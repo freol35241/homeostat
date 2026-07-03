@@ -1,0 +1,10 @@
+schema = 1
+
+[entity]
+id = "fake-0001"
+capability = "sensor"
+room = "testroom"
+
+[write_policy]
+mode = "shared"
+owner = "fake"

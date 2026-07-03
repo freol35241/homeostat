@@ -6,12 +6,12 @@ governs structure. The repo is the single source of truth — no hidden state
 mutated by a UI. See [docs/design.md](docs/design.md) for the full design
 record.
 
-## Status: build-sequence step 1
+## Status: build-sequence step 2
 
-Key space + manifest parser + validator, no runtime. `homeostat plan` reads
-a house repo (unit manifests, entity files, zone definitions), validates it,
-expands templates and zones, resolves the grant table, and diffs against an
-empty world. No Zenoh, no supervisor, no processes yet.
+Step 1 (key space + manifest parser + validator, `homeostat plan`) is done.
+Step 2 adds the process supervisor: `homeostat up` runs a house's units as
+supervised OS processes on a Zenoh bus, with liveliness tokens, exponential
+restart backoff, and a circuit breaker visible at `home/health/{unit}`.
 
 ## Usage
 
@@ -86,6 +86,43 @@ Plan tier: structural (4 units created, 1 grant added)
 Everything is structural against an empty world; the tier derivation
 (parameter-only / behavioral / structural, per the design record) lives in
 `src/plan.rs` and any grant-table delta escalates the tier.
+
+## up
+
+`homeostat up` validates a house repo exactly like `plan`, refuses it on any
+error, and otherwise runs every unit as a supervised process:
+
+```
+cargo build
+PATH="$PWD/target/debug:$PATH" cargo run -- up tests/fixture_house
+```
+
+The supervisor opens a router-mode Zenoh session listening on
+`tcp/127.0.0.1:7447` (override with `--listen`) — the hub all units and
+observers connect to as clients — and hands each unit its name and the bus
+endpoint via `HOMEOSTAT_UNIT` / `HOMEOSTAT_BUS`. Units declare a liveliness token at
+`home/health/{unit}/alive` when ready; the supervisor publishes JSON health
+at `home/health/{unit}` (`starting`, `running`, `backoff`, `open`,
+`stopped`) and `home/meta/{unit}/manifest_hash`. Transitions are also logged
+to stdout, so the fixture house shows the fake adapter going `starting` →
+`running` with its pid.
+
+Crashed units restart per their manifest `restart` policy with exponential
+backoff (100ms doubling, 30s cap); five consecutive quick exits open the
+circuit breaker (`status = "open"`, no further restarts). SIGTERM/Ctrl-C
+terminates units gracefully within their `shutdown_grace_s`, then SIGKILLs
+the process group — no orphans, even if the supervisor itself is SIGKILLed
+(pdeathsig). The full contract is in
+[docs/design.md](docs/design.md#supervision-settled-in-step-2).
+
+The `PATH` prefix is only for the fixture house, whose fake adapter is the
+`fake_adapter` binary built by this crate; real houses use commands that
+resolve on their own (`uv run units/...`).
+
+`tests/supervision.rs` pins the four supervision scenarios (spawn shows
+liveliness and state, induced crash restarts with observable backoff, a
+crash loop opens the breaker, SIGTERM shuts down cleanly without orphans)
+against the real binary on `tests/fixture_house/`.
 
 ## House repo layout
 

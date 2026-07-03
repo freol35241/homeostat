@@ -48,6 +48,78 @@ not the general long tail. No Home Assistant bridge in v1.
 - **Supervision:** liveliness tokens on the bus, not just PIDs. Restart with
   exponential backoff and a circuit breaker whose state is visible at
   `home/health/{unit}`. (Pattern imported from the Keelson liveliness RFC.)
+## Supervision (settled in step 2)
+
+### The unit contract
+
+What the supervisor guarantees to every unit, and what every unit owes back.
+
+Supervisor -> unit, at spawn:
+
+- `runtime.command` is whitespace-tokenized and exec'd directly — no shell,
+  so no quoting in v1 manifests. Lookup uses PATH; relative paths resolve
+  against the house repo root, which is the unit's cwd.
+- Each unit runs in its own process group. On Linux the child additionally
+  gets `PR_SET_PDEATHSIG(SIGKILL)`, so even a SIGKILLed supervisor cannot
+  leak orphans.
+- Environment: `HOMEOSTAT_UNIT` (the unit's name) and `HOMEOSTAT_BUS` (the
+  Zenoh endpoint to connect to, e.g. `tcp/127.0.0.1:7447`).
+
+Unit -> bus, obligations:
+
+- Connect to `HOMEOSTAT_BUS` as a Zenoh client. The supervisor's session
+  runs in router mode — the hub that routes between units and observers
+  (Zenoh peers do not route between clients, and peer linkstate routing was
+  removed in Zenoh 1.9). Multicast scouting stays off; topology is explicit.
+- Declare a liveliness token at `home/health/{unit}/alive` once actually
+  ready. The token — not the PID — is what "up" means; the supervisor only
+  reports `running` after the token appears.
+- On SIGTERM, exit cleanly within `shutdown_grace_s` (default 5s). After the
+  grace the whole process group gets SIGKILL.
+
+### Health key schema
+
+The supervisor publishes JSON at `home/health/{unit}` on every transition,
+refreshed every 1s so late subscribers see current state (a stopgap until
+last-value storage backs the health keys):
+
+```json
+{
+  "status": "starting | running | backoff | open | stopped",
+  "pid": 1234,
+  "restarts": 2,
+  "backoff_ms": 400,
+  "last_exit_code": 1
+}
+```
+
+- `starting`: process spawned, token not yet seen. `running`: token present.
+- `backoff`: process exited, restart scheduled in `backoff_ms` (present only
+  in this status).
+- `open`: circuit breaker open, no further restarts until the supervisor is
+  restarted.
+- `stopped`: not coming back — policy `never`, clean exit under
+  `on-failure`, or supervisor shutdown.
+
+Restart policy per manifest (`always` / `on-failure` / `never`). Backoff is
+exponential: 100ms base, doubling, capped at 30s. A run that survives 5s
+resets the consecutive-failure counter; the 5th consecutive quick exit opens
+the breaker. Any quick exit counts — a clean-exit loop is as much a crash
+loop as a panic loop.
+
+The supervisor also publishes `home/meta/{unit}/manifest_hash` (sha256 hex
+of the manifest file) at startup.
+
+### Clock key schema
+
+Documented now, clock service implemented with the first automation:
+
+- `home/clock/minute` — published each minute on the minute; payload is
+  RFC3339 local time with offset, e.g. `2026-07-03T21:04:00+02:00`.
+- `home/clock/date` — published at local midnight; payload `2026-07-03`.
+- The clock service owns timezone and DST; subscribers never do naive time
+  arithmetic.
+
 ## Key space
  
 ```
@@ -280,10 +352,9 @@ is parked; `.io`/`.org` unregistered. No trademark risk surfaced (generic
 1. **Key space + manifest parser + validator, no runtime.** CLI reading a
    repo of manifests and entity files: template expansion, zone expansion,
    grant-table resolution, `homeostat plan` against an empty world. Pure
-   Rust, serde types, test corpus of manifest files. THIS IS THE CURRENT
-   PHASE.
-2. Supervisor + one trivial (fake) adapter: process spawning, liveliness,
-   restart with backoff, meta key space.
+   Rust, serde types, test corpus of manifest files. DONE.
+2. **Supervisor + one trivial (fake) adapter: process spawning, liveliness,
+   restart with backoff, meta key space.** THIS IS THE CURRENT PHASE.
 3. First real adapter: Zigbee2MQTT (translating subscriber).
 4. First automation + live parameter path end to end.
 5. Recorder, then plan/apply proper, then agent MCP surface, then voice.
@@ -293,7 +364,8 @@ Risk lives in steps 1 and 2; everything after is accretion.
  
 - Civil time semantics: the clock service owns timezone/DST (Sweden has real
   transitions); constraints evaluate against it, never naive comparison.
-  Exact clock-service key schema TBD in step 2.
+  Key schema settled in step 2 (see Supervision); the service itself lands
+  with the first automation.
 - Whether `features` should gate command contents beyond SDK constructors.
   Current lean: no separate layer.
 - Zenoh ACL hardening timeline.

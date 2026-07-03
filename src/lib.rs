@@ -1,3 +1,4 @@
+pub mod bus;
 pub mod error;
 pub mod expand;
 pub mod grants;
@@ -5,6 +6,7 @@ pub mod keyspace;
 pub mod manifest;
 pub mod plan;
 pub mod repo;
+pub mod supervisor;
 pub mod validate;
 
 use std::path::Path;

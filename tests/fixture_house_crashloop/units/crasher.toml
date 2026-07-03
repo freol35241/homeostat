@@ -1,0 +1,10 @@
+schema = 1
+
+[unit]
+name = "crasher"
+kind = "service"
+description = "Exits immediately, forever; the circuit breaker must open"
+
+[runtime]
+command = "fake_adapter --crash-after-ms 0"
+restart = "always"

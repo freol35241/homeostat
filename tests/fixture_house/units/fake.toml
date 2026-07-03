@@ -1,0 +1,24 @@
+schema = 1
+
+[unit]
+name = "fake"
+kind = "adapter"
+description = "Fake adapter used by the supervision tests"
+
+[runtime]
+command = "fake_adapter --heartbeat-ms 50"
+restart = "on-failure"
+shutdown_grace_s = 5
+
+[discovery]
+mode = "static"
+endpoint = "fake://none"
+
+[bus.publishes]
+state = { key = "home/state/{room}/{entity}/**" }
+
+[bus.subscribes]
+commands = "home/cmd/{room}/{entity}/**"
+
+[entities]
+dir = "entities/fake/"
