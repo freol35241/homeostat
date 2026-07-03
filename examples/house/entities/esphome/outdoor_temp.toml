@@ -1,0 +1,16 @@
+schema = 1
+
+[entity]
+id = "outdoor-temp-sensor.local"
+capability = "sensor"
+features = ["temperature", "humidity"]
+room = "global"
+
+[naming]
+sv = "utomhustemperaturen"
+en = "outdoor temperature"
+aliases = []
+
+[write_policy]
+mode = "shared"
+owner = "esphome"

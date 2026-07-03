@@ -1,0 +1,2 @@
+error[reserved-room-name] weird_sensor: room "meta" is a reserved word (entities/zigbee/weird_sensor.toml)
+error[reserved-zone-name] global: zone name "global" is a reserved word (zones.toml)

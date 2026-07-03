@@ -1,0 +1,3 @@
+error[key-outside-schema] watcher.beam: "home/telemetry/kitchen/lamp/light" has unknown class "telemetry" (units/watcher.toml)
+error[key-outside-schema] watcher.short: "home/state/kitchen" needs room/entity/aspect segments after the class (units/watcher.toml)
+error[key-outside-schema] watcher.stuff: "house/state/kitchen/**" does not start with "home/" (units/watcher.toml)

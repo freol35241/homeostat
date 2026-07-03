@@ -1,0 +1,2 @@
+error[unknown-capability] toy: unknown capability "blaster" (entities/zigbee/toy.toml)
+error[unknown-capability] zapper.beam: unknown capability "sonic" (units/zapper.toml)

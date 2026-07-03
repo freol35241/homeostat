@@ -1,0 +1,12 @@
+schema = 1
+
+[unit]
+name = "zapper"
+kind = "automation"
+
+[runtime]
+command = "uv run units/zapper.py"
+restart = "on-failure"
+
+[bus.publishes]
+beam = { key = "home/cmd/kitchen/toy/beam", capability = "sonic", priority = "automation" }

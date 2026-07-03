@@ -1,0 +1,16 @@
+schema = 1
+
+[entity]
+id = "0x00158d0004cd2e3f"
+capability = "light"
+features = ["brightness"]
+room = "livingroom"
+
+[naming]
+sv = "golvlampan i vardagsrummet"
+en = "livingroom floor lamp"
+aliases = []
+
+[write_policy]
+mode = "exclusive"
+owner = "zigbee"

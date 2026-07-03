@@ -1,0 +1,1 @@
+error[missing-owner-adapter] some_lamp: owner adapter "zwave" does not exist (entities/zigbee/some_lamp.toml)

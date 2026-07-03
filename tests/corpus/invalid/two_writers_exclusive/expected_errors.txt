@@ -1,0 +1,1 @@
+error[exclusive-write-conflict] bedroom_lamp: exclusive entity has 2 writers: night_mode.lights, wake_up.lights (entities/zigbee/bedroom_lamp.toml)

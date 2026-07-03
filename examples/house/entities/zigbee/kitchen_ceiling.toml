@@ -1,0 +1,16 @@
+schema = 1
+
+[entity]
+id = "0x00158d0003ab1c2d"
+capability = "light"
+features = ["brightness", "color_temp"]
+room = "kitchen"
+
+[naming]
+sv = "taklampan i köket"
+en = "kitchen ceiling light"
+aliases = ["köksbelysningen"]
+
+[write_policy]
+mode = "shared"
+owner = "zigbee"

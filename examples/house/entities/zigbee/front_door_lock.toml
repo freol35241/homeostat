@@ -1,0 +1,16 @@
+schema = 1
+
+[entity]
+id = "0x00158d0006aa5c6d"
+capability = "lock"
+features = []
+room = "hallway"
+
+[naming]
+sv = "ytterdörrslåset"
+en = "front door lock"
+aliases = []
+
+[write_policy]
+mode = "arbitrated"
+owner = "zigbee"

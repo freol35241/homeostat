@@ -1,0 +1,1 @@
+error[duplicate-entity-name] lamp: defined in entities/hue/lamp.toml and entities/zigbee/lamp.toml

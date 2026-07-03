@@ -1,0 +1,13 @@
+schema = 1
+
+[unit]
+name = "recorder"
+kind = "service"
+description = "Writes home/state/** to the time-series backend"
+
+[runtime]
+command = "uv run units/recorder.py"
+restart = "always"
+
+[bus.subscribes]
+state = "home/state/**"

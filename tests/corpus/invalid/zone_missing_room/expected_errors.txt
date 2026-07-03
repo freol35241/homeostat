@@ -1,0 +1,1 @@
+error[zone-unknown-room] upstairs: zone references unknown room "attic" (zones.toml)

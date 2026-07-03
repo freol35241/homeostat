@@ -1,0 +1,2 @@
+error[malformed-constraint] dimmer.brightness: min (100) is greater than max (10) (units/dimmer.toml)
+error[malformed-constraint] dimmer.level: constraint "after" is not valid for type "int" (units/dimmer.toml)

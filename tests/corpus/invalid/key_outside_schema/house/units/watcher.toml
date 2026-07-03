@@ -1,0 +1,16 @@
+schema = 1
+
+[unit]
+name = "watcher"
+kind = "automation"
+
+[runtime]
+command = "uv run units/watcher.py"
+restart = "on-failure"
+
+[bus.subscribes]
+stuff = "house/state/kitchen/**"
+short = "home/state/kitchen"
+
+[bus.publishes]
+beam = { key = "home/telemetry/kitchen/lamp/light", capability = "light", priority = "automation" }

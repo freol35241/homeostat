@@ -1,0 +1,10 @@
+schema = 1
+
+[entity]
+id = "0x07"
+capability = "light"
+room = "kitchen"
+
+[write_policy]
+mode = "shared"
+owner = "zigbee"
