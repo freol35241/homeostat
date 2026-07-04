@@ -6,7 +6,7 @@ governs structure. The repo is the single source of truth — no hidden state
 mutated by a UI. See [docs/design.md](docs/design.md) for the full design
 record.
 
-## Status: build-sequence step 5b
+## Status: build-sequence step 6
 
 Step 1 (key space + manifest parser + validator, `homeostat plan`),
 step 2 (the process supervisor: `homeostat up` runs a house's units as
@@ -16,12 +16,14 @@ step 3 (the Zigbee2MQTT adapter and the Python SDK bootstrap), step 4
 (the first automation — `evening_lights` — the clock service, and the live
 parameter path end to end: `home/config/{unit}/{param}` backed by a
 core-owned last-value cache, constraint-validated writes, and edits that
-reach running units without a restart) and step 5a (the recorder: history
+reach running units without a restart), step 5a (the recorder: history
 end to end — typed state/cmd samples and an audit trail in a SQLite store,
-with history reads served over the bus at `home/history/**`) are done.
-Step 5b adds plan/apply proper: `homeostat plan` diffs the repo against
-the live bus and `homeostat apply` commands the running supervisor to
-walk the difference, per-unit and rolling.
+with history reads served over the bus at `home/history/**`) and step 5b
+(plan/apply proper: `homeostat plan` diffs the repo against the live bus
+and `homeostat apply` commands the running supervisor to walk the
+difference, per-unit and rolling) are done. Step 6 adds the agent
+surface: `homeostat mcp`, an MCP server whose authority is bounded by the
+same plan/apply machinery as every other actor.
 
 ## Usage
 
@@ -417,6 +419,62 @@ earlier units running and later units untouched; and a stale pending plan
 refuses to apply. Scenarios needing commits git-init their temp copy —
 the checked-in fixture is a nested directory of this repo and must not
 inherit its HEAD.
+
+## Agent surface (MCP)
+
+`homeostat mcp` serves five tools over MCP: `read_state`, `read_history`,
+`plan`, `propose`, `apply`. The agent never touches the bus directly for
+structural work — it manipulates text and goes through plan/apply like
+every other actor.
+
+- `read_state` reads any `home/**` key expression through the core's
+  last-value caches (the supervisor now mirrors `home/state/**` the same
+  way it mirrors the clock, so current values are always a get away);
+  `read_history` queries the recorder at `home/history/**` with
+  `from`/`to`/`limit`.
+- `propose` takes repo-relative paths plus full new content, writes them,
+  commits to the current branch, and plans. An invalid repo is restored
+  and never committed — and the validator now rejects a parameter default
+  outside its own constraint, so an out-of-constraint "parameter edit" is
+  refused with the constraint named. A parameter-only plan auto-applies:
+  zero restarts, durable by construction, the commit IS the edit.
+  Anything behavioral or structural stays committed but unapplied, saved
+  as `plans/pending/{id}.plan` with actor `agent`.
+- `apply` executes the current diff only when it is parameter-only.
+  Behavioral and structural plans are refused at agent tier; the owner
+  applies them with `homeostat apply --plan <file>`. The tier is derived
+  mechanically from the diff, so a manifest edit that smuggles in a grant
+  delta escalates to structural — the plan engine is the enforcement,
+  not tool-level checks.
+
+Transports: stdio by default (an MCP client launches
+`homeostat mcp /path/to/house --bus tcp/127.0.0.1:7447`). For a deployed
+house — supervisor as PID 1 in a container — the server runs as a
+supervised service unit over HTTP, declared in the repo like any unit:
+
+```
+[unit]
+name = "mcp"
+kind = "service"
+
+[runtime]
+command = "homeostat mcp --http 127.0.0.1:8642"
+restart = "on-failure"
+```
+
+It is a bus client under the unit contract: liveliness token, health at
+`home/health/mcp`, graceful SIGTERM. A saved pending plan no longer
+counts toward the repo's dirty state (`plans/` is excluded from the HEAD
+dirty check), so `apply --plan` accepts the plan it just saved.
+
+`tests/mcp.rs` pins six scenarios against the real server and a live
+supervised house: reads serving live state and recorded history end to
+end; the deployed HTTP-as-a-unit shape; a parameter propose that commits
+and auto-applies with zero restarts and `applied_commit` advancing; an
+out-of-constraint propose rejected with the constraint named and nothing
+committed; a structural propose landing a pending plan the agent's own
+apply refuses and the owner applies in grant order; and the
+grant-smuggling escalation.
 
 ## House repo layout
 

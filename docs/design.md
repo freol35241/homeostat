@@ -790,6 +790,36 @@ supervisor-executed walk.
 - **Non-goals:** voice, dashboard generation, Zenoh ACLs, any approval UI
   beyond the pending-plan file.
  
+### Settled during step 6
+ 
+- **The protocol layer is hand-rolled** (~200 lines): initialize,
+  tools/list, tools/call, ping over JSON-RPC 2.0 — newline-delimited on
+  stdio, stateless streamable-HTTP on `--http` (POST answers
+  `application/json`, which the spec permits in place of an SSE stream;
+  GET is 405 because this server never initiates messages, so there is no
+  session to manage). An MCP SDK would have been the largest dependency
+  in the tree for five methods.
+- **The core now mirrors `home/state/**`** into a last-value queryable —
+  the clock mirror generalized. read_state needed current values to be
+  readable on demand; every late joiner benefits, not just the agent.
+- **The enforcement point for agent parameter edits is plan-time
+  validation.** The validator rejects a default outside its own
+  constraint (`invalid-default`, pinned in the corpus), so propose
+  refuses the edit before anything is committed. Previously an
+  out-of-constraint default would have seeded the config store silently —
+  a real gap the agent surface exposed.
+- **Entries under `plans/` are excluded from head_commit's dirty check.**
+  A pending plan is a review artifact of the commit it plans against;
+  before this, saving one marked the repo dirty and made `apply --plan`
+  refuse the very plan it had just saved as stale.
+- **Propose is write → validate → restore-on-failure.** An invalid
+  proposal never reaches a commit and the working tree ends clean either
+  way. Proposed paths must be plain repo-relative (no `..`, nothing under
+  `.git/` or `plans/`).
+- **Agent commits are authored `homeostat-agent <agent@homeostat.local>`**
+  with the propose message as the commit message — the same channel the
+  voice phase will use for transcript-as-commit-message.
+ 
 ## Voice (later phase)
  
 - Two-tier command path: a fast-path intent matcher (high precision,
@@ -836,9 +866,9 @@ is parked; `.io`/`.org` unregistered. No trademark risk surfaced (generic
 4. First automation (evening_lights) + clock service + live parameter
    path end to end. DONE.
 5. Recorder (5a), then plan/apply proper (5b). DONE.
-6. **Agent MCP surface** (goal settled above, under "Agent surface").
-   THIS IS THE CURRENT STEP.
-7. Voice. Deferred.
+6. Agent MCP surface (goal and settlements above, under "Agent
+   surface"). DONE.
+7. Voice. Deferred — not yet begun.
 Risk lives in steps 1 and 2; everything after is accretion.
  
 ## Open questions (flagged, not settled)
