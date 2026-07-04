@@ -21,6 +21,20 @@ def cmd_keyexpr(room: str, entity: str) -> str:
     return f"home/cmd/{room}/{entity}/**"
 
 
+def config_key(unit: str, param: str) -> str:
+    """Core-owned live parameter value (see docs/design.md, step 4)."""
+    return f"home/config/{unit}/{param}"
+
+
+def config_keyexpr(unit: str) -> str:
+    """Key expression matching every parameter of one unit."""
+    return f"home/config/{unit}/*"
+
+
+CLOCK_MINUTE = "home/clock/minute"
+CLOCK_DATE = "home/clock/date"
+
+
 def liveliness_key(unit: str) -> str:
     return f"home/health/{unit}/alive"
 

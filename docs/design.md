@@ -61,7 +61,11 @@ Supervisor -> unit, at spawn:
   against the house repo root, which is the unit's cwd.
 - Each unit runs in its own process group. On Linux the child additionally
   gets `PR_SET_PDEATHSIG(SIGKILL)`, so even a SIGKILLed supervisor cannot
-  leak orphans.
+  leak orphans. If the direct child exits on its own, the supervisor sweeps
+  the remainder of its process group before applying the restart policy —
+  a unit's descendants (e.g. the interpreter under a `uv run` wrapper)
+  never outlive its leader, so a survivor can't keep the liveliness token
+  alive and poison the next incarnation.
 - Environment: `HOMEOSTAT_UNIT` (the unit's name) and `HOMEOSTAT_BUS` (the
   Zenoh endpoint to connect to, e.g. `tcp/127.0.0.1:7447`).
 

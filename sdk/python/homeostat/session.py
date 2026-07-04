@@ -46,6 +46,18 @@ class UnitSession:
     def subscribe(self, keyexpr: str, callback: Callable[[zenoh.Sample], None]):
         return self._session.declare_subscriber(keyexpr, callback)
 
+    def get_json(self, selector: str) -> list[tuple[str, Any]]:
+        """Queries the bus, returning (key, decoded JSON) per ok reply."""
+        values = []
+        for reply in self._session.get(selector):
+            sample = reply.ok
+            if sample is None:
+                continue
+            values.append(
+                (str(sample.key_expr), json.loads(sample.payload.to_bytes()))
+            )
+        return values
+
     def health_event(self, kind: str, **fields: Any) -> None:
         """Publishes a JSON event at home/health/{unit}/event."""
         self.put_json(keys.health_event_key(self.unit), {"kind": kind, **fields})

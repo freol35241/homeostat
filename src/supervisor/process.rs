@@ -41,16 +41,40 @@ pub fn spawn(command: &str, cwd: &Path, env: &[(&str, &str)]) -> io::Result<Chil
 }
 
 /// Graceful termination: SIGTERM to the unit's process group, wait up to
-/// `grace`, then SIGKILL the group. Returns when the direct child is reaped.
+/// `grace`, then SIGKILL the group. Waits for the whole group, not just
+/// the direct child: a `uv run` wrapper exits ahead of its interpreter,
+/// and the survivor gets the rest of the grace before the sweep.
 pub async fn terminate(child: &mut Child, grace: Duration) {
     let Some(pid) = child.id() else {
         return; // already reaped
     };
     signal_group(pid, libc::SIGTERM);
-    if tokio::time::timeout(grace, child.wait()).await.is_err() {
+    let deadline = tokio::time::Instant::now() + grace;
+    if tokio::time::timeout_at(deadline, child.wait()).await.is_err() {
         signal_group(pid, libc::SIGKILL);
         let _ = child.wait().await;
+        return;
     }
+    while group_alive(pid) {
+        if tokio::time::Instant::now() >= deadline {
+            signal_group(pid, libc::SIGKILL);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// Whether any member of the process group still exists.
+fn group_alive(pgid: u32) -> bool {
+    unsafe { libc::kill(-(pgid as i32), 0) == 0 }
+}
+
+/// Sweeps a unit's process group after its leader exited on its own. A
+/// wrapper like `uv run` leaves its interpreter child behind; a survivor
+/// would keep the unit's liveliness token alive and poison the next
+/// incarnation's supervision.
+pub fn sweep_group(pid: u32) {
+    signal_group(pid, libc::SIGKILL);
 }
 
 fn signal_group(pid: u32, signal: i32) {

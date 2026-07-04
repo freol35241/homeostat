@@ -6,7 +6,7 @@
 # ]
 #
 # [tool.uv.sources]
-# homeostat = { path = "../sdk/python" }
+# homeostat = { path = "../sdk/python", editable = true }
 # ///
 """Zigbee2MQTT adapter: a translating subscriber.
 

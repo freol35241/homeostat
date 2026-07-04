@@ -15,6 +15,7 @@ use zenoh::sample::Sample;
 pub struct Supervisor {
     child: Child,
     pub endpoint: String,
+    stderr_path: PathBuf,
 }
 
 impl Supervisor {
@@ -27,8 +28,20 @@ impl Supervisor {
     }
 
     /// Like `spawn`, with extra environment variables that the supervisor
-    /// (and therefore its units) inherit.
+    /// (and therefore its units) inherit. Ephemeral ports are handed out
+    /// racily (the probe listener closes before the supervisor binds), so
+    /// a supervisor that dies before listening is retried on a new port.
     pub fn spawn_with_env(fixture: &str, envs: &[(&str, &str)]) -> Self {
+        for _ in 0..5 {
+            match Self::try_spawn(fixture, envs) {
+                Some(sup) => return sup,
+                None => continue,
+            }
+        }
+        panic!("supervisor kept exiting before listening");
+    }
+
+    fn try_spawn(fixture: &str, envs: &[(&str, &str)]) -> Option<Self> {
         let port = free_port();
         let endpoint = format!("tcp/127.0.0.1:{port}");
         let house = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(fixture);
@@ -41,31 +54,50 @@ impl Supervisor {
             fake_adapter_dir.display(),
             std::env::var("PATH").unwrap_or_default()
         );
+        let stderr_path =
+            std::env::temp_dir().join(format!("homeostat-test-sup-{port}.stderr"));
+        let stderr = std::fs::File::create(&stderr_path).expect("create stderr capture");
         let mut command = Command::new(env!("CARGO_BIN_EXE_homeostat"));
         command
             .args(["up", house.to_str().expect("utf-8 path"), "--listen", &endpoint])
             .env("PATH", path)
             .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            .stderr(stderr);
         for (key, value) in envs {
             command.env(key, value);
         }
         let child = command.spawn().expect("spawn supervisor");
-        let sup = Self { child, endpoint };
-        sup.await_listening();
-        sup
+        let mut sup = Self { child, endpoint, stderr_path };
+        if sup.await_listening() {
+            Some(sup)
+        } else {
+            None
+        }
     }
 
-    fn await_listening(&self) {
+    /// True once the endpoint accepts connections; false if the supervisor
+    /// exited first (e.g. it lost a bind race for the probed port).
+    fn await_listening(&mut self) -> bool {
         let addr = self.endpoint.trim_start_matches("tcp/").to_string();
         let deadline = Instant::now() + Duration::from_secs(10);
         while Instant::now() < deadline {
             if TcpStream::connect(&addr).is_ok() {
-                return;
+                return true;
+            }
+            if let Ok(Some(status)) = self.child.try_wait() {
+                eprintln!(
+                    "supervisor exited before listening ({status}): {}",
+                    self.stderr(),
+                );
+                return false;
             }
             std::thread::sleep(Duration::from_millis(50));
         }
         panic!("supervisor never listened on {}", self.endpoint);
+    }
+
+    fn stderr(&self) -> String {
+        std::fs::read_to_string(&self.stderr_path).unwrap_or_default()
     }
 
     pub fn pid(&self) -> i32 {
@@ -92,9 +124,13 @@ impl Supervisor {
 
     /// Opens a client session on the supervisor's bus.
     pub async fn observer(&self) -> zenoh::Session {
-        zenoh::open(bus::connect_config(&self.endpoint))
-            .await
-            .expect("observer session")
+        match zenoh::open(bus::connect_config(&self.endpoint)).await {
+            Ok(session) => session,
+            Err(err) => panic!(
+                "observer session failed: {err}; supervisor stderr: {}",
+                self.stderr()
+            ),
+        }
     }
 
     /// Graceful teardown used by tests that already asserted what they
@@ -110,6 +146,7 @@ impl Drop for Supervisor {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+        let _ = std::fs::remove_file(&self.stderr_path);
     }
 }
 
@@ -122,6 +159,7 @@ pub fn free_port() -> u16 {
 }
 
 /// True while a process exists and is not a zombie.
+#[allow(dead_code)] // each test binary uses its own subset of the harness
 pub fn process_alive(pid: u32) -> bool {
     let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
         return false;

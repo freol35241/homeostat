@@ -175,6 +175,12 @@ pub async fn supervise(
             }
         };
 
+        // The group must not outlive its leader: sweep any descendants the
+        // exited child left behind before deciding what happens next.
+        if let (RunOutcome::Exited(_), Some(pid)) = (&outcome, pid) {
+            process::sweep_group(pid);
+        }
+
         let code = match outcome {
             RunOutcome::Shutdown => {
                 health

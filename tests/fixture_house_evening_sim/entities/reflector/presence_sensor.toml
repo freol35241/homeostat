@@ -1,0 +1,14 @@
+schema = 1
+
+[entity]
+id = "presence-1"
+capability = "presence"
+features = []
+room = "livingroom"
+
+[naming]
+en = "living room presence sensor"
+
+[write_policy]
+mode = "shared"
+owner = "reflector"
