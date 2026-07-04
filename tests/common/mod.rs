@@ -122,14 +122,24 @@ impl Supervisor {
         panic!("supervisor did not exit within {timeout:?}");
     }
 
-    /// Opens a client session on the supervisor's bus.
+    /// Opens a client session on the supervisor's bus. A single connect
+    /// attempt can lose to a loaded host (the TCP probe in `spawn` proves
+    /// the endpoint listens, but a zenoh open right after may still time
+    /// out), so failures retry within a deadline.
     pub async fn observer(&self) -> zenoh::Session {
-        match zenoh::open(bus::connect_config(&self.endpoint)).await {
-            Ok(session) => session,
-            Err(err) => panic!(
-                "observer session failed: {err}; supervisor stderr: {}",
-                self.stderr()
-            ),
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+        loop {
+            match zenoh::open(bus::connect_config(&self.endpoint)).await {
+                Ok(session) => return session,
+                Err(err) if tokio::time::Instant::now() < deadline => {
+                    eprintln!("observer session failed ({err}), retrying");
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                }
+                Err(err) => panic!(
+                    "observer session failed: {err}; supervisor stderr: {}",
+                    self.stderr()
+                ),
+            }
         }
     }
 
