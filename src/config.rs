@@ -74,21 +74,27 @@ pub struct ConfigStore {
 
 impl ConfigStore {
     pub fn from_house(house: &House) -> ConfigStore {
-        let mut params = BTreeMap::new();
-        for unit in &house.units {
-            let Some(specs) = &unit.manifest.params else { continue };
-            for (name, spec) in specs {
-                params.insert(
-                    (unit.manifest.unit.name.clone(), name.clone()),
-                    StoredParam {
-                        param_type: spec.param_type,
-                        constraint: Constraint::from_spec(spec),
-                        value: default_value(spec),
-                    },
-                );
-            }
-        }
-        ConfigStore { params: Mutex::new(params) }
+        ConfigStore { params: Mutex::new(build(house)) }
+    }
+
+    /// Rebuilds the store from a new house — on apply, every parameter is
+    /// set to its repo default (the repo is the system of record; live
+    /// drift resets, and the plan showed it). Returns the params whose
+    /// effective value changed so the caller can put them on the bus for
+    /// live subscribers; params of new units need no put (they seed via
+    /// get at startup).
+    pub fn replace_from_house(&self, house: &House) -> Vec<(String, String, Value)> {
+        let mut params = self.params.lock().expect("config store lock");
+        let fresh = build(house);
+        let changed = fresh
+            .iter()
+            .filter(|(key, new)| {
+                params.get(*key).is_some_and(|old| old.value != new.value)
+            })
+            .map(|((unit, param), p)| (unit.clone(), param.clone(), p.value.clone()))
+            .collect();
+        *params = fresh;
+        changed
     }
 
     /// Current values matching a `(unit, param)` filter, as
@@ -119,7 +125,25 @@ impl ConfigStore {
     }
 }
 
-fn default_value(spec: &ParamSpec) -> Value {
+fn build(house: &House) -> BTreeMap<(String, String), StoredParam> {
+    let mut params = BTreeMap::new();
+    for unit in &house.units {
+        let Some(specs) = &unit.manifest.params else { continue };
+        for (name, spec) in specs {
+            params.insert(
+                (unit.manifest.unit.name.clone(), name.clone()),
+                StoredParam {
+                    param_type: spec.param_type,
+                    constraint: Constraint::from_spec(spec),
+                    value: default_value(spec),
+                },
+            );
+        }
+    }
+    params
+}
+
+pub fn default_value(spec: &ParamSpec) -> Value {
     match &spec.default {
         toml::Value::Boolean(b) => Value::from(*b),
         toml::Value::Integer(i) => Value::from(*i),

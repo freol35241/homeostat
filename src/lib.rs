@@ -1,14 +1,18 @@
 pub mod bus;
 pub mod config;
+pub mod content;
 pub mod error;
 pub mod expand;
+pub mod gitinfo;
 pub mod grants;
 pub mod keyspace;
 pub mod manifest;
+pub mod pending;
 pub mod plan;
 pub mod repo;
 pub mod supervisor;
 pub mod validate;
+pub mod world;
 
 use std::path::Path;
 

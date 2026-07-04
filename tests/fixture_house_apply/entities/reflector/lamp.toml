@@ -1,0 +1,10 @@
+schema = 1
+
+[entity]
+id = "lamp-1"
+capability = "light"
+room = "livingroom"
+
+[write_policy]
+mode = "shared"
+owner = "reflector"

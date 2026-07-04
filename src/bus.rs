@@ -32,6 +32,20 @@ pub fn manifest_hash_key(unit: &str) -> String {
     format!("home/meta/{unit}/manifest_hash")
 }
 
+pub fn files_hash_key(unit: &str) -> String {
+    format!("home/meta/{unit}/files_hash")
+}
+
+pub fn manifest_key(unit: &str) -> String {
+    format!("home/meta/{unit}/manifest")
+}
+
+pub const GRANTS_KEY: &str = "home/meta/system/grants";
+pub const APPLIED_COMMIT_KEY: &str = "home/meta/system/applied_commit";
+/// The apply control queryable: a GET with payload is an apply request
+/// (the same query-as-command pattern as config writes).
+pub const APPLY_KEY: &str = "home/meta/system/apply";
+
 pub fn config_key(unit: &str, param: &str) -> String {
     format!("home/config/{unit}/{param}")
 }
@@ -99,4 +113,44 @@ pub struct Health {
     pub backoff_ms: Option<u64>,
     /// Exit code of the most recent exit, if it exited with one.
     pub last_exit_code: Option<i32>,
+}
+
+/// Payload of a GET on `home/meta/system/apply`: the apply request the CLI
+/// sends to the running supervisor (see docs/design.md, step 5b).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApplyRequest {
+    /// The repo's HEAD when the house root is a git worktree root;
+    /// published at `home/meta/system/applied_commit` on success.
+    pub base_commit: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApplyParam {
+    pub unit: String,
+    pub param: String,
+    pub value: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApplyStep {
+    pub unit: String,
+    /// "stop" | "start" | "restart"
+    pub action: String,
+    pub ok: bool,
+    pub error: Option<String>,
+}
+
+/// The supervisor's reply to an apply request. `steps` holds every unit
+/// step attempted, in walk order; a halted walk names its position.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApplyResult {
+    pub ok: bool,
+    pub tier: Option<String>,
+    pub params: Vec<ApplyParam>,
+    pub steps: Vec<ApplyStep>,
+    /// Unit at which the walk halted in place, if it did.
+    pub halted_at: Option<String>,
+    /// Units the walk never reached.
+    pub not_reached: Vec<String>,
+    pub error: Option<String>,
 }

@@ -21,7 +21,12 @@ fn valid_house_produces_no_errors_and_golden_plan() {
         result.warnings.join("\n")
     );
 
-    let plan = homeostat::plan::render(&result, "examples/house");
+    let plan = homeostat::plan::render(
+        &result,
+        &manifest_dir().join("examples/house"),
+        "examples/house",
+        &homeostat::plan::World::empty(),
+    );
     let expected = include_str!("corpus/expected_plan.txt");
     assert_eq!(
         plan, expected,

@@ -1,34 +1,69 @@
 //! The process supervisor behind `homeostat up`: spawns every unit in the
-//! house, publishes manifest hashes to the meta key space, serves the core
-//! last-value cache (config, health, clock), and shuts the whole tree down
-//! gracefully on SIGTERM/SIGINT.
+//! house, serves the core last-value caches (config, health, clock, meta),
+//! executes apply walks commanded over the bus, and shuts the whole tree
+//! down gracefully on SIGTERM/SIGINT.
 
+pub mod apply;
 pub mod backoff;
 pub mod process;
 pub mod unit;
 
 use std::collections::BTreeMap;
-use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
-use sha2::{Digest, Sha256};
 use tokio::sync::watch;
 use zenoh::Session;
 
 use crate::bus::{self, Health, HealthStatus};
 use crate::config::ConfigStore;
-use crate::repo::House;
+use crate::grants::Grant;
+use crate::plan::WorldUnit;
 use crate::supervisor::unit::UnitSpec;
+use crate::CheckResult;
 
 /// Current health per unit, shared between the supervision tasks (writers)
 /// and the health queryable (reader). This is the last-value cache that
 /// lets late subscribers see current state without a republish loop.
 pub type HealthMap = Arc<Mutex<BTreeMap<String, Health>>>;
 
+/// How long an apply step waits for a (re)started unit to reach `running`
+/// before halting the walk. Breaker-open and stopped halt sooner.
+const READY_DEADLINE: Duration = Duration::from_secs(60);
+
+/// What the supervisor knows to be applied: the world it serves at
+/// `home/meta/**`. Unit entries update only when a unit reaches `running`
+/// during an apply (or at startup), so a halted walk re-plans the
+/// remaining work instead of pretending it landed.
+#[derive(Default)]
+pub struct WorldMeta {
+    pub units: BTreeMap<String, WorldUnit>,
+    pub grants: Vec<Grant>,
+    pub applied_commit: Option<String>,
+}
+
+struct UnitHandle {
+    shutdown: watch::Sender<bool>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+/// Shared state of a running supervisor: everything the queryables and the
+/// apply engine touch.
+pub struct Core {
+    pub session: Session,
+    pub root: PathBuf,
+    pub listen: String,
+    pub store: Arc<ConfigStore>,
+    pub health: HealthMap,
+    world: Mutex<WorldMeta>,
+    units: tokio::sync::Mutex<BTreeMap<String, UnitHandle>>,
+    apply_lock: tokio::sync::Mutex<()>,
+}
+
 /// Runs the supervisor until SIGTERM/SIGINT. Assumes the house already
 /// passed plan-time validation.
-pub async fn run(house: &House, root: &Path, listen: &str) -> Result<(), String> {
+pub async fn run(check: &CheckResult, root: &Path, listen: &str) -> Result<(), String> {
     let session = zenoh::open(bus::listen_config(listen))
         .await
         .map_err(|e| format!("failed to open bus session on {listen}: {e}"))?;
@@ -36,58 +71,191 @@ pub async fn run(house: &House, root: &Path, listen: &str) -> Result<(), String>
 
     // The last-value queryables are up before any unit spawns, so a unit's
     // first get always finds them.
-    let store = Arc::new(ConfigStore::from_house(house));
-    serve_config(&session, store).await?;
-    let health: HealthMap = Arc::new(Mutex::new(
-        house
-            .units
-            .iter()
-            .map(|u| (u.manifest.unit.name.clone(), initial_health()))
-            .collect(),
-    ));
+    let store = Arc::new(ConfigStore::from_house(&check.house));
+    serve_config(&session, store.clone()).await?;
+    let health: HealthMap = Arc::default();
     serve_health(&session, health.clone()).await?;
     mirror_clock(&session).await?;
 
-    for unit in &house.units {
-        let manifest_bytes = fs::read(root.join(&unit.path))
-            .map_err(|e| format!("failed to read {}: {e}", unit.path))?;
-        let hash: String = Sha256::digest(&manifest_bytes)
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect();
-        session
-            .put(bus::manifest_hash_key(&unit.manifest.unit.name), hash)
-            .await
-            .map_err(|e| format!("failed to publish manifest hash: {e}"))?;
+    let mut world = WorldMeta { grants: check.grants.clone(), ..WorldMeta::default() };
+    for unit in &check.house.units {
+        world.units.insert(
+            unit.manifest.unit.name.clone(),
+            crate::plan::world_unit_from_repo(root, unit, &check.house, &check.expanded),
+        );
     }
 
-    let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    let mut tasks = Vec::new();
-    for unit in &house.units {
-        let spec = UnitSpec {
-            name: unit.manifest.unit.name.clone(),
-            command: unit.manifest.runtime.command.clone(),
-            restart: unit.manifest.runtime.restart,
-            grace: UnitSpec::grace_from_manifest(unit.manifest.runtime.shutdown_grace_s),
-            cwd: root.to_path_buf(),
-            endpoint: listen.to_string(),
-        };
-        tasks.push(tokio::spawn(unit::supervise(
-            spec,
-            session.clone(),
-            health.clone(),
-            shutdown_rx.clone(),
-        )));
+    let core = Arc::new(Core {
+        session: session.clone(),
+        root: root.to_path_buf(),
+        listen: listen.to_string(),
+        store,
+        health,
+        world: Mutex::new(world),
+        units: tokio::sync::Mutex::new(BTreeMap::new()),
+        apply_lock: tokio::sync::Mutex::new(()),
+    });
+    serve_meta(core.clone()).await?;
+    apply::serve(core.clone()).await?;
+    core.publish_meta().await;
+
+    for unit in &check.house.units {
+        core.launch(UnitSpec::from_loaded(unit, root, listen)).await;
     }
 
     wait_for_signal().await;
     println!("[homeostat] shutting down");
-    let _ = shutdown_tx.send(true);
-    for task in tasks {
-        let _ = task.await;
+    let handles: Vec<UnitHandle> = {
+        let mut units = core.units.lock().await;
+        std::mem::take(&mut *units).into_values().collect()
+    };
+    for handle in &handles {
+        let _ = handle.shutdown.send(true);
+    }
+    for handle in handles {
+        let _ = handle.task.await;
     }
     let _ = session.close().await;
     Ok(())
+}
+
+impl Core {
+    /// The world as this supervisor would report it over the bus.
+    pub fn snapshot(&self) -> crate::plan::World {
+        let world = self.world.lock().expect("world meta lock");
+        crate::plan::World {
+            label: self.listen.clone(),
+            live: true,
+            units: world.units.clone(),
+            params: self
+                .store
+                .read(|_, _| true)
+                .into_iter()
+                .map(|(unit, param, value)| ((unit, param), value))
+                .collect(),
+            grants: world.grants.clone(),
+            applied_commit: world.applied_commit.clone(),
+        }
+    }
+
+    /// Spawns a fresh supervision task for `spec`. The health entry is set
+    /// to `starting` synchronously so a reader never sees the previous
+    /// incarnation's terminal state after this returns.
+    async fn launch(&self, spec: UnitSpec) {
+        let name = spec.name.clone();
+        self.health
+            .lock()
+            .expect("health map lock")
+            .insert(name.clone(), initial_health());
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let task = tokio::spawn(unit::supervise(
+            spec,
+            self.session.clone(),
+            self.health.clone(),
+            shutdown_rx,
+        ));
+        self.units
+            .lock()
+            .await
+            .insert(name, UnitHandle { shutdown: shutdown_tx, task });
+    }
+
+    /// Stops a unit's supervision task (graceful per the unit contract) and
+    /// waits for it to finish. No-op when the unit is not running.
+    async fn stop(&self, name: &str) {
+        let handle = self.units.lock().await.remove(name);
+        if let Some(handle) = handle {
+            let _ = handle.shutdown.send(true);
+            let _ = handle.task.await;
+        }
+    }
+
+    /// Stops a destroyed unit and removes every trace: health entry, meta
+    /// entries, world membership.
+    async fn destroy(&self, name: &str) {
+        self.stop(name).await;
+        self.health.lock().expect("health map lock").remove(name);
+        self.world.lock().expect("world meta lock").units.remove(name);
+        for key in [
+            bus::manifest_hash_key(name),
+            bus::files_hash_key(name),
+            bus::manifest_key(name),
+        ] {
+            let _ = self.session.delete(key).await;
+        }
+    }
+
+    /// Waits until the unit's liveliness token is up (health `running`).
+    /// Halts early when the breaker opens or the unit stops for good.
+    async fn await_ready(&self, name: &str) -> Result<(), String> {
+        let deadline = tokio::time::Instant::now() + READY_DEADLINE;
+        loop {
+            let status = self
+                .health
+                .lock()
+                .expect("health map lock")
+                .get(name)
+                .map(|h| h.status);
+            match status {
+                Some(HealthStatus::Running) => return Ok(()),
+                Some(HealthStatus::Open) => {
+                    return Err("circuit breaker open".to_string());
+                }
+                Some(HealthStatus::Stopped) => {
+                    return Err("stopped before becoming ready".to_string());
+                }
+                _ => {}
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(format!("not running within {}s", READY_DEADLINE.as_secs()));
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    }
+
+    /// Records a unit as applied and publishes its meta keys.
+    async fn record_unit(&self, name: &str, unit: WorldUnit) {
+        let manifest = unit.manifest.clone();
+        let manifest_hash = unit.manifest_hash.clone();
+        let files_hash = unit.files_hash.clone();
+        self.world
+            .lock()
+            .expect("world meta lock")
+            .units
+            .insert(name.to_string(), unit);
+        let _ = self.session.put(bus::manifest_hash_key(name), manifest_hash).await;
+        let _ = self.session.put(bus::files_hash_key(name), files_hash).await;
+        let _ = self.session.put(bus::manifest_key(name), manifest).await;
+    }
+
+    async fn record_grants(&self, grants: Vec<Grant>) {
+        let payload = serde_json::to_string(&grants).expect("grants serialize");
+        self.world.lock().expect("world meta lock").grants = grants;
+        let _ = self.session.put(bus::GRANTS_KEY, payload).await;
+    }
+
+    async fn record_applied_commit(&self, commit: String) {
+        self.world.lock().expect("world meta lock").applied_commit = Some(commit.clone());
+        let _ = self.session.put(bus::APPLIED_COMMIT_KEY, commit).await;
+    }
+
+    /// Publishes the whole meta space (startup).
+    async fn publish_meta(&self) {
+        let (units, grants): (Vec<(String, WorldUnit)>, Vec<Grant>) = {
+            let world = self.world.lock().expect("world meta lock");
+            (
+                world.units.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+                world.grants.clone(),
+            )
+        };
+        for (name, unit) in units {
+            let _ = self.session.put(bus::manifest_hash_key(&name), unit.manifest_hash).await;
+            let _ = self.session.put(bus::files_hash_key(&name), unit.files_hash).await;
+            let _ = self.session.put(bus::manifest_key(&name), unit.manifest).await;
+        }
+        let payload = serde_json::to_string(&grants).expect("grants serialize");
+        let _ = self.session.put(bus::GRANTS_KEY, payload).await;
+    }
 }
 
 fn initial_health() -> Health {
@@ -105,6 +273,53 @@ fn intersects(query: &zenoh::query::Query, key: &str) -> bool {
     zenoh::key_expr::KeyExpr::try_from(key.to_string())
         .map(|k| query.key_expr().intersects(&k))
         .unwrap_or(false)
+}
+
+/// Serves the meta space to late joiners: manifest hashes and bytes per
+/// unit, the resolved grant table, and the applied commit. This is what
+/// `homeostat plan --bus` reads as the world.
+async fn serve_meta(core: Arc<Core>) -> Result<(), String> {
+    let queryable = core
+        .session
+        .declare_queryable("home/meta/**")
+        .await
+        .map_err(|e| format!("failed to declare meta queryable: {e}"))?;
+    tokio::spawn(async move {
+        while let Ok(query) = queryable.recv_async().await {
+            let entries: Vec<(String, Vec<u8>)> = {
+                let world = core.world.lock().expect("world meta lock");
+                let mut entries = Vec::new();
+                for (name, unit) in &world.units {
+                    entries.push((
+                        bus::manifest_hash_key(name),
+                        unit.manifest_hash.clone().into_bytes(),
+                    ));
+                    entries.push((
+                        bus::files_hash_key(name),
+                        unit.files_hash.clone().into_bytes(),
+                    ));
+                    entries.push((bus::manifest_key(name), unit.manifest.clone()));
+                }
+                entries.push((
+                    bus::GRANTS_KEY.to_string(),
+                    serde_json::to_vec(&world.grants).expect("grants serialize"),
+                ));
+                if let Some(commit) = &world.applied_commit {
+                    entries.push((
+                        bus::APPLIED_COMMIT_KEY.to_string(),
+                        commit.clone().into_bytes(),
+                    ));
+                }
+                entries
+            };
+            for (key, payload) in entries {
+                if intersects(&query, &key) {
+                    let _ = query.reply(key, payload).await;
+                }
+            }
+        }
+    });
+    Ok(())
 }
 
 /// Serves `home/config/{unit}/{param}`: GET without payload reads the

@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 
+use serde::{Deserialize, Serialize};
+
 use crate::error::ValidationError;
 use crate::expand::{Direction, ExpandedKey};
 use crate::manifest::{Priority, UnitKind, WriteMode, CAPABILITIES};
@@ -8,7 +10,7 @@ use crate::repo::House;
 /// One resolved write grant: a non-adapter publish expression resolved
 /// against the concrete entity set. The table doubles as the dependency
 /// graph (unit -> entities -> owner adapters).
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Grant {
     pub unit: String,
     pub publish: String,

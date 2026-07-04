@@ -6,19 +6,22 @@ governs structure. The repo is the single source of truth — no hidden state
 mutated by a UI. See [docs/design.md](docs/design.md) for the full design
 record.
 
-## Status: build-sequence step 5a
+## Status: build-sequence step 5b
 
 Step 1 (key space + manifest parser + validator, `homeostat plan`),
 step 2 (the process supervisor: `homeostat up` runs a house's units as
 supervised OS processes on a Zenoh bus, with liveliness tokens, exponential
 restart backoff, and a circuit breaker visible at `home/health/{unit}`),
-step 3 (the Zigbee2MQTT adapter and the Python SDK bootstrap) and step 4
+step 3 (the Zigbee2MQTT adapter and the Python SDK bootstrap), step 4
 (the first automation — `evening_lights` — the clock service, and the live
 parameter path end to end: `home/config/{unit}/{param}` backed by a
 core-owned last-value cache, constraint-validated writes, and edits that
-reach running units without a restart) are done. Step 5a adds the recorder:
-history end to end — typed state/cmd samples and an audit trail in a SQLite
-store, with history reads served over the bus at `home/history/**`.
+reach running units without a restart) and step 5a (the recorder: history
+end to end — typed state/cmd samples and an audit trail in a SQLite store,
+with history reads served over the bus at `home/history/**`) are done.
+Step 5b adds plan/apply proper: `homeostat plan` diffs the repo against
+the live bus and `homeostat apply` commands the running supervisor to
+walk the difference, per-unit and rolling.
 
 ## Usage
 
@@ -26,8 +29,9 @@ store, with history reads served over the bus at `home/history/**`.
 cargo run -- plan examples/house
 ```
 
-On a valid repo it prints the plan (below, verbatim). On an invalid repo it
-prints the complete error list and exits non-zero.
+On a valid repo it prints the plan (below, verbatim — offline, so against
+the empty world; `--bus` reads the live world, see Plan / apply). On an
+invalid repo it prints the complete error list and exits non-zero.
 
 ```
 Homeostat plan
@@ -330,6 +334,89 @@ returns what was written, honoring `from`/`limit` and error-replying on a
 malformed selector. Each test names its own store via `RECORDER_DB` — no
 fixed paths, like no fixed ports, and nothing to install in CI: the store
 is embedded.
+
+## Plan / apply
+
+There is no state file: desired state is the repo, actual state is read
+from the bus, so drift is impossible by construction. `homeostat plan
+--bus <endpoint>` (or `HOMEOSTAT_BUS`) connects to the running supervisor
+as a client and reads the world through the core's last-value queryables
+— `home/meta/**` (the manifest bytes and hashes of what is running, the
+resolved grant table, `home/meta/system/applied_commit`) and
+`home/config/*/*` (current parameter values). Without an endpoint the
+plan runs offline against the empty world, as a house repo's CI wants; an
+endpoint that is given but unreachable is a hard error, never a silent
+empty world.
+
+The tier is derived mechanically, never declared:
+
+- **parameter-only** — every live≠repo parameter renders as
+  `~ unit/param  live=…  repo=…`; one rule covers a changed manifest
+  default and live drift (a family member's live edit), because the repo
+  is the system of record: apply resets live values to repo values, with
+  zero restarts, and committing the new default is what makes a live edit
+  durable. A manifest change counts as parameter-level only if the
+  manifests are identical once every param's default/constraint/
+  editable_by is stripped.
+- **behavioral** — the unit's manifest changed beyond parameters, or its
+  files did (`files_hash` covers command-token files like
+  `units/probe.py`, an adapter's entity files, and `zones.toml` when the
+  unit references a zone). Restarts exactly that unit.
+- **structural** — unit create/destroy or any grant-table delta; the plan
+  renders the grant diff.
+
+`homeostat apply` prints the plan, then commands the supervisor over the
+bus: a GET with payload on `home/meta/system/apply`, the same
+query-as-command pattern as config writes. The supervisor holds the apply
+lock (parameter-only applies bypass it) and executes the walk itself,
+per-unit and rolling, never transactional: parameters first (no
+restarts), removals in reverse grant order, creates/restarts in grant
+order — adapters before the automations granted onto their entities —
+awaiting health `running` after each unit and halting on a breaker open.
+A deliberate apply restart gets a fresh breaker. Failure halts the walk
+in place: exit code 1, the position printed (`apply halted at X; not
+reached: …`), earlier units keep running their new incarnations, later
+units are untouched, and neither the grant table nor `applied_commit`
+advances — re-running apply plans exactly the remaining work.
+
+`homeostat plan --save` writes `plans/pending/{id}.plan`: TOML with id,
+actor, timestamp, base commit, tier, and the rendered plan text —
+reviewable on a phone as-is. `homeostat apply --plan <file>` refuses when
+the base commit is no longer the repo's HEAD (pending plans
+auto-invalidate as the repo moves) and otherwise recomputes the plan
+fresh; the file is a review artifact, not an execution script.
+`applied_commit` is recorded only when the house root is itself a git
+worktree root. Rollback is git: check out the previous commit and apply —
+a normal forward plan.
+
+Try an edit-plan-apply cycle (needs `uv`; revert the edit after):
+
+```
+cargo build
+PATH="$PWD/target/debug:$PATH" target/debug/homeostat up tests/fixture_house_apply &
+target/debug/homeostat plan tests/fixture_house_apply --bus tcp/127.0.0.1:7447
+# -> No changes. The world matches the repo.
+sed -i 's/default = 1/default = 5/' tests/fixture_house_apply/units/probe.toml
+target/debug/homeostat apply tests/fixture_house_apply --bus tcp/127.0.0.1:7447
+# -> Plan tier: parameter-only (1 parameter change) ... Applied.
+```
+
+The running probe automation echoes the new value to
+`home/state/den/probe_echo/level` without restarting; edit its `probe.py`
+instead and the same apply restarts exactly that unit.
+
+`tests/plan_apply.rs` pins five scenarios on temp-dir copies of
+`tests/fixture_house_apply/` under the real supervisor, asserting on the
+bus and the process table: a code edit plans behavioral and restarts only
+that unit (the adapter's pid survives, `applied_commit` updates to HEAD);
+a manifest-default edit plans parameter-only and applies with zero
+restarts, the running unit seeing the value live; a new adapter + granted
+automation plans structural with the grant diff rendered and starts in
+grant order; a unit that never becomes ready halts the walk in place with
+earlier units running and later units untouched; and a stale pending plan
+refuses to apply. Scenarios needing commits git-init their temp copy —
+the checked-in fixture is a nested directory of this repo and must not
+inherit its HEAD.
 
 ## House repo layout
 

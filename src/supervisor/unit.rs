@@ -32,6 +32,17 @@ impl UnitSpec {
     pub fn grace_from_manifest(grace_s: Option<u32>) -> Duration {
         Duration::from_secs(grace_s.unwrap_or(DEFAULT_GRACE_S) as u64)
     }
+
+    pub fn from_loaded(unit: &crate::repo::LoadedUnit, root: &std::path::Path, endpoint: &str) -> UnitSpec {
+        UnitSpec {
+            name: unit.manifest.unit.name.clone(),
+            command: unit.manifest.runtime.command.clone(),
+            restart: unit.manifest.runtime.restart,
+            grace: UnitSpec::grace_from_manifest(unit.manifest.runtime.shutdown_grace_s),
+            cwd: root.to_path_buf(),
+            endpoint: endpoint.to_string(),
+        }
+    }
 }
 
 /// Publishes health transitions and keeps the supervisor's shared health

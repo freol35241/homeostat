@@ -19,6 +19,7 @@ jobs:
             sdk/python/pyproject.toml
             adapters/*.py
             tests/fixture_house_evening/units/*.py
+            tests/fixture_house_apply/units/*.py
       - name: Install mosquitto
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends mosquitto
       # First-run dependency resolution must not eat into test timeouts.
@@ -28,4 +29,5 @@ jobs:
           uv sync --script adapters/clock.py
           uv sync --script adapters/recorder.py
           uv sync --script tests/fixture_house_evening/units/evening_lights.py
+          uv sync --script tests/fixture_house_apply/units/probe.py
       - run: cargo test

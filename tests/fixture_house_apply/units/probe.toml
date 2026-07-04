@@ -1,0 +1,20 @@
+schema = 1
+
+[unit]
+name = "probe"
+kind = "automation"
+description = "Echoes its live level parameter to a state key"
+
+[runtime]
+command = "uv run units/probe.py"
+restart = "on-failure"
+shutdown_grace_s = 5
+
+[bus.publishes]
+echo = { key = "home/state/den/probe_echo/level" }
+
+[params.level]
+type = "int"
+default = 1
+constraint = { min = 0, max = 10 }
+editable_by = "family"

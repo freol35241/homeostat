@@ -457,6 +457,131 @@ integration test induces (chmod the store read-only, publish, restore) and
 what the policy above is written against; no production code path knows
 tests exist.
  
+## Plan/apply proper (settled in step 5b)
+
+The founding mechanics (below, "Plan/apply mechanics") stand; this section
+records how they became concrete. Durable parameter state arrives here: the
+repo is the system of record, the bus cache is a live view.
+
+### How plan sees the live world
+
+`homeostat plan [path] --bus <endpoint>` (falling back to `HOMEOSTAT_BUS`)
+connects to the supervisor's bus as a client and reads the world through
+the core's existing last-value queryables — no second channel:
+
+- `home/meta/{unit}/manifest` (raw TOML as loaded), `.../manifest_hash`,
+  `.../files_hash`, `home/meta/system/grants`,
+  `home/meta/system/applied_commit` — a new meta cache/queryable in the
+  core, same pattern as config/health/clock (step 4). Startup previously
+  only *put* manifest hashes; late joiners could never read them.
+- `home/health/*` — unit status.
+- `home/config/*/*` — current parameter values.
+
+With no endpoint anywhere, plan runs offline against the empty world,
+labeled as such — still what a house repo's CI wants. An endpoint that is
+given but unreachable is a hard error, never a silent empty world: a plan
+that says "create everything" against a house that is merely unreachable
+is how you double-start a home.
+
+### What "changed" means: two hashes, then semantics
+
+- `manifest_hash` — sha256 of the manifest file (as in step 2).
+- `files_hash` — sha256 over the unit's non-manifest repo inputs: command
+  tokens that resolve to files under the house root (`uv run
+  units/foo.py` hashes the script), an adapter's entity files, and
+  `zones.toml` when any of the unit's key expressions referenced a zone.
+
+Hash-equal units are unchanged. A manifest-hash mismatch is classified
+semantically: both manifests are parsed and compared with every param's
+`default`/`constraint`/`editable_by` stripped. Equal after stripping (and
+files unchanged, and no grant delta) → the change is parameter-level →
+parameter-only tier. Anything else — including param add/remove or type
+change, since a running unit read its manifest at startup — is behavioral.
+Grant-table delta or unit create/destroy escalates to structural, as
+always. Parameter diffs themselves come from comparing live values against
+repo defaults, which covers both a changed default and live drift with one
+rule.
+
+### Who executes apply
+
+The CLI commands the running supervisor over the bus: a core-owned control
+queryable at `home/meta/system/apply`, GET-with-payload = apply request
+(the same query-as-command pattern as config writes). The supervisor
+executes the walk itself — it owns the process table, the per-unit
+backoff/breaker state, and the health map, so restart-and-await-readiness
+composes with supervision instead of racing it. The alternatives lose:
+a CLI-side walk needs remote per-unit stop/start controls plus its own
+lock anyway, and signal-and-re-read gives no plan verification and no
+result channel.
+
+The supervisor holds the apply lock (one apply at a time); parameter-only
+applies bypass it. On request it re-reads and re-validates the repo from
+disk and derives its own diff against its in-memory world — the CLI's
+printed plan is a preview; the supervisor's diff is what executes. "Await
+liveliness + healthy heartbeat" is defined as: health `running`, which by
+construction means the liveliness token is present. A deliberate apply
+restart gets a fresh supervise task and therefore a fresh breaker — new
+code earns a fresh failure budget, and a unit stuck in backoff/open can be
+replaced mid-cycle.
+
+### The walk
+
+Derived from the grant table (automation → granted entities → owner
+adapter ⇒ adapter before dependent automation), never declared:
+
+1. Parameter writes (no restarts; a unit about to restart just reads the
+   new value on start).
+2. Removals, in reverse grant order — dependents stop before the adapters
+   they write through.
+3. Creates and restarts, in grant order; after each unit: await health
+   `running`, halt on breaker `open`, `stopped`, or a readiness deadline.
+
+Grant-edgeless units and ties order by kind (adapter, automation,
+service), then name — deterministic. Failure halts the walk in place:
+exit code 1, the CLI prints the halt position (applied / halted-at /
+not-reached), the apply reply carries per-step results, the failed unit's
+state is visible at `home/health/{unit}`, earlier units keep running
+their new incarnations, later units are untouched, and neither
+`applied_commit` nor `home/meta/system/grants` advances — a re-run plans
+exactly the remaining work.
+
+### Parameter drift
+
+Plan renders every live≠repo parameter (`~ evening_lights/off_time
+live="21:30"  repo="23:00"`); drift is always visible. Apply sets live = repo:
+the repo is the system of record, and a live edit the family wants to
+keep is made durable by committing it (edit the manifest default; that
+plan is parameter-only, auto-applies with zero restarts, exempt from the
+apply lock). The capture path — turning a live edit into a commit
+automatically — belongs to the agent/voice surface ("voice-initiated
+changes commit with the transcript as the message") and is deferred; v1
+actor enforcement remains plan-time + trust.
+
+### Pending plans and applied_commit
+
+`homeostat plan --save` writes `plans/pending/{id}.plan` — TOML with
+`id`, `actor`, `created` (RFC3339), `base_commit`, `tier`, and the full
+rendered plan text, readable on a phone as-is. `homeostat apply --plan
+<file>` refuses when `base_commit` is not the repo's current HEAD (the
+auto-invalidation), otherwise recomputes the plan fresh against worktree
++ bus — the file is a review artifact, not an execution script. Approval
+UX beyond this arrives with the agent surface.
+
+`applied_commit` exists only when the house root is itself a git worktree
+root (`git rev-parse --show-toplevel` == the house root — a nested
+fixture directory must not inherit the enclosing repo's HEAD). Then the
+CLI passes HEAD (suffixed `-dirty` when the worktree has uncommitted
+changes) with the apply request and the supervisor publishes it at
+`home/meta/system/applied_commit` after a fully applied walk. A non-git
+house applies fine but records no commit and cannot save pending plans.
+Integration tests git-init fixture copies in temp dirs.
+
+### Rollback
+
+Git does the time travel: check out the previous commit and run a normal
+forward plan/apply. Plan never reads arbitrary commits itself; it stays a
+function of worktree + bus.
+
 ## Manifest schema
  
 TOML. One schema, three kinds. `schema = 1` versioning field at the top of

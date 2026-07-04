@@ -32,8 +32,15 @@ impl Supervisor {
     /// racily (the probe listener closes before the supervisor binds), so
     /// a supervisor that dies before listening is retried on a new port.
     pub fn spawn_with_env(fixture: &str, envs: &[(&str, &str)]) -> Self {
+        Self::spawn_at(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(fixture), envs)
+    }
+
+    /// Like `spawn_with_env`, on an absolute house path (temp-dir copies
+    /// that tests edit between plan and apply).
+    #[allow(dead_code)] // each test binary uses its own subset of the harness
+    pub fn spawn_at(house: &std::path::Path, envs: &[(&str, &str)]) -> Self {
         for _ in 0..5 {
-            match Self::try_spawn(fixture, envs) {
+            match Self::try_spawn(house, envs) {
                 Some(sup) => return sup,
                 None => continue,
             }
@@ -41,10 +48,9 @@ impl Supervisor {
         panic!("supervisor kept exiting before listening");
     }
 
-    fn try_spawn(fixture: &str, envs: &[(&str, &str)]) -> Option<Self> {
+    fn try_spawn(house: &std::path::Path, envs: &[(&str, &str)]) -> Option<Self> {
         let port = free_port();
         let endpoint = format!("tcp/127.0.0.1:{port}");
-        let house = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(fixture);
         let fake_adapter_dir = PathBuf::from(env!("CARGO_BIN_EXE_fake_adapter"))
             .parent()
             .expect("bin dir")
