@@ -1,39 +1,98 @@
 # Homeostat
 
-A household regulator, after W. Ross Ashby's 1948 machine. The system
-maintains a home in equilibrium; the family adjusts setpoints, the owner
-governs structure. The repo is the single source of truth — no hidden state
-mutated by a UI. See [docs/design.md](docs/design.md) for the full design
-record.
+**A household regulator, not an assistant.** Text-first home automation:
+your home's entire configuration lives in a git repo, a small Rust core
+supervises plain OS processes over a [Zenoh](https://zenoh.io/) bus, and
+every change — a family member nudging a setpoint, you rewriting an
+automation, an AI agent proposing one — goes through the same
+`plan` / `apply` discipline.
 
-## Status: build-sequence step 6
+Named after W. Ross Ashby's 1948 machine. The system maintains the home in
+equilibrium; the family adjusts setpoints; the owner governs structure.
+[docs/design.md](docs/design.md) is the full design record and the
+authority on architecture.
 
-Step 1 (key space + manifest parser + validator, `homeostat plan`),
-step 2 (the process supervisor: `homeostat up` runs a house's units as
-supervised OS processes on a Zenoh bus, with liveliness tokens, exponential
-restart backoff, and a circuit breaker visible at `home/health/{unit}`),
-step 3 (the Zigbee2MQTT adapter and the Python SDK bootstrap), step 4
-(the first automation — `evening_lights` — the clock service, and the live
-parameter path end to end: `home/config/{unit}/{param}` backed by a
-core-owned last-value cache, constraint-validated writes, and edits that
-reach running units without a restart), step 5a (the recorder: history
-end to end — typed state/cmd samples and an audit trail in a SQLite store,
-with history reads served over the bus at `home/history/**`) and step 5b
-(plan/apply proper: `homeostat plan` diffs the repo against the live bus
-and `homeostat apply` commands the running supervisor to walk the
-difference, per-unit and rolling) are done. Step 6 adds the agent
-surface: `homeostat mcp`, an MCP server whose authority is bounded by the
-same plan/apply machinery as every other actor.
+## Why
 
-## Usage
+Homeostat is built as a Home Assistant replacement around a few firm
+opinions:
+
+- **The repo is the single source of truth.** No hidden state mutated by a
+  UI. Desired state is text in git; actual state is read live from the
+  bus; there is no state file, so drift is impossible by construction.
+- **Automations are pure code.** Python scripts with a small SDK — no YAML
+  DSL ceiling. A unit gets exactly the bus surface its manifest declares,
+  nothing more.
+- **Changes are reviewed, not clicked.** `homeostat plan` shows exactly
+  what would change and derives how disruptive it is — parameter-only,
+  behavioral, or structural — mechanically from the diff, never from a
+  declaration. `homeostat apply` walks the difference unit by unit,
+  rolling, halting visibly on failure. Rollback is `git checkout` and
+  apply again.
+- **Agent-native.** An MCP server lets an agent read state and history,
+  propose edits, and apply them — with authority bounded by the same
+  plan/apply machinery as every other actor. A setpoint change
+  auto-applies; anything structural waits for the owner.
+- **Small core, real processes.** Every running thing is a supervised OS
+  process with liveliness tokens, exponential restart backoff, and a
+  circuit breaker visible on the bus — Erlang lineage, not containers or
+  plugins.
+
+It is early software (see [Status](#status)) and currently targets its
+author's device inventory: Zigbee2MQTT, ESPHome, MQTT. There is no Home
+Assistant bridge.
+
+## How it works
+
+A **house repo** declares everything about your home:
 
 ```
+house/
+  zones.toml              # named sets of rooms; zones never appear in keys
+  units/
+    zigbee.toml           # adapter: discovery endpoint, templated keys, entities dir
+    evening_lights.toml   # automation: subscribes, publishes, params
+    recorder.toml         # service
+  entities/
+    zigbee/
+      kitchen_ceiling.toml   # one file per device; file stem = entity name
+```
+
+The entity file is the sole authority on write policy (`shared`,
+`exclusive`, `arbitrated`); its `room` field is the single source of
+spatial truth. `examples/house/` is a complete, documented example.
+
+`homeostat up` validates the repo, then runs every unit as a supervised
+process, all talking over a well-defined key space on the bus:
+
+```
+home/state/{room}/{entity}/{aspect}   live device state
+home/cmd/{room}/{entity}/{aspect}     commands toward devices
+home/config/{unit}/{param}            live-editable setpoints
+home/health/{unit}                    supervision status, health events
+home/history/**                       recorded history, served over the bus
+```
+
+Authority is tiered along the same lines as the plan tiers: parameters are
+family-editable live on the bus (validated against manifest constraints);
+structure — units, grants, code — changes only through the repo and
+plan/apply.
+
+## Quick start
+
+You need a Rust toolchain, and [uv](https://docs.astral.sh/uv/) to run the
+Python units.
+
+**Plan a house** (offline, against the empty world):
+
+```
+git clone https://github.com/freol35241/homeostat && cd homeostat
 cargo run -- plan examples/house
 ```
 
-On a valid repo it prints the plan (below, verbatim — offline, so against
-the empty world; `--bus` reads the live world, see Plan / apply). On an
-invalid repo it prints the complete error list and exits non-zero.
+On a valid repo this prints every unit to create, the expanded key
+space, and the resolved grant table; on an invalid repo, the complete
+error list and a non-zero exit — a house repo's CI in one command:
 
 ```
 Homeostat plan
@@ -42,359 +101,46 @@ Homeostat plan
 
 Units to create (4):
 
-+ adapter esphome (units/esphome.toml)
-    command: uv run units/esphome.py
-    entities (1):
-      outdoor_temp  sensor  room=global  write=shared
 + adapter zigbee (units/zigbee.toml)
-    command: uv run units/zigbee.py
-    entities (4):
-      front_door_lock  lock      room=hallway     write=arbitrated
-      hallway_motion   presence  room=hallway     write=shared
-      kitchen_ceiling  light     room=kitchen     write=shared
-      livingroom_lamp  light     room=livingroom  write=exclusive
+    ...
 + automation evening_lights (units/evening_lights.toml)
-    command: uv run units/evening_lights.py
     params:
       off_time  type=time  default=23:00  constraint={after=20:00, before=02:00}  editable_by=family
-+ service recorder (units/recorder.toml)
-    command: uv run units/recorder.py
-
-Expanded keys:
-
-  esphome publishes state: home/state/{room}/{entity}/**
-    -> home/state/global/outdoor_temp/**
-  esphome subscribes commands: home/cmd/{room}/{entity}/**
-    -> home/cmd/global/outdoor_temp/**
-  zigbee publishes state: home/state/{room}/{entity}/**
-    -> home/state/hallway/front_door_lock/**
-    -> home/state/hallway/hallway_motion/**
-    -> home/state/kitchen/kitchen_ceiling/**
-    -> home/state/livingroom/livingroom_lamp/**
-  zigbee subscribes commands: home/cmd/{room}/{entity}/**
-    -> home/cmd/hallway/front_door_lock/**
-    -> home/cmd/hallway/hallway_motion/**
-    -> home/cmd/kitchen/kitchen_ceiling/**
-    -> home/cmd/livingroom/livingroom_lamp/**
-  evening_lights publishes lights: home/cmd/downstairs/**/light (zone downstairs)
-    -> home/cmd/kitchen/**/light
-    -> home/cmd/livingroom/**/light
-    -> home/cmd/hallway/**/light
-  evening_lights subscribes clock: home/clock/minute
-  evening_lights subscribes presence: home/state/downstairs/**/presence (zone downstairs)
-    -> home/state/kitchen/**/presence
-    -> home/state/livingroom/**/presence
-    -> home/state/hallway/**/presence
-  recorder publishes history: home/history/**
-  recorder subscribes cmd: home/cmd/**
-  recorder subscribes config: home/config/**
-  recorder subscribes health: home/health/**
-  recorder subscribes state: home/state/**
 
 Grant table:
 
   evening_lights.lights  capability=light  priority=automation
     -> kitchen_ceiling  (room=kitchen, write=shared, owner=zigbee)
-    -> livingroom_lamp  (room=livingroom, write=exclusive, owner=zigbee)
+    ...
 
 Plan tier: structural (4 units created, 1 grant added)
 ```
 
-Everything is structural against an empty world; the tier derivation
-(parameter-only / behavioral / structural, per the design record) lives in
-`src/plan.rs` and any grant-table delta escalates the tier.
-
-## up
-
-`homeostat up` validates a house repo exactly like `plan`, refuses it on any
-error, and otherwise runs every unit as a supervised process:
-
-```
-cargo build
-PATH="$PWD/target/debug:$PATH" cargo run -- up tests/fixture_house
-```
-
-The supervisor opens a router-mode Zenoh session listening on
-`tcp/127.0.0.1:7447` (override with `--listen`) — the hub all units and
-observers connect to as clients — and hands each unit its name and the bus
-endpoint via `HOMEOSTAT_UNIT` / `HOMEOSTAT_BUS`. Units declare a liveliness token at
-`home/health/{unit}/alive` when ready; the supervisor publishes JSON health
-at `home/health/{unit}` (`starting`, `running`, `backoff`, `open`,
-`stopped`) and `home/meta/{unit}/manifest_hash`. Transitions are also logged
-to stdout, so the fixture house shows the fake adapter going `starting` →
-`running` with its pid.
-
-Crashed units restart per their manifest `restart` policy with exponential
-backoff (100ms doubling, 30s cap); five consecutive quick exits open the
-circuit breaker (`status = "open"`, no further restarts). SIGTERM/Ctrl-C
-terminates units gracefully within their `shutdown_grace_s`, then SIGKILLs
-the process group — the grace applies to the whole group, and a unit whose
-direct child exits on its own gets its group swept before the restart, so
-a `uv run` wrapper can't leave its interpreter behind. pdeathsig covers a
-SIGKILLed supervisor. The full contract is in
-[docs/design.md](docs/design.md#supervision-settled-in-step-2).
-
-Health is published on transitions and served to late joiners by a
-queryable from the core's last-value cache (get `home/health/{unit}` for
-the current state).
-
-The `PATH` prefix is only for the fixture house, whose fake adapter is the
-`fake_adapter` binary built by this crate; real houses use commands that
-resolve on their own (`uv run units/...`).
-
-`tests/supervision.rs` pins the four supervision scenarios (spawn shows
-liveliness and state, induced crash restarts with observable backoff, a
-crash loop opens the breaker, SIGTERM shuts down cleanly without orphans)
-against the real binary on `tests/fixture_house/`.
-
-## Zigbee2MQTT adapter
-
-`adapters/zigbee2mqtt.py` is the first Python unit: a uv-run script with
-PEP 723 inline dependencies and the first consumer of the Python SDK at
-`sdk/python/` (`homeostat.session` — bus session from
-`HOMEOSTAT_UNIT`/`HOMEOSTAT_BUS` plus the liveliness token,
-`homeostat.keys` — key builders, `homeostat.house` — manifest and entity
-loading; the script pulls the SDK in via a `[tool.uv.sources]` path source).
-
-It is a translating subscriber. Zigbee2MQTT state on `zigbee2mqtt/{id}`
-fans out to per-aspect keys:
-
-```
-zigbee2mqtt/lamp_kitchen_1  {"state":"ON","brightness":128}
-  -> home/state/kitchen/kitchen_lamp/on          true
-  -> home/state/kitchen/kitchen_lamp/brightness  128
-```
-
-and commands translate back:
-
-```
-home/cmd/kitchen/kitchen_lamp/on  true
-  -> zigbee2mqtt/lamp_kitchen_1/set  {"state":"ON"}
-```
-
-The entity file's `id` is the z2m topic segment; the file stem is the bus
-entity name. The z2m `state` field is normalized (`on` for lights/switches,
-`locked` for locks); other scalar fields pass through under their z2m
-names. Lock entities are state-only — no command subscription until the
-arbiter exists. Unknown devices and malformed payloads are dropped with a
-JSON event at `home/health/{unit}/event`, never a crash. Full conventions
-in [docs/design.md](docs/design.md#zigbee2mqtt-adapter-and-python-sdk-settled-in-step-3).
-
-The adapter reads its own manifest and entity files from the house repo
-(cwd is the house root); the MQTT endpoint comes from
-`[discovery].endpoint`, with `${VAR}` env expansion done adapter-side. Try
-it against a live broker (needs `mosquitto` and `uv`):
-
-```
-mosquitto -p 1883 &
-uv sync --script adapters/zigbee2mqtt.py   # pre-warm the env (optional)
-HOMEOSTAT_TEST_MQTT_PORT=1883 cargo run -- up tests/fixture_house_z2m
-mosquitto_pub -t zigbee2mqtt/lamp_kitchen_1 -m '{"state":"ON","brightness":128}'
-```
-
-`tests/z2m.rs` pins four scenarios against a real mosquitto on a free port
-and the real supervisor: state translation onto the Zenoh bus, command
-translation onto MQTT (including lock-command silence), unknown-device and
-malformed payloads dropped with health events, and the step-2 unit contract
-(liveliness token, graceful SIGTERM within the grace). CI installs
-mosquitto and uv and pre-warms the adapter environment before `cargo test`.
-
-## Automations and parameters
-
-`tests/fixture_house_evening/units/evening_lights.py` is the first
-automation: a regulator, not a scheduler. On every input — clock minute,
-presence change, light state — it re-evaluates one rule: inside the night
-window with nobody present, every light that is on gets turned off. It is
-built on the SDK's automation Context, which gives a unit exactly the
-surface its manifest declares:
-
-```python
-from homeostat import automation
-
-ctx = automation.context()            # reads units/{HOMEOSTAT_UNIT}.toml
-ctx.subscribe("presence", on_presence)  # binding names from [bus.subscribes];
-ctx.subscribe("clock", on_clock)        # handlers get (key, decoded JSON)
-ctx.params.off_time                   # typed (datetime.time), live-updated
-ctx.publish("lights", False, room="livingroom", entity="lamp")
-                                      # through [bus.publishes]; concrete
-                                      # keys only, checked against the
-                                      # declared expression
-ctx.ready(); ctx.run()                # liveliness token, block until SIGTERM
-```
-
-Zone references in subscribe/publish expressions expand against the
-house's `zones.toml`, the same expansion the core performs at plan time.
-
-Parameters live on the bus at `home/config/{unit}/{param}`, seeded from
-manifest defaults and backed by a core-owned last-value cache. A zenoh GET
-without payload reads the current value; a GET **with** payload is a write:
-the core validates it against the manifest's type and constraint (min/max,
-after/before with midnight spanning, enum) and either stores + publishes it
-— every subscribed unit sees it live, no restart — or rejects it with an
-error reply while the old value stands. An edit survives any unit restart
-(the supervisor holds the value); durable parameter state arrives with
-plan/apply in step 5.
-
-`adapters/clock.py` owns civil time: `home/clock/minute` (RFC3339 local
-time with offset, on the minute) and `home/clock/date` (at local
-midnight), both also published at startup so a late joiner never waits out
-a wall-clock minute, and both served from the core cache via get. The
-timezone is the clock's own `timezone` manifest parameter — the clock
-dogfoods the parameter path.
-
-Try it (needs `uv`):
+**Run a live house.** The integration-test fixtures double as demos; this
+one runs a clock, a reflector adapter (echoes commands back as state), and
+the `evening_lights` automation:
 
 ```
 cargo build
 PATH="$PWD/target/debug:$PATH" cargo run -- up tests/fixture_house_evening
 ```
 
-then watch `home/cmd/livingroom/lamp/on` while you flip presence and edit
-`off_time` — a zenoh GET on `home/config/evening_lights/off_time` with
-payload `"21:30"` changes the running automation's behavior on the next
-minute; payload `"03:00"` is rejected (outside `after 20:00, before
-02:00`) and changes nothing.
+(The `PATH` prefix is only for fixtures, whose adapters are test binaries
+built by this crate; real houses use commands that resolve on their own,
+like `uv run units/...`.)
 
-`tests/evening.rs` pins four scenarios against the real supervisor: clock
-payloads match the documented schema (asserted through the cache — no
-wall-clock waits), presence + a tick crossing `off_time` publishes the
-lights-off command, a live `off_time` edit takes effect in the same
-process and survives an automation restart via last-value, and an
-out-of-constraint write is rejected observably with the old value still
-driving behavior. The crossing scenarios run on
-`tests/fixture_house_evening_sim/` — the same house without the clock unit
-— where the test process publishes `home/clock/minute` itself; the
-production clock has no test hooks.
+The supervisor opens a router-mode Zenoh session on `tcp/127.0.0.1:7447`
+(override with `--listen`), spawns each unit, and logs health transitions
+(`starting` → `running`). Any Zenoh client can now watch
+`home/state/**`, publish commands, or edit a setpoint live: a zenoh GET on
+`home/config/evening_lights/off_time` with payload `"21:30"` changes the
+running automation on the next minute — and payload `"03:00"` is rejected
+against the manifest constraint with the old value still in force.
 
-## Recorder / history
-
-`adapters/recorder.py` is the history service — NOT a naive bus mirror.
-It subscribes the key spaces its manifest declares and writes a SQLite
-store (the path comes from `[discovery]`, `endpoint = "sqlite:<path>"`,
-`${VAR}`-expanded recorder-side like adapters' endpoints):
-
-- `home/state/**` and `home/cmd/**` land as **typed samples**: payloads
-  are decoded on the way in (`bool` / `number` / `string`; non-scalar or
-  non-JSON payloads are dropped with a health event, never a row). Series
-  identity is `(class, entity, aspect)`; **room is a tag column**, so an
-  entity move is a tag transition on one continuous series, never a new
-  series. Timestamps are recorder receive time (µs, UTC), stamped before
-  any buffering.
-- `home/health/**` and `home/config/**` land raw in an `events` audit
-  table — only *accepted* config writes ever reach the bus, so that
-  subscription is exactly the accepted-edit audit trail.
-- Explicitly not recorded: `home/clock/**`, `home/meta/**`, liveliness.
-
-History reads go **over the bus**, not to the backend: the recorder serves
-a queryable at `home/history/**`, keeping the store recorder-private and
-swappable (SQLite carries a single home for years; QuestDB is the recorded
-growth path). The history key is entity-first — entity is the series
-identity, room arrives per row:
+**Make a change through plan/apply.** With a house running, edit the repo
+and let the engine work out what it means:
 
 ```
-zenoh get 'home/history/state/lamp/on?from=2026-07-01T00:00:00+02:00;limit=100'
-  -> home/history/state/lamp/on
-     [{"ts": "2026-07-04T08:26:56.892816+00:00", "room": "livingroom", "value": true}, ...]
-```
-
-(`;` separates zenoh selector parameters; `from`/`to` are RFC3339 with
-offset, `limit` keeps the most recent rows, replies are ascending, one
-reply per concrete series when the key has wildcards.)
-
-If the store becomes unwritable — disk full, permissions, a dying SD card
-— samples buffer in memory (bounded, drop-oldest) with their receive-time
-timestamps, `{"kind": "backend-outage"}` appears at
-`home/health/recorder/event`, and recovery flushes the buffer and reports
-`{"kind": "backend-restored", "flushed": N, "dropped": M}` — the outage is
-invisible in the data unless the buffer overflowed. A store that cannot
-open at startup is a startup error: no readiness, supervisor backoff makes
-it visible. Full decisions in
-[docs/design.md](docs/design.md#history--recorder-settled-in-step-5a).
-
-Try it (needs `uv`):
-
-```
-cargo build
-RECORDER_DB=/tmp/history.db PATH="$PWD/target/debug:$PATH" \
-  cargo run -- up tests/fixture_house_recorder
-```
-
-then publish some `home/state/...` values and get
-`home/history/state/{entity}/{aspect}` — the evening-lights loop runs on
-the real clock and its state history lands in `/tmp/history.db` and reads
-back over the bus.
-
-`tests/recorder.rs` pins four scenarios against the real supervisor
-running the step-4 units plus the recorder, asserting on both the store
-(rusqlite, dev-dependency) and the bus: state lands with entity, room,
-aspect, and correctly typed value (plus the cmd/config/health audit
-spaces, and the non-scalar drop); an entity publishing under a new room
-continues one series with a tag transition; the backend-outage policy is
-observable (store made read-only, samples buffered, health events on
-outage and recovery, receive-time timestamps preserved); and the read path
-returns what was written, honoring `from`/`limit` and error-replying on a
-malformed selector. Each test names its own store via `RECORDER_DB` — no
-fixed paths, like no fixed ports, and nothing to install in CI: the store
-is embedded.
-
-## Plan / apply
-
-There is no state file: desired state is the repo, actual state is read
-from the bus, so drift is impossible by construction. `homeostat plan
---bus <endpoint>` (or `HOMEOSTAT_BUS`) connects to the running supervisor
-as a client and reads the world through the core's last-value queryables
-— `home/meta/**` (the manifest bytes and hashes of what is running, the
-resolved grant table, `home/meta/system/applied_commit`) and
-`home/config/*/*` (current parameter values). Without an endpoint the
-plan runs offline against the empty world, as a house repo's CI wants; an
-endpoint that is given but unreachable is a hard error, never a silent
-empty world.
-
-The tier is derived mechanically, never declared:
-
-- **parameter-only** — every live≠repo parameter renders as
-  `~ unit/param  live=…  repo=…`; one rule covers a changed manifest
-  default and live drift (a family member's live edit), because the repo
-  is the system of record: apply resets live values to repo values, with
-  zero restarts, and committing the new default is what makes a live edit
-  durable. A manifest change counts as parameter-level only if the
-  manifests are identical once every param's default/constraint/
-  editable_by is stripped.
-- **behavioral** — the unit's manifest changed beyond parameters, or its
-  files did (`files_hash` covers command-token files like
-  `units/probe.py`, an adapter's entity files, and `zones.toml` when the
-  unit references a zone). Restarts exactly that unit.
-- **structural** — unit create/destroy or any grant-table delta; the plan
-  renders the grant diff.
-
-`homeostat apply` prints the plan, then commands the supervisor over the
-bus: a GET with payload on `home/meta/system/apply`, the same
-query-as-command pattern as config writes. The supervisor holds the apply
-lock (parameter-only applies bypass it) and executes the walk itself,
-per-unit and rolling, never transactional: parameters first (no
-restarts), removals in reverse grant order, creates/restarts in grant
-order — adapters before the automations granted onto their entities —
-awaiting health `running` after each unit and halting on a breaker open.
-A deliberate apply restart gets a fresh breaker. Failure halts the walk
-in place: exit code 1, the position printed (`apply halted at X; not
-reached: …`), earlier units keep running their new incarnations, later
-units are untouched, and neither the grant table nor `applied_commit`
-advances — re-running apply plans exactly the remaining work.
-
-`homeostat plan --save` writes `plans/pending/{id}.plan`: TOML with id,
-actor, timestamp, base commit, tier, and the rendered plan text —
-reviewable on a phone as-is. `homeostat apply --plan <file>` refuses when
-the base commit is no longer the repo's HEAD (pending plans
-auto-invalidate as the repo moves) and otherwise recomputes the plan
-fresh; the file is a review artifact, not an execution script.
-`applied_commit` is recorded only when the house root is itself a git
-worktree root. Rollback is git: check out the previous commit and apply —
-a normal forward plan.
-
-Try an edit-plan-apply cycle (needs `uv`; revert the edit after):
-
-```
-cargo build
 PATH="$PWD/target/debug:$PATH" target/debug/homeostat up tests/fixture_house_apply &
 target/debug/homeostat plan tests/fixture_house_apply --bus tcp/127.0.0.1:7447
 # -> No changes. The world matches the repo.
@@ -403,117 +149,136 @@ target/debug/homeostat apply tests/fixture_house_apply --bus tcp/127.0.0.1:7447
 # -> Plan tier: parameter-only (1 parameter change) ... Applied.
 ```
 
-The running probe automation echoes the new value to
-`home/state/den/probe_echo/level` without restarting; edit its `probe.py`
-instead and the same apply restarts exactly that unit.
+The running unit picks up the new value with zero restarts. Edit its
+`probe.py` instead and the same command plans behavioral and restarts
+exactly that unit.
 
-`tests/plan_apply.rs` pins five scenarios on temp-dir copies of
-`tests/fixture_house_apply/` under the real supervisor, asserting on the
-bus and the process table: a code edit plans behavioral and restarts only
-that unit (the adapter's pid survives, `applied_commit` updates to HEAD);
-a manifest-default edit plans parameter-only and applies with zero
-restarts, the running unit seeing the value live; a new adapter + granted
-automation plans structural with the grant diff rendered and starts in
-grant order; a unit that never becomes ready halts the walk in place with
-earlier units running and later units untouched; and a stale pending plan
-refuses to apply. Scenarios needing commits git-init their temp copy —
-the checked-in fixture is a nested directory of this repo and must not
-inherit its HEAD.
+## The pieces
 
-## Agent surface (MCP)
+### Adapters: devices onto the bus
 
-`homeostat mcp` serves five tools over MCP: `read_state`, `read_history`,
-`plan`, `propose`, `apply`. The agent never touches the bus directly for
-structural work — it manipulates text and goes through plan/apply like
-every other actor.
-
-- `read_state` reads any `home/**` key expression through the core's
-  last-value caches (the supervisor now mirrors `home/state/**` the same
-  way it mirrors the clock, so current values are always a get away);
-  `read_history` queries the recorder at `home/history/**` with
-  `from`/`to`/`limit`.
-- `propose` takes repo-relative paths plus full new content, writes them,
-  commits to the current branch, and plans. An invalid repo is restored
-  and never committed — and the validator now rejects a parameter default
-  outside its own constraint, so an out-of-constraint "parameter edit" is
-  refused with the constraint named. A parameter-only plan auto-applies:
-  zero restarts, durable by construction, the commit IS the edit.
-  Anything behavioral or structural stays committed but unapplied, saved
-  as `plans/pending/{id}.plan` with actor `agent`.
-- `apply` executes the current diff only when it is parameter-only.
-  Behavioral and structural plans are refused at agent tier; the owner
-  applies them with `homeostat apply --plan <file>`. The tier is derived
-  mechanically from the diff, so a manifest edit that smuggles in a grant
-  delta escalates to structural — the plan engine is the enforcement,
-  not tool-level checks.
-
-Transports: stdio by default (an MCP client launches
-`homeostat mcp /path/to/house --bus tcp/127.0.0.1:7447`). For a deployed
-house — supervisor as PID 1 in a container — the server runs as a
-supervised service unit over HTTP, declared in the repo like any unit:
+`adapters/zigbee2mqtt.py` is the reference adapter — a translating
+subscriber that fans Zigbee2MQTT state out to per-aspect keys and
+translates commands back:
 
 ```
-[unit]
-name = "mcp"
-kind = "service"
+zigbee2mqtt/lamp_kitchen_1  {"state":"ON","brightness":128}
+  -> home/state/kitchen/kitchen_lamp/on          true
+  -> home/state/kitchen/kitchen_lamp/brightness  128
 
-[runtime]
-command = "homeostat mcp --http 127.0.0.1:8642"
-restart = "on-failure"
+home/cmd/kitchen/kitchen_lamp/on  true
+  -> zigbee2mqtt/lamp_kitchen_1/set  {"state":"ON"}
 ```
 
-It is a bus client under the unit contract: liveliness token, health at
-`home/health/mcp`, graceful SIGTERM. A saved pending plan no longer
-counts toward the repo's dirty state (`plans/` is excluded from the HEAD
-dirty check), so `apply --plan` accepts the plan it just saved.
+Unknown devices and malformed payloads are dropped with a health event at
+`home/health/{unit}/event`, never a crash. Details and conventions:
+[design record §Zigbee2MQTT](docs/design.md#zigbee2mqtt-adapter-and-python-sdk-settled-in-step-3).
 
-`tests/mcp.rs` pins six scenarios against the real server and a live
-supervised house: reads serving live state and recorded history end to
-end; the deployed HTTP-as-a-unit shape; a parameter propose that commits
-and auto-applies with zero restarts and `applied_commit` advancing; an
-out-of-constraint propose rejected with the constraint named and nothing
-committed; a structural propose landing a pending plan the agent's own
-apply refuses and the owner applies in grant order; and the
-grant-smuggling escalation.
+### Automations: regulators, not schedulers
 
-## House repo layout
+Automations are Python scripts built on the SDK in `sdk/python/`. The
+automation context gives a unit exactly the surface its manifest declares:
 
-`examples/house/` doubles as documentation:
+```python
+from homeostat import automation
 
-```
-examples/house/
-  zones.toml              # named sets of rooms; zones never appear in keys
-  units/
-    zigbee.toml           # adapter: discovery, templated keys, entities dir
-    esphome.toml          # adapter
-    evening_lights.toml   # automation: subscribes, publishes, params
-    recorder.toml         # service
-  entities/
-    zigbee/
-      kitchen_ceiling.toml   # one file per device; file stem = entity name
-      ...
-    esphome/
-      outdoor_temp.toml
+ctx = automation.context()              # reads units/{HOMEOSTAT_UNIT}.toml
+ctx.subscribe("presence", on_presence)  # binding names from [bus.subscribes]
+ctx.subscribe("clock", on_clock)
+ctx.params.off_time                     # typed (datetime.time), live-updated
+ctx.publish("lights", False, room="livingroom", entity="lamp")
+ctx.ready(); ctx.run()                  # liveliness token, block until SIGTERM
 ```
 
-The entity file is the sole authority on write policy; the file stem is the
-globally unique entity name; `room` in the entity file is the single source
-of spatial truth.
+Parameters live at `home/config/{unit}/{param}`, seeded from manifest
+defaults, validated against constraints (min/max, after/before with
+midnight spanning, enum) on every write, and delivered to running units
+live — no restart. Committing a new default to the repo is what makes a
+live edit durable. A `clock` service owns civil time at
+`home/clock/minute` and `home/clock/date`.
 
-## Validation
+### The recorder: history as a service
 
-Plan-time validation covers: globally unique unit and entity names,
-key-space schema conformance (`home/{class}/{room}/{entity}/{aspect}`),
-capability matching between publishes and entities, write-policy enforcement
-(two writers on an exclusive entity is an error), the reserved pseudo-room
-list (`global`, `person`), exactly one owner adapter per entity, zone
-well-formedness, and parameter constraint well-formedness (min/max,
-after/before, enum).
+`adapters/recorder.py` writes state and commands to SQLite as typed
+samples — entity is the series identity, room is a tag, so moving a device
+between rooms continues one series — plus an audit trail of health events
+and accepted config edits. Reads go over the bus, keeping the store
+private and swappable:
 
-The test corpus in `tests/corpus/invalid/` pairs each invalid house with its
-complete expected error list; `tests/corpus/expected_plan.txt` pins the plan
-output above.
+```
+zenoh get 'home/history/state/lamp/on?from=2026-07-01T00:00:00+02:00;limit=100'
+```
+
+A backend outage (full disk, dying SD card) buffers samples in memory with
+their original timestamps and reports itself as health events; recovery
+flushes the buffer. Details:
+[design record §History](docs/design.md#history--recorder-settled-in-step-5a).
+
+### Plan / apply
+
+`homeostat plan --bus <endpoint>` reads the live world through the core's
+queryables and diffs it against the repo. The tier is derived, never
+declared:
+
+- **parameter-only** — setpoint differences; applies with zero restarts.
+- **behavioral** — a unit's manifest or code changed; restarts exactly
+  that unit.
+- **structural** — units created/destroyed or any grant-table delta; the
+  plan renders the grant diff.
+
+`homeostat apply` commands the running supervisor to walk the difference —
+per-unit, rolling, in grant order, awaiting health after each — and halts
+in place on failure with the position printed; re-running plans exactly
+the remaining work. `plan --save` writes a pending plan file, reviewable
+on a phone, that auto-invalidates when the repo moves.
+
+### The agent surface: MCP
+
+`homeostat mcp` serves five tools — `read_state`, `read_history`, `plan`,
+`propose`, `apply` — over stdio, or over HTTP as a supervised service unit
+in a deployed house. The agent never touches the bus directly for
+structural work: `propose` takes file contents, commits, and plans. A
+parameter-only plan auto-applies (the commit *is* the edit); anything
+behavioral or structural is saved as a pending plan for the owner to apply
+with `homeostat apply --plan <file>`. The tier derivation is the
+enforcement — a manifest edit that smuggles in a grant delta escalates to
+structural on its own. Details:
+[design record §Agent surface](docs/design.md#agent-surface-mcp).
+
+## Status
+
+Pre-1.0, under active development, following the build sequence in the
+design record:
+
+1. ✅ Key space, manifest parser, validator, `homeostat plan`
+2. ✅ Process supervisor: liveliness, backoff, circuit breaker
+3. ✅ Zigbee2MQTT adapter and Python SDK
+4. ✅ First automation, clock service, live parameter path
+5. ✅ Recorder / history, then plan/apply proper
+6. ✅ Agent MCP surface
+7. ⬜ Voice
+
+## Development
 
 ```
 cargo test
 ```
+
+Integration tests run the real binary against real infrastructure — a live
+supervisor, a real mosquitto broker on a free port, a real SQLite store —
+never mocks. The invalid-manifest corpus in `tests/corpus/invalid/` pairs
+each broken house with its complete expected error list. CI needs
+`mosquitto` and `uv` installed.
+
+| Test | Pins |
+| --- | --- |
+| `tests/supervision.rs` | the unit contract: spawn, crash/backoff, breaker, clean shutdown |
+| `tests/z2m.rs` | adapter translation both ways, drop policy, unit contract |
+| `tests/evening.rs` | automation behavior, live parameter edits, constraint rejection |
+| `tests/recorder.rs` | typed history, room-tag transitions, outage buffering, bus reads |
+| `tests/plan_apply.rs` | tier derivation, rolling apply, halt-in-place, stale plans |
+| `tests/mcp.rs` | agent reads, propose/auto-apply, tier gating, grant-smuggling escalation |
+
+## License
+
+MIT OR Apache-2.0
