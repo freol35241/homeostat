@@ -324,7 +324,16 @@ What makes the backend swappable later is the read path: history reads go
 over the bus (below), so the store is recorder-private. Outgrowing SQLite
 means a behavioral change to one unit, not a structural change to the
 system. QuestDB remains the designated growth path if volume or analytical
-queries ever demand it.
+queries ever demand it. DuckDB was considered and rejected as the store —
+the recorder's workload is high-frequency tiny appends plus small indexed
+range reads (OLTP-shaped, SQLite's grain), while DuckDB is a columnar OLAP
+engine that is weak at frequent single-row inserts and single-process by
+design (no other process can read the file while the recorder writes; the
+tests and any live backup/inspection depend on exactly that). But it
+composes: DuckDB's `sqlite` extension can ATTACH the store file read-only,
+so an analytical layer (downsampling, long-range aggregation) can sit on
+top of the same SQLite file later — additive, no recorder change, no
+migration.
 
 The store location comes from the recorder's `[discovery]` section
 (`endpoint = "sqlite:<path>"`, path relative to the house root, `${VAR}`
