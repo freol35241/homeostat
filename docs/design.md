@@ -745,6 +745,51 @@ goes through plan/apply like every other actor. Agent-authored parameter
 edits within constraints auto-apply; structural changes land as pending
 plans for owner approval.
  
+### Step 6 goal (settled 2026-07-04, before implementation)
+ 
+An MCP server through which an agent can observe the house and change it,
+with authority bounded by the same plan/apply machinery as every other
+actor. Rides entirely on step 5b: tier derivation, pending plans, the
+supervisor-executed walk.
+ 
+- **Where it lives:** in the Rust core, `homeostat mcp`. Two transports:
+  stdio for local development (the MCP client launches the binary with the
+  house root and `--bus`), and HTTP for the deployed house. Deployed, the
+  MCP server is a **service unit** — `units/mcp.toml` with
+  `command = homeostat mcp --http <addr>` — so when `homeostat up` runs as
+  PID 1 in a container, the agent surface is supervised like any unit:
+  health at `home/health/mcp`, backoff, breaker, graceful shutdown, and
+  the house repo opts in by declaring it. No special casing in the
+  supervisor.
+- **Reads:** `read_state` serves live values from the core last-value
+  cache; `read_history` queries `home/history/**`. Both are bus clients;
+  the agent needs zero backend knowledge.
+- **Writes go through the repo.** `propose` takes text — house-repo file
+  path(s) plus new content — writes it, commits to the current branch,
+  and plans. Parameter edits are repo edits: a manifest-default change
+  that plans parameter-only auto-applies (zero restarts, durable by
+  construction, transcript-as-commit-message falls out for free). No
+  separate live set_parameter tool — one path for everything.
+- **The tier gates the actor.** A plan that is behavioral or structural is
+  refused at agent tier by `apply`; `propose` leaves it committed and
+  saved as `plans/pending/{id}.plan`. Owner approval v1 is the owner
+  running `homeostat apply --plan <file>` — no in-band approval channel.
+  Unwanted proposals are reverted with git, like any commit.
+- **Success criteria** (`tests/mcp.rs`, real server against a live
+  supervised house):
+  1. `read_state`/`read_history` return what the bus and recorder hold.
+  2. A parameter `propose` within constraints auto-applies: commit lands,
+     the running unit sees the value with no restart.
+  3. An out-of-constraint parameter `propose` is rejected with the
+     constraint named; world and repo unchanged.
+  4. A structural `propose` (a grant delta) produces a pending plan and
+     does not touch the world; the agent's own `apply` on it is refused.
+  5. Smuggling: a manifest edit carrying a grant delta escalates to
+     structural through the MCP surface — the mechanical tier derivation
+     is the enforcement, not tool-level checks.
+- **Non-goals:** voice, dashboard generation, Zenoh ACLs, any approval UI
+  beyond the pending-plan file.
+ 
 ## Voice (later phase)
  
 - Two-tier command path: a fast-path intent matcher (high precision,
@@ -790,8 +835,10 @@ is parked; `.io`/`.org` unregistered. No trademark risk surfaced (generic
    Python SDK bootstrap. DONE.
 4. First automation (evening_lights) + clock service + live parameter
    path end to end. DONE.
-5. **Recorder, then plan/apply proper, then agent MCP surface, then
-   voice.** THIS IS THE CURRENT PHASE.
+5. Recorder (5a), then plan/apply proper (5b). DONE.
+6. **Agent MCP surface** (goal settled above, under "Agent surface").
+   THIS IS THE CURRENT STEP.
+7. Voice. Deferred.
 Risk lives in steps 1 and 2; everything after is accretion.
  
 ## Open questions (flagged, not settled)
