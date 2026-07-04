@@ -1,7 +1,7 @@
 //! The process supervisor behind `homeostat up`: spawns every unit in the
-//! house, serves the core last-value caches (config, health, clock, meta),
-//! executes apply walks commanded over the bus, and shuts the whole tree
-//! down gracefully on SIGTERM/SIGINT.
+//! house, serves the core last-value caches (config, health, clock, state,
+//! meta), executes apply walks commanded over the bus, and shuts the whole
+//! tree down gracefully on SIGTERM/SIGINT.
 
 pub mod apply;
 pub mod backoff;
@@ -75,7 +75,8 @@ pub async fn run(check: &CheckResult, root: &Path, listen: &str) -> Result<(), S
     serve_config(&session, store.clone()).await?;
     let health: HealthMap = Arc::default();
     serve_health(&session, health.clone()).await?;
-    mirror_clock(&session).await?;
+    mirror(&session, "home/clock/*").await?;
+    mirror(&session, "home/state/**").await?;
 
     let mut world = WorldMeta { grants: check.grants.clone(), ..WorldMeta::default() };
     for unit in &check.house.units {
@@ -414,24 +415,26 @@ async fn serve_health(session: &Session, health: HealthMap) -> Result<(), String
     Ok(())
 }
 
-/// Mirrors `home/clock/*` into a last-value cache served by a queryable, so
-/// a late joiner sees the current minute/date instead of waiting out the
-/// next boundary.
-async fn mirror_clock(session: &Session) -> Result<(), String> {
+/// Mirrors a published key space into a last-value cache served by a
+/// queryable. Clock: a late joiner sees the current minute/date instead of
+/// waiting out the next boundary. State: a late joiner (or a bus read, e.g.
+/// the MCP surface's read_state) sees every entity's current value without
+/// waiting for the next publish.
+async fn mirror(session: &Session, keyexpr: &'static str) -> Result<(), String> {
     let cache: Arc<Mutex<BTreeMap<String, Vec<u8>>>> = Arc::default();
     let sub = session
-        .declare_subscriber("home/clock/*")
+        .declare_subscriber(keyexpr)
         .await
-        .map_err(|e| format!("failed to subscribe to clock keys: {e}"))?;
+        .map_err(|e| format!("failed to subscribe to {keyexpr}: {e}"))?;
     let queryable = session
-        .declare_queryable("home/clock/*")
+        .declare_queryable(keyexpr)
         .await
-        .map_err(|e| format!("failed to declare clock queryable: {e}"))?;
+        .map_err(|e| format!("failed to declare {keyexpr} queryable: {e}"))?;
     {
         let cache = cache.clone();
         tokio::spawn(async move {
             while let Ok(sample) = sub.recv_async().await {
-                cache.lock().expect("clock cache lock").insert(
+                cache.lock().expect("mirror cache lock").insert(
                     sample.key_expr().as_str().to_string(),
                     sample.payload().to_bytes().to_vec(),
                 );
@@ -442,7 +445,7 @@ async fn mirror_clock(session: &Session) -> Result<(), String> {
         while let Ok(query) = queryable.recv_async().await {
             let entries: Vec<(String, Vec<u8>)> = cache
                 .lock()
-                .expect("clock cache lock")
+                .expect("mirror cache lock")
                 .iter()
                 .filter(|(key, _)| intersects(&query, key))
                 .map(|(key, payload)| (key.clone(), payload.clone()))

@@ -140,6 +140,32 @@ pub struct ApplyStep {
     pub error: Option<String>,
 }
 
+/// Sends an apply request to the running supervisor and decodes its reply.
+/// The bool is false when the supervisor replied with an error reply (a
+/// refused or halted apply); the ApplyResult carries the detail either way.
+pub async fn request_apply(
+    session: &zenoh::Session,
+    request: &ApplyRequest,
+) -> Result<(ApplyResult, bool), String> {
+    let replies = session
+        .get(APPLY_KEY)
+        .payload(serde_json::to_string(request).expect("request serializes"))
+        .timeout(std::time::Duration::from_secs(600))
+        .await
+        .map_err(|e| e.to_string())?;
+    let Ok(reply) = replies.recv_async().await else {
+        return Err("no reply from the supervisor".to_string());
+    };
+    let (payload, replied_ok) = match reply.result() {
+        Ok(sample) => (sample.payload().to_bytes().to_vec(), true),
+        Err(err) => (err.payload().to_bytes().to_vec(), false),
+    };
+    match serde_json::from_slice::<ApplyResult>(&payload) {
+        Ok(outcome) => Ok((outcome, replied_ok)),
+        Err(_) => Err(String::from_utf8_lossy(&payload).to_string()),
+    }
+}
+
 /// The supervisor's reply to an apply request. `steps` holds every unit
 /// step attempted, in walk order; a halted walk names its position.
 #[derive(Debug, Clone, Serialize, Deserialize)]

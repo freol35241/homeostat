@@ -221,6 +221,7 @@ fn check_params(house: &House, errors: &mut Vec<ValidationError>) {
 }
 
 fn check_param(subject: &str, spec: &ParamSpec, path: &str, errors: &mut Vec<ValidationError>) {
+    let before = errors.len();
     let mut err = |code: &'static str, message: String| {
         errors.push(ValidationError::new(
             code,
@@ -305,6 +306,22 @@ fn check_param(subject: &str, spec: &ParamSpec, path: &str, errors: &mut Vec<Val
                     display_value(&constraint["max"])
                 ),
             );
+        }
+    }
+
+    // The default must satisfy its own constraint: the repo-edit parameter
+    // path (propose) is enforced here, so an out-of-constraint default
+    // never plans, let alone reaches a running unit. Skipped when this
+    // param already has errors — a default judged against a malformed
+    // constraint would only add noise.
+    if default_ok && errors.len() == before {
+        if let Err(message) = crate::config::default_within_constraint(spec) {
+            errors.push(ValidationError::new(
+                "invalid-default",
+                subject,
+                format!("default {}: {message}", display_value(&spec.default)),
+                Some(path.to_string()),
+            ));
         }
     }
 }

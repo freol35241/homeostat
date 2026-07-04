@@ -1,0 +1,2 @@
+error[invalid-default] dimmer.brightness: default 50: 50 is above max 10 (units/dimmer.toml)
+error[invalid-default] dimmer.off_time: default 12:00: 12:00 is outside 20:00..02:00 (units/dimmer.toml)

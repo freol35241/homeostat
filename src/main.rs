@@ -1,6 +1,5 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
-use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 
@@ -46,6 +45,21 @@ enum Command {
         #[arg(long)]
         plan: Option<PathBuf>,
     },
+    /// Serve the agent surface: an MCP server bound to a live house.
+    /// Stdio by default (an MCP client launches it); --http for the
+    /// deployed house, where it runs as a supervised service unit.
+    Mcp {
+        /// Path to the house repo.
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        /// Bus endpoint of the running supervisor (or HOMEOSTAT_BUS).
+        #[arg(long)]
+        bus: Option<String>,
+        /// Serve MCP over HTTP on this address (e.g. 127.0.0.1:8642)
+        /// instead of stdio.
+        #[arg(long)]
+        http: Option<String>,
+    },
     /// Validate a house repo, then run its units under supervision.
     Up {
         /// Path to the house repo.
@@ -62,6 +76,7 @@ fn main() -> ExitCode {
     match cli.command {
         Command::Plan { path, bus, save, actor } => plan_command(path, bus, save, actor),
         Command::Apply { path, bus, plan } => apply_command(path, bus, plan),
+        Command::Mcp { path, bus, http } => mcp_command(path, bus, http),
         Command::Up { path, listen } => {
             let Some(result) = checked(&path, "up") else {
                 return ExitCode::FAILURE;
@@ -153,6 +168,31 @@ fn plan_command(path: PathBuf, bus: Option<String>, save: bool, actor: String) -
     ExitCode::SUCCESS
 }
 
+fn mcp_command(path: PathBuf, bus: Option<String>, http: Option<String>) -> ExitCode {
+    let Some(endpoint) = endpoint(bus) else {
+        eprintln!("mcp needs a running supervisor: pass --bus or set HOMEOSTAT_BUS");
+        return ExitCode::FAILURE;
+    };
+    let server = match homeostat::mcp::Server::start(&path, &endpoint) {
+        Ok(server) => server,
+        Err(err) => {
+            eprintln!("mcp failed: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let served = match http {
+        Some(addr) => homeostat::mcp::http::serve(std::sync::Arc::new(server), &addr),
+        None => homeostat::mcp::protocol::serve_stdio(&server),
+    };
+    match served {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("mcp failed: {err}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn apply_command(path: PathBuf, bus: Option<String>, plan_file: Option<PathBuf>) -> ExitCode {
     let Some(endpoint) = endpoint(bus) else {
         eprintln!("apply needs a running supervisor: pass --bus or set HOMEOSTAT_BUS");
@@ -220,36 +260,14 @@ fn apply_command(path: PathBuf, bus: Option<String>, plan_file: Option<PathBuf>)
             base_commit: homeostat::gitinfo::head_commit(&path),
         };
         println!("\nApplying...");
-        let replies = match session
-            .get(homeostat::bus::APPLY_KEY)
-            .payload(serde_json::to_string(&request).expect("request serializes"))
-            .timeout(Duration::from_secs(600))
-            .await
-        {
-            Ok(replies) => replies,
-            Err(err) => {
-                eprintln!("apply failed: {err}");
-                return ExitCode::FAILURE;
-            }
-        };
-        let Ok(reply) = replies.recv_async().await else {
-            eprintln!("apply failed: no reply from the supervisor");
-            return ExitCode::FAILURE;
-        };
-        let (payload, replied_ok) = match reply.result() {
-            Ok(sample) => (sample.payload().to_bytes().to_vec(), true),
-            Err(err) => (err.payload().to_bytes().to_vec(), false),
-        };
-        let outcome = match serde_json::from_slice::<ApplyResult>(&payload) {
-            Ok(outcome) => outcome,
-            Err(_) => {
-                eprintln!(
-                    "apply failed: {}",
-                    String::from_utf8_lossy(&payload)
-                );
-                return ExitCode::FAILURE;
-            }
-        };
+        let (outcome, replied_ok) =
+            match homeostat::bus::request_apply(&session, &request).await {
+                Ok(result) => result,
+                Err(err) => {
+                    eprintln!("apply failed: {err}");
+                    return ExitCode::FAILURE;
+                }
+            };
         let _ = session.close().await;
         render_outcome(&outcome, replied_ok)
     })

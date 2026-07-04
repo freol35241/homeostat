@@ -143,6 +143,19 @@ fn build(house: &House) -> BTreeMap<(String, String), StoredParam> {
     params
 }
 
+/// Whether the spec's default satisfies its own constraint — the plan-time
+/// check behind the repo-edit parameter path: a proposed default outside
+/// the constraint must fail validation, never reach a running unit (see
+/// docs/design.md, step 6). A malformed constraint enforces nothing here;
+/// plan-time validation reports it separately.
+pub fn default_within_constraint(spec: &ParamSpec) -> Result<(), String> {
+    check(
+        spec.param_type,
+        &Constraint::from_spec(spec),
+        &default_value(spec),
+    )
+}
+
 pub fn default_value(spec: &ParamSpec) -> Value {
     match &spec.default {
         toml::Value::Boolean(b) => Value::from(*b),
