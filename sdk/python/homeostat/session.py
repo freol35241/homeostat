@@ -46,6 +46,9 @@ class UnitSession:
     def subscribe(self, keyexpr: str, callback: Callable[[zenoh.Sample], None]):
         return self._session.declare_subscriber(keyexpr, callback)
 
+    def declare_queryable(self, keyexpr: str, callback: Callable[[zenoh.Query], None]):
+        return self._session.declare_queryable(keyexpr, callback)
+
     def get_json(self, selector: str) -> list[tuple[str, Any]]:
         """Queries the bus, returning (key, decoded JSON) per ok reply."""
         values = []

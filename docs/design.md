@@ -299,13 +299,154 @@ home/{class}/{room}/{entity}/{aspect}
   last-value storage. Units subscribe to their own config subtree. Parameter
   edits propagate live, no restart.
 - Meta: `home/meta/{unit}/manifest_hash`, `home/meta/system/applied_commit`.
-## History / recorder
+## History / recorder (settled in step 5a)
  
 The recorder is NOT a naive Zenoh storage mirror. It subscribes to
-`home/state/**` and writes to a time-series backend (QuestDB or TimescaleDB)
-with entity id as series identity and room as a tag. A move is a tag
-transition on a continuous series. Naive Zenoh storage is used only for
-last-value on live keys.
+`home/state/**` and writes a time-series store with entity id as series
+identity and room as a tag. A move is a tag transition on a continuous
+series. Naive Zenoh storage is used only for last-value on live keys.
+Payloads are decoded and typed on the way in; anything that fails to decode
+leaves a health event, never a row of garbage.
+
+### Backend: SQLite, embedded in the recorder — production AND tests
+
+The founding candidates were QuestDB or TimescaleDB. v1 uses neither: a
+single home produces well under ten samples a second, and a SQLite file
+with a series index absorbs years of that without noticing. The heavier
+engines cost what this system refuses to pay: a permanent JVM (or a
+Postgres cluster) on the home server, a provisioning/supervision story the
+core doesn't have (the backend is not a unit), and CI setup beyond
+`cargo test` on a stock runner. Choosing a server backend for production
+and an embedded one for tests would hollow the tests out — so there is no
+dual path: the identical engine runs in both.
+
+What makes the backend swappable later is the read path: history reads go
+over the bus (below), so the store is recorder-private. Outgrowing SQLite
+means a behavioral change to one unit, not a structural change to the
+system. QuestDB remains the designated growth path if volume or analytical
+queries ever demand it.
+
+The store location comes from the recorder's `[discovery]` section
+(`endpoint = "sqlite:<path>"`, path relative to the house root, `${VAR}`
+expansion recorder-side like adapters). `[discovery]` is therefore legal on
+services as well as adapters — required for adapters, optional for
+services, still an error on automations.
+
+### Schema
+
+Two tables. Scalar samples from room/entity/aspect keys:
+
+```sql
+samples(ts, class, room, entity, aspect, kind, value)
+  -- ts:     µs since epoch, UTC, recorder receive time
+  -- class:  'state' | 'cmd'
+  -- kind:   'bool' | 'number' | 'string'; value stored natively per kind
+  -- index:  (class, entity, aspect, ts)
+```
+
+Series identity is `(class, entity, aspect)`; `room` is a tag column. An
+entity move is consecutive rows whose tag changes — one continuous series,
+never a new one.
+
+The timestamp is recorder receive time, not the zenoh sample timestamp:
+sample timestamps are optional (client sessions don't stamp by default),
+and one consistent clock source beats mixed provenance. On a single-host
+bus the skew is microseconds. Timestamps are assigned at receive, before
+any buffering, so a backend outage never distorts history.
+
+Non-scalar payloads (JSON objects, arrays, null) are not recorded:
+composite fields are deferred by design (step 3), so their appearance is a
+bug worth a trace — a `drop` health event at `home/health/recorder/event`
+— not data. Non-JSON payloads likewise.
+
+Audit events from unit/param keys, raw JSON, no typing:
+
+```sql
+events(ts, key, payload)   -- index: (key, ts)
+```
+
+### Recorded key spaces
+
+- `home/state/**` → samples, class `state`.
+- `home/cmd/**` → samples, class `cmd` — what was commanded, when. "Who"
+  arrives when command payloads carry actors (arbiter phase).
+- `home/health/**` → events: supervisor transitions and unit drop events.
+  (Liveliness tokens are not samples and don't appear.)
+- `home/config/**` → events: only *accepted* writes ever land on config
+  keys (rejects never put), so this subscription IS the accepted-edit
+  audit trail. The step-4 rule "units never subscribe to config in their
+  manifests" is about consuming your own parameters (the SDK does that
+  implicitly); the recorder subscribes `home/config/**` as data, declared
+  in its manifest like any other subscription.
+
+Explicitly NOT recorded: `home/clock/**` (a derivable row per minute,
+forever — history queries don't need it), `home/meta/**`, liveliness
+tokens, and `home/history/**` itself.
+
+A recorder restart is a gap in history: there is no bus replay in v1; the
+supervisor's `always` restart policy keeps the gap small.
+
+### Read path: over the bus
+
+`home/history` is a key class. The recorder declares a queryable at
+`home/history/**`; a GET on
+
+```
+home/history/{state|cmd}/{entity}/{aspect}?from=<RFC3339>;to=<RFC3339>;limit=<n>
+```
+
+(`;` is zenoh's selector-parameter separator; RFC3339 offsets contain `+`
+and `&` would need escaping zenoh doesn't do.)
+
+returns one reply per concrete series (reply key = concrete history key),
+payload a JSON array of `{"ts": <RFC3339 UTC>, "room": ..., "value": ...}`
+ascending; `limit` (default 1000) keeps the most recent rows in range.
+Wildcards in the entity/aspect slots fan out to one reply per matching
+series. A malformed selector gets an error reply.
+
+The history key is entity-first — no room slot — because entity is the
+series identity and room is a tag carried per row: a moved entity is ONE
+key whose rows show the tag transition. Reads over the bus keep the
+backend recorder-private (the step-6 agent needs zero backend knowledge or
+credentials) and give history the same access story as everything else
+(future Zenoh ACLs). The recorder declares the queryable surface under
+`[bus.publishes]` — replies are data the unit originates, and the plan
+renders the read surface visibly.
+
+### The recorder unit
+
+Python on the SDK (`adapters/recorder.py`, generic and public like the
+clock); `sqlite3` is stdlib, so no new dependencies. Subscriber callbacks
+stamp, type, and enqueue; a single writer thread drains the queue, one
+transaction per flush, on a connection opened per flush — the failure
+domain is "can I open and commit right now", with no long-lived handle to
+hold stale permissions or a deleted inode. Reads open their own read-only
+connections (readers and the writer never share a handle).
+
+### Failure policy: bounded buffer + flush
+
+- Startup: the store must open and its schema initialize before `ready()`
+  — a recorder that never had a working store must not claim readiness.
+  Failure (including an unset `${VAR}`) is a startup error, visible
+  through the supervisor's backoff.
+- Runtime: a failed flush keeps the batch queued (bounded, 10,000 samples,
+  drop-oldest — recent state is worth more than old) and emits
+  `{"kind": "backend-outage", ...}` at `home/health/recorder/event` once
+  per down-transition, not per retry. Retries happen on new samples and on
+  a ~1s timer.
+- Recovery: the buffer flushes and `{"kind": "backend-restored",
+  "flushed": N, "dropped": M}` is published. Buffered samples land with
+  their receive-time timestamps — the outage is invisible in the data
+  unless the buffer overflowed.
+- Reads during a write outage are attempted normally and usually still
+  work (disk-full and permission failures don't stop reading); a read
+  error becomes an error reply.
+
+For an embedded backend, "the backend is down" means the store file became
+unwritable — disk full, permissions, dying SD card. That is what the
+integration test induces (chmod the store read-only, publish, restore) and
+what the policy above is written against; no production code path knows
+tests exist.
  
 ## Manifest schema
  

@@ -47,6 +47,10 @@ Expanded keys:
     -> home/state/kitchen/**/presence
     -> home/state/livingroom/**/presence
     -> home/state/hallway/**/presence
+  recorder publishes history: home/history/**
+  recorder subscribes cmd: home/cmd/**
+  recorder subscribes config: home/config/**
+  recorder subscribes health: home/health/**
   recorder subscribes state: home/state/**
 
 Grant table:

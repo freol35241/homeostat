@@ -26,5 +26,6 @@ jobs:
         run: |
           uv sync --script adapters/zigbee2mqtt.py
           uv sync --script adapters/clock.py
+          uv sync --script adapters/recorder.py
           uv sync --script tests/fixture_house_evening/units/evening_lights.py
       - run: cargo test

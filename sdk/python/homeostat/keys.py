@@ -35,6 +35,12 @@ CLOCK_MINUTE = "home/clock/minute"
 CLOCK_DATE = "home/clock/date"
 
 
+def history_key(space: str, entity: str, aspect: str) -> str:
+    """History series key: entity-first (entity is the series identity,
+    room is a tag carried per row). `space` is 'state' or 'cmd'."""
+    return f"home/history/{space}/{entity}/{aspect}"
+
+
 def liveliness_key(unit: str) -> str:
     return f"home/health/{unit}/alive"
 

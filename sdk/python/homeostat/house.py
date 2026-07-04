@@ -32,14 +32,22 @@ class AdapterConfig:
     entities: list[Entity]
 
 
+def load_endpoint(unit: str, root: str | Path = ".") -> str:
+    """The unit's [discovery] endpoint with ${VAR} expansion. An unset
+    variable is a startup error (visible via the supervisor's backoff)."""
+    manifest = tomllib.loads((Path(root) / "units" / f"{unit}.toml").read_text())
+    endpoint = os.path.expandvars(manifest["discovery"]["endpoint"])
+    if "$" in endpoint:
+        raise ValueError(f"unset variable in discovery endpoint: {endpoint}")
+    return endpoint
+
+
 def load_adapter(unit: str, root: str | Path = ".") -> AdapterConfig:
     root = Path(root)
     manifest_path = root / "units" / f"{unit}.toml"
     manifest = tomllib.loads(manifest_path.read_text())
 
-    endpoint = os.path.expandvars(manifest["discovery"]["endpoint"])
-    if "$" in endpoint:
-        raise ValueError(f"unset variable in discovery endpoint: {endpoint}")
+    endpoint = load_endpoint(unit, root)
 
     entities = []
     entities_dir = root / manifest["entities"]["dir"]

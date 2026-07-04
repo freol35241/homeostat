@@ -6,17 +6,19 @@ governs structure. The repo is the single source of truth — no hidden state
 mutated by a UI. See [docs/design.md](docs/design.md) for the full design
 record.
 
-## Status: build-sequence step 4
+## Status: build-sequence step 5a
 
 Step 1 (key space + manifest parser + validator, `homeostat plan`),
 step 2 (the process supervisor: `homeostat up` runs a house's units as
 supervised OS processes on a Zenoh bus, with liveliness tokens, exponential
-restart backoff, and a circuit breaker visible at `home/health/{unit}`) and
-step 3 (the Zigbee2MQTT adapter and the Python SDK bootstrap) are done.
-Step 4 adds the first automation — `evening_lights` — the clock service,
-and the live parameter path end to end: `home/config/{unit}/{param}` backed
-by a core-owned last-value cache, constraint-validated writes, and edits
-that reach running units without a restart.
+restart backoff, and a circuit breaker visible at `home/health/{unit}`),
+step 3 (the Zigbee2MQTT adapter and the Python SDK bootstrap) and step 4
+(the first automation — `evening_lights` — the clock service, and the live
+parameter path end to end: `home/config/{unit}/{param}` backed by a
+core-owned last-value cache, constraint-validated writes, and edits that
+reach running units without a restart) are done. Step 5a adds the recorder:
+history end to end — typed state/cmd samples and an audit trail in a SQLite
+store, with history reads served over the bus at `home/history/**`.
 
 ## Usage
 
@@ -77,6 +79,10 @@ Expanded keys:
     -> home/state/kitchen/**/presence
     -> home/state/livingroom/**/presence
     -> home/state/hallway/**/presence
+  recorder publishes history: home/history/**
+  recorder subscribes cmd: home/cmd/**
+  recorder subscribes config: home/config/**
+  recorder subscribes health: home/health/**
   recorder subscribes state: home/state/**
 
 Grant table:
@@ -253,6 +259,77 @@ driving behavior. The crossing scenarios run on
 `tests/fixture_house_evening_sim/` — the same house without the clock unit
 — where the test process publishes `home/clock/minute` itself; the
 production clock has no test hooks.
+
+## Recorder / history
+
+`adapters/recorder.py` is the history service — NOT a naive bus mirror.
+It subscribes the key spaces its manifest declares and writes a SQLite
+store (the path comes from `[discovery]`, `endpoint = "sqlite:<path>"`,
+`${VAR}`-expanded recorder-side like adapters' endpoints):
+
+- `home/state/**` and `home/cmd/**` land as **typed samples**: payloads
+  are decoded on the way in (`bool` / `number` / `string`; non-scalar or
+  non-JSON payloads are dropped with a health event, never a row). Series
+  identity is `(class, entity, aspect)`; **room is a tag column**, so an
+  entity move is a tag transition on one continuous series, never a new
+  series. Timestamps are recorder receive time (µs, UTC), stamped before
+  any buffering.
+- `home/health/**` and `home/config/**` land raw in an `events` audit
+  table — only *accepted* config writes ever reach the bus, so that
+  subscription is exactly the accepted-edit audit trail.
+- Explicitly not recorded: `home/clock/**`, `home/meta/**`, liveliness.
+
+History reads go **over the bus**, not to the backend: the recorder serves
+a queryable at `home/history/**`, keeping the store recorder-private and
+swappable (SQLite carries a single home for years; QuestDB is the recorded
+growth path). The history key is entity-first — entity is the series
+identity, room arrives per row:
+
+```
+zenoh get 'home/history/state/lamp/on?from=2026-07-01T00:00:00+02:00;limit=100'
+  -> home/history/state/lamp/on
+     [{"ts": "2026-07-04T08:26:56.892816+00:00", "room": "livingroom", "value": true}, ...]
+```
+
+(`;` separates zenoh selector parameters; `from`/`to` are RFC3339 with
+offset, `limit` keeps the most recent rows, replies are ascending, one
+reply per concrete series when the key has wildcards.)
+
+If the store becomes unwritable — disk full, permissions, a dying SD card
+— samples buffer in memory (bounded, drop-oldest) with their receive-time
+timestamps, `{"kind": "backend-outage"}` appears at
+`home/health/recorder/event`, and recovery flushes the buffer and reports
+`{"kind": "backend-restored", "flushed": N, "dropped": M}` — the outage is
+invisible in the data unless the buffer overflowed. A store that cannot
+open at startup is a startup error: no readiness, supervisor backoff makes
+it visible. Full decisions in
+[docs/design.md](docs/design.md#history--recorder-settled-in-step-5a).
+
+Try it (needs `uv`):
+
+```
+cargo build
+RECORDER_DB=/tmp/history.db PATH="$PWD/target/debug:$PATH" \
+  cargo run -- up tests/fixture_house_recorder
+```
+
+then publish some `home/state/...` values and get
+`home/history/state/{entity}/{aspect}` — the evening-lights loop runs on
+the real clock and its state history lands in `/tmp/history.db` and reads
+back over the bus.
+
+`tests/recorder.rs` pins four scenarios against the real supervisor
+running the step-4 units plus the recorder, asserting on both the store
+(rusqlite, dev-dependency) and the bus: state lands with entity, room,
+aspect, and correctly typed value (plus the cmd/config/health audit
+spaces, and the non-scalar drop); an entity publishing under a new room
+continues one series with a tag transition; the backend-outage policy is
+observable (store made read-only, samples buffered, health events on
+outage and recovery, receive-time timestamps preserved); and the read path
+returns what was written, honoring `from`/`limit` and error-replying on a
+malformed selector. Each test names its own store via `RECORDER_DB` — no
+fixed paths, like no fixed ports, and nothing to install in CI: the store
+is embedded.
 
 ## House repo layout
 

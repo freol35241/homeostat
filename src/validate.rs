@@ -62,6 +62,25 @@ fn check_manifest_shape(house: &House, errors: &mut Vec<ValidationError>) {
     for unit in &house.units {
         let name = &unit.manifest.unit.name;
         let file = Some(unit.path.clone());
+        if let Some(d) = &unit.manifest.discovery {
+            let missing = match d.mode {
+                DiscoveryMode::Static if d.endpoint.is_none() => {
+                    Some("discovery mode \"static\" requires an endpoint")
+                }
+                DiscoveryMode::Mdns if d.service.is_none() => {
+                    Some("discovery mode \"mdns\" requires a service")
+                }
+                _ => None,
+            };
+            if let Some(message) = missing {
+                errors.push(ValidationError::new(
+                    "invalid-manifest",
+                    name,
+                    message,
+                    file.clone(),
+                ));
+            }
+        }
         if unit.manifest.unit.kind == UnitKind::Adapter {
             if unit.manifest.entities.is_none() {
                 errors.push(ValidationError::new(
@@ -71,32 +90,13 @@ fn check_manifest_shape(house: &House, errors: &mut Vec<ValidationError>) {
                     file.clone(),
                 ));
             }
-            match &unit.manifest.discovery {
-                None => errors.push(ValidationError::new(
+            if unit.manifest.discovery.is_none() {
+                errors.push(ValidationError::new(
                     "invalid-manifest",
                     name,
                     "adapter requires a [discovery] section",
                     file.clone(),
-                )),
-                Some(d) => {
-                    let missing = match d.mode {
-                        DiscoveryMode::Static if d.endpoint.is_none() => {
-                            Some("discovery mode \"static\" requires an endpoint")
-                        }
-                        DiscoveryMode::Mdns if d.service.is_none() => {
-                            Some("discovery mode \"mdns\" requires a service")
-                        }
-                        _ => None,
-                    };
-                    if let Some(message) = missing {
-                        errors.push(ValidationError::new(
-                            "invalid-manifest",
-                            name,
-                            message,
-                            file.clone(),
-                        ));
-                    }
-                }
+                ));
             }
         } else {
             if unit.manifest.entities.is_some() {
@@ -107,11 +107,13 @@ fn check_manifest_shape(house: &House, errors: &mut Vec<ValidationError>) {
                     file.clone(),
                 ));
             }
-            if unit.manifest.discovery.is_some() {
+            // Services may talk to an external backend (e.g. the recorder's
+            // store) and use [discovery] the same way adapters do.
+            if unit.manifest.discovery.is_some() && unit.manifest.unit.kind != UnitKind::Service {
                 errors.push(ValidationError::new(
                     "invalid-manifest",
                     name,
-                    "[discovery] is only valid for adapters",
+                    "[discovery] is only valid for adapters and services",
                     file.clone(),
                 ));
             }

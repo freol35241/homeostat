@@ -20,3 +20,6 @@ libc = "0.2.186"
 
 [dev-dependencies]
 rumqttc = "0.25.1"
+# "bundled" so the recorder tests can assert on the store without a system
+# libsqlite3; the recorder itself uses Python's stdlib sqlite3.
+rusqlite = { version = "0.37", features = ["bundled"] }

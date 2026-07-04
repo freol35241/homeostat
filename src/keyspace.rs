@@ -1,7 +1,7 @@
 use std::fmt;
 
 /// `home/{class}/...` — the classes the core owns.
-pub const CLASSES: &[&str] = &["state", "cmd", "config", "meta", "health", "clock"];
+pub const CLASSES: &[&str] = &["state", "cmd", "config", "meta", "health", "clock", "history"];
 
 /// Reserved pseudo-rooms for non-spatial entities.
 pub const PSEUDO_ROOMS: &[&str] = &["global", "person"];
