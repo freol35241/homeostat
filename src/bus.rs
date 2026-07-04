@@ -4,6 +4,7 @@
 //! - `home/health/{unit}`        supervisor-published JSON health status
 //! - `home/health/{unit}/alive`  liveliness token declared by the unit itself
 //! - `home/meta/{unit}/manifest_hash`  sha256 of the unit's manifest file
+//! - `home/config/{unit}/{param}`  core-owned live parameter values
 //!
 //! All sessions run in peer mode with multicast scouting disabled; topology
 //! is explicit (the supervisor listens, everyone else connects). This keeps
@@ -29,6 +30,10 @@ pub fn liveliness_key(unit: &str) -> String {
 
 pub fn manifest_hash_key(unit: &str) -> String {
     format!("home/meta/{unit}/manifest_hash")
+}
+
+pub fn config_key(unit: &str, param: &str) -> String {
+    format!("home/config/{unit}/{param}")
 }
 
 /// Supervisor-side session config: a router listening on `endpoint`, no

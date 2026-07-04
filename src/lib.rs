@@ -1,4 +1,5 @@
 pub mod bus;
+pub mod config;
 pub mod error;
 pub mod expand;
 pub mod grants;

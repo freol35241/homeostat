@@ -8,7 +8,7 @@ use std::time::Duration;
 use homeostat::bus::{Health, HealthStatus};
 use zenoh::sample::SampleKind;
 
-use common::{await_health, health_subscriber, process_alive, scan_health, Supervisor};
+use common::{await_health, health_watch, process_alive, scan_health, Supervisor};
 
 const STATE_KEY: &str = "home/state/testroom/fake_sensor/value";
 const CRASH_KEY: &str = "home/cmd/testroom/fake_sensor/crash";
@@ -47,8 +47,8 @@ async fn spawn_shows_liveliness_and_state_flows() {
             .expect("state stream open");
     }
 
-    let health_sub = health_subscriber(&observer, "fake").await;
-    let health = await_health(&health_sub, Duration::from_secs(10), running).await;
+    let mut watch = health_watch(&observer, "fake").await;
+    let health = await_health(&mut watch, Duration::from_secs(10), running).await;
     assert!(health.pid.is_some());
 
     sup.shutdown();
@@ -59,12 +59,12 @@ async fn spawn_shows_liveliness_and_state_flows() {
 async fn crash_restarts_with_exponential_backoff() {
     let mut sup = Supervisor::spawn("tests/fixture_house");
     let observer = sup.observer().await;
-    let health_sub = health_subscriber(&observer, "fake").await;
+    let mut watch = health_watch(&observer, "fake").await;
 
     let mut backoffs: Vec<u64> = Vec::new();
     let mut seen_restarts = 0;
     while backoffs.len() < 3 {
-        await_health(&health_sub, Duration::from_secs(10), running).await;
+        await_health(&mut watch, Duration::from_secs(10), running).await;
         // The crash command has no last-value storage behind it yet, so a
         // put can land before the fresh incarnation subscribes; resend
         // until a new backoff transition shows up.
@@ -75,7 +75,7 @@ async fn crash_restarts_with_exponential_backoff() {
                 "no backoff observed after repeated crash commands"
             );
             observer.put(CRASH_KEY, "crash").await.expect("crash put");
-            let found = scan_health(&health_sub, Duration::from_millis(700), |h| {
+            let found = scan_health(&mut watch, Duration::from_millis(700), |h| {
                 h.status == HealthStatus::Backoff && h.restarts > seen_restarts
             })
             .await;
@@ -89,7 +89,7 @@ async fn crash_restarts_with_exponential_backoff() {
     assert_eq!(backoffs, vec![100, 200, 400], "exponential backoff delays");
 
     // And it actually came back after all that.
-    await_health(&health_sub, Duration::from_secs(10), running).await;
+    await_health(&mut watch, Duration::from_secs(10), running).await;
     sup.shutdown();
 }
 
@@ -98,9 +98,9 @@ async fn crash_restarts_with_exponential_backoff() {
 async fn crash_loop_opens_circuit_breaker() {
     let mut sup = Supervisor::spawn("tests/fixture_house_crashloop");
     let observer = sup.observer().await;
-    let health_sub = health_subscriber(&observer, "crasher").await;
+    let mut watch = health_watch(&observer, "crasher").await;
 
-    let open = await_health(&health_sub, Duration::from_secs(20), |h| {
+    let open = await_health(&mut watch, Duration::from_secs(20), |h| {
         h.status == HealthStatus::Open
     })
     .await;
@@ -108,7 +108,7 @@ async fn crash_loop_opens_circuit_breaker() {
     assert_eq!(open.last_exit_code, Some(1));
 
     // The breaker holds: nothing but `open` on the health key afterwards.
-    let relapse = scan_health(&health_sub, Duration::from_millis(1500), |h| {
+    let relapse = scan_health(&mut watch, Duration::from_millis(1500), |h| {
         h.status != HealthStatus::Open
     })
     .await;
@@ -122,8 +122,8 @@ async fn crash_loop_opens_circuit_breaker() {
 async fn sigterm_shuts_down_gracefully_without_orphans() {
     let mut sup = Supervisor::spawn("tests/fixture_house");
     let observer = sup.observer().await;
-    let health_sub = health_subscriber(&observer, "fake").await;
-    let health = await_health(&health_sub, Duration::from_secs(10), running).await;
+    let mut watch = health_watch(&observer, "fake").await;
+    let health = await_health(&mut watch, Duration::from_secs(10), running).await;
     let adapter_pid = health.pid.expect("running unit has a pid");
     assert!(process_alive(adapter_pid), "adapter alive before shutdown");
 
@@ -140,8 +140,8 @@ async fn sigterm_shuts_down_gracefully_without_orphans() {
 async fn sigkill_leaves_no_orphans() {
     let mut sup = Supervisor::spawn("tests/fixture_house");
     let observer = sup.observer().await;
-    let health_sub = health_subscriber(&observer, "fake").await;
-    let health = await_health(&health_sub, Duration::from_secs(10), running).await;
+    let mut watch = health_watch(&observer, "fake").await;
+    let health = await_health(&mut watch, Duration::from_secs(10), running).await;
     let adapter_pid = health.pid.expect("running unit has a pid");
 
     sup.signal(libc::SIGKILL);

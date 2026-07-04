@@ -79,9 +79,9 @@ Unit -> bus, obligations:
 
 ### Health key schema
 
-The supervisor publishes JSON at `home/health/{unit}` on every transition,
-refreshed every 1s so late subscribers see current state (a stopgap until
-last-value storage backs the health keys):
+The supervisor publishes JSON at `home/health/{unit}` on every transition;
+since step 4 the core's last-value cache serves the current value to late
+joiners via a queryable (this replaced a 1s-republish stopgap):
 
 ```json
 {
@@ -112,7 +112,7 @@ of the manifest file) at startup.
 
 ### Clock key schema
 
-Documented now, clock service implemented with the first automation:
+Documented in step 2, implemented in step 4 (see the step-4 section):
 
 - `home/clock/minute` — published each minute on the minute; payload is
   RFC3339 local time with offset, e.g. `2026-07-03T21:04:00+02:00`.
@@ -188,6 +188,89 @@ the script file regardless of cwd); PyPI publication comes later. `uv sync
 --script <unit>.py` pre-warms a unit's environment so first-run dependency
 resolution never eats into supervision timeouts (CI does this before
 `cargo test`).
+
+## First automation and the live parameter path (settled in step 4)
+
+### Last-value lives in the core, not a storage plugin
+
+The core owns an in-memory last-value cache inside the supervisor process,
+served over the bus by queryables. It backs three key spaces:
+
+- `home/config/{unit}/{param}` — the parameter path (below).
+- `home/health/{unit}` — replaces the step-2 1s-republish stopgap. The
+  supervisor publishes health only on transitions; a queryable serves the
+  current value to late joiners.
+- `home/clock/*` — the core mirrors clock publications so a late joiner
+  (or a test) can `get` the current minute/date instead of waiting out a
+  wall-clock minute.
+
+Why not the Zenoh storage plugin: it is a heavy, version-coupled dependency,
+and a passive mirror cannot reject an out-of-constraint write — validation
+needs to sit on the write path anyway, so the write path and the cache
+belong to the same owner. The read pattern everywhere is *subscribe, then
+get, merge*: the subscriber catches everything after the get; the get covers
+everything before it.
+
+The cache is in-memory: parameter edits survive any unit restart (the
+supervisor holds the value) but not a supervisor restart — defaults re-seed
+from manifests. Durable parameter state arrives with plan/apply (step 5),
+where a parameter edit is a repo commit; the bus cache is a live view, not
+the system of record.
+
+### The parameter write path
+
+Only the core ever puts on `home/config/**`. It seeds each unit's parameters
+from manifest defaults at startup and declares a queryable on
+`home/config/*/*`:
+
+- **GET without payload** — read: replies the current JSON value.
+- **GET with payload** — write request: the core validates the JSON payload
+  against the manifest's type and constraint (`min`/`max`, `after`/`before`
+  with midnight spanning, `enum`). Accepted: the value is stored, put on the
+  key (every subscribed unit sees it live, no restart), and echoed in an ok
+  reply. Rejected: the query gets an **error reply** naming the violation —
+  synchronously observable to the writer — no put happens, and the old value
+  stands.
+
+Units never subscribe to config in their manifests; subscribing to your own
+`home/config/{unit}/*` subtree is implicit and the SDK does it for you.
+Actor-tier enforcement of `editable_by` waits for plan/apply and Zenoh ACLs;
+v1 is plan-time + trust, as everywhere else.
+
+### SDK automation Context
+
+`homeostat.automation.context()` reads the unit's own manifest (same file
+the core validated) and gives an automation exactly its declared surface:
+
+- `ctx.subscribe(binding, handler)` — binding names from `[bus.subscribes]`;
+  the handler gets `(key, value)` with the JSON payload decoded.
+- `ctx.params.name` — typed current values (`time` → `datetime.time`),
+  seeded via get and updated live by a config subscription.
+- `ctx.publish(binding, value, room=..., entity=..., aspect=...)` — publish
+  expressions from `[bus.publishes]`. Publishes go to **concrete keys only**
+  (a put on a `**` expression would hand adapters an unparseable wildcard
+  key); literal segments of the expression are defaults, wildcard segments
+  must be named, and the SDK refuses any key the declared expression does
+  not cover — the manifest stays the authority on intent.
+- `ctx.ready()` / `ctx.run()` — liveliness token, then block until SIGTERM.
+
+### Clock service
+
+A Python service (`adapters/clock.py`, generic and public) on the SDK's
+Context, stdlib zoneinfo for real DST handling. Timezone comes from its own
+manifest: `[params.timezone]`, type `string`, `editable_by = "owner"` — the
+clock dogfoods the live parameter path. Payloads are bare JSON strings like
+all bus payloads: `"2026-07-03T21:04:00+02:00"` on `home/clock/minute`,
+`"2026-07-03"` on `home/clock/date`.
+
+The clock publishes the *current* minute and date immediately at startup
+before declaring ready, then on each boundary. That startup publish is
+late-joiner catch-up, not a test hook — a restarted subscriber must not run
+blind for up to 59 seconds. Tests exploit it plus the core clock cache to
+assert the schema without waiting; the off-time-crossing scenarios run on a
+fixture house with no clock unit at all, where the test process publishes
+`home/clock/minute` itself. Nothing in any production path knows tests
+exist; an automation cannot tell who publishes clock keys.
 
 ## Key space
  
@@ -433,10 +516,6 @@ Risk lives in steps 1 and 2; everything after is accretion.
  
 ## Open questions (flagged, not settled)
  
-- Civil time semantics: the clock service owns timezone/DST (Sweden has real
-  transitions); constraints evaluate against it, never naive comparison.
-  Key schema settled in step 2 (see Supervision); the service itself lands
-  with the first automation.
 - Whether `features` should gate command contents beyond SDK constructors.
   Current lean: no separate layer.
 - Zenoh ACL hardening timeline.

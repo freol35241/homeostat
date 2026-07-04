@@ -13,11 +13,9 @@ use crate::bus::{self, Health, HealthStatus};
 use crate::manifest::RestartPolicy;
 use crate::supervisor::backoff::{Breaker, Decision};
 use crate::supervisor::process;
+use crate::supervisor::HealthMap;
 
 const DEFAULT_GRACE_S: u32 = 5;
-/// Health is republished at this cadence so late subscribers see current
-/// state; last-value storage on the bus replaces this eventually.
-const HEALTH_REFRESH: Duration = Duration::from_secs(1);
 
 pub struct UnitSpec {
     pub name: String,
@@ -36,22 +34,24 @@ impl UnitSpec {
     }
 }
 
+/// Publishes health transitions and keeps the supervisor's shared health
+/// map current; the map (served by a queryable) is what late joiners see,
+/// so transitions are published exactly once.
 struct HealthPublisher {
     session: Session,
     key: String,
     unit: String,
-    current: Health,
+    map: HealthMap,
 }
 
 impl HealthPublisher {
     async fn set(&mut self, health: Health) {
         log_transition(&self.unit, &health);
-        self.current = health;
-        self.publish().await;
-    }
-
-    async fn publish(&self) {
-        let payload = serde_json::to_string(&self.current).expect("health serializes");
+        self.map
+            .lock()
+            .expect("health map lock")
+            .insert(self.unit.clone(), health.clone());
+        let payload = serde_json::to_string(&health).expect("health serializes");
         let _ = self.session.put(&self.key, payload).await;
     }
 }
@@ -83,18 +83,17 @@ enum RunOutcome {
 }
 
 /// Supervises one unit until it stops for good or shutdown is signalled.
-pub async fn supervise(spec: UnitSpec, session: Session, mut shutdown: watch::Receiver<bool>) {
+pub async fn supervise(
+    spec: UnitSpec,
+    session: Session,
+    map: HealthMap,
+    mut shutdown: watch::Receiver<bool>,
+) {
     let mut health = HealthPublisher {
         session: session.clone(),
         key: bus::health_key(&spec.name),
         unit: spec.name.clone(),
-        current: Health {
-            status: HealthStatus::Starting,
-            pid: None,
-            restarts: 0,
-            backoff_ms: None,
-            last_exit_code: None,
-        },
+        map,
     };
     let token_sub = session
         .liveliness()
@@ -151,7 +150,6 @@ pub async fn supervise(spec: UnitSpec, session: Session, mut shutdown: watch::Re
         };
         let pid = child.id();
 
-        let mut refresh = tokio::time::interval(HEALTH_REFRESH);
         let outcome = loop {
             tokio::select! {
                 status = child.wait() => {
@@ -173,9 +171,6 @@ pub async fn supervise(spec: UnitSpec, session: Session, mut shutdown: watch::Re
                             }).await;
                         }
                     }
-                }
-                _ = refresh.tick() => {
-                    health.publish().await;
                 }
             }
         };
@@ -255,14 +250,7 @@ pub async fn supervise(spec: UnitSpec, session: Session, mut shutdown: watch::Re
     }
 
     // A unit that stopped or opened its breaker keeps its last health state
-    // visible until the supervisor exits.
-    let mut refresh = tokio::time::interval(HEALTH_REFRESH);
-    while !*shutdown.borrow() {
-        tokio::select! {
-            _ = shutdown.changed() => {}
-            _ = refresh.tick() => health.publish().await,
-        }
-    }
+    // visible through the supervisor's health queryable; nothing left to do.
 }
 
 /// Publishes backoff health and sleeps; returns true if shutdown arrived.

@@ -16,7 +16,7 @@ use zenoh::handlers::FifoChannelHandler;
 use zenoh::pubsub::Subscriber;
 use zenoh::sample::{Sample, SampleKind};
 
-use common::{await_health, free_port, health_subscriber, process_alive, Supervisor};
+use common::{await_health, free_port, health_watch, process_alive, Supervisor};
 
 const FIXTURE: &str = "tests/fixture_house_z2m";
 const PORT_ENV: &str = "HOMEOSTAT_TEST_MQTT_PORT";
@@ -304,8 +304,8 @@ async fn bad_input_drops_with_health_event() {
 #[tokio::test(flavor = "multi_thread")]
 async fn adapter_honors_unit_contract() {
     let (_mosquitto, mut sup, observer) = setup().await;
-    let health_sub = health_subscriber(&observer, "zigbee").await;
-    let health = await_health(&health_sub, Duration::from_secs(10), |h| {
+    let mut watch = health_watch(&observer, "zigbee").await;
+    let health = await_health(&mut watch, Duration::from_secs(10), |h| {
         h.status == HealthStatus::Running
     })
     .await;

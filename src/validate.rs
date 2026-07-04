@@ -324,7 +324,7 @@ pub fn display_value(value: &toml::Value) -> String {
     }
 }
 
-fn parse_time(s: &str) -> Option<(u8, u8)> {
+pub(crate) fn parse_time(s: &str) -> Option<(u8, u8)> {
     let (hh, mm) = s.split_once(':')?;
     let hh: u8 = hh.parse().ok()?;
     let mm: u8 = mm.parse().ok()?;

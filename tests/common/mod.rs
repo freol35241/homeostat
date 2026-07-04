@@ -135,35 +135,62 @@ pub fn process_alive(pid: u32) -> bool {
 
 pub type HealthSub = Subscriber<FifoChannelHandler<Sample>>;
 
-pub async fn health_subscriber(session: &zenoh::Session, unit: &str) -> HealthSub {
-    session
-        .declare_subscriber(bus::health_key(unit))
-        .await
-        .expect("health subscriber")
+/// A health watch: live subscription plus the current value fetched from
+/// the supervisor's health queryable. Health is published on transitions
+/// only; the get covers everything before the subscription, the subscriber
+/// everything after.
+pub struct HealthWatch {
+    sub: HealthSub,
+    pending: std::collections::VecDeque<Health>,
 }
 
-/// Reads health samples until one satisfies `pred`; panics on timeout.
-pub async fn await_health<F>(sub: &HealthSub, timeout: Duration, pred: F) -> Health
+pub async fn health_watch(session: &zenoh::Session, unit: &str) -> HealthWatch {
+    let sub = session
+        .declare_subscriber(bus::health_key(unit))
+        .await
+        .expect("health subscriber");
+    let replies = session
+        .get(bus::health_key(unit))
+        .await
+        .expect("health get");
+    let mut pending = std::collections::VecDeque::new();
+    while let Ok(reply) = replies.recv_async().await {
+        if let Ok(sample) = reply.result() {
+            let health: Health = serde_json::from_slice(&sample.payload().to_bytes())
+                .expect("health payload parses");
+            pending.push_back(health);
+        }
+    }
+    HealthWatch { sub, pending }
+}
+
+/// Reads health states until one satisfies `pred`; panics on timeout.
+pub async fn await_health<F>(watch: &mut HealthWatch, timeout: Duration, pred: F) -> Health
 where
     F: Fn(&Health) -> bool,
 {
-    scan_health(sub, timeout, pred)
+    scan_health(watch, timeout, pred)
         .await
         .expect("health condition not met in time")
 }
 
 /// Like `await_health`, but a timeout returns None instead of panicking.
-pub async fn scan_health<F>(sub: &HealthSub, timeout: Duration, pred: F) -> Option<Health>
+pub async fn scan_health<F>(watch: &mut HealthWatch, timeout: Duration, pred: F) -> Option<Health>
 where
     F: Fn(&Health) -> bool,
 {
+    while let Some(health) = watch.pending.pop_front() {
+        if pred(&health) {
+            return Some(health);
+        }
+    }
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
         let now = tokio::time::Instant::now();
         if now >= deadline {
             return None;
         }
-        match tokio::time::timeout(deadline - now, sub.recv_async()).await {
+        match tokio::time::timeout(deadline - now, watch.sub.recv_async()).await {
             Err(_) => return None,
             Ok(Err(_)) => panic!("health subscriber closed"),
             Ok(Ok(sample)) => {
