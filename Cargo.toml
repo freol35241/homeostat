@@ -3,7 +3,7 @@ name = "homeostat"
 version = "0.1.0"
 edition = "2021"
 description = "A household regulator. Text-first home automation core."
-license = "MIT OR Apache-2.0"
+license = "Apache-2.0"
 default-run = "homeostat"
 
 [dependencies]
