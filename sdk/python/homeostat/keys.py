@@ -1,0 +1,31 @@
+"""Key builders for the homeostat key space (mirrors the Rust src/bus.rs).
+
+Schema: home/{class}/{room}/{entity}/{aspect} for state and cmd;
+home/health/{unit}[...] and home/meta/{unit}/... for supervision.
+"""
+
+ENV_UNIT = "HOMEOSTAT_UNIT"
+ENV_BUS = "HOMEOSTAT_BUS"
+
+
+def state_key(room: str, entity: str, aspect: str) -> str:
+    return f"home/state/{room}/{entity}/{aspect}"
+
+
+def cmd_key(room: str, entity: str, aspect: str) -> str:
+    return f"home/cmd/{room}/{entity}/{aspect}"
+
+
+def cmd_keyexpr(room: str, entity: str) -> str:
+    """Key expression matching every command aspect of one entity."""
+    return f"home/cmd/{room}/{entity}/**"
+
+
+def liveliness_key(unit: str) -> str:
+    return f"home/health/{unit}/alive"
+
+
+def health_event_key(unit: str) -> str:
+    """Unit-published JSON events (e.g. dropped payloads); the parent key
+    home/health/{unit} itself belongs to the supervisor."""
+    return f"home/health/{unit}/event"

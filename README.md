@@ -6,12 +6,14 @@ governs structure. The repo is the single source of truth — no hidden state
 mutated by a UI. See [docs/design.md](docs/design.md) for the full design
 record.
 
-## Status: build-sequence step 2
+## Status: build-sequence step 3
 
-Step 1 (key space + manifest parser + validator, `homeostat plan`) is done.
-Step 2 adds the process supervisor: `homeostat up` runs a house's units as
+Step 1 (key space + manifest parser + validator, `homeostat plan`) and
+step 2 (the process supervisor: `homeostat up` runs a house's units as
 supervised OS processes on a Zenoh bus, with liveliness tokens, exponential
-restart backoff, and a circuit breaker visible at `home/health/{unit}`.
+restart backoff, and a circuit breaker visible at `home/health/{unit}`) are
+done. Step 3 adds the first real adapter — Zigbee2MQTT — and bootstraps the
+Python SDK it consumes.
 
 ## Usage
 
@@ -123,6 +125,58 @@ resolve on their own (`uv run units/...`).
 liveliness and state, induced crash restarts with observable backoff, a
 crash loop opens the breaker, SIGTERM shuts down cleanly without orphans)
 against the real binary on `tests/fixture_house/`.
+
+## Zigbee2MQTT adapter
+
+`adapters/zigbee2mqtt.py` is the first Python unit: a uv-run script with
+PEP 723 inline dependencies and the first consumer of the Python SDK at
+`sdk/python/` (`homeostat.session` — bus session from
+`HOMEOSTAT_UNIT`/`HOMEOSTAT_BUS` plus the liveliness token,
+`homeostat.keys` — key builders, `homeostat.house` — manifest and entity
+loading; the script pulls the SDK in via a `[tool.uv.sources]` path source).
+
+It is a translating subscriber. Zigbee2MQTT state on `zigbee2mqtt/{id}`
+fans out to per-aspect keys:
+
+```
+zigbee2mqtt/lamp_kitchen_1  {"state":"ON","brightness":128}
+  -> home/state/kitchen/kitchen_lamp/on          true
+  -> home/state/kitchen/kitchen_lamp/brightness  128
+```
+
+and commands translate back:
+
+```
+home/cmd/kitchen/kitchen_lamp/on  true
+  -> zigbee2mqtt/lamp_kitchen_1/set  {"state":"ON"}
+```
+
+The entity file's `id` is the z2m topic segment; the file stem is the bus
+entity name. The z2m `state` field is normalized (`on` for lights/switches,
+`locked` for locks); other scalar fields pass through under their z2m
+names. Lock entities are state-only — no command subscription until the
+arbiter exists. Unknown devices and malformed payloads are dropped with a
+JSON event at `home/health/{unit}/event`, never a crash. Full conventions
+in [docs/design.md](docs/design.md#zigbee2mqtt-adapter-and-python-sdk-settled-in-step-3).
+
+The adapter reads its own manifest and entity files from the house repo
+(cwd is the house root); the MQTT endpoint comes from
+`[discovery].endpoint`, with `${VAR}` env expansion done adapter-side. Try
+it against a live broker (needs `mosquitto` and `uv`):
+
+```
+mosquitto -p 1883 &
+uv sync --script adapters/zigbee2mqtt.py   # pre-warm the env (optional)
+HOMEOSTAT_TEST_MQTT_PORT=1883 cargo run -- up tests/fixture_house_z2m
+mosquitto_pub -t zigbee2mqtt/lamp_kitchen_1 -m '{"state":"ON","brightness":128}'
+```
+
+`tests/z2m.rs` pins four scenarios against a real mosquitto on a free port
+and the real supervisor: state translation onto the Zenoh bus, command
+translation onto MQTT (including lock-command silence), unknown-device and
+malformed payloads dropped with health events, and the step-2 unit contract
+(liveliness token, graceful SIGTERM within the grace). CI installs
+mosquitto and uv and pre-warms the adapter environment before `cargo test`.
 
 ## House repo layout
 

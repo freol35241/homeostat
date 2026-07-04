@@ -1,0 +1,133 @@
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "homeostat",
+#     "paho-mqtt>=2,<3",
+# ]
+#
+# [tool.uv.sources]
+# homeostat = { path = "../sdk/python" }
+# ///
+"""Zigbee2MQTT adapter: a translating subscriber.
+
+Device state published as JSON on zigbee2mqtt/{id} fans out to per-aspect
+keys home/state/{room}/{entity}/{aspect}; commands on
+home/cmd/{room}/{entity}/{aspect} translate to zigbee2mqtt/{id}/set. The
+entity file's `id` is the z2m topic segment; the file stem is the entity
+name. The z2m `state` field is normalized (`on` for lights/switches,
+`locked` for locks); other scalar fields pass through under their z2m
+names; nested objects (e.g. color) are deferred. Lock entities get no
+command subscription until the arbiter exists. Anything dropped emits a
+JSON event at home/health/{unit}/event instead of crashing.
+"""
+
+import json
+import os
+import signal
+import threading
+from urllib.parse import urlparse
+
+import paho.mqtt.client as mqtt
+
+import homeostat
+from homeostat import house, keys
+
+BASE_TOPIC = "zigbee2mqtt"
+
+
+def state_aspect(capability: str, z2m_field: str, value):
+    """Maps one z2m JSON field to a (bus aspect, JSON value) pair."""
+    if z2m_field == "state":
+        if capability == "lock":
+            return "locked", value == "LOCKED"
+        return "on", value == "ON"
+    return z2m_field, value
+
+
+def main():
+    unit = os.environ[keys.ENV_UNIT]
+    config = house.load_adapter(unit)
+    by_id = {e.id: e for e in config.entities}
+
+    endpoint = urlparse(config.endpoint)
+    if endpoint.scheme != "mqtt":
+        raise ValueError(f"unsupported endpoint scheme: {config.endpoint}")
+
+    session = homeostat.connect()
+
+    def on_z2m_message(client, userdata, msg):
+        entity = by_id.get(msg.topic.split("/", 1)[1])
+        if entity is None:
+            session.health_event("drop", reason="unknown-device", topic=msg.topic)
+            return
+        try:
+            payload = json.loads(msg.payload)
+        except ValueError:
+            payload = None
+        if not isinstance(payload, dict):
+            session.health_event("drop", reason="malformed-payload", topic=msg.topic)
+            return
+        for z2m_field, value in payload.items():
+            if isinstance(value, (dict, list)):
+                continue  # composite fields (color, ...) deferred
+            aspect, value = state_aspect(entity.capability, z2m_field, value)
+            session.put_json(keys.state_key(entity.room, entity.name, aspect), value)
+
+    def cmd_handler(entity):
+        def handler(sample):
+            key = str(sample.key_expr)
+            aspect = key.split("/", 4)[4]
+            try:
+                value = json.loads(sample.payload.to_bytes())
+            except ValueError:
+                session.health_event("drop", reason="malformed-payload", key=key)
+                return
+            if aspect == "on":
+                if not isinstance(value, bool):
+                    session.health_event("drop", reason="invalid-command", key=key)
+                    return
+                body = {"state": "ON" if value else "OFF"}
+            elif "/" in aspect:
+                session.health_event("drop", reason="invalid-command", key=key)
+                return
+            else:
+                body = {aspect: value}
+            client.publish(f"{BASE_TOPIC}/{entity.id}/set", json.dumps(body))
+
+        return handler
+
+    subscribed = threading.Event()
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+    client.on_message = on_z2m_message
+    client.on_connect = lambda c, *_: c.subscribe(f"{BASE_TOPIC}/+")
+    client.on_subscribe = lambda *_: subscribed.set()
+    client.connect(endpoint.hostname, endpoint.port or 1883)
+    client.loop_start()
+    if not subscribed.wait(timeout=30):
+        raise TimeoutError("no MQTT SUBACK within 30s")
+
+    # Locks are state-only until the arbiter exists: no command subscription
+    # is the structural enforcement for arbitrated entities.
+    subscribers = [
+        session.subscribe(keys.cmd_keyexpr(e.room, e.name), cmd_handler(e))
+        for e in config.entities
+        if e.capability != "lock"
+    ]
+
+    # Both translation directions are wired up: the unit is ready.
+    session.ready()
+
+    stop = threading.Event()
+    signal.signal(signal.SIGTERM, lambda *_: stop.set())
+    signal.signal(signal.SIGINT, lambda *_: stop.set())
+    stop.wait()
+
+    for sub in subscribers:
+        sub.undeclare()
+    session.close()
+    client.loop_stop()
+    client.disconnect()
+
+
+if __name__ == "__main__":
+    main()

@@ -120,6 +120,75 @@ Documented now, clock service implemented with the first automation:
 - The clock service owns timezone and DST; subscribers never do naive time
   arithmetic.
 
+## Zigbee2MQTT adapter and Python SDK (settled in step 3)
+
+### How an adapter learns its configuration
+
+An adapter reads its own manifest at `units/{HOMEOSTAT_UNIT}.toml` and the
+entity files in its `[entities].dir` — the same files the core already
+validated; cwd is the house root, so paths are relative. There is no second
+config channel and no core-to-adapter config protocol.
+
+The discovery endpoint may reference environment variables (`${VAR}`),
+expanded by the adapter — endpoints are opaque to the core, and ports or
+credentials don't belong in the repo. An unset variable is a startup error
+(the supervisor's backoff makes it visible).
+
+Entity binding for z2m: the entity file's `id` is the Zigbee2MQTT topic
+segment (`zigbee2mqtt/{id}` — the friendly name or IEEE address), the file
+stem is the bus entity name, `room` comes from the entity file. The base
+topic `zigbee2mqtt` is a constant for now; the adapter subscribes
+`zigbee2mqtt/+`, which keeps `bridge/#` traffic out and means friendly
+names containing `/` are unsupported.
+
+### Bus payload conventions
+
+Payloads on `state` and `cmd` keys are bare JSON values.
+
+State: a z2m JSON object fans out per top-level field to
+`home/state/{room}/{entity}/{field}`. The z2m `state` field is normalized —
+adapter-native vocabulary does not leak onto the bus:
+
+- lights/switches: aspect `on`, boolean (`"ON"` → `true`)
+- locks: aspect `locked`, boolean (`"LOCKED"` → `true`)
+
+Other scalar fields pass through under their z2m names (`brightness`,
+`temperature`, `occupancy`, ...). Composite fields (objects/arrays, e.g.
+`color`) are deferred.
+
+Commands: the payload on `home/cmd/{room}/{entity}/{aspect}` is one JSON
+value. `on` + boolean translates to `{"state": "ON"|"OFF"}`; any other
+aspect passes through as `{aspect: value}` to `zigbee2mqtt/{id}/set`.
+
+Locks are state-only until the arbiter exists: the adapter declares no
+command subscription at all for lock entities — not subscribing IS the
+structural enforcement for arbitrated entities in the meantime.
+
+Dropped input never crashes the adapter and always leaves a trace: a JSON
+event at `home/health/{unit}/event`, e.g.
+`{"kind": "drop", "reason": "unknown-device", "topic": "zigbee2mqtt/x"}`
+(reasons so far: `unknown-device`, `malformed-payload`, `invalid-command`).
+The parent key `home/health/{unit}` remains supervisor-owned.
+
+### Python SDK
+
+Lives at `sdk/python/`, package name `homeostat`. Minimal bootstrap, grown
+by need:
+
+- `homeostat.session` — `connect()` reads `HOMEOSTAT_UNIT`/`HOMEOSTAT_BUS`
+  and opens a client session (scouting off); `UnitSession.ready()` declares
+  the liveliness token — call it only once the unit can actually do its
+  job; `put_json` / `subscribe` / `health_event` / `close`.
+- `homeostat.keys` — key builders mirroring the Rust `src/bus.rs`.
+- `homeostat.house` — adapter-side manifest and entity loading.
+
+Python units consume it via PEP 723 inline metadata with a `[tool.uv.sources]`
+path source (`homeostat = { path = "../sdk/python" }`, resolved relative to
+the script file regardless of cwd); PyPI publication comes later. `uv sync
+--script <unit>.py` pre-warms a unit's environment so first-run dependency
+resolution never eats into supervision timeouts (CI does this before
+`cargo test`).
+
 ## Key space
  
 ```
@@ -354,9 +423,11 @@ is parked; `.io`/`.org` unregistered. No trademark risk surfaced (generic
    grant-table resolution, `homeostat plan` against an empty world. Pure
    Rust, serde types, test corpus of manifest files. DONE.
 2. **Supervisor + one trivial (fake) adapter: process spawning, liveliness,
-   restart with backoff, meta key space.** THIS IS THE CURRENT PHASE.
-3. First real adapter: Zigbee2MQTT (translating subscriber).
-4. First automation + live parameter path end to end.
+   restart with backoff, meta key space.** DONE.
+3. First real adapter: Zigbee2MQTT (translating subscriber), plus the
+   Python SDK bootstrap. DONE.
+4. **First automation + live parameter path end to end.** THIS IS THE
+   CURRENT PHASE.
 5. Recorder, then plan/apply proper, then agent MCP surface, then voice.
 Risk lives in steps 1 and 2; everything after is accretion.
  

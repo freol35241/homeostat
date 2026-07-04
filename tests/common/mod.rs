@@ -21,7 +21,14 @@ impl Supervisor {
     /// Spawns `homeostat up <fixture> --listen <fresh port>` with the
     /// fake_adapter binary's directory on PATH, and waits until the bus
     /// endpoint accepts connections.
+    #[allow(dead_code)] // each test binary uses its own subset of the harness
     pub fn spawn(fixture: &str) -> Self {
+        Self::spawn_with_env(fixture, &[])
+    }
+
+    /// Like `spawn`, with extra environment variables that the supervisor
+    /// (and therefore its units) inherit.
+    pub fn spawn_with_env(fixture: &str, envs: &[(&str, &str)]) -> Self {
         let port = free_port();
         let endpoint = format!("tcp/127.0.0.1:{port}");
         let house = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(fixture);
@@ -34,13 +41,16 @@ impl Supervisor {
             fake_adapter_dir.display(),
             std::env::var("PATH").unwrap_or_default()
         );
-        let child = Command::new(env!("CARGO_BIN_EXE_homeostat"))
+        let mut command = Command::new(env!("CARGO_BIN_EXE_homeostat"));
+        command
             .args(["up", house.to_str().expect("utf-8 path"), "--listen", &endpoint])
             .env("PATH", path)
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("spawn supervisor");
+            .stderr(Stdio::null());
+        for (key, value) in envs {
+            command.env(key, value);
+        }
+        let child = command.spawn().expect("spawn supervisor");
         let sup = Self { child, endpoint };
         sup.await_listening();
         sup
@@ -103,7 +113,7 @@ impl Drop for Supervisor {
     }
 }
 
-fn free_port() -> u16 {
+pub fn free_port() -> u16 {
     TcpListener::bind("127.0.0.1:0")
         .expect("bind ephemeral port")
         .local_addr()
