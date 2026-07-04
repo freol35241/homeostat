@@ -6,14 +6,17 @@ governs structure. The repo is the single source of truth — no hidden state
 mutated by a UI. See [docs/design.md](docs/design.md) for the full design
 record.
 
-## Status: build-sequence step 3
+## Status: build-sequence step 4
 
-Step 1 (key space + manifest parser + validator, `homeostat plan`) and
+Step 1 (key space + manifest parser + validator, `homeostat plan`),
 step 2 (the process supervisor: `homeostat up` runs a house's units as
 supervised OS processes on a Zenoh bus, with liveliness tokens, exponential
-restart backoff, and a circuit breaker visible at `home/health/{unit}`) are
-done. Step 3 adds the first real adapter — Zigbee2MQTT — and bootstraps the
-Python SDK it consumes.
+restart backoff, and a circuit breaker visible at `home/health/{unit}`) and
+step 3 (the Zigbee2MQTT adapter and the Python SDK bootstrap) are done.
+Step 4 adds the first automation — `evening_lights` — the clock service,
+and the live parameter path end to end: `home/config/{unit}/{param}` backed
+by a core-owned last-value cache, constraint-validated writes, and edits
+that reach running units without a restart.
 
 ## Usage
 
@@ -113,9 +116,15 @@ Crashed units restart per their manifest `restart` policy with exponential
 backoff (100ms doubling, 30s cap); five consecutive quick exits open the
 circuit breaker (`status = "open"`, no further restarts). SIGTERM/Ctrl-C
 terminates units gracefully within their `shutdown_grace_s`, then SIGKILLs
-the process group — no orphans, even if the supervisor itself is SIGKILLed
-(pdeathsig). The full contract is in
+the process group — the grace applies to the whole group, and a unit whose
+direct child exits on its own gets its group swept before the restart, so
+a `uv run` wrapper can't leave its interpreter behind. pdeathsig covers a
+SIGKILLed supervisor. The full contract is in
 [docs/design.md](docs/design.md#supervision-settled-in-step-2).
+
+Health is published on transitions and served to late joiners by a
+queryable from the core's last-value cache (get `home/health/{unit}` for
+the current state).
 
 The `PATH` prefix is only for the fixture house, whose fake adapter is the
 `fake_adapter` binary built by this crate; real houses use commands that
@@ -177,6 +186,73 @@ translation onto MQTT (including lock-command silence), unknown-device and
 malformed payloads dropped with health events, and the step-2 unit contract
 (liveliness token, graceful SIGTERM within the grace). CI installs
 mosquitto and uv and pre-warms the adapter environment before `cargo test`.
+
+## Automations and parameters
+
+`tests/fixture_house_evening/units/evening_lights.py` is the first
+automation: a regulator, not a scheduler. On every input — clock minute,
+presence change, light state — it re-evaluates one rule: inside the night
+window with nobody present, every light that is on gets turned off. It is
+built on the SDK's automation Context, which gives a unit exactly the
+surface its manifest declares:
+
+```python
+from homeostat import automation
+
+ctx = automation.context()            # reads units/{HOMEOSTAT_UNIT}.toml
+ctx.subscribe("presence", on_presence)  # binding names from [bus.subscribes];
+ctx.subscribe("clock", on_clock)        # handlers get (key, decoded JSON)
+ctx.params.off_time                   # typed (datetime.time), live-updated
+ctx.publish("lights", False, room="livingroom", entity="lamp")
+                                      # through [bus.publishes]; concrete
+                                      # keys only, checked against the
+                                      # declared expression
+ctx.ready(); ctx.run()                # liveliness token, block until SIGTERM
+```
+
+Zone references in subscribe/publish expressions expand against the
+house's `zones.toml`, the same expansion the core performs at plan time.
+
+Parameters live on the bus at `home/config/{unit}/{param}`, seeded from
+manifest defaults and backed by a core-owned last-value cache. A zenoh GET
+without payload reads the current value; a GET **with** payload is a write:
+the core validates it against the manifest's type and constraint (min/max,
+after/before with midnight spanning, enum) and either stores + publishes it
+— every subscribed unit sees it live, no restart — or rejects it with an
+error reply while the old value stands. An edit survives any unit restart
+(the supervisor holds the value); durable parameter state arrives with
+plan/apply in step 5.
+
+`adapters/clock.py` owns civil time: `home/clock/minute` (RFC3339 local
+time with offset, on the minute) and `home/clock/date` (at local
+midnight), both also published at startup so a late joiner never waits out
+a wall-clock minute, and both served from the core cache via get. The
+timezone is the clock's own `timezone` manifest parameter — the clock
+dogfoods the parameter path.
+
+Try it (needs `uv`):
+
+```
+cargo build
+PATH="$PWD/target/debug:$PATH" cargo run -- up tests/fixture_house_evening
+```
+
+then watch `home/cmd/livingroom/lamp/on` while you flip presence and edit
+`off_time` — a zenoh GET on `home/config/evening_lights/off_time` with
+payload `"21:30"` changes the running automation's behavior on the next
+minute; payload `"03:00"` is rejected (outside `after 20:00, before
+02:00`) and changes nothing.
+
+`tests/evening.rs` pins four scenarios against the real supervisor: clock
+payloads match the documented schema (asserted through the cache — no
+wall-clock waits), presence + a tick crossing `off_time` publishes the
+lights-off command, a live `off_time` edit takes effect in the same
+process and survives an automation restart via last-value, and an
+out-of-constraint write is rejected observably with the old value still
+driving behavior. The crossing scenarios run on
+`tests/fixture_house_evening_sim/` — the same house without the clock unit
+— where the test process publishes `home/clock/minute` itself; the
+production clock has no test hooks.
 
 ## House repo layout
 

@@ -513,9 +513,10 @@ is parked; `.io`/`.org` unregistered. No trademark risk surfaced (generic
    restart with backoff, meta key space.** DONE.
 3. First real adapter: Zigbee2MQTT (translating subscriber), plus the
    Python SDK bootstrap. DONE.
-4. **First automation + live parameter path end to end.** THIS IS THE
-   CURRENT PHASE.
-5. Recorder, then plan/apply proper, then agent MCP surface, then voice.
+4. First automation (evening_lights) + clock service + live parameter
+   path end to end. DONE.
+5. **Recorder, then plan/apply proper, then agent MCP surface, then
+   voice.** THIS IS THE CURRENT PHASE.
 Risk lives in steps 1 and 2; everything after is accretion.
  
 ## Open questions (flagged, not settled)
