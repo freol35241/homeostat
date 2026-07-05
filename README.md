@@ -153,6 +153,29 @@ The running unit picks up the new value with zero restarts. Edit its
 `probe.py` instead and the same command plans behavioral and restarts
 exactly that unit.
 
+**Run with Docker.** Each release publishes a container image for
+linux/amd64 and linux/arm64 alongside prebuilt binaries. The image
+carries everything a deployed house needs — the `homeostat` binary, git,
+uv, and a pre-installed Python:
+
+```
+docker run -d \
+  -v /path/to/house:/house \
+  -v homeostat-uv:/var/cache/uv \
+  -p 7447:7447 \
+  ghcr.io/freol35241/homeostat
+```
+
+The default command is `up /house --listen tcp/0.0.0.0:7447`, so the bus
+is reachable through the published port. The uv cache volume is optional
+but keeps unit environments across container replacements. The other
+subcommands work through the same image:
+
+```
+docker run --rm -v /path/to/house:/house ghcr.io/freol35241/homeostat \
+  plan /house --bus tcp/<supervisor-host>:7447
+```
+
 ## The pieces
 
 ### Adapters: devices onto the bus
@@ -268,7 +291,10 @@ Integration tests run the real binary against real infrastructure — a live
 supervisor, a real mosquitto broker on a free port, a real SQLite store —
 never mocks. The invalid-manifest corpus in `tests/corpus/invalid/` pairs
 each broken house with its complete expected error list. CI needs
-`mosquitto` and `uv` installed.
+`mosquitto` and `uv` installed. CI also builds the container image and
+runs `scripts/smoke_image.sh` against it — a packaging test that boots a
+minimal house in the image and asserts a unit reaches `running`, the bus
+answers a second container, and SIGTERM shuts down cleanly.
 
 | Test | Pins |
 | --- | --- |
