@@ -71,7 +71,15 @@ docker compose exec homeostat homeostat apply /house \
   --bus tcp/127.0.0.1:7447 --plan plans/pending/<id>.plan
 ```
 
-Paired devices without an entity file show up as `drop`
-(`unknown-device`) health events in the history, so "look for dropped
-devices and write entity files for them" is a prompt the agent can act
-on end to end.
+Discovery closes the loop: the zigbee adapter republishes the bridge's
+device inventory at `home/discovery/zigbee` — every paired device with
+its binding `id`, whether an entity file claims it (`configured`), a
+suggested capability stanza mapped from the device's z2m `exposes`, and
+the raw definition. So the prompt an agent can act on end to end is:
+
+> Read `home/discovery/zigbee` and propose entity files under
+> `entities/zigbee/` for every unconfigured device, using the suggested
+> capabilities. Ask me which room each device is in.
+
+Rooms are the one thing no protocol knows — expect the agent to ask,
+or correct its guesses when you review the pending plan.

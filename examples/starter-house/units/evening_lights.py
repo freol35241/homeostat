@@ -5,7 +5,7 @@
 # ]
 #
 # [tool.uv.sources]
-# homeostat = { git = "https://github.com/freol35241/homeostat", subdirectory = "sdk/python", tag = "v0.1.0" }
+# homeostat = { git = "https://github.com/freol35241/homeostat", subdirectory = "sdk/python", tag = "v0.2.0" }
 # ///
 """Evening lights: the first automation (see docs/design.md).
 

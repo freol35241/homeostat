@@ -30,7 +30,7 @@ fail() {
 
 # The released SDK the smoke house pins, the way a real house does. Bump
 # on release when the working-tree adapters outgrow the released SDK.
-SDK_TAG="v0.1.0"
+SDK_TAG="v0.2.0"
 
 # A minimal house: the clock adapter as its one unit, its SDK dependency
 # rewritten from the in-repo path source to the released git-tag source —
