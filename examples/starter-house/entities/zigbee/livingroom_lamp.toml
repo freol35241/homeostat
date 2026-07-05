@@ -1,0 +1,18 @@
+schema = 1
+
+[entity]
+# The Zigbee2MQTT topic segment: your device's friendly name (or its
+# IEEE address like 0x00158d0004cd2e3f if you never renamed it).
+id = "livingroom_lamp"
+capability = "light"
+features = ["brightness"]
+room = "livingroom"
+
+[naming]
+sv = "lampan i vardagsrummet"
+en = "livingroom lamp"
+aliases = []
+
+[write_policy]
+mode = "shared"
+owner = "zigbee"

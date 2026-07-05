@@ -1,0 +1,24 @@
+schema = 1
+
+[unit]
+name = "recorder"
+kind = "service"
+description = "Writes the bus to the history store"
+
+[runtime]
+command = "uv run units/recorder.py"
+restart = "always"
+shutdown_grace_s = 5
+
+[discovery]
+mode = "static"
+endpoint = "sqlite:data/history.db"
+
+[bus.subscribes]
+state = "home/state/**"
+cmd = "home/cmd/**"
+health = "home/health/**"
+config = "home/config/**"
+
+[bus.publishes]
+history = { key = "home/history/**" }

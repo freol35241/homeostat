@@ -1,0 +1,39 @@
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    restart: unless-stopped
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+
+  zigbee2mqtt:
+    image: koenkk/zigbee2mqtt:2
+    restart: unless-stopped
+    depends_on:
+      - mosquitto
+    volumes:
+      - z2m-data:/app/data
+    devices:
+      # Adjust to your coordinator stick (often /dev/ttyACM0).
+      - /dev/ttyUSB0:/dev/ttyUSB0
+    environment:
+      ZIGBEE2MQTT_CONFIG_MQTT_SERVER: mqtt://mosquitto:1883
+      ZIGBEE2MQTT_CONFIG_SERIAL_PORT: /dev/ttyUSB0
+      ZIGBEE2MQTT_CONFIG_FRONTEND_ENABLED: "true"
+    ports:
+      - "8080:8080" # pairing/management frontend
+
+  homeostat:
+    # HOMEOSTAT_IMAGE lets CI point this at a locally built image.
+    image: ${HOMEOSTAT_IMAGE:-ghcr.io/freol35241/homeostat:0.1.0}
+    restart: unless-stopped
+    depends_on:
+      - mosquitto
+    volumes:
+      - .:/house
+      - uv-cache:/var/cache/uv
+    ports:
+      - "7447:7447" # the bus: plan/apply and any Zenoh observer
+
+volumes:
+  z2m-data:
+  uv-cache:

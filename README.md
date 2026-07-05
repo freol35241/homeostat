@@ -168,8 +168,12 @@ docker run -d \
 
 The default command is `up /house --listen tcp/0.0.0.0:7447`, so the bus
 is reachable through the published port. The uv cache volume is optional
-but keeps unit environments across container replacements. The other
-subcommands work through the same image:
+but keeps unit environments across container replacements.
+[`examples/starter-house`](examples/starter-house/) is a runnable
+template for that mounted house — clock, recorder, Zigbee2MQTT adapter,
+and the evening-lights automation, with a compose file for the full
+mosquitto + zigbee2mqtt + homeostat stack; copy it out and make it your
+own repo. The other subcommands work through the same image:
 
 ```
 docker run --rm -v /path/to/house:/house ghcr.io/freol35241/homeostat \

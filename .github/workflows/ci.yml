@@ -48,3 +48,4 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - run: scripts/smoke_image.sh homeostat:smoke
+      - run: scripts/smoke_starter.sh homeostat:smoke

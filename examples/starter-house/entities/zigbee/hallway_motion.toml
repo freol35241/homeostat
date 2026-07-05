@@ -1,0 +1,18 @@
+schema = 1
+
+[entity]
+# The Zigbee2MQTT topic segment: your device's friendly name (or its
+# IEEE address if you never renamed it).
+id = "hallway_motion"
+capability = "presence"
+features = []
+room = "hallway"
+
+[naming]
+sv = "rörelsesensorn i hallen"
+en = "hallway motion sensor"
+aliases = []
+
+[write_policy]
+mode = "shared"
+owner = "zigbee"
