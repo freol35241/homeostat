@@ -435,8 +435,8 @@ pub fn tools() -> Value {
         {
             "name": "read_state",
             "description": "Read live values from the house bus by key expression: \
-                state, health, config, clock, meta. Wildcards allowed, \
-                e.g. home/state/** or home/health/zigbee.",
+                state, health, config, clock, meta, discovery. Wildcards allowed, \
+                e.g. home/state/** or home/discovery/zigbee.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

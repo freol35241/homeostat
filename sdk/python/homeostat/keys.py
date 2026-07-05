@@ -41,6 +41,12 @@ def history_key(space: str, entity: str, aspect: str) -> str:
     return f"home/history/{space}/{entity}/{aspect}"
 
 
+def discovery_key(unit: str) -> str:
+    """An adapter's complete current view of its periphery: one JSON array
+    of device records (see docs/design.md, Discovery)."""
+    return f"home/discovery/{unit}"
+
+
 def liveliness_key(unit: str) -> str:
     return f"home/health/{unit}/alive"
 

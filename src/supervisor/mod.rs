@@ -77,6 +77,7 @@ pub async fn run(check: &CheckResult, root: &Path, listen: &str) -> Result<(), S
     serve_health(&session, health.clone()).await?;
     mirror(&session, "home/clock/*").await?;
     mirror(&session, "home/state/**").await?;
+    mirror(&session, "home/discovery/*").await?;
 
     let mut world = WorldMeta { grants: check.grants.clone(), ..WorldMeta::default() };
     for unit in &check.house.units {

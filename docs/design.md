@@ -282,7 +282,8 @@ exist; an automation cannot tell who publishes clock keys.
 home/{class}/{room}/{entity}/{aspect}
 ```
  
-- `class`: `state`, `cmd`, `config`, `meta`, `health`, `clock`.
+- `class`: `state`, `cmd`, `config`, `meta`, `health`, `clock`, `history`,
+  `discovery`.
 - One room segment, no floor hierarchy in keys.
 - Entity names are globally unique (enforced at plan time).
 - **Zones never appear in keys.** A zone is a named set of rooms in config.
@@ -820,6 +821,53 @@ supervisor-executed walk.
   with the propose message as the commit message — the same channel the
   voice phase will use for transcript-as-commit-message.
  
+## Discovery (settled 2026-07-05)
+
+The `discovery` class carries an adapter's complete current view of its
+periphery — what the protocol can see that the house has not claimed.
+Contract: an adapter that can enumerate its devices publishes one JSON
+array at `home/discovery/{unit}`, each record carrying
+
+- `id` — the exact value an entity file's `id` field must use to bind
+  the device; only the adapter knows its own binding rule, so agents
+  never guess it;
+- `configured` / `entity` — whether an entity file already binds it,
+  and which;
+- `suggested` — a best-effort `{capability, features}` stanza in
+  homeostat vocabulary, or null: the adapter suggests, the plan/apply
+  review decides. A hard mapping would make unknown device types
+  invisible; agent-side-only mapping would push a per-protocol table
+  into every agent;
+- `description` — the raw protocol descriptor verbatim (for z2m: the
+  definition with its `exposes`), so richer consumers can dig.
+
+Decisions and why:
+
+- **One key, whole inventory.** Device ids may contain `/` (z2m allows
+  hierarchical friendly names), so per-device key segments are a trap;
+  a complete document per publish also makes departures trivial and
+  matches the consumer (an agent reads everything, filters
+  `configured = false`).
+- **Core stays thin**: the class name in the schema, a supervisor
+  mirror of `home/discovery/*` for late joiners (what read_state
+  reads), nothing else. Same shape as `health`: plumbing in core,
+  content from units. How discovery happens (retained bridge topic,
+  mDNS browse, passive sniffing) is protocol business the core never
+  sees; the manifest's `[discovery]` section configures the mechanism,
+  this class carries its results.
+- **Opt-in.** Adapters with nothing to enumerate (Modbus-style static
+  buses) and non-adapters simply do not declare the publish.
+- Out of scope, deliberately: rooms (physical knowledge no protocol
+  has — the agent asks or proposes a guess for review); actuating
+  discovery (permit-join, commissioning — commands with authority
+  implications, grant territory for later); inventory history (the
+  recorder's typed-series model does not fit an array document;
+  read_state covers the agent workflow).
+
+The agent loop this enables: `read_state home/discovery/{unit}` →
+propose entity files for unconfigured records → structural pending
+plan → owner applies. The agent never touches the native bus.
+
 ## Voice (later phase)
  
 - Two-tier command path: a fast-path intent matcher (high precision,

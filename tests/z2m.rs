@@ -319,3 +319,71 @@ async fn adapter_honors_unit_contract() {
     assert_eq!(code, Some(0), "supervisor exit code");
     assert!(!process_alive(adapter_pid), "adapter must not outlive the supervisor");
 }
+
+/// (e) Discovery: a bridge/devices inventory lands on the bus as one JSON
+/// document at home/discovery/zigbee — binding ids, configured flags,
+/// best-effort suggestions, raw definitions; the coordinator is omitted.
+#[tokio::test(flavor = "multi_thread")]
+async fn bridge_inventory_published_as_discovery() {
+    let (mosquitto, mut sup, observer) = setup().await;
+    let mut mqtt = Mqtt::connect(mosquitto.port, "inventory-test").await;
+    let sub = observer
+        .declare_subscriber("home/discovery/zigbee")
+        .await
+        .expect("discovery subscriber");
+
+    mqtt.publish(
+        "zigbee2mqtt/bridge/devices",
+        &json!([
+            {"type": "Coordinator", "friendly_name": "Coordinator", "ieee_address": "0x00"},
+            {"type": "Router", "friendly_name": "lamp_kitchen_1", "ieee_address": "0x01",
+             "definition": {"vendor": "IKEA", "model": "LED1836G9", "description": "bulb",
+                "exposes": [{"type": "light",
+                    "features": [{"property": "state"}, {"property": "brightness"}]}]}},
+            {"type": "EndDevice", "friendly_name": "motion_new", "ieee_address": "0x02",
+             "definition": {"vendor": "Aqara", "model": "RTCGQ11LM", "description": "motion",
+                "exposes": [{"type": "binary", "property": "occupancy"}]}}
+        ])
+        .to_string(),
+    )
+    .await;
+
+    let sample = tokio::time::timeout(Duration::from_secs(10), sub.recv_async())
+        .await
+        .expect("discovery document within 10s")
+        .expect("discovery sample");
+    let doc: Value =
+        serde_json::from_slice(&sample.payload().to_bytes()).expect("discovery is JSON");
+    let records = doc.as_array().expect("discovery is an array");
+    assert_eq!(records.len(), 2, "coordinator omitted: {doc}");
+
+    let lamp = records
+        .iter()
+        .find(|r| r["id"] == json!("lamp_kitchen_1"))
+        .expect("lamp record");
+    assert_eq!(lamp["configured"], json!(true));
+    assert_eq!(lamp["entity"], json!("kitchen_lamp"));
+    assert_eq!(lamp["suggested"]["capability"], json!("light"));
+    assert_eq!(lamp["suggested"]["features"], json!(["brightness"]));
+
+    let motion = records
+        .iter()
+        .find(|r| r["id"] == json!("motion_new"))
+        .expect("motion record");
+    assert_eq!(motion["configured"], json!(false));
+    assert_eq!(motion["entity"], json!(null));
+    assert_eq!(motion["suggested"]["capability"], json!("presence"));
+    assert_eq!(motion["description"]["model"], json!("RTCGQ11LM"));
+
+    // The mirror serves it to late joiners: the read path the MCP
+    // surface's read_state uses.
+    let replies = observer.get("home/discovery/zigbee").await.expect("get discovery");
+    let reply = replies.recv_async().await.expect("mirrored discovery reply");
+    let mirrored: Value = serde_json::from_slice(
+        &reply.result().expect("mirrored sample").payload().to_bytes(),
+    )
+    .expect("mirrored discovery is JSON");
+    assert_eq!(mirrored, doc, "mirror serves the same document");
+
+    sup.shutdown();
+}

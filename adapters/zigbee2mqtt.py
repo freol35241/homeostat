@@ -19,6 +19,13 @@ name. The z2m `state` field is normalized (`on` for lights/switches,
 names; nested objects (e.g. color) are deferred. Lock entities get no
 command subscription until the arbiter exists. Anything dropped emits a
 JSON event at home/health/{unit}/event instead of crashing.
+
+The retained zigbee2mqtt/bridge/devices inventory is republished at
+home/discovery/{unit}: every paired device (coordinator excluded) as a
+record carrying the entity-file binding `id`, whether an entity file
+already binds it, a best-effort suggested capability/features stanza
+mapped from the z2m `exposes` descriptor, and the raw definition for
+anything the mapping does not cover (docs/design.md, Discovery).
 """
 
 import json
@@ -44,6 +51,52 @@ def state_aspect(capability: str, z2m_field: str, value):
     return z2m_field, value
 
 
+def suggest(exposes):
+    """Best-effort entity-file stanza from a z2m exposes descriptor, or
+    None when no confident mapping exists — the raw definition rides
+    along in the record either way, so nothing becomes invisible."""
+    for exp in exposes:
+        if exp.get("type") == "light":
+            inner = {f.get("property") for f in exp.get("features", [])}
+            return {
+                "capability": "light",
+                "features": ["brightness"] if "brightness" in inner else [],
+            }
+        if exp.get("type") == "lock":
+            return {"capability": "lock", "features": []}
+        if exp.get("type") == "binary" and exp.get("property") == "occupancy":
+            return {"capability": "presence", "features": []}
+    return None
+
+
+def inventory(devices, by_id):
+    """The complete discovery document from one bridge/devices payload."""
+    records = []
+    for dev in devices:
+        if dev.get("type") == "Coordinator":
+            continue
+        dev_id = dev.get("friendly_name") or dev.get("ieee_address")
+        if not dev_id:
+            continue
+        definition = dev.get("definition") or {}
+        entity = by_id.get(dev_id)
+        records.append(
+            {
+                "id": dev_id,
+                "configured": entity is not None,
+                "entity": entity.name if entity else None,
+                "suggested": suggest(definition.get("exposes") or []),
+                "description": {
+                    "vendor": definition.get("vendor"),
+                    "model": definition.get("model"),
+                    "description": definition.get("description"),
+                    "exposes": definition.get("exposes"),
+                },
+            }
+        )
+    return records
+
+
 def main():
     unit = os.environ[keys.ENV_UNIT]
     config = house.load_adapter(unit)
@@ -56,6 +109,16 @@ def main():
     session = homeostat.connect()
 
     def on_z2m_message(client, userdata, msg):
+        if msg.topic == f"{BASE_TOPIC}/bridge/devices":
+            try:
+                devices = json.loads(msg.payload)
+            except ValueError:
+                devices = None
+            if not isinstance(devices, list):
+                session.health_event("drop", reason="malformed-payload", topic=msg.topic)
+                return
+            session.put_json(keys.discovery_key(unit), inventory(devices, by_id))
+            return
         entity = by_id.get(msg.topic.split("/", 1)[1])
         if entity is None:
             session.health_event("drop", reason="unknown-device", topic=msg.topic)
@@ -99,7 +162,9 @@ def main():
     subscribed = threading.Event()
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
     client.on_message = on_z2m_message
-    client.on_connect = lambda c, *_: c.subscribe(f"{BASE_TOPIC}/+")
+    client.on_connect = lambda c, *_: c.subscribe(
+        [(f"{BASE_TOPIC}/+", 0), (f"{BASE_TOPIC}/bridge/devices", 0)]
+    )
     client.on_subscribe = lambda *_: subscribed.set()
     client.connect(endpoint.hostname, endpoint.port or 1883)
     client.loop_start()

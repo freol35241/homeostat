@@ -16,6 +16,7 @@ endpoint = "mqtt://127.0.0.1:${HOMEOSTAT_TEST_MQTT_PORT}"
 
 [bus.publishes]
 state = { key = "home/state/{room}/{entity}/**" }
+discovery = { key = "home/discovery/zigbee" }
 
 [bus.subscribes]
 commands = "home/cmd/{room}/{entity}/**"

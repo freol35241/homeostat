@@ -201,6 +201,12 @@ Unknown devices and malformed payloads are dropped with a health event at
 `home/health/{unit}/event`, never a crash. Details and conventions:
 [design record §Zigbee2MQTT](docs/design.md#zigbee2mqtt-adapter-and-python-sdk-settled-in-step-3).
 
+Adapters that can enumerate their periphery also publish a discovery
+document at `home/discovery/{unit}` — every paired device with its
+binding id, whether an entity file claims it yet, and a suggested
+capability stanza — which is how an agent constructs entity files for
+unconfigured devices ([design record §Discovery](docs/design.md#discovery-settled-2026-07-05)).
+
 ### Automations: regulators, not schedulers
 
 Automations are Python scripts built on the SDK in `sdk/python/`. A unit
