@@ -28,6 +28,7 @@ Expanded keys:
     -> home/state/global/outdoor_temp/**
   esphome subscribes commands: home/cmd/{room}/{entity}/**
     -> home/cmd/global/outdoor_temp/**
+  zigbee publishes discovery: home/discovery/zigbee
   zigbee publishes state: home/state/{room}/{entity}/**
     -> home/state/hallway/front_door_lock/**
     -> home/state/hallway/hallway_motion/**
