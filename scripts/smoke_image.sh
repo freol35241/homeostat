@@ -28,13 +28,20 @@ fail() {
   exit 1
 }
 
-# A minimal self-contained house: the clock adapter as its one unit, the
-# Python SDK vendored at house/sdk/python so the script's relative
-# `../sdk/python` uv source resolves inside the mount.
+# The released SDK the smoke house pins, the way a real house does. Bump
+# on release when the working-tree adapters outgrow the released SDK.
+SDK_TAG="v0.1.0"
+
+# A minimal house: the clock adapter as its one unit, its SDK dependency
+# rewritten from the in-repo path source to the released git-tag source —
+# the documented pattern for real houses, so the smoke test walks the
+# same path a user does.
 HOUSE="$WORK/house"
-mkdir -p "$HOUSE/units" "$HOUSE/sdk"
-cp -r "$REPO/sdk/python" "$HOUSE/sdk/python"
-cp "$REPO/adapters/clock.py" "$HOUSE/units/clock.py"
+mkdir -p "$HOUSE/units"
+sed 's|homeostat = { path = "../sdk/python", editable = true }|homeostat = { git = "https://github.com/freol35241/homeostat", subdirectory = "sdk/python", tag = "'"$SDK_TAG"'" }|' \
+  "$REPO/adapters/clock.py" > "$HOUSE/units/clock.py"
+grep -q 'subdirectory = "sdk/python"' "$HOUSE/units/clock.py" \
+  || { echo "SMOKE FAIL: clock.py SDK source line drifted; sed rewrite missed" >&2; exit 1; }
 cat > "$HOUSE/zones.toml" <<'EOF'
 schema = 1
 
@@ -71,8 +78,8 @@ git -C "$HOUSE" -c user.name=smoke -c user.email=smoke@example.com \
 docker network create "$NET" >/dev/null
 docker run -d --name "$SUP" --network "$NET" -v "$HOUSE:/house" "$IMAGE" >/dev/null
 
-# The unit's first `uv run` resolves eclipse-zenoh from the network, so
-# allow a generous deadline before requiring `running`.
+# The unit's first `uv run` resolves eclipse-zenoh and builds the SDK
+# from GitHub, so allow a generous deadline before requiring `running`.
 echo "waiting for the clock unit to reach running..."
 deadline=$((SECONDS + 180))
 until docker logs "$SUP" 2>&1 | grep -q "\[homeostat\] clock: running"; do

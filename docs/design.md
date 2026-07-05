@@ -845,6 +845,15 @@ supervisor-executed walk.
   choice => private. Identical in a stranger's house => public.
 - Generic automations graduate from private to public SDK helpers/examples.
 - Invariant: the public tool never sees the private repo except locally.
+- SDK distribution (settled 2026-07-05): house units pin the SDK as a uv
+  git source — `{ git = "https://github.com/freol35241/homeostat",
+  subdirectory = "sdk/python", tag = "vX.Y.Z" }` in the PEP 723 header —
+  never a vendored copy. The pin lives in the unit script, which
+  files_hash covers, so an SDK bump is a visible behavioral change to
+  plan/apply; a vendored copy sits outside change detection and was
+  rejected for exactly that reason. In-repo adapters and fixtures keep
+  relative `path` sources so tests exercise the working-tree SDK. PyPI
+  publication later keeps the same shape (`homeostat==X.Y.Z`).
 ## Name collision status (checked 2026-07-03)
  
 crates.io: free. PyPI: free. npm: free. Homebrew: free. GitHub username and

@@ -199,8 +199,25 @@ Unknown devices and malformed payloads are dropped with a health event at
 
 ### Automations: regulators, not schedulers
 
-Automations are Python scripts built on the SDK in `sdk/python/`. The
-automation context gives a unit exactly the surface its manifest declares:
+Automations are Python scripts built on the SDK in `sdk/python/`. A unit
+declares it in its PEP 723 header, pinned to a release tag:
+
+```python
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["homeostat"]
+#
+# [tool.uv.sources]
+# homeostat = { git = "https://github.com/freol35241/homeostat", subdirectory = "sdk/python", tag = "v0.1.0" }
+# ///
+```
+
+Because the pin lives in the script itself — a file plan/apply hashes —
+an SDK upgrade is a visible behavioral change: `plan` flags it, `apply`
+restarts exactly the units that bumped. (Units inside this repo use a
+relative `path` source instead, so tests exercise the working-tree SDK.)
+
+The automation context gives a unit exactly the surface its manifest declares:
 
 ```python
 from homeostat import automation
