@@ -40,8 +40,38 @@ State appears at `home/state/{room}/{entity}/{aspect}`, history lands in
 `data/history.db`, and the automation turns downstairs lights off after
 `off_time` (a live-editable parameter) when nobody is present.
 
+Already running Zigbee2MQTT elsewhere? Delete the `mosquitto` and
+`zigbee2mqtt` services from the compose file and point the `endpoint`
+in `units/zigbee.toml` at your existing MQTT broker instead.
+
 Plan and apply from the host, against the running house:
 
 ```
 docker compose exec homeostat homeostat plan /house --bus tcp/127.0.0.1:7447
 ```
+
+## Let an agent configure it
+
+The house runs its own agent surface: `units/mcp.toml` serves MCP over
+HTTP on `:8642`. Connect any MCP client, e.g.:
+
+```
+claude mcp add --transport http homeostat http://<host>:8642
+```
+
+The agent gets five tools — `read_state`, `read_history`, `plan`,
+`propose`, `apply` — with tier-gated authority: it can read everything,
+and `propose` commits repo edits, but only parameter-only changes apply
+immediately. Anything behavioral or structural (new entities, new
+units) is saved as a pending plan under `plans/pending/` for you to
+review and apply:
+
+```
+docker compose exec homeostat homeostat apply /house \
+  --bus tcp/127.0.0.1:7447 --plan plans/pending/<id>.plan
+```
+
+Paired devices without an entity file show up as `drop`
+(`unknown-device`) health events in the history, so "look for dropped
+devices and write entity files for them" is a prompt the agent can act
+on end to end.

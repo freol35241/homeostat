@@ -33,6 +33,7 @@ services:
       - uv-cache:/var/cache/uv
     ports:
       - "7447:7447" # the bus: plan/apply and any Zenoh observer
+      - "8642:8642" # the agent surface: MCP over HTTP (units/mcp.toml)
 
 volumes:
   z2m-data:

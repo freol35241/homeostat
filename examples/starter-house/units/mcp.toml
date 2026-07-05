@@ -1,0 +1,11 @@
+schema = 1
+
+[unit]
+name = "mcp"
+kind = "service"
+description = "Agent surface: MCP over HTTP"
+
+[runtime]
+command = "homeostat mcp --http 0.0.0.0:8642"
+restart = "on-failure"
+shutdown_grace_s = 5

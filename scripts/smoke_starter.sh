@@ -48,7 +48,7 @@ compose up -d mosquitto homeostat >/dev/null 2>&1
 # release tag, eclipse-zenoh and paho-mqtt from PyPI): generous deadline.
 echo "waiting for all starter units to reach running..."
 deadline=$((SECONDS + 300))
-for unit in clock recorder zigbee evening_lights; do
+for unit in clock recorder zigbee evening_lights mcp; do
   until compose logs homeostat 2>&1 | grep -q "\[homeostat\] $unit: running"; do
     if [ -z "$(compose ps -q homeostat)" ]; then
       fail "homeostat container exited before $unit ran"
@@ -60,6 +60,14 @@ for unit in clock recorder zigbee evening_lights; do
   done
   echo "$unit is running"
 done
+
+# The agent surface answers MCP over the published HTTP port.
+init="$(curl -s -m 10 -X POST http://127.0.0.1:8642 \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}')"
+echo "$init" | grep -q '"name":"homeostat"' \
+  || fail "MCP initialize did not answer over HTTP: $init"
+echo "agent surface answers on :8642"
 
 CID="$(compose ps -q homeostat)"
 compose stop --timeout 20 homeostat >/dev/null 2>&1
