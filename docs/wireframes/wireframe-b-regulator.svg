@@ -1,0 +1,168 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="880" viewBox="0 0 1500 880" font-family="DejaVu Sans, sans-serif">
+<rect width="1500" height="880" fill="#fafafa"/>
+<text x="40.0" y="40.0" font-size="11" fill="#a1a1aa" font-weight="bold" text-anchor="start" font-family="DejaVu Sans, sans-serif" letter-spacing="1.5">HOMEOSTAT DASHBOARD · WIREFRAME 2/2</text>
+<text x="40.0" y="68.0" font-size="22" fill="#18181b" font-weight="bold" text-anchor="start" font-family="DejaVu Sans, sans-serif">Concept B — The regulator</text>
+<text x="40.0" y="90.0" font-size="13" fill="#52525b" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">State-first: the house as a control loop — signals and setpoints front and center. Rooms are demoted to navigation; a room detail view reuses Concept A's card.</text>
+<rect x="40.0" y="128.0" width="1000.0" height="560.0" rx="8" fill="#ffffff" stroke="#52525b" stroke-width="1.2"/>
+<rect x="40.0" y="128.0" width="1000.0" height="28.0" rx="8" fill="#f4f4f5"/>
+<rect x="40.0" y="148.0" width="1000.0" height="8.0" rx="0" fill="#f4f4f5"/>
+<line x1="40.0" y1="156.0" x2="1040.0" y2="156.0" stroke="#d4d4d8" stroke-width="1"/>
+<circle cx="56.0" cy="142.0" r="4.5" fill="none" stroke="#a1a1aa" stroke-width="1.2"/>
+<circle cx="72.0" cy="142.0" r="4.5" fill="none" stroke="#a1a1aa" stroke-width="1.2"/>
+<circle cx="88.0" cy="142.0" r="4.5" fill="none" stroke="#a1a1aa" stroke-width="1.2"/>
+<rect x="108.0" y="134.0" width="240.0" height="16.0" rx="8" fill="#ffffff" stroke="#d4d4d8" stroke-width="1"/>
+<text x="118.0" y="145.5" font-size="9.5" fill="#a1a1aa" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">http://homeostat.lan  (LAN / WireGuard)</text>
+<rect x="40.0" y="156.0" width="190.0" height="532.0" rx="0" fill="#f4f4f5"/>
+<line x1="230.0" y1="156.0" x2="230.0" y2="688.0" stroke="#d4d4d8" stroke-width="1"/>
+<text x="60.0" y="190.0" font-size="15" fill="#18181b" font-weight="bold" text-anchor="start" font-family="DejaVu Sans, sans-serif">homeostat</text>
+<rect x="50.0" y="204.0" width="170.0" height="26.0" rx="6" fill="#ffffff" stroke="#d4d4d8" stroke-width="1"/>
+<text x="62.0" y="222.0" font-size="12.5" fill="#18181b" font-weight="bold" text-anchor="start" font-family="DejaVu Sans, sans-serif">Läget</text>
+<text x="62.0" y="256.0" font-size="12.5" fill="#52525b" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">Börvärden</text>
+<text x="62.0" y="290.0" font-size="12.5" fill="#52525b" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">Rum</text>
+<text x="74.0" y="322.0" font-size="10.5" fill="#a1a1aa" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">Nere · Vardagsrum</text>
+<text x="74.0" y="344.0" font-size="10.5" fill="#a1a1aa" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">Nere · Hall</text>
+<text x="74.0" y="366.0" font-size="10.5" fill="#a1a1aa" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">Nere · Kök</text>
+<text x="74.0" y="388.0" font-size="10.5" fill="#a1a1aa" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">Uppe · Sovrum</text>
+<text x="74.0" y="410.0" font-size="10.5" fill="#a1a1aa" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">Ute</text>
+<line x1="40.0" y1="570.0" x2="230.0" y2="570.0" stroke="#d4d4d8" stroke-width="1"/>
+<text x="60.0" y="592.0" font-size="10" fill="#a1a1aa" font-weight="bold" text-anchor="start" font-family="DejaVu Sans, sans-serif" letter-spacing="1.2">HÄLSA</text>
+<path d="M 66 608 L 71 617 L 61 617 Z" stroke="#18181b" stroke-width="1.2" fill="#18181b" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="78.0" y="617.0" font-size="9.5" fill="#52525b" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">kvällsbelysning · omstart 3/5</text>
+<circle cx="66.0" cy="636.0" r="3.5" fill="#52525b"/>
+<text x="78.0" y="640.0" font-size="9.5" fill="#52525b" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">4 enheter · ok</text>
+<text x="60.0" y="662.0" font-size="9.5" fill="#a1a1aa" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">visa allt ▸</text>
+<text x="254.0" y="192.0" font-size="16" fill="#18181b" font-weight="bold" text-anchor="start" font-family="DejaVu Sans, sans-serif">Läget nu</text>
+<text x="1016.0" y="192.0" font-size="11" fill="#52525b" font-weight="normal" text-anchor="end" font-family="DejaVu Sans, sans-serif">Nere ▾   12:44</text>
+<rect x="254.0" y="210.0" width="243.3" height="108.0" rx="8" fill="#ffffff" stroke="#d4d4d8" stroke-width="1"/>
+<text x="268.0" y="232.0" font-size="10" fill="#a1a1aa" font-weight="bold" text-anchor="start" font-family="DejaVu Sans, sans-serif" letter-spacing="1.2">TEMPERATUR INNE</text>
+<text x="268.0" y="262.0" font-size="22" fill="#18181b" font-weight="bold" text-anchor="start" font-family="DejaVu Sans, sans-serif">21,4°</text>
+<path d="M 268.0 279.6 L 276.0 280.5 L 284.0 281.6 L 291.9 282.8 L 299.9 283.8 L 307.9 284.6 L 315.9 285.0 L 323.8 285.2 L 331.8 285.1 L 339.8 284.9 L 347.8 284.8 L 355.7 284.8 L 363.7 285.1 L 371.7 285.7 L 379.7 286.7 L 387.6 287.8 L 395.6 289.0 L 403.6 290.1 L 411.6 290.9 L 419.5 291.3 L 427.5 291.2 L 435.5 290.5 L 443.5 289.3 L 451.4 287.6 L 459.4 285.8 L 467.4 283.9 L 475.4 282.1 L 483.3 280.7" stroke="#52525b" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="483.3" cy="280.7" r="2.5" fill="#18181b"/>
+<text x="268.0" y="308.0" font-size="9.5" fill="#a1a1aa" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">20,8–22,3° idag</text>
+<rect x="513.3" y="210.0" width="243.3" height="108.0" rx="8" fill="#ffffff" stroke="#d4d4d8" stroke-width="1"/>
+<text x="527.3" y="232.0" font-size="10" fill="#a1a1aa" font-weight="bold" text-anchor="start" font-family="DejaVu Sans, sans-serif" letter-spacing="1.2">TEMPERATUR UTE</text>
+<text x="527.3" y="262.0" font-size="22" fill="#18181b" font-weight="bold" text-anchor="start" font-family="DejaVu Sans, sans-serif">14,2°</text>
+<path d="M 527.3 284.9 L 535.3 285.6 L 543.3 286.5 L 551.3 287.4 L 559.2 288.1 L 567.2 288.4 L 575.2 288.3 L 583.2 287.7 L 591.1 286.6 L 599.1 285.1 L 607.1 283.2 L 615.1 281.3 L 623.0 279.4 L 631.0 277.8 L 639.0 276.7 L 647.0 276.0 L 654.9 275.8 L 662.9 276.0 L 670.9 276.6 L 678.9 277.2 L 686.8 277.9 L 694.8 278.4 L 702.8 278.8 L 710.8 278.8 L 718.7 278.6 L 726.7 278.4 L 734.7 278.2 L 742.7 278.1" stroke="#52525b" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="742.7" cy="278.1" r="2.5" fill="#18181b"/>
+<text x="527.3" y="308.0" font-size="9.5" fill="#a1a1aa" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">9,6–15,1° idag</text>
+<rect x="772.7" y="210.0" width="243.3" height="108.0" rx="8" fill="#ffffff" stroke="#d4d4d8" stroke-width="1"/>
+<text x="786.7" y="232.0" font-size="10" fill="#a1a1aa" font-weight="bold" text-anchor="start" font-family="DejaVu Sans, sans-serif" letter-spacing="1.2">NÄRVARO</text>
+<circle cx="792.7" cy="256.0" r="3.5" fill="#52525b"/>
+<text x="802.7" y="260.0" font-size="10.5" fill="#18181b" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">Hallen · 3 min sedan</text>
+<circle cx="792.7" cy="278.0" r="3.5" fill="none" stroke="#a1a1aa" stroke-width="1.2"/>
+<text x="802.7" y="282.0" font-size="10.5" fill="#52525b" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">Vardagsrummet · 41 min</text>
+<circle cx="792.7" cy="300.0" r="3.5" fill="none" stroke="#a1a1aa" stroke-width="1.2"/>
+<text x="802.7" y="304.0" font-size="10.5" fill="#52525b" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">Uppe · 2 tim</text>
+<text x="254.0" y="342.0" font-size="10" fill="#a1a1aa" font-weight="bold" text-anchor="start" font-family="DejaVu Sans, sans-serif" letter-spacing="1.2">BÖRVÄRDEN — HELA HUSET</text>
+<rect x="254.0" y="354.0" width="762.0" height="146.0" rx="8" fill="#ffffff" stroke="#d4d4d8" stroke-width="1"/>
+<text x="270.0" y="378.0" font-size="11.5" fill="#18181b" font-weight="bold" text-anchor="start" font-family="DejaVu Sans, sans-serif">Kvällsbelysning</text>
+<text x="270.0" y="394.0" font-size="9.5" fill="#a1a1aa" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">släcktid</text>
+<rect x="790.0" y="370.0" width="96.0" height="22.0" rx="5" fill="#ffffff" stroke="#d4d4d8" stroke-width="1"/>
+<line x1="814.0" y1="370.0" x2="814.0" y2="392.0" stroke="#d4d4d8" stroke-width="1"/>
+<line x1="862.0" y1="370.0" x2="862.0" y2="392.0" stroke="#d4d4d8" stroke-width="1"/>
+<text x="802.0" y="385.0" font-size="12" fill="#52525b" font-weight="normal" text-anchor="middle" font-family="DejaVu Sans, sans-serif">–</text>
+<text x="874.0" y="385.0" font-size="12" fill="#52525b" font-weight="normal" text-anchor="middle" font-family="DejaVu Sans, sans-serif">+</text>
+<text x="838.0" y="385.0" font-size="11" fill="#18181b" font-weight="bold" text-anchor="middle" font-family="DejaVu Sans, sans-serif">22:00</text>
+<text x="1000.0" y="385.0" font-size="9.5" fill="#a1a1aa" font-weight="normal" text-anchor="end" font-family="DejaVu Sans, sans-serif">20:00–02:00</text>
+<line x1="268.0" y1="404.0" x2="1002.0" y2="404.0" stroke="#d4d4d8" stroke-width="1"/>
+<text x="270.0" y="424.0" font-size="11.5" fill="#18181b" font-weight="bold" text-anchor="start" font-family="DejaVu Sans, sans-serif">Värmepumpen</text>
+<text x="270.0" y="440.0" font-size="9.5" fill="#a1a1aa" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">börvärde</text>
+<rect x="384.0" y="414.0" width="74.0" height="14.0" rx="7" fill="#f4f4f5" stroke="#d4d4d8" stroke-width="1"/>
+<text x="421.0" y="424.5" font-size="8" fill="#52525b" font-weight="normal" text-anchor="middle" font-family="DejaVu Sans, sans-serif" letter-spacing="0.5">ARBITRERAD</text>
+<line x1="584.0" y1="427.0" x2="744.0" y2="427.0" stroke="#d4d4d8" stroke-width="3"/>
+<line x1="584.0" y1="427.0" x2="664.0" y2="427.0" stroke="#52525b" stroke-width="3"/>
+<circle cx="664.0" cy="427.0" r="6" fill="#ffffff" stroke="#18181b" stroke-width="1.5"/>
+<text x="764.0" y="431.0" font-size="11" fill="#18181b" font-weight="bold" text-anchor="start" font-family="DejaVu Sans, sans-serif">21,0°</text>
+<text x="1000.0" y="431.0" font-size="9.5" fill="#a1a1aa" font-weight="normal" text-anchor="end" font-family="DejaVu Sans, sans-serif">18–24°</text>
+<line x1="268.0" y1="450.0" x2="1002.0" y2="450.0" stroke="#d4d4d8" stroke-width="1"/>
+<text x="270.0" y="470.0" font-size="11.5" fill="#18181b" font-weight="bold" text-anchor="start" font-family="DejaVu Sans, sans-serif">Morgonvärmen</text>
+<text x="270.0" y="486.0" font-size="9.5" fill="#a1a1aa" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">starttid</text>
+<rect x="790.0" y="462.0" width="96.0" height="22.0" rx="5" fill="#ffffff" stroke="#d4d4d8" stroke-width="1"/>
+<line x1="814.0" y1="462.0" x2="814.0" y2="484.0" stroke="#d4d4d8" stroke-width="1"/>
+<line x1="862.0" y1="462.0" x2="862.0" y2="484.0" stroke="#d4d4d8" stroke-width="1"/>
+<text x="802.0" y="477.0" font-size="12" fill="#52525b" font-weight="normal" text-anchor="middle" font-family="DejaVu Sans, sans-serif">–</text>
+<text x="874.0" y="477.0" font-size="12" fill="#52525b" font-weight="normal" text-anchor="middle" font-family="DejaVu Sans, sans-serif">+</text>
+<text x="838.0" y="477.0" font-size="11" fill="#18181b" font-weight="bold" text-anchor="middle" font-family="DejaVu Sans, sans-serif">06:30</text>
+<text x="1000.0" y="477.0" font-size="9.5" fill="#a1a1aa" font-weight="normal" text-anchor="end" font-family="DejaVu Sans, sans-serif">05:00–08:00</text>
+<text x="254.0" y="522.0" font-size="10" fill="#a1a1aa" font-weight="bold" text-anchor="start" font-family="DejaVu Sans, sans-serif" letter-spacing="1.2">RUM — SNABBT</text>
+<rect x="254.0" y="534.0" width="762.0" height="118.0" rx="8" fill="#ffffff" stroke="#d4d4d8" stroke-width="1"/>
+<text x="270.0" y="556.0" font-size="11.5" fill="#18181b" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">Vardagsrum</text>
+<text x="976.0" y="556.0" font-size="10" fill="#52525b" font-weight="normal" text-anchor="end" font-family="DejaVu Sans, sans-serif">2 av 3 tända · 21,4°</text>
+<text x="998.0" y="556.0" font-size="11" fill="#a1a1aa" font-weight="normal" text-anchor="end" font-family="DejaVu Sans, sans-serif">▸</text>
+<line x1="268.0" y1="568.0" x2="1002.0" y2="568.0" stroke="#d4d4d8" stroke-width="1"/>
+<text x="270.0" y="590.0" font-size="11.5" fill="#18181b" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">Hall</text>
+<text x="976.0" y="590.0" font-size="10" fill="#52525b" font-weight="normal" text-anchor="end" font-family="DejaVu Sans, sans-serif">1 tänd · rörelse 3 min</text>
+<text x="998.0" y="590.0" font-size="11" fill="#a1a1aa" font-weight="normal" text-anchor="end" font-family="DejaVu Sans, sans-serif">▸</text>
+<line x1="268.0" y1="602.0" x2="1002.0" y2="602.0" stroke="#d4d4d8" stroke-width="1"/>
+<text x="270.0" y="624.0" font-size="11.5" fill="#18181b" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">Kök</text>
+<text x="976.0" y="624.0" font-size="10" fill="#52525b" font-weight="normal" text-anchor="end" font-family="DejaVu Sans, sans-serif">1 tänd · 22,1°</text>
+<text x="998.0" y="624.0" font-size="11" fill="#a1a1aa" font-weight="normal" text-anchor="end" font-family="DejaVu Sans, sans-serif">▸</text>
+<rect x="1120.0" y="128.0" width="300.0" height="620.0" rx="22" fill="#ffffff" stroke="#52525b" stroke-width="1.2"/>
+<rect x="1236.0" y="136.0" width="68.0" height="12.0" rx="6" fill="#f4f4f5" stroke="#d4d4d8" stroke-width="1"/>
+<text x="1136.0" y="146.0" font-size="9" fill="#a1a1aa" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">12:44</text>
+<text x="1404.0" y="146.0" font-size="8" fill="#a1a1aa" font-weight="normal" text-anchor="end" font-family="DejaVu Sans, sans-serif">▮▮ WG</text>
+<text x="1138.0" y="180.0" font-size="15" fill="#18181b" font-weight="bold" text-anchor="start" font-family="DejaVu Sans, sans-serif">Börvärden</text>
+<rect x="1136.0" y="196.0" width="268.0" height="74.0" rx="8" fill="#ffffff" stroke="#d4d4d8" stroke-width="1"/>
+<text x="1150.0" y="218.0" font-size="12" fill="#18181b" font-weight="bold" text-anchor="start" font-family="DejaVu Sans, sans-serif">Kvällsbelysning</text>
+<text x="1150.0" y="236.0" font-size="9.5" fill="#a1a1aa" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">släcktid · 20:00–02:00</text>
+<rect x="1280.0" y="240.0" width="110.0" height="22.0" rx="5" fill="#ffffff" stroke="#d4d4d8" stroke-width="1"/>
+<line x1="1304.0" y1="240.0" x2="1304.0" y2="262.0" stroke="#d4d4d8" stroke-width="1"/>
+<line x1="1366.0" y1="240.0" x2="1366.0" y2="262.0" stroke="#d4d4d8" stroke-width="1"/>
+<text x="1292.0" y="255.0" font-size="12" fill="#52525b" font-weight="normal" text-anchor="middle" font-family="DejaVu Sans, sans-serif">–</text>
+<text x="1378.0" y="255.0" font-size="12" fill="#52525b" font-weight="normal" text-anchor="middle" font-family="DejaVu Sans, sans-serif">+</text>
+<text x="1335.0" y="255.0" font-size="11" fill="#18181b" font-weight="bold" text-anchor="middle" font-family="DejaVu Sans, sans-serif">22:00</text>
+<text x="1150.0" y="256.0" font-size="8.5" fill="#a1a1aa" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">live på bussen</text>
+<rect x="1136.0" y="278.0" width="268.0" height="74.0" rx="8" fill="#ffffff" stroke="#d4d4d8" stroke-width="1"/>
+<text x="1150.0" y="300.0" font-size="12" fill="#18181b" font-weight="bold" text-anchor="start" font-family="DejaVu Sans, sans-serif">Värmepumpen</text>
+<text x="1150.0" y="318.0" font-size="9.5" fill="#a1a1aa" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">börvärde · 18–24° · arbitrerad</text>
+<rect x="1280.0" y="322.0" width="110.0" height="22.0" rx="5" fill="#ffffff" stroke="#d4d4d8" stroke-width="1"/>
+<line x1="1304.0" y1="322.0" x2="1304.0" y2="344.0" stroke="#d4d4d8" stroke-width="1"/>
+<line x1="1366.0" y1="322.0" x2="1366.0" y2="344.0" stroke="#d4d4d8" stroke-width="1"/>
+<text x="1292.0" y="337.0" font-size="12" fill="#52525b" font-weight="normal" text-anchor="middle" font-family="DejaVu Sans, sans-serif">–</text>
+<text x="1378.0" y="337.0" font-size="12" fill="#52525b" font-weight="normal" text-anchor="middle" font-family="DejaVu Sans, sans-serif">+</text>
+<text x="1335.0" y="337.0" font-size="11" fill="#18181b" font-weight="bold" text-anchor="middle" font-family="DejaVu Sans, sans-serif">21,0°</text>
+<text x="1150.0" y="338.0" font-size="8.5" fill="#a1a1aa" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">live på bussen</text>
+<rect x="1136.0" y="360.0" width="268.0" height="74.0" rx="8" fill="#ffffff" stroke="#d4d4d8" stroke-width="1"/>
+<text x="1150.0" y="382.0" font-size="12" fill="#18181b" font-weight="bold" text-anchor="start" font-family="DejaVu Sans, sans-serif">Morgonvärmen</text>
+<text x="1150.0" y="400.0" font-size="9.5" fill="#a1a1aa" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">starttid · 05:00–08:00</text>
+<rect x="1280.0" y="404.0" width="110.0" height="22.0" rx="5" fill="#ffffff" stroke="#d4d4d8" stroke-width="1"/>
+<line x1="1304.0" y1="404.0" x2="1304.0" y2="426.0" stroke="#d4d4d8" stroke-width="1"/>
+<line x1="1366.0" y1="404.0" x2="1366.0" y2="426.0" stroke="#d4d4d8" stroke-width="1"/>
+<text x="1292.0" y="419.0" font-size="12" fill="#52525b" font-weight="normal" text-anchor="middle" font-family="DejaVu Sans, sans-serif">–</text>
+<text x="1378.0" y="419.0" font-size="12" fill="#52525b" font-weight="normal" text-anchor="middle" font-family="DejaVu Sans, sans-serif">+</text>
+<text x="1335.0" y="419.0" font-size="11" fill="#18181b" font-weight="bold" text-anchor="middle" font-family="DejaVu Sans, sans-serif">06:30</text>
+<text x="1150.0" y="420.0" font-size="8.5" fill="#a1a1aa" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">live på bussen</text>
+<line x1="1122.0" y1="694.0" x2="1418.0" y2="694.0" stroke="#d4d4d8" stroke-width="1"/>
+<rect x="1146.5" y="704.0" width="22.0" height="16.0" rx="4" fill="#f4f4f5" stroke="#d4d4d8" stroke-width="1"/>
+<text x="1157.5" y="736.0" font-size="8.5" fill="#a1a1aa" font-weight="normal" text-anchor="middle" font-family="DejaVu Sans, sans-serif">Läget</text>
+<rect x="1221.5" y="704.0" width="22.0" height="16.0" rx="4" fill="#18181b"/>
+<text x="1232.5" y="736.0" font-size="8.5" fill="#18181b" font-weight="bold" text-anchor="middle" font-family="DejaVu Sans, sans-serif">Börvärden</text>
+<rect x="1296.5" y="704.0" width="22.0" height="16.0" rx="4" fill="#f4f4f5" stroke="#d4d4d8" stroke-width="1"/>
+<text x="1307.5" y="736.0" font-size="8.5" fill="#a1a1aa" font-weight="normal" text-anchor="middle" font-family="DejaVu Sans, sans-serif">Rum</text>
+<rect x="1371.5" y="704.0" width="22.0" height="16.0" rx="4" fill="#f4f4f5" stroke="#d4d4d8" stroke-width="1"/>
+<text x="1382.5" y="736.0" font-size="8.5" fill="#a1a1aa" font-weight="normal" text-anchor="middle" font-family="DejaVu Sans, sans-serif">Hälsa</text>
+<text x="480.0" y="120.0" font-size="11.5" fill="#2563eb" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif" font-style="italic">sensors first: the regulator's inputs, with today's range</text>
+<line x1="474.0" y1="116.0" x2="374.0" y2="226.0" stroke="#2563eb" stroke-width="1" stroke-dasharray="3 3"/>
+<circle cx="374.0" cy="226.0" r="2.4" fill="#2563eb"/>
+<text x="40.0" y="740.0" font-size="11.5" fill="#2563eb" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif" font-style="italic">spatial view demoted to nav;</text>
+<text x="40.0" y="755.0" font-size="11.5" fill="#2563eb" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif" font-style="italic">room detail reuses Concept A's card</text>
+<line x1="34.0" y1="736.0" x2="120.0" y2="306.0" stroke="#2563eb" stroke-width="1" stroke-dasharray="3 3"/>
+<circle cx="120.0" cy="306.0" r="2.4" fill="#2563eb"/>
+<text x="330.0" y="740.0" font-size="11.5" fill="#2563eb" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif" font-style="italic">health pinned in the rail,</text>
+<text x="330.0" y="755.0" font-size="11.5" fill="#2563eb" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif" font-style="italic">not a strip across the top</text>
+<line x1="324.0" y1="736.0" x2="130.0" y2="620.0" stroke="#2563eb" stroke-width="1" stroke-dasharray="3 3"/>
+<circle cx="130.0" cy="620.0" r="2.4" fill="#2563eb"/>
+<text x="620.0" y="740.0" font-size="11.5" fill="#2563eb" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif" font-style="italic">every editable_by="family" param in the</text>
+<text x="620.0" y="755.0" font-size="11.5" fill="#2563eb" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif" font-style="italic">house — one flat list, the family's levers</text>
+<line x1="614.0" y1="736.0" x2="654.0" y2="388.0" stroke="#2563eb" stroke-width="1" stroke-dasharray="3 3"/>
+<circle cx="654.0" cy="388.0" r="2.4" fill="#2563eb"/>
+<text x="920.0" y="740.0" font-size="11.5" fill="#2563eb" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif" font-style="italic">room summary rows navigate;</text>
+<text x="920.0" y="755.0" font-size="11.5" fill="#2563eb" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif" font-style="italic">no aggregate "all off" action invented</text>
+<line x1="914.0" y1="736.0" x2="554.0" y2="594.0" stroke="#2563eb" stroke-width="1" stroke-dasharray="3 3"/>
+<circle cx="554.0" cy="594.0" r="2.4" fill="#2563eb"/>
+<text x="1136.0" y="776.0" font-size="11.5" fill="#2563eb" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif" font-style="italic">phone leads with Börvärden — the most</text>
+<text x="1136.0" y="791.0" font-size="11.5" fill="#2563eb" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif" font-style="italic">common family act is nudging a setpoint</text>
+<line x1="1130.0" y1="772.0" x2="1232.0" y2="706.0" stroke="#2563eb" stroke-width="1" stroke-dasharray="3 3"/>
+<circle cx="1232.0" cy="706.0" r="2.4" fill="#2563eb"/>
+<text x="40.0" y="856.0" font-size="11" fill="#a1a1aa" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">Wireframe — grayscale is deliberate; visual design is a later pass. All labels from [naming].sv.</text>
+</svg>

@@ -921,8 +921,8 @@ Decisions and why:
   → segmented control); only `editable_by = "family"` parameters appear
   at all. Names and locale from `[naming]` — dashboard quality is a
   function of manifest hygiene, auditable by the agent, exactly like
-  voice. A health strip from `home/health/**` (unit status, circuit
-  breakers) is family-visible by design. If generated turns out bland,
+  voice. Health (`home/health/**`: unit status, circuit breakers) is
+  family-visible by design. If generated turns out bland,
   the escape hatch is ordering/pinning hints as text in the house repo
   — never browser-side customization, which is exactly the hidden UI
   state the project exists to reject.
@@ -932,6 +932,48 @@ Decisions and why:
   state push is the dashboard's whole job, so client-side reactivity is
   unavoidable; server-rendered-with-sprinkles was rejected on those
   grounds.
+
+Settled after wireframe review (2026-07-15, sheets in
+`docs/wireframes/` — the hybrid sheet is the direction; A and B are
+the exploration that produced it):
+
+- **Shape: four generated views** — `Now`, `Setpoints`, `Rooms`,
+  `Health`, with health also summarized in the nav rail. `Setpoints`
+  is every family-editable parameter in the house as one flat list:
+  the family's levers. `Rooms` is the spatial room-card grid. **`Now`
+  shows the error signal, not an inventory**: people, a few key
+  signals with today's range, and one deviations feed drawn from four
+  sources — supervision events, arbiter preemptions, notable state
+  (lights on, doors open), and setpoints differing from their manifest
+  default. A house in equilibrium renders a nearly empty page,
+  deliberately. What counts as "notable state" is per-capability
+  vocabulary in the public schema, never house configuration.
+- **English first.** `[naming]` already carries `en` and `sv`; the
+  dashboard renders `en` now, and locale becomes a per-browser choice
+  later. No architecture in it.
+- **The dashboard owns rendering; adapters never do.** Same shape as
+  the discovery settlement: adapters speak homeostat vocabulary
+  (capability, features, aspects, constraints); the mapping from that
+  vocabulary to widgets lives in the dashboard alone. Per-adapter UI
+  (the Home Assistant path) was rejected — widget drift, and the
+  dashboard stops being a pure function of the house's text. A device
+  class needing a new widget means extending the versioned schema
+  vocabulary plus one dashboard widget: public repo, reviewed, every
+  adapter benefits. Unknown aspects render generically (read-only
+  value, history if recorded) rather than becoming invisible.
+- **Map and person entities.** OwnTracks (or similar) is just another
+  adapter, binding `person` entities that publish a location aspect.
+  The map is the first widget that is a view over every entity with a
+  location aspect rather than a per-entity row; it appears on `Now`
+  iff any exist. The key-space reservation this forces: persons move,
+  so the room-keyed space gains one reserved pseudo-room — person
+  entity files set `room = "people"` and their state lives at
+  `home/state/people/{entity}/…`; `people` can never be a physical
+  room or appear in a zone. Which physical room a person is in, when
+  derivable, is state, never structure. Map tiles are self-hosted (a
+  PMTiles region extract served by the dashboard unit — no tile
+  server): fetching public tile CDNs would leak family positions as
+  tile coordinates, exactly what local-only exists to prevent.
 
 ## Voice (later phase)
  
@@ -990,7 +1032,9 @@ is parked; `.io`/`.org` unregistered. No trademark risk surfaced (generic
 5. Recorder (5a), then plan/apply proper (5b). DONE.
 6. Agent MCP surface (goal and settlements above, under "Agent
    surface"). DONE.
-7. Voice. Deferred — not yet begun.
+7. Dashboard (design settled above; wireframes in `docs/wireframes/`).
+   In progress.
+8. Voice. Deferred — not yet begun.
 Risk lives in steps 1 and 2; everything after is accretion.
  
 ## Open questions (flagged, not settled)

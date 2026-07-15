@@ -1,0 +1,142 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="880" viewBox="0 0 1500 880" font-family="DejaVu Sans, sans-serif">
+<rect width="1500" height="880" fill="#fafafa"/>
+<text x="40.0" y="40.0" font-size="11" fill="#a1a1aa" font-weight="bold" text-anchor="start" font-family="DejaVu Sans, sans-serif" letter-spacing="1.5">HOMEOSTAT DASHBOARD · WIREFRAME V2 (HYBRID)</text>
+<text x="40.0" y="68.0" font-size="22" fill="#18181b" font-weight="bold" text-anchor="start" font-family="DejaVu Sans, sans-serif">Hybrid — B's shell, a deviation-first “Now”</text>
+<text x="40.0" y="90.0" font-size="13" fill="#52525b" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">B's navigation and flat setpoint list; A's room cards live behind “Rooms”. “Now” shows the error signal — people, key signals, and what deviates from equilibrium. English-first labels from [naming].en.</text>
+<rect x="40.0" y="128.0" width="1000.0" height="500.0" rx="8" fill="#ffffff" stroke="#52525b" stroke-width="1.2"/>
+<rect x="40.0" y="128.0" width="1000.0" height="28.0" rx="8" fill="#f4f4f5"/>
+<rect x="40.0" y="148.0" width="1000.0" height="8.0" rx="0" fill="#f4f4f5"/>
+<line x1="40.0" y1="156.0" x2="1040.0" y2="156.0" stroke="#d4d4d8" stroke-width="1"/>
+<circle cx="56.0" cy="142.0" r="4.5" fill="none" stroke="#a1a1aa" stroke-width="1.2"/>
+<circle cx="72.0" cy="142.0" r="4.5" fill="none" stroke="#a1a1aa" stroke-width="1.2"/>
+<circle cx="88.0" cy="142.0" r="4.5" fill="none" stroke="#a1a1aa" stroke-width="1.2"/>
+<rect x="108.0" y="134.0" width="240.0" height="16.0" rx="8" fill="#ffffff" stroke="#d4d4d8" stroke-width="1"/>
+<text x="118.0" y="145.5" font-size="9.5" fill="#a1a1aa" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">http://homeostat.lan  (LAN / WireGuard)</text>
+<rect x="40.0" y="156.0" width="190.0" height="472.0" rx="0" fill="#f4f4f5"/>
+<line x1="230.0" y1="156.0" x2="230.0" y2="628.0" stroke="#d4d4d8" stroke-width="1"/>
+<text x="60.0" y="190.0" font-size="15" fill="#18181b" font-weight="bold" text-anchor="start" font-family="DejaVu Sans, sans-serif">homeostat</text>
+<rect x="50.0" y="204.0" width="170.0" height="26.0" rx="6" fill="#ffffff" stroke="#d4d4d8" stroke-width="1"/>
+<text x="62.0" y="222.0" font-size="12.5" fill="#18181b" font-weight="bold" text-anchor="start" font-family="DejaVu Sans, sans-serif">Now</text>
+<text x="62.0" y="256.0" font-size="12.5" fill="#52525b" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">Setpoints</text>
+<text x="62.0" y="290.0" font-size="12.5" fill="#52525b" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">Rooms</text>
+<text x="74.0" y="322.0" font-size="10.5" fill="#a1a1aa" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">Downstairs · Livingroom</text>
+<text x="74.0" y="344.0" font-size="10.5" fill="#a1a1aa" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">Downstairs · Hallway</text>
+<text x="74.0" y="366.0" font-size="10.5" fill="#a1a1aa" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">Downstairs · Kitchen</text>
+<text x="74.0" y="388.0" font-size="10.5" fill="#a1a1aa" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">Upstairs · Bedroom</text>
+<text x="74.0" y="410.0" font-size="10.5" fill="#a1a1aa" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">Outside</text>
+<line x1="40.0" y1="520.0" x2="230.0" y2="520.0" stroke="#d4d4d8" stroke-width="1"/>
+<text x="60.0" y="542.0" font-size="10" fill="#a1a1aa" font-weight="bold" text-anchor="start" font-family="DejaVu Sans, sans-serif" letter-spacing="1.2">HEALTH</text>
+<path d="M 66 558 L 71 567 L 61 567 Z" stroke="#18181b" stroke-width="1.2" fill="#18181b" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="78.0" y="567.0" font-size="9.5" fill="#52525b" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">evening lights · restart 3/5</text>
+<circle cx="66.0" cy="586.0" r="3.5" fill="#52525b"/>
+<text x="78.0" y="590.0" font-size="9.5" fill="#52525b" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">4 units · ok</text>
+<text x="60.0" y="612.0" font-size="9.5" fill="#a1a1aa" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">view all ▸</text>
+<text x="254.0" y="192.0" font-size="16" fill="#18181b" font-weight="bold" text-anchor="start" font-family="DejaVu Sans, sans-serif">Now</text>
+<text x="1016.0" y="192.0" font-size="11" fill="#52525b" font-weight="normal" text-anchor="end" font-family="DejaVu Sans, sans-serif">Whole house · 12:44</text>
+<rect x="254.0" y="210.0" width="243.3" height="100.0" rx="8" fill="#ffffff" stroke="#d4d4d8" stroke-width="1"/>
+<text x="268.0" y="232.0" font-size="10" fill="#a1a1aa" font-weight="bold" text-anchor="start" font-family="DejaVu Sans, sans-serif" letter-spacing="1.2">INSIDE</text>
+<text x="268.0" y="260.0" font-size="21" fill="#18181b" font-weight="bold" text-anchor="start" font-family="DejaVu Sans, sans-serif">21.4°</text>
+<path d="M 268.0 274.9 L 276.0 275.7 L 284.0 276.8 L 291.9 277.8 L 299.9 278.7 L 307.9 279.4 L 315.9 279.8 L 323.8 280.0 L 331.8 279.9 L 339.8 279.7 L 347.8 279.6 L 355.7 279.6 L 363.7 279.9 L 371.7 280.5 L 379.7 281.3 L 387.6 282.4 L 395.6 283.5 L 403.6 284.5 L 411.6 285.2 L 419.5 285.6 L 427.5 285.4 L 435.5 284.8 L 443.5 283.7 L 451.4 282.2 L 459.4 280.5 L 467.4 278.8 L 475.4 277.2 L 483.3 275.9" stroke="#52525b" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="483.3" cy="275.9" r="2.5" fill="#18181b"/>
+<text x="268.0" y="302.0" font-size="9.5" fill="#a1a1aa" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">20.8–22.3° today</text>
+<rect x="513.3" y="210.0" width="243.3" height="100.0" rx="8" fill="#ffffff" stroke="#d4d4d8" stroke-width="1"/>
+<text x="527.3" y="232.0" font-size="10" fill="#a1a1aa" font-weight="bold" text-anchor="start" font-family="DejaVu Sans, sans-serif" letter-spacing="1.2">OUTSIDE</text>
+<text x="527.3" y="260.0" font-size="21" fill="#18181b" font-weight="bold" text-anchor="start" font-family="DejaVu Sans, sans-serif">14.2°</text>
+<path d="M 527.3 279.8 L 535.3 280.4 L 543.3 281.2 L 551.3 282.0 L 559.2 282.6 L 567.2 282.9 L 575.2 282.9 L 583.2 282.3 L 591.1 281.3 L 599.1 279.9 L 607.1 278.2 L 615.1 276.4 L 623.0 274.8 L 631.0 273.3 L 639.0 272.3 L 647.0 271.6 L 654.9 271.5 L 662.9 271.7 L 670.9 272.2 L 678.9 272.8 L 686.8 273.4 L 694.8 273.9 L 702.8 274.1 L 710.8 274.2 L 718.7 274.0 L 726.7 273.8 L 734.7 273.6 L 742.7 273.5" stroke="#52525b" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="742.7" cy="273.5" r="2.5" fill="#18181b"/>
+<text x="527.3" y="302.0" font-size="9.5" fill="#a1a1aa" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">9.6–15.1° today</text>
+<rect x="772.7" y="210.0" width="243.3" height="100.0" rx="8" fill="#ffffff" stroke="#d4d4d8" stroke-width="1"/>
+<text x="786.7" y="232.0" font-size="10" fill="#a1a1aa" font-weight="bold" text-anchor="start" font-family="DejaVu Sans, sans-serif" letter-spacing="1.2">PEOPLE</text>
+<circle cx="792.7" cy="254.0" r="3.5" fill="#52525b"/>
+<text x="802.7" y="258.0" font-size="10.5" fill="#18181b" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">Anna · home — Hallway, 3 min</text>
+<circle cx="792.7" cy="278.0" r="3.5" fill="none" stroke="#a1a1aa" stroke-width="1.2"/>
+<text x="802.7" y="282.0" font-size="10.5" fill="#52525b" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">Erik · away — 2.1 km</text>
+<rect x="254.0" y="326.0" width="300.0" height="240.0" rx="8" fill="#ffffff" stroke="#d4d4d8" stroke-width="1"/>
+<text x="268.0" y="348.0" font-size="10" fill="#a1a1aa" font-weight="bold" text-anchor="start" font-family="DejaVu Sans, sans-serif" letter-spacing="1.2">MAP</text>
+<rect x="268.0" y="358.0" width="272.0" height="174.0" rx="0" fill="#f4f4f5" stroke="#d4d4d8" stroke-width="1"/>
+<path d="M 268 416 L 374 406 L 540 436" stroke="#ffffff" stroke-width="5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 344 358 L 364 466 L 354 532" stroke="#ffffff" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 268 486 L 540 476" stroke="#ffffff" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="394.0" y="422.0" width="12.0" height="12.0" rx="0" fill="#18181b" stroke="#d4d4d8" stroke-width="1"/>
+<text x="412.0" y="432.0" font-size="9" fill="#52525b" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">home</text>
+<circle cx="490.0" cy="394.0" r="6" fill="#18181b"/>
+<path d="M 490 400 L 490 410" stroke="#18181b" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="490.0" y="384.0" font-size="9" fill="#52525b" font-weight="normal" text-anchor="middle" font-family="DejaVu Sans, sans-serif">Erik</text>
+<text x="268.0" y="554.0" font-size="8.5" fill="#a1a1aa" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">self-hosted tiles (PMTiles) — served by the unit</text>
+<rect x="570.0" y="326.0" width="446.0" height="240.0" rx="8" fill="#ffffff" stroke="#d4d4d8" stroke-width="1"/>
+<text x="584.0" y="348.0" font-size="10" fill="#a1a1aa" font-weight="bold" text-anchor="start" font-family="DejaVu Sans, sans-serif" letter-spacing="1.2">OUT OF THE ORDINARY — 4</text>
+<path d="M 592 369 L 597 378 L 587 378 Z" stroke="#18181b" stroke-width="1.2" fill="#18181b" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="608.0" y="372.0" font-size="11.5" fill="#18181b" font-weight="bold" text-anchor="start" font-family="DejaVu Sans, sans-serif">evening lights</text>
+<text x="608.0" y="388.0" font-size="10" fill="#52525b" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">restarting, attempt 3 of 5</text>
+<text x="1002.0" y="372.0" font-size="9" fill="#a1a1aa" font-weight="normal" text-anchor="end" font-family="DejaVu Sans, sans-serif">supervision</text>
+<text x="587.0" y="425.0" font-size="11" fill="#18181b" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">⚑</text>
+<text x="608.0" y="418.0" font-size="11.5" fill="#18181b" font-weight="bold" text-anchor="start" font-family="DejaVu Sans, sans-serif">heat pump</text>
+<text x="608.0" y="434.0" font-size="10" fill="#52525b" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">manual override active — automation preempted</text>
+<text x="1002.0" y="418.0" font-size="9" fill="#a1a1aa" font-weight="normal" text-anchor="end" font-family="DejaVu Sans, sans-serif">arbiter</text>
+<circle cx="592.0" cy="466.0" r="4" fill="#52525b"/>
+<text x="608.0" y="464.0" font-size="11.5" fill="#18181b" font-weight="bold" text-anchor="start" font-family="DejaVu Sans, sans-serif">3 lights on</text>
+<text x="608.0" y="480.0" font-size="10" fill="#52525b" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">Livingroom, Kitchen</text>
+<text x="1002.0" y="464.0" font-size="9" fill="#a1a1aa" font-weight="normal" text-anchor="end" font-family="DejaVu Sans, sans-serif">state</text>
+<circle cx="592.0" cy="512.0" r="4" fill="none" stroke="#52525b" stroke-width="1.4"/>
+<text x="608.0" y="510.0" font-size="11.5" fill="#18181b" font-weight="bold" text-anchor="start" font-family="DejaVu Sans, sans-serif">off time</text>
+<text x="608.0" y="526.0" font-size="10" fill="#52525b" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">23:00 — differs from default 22:00</text>
+<text x="1002.0" y="510.0" font-size="9" fill="#a1a1aa" font-weight="normal" text-anchor="end" font-family="DejaVu Sans, sans-serif">setpoint</text>
+<text x="584.0" y="554.0" font-size="8.5" fill="#a1a1aa" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">empty when the house is in equilibrium — a calm page</text>
+<rect x="1120.0" y="128.0" width="300.0" height="620.0" rx="22" fill="#ffffff" stroke="#52525b" stroke-width="1.2"/>
+<rect x="1236.0" y="136.0" width="68.0" height="12.0" rx="6" fill="#f4f4f5" stroke="#d4d4d8" stroke-width="1"/>
+<text x="1136.0" y="146.0" font-size="9" fill="#a1a1aa" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">12:44</text>
+<text x="1404.0" y="146.0" font-size="8" fill="#a1a1aa" font-weight="normal" text-anchor="end" font-family="DejaVu Sans, sans-serif">▮▮ WG</text>
+<text x="1138.0" y="180.0" font-size="15" fill="#18181b" font-weight="bold" text-anchor="start" font-family="DejaVu Sans, sans-serif">Now</text>
+<text x="1402.0" y="180.0" font-size="10" fill="#a1a1aa" font-weight="normal" text-anchor="end" font-family="DejaVu Sans, sans-serif">12:44</text>
+<rect x="1136.0" y="194.0" width="268.0" height="62.0" rx="8" fill="#ffffff" stroke="#d4d4d8" stroke-width="1"/>
+<circle cx="1152.0" cy="216.0" r="3.5" fill="#52525b"/>
+<text x="1162.0" y="220.0" font-size="10.5" fill="#18181b" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">Anna · home — Hallway</text>
+<circle cx="1152.0" cy="238.0" r="3.5" fill="none" stroke="#a1a1aa" stroke-width="1.2"/>
+<text x="1162.0" y="242.0" font-size="10.5" fill="#52525b" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">Erik · away — 2.1 km</text>
+<rect x="1136.0" y="264.0" width="268.0" height="172.0" rx="8" fill="#ffffff" stroke="#d4d4d8" stroke-width="1"/>
+<text x="1150.0" y="286.0" font-size="10" fill="#a1a1aa" font-weight="bold" text-anchor="start" font-family="DejaVu Sans, sans-serif" letter-spacing="1.2">OUT OF THE ORDINARY</text>
+<text x="1150.0" y="310.0" font-size="10.5" fill="#18181b" font-weight="bold" text-anchor="start" font-family="DejaVu Sans, sans-serif">evening lights</text>
+<text x="1390.0" y="310.0" font-size="9.5" fill="#52525b" font-weight="normal" text-anchor="end" font-family="DejaVu Sans, sans-serif">restarting 3/5</text>
+<text x="1150.0" y="342.0" font-size="10.5" fill="#18181b" font-weight="bold" text-anchor="start" font-family="DejaVu Sans, sans-serif">heat pump</text>
+<text x="1390.0" y="342.0" font-size="9.5" fill="#52525b" font-weight="normal" text-anchor="end" font-family="DejaVu Sans, sans-serif">manual override</text>
+<text x="1150.0" y="374.0" font-size="10.5" fill="#18181b" font-weight="bold" text-anchor="start" font-family="DejaVu Sans, sans-serif">3 lights on</text>
+<text x="1390.0" y="374.0" font-size="9.5" fill="#52525b" font-weight="normal" text-anchor="end" font-family="DejaVu Sans, sans-serif">Livingroom, Kitchen</text>
+<text x="1150.0" y="406.0" font-size="10.5" fill="#18181b" font-weight="bold" text-anchor="start" font-family="DejaVu Sans, sans-serif">off time</text>
+<text x="1390.0" y="406.0" font-size="9.5" fill="#52525b" font-weight="normal" text-anchor="end" font-family="DejaVu Sans, sans-serif">23:00 · default 22:00</text>
+<rect x="1136.0" y="444.0" width="268.0" height="108.0" rx="8" fill="#ffffff" stroke="#d4d4d8" stroke-width="1"/>
+<rect x="1146.0" y="454.0" width="248.0" height="88.0" rx="0" fill="#f4f4f5" stroke="#d4d4d8" stroke-width="1"/>
+<path d="M 1146 494 L 1260 486 L 1394 504" stroke="#ffffff" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="1240.0" y="492.0" width="10.0" height="10.0" rx="0" fill="#18181b" stroke="#d4d4d8" stroke-width="1"/>
+<circle cx="1330.0" cy="478.0" r="5" fill="#18181b"/>
+<line x1="1122.0" y1="694.0" x2="1418.0" y2="694.0" stroke="#d4d4d8" stroke-width="1"/>
+<rect x="1146.5" y="704.0" width="22.0" height="16.0" rx="4" fill="#18181b"/>
+<text x="1157.5" y="736.0" font-size="8.5" fill="#18181b" font-weight="bold" text-anchor="middle" font-family="DejaVu Sans, sans-serif">Now</text>
+<rect x="1221.5" y="704.0" width="22.0" height="16.0" rx="4" fill="#f4f4f5" stroke="#d4d4d8" stroke-width="1"/>
+<text x="1232.5" y="736.0" font-size="8.5" fill="#a1a1aa" font-weight="normal" text-anchor="middle" font-family="DejaVu Sans, sans-serif">Setpoints</text>
+<rect x="1296.5" y="704.0" width="22.0" height="16.0" rx="4" fill="#f4f4f5" stroke="#d4d4d8" stroke-width="1"/>
+<text x="1307.5" y="736.0" font-size="8.5" fill="#a1a1aa" font-weight="normal" text-anchor="middle" font-family="DejaVu Sans, sans-serif">Rooms</text>
+<rect x="1371.5" y="704.0" width="22.0" height="16.0" rx="4" fill="#f4f4f5" stroke="#d4d4d8" stroke-width="1"/>
+<text x="1382.5" y="736.0" font-size="8.5" fill="#a1a1aa" font-weight="normal" text-anchor="middle" font-family="DejaVu Sans, sans-serif">Health</text>
+<text x="470.0" y="120.0" font-size="11.5" fill="#2563eb" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif" font-style="italic">“Now” = the error signal: deviations from equilibrium, not an inventory</text>
+<line x1="464.0" y1="116.0" x2="770.0" y2="346.0" stroke="#2563eb" stroke-width="1" stroke-dasharray="3 3"/>
+<circle cx="770.0" cy="346.0" r="2.4" fill="#2563eb"/>
+<text x="40.0" y="680.0" font-size="11.5" fill="#2563eb" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif" font-style="italic">map: a view over every entity with a</text>
+<text x="40.0" y="695.0" font-size="11.5" fill="#2563eb" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif" font-style="italic">location aspect — not a per-entity widget;</text>
+<text x="40.0" y="710.0" font-size="11.5" fill="#2563eb" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif" font-style="italic">tiles self-hosted, positions never leave the LAN</text>
+<line x1="34.0" y1="676.0" x2="404.0" y2="536.0" stroke="#2563eb" stroke-width="1" stroke-dasharray="3 3"/>
+<circle cx="404.0" cy="536.0" r="2.4" fill="#2563eb"/>
+<text x="420.0" y="680.0" font-size="11.5" fill="#2563eb" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif" font-style="italic">four sources, one feed: supervision, arbiter</text>
+<text x="420.0" y="695.0" font-size="11.5" fill="#2563eb" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif" font-style="italic">preemptions, notable state, setpoints off default</text>
+<line x1="414.0" y1="676.0" x2="620.0" y2="541.0" stroke="#2563eb" stroke-width="1" stroke-dasharray="3 3"/>
+<circle cx="620.0" cy="541.0" r="2.4" fill="#2563eb"/>
+<text x="800.0" y="680.0" font-size="11.5" fill="#2563eb" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif" font-style="italic">people via an OwnTracks adapter → person</text>
+<text x="800.0" y="695.0" font-size="11.5" fill="#2563eb" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif" font-style="italic">entities; where movers live in the room-keyed</text>
+<text x="800.0" y="710.0" font-size="11.5" fill="#2563eb" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif" font-style="italic">key space is a design-doc decision to settle</text>
+<line x1="794.0" y1="676.0" x2="832.7" y2="314.0" stroke="#2563eb" stroke-width="1" stroke-dasharray="3 3"/>
+<circle cx="832.7" cy="314.0" r="2.4" fill="#2563eb"/>
+<text x="1136.0" y="776.0" font-size="11.5" fill="#2563eb" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif" font-style="italic">phone “Now”: people + deviations first,</text>
+<text x="1136.0" y="791.0" font-size="11.5" fill="#2563eb" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif" font-style="italic">map below; rooms and setpoints one tab away</text>
+<line x1="1130.0" y1="772.0" x2="1158.0" y2="706.0" stroke="#2563eb" stroke-width="1" stroke-dasharray="3 3"/>
+<circle cx="1158.0" cy="706.0" r="2.4" fill="#2563eb"/>
+<text x="40.0" y="856.0" font-size="11" fill="#a1a1aa" font-weight="normal" text-anchor="start" font-family="DejaVu Sans, sans-serif">Wireframe — grayscale is deliberate; visual design is a later pass. Labels from [naming].en; locale is a per-browser choice.</text>
+</svg>
