@@ -3,152 +3,246 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
 <title>homeostat</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M3 11 L12 3 L21 11 V21 H14 V14 H10 V21 H3 Z' fill='%2318181b'/%3E%3C/svg%3E">
 <style>
 :root {
-  --bg: #fafafa; --card: #ffffff; --border: #d4d4d8; --text: #18181b;
-  --muted: #71717a; --faint: #a1a1aa; --rail: #f4f4f5; --accent: #2563eb;
+  --bg: #f6f6f7; --card: #ffffff; --border: #e4e4e7; --ink: #18181b;
+  --secondary: #52525b; --muted: #a1a1aa; --accent: #2a78d6; --accent-tint: rgba(42,120,214,.10);
+  --good: #0ca30c; --warning: #fab219; --serious: #ec835a; --critical: #d03b3b;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #0f0f10; --card: #18181b; --border: #3f3f46; --text: #f4f4f5;
-    --muted: #a1a1aa; --faint: #71717a; --rail: #18181b; --accent: #60a5fa;
+    --bg: #101012; --card: #1b1b1f; --border: #2a2a30; --ink: #f4f4f5;
+    --secondary: #b0b0b8; --muted: #6b6b74; --accent: #3987e5; --accent-tint: rgba(57,135,229,.14);
   }
 }
 * { box-sizing: border-box; }
-html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
-button, input { font-family: inherit; }
+html, body { margin: 0; padding: 0; background: var(--bg); color: var(--ink);
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 13.5px; line-height: 1.5; }
+button, input { font-family: inherit; font-size: inherit; }
 a { color: inherit; }
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+}
 
 #app { display: flex; min-height: 100vh; }
 
 /* nav rail (desktop) */
-#rail { width: 210px; flex: 0 0 210px; background: var(--rail); border-right: 1px solid var(--border);
+#rail { width: 210px; flex: 0 0 210px; background: var(--card); border-right: 1px solid var(--border);
   display: flex; flex-direction: column; padding: 20px 12px; }
-#rail .wordmark { font-size: 16px; font-weight: 700; padding: 4px 10px 20px; }
+#rail .wordmark { font-size: 16px; font-weight: 700; padding: 4px 12px 20px; }
 #rail nav { display: flex; flex-direction: column; gap: 2px; }
-#rail nav button { text-align: left; border: none; background: transparent; color: var(--muted);
-  font-size: 13.5px; padding: 10px 12px; border-radius: 6px; cursor: pointer; min-height: 40px; }
-#rail nav button:hover { background: var(--card); }
-#rail nav button.active { background: var(--card); color: var(--text); font-weight: 600; border: 1px solid var(--border); }
-#rail .health-pin { margin-top: auto; padding: 12px 10px 4px; border-top: 1px solid var(--border); font-size: 11px; }
-#rail .health-pin .label { color: var(--faint); font-weight: 700; letter-spacing: 1px; font-size: 9.5px; margin-bottom: 8px; }
-#rail .health-pin .row { display: flex; align-items: center; gap: 6px; color: var(--muted); padding: 3px 0; }
+#rail nav button { text-align: left; border: none; border-left: 3px solid transparent; background: transparent;
+  color: var(--secondary); font-size: 13.5px; padding: 10px 12px; border-radius: 0 6px 6px 0; cursor: pointer;
+  min-height: 40px; transition: background-color 140ms ease, color 140ms ease; }
+#rail nav button:hover { background: var(--accent-tint); }
+#rail nav button.active { border-left-color: var(--accent); padding-left: 9px; color: var(--ink); font-weight: 600; }
+#rail .health-pin { margin-top: auto; padding: 12px 12px 4px; border-top: 1px solid var(--border); font-size: 11px; }
+#rail .health-pin .label { color: var(--muted); font-weight: 600; letter-spacing: .08em; font-size: 10.5px;
+  text-transform: uppercase; margin-bottom: 8px; }
+#rail .health-pin .row { display: flex; align-items: center; gap: 6px; color: var(--secondary); padding: 3px 0; }
 
 /* main column */
 #main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-#topbar { display: none; align-items: center; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+#topbar { display: none; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid var(--border); }
 #topbar .wordmark { font-size: 15px; font-weight: 700; }
-#banner { display: none; background: #f59e0b; color: #1c1917; font-size: 12.5px; text-align: center; padding: 6px; }
+#banner { display: none; background: var(--warning); color: #1c1917; font-size: 12.5px; text-align: center; padding: 6px; }
 #banner.show { display: block; }
-#view { padding: 24px 28px 90px; max-width: 1100px; width: 100%; }
+#view { padding: 24px 24px 96px; max-width: 1100px; width: 100%; }
 h1.view-title { font-size: 20px; margin: 0 0 16px; }
 
 /* bottom tabs (mobile) */
 #tabs { display: none; position: fixed; bottom: 0; left: 0; right: 0; background: var(--card);
   border-top: 1px solid var(--border); padding: 4px 4px calc(4px + env(safe-area-inset-bottom)); z-index: 10; }
 #tabs .row { display: flex; }
-#tabs button { flex: 1; border: none; background: transparent; color: var(--muted); font-size: 11px;
-  padding: 8px 2px; min-height: 44px; cursor: pointer; }
-#tabs button.active { color: var(--text); font-weight: 600; }
+#tabs button { flex: 1; border: none; background: transparent; color: var(--muted);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+  padding: 6px 2px; min-height: 44px; cursor: pointer; }
+#tabs button svg { display: block; }
+#tabs button .tab-label { font-size: 10px; }
+#tabs button.active { color: var(--accent); font-weight: 600; }
 
 @media (max-width: 720px) {
   #rail { display: none; }
   #topbar { display: flex; }
   #tabs { display: block; }
-  #view { padding: 16px 14px 90px; }
+  #view { padding: 16px 16px 96px; }
 }
 
 /* toast */
-#toast { position: fixed; bottom: 70px; left: 50%; transform: translateX(-50%); background: var(--text);
+#toast { position: fixed; bottom: 70px; left: 50%; transform: translateX(-50%); background: var(--ink);
   color: var(--bg); padding: 10px 16px; border-radius: 8px; font-size: 13px; opacity: 0;
-  pointer-events: none; transition: opacity 0.2s; max-width: 90vw; z-index: 20; }
+  pointer-events: none; transition: opacity 140ms ease; max-width: 90vw; z-index: 20; }
 #toast.show { opacity: 1; }
 
 /* cards / widgets */
-.card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
-.card + .card { margin-top: 14px; }
-.card-label { font-size: 10px; font-weight: 700; letter-spacing: 1.2px; color: var(--faint); margin-bottom: 10px; }
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }
-.muted { color: var(--muted); }
-.faint { color: var(--faint); }
+.card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px;
+  box-shadow: 0 1px 2px rgba(0,0,0,.05); }
+.card + .card { margin-top: 16px; }
+.card.clickable { cursor: pointer; transition: border-color 140ms ease, box-shadow 140ms ease; }
+.card.clickable:hover { border-color: var(--muted); box-shadow: 0 2px 8px rgba(0,0,0,.07); }
+.card-label { font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--muted); margin-bottom: 10px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; }
+.muted { color: var(--secondary); }
+.faint { color: var(--muted); }
+
+.row-clickable { cursor: pointer; transition: background-color 140ms ease; border-radius: 6px; }
+.row-clickable:hover { background-color: var(--accent-tint); }
 
 /* signal tiles */
-.tile .big { font-size: 26px; font-weight: 700; margin: 6px 0 4px; }
-.tile svg { display: block; width: 100%; height: 36px; }
-.tile .caption { font-size: 11px; color: var(--faint); }
+.big, .stat-value { font-size: 26px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.tile .big { margin: 6px 0 4px; }
+.tile .caption { font-size: 12px; color: var(--muted); }
+
+/* charts (sparklines + detail chart) */
+.chart-wrap { position: relative; width: 100%; }
+.chart-wrap svg { display: block; width: 100%; height: 100%; }
+.chart-tile { height: 36px; }
+.chart-row { height: 28px; }
+.chart-detail { height: 220px; margin: 12px 0 4px; }
+.chart-empty { height: 100%; min-height: 36px; display: flex; align-items: center; justify-content: center;
+  color: var(--muted); font-size: 12px; }
+.chart-line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;
+  vector-effect: non-scaling-stroke; }
+.chart-area { fill: var(--accent); opacity: .08; stroke: none; }
+.chart-dot { fill: var(--accent); }
+.chart-grid { stroke: var(--border); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.chart-crosshair { stroke: var(--muted); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.chart-crosshair-dot { fill: var(--accent); }
+.chart-ylabel { position: absolute; right: 4px; font-size: 12px; color: var(--muted); pointer-events: none; }
+.chart-ylabel-top { top: 0; }
+.chart-ylabel-bottom { bottom: 0; }
+.chart-loading { opacity: .5; transition: opacity 140ms ease; }
+
+#chart-tooltip { position: fixed; left: 0; top: 0; background: var(--card); border: 1px solid var(--border);
+  border-radius: 6px; padding: 6px 10px; box-shadow: 0 2px 8px rgba(0,0,0,.14); pointer-events: none;
+  opacity: 0; transition: opacity 100ms ease; z-index: 50; max-width: 220px; }
+#chart-tooltip.show { opacity: 1; }
+#chart-tooltip-value { font-weight: 650; color: var(--ink); font-variant-numeric: tabular-nums; font-size: 13px; }
+#chart-tooltip-time { color: var(--secondary); font-size: 12px; margin-top: 2px; }
 
 /* deviations list */
-.dev-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px;
-  padding: 10px 0; border-top: 1px solid var(--border); }
+.dev-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+  padding: 10px 8px; margin: 0 -8px; border-top: 1px solid var(--border); min-height: 40px; }
 .dev-row:first-of-type { border-top: none; padding-top: 4px; }
 .dev-main .title { font-weight: 600; font-size: 13px; }
-.dev-main .detail { font-size: 12px; color: var(--muted); margin-top: 2px; }
-.dev-tag { font-size: 9.5px; color: var(--faint); white-space: nowrap; margin-top: 2px; }
-.equilibrium { color: var(--muted); font-size: 13px; padding: 6px 0; }
+.dev-main .detail { font-size: 12px; color: var(--secondary); margin-top: 2px; }
+.dev-tag { font-size: 10px; color: var(--muted); white-space: nowrap; margin-top: 2px; }
+.equilibrium { display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 10px; padding: 48px 24px; color: var(--secondary); font-size: 15px; text-align: center; }
+.equilibrium .eq-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good); opacity: .55; }
 
 /* room cards */
-.room-card { margin-bottom: 14px; }
-.room-card h3 { margin: 0 0 10px; font-size: 14px; }
+.room-card { margin-bottom: 16px; }
+.room-card h3 { margin: 0 0 10px; font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .entity-row { display: flex; align-items: center; justify-content: space-between; gap: 10px;
-  min-height: 40px; padding: 6px 0; border-top: 1px solid var(--border); }
+  min-height: 40px; padding: 6px 8px; margin: 0 -8px; border-top: 1px solid var(--border); }
 .entity-row:first-of-type { border-top: none; }
-.entity-name { font-size: 13px; }
+.entity-name { font-size: 13px; flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .entity-sub { margin-top: 2px; }
-.status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; }
-.dot-on { background: var(--text); }
-.dot-off { background: transparent; border: 1.4px solid var(--faint); }
+.status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; flex: 0 0 auto; }
+.dot-on { background: var(--ink); }
+.dot-off { background: transparent; border: 1.4px solid var(--muted); }
 
 /* toggle switch */
-.toggle { width: 40px; height: 22px; border-radius: 11px; border: 1px solid var(--border);
-  background: var(--rail); position: relative; cursor: pointer; flex: 0 0 40px; }
-.toggle .knob { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%;
-  background: var(--card); border: 1px solid var(--border); transition: left 0.15s; }
-.toggle.on { background: var(--text); border-color: var(--text); }
-.toggle.on .knob { left: 20px; background: var(--card); border-color: var(--text); }
+.toggle { width: 40px; height: 22px; border-radius: 11px; background: var(--border);
+  position: relative; cursor: pointer; flex: 0 0 40px; transition: background-color 140ms ease; }
+.toggle .knob { position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%;
+  background: var(--card); border: 1px solid var(--border); box-shadow: 0 1px 2px rgba(0,0,0,.2);
+  transition: left 140ms ease; }
+.toggle.on { background: var(--accent); }
+.toggle.on .knob { left: 20px; border-color: var(--accent); }
 
 /* slider row */
-.slider-row { display: flex; align-items: center; gap: 10px; padding: 6px 0 6px 18px; font-size: 12px; }
-.slider-row .slabel { flex: 0 0 70px; color: var(--muted); }
-.slider-row input[type=range] { flex: 1; accent-color: var(--text); }
-.slider-row .sval { flex: 0 0 60px; text-align: right; color: var(--text); }
+.slider-row { display: flex; align-items: center; gap: 12px; padding: 6px 0 6px 18px; font-size: 12px; }
+.slider-row .slabel { flex: 0 0 70px; color: var(--secondary); }
+.slider-row .sval { flex: 0 0 60px; text-align: right; color: var(--ink); font-variant-numeric: tabular-nums; }
+
+input[type=range] { flex: 1; -webkit-appearance: none; appearance: none; width: 100%; height: 2px;
+  background: var(--border); border-radius: 1px; outline: none; }
+input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%;
+  background: var(--accent); cursor: pointer; border: 2px solid var(--card); box-shadow: 0 1px 2px rgba(0,0,0,.2); }
+input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 50%; background: var(--accent);
+  cursor: pointer; border: 2px solid var(--card); box-shadow: 0 1px 2px rgba(0,0,0,.2); }
+input[type=range]::-moz-range-track { background: var(--border); height: 2px; border-radius: 1px; }
 
 /* setpoint controls */
 .param-row { padding: 12px 0; border-top: 1px solid var(--border); }
 .param-row:first-of-type { border-top: none; }
+.param-row.flash-highlight { animation: flash-highlight 1.5s ease; }
+@keyframes flash-highlight { from { background: var(--accent-tint); } to { background: transparent; } }
 .param-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 6px; }
-.param-head .name { font-weight: 600; font-size: 13.5px; }
-.param-caption { font-size: 11px; color: var(--faint); margin-top: 4px; }
-.seg { display: flex; gap: 6px; flex-wrap: wrap; }
-.seg button { border: 1px solid var(--border); background: var(--card); color: var(--muted); border-radius: 14px;
-  padding: 6px 12px; font-size: 12px; cursor: pointer; min-height: 32px; }
-.seg button.active { background: var(--text); color: var(--bg); border-color: var(--text); }
-input[type=text], input[type=time] { border: 1px solid var(--border); background: var(--card); color: var(--text);
+.param-head .name { font-weight: 600; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.param-caption { font-size: 12px; color: var(--muted); margin-top: 4px; cursor: help; }
+.seg { display: flex; gap: 8px; flex-wrap: wrap; }
+.seg button { border: 1px solid var(--border); background: var(--card); color: var(--secondary); border-radius: 14px;
+  padding: 6px 12px; font-size: 12px; cursor: pointer; min-height: 32px; transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease; }
+.seg button:hover { border-color: var(--muted); }
+.seg button.active { background: var(--accent-tint); color: var(--accent); border-color: var(--accent); font-weight: 600; }
+input[type=text], input[type=time] { border: 1px solid var(--border); background: var(--card); color: var(--ink);
   border-radius: 6px; padding: 8px 10px; font-size: 13px; }
 
 /* chips (rooms view) */
 .chips { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
-.chip { border: 1px solid var(--border); background: var(--card); color: var(--muted); border-radius: 14px;
-  padding: 6px 14px; font-size: 12.5px; cursor: pointer; min-height: 32px; }
-.chip.active { background: var(--text); color: var(--bg); border-color: var(--text); }
+.chip { border: 1px solid var(--border); background: var(--card); color: var(--secondary); border-radius: 14px;
+  padding: 6px 14px; font-size: 12.5px; cursor: pointer; min-height: 32px; transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease; }
+.chip:hover { border-color: var(--muted); }
+.chip.active { background: var(--accent-tint); color: var(--accent); border-color: var(--accent); font-weight: 600; }
 
 /* health cards */
 .health-card { display: flex; flex-direction: column; gap: 4px; }
-.health-head { display: flex; align-items: center; justify-content: space-between; }
-.health-head .name { font-weight: 600; font-size: 13.5px; }
-.status-badge { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); }
+.health-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.health-head .name { font-weight: 600; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.status-badge { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--secondary); cursor: help; white-space: nowrap; }
 .status-glyph { font-size: 12px; width: 14px; text-align: center; }
-.health-meta { font-size: 11.5px; color: var(--faint); }
+.status-glyph.status-running { color: var(--good); }
+.status-glyph.status-starting { color: var(--muted); }
+.status-glyph.status-backoff { color: var(--warning); }
+.status-glyph.status-open { color: var(--critical); }
+.status-glyph.status-stopped { color: var(--muted); }
+.health-meta { font-size: 12px; color: var(--muted); }
 .event-feed { margin-top: 10px; }
-.event-row { font-size: 12px; padding: 6px 0; border-top: 1px solid var(--border); color: var(--muted); }
+.event-row { font-size: 12px; padding: 6px 0; border-top: 1px solid var(--border); color: var(--secondary); }
 .event-row:first-of-type { border-top: none; }
-.event-row .ts { color: var(--faint); margin-right: 6px; }
-.badge-arbitrated { font-size: 9px; letter-spacing: 0.5px; color: var(--faint); border: 1px solid var(--border);
+.event-row .ts { color: var(--muted); margin-right: 6px; cursor: help; }
+.badge-arbitrated { font-size: 9px; letter-spacing: .05em; color: var(--muted); border: 1px solid var(--border);
   border-radius: 8px; padding: 2px 6px; margin-left: 6px; }
-.aspect-row { font-size: 12px; color: var(--muted); padding: 4px 0; }
-.empty-hint { color: var(--faint); font-size: 12.5px; padding: 8px 0; }
+.aspect-row { font-size: 12px; color: var(--secondary); padding: 6px 4px; }
+.aspect-row.row-clickable { min-height: 40px; display: flex; align-items: center; }
+.empty-hint { color: var(--muted); font-size: 12.5px; padding: 8px 0; }
+
+/* stat row (history detail) */
+.stat-row { display: flex; gap: 16px; margin-top: 12px; flex-wrap: wrap; }
+.stat-item { flex: 1 1 80px; }
+.stat-item .stat-label { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin-top: 2px; }
+
+/* detail overlay */
+#overlay-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.35); opacity: 0; pointer-events: none;
+  transition: opacity 140ms ease; z-index: 30; }
+#overlay-backdrop.show { opacity: 1; pointer-events: auto; }
+#overlay-panel { position: fixed; top: 0; right: 0; bottom: 0; width: 440px; max-width: 100vw;
+  background: var(--card); border-left: 1px solid var(--border); box-shadow: -4px 0 24px rgba(0,0,0,.14);
+  transform: translateX(100%); transition: transform 200ms ease; z-index: 31;
+  display: flex; flex-direction: column; outline: none; }
+#overlay-panel.show { transform: translateX(0); }
+.overlay-head { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 16px; border-bottom: 1px solid var(--border); flex: 0 0 auto; }
+.overlay-title { font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.overlay-close { border: none; background: transparent; color: var(--secondary); font-size: 20px; line-height: 1;
+  cursor: pointer; width: 32px; height: 32px; flex: 0 0 auto; border-radius: 6px; transition: background-color 140ms ease; }
+.overlay-close:hover { background: var(--bg); }
+.overlay-body { padding: 16px; overflow-y: auto; flex: 1 1 auto; }
+
+@media (max-width: 720px) {
+  #overlay-panel { top: auto; left: 0; right: 0; width: auto; height: 88vh; border-left: none;
+    border-top: 1px solid var(--border); border-radius: 14px 14px 0 0; transform: translateY(100%); }
+  #overlay-panel.show { transform: translateY(0); }
+}
 </style>
 </head>
 <body>
@@ -169,12 +263,34 @@ input[type=text], input[type=time] { border: 1px solid var(--border); background
 <nav id="tabs"><div class="row" id="tabs-row"></div></nav>
 <div id="toast"></div>
 
+<div id="overlay-backdrop" data-action="overlay-close"></div>
+<div id="overlay-panel" role="dialog" aria-modal="true" aria-labelledby="overlay-title" tabindex="-1">
+  <div class="overlay-head">
+    <div class="overlay-title" id="overlay-title"></div>
+    <button class="overlay-close" id="overlay-close" data-action="overlay-close" aria-label="Close">&times;</button>
+  </div>
+  <div class="overlay-body" id="overlay-body"></div>
+</div>
+
+<div id="chart-tooltip">
+  <div id="chart-tooltip-value"></div>
+  <div id="chart-tooltip-time"></div>
+</div>
+
 <script>
 'use strict';
 (function () {
 
 var VIEWS = ['now', 'setpoints', 'rooms', 'health'];
 var VIEW_LABELS = { now: 'Now', setpoints: 'Setpoints', rooms: 'Rooms', health: 'Health' };
+var TAB_ICONS = {
+  now: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 12 8 12 10 6 14 18 16 12 21 12"/></svg>',
+  setpoints: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="6" y1="4" x2="6" y2="20"/><circle cx="6" cy="9" r="2.2" fill="currentColor" stroke="none"/><line x1="12" y1="4" x2="12" y2="20"/><circle cx="12" cy="16" r="2.2" fill="currentColor" stroke="none"/><line x1="18" y1="4" x2="18" y2="20"/><circle cx="18" cy="11" r="2.2" fill="currentColor" stroke="none"/></svg>',
+  rooms: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><rect x="3.5" y="3.5" width="7.5" height="7.5" rx="1.4"/><rect x="13" y="3.5" width="7.5" height="7.5" rx="1.4"/><rect x="3.5" y="13" width="7.5" height="7.5" rx="1.4"/><rect x="13" y="13" width="7.5" height="7.5" rx="1.4"/></svg>',
+  health: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20.5 C 6 15.8 2.5 12.6 2.5 8.6 C 2.5 5.8 4.7 3.6 7.4 3.6 C 9 3.6 10.6 4.4 12 6 C 13.4 4.4 15 3.6 16.6 3.6 C 19.3 3.6 21.5 5.8 21.5 8.6 C 21.5 12.6 18 15.8 12 20.5 Z"/></svg>'
+};
+var RANGE_PRESETS = [{ label: '1h', hours: 1 }, { label: '6h', hours: 6 }, { label: '24h', hours: 24 }, { label: '7d', hours: 168 }];
+var CHART_VBW = 400; // internal viewBox width used for coordinate math; visual width is CSS 100%
 
 var store = {
   model: { zones: {}, entities: [], units: [] },
@@ -192,6 +308,22 @@ var localState = {
   sliderDrag: {},   // key -> true while user is dragging
   sparklines: {}    // entity|aspect -> {points:[], loaded:bool, loading:bool}
 };
+
+// detail overlay state (right slide-over / mobile sheet)
+var overlay = {
+  open: false,
+  type: null,        // 'history' | 'entity' | 'unit'
+  entity: null,       // for history/entity: entity object
+  aspect: null,        // for history: aspect name
+  unit: null,           // for unit: unit name
+  range: 24,             // hours, for history
+  rangeData: {},          // hours -> {points, loaded, loading}
+  lastPoints: null
+};
+
+// chartId -> {coords, width, height, aspect} — populated while building chart
+// markup, consumed by the pointermove/pointerleave hover wiring.
+var chartRegistry = {};
 
 // ---- helpers ----
 
@@ -216,6 +348,14 @@ function unitsByName() {
   var m = {};
   (store.model.units || []).forEach(function (u) { m[u.name] = u; });
   return m;
+}
+
+function findEntity(room, name) {
+  var list = store.model.entities || [];
+  for (var i = 0; i < list.length; i++) {
+    if (list[i].room === room && list[i].name === name) return list[i];
+  }
+  return null;
 }
 
 // current value for a given entity/aspect from the state map
@@ -408,7 +548,7 @@ function toast(msg) {
   toastTimer = setTimeout(function () { el.classList.remove('show'); }, 3200);
 }
 
-// ---- history fetch (sparklines) ----
+// ---- history fetch (tile/row sparklines, fixed 24h window) ----
 
 function ensureHistory(entity, aspect) {
   var sk = entity + '|' + aspect;
@@ -427,6 +567,29 @@ function ensureHistory(entity, aspect) {
     })
     .catch(function () {
       localState.sparklines[sk] = { points: [], loaded: true, loading: false };
+    });
+}
+
+// ---- history fetch (detail overlay, range-selectable) ----
+
+function fetchHistoryRange(entityName, aspect, hours) {
+  var rd = overlay.rangeData[hours];
+  if (rd && (rd.loaded || rd.loading)) return;
+  overlay.rangeData[hours] = { points: [], loaded: false, loading: true };
+  fetch('/api/history?entity=' + encodeURIComponent(entityName) + '&aspect=' + encodeURIComponent(aspect) + '&hours=' + hours + '&limit=500')
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      var pts = [];
+      (data.series || []).forEach(function (series) {
+        (series.points || []).forEach(function (p) { pts.push(p); });
+      });
+      overlay.rangeData[hours] = { points: pts, loaded: true, loading: false };
+      overlay.lastPoints = pts;
+      if (overlay.open && overlay.type === 'history') renderOverlayContent();
+    })
+    .catch(function () {
+      overlay.rangeData[hours] = { points: [], loaded: true, loading: false };
+      if (overlay.open && overlay.type === 'history') renderOverlayContent();
     });
 }
 
@@ -464,10 +627,25 @@ function healthWorstAndCount() {
 }
 
 function statusGlyph(status) {
-  if (status === 'running') return '●';
-  if (status === 'backoff') return '▲';
-  if (status === 'open') return '✕';
-  return '○'; // starting / stopped / unknown
+  if (status === 'running') return '●'; // ●
+  if (status === 'backoff') return '▲'; // ▲
+  if (status === 'open') return '✕'; // ✕
+  return '○'; // ○ starting / stopped / unknown
+}
+
+function statusChipHtml(status) {
+  return '<span class="status-badge"><span class="status-glyph status-' + esc(status) + '">' + statusGlyph(status) + '</span>' + esc(status) + '</span>';
+}
+
+function healthTooltip(h) {
+  var restarts = (h.restarts !== undefined && h.restarts !== null) ? h.restarts : 0;
+  var backoff = (h.backoff_ms !== undefined && h.backoff_ms !== null) ? h.backoff_ms : 0;
+  var exitCode = (h.last_exit_code !== undefined && h.last_exit_code !== null) ? h.last_exit_code : 0;
+  return 'restarts ' + restarts + ' · backoff ' + backoff + 'ms · exit ' + exitCode;
+}
+
+function fmtOrDash(v) {
+  return (v === undefined || v === null) ? '—' : String(v);
 }
 
 function unitNameFromHealthKey(key) {
@@ -484,19 +662,21 @@ function renderShell() {
 
   var tabs = byId('tabs-row');
   tabs.innerHTML = VIEWS.map(function (v) {
-    return '<button data-view="' + v + '" class="' + (store.view === v ? 'active' : '') + '">' + VIEW_LABELS[v] + '</button>';
+    return '<button data-view="' + v + '" class="' + (store.view === v ? 'active' : '') + '">' +
+      TAB_ICONS[v] + '<span class="tab-label">' + VIEW_LABELS[v] + '</span></button>';
   }).join('');
 
   var hw = healthWorstAndCount();
   var pin = byId('health-pin');
   if (hw.total === 0) {
-    pin.innerHTML = '<div class="label">HEALTH</div><div class="row faint">no units yet</div>';
+    pin.innerHTML = '<div class="label">Health</div><div class="row faint">no units yet</div>';
   } else {
     var worstLine = hw.worst.status === 'running'
       ? ''
-      : '<div class="row">' + statusGlyph(hw.worst.status) + '&nbsp;' + esc(titleCase(unitNameFromHealthKey(hw.worst.key))) + ' &middot; ' + esc(hw.worst.status) + '</div>';
-    pin.innerHTML = '<div class="label">HEALTH</div>' + worstLine +
-      '<div class="row">● ' + hw.ok + '/' + hw.total + ' ok</div>';
+      : '<div class="row"><span class="status-glyph status-' + esc(hw.worst.status) + '">' + statusGlyph(hw.worst.status) + '</span>&nbsp;' +
+        esc(titleCase(unitNameFromHealthKey(hw.worst.key))) + ' · ' + esc(hw.worst.status) + '</div>';
+    pin.innerHTML = '<div class="label">Health</div>' + worstLine +
+      '<div class="row"><span class="status-glyph status-running">●</span> ' + hw.ok + '/' + hw.total + ' ok</div>';
   }
 
   updateBanner();
@@ -511,34 +691,79 @@ document.addEventListener('click', function (e) {
   }
 });
 
-// ---- widget: sparkline SVG ----
+// ---- charts: geometry + markup ----
 
-function sparklineSvg(points, width, height) {
-  width = width || 220;
-  height = height || 36;
-  if (!points || points.length < 2) {
-    return '<svg viewBox="0 0 ' + width + ' ' + height + '"></svg>';
-  }
+function computeChartGeometry(points, width, height, pad) {
   var vals = points.map(function (p) { return p.value; }).filter(function (v) { return typeof v === 'number'; });
-  if (vals.length < 2) return '<svg viewBox="0 0 ' + width + ' ' + height + '"></svg>';
+  if (vals.length < 2) return null;
   var min = Math.min.apply(null, vals);
   var max = Math.max.apply(null, vals);
   var span = (max - min) || 1;
   var n = points.length;
-  var pad = 3;
   var coords = points.map(function (p, i) {
     var x = pad + (i / (n - 1)) * (width - 2 * pad);
     var y = pad + (1 - (p.value - min) / span) * (height - 2 * pad);
-    return [x, y];
+    return { x: x, y: y, value: p.value, ts: p.ts };
   });
-  var d = coords.map(function (c, i) {
-    return (i === 0 ? 'M ' : 'L ') + c[0].toFixed(1) + ' ' + c[1].toFixed(1);
+  return { coords: coords, min: min, max: max };
+}
+
+function chartPathData(coords) {
+  return coords.map(function (c, i) {
+    return (i === 0 ? 'M ' : 'L ') + c.x.toFixed(1) + ' ' + c.y.toFixed(1);
   }).join(' ');
-  var last = coords[coords.length - 1];
-  return '<svg viewBox="0 0 ' + width + ' ' + height + '" preserveAspectRatio="none">' +
-    '<path d="' + d + '" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>' +
-    '<circle cx="' + last[0].toFixed(1) + '" cy="' + last[1].toFixed(1) + '" r="2.5" fill="currentColor"/>' +
-    '</svg>';
+}
+
+function formatChartValue(aspect, v) {
+  if (typeof v !== 'number') return String(v);
+  return displayAspectValue(null, aspect || '', v);
+}
+
+function formatChartTime(ts) {
+  var d = new Date(ts);
+  if (isNaN(d.getTime())) return '';
+  return d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+// Builds a chart's markup (line + optional area/gridlines/y-labels) and
+// registers its geometry under chartId for hover/tooltip wiring. Guards
+// against sparse/empty history with a "no history yet" placeholder.
+function buildChart(chartId, points, opts) {
+  opts = opts || {};
+  var height = opts.height || 36;
+  var pad = opts.pad !== undefined ? opts.pad : 3;
+  var sizeClass = opts.sizeClass || 'chart-tile';
+  var geo = computeChartGeometry(points || [], CHART_VBW, height, pad);
+  var inner;
+  if (!geo) {
+    chartRegistry[chartId] = null;
+    inner = '<div class="chart-empty">no history yet</div>';
+  } else {
+    chartRegistry[chartId] = { coords: geo.coords, width: CHART_VBW, height: height, aspect: opts.aspect };
+    var d = chartPathData(geo.coords);
+    var last = geo.coords[geo.coords.length - 1];
+    var svg = '<svg viewBox="0 0 ' + CHART_VBW + ' ' + height + '" preserveAspectRatio="none">';
+    if (opts.gridlines) {
+      [pad, height / 2, height - pad].forEach(function (y) {
+        svg += '<line class="chart-grid" x1="0" y1="' + y.toFixed(1) + '" x2="' + CHART_VBW + '" y2="' + y.toFixed(1) + '"/>';
+      });
+    }
+    if (opts.area) {
+      var areaD = d + ' L ' + last.x.toFixed(1) + ' ' + (height - pad) + ' L ' + geo.coords[0].x.toFixed(1) + ' ' + (height - pad) + ' Z';
+      svg += '<path class="chart-area" d="' + areaD + '"/>';
+    }
+    svg += '<path class="chart-line" d="' + d + '"/>';
+    svg += '<circle class="chart-dot" cx="' + last.x.toFixed(1) + '" cy="' + last.y.toFixed(1) + '" r="3"/>';
+    svg += '<line class="chart-crosshair" x1="0" y1="0" x2="0" y2="' + height + '" style="display:none;"/>';
+    svg += '<circle class="chart-crosshair-dot" cx="0" cy="0" r="3" style="display:none;"/>';
+    svg += '</svg>';
+    inner = svg;
+    if (opts.yLabels) {
+      inner += '<div class="chart-ylabel chart-ylabel-top">' + esc(formatChartValue(opts.aspect, geo.max)) + '</div>' +
+        '<div class="chart-ylabel chart-ylabel-bottom">' + esc(formatChartValue(opts.aspect, geo.min)) + '</div>';
+    }
+  }
+  return '<div class="chart-wrap ' + sizeClass + '" data-chart-id="' + esc(chartId) + '">' + inner + '</div>';
 }
 
 function minMaxCaption(points) {
@@ -547,6 +772,66 @@ function minMaxCaption(points) {
   var min = Math.min.apply(null, vals);
   var max = Math.max.apply(null, vals);
   return min.toFixed(1) + '–' + max.toFixed(1) + ' today';
+}
+
+// ---- charts: hover crosshair + tooltip ----
+
+function wireChartInteractions(root) {
+  (root || document).querySelectorAll('.chart-wrap[data-chart-id]').forEach(function (wrap) {
+    var id = wrap.getAttribute('data-chart-id');
+    var reg = chartRegistry[id];
+    if (!reg || !reg.coords || reg.coords.length < 2) return;
+    wrap.addEventListener('pointermove', function (ev) { onChartPointerMove(wrap, reg, ev); });
+    wrap.addEventListener('pointerleave', function () { onChartPointerLeave(wrap); });
+  });
+}
+
+function onChartPointerMove(wrap, reg, ev) {
+  var rect = wrap.getBoundingClientRect();
+  if (rect.width === 0) return;
+  var fx = (ev.clientX - rect.left) / rect.width;
+  fx = Math.max(0, Math.min(1, fx));
+  var n = reg.coords.length;
+  var idx = Math.round(fx * (n - 1));
+  var c = reg.coords[idx];
+  var svg = wrap.querySelector('svg');
+  if (!svg) return;
+  var line = svg.querySelector('.chart-crosshair');
+  var dot = svg.querySelector('.chart-crosshair-dot');
+  line.setAttribute('x1', c.x); line.setAttribute('x2', c.x);
+  line.style.display = '';
+  dot.setAttribute('cx', c.x); dot.setAttribute('cy', c.y);
+  dot.style.display = '';
+  var px = rect.left + (c.x / reg.width) * rect.width;
+  var py = rect.top + (c.y / reg.height) * rect.height;
+  showChartTooltip(px, py, formatChartValue(reg.aspect, c.value), formatChartTime(c.ts));
+}
+
+function onChartPointerLeave(wrap) {
+  var line = wrap.querySelector('.chart-crosshair');
+  var dot = wrap.querySelector('.chart-crosshair-dot');
+  if (line) line.style.display = 'none';
+  if (dot) dot.style.display = 'none';
+  hideChartTooltip();
+}
+
+function showChartTooltip(x, y, valueText, timeText) {
+  var tt = byId('chart-tooltip');
+  byId('chart-tooltip-value').textContent = valueText;
+  byId('chart-tooltip-time').textContent = timeText;
+  tt.classList.add('show');
+  var ttRect = tt.getBoundingClientRect();
+  var left = x + 12;
+  var top = y - ttRect.height - 10;
+  if (left + ttRect.width > window.innerWidth - 8) left = x - ttRect.width - 12;
+  if (left < 8) left = 8;
+  if (top < 8) top = y + 12;
+  tt.style.left = left + 'px';
+  tt.style.top = top + 'px';
+}
+
+function hideChartTooltip() {
+  byId('chart-tooltip').classList.remove('show');
 }
 
 // ---- widget: entity capability rows (shared by Rooms and generic use) ----
@@ -562,8 +847,8 @@ function displayAspectValue(entity, aspect, value) {
 
 function widgetForLight(entity) {
   var on = !!stateValue(entity.room, entity.name, 'on');
-  var html = '<div class="entity-row">' +
-    '<span class="entity-name">' + esc(entity.label) + '</span>' +
+  var html = '<div class="entity-row row-clickable" data-action="entity-detail" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '">' +
+    '<span class="entity-name" title="' + esc(entity.label) + '">' + esc(entity.label) + '</span>' +
     '<span class="toggle ' + (on ? 'on' : '') + '" data-action="toggle-light" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '" data-value="' + (!on) + '"><span class="knob"></span></span>' +
     '</div>';
 
@@ -594,18 +879,18 @@ function widgetForPresence(entity) {
   var seenKey = entity.room + '/' + entity.name;
   var lastSeen = store.lastSeen[seenKey];
   var label = occ ? 'Motion' : 'Clear';
-  var extra = lastSeen ? '<span class="faint"> &middot; ' + relTime(lastSeen) + '</span>' : '';
-  return '<div class="entity-row">' +
-    '<span class="entity-name">' + esc(entity.label) + '</span>' +
-    '<span><span class="status-dot ' + (occ ? 'dot-on' : 'dot-off') + '"></span>' + label + extra + '</span>' +
+  var extra = lastSeen ? '<span class="faint" title="' + esc(new Date(lastSeen).toLocaleString()) + '"> &middot; ' + esc(relTime(lastSeen)) + '</span>' : '';
+  return '<div class="entity-row row-clickable" data-action="entity-detail" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '">' +
+    '<span class="entity-name" title="' + esc(entity.label) + '">' + esc(entity.label) + '</span>' +
+    '<span><span class="status-dot ' + (occ ? 'dot-on' : 'dot-off') + '"></span>' + esc(label) + extra + '</span>' +
     '</div>';
 }
 
 function widgetForLock(entity) {
   var locked = stateValue(entity.room, entity.name, 'locked');
   var badge = entity.write_mode === 'arbitrated' ? '<span class="badge-arbitrated">ARBITRATED</span>' : '';
-  return '<div class="entity-row">' +
-    '<span class="entity-name">' + esc(entity.label) + badge + '</span>' +
+  return '<div class="entity-row row-clickable" data-action="entity-detail" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '">' +
+    '<span class="entity-name" title="' + esc(entity.label) + '">' + esc(entity.label) + badge + '</span>' +
     '<span class="muted">' + (locked ? 'Locked' : 'Unlocked') + '</span>' +
     '</div>';
 }
@@ -620,12 +905,12 @@ function widgetForSensor(entity) {
     var sk = entity.name + '|' + aspect;
     ensureHistory(entity.name, aspect); // fetched once (guarded), on first render while visible
     var s = localState.sparklines[sk];
-    var sparkHtml = s && s.loaded ? sparklineSvg(s.points, 140, 28) : '';
-    return '<div class="entity-row">' +
-      '<span class="entity-name">' + esc(entity.label) + (aspects.length > 1 ? ' &middot; ' + esc(aspect) : '') + '</span>' +
+    var sparkHtml = s && s.loaded ? buildChart('room-' + sk, s.points, { height: 28, sizeClass: 'chart-row', aspect: aspect, area: true }) : '';
+    return '<div class="entity-row row-clickable" data-action="history-detail" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '" data-aspect="' + esc(aspect) + '">' +
+      '<span class="entity-name" title="' + esc(entity.label) + '">' + esc(entity.label) + (aspects.length > 1 ? ' &middot; ' + esc(aspect) : '') + '</span>' +
       '<span style="display:flex;align-items:center;gap:8px;">' +
       (sparkHtml ? '<span style="width:80px;">' + sparkHtml + '</span>' : '') +
-      '<span class="muted">' + displayAspectValue(entity, aspect, v) + '</span></span>' +
+      '<span class="muted">' + esc(displayAspectValue(entity, aspect, v)) + '</span></span>' +
       '</div>';
   }).join('');
 }
@@ -640,8 +925,8 @@ function widgetGeneric(entity) {
     }
   });
   if (rows.length === 0) rows.push('<div class="aspect-row faint">no data</div>');
-  return '<div class="entity-row" style="flex-direction:column;align-items:flex-start;">' +
-    '<span class="entity-name">' + esc(entity.label) + '</span>' + rows.join('') + '</div>';
+  return '<div class="entity-row row-clickable" data-action="entity-detail" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '" style="flex-direction:column;align-items:flex-start;">' +
+    '<span class="entity-name" title="' + esc(entity.label) + '">' + esc(entity.label) + '</span>' + rows.join('') + '</div>';
 }
 
 function widgetForEntity(entity) {
@@ -682,16 +967,19 @@ function renderNow() {
   var tileCount = 0;
   sensorEntities.forEach(function (e) {
     if (tileCount >= 6) return;
-    numericAspectsFor(e).forEach(function (aspect) {
+    var aspectsForE = numericAspectsFor(e);
+    aspectsForE.forEach(function (aspect) {
       if (tileCount >= 6) return;
       var sk = e.name + '|' + aspect;
       ensureHistory(e.name, aspect);
       var s = localState.sparklines[sk];
       var v = stateValue(e.room, e.name, aspect);
       var vDisplay = typeof v === 'number' ? displayAspectValue(e, aspect, v) : '—';
-      var spark = s && s.loaded ? sparklineSvg(s.points, 220, 36) : '';
+      var spark = s && s.loaded ? buildChart('now-' + sk, s.points, { height: 36, sizeClass: 'chart-tile', aspect: aspect, area: true }) : '';
       var caption = s && s.loaded ? minMaxCaption(s.points) : '';
-      tiles.push('<div class="card tile"><div class="card-label">' + esc(e.label.toUpperCase()) + (numericAspectsFor(e).length > 1 ? ' &middot; ' + esc(aspect.toUpperCase()) : '') + '</div>' +
+      var tileLabel = esc(e.label) + (aspectsForE.length > 1 ? ' &middot; ' + esc(aspect) : '');
+      tiles.push('<div class="card tile clickable" data-action="history-detail" data-room="' + esc(e.room) + '" data-entity="' + esc(e.name) + '" data-aspect="' + esc(aspect) + '">' +
+        '<div class="card-label" title="' + esc(e.label) + '">' + tileLabel.toUpperCase() + '</div>' +
         '<div class="big">' + vDisplay + '</div>' + spark +
         '<div class="caption">' + esc(caption) + '</div></div>');
       tileCount++;
@@ -705,7 +993,7 @@ function renderNow() {
         '<span class="status-dot ' + (occ ? 'dot-on' : 'dot-off') + '"></span>' +
         '<span>' + esc(e.label) + ' &middot; ' + (occ ? 'Motion' : 'Clear') + '</span></div>';
     }).join('');
-    tiles.push('<div class="card tile"><div class="card-label">PEOPLE</div>' + pRows + '</div>');
+    tiles.push('<div class="card tile"><div class="card-label">People</div>' + pRows + '</div>');
   }
 
   // out of the ordinary
@@ -723,7 +1011,9 @@ function renderNow() {
     deviations.push({
       title: unitLabel(unit),
       detail: status + (detail.length ? ' — ' + detail.join(', ') : ''),
-      tag: 'supervision'
+      tag: 'supervision',
+      action: 'unit-detail',
+      attrs: 'data-unit="' + esc(unit) + '"'
     });
   });
 
@@ -740,7 +1030,9 @@ function renderNow() {
     deviations.push({
       title: litCount + ' light' + (litCount === 1 ? '' : 's') + ' on',
       detail: Object.keys(litRooms).map(titleCase).join(', '),
-      tag: 'state'
+      tag: 'state',
+      action: 'goto-rooms',
+      attrs: ''
     });
   }
 
@@ -748,7 +1040,10 @@ function renderNow() {
   entities.filter(function (e) { return e.capability === 'lock'; }).forEach(function (e) {
     var locked = stateValue(e.room, e.name, 'locked');
     if (locked === false) {
-      deviations.push({ title: e.label + ' unlocked', detail: '', tag: 'state' });
+      deviations.push({
+        title: e.label + ' unlocked', detail: '', tag: 'state',
+        action: 'entity-detail', attrs: 'data-room="' + esc(e.room) + '" data-entity="' + esc(e.name) + '"'
+      });
     }
   });
 
@@ -765,7 +1060,9 @@ function renderNow() {
         deviations.push({
           title: unitLabel(u.name) + ' · ' + pname,
           detail: String(live) + ' (default ' + String(def) + ')',
-          tag: 'setpoint'
+          tag: 'setpoint',
+          action: 'goto-setpoint',
+          attrs: 'data-unit="' + esc(u.name) + '" data-param="' + esc(pname) + '"'
         });
       }
     });
@@ -777,10 +1074,11 @@ function renderNow() {
 
   var devHtml;
   if (deviations.length === 0) {
-    devHtml = '<div class="equilibrium">In equilibrium.</div>';
+    devHtml = '<div class="equilibrium"><span class="eq-dot"></span>In equilibrium.</div>';
   } else {
     devHtml = deviations.map(function (d) {
-      return '<div class="dev-row"><div class="dev-main"><div class="title">' + esc(d.title) + '</div>' +
+      return '<div class="dev-row row-clickable" data-action="' + d.action + '" ' + d.attrs + '>' +
+        '<div class="dev-main"><div class="title" title="' + esc(d.title) + '">' + esc(d.title) + '</div>' +
         (d.detail ? '<div class="detail">' + esc(d.detail) + '</div>' : '') + '</div>' +
         '<div class="dev-tag">' + esc(d.tag) + '</div></div>';
     }).join('');
@@ -788,7 +1086,7 @@ function renderNow() {
 
   var html = '<h1 class="view-title">Now</h1>';
   html += '<div class="grid">' + tiles.join('') + '</div>';
-  html += '<div class="card" style="margin-top:14px;"><div class="card-label">OUT OF THE ORDINARY' + (deviations.length ? ' — ' + deviations.length : '') + '</div>' + devHtml + '</div>';
+  html += '<div class="card" style="margin-top:16px;"><div class="card-label">Out of the ordinary' + (deviations.length ? ' — ' + deviations.length : '') + '</div>' + devHtml + '</div>';
   byId('view').innerHTML = html;
 }
 
@@ -840,16 +1138,20 @@ function renderParamControl(unitName, pname, p) {
   return '<input type="text" id="' + id + '" value="' + esc(value === undefined ? '' : value) + '" data-action="param-text" data-unit="' + esc(unitName) + '" data-param="' + esc(pname) + '">';
 }
 
+// shared by the Setpoints view and the unit-detail overlay
+function renderParamRow(unitName, pname, p) {
+  return '<div class="param-row" id="paramrow-' + unitName + '-' + pname + '"><div class="param-head">' +
+    '<span class="name" title="' + esc(unitLabel(unitName)) + ' · ' + esc(pname) + '">' + esc(unitLabel(unitName)) + ' · ' + esc(pname) + '</span></div>' +
+    '<div>' + renderParamControl(unitName, pname, p) + '</div>' +
+    '<div class="param-caption" title="' + esc(JSON.stringify(p.constraint || {})) + '">' + esc(paramConstraintCaption(p)) + '</div></div>';
+}
+
 function renderSetpoints() {
   var rows = [];
   (store.model.units || []).forEach(function (u) {
     var params = u.params || {};
     Object.keys(params).forEach(function (pname) {
-      var p = params[pname];
-      rows.push('<div class="param-row"><div class="param-head">' +
-        '<span class="name">' + esc(u.label) + ' · ' + esc(pname) + '</span></div>' +
-        '<div>' + renderParamControl(u.name, pname, p) + '</div>' +
-        '<div class="param-caption">' + esc(paramConstraintCaption(p)) + '</div></div>');
+      rows.push(renderParamRow(u.name, pname, params[pname]));
     });
   });
   var html = '<h1 class="view-title">Setpoints</h1>';
@@ -859,6 +1161,14 @@ function renderSetpoints() {
     html += '<div class="card">' + rows.join('') + '</div>';
   }
   byId('view').innerHTML = html;
+}
+
+function flashParamRow(unitName, pname) {
+  var rowEl = byId('paramrow-' + unitName + '-' + pname);
+  if (!rowEl) return;
+  rowEl.classList.remove('flash-highlight');
+  void rowEl.offsetWidth; // restart the animation
+  rowEl.classList.add('flash-highlight');
 }
 
 // ---- view: Rooms ----
@@ -901,7 +1211,7 @@ function renderRooms() {
   var cards = roomNames.map(function (room) {
     var ents = byRoom[room].slice().sort(function (a, b) { return capRank(a) - capRank(b); });
     var body = ents.map(widgetForEntity).join('');
-    return '<div class="card room-card"><h3>' + esc(titleCase(room)) + '</h3>' + body + '</div>';
+    return '<div class="card room-card"><h3 title="' + esc(titleCase(room)) + '">' + esc(titleCase(room)) + '</h3>' + body + '</div>';
   });
 
   var html = '<h1 class="view-title">Rooms</h1>';
@@ -916,6 +1226,18 @@ function renderRooms() {
 
 // ---- view: Health ----
 
+function renderEventRow(ev) {
+  var unit = unitNameFromHealthKey(ev.key);
+  var extra = Object.keys(ev.value || {}).filter(function (k) { return k !== 'kind'; })
+    .map(function (k) { return k + '=' + JSON.stringify(ev.value[k]); }).join(' ');
+  var t = new Date((ev.ts || 0) * 1000);
+  var tStr = isNaN(t.getTime()) ? '' : t.toLocaleTimeString();
+  var tFull = isNaN(t.getTime()) ? '' : t.toLocaleString();
+  return '<div class="event-row"><span class="ts" title="' + esc(tFull) + '">' + esc(tStr) + '</span>' +
+    esc(unitLabel(unit)) + ' — ' + esc((ev.value && ev.value.kind) || 'event') +
+    (extra ? ' (' + esc(extra) + ')' : '') + '</div>';
+}
+
 function renderHealth() {
   var units = store.model.units || [];
   var cards = units.map(function (u) {
@@ -925,28 +1247,19 @@ function renderHealth() {
     var meta = [];
     if (h.restarts !== undefined && h.restarts !== null) meta.push('restarts: ' + h.restarts);
     if (h.last_exit_code !== undefined && h.last_exit_code !== null) meta.push('last exit: ' + h.last_exit_code);
-    return '<div class="card health-card"><div class="health-head">' +
-      '<span class="name">' + esc(u.label) + '</span>' +
-      '<span class="status-badge"><span class="status-glyph">' + statusGlyph(status) + '</span>' + esc(status) + '</span></div>' +
+    return '<div class="card health-card clickable" data-action="unit-detail" data-unit="' + esc(u.name) + '"><div class="health-head">' +
+      '<span class="name" title="' + esc(u.label) + '">' + esc(u.label) + '</span>' +
+      '<span class="status-badge" title="' + esc(healthTooltip(h)) + '"><span class="status-glyph status-' + esc(status) + '">' + statusGlyph(status) + '</span>' + esc(status) + '</span></div>' +
       (meta.length ? '<div class="health-meta">' + esc(meta.join(' · ')) + '</div>' : '') +
       '</div>';
   });
 
   var events = store.events.slice().sort(function (a, b) { return b.ts - a.ts; });
-  var eventRows = events.map(function (ev) {
-    var unit = unitNameFromHealthKey(ev.key);
-    var extra = Object.keys(ev.value || {}).filter(function (k) { return k !== 'kind'; })
-      .map(function (k) { return k + '=' + JSON.stringify(ev.value[k]); }).join(' ');
-    var t = new Date((ev.ts || 0) * 1000);
-    var tStr = isNaN(t.getTime()) ? '' : t.toLocaleTimeString();
-    return '<div class="event-row"><span class="ts">' + esc(tStr) + '</span>' +
-      esc(unitLabel(unit)) + ' — ' + esc((ev.value && ev.value.kind) || 'event') +
-      (extra ? ' (' + esc(extra) + ')' : '') + '</div>';
-  });
+  var eventRows = events.map(renderEventRow);
 
   var html = '<h1 class="view-title">Health</h1>';
   html += '<div class="grid">' + cards.join('') + '</div>';
-  html += '<div class="card event-feed"><div class="card-label">EVENTS</div>';
+  html += '<div class="card event-feed"><div class="card-label">Events</div>';
   html += eventRows.length ? eventRows.join('') : '<div class="empty-hint">No events yet this session.</div>';
   html += '</div>';
   byId('view').innerHTML = html;
@@ -955,15 +1268,202 @@ function renderHealth() {
 // ---- view dispatch ----
 
 function renderView() {
-  if (store.view === 'now') return renderNow();
-  if (store.view === 'setpoints') return renderSetpoints();
-  if (store.view === 'rooms') return renderRooms();
-  if (store.view === 'health') return renderHealth();
+  if (store.view === 'now') renderNow();
+  else if (store.view === 'setpoints') renderSetpoints();
+  else if (store.view === 'rooms') renderRooms();
+  else if (store.view === 'health') renderHealth();
+  wireChartInteractions(byId('view'));
 }
 
 function render() {
   renderShell();
   renderView();
+  if (overlay.open) renderOverlayContent();
+}
+
+// ---- detail overlay: open/close plumbing ----
+
+function showOverlay() {
+  var wasOpen = overlay.open;
+  overlay.open = true;
+  renderOverlayContent();
+  byId('overlay-backdrop').classList.add('show');
+  var panel = byId('overlay-panel');
+  panel.classList.add('show');
+  if (!wasOpen) {
+    history.pushState({ homeostatOverlay: true }, '', location.pathname + location.search + location.hash);
+  }
+  panel.focus();
+}
+
+function hideOverlayUI() {
+  overlay.open = false;
+  overlay.type = null;
+  byId('overlay-backdrop').classList.remove('show');
+  byId('overlay-panel').classList.remove('show');
+}
+
+function closeOverlay() {
+  if (history.state && history.state.homeostatOverlay) {
+    history.back(); // triggers popstate below, which actually hides the panel
+  } else {
+    hideOverlayUI();
+  }
+}
+
+window.addEventListener('popstate', function (e) {
+  if (!e.state || !e.state.homeostatOverlay) {
+    hideOverlayUI();
+  }
+});
+
+document.addEventListener('keydown', function (e) {
+  if (e.key === 'Escape' && overlay.open) closeOverlay();
+});
+
+// ---- detail overlay: open <type> ----
+
+function openHistoryDetail(room, entityName, aspect) {
+  var entity = findEntity(room, entityName);
+  if (!entity) return;
+  overlay.type = 'history';
+  overlay.entity = entity;
+  overlay.aspect = aspect;
+  overlay.range = 24;
+  overlay.rangeData = {};
+  overlay.lastPoints = null;
+  fetchHistoryRange(entityName, aspect, 24);
+  showOverlay();
+}
+
+function openEntityDetail(room, entityName) {
+  var entity = findEntity(room, entityName);
+  if (!entity) return;
+  overlay.type = 'entity';
+  overlay.entity = entity;
+  showOverlay();
+}
+
+function openUnitDetail(unitName) {
+  overlay.type = 'unit';
+  overlay.unit = unitName;
+  showOverlay();
+}
+
+// ---- detail overlay: render <type> ----
+
+function renderOverlayContent() {
+  if (!overlay.open) return;
+  var r;
+  if (overlay.type === 'history') r = renderHistoryDetailBody();
+  else if (overlay.type === 'entity') r = renderEntityDetailBody();
+  else if (overlay.type === 'unit') r = renderUnitDetailBody();
+  else r = { title: '', body: '' };
+  byId('overlay-title').textContent = r.title;
+  byId('overlay-body').innerHTML = r.body;
+  wireChartInteractions(byId('overlay-body'));
+}
+
+function statItem(label, value, aspect) {
+  var v = value === null ? '—' : formatChartValue(aspect, value);
+  return '<div class="stat-item"><div class="stat-value">' + esc(v) + '</div><div class="stat-label">' + label + '</div></div>';
+}
+
+function rangeStats(points) {
+  var vals = (points || []).map(function (p) { return p.value; }).filter(function (v) { return typeof v === 'number'; });
+  if (vals.length === 0) return { latest: null, min: null, max: null, avg: null };
+  var sum = 0;
+  vals.forEach(function (v) { sum += v; });
+  return {
+    latest: points[points.length - 1].value,
+    min: Math.min.apply(null, vals),
+    max: Math.max.apply(null, vals),
+    avg: sum / vals.length
+  };
+}
+
+function renderHistoryDetailBody() {
+  var entity = overlay.entity, aspect = overlay.aspect;
+  var multi = numericAspectsFor(entity).length > 1;
+  var label = entity.label + (multi ? ' · ' + titleCase(aspect) : '');
+
+  var chips = RANGE_PRESETS.map(function (rp) {
+    return '<button data-action="range-chip" data-hours="' + rp.hours + '" class="' + (overlay.range === rp.hours ? 'active' : '') + '">' + rp.label + '</button>';
+  }).join('');
+
+  var rd = overlay.rangeData[overlay.range];
+  var loaded = !!(rd && rd.loaded);
+  var points = loaded ? rd.points : (overlay.lastPoints || []);
+  var chartHtml = buildChart('detail-chart', points, { height: 220, sizeClass: 'chart-detail', aspect: aspect, gridlines: true, area: true, yLabels: true });
+  var stats = rangeStats(points);
+  var statsHtml = '<div class="stat-row">' +
+    statItem('Latest', stats.latest, aspect) + statItem('Min', stats.min, aspect) +
+    statItem('Max', stats.max, aspect) + statItem('Avg', stats.avg, aspect) + '</div>';
+
+  var body = '<div class="seg">' + chips + '</div>' +
+    '<div class="' + (loaded ? '' : 'chart-loading') + '">' + chartHtml + statsHtml + '</div>';
+  return { title: label, body: body };
+}
+
+function renderEntityDetailBody() {
+  var entity = overlay.entity;
+  var meta = titleCase(entity.room) + ' · ' + titleCase(entity.capability) +
+    ((entity.features && entity.features.length) ? ' · ' + entity.features.map(titleCase).join(', ') : '');
+  var badge = entity.write_mode === 'arbitrated' ? '<span class="badge-arbitrated">ARBITRATED</span>' : '';
+  var ownerLine = 'Owned by ' + esc(unitLabel(entity.owner)) + ' · ' + esc(entity.write_mode) + badge;
+
+  var prefix = 'home/state/' + entity.room + '/' + entity.name + '/';
+  var rows = [];
+  Object.keys(store.state).sort().forEach(function (k) {
+    if (k.indexOf(prefix) !== 0) return;
+    var aspect = k.slice(prefix.length);
+    var v = store.state[k];
+    if (typeof v === 'number') {
+      rows.push('<div class="aspect-row row-clickable" data-action="history-detail" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '" data-aspect="' + esc(aspect) + '">' +
+        esc(aspect) + ': ' + esc(displayAspectValue(entity, aspect, v)) + '</div>');
+    } else {
+      rows.push('<div class="aspect-row">' + esc(aspect) + ': ' + esc(displayAspectValue(entity, aspect, v)) + '</div>');
+    }
+  });
+  if (rows.length === 0) rows.push('<div class="aspect-row faint">no data</div>');
+
+  var body = '<div class="muted" style="margin-top:2px;">' + esc(meta) + '</div>' +
+    '<div class="muted" style="margin-top:6px;">' + ownerLine + '</div>' +
+    '<div class="card-label" style="margin-top:20px;">Controls</div>' +
+    widgetForEntity(entity) +
+    '<div class="card-label" style="margin-top:20px;">State</div>' + rows.join('');
+  return { title: entity.label, body: body };
+}
+
+function renderUnitDetailBody() {
+  var unit = unitsByName()[overlay.unit] || { name: overlay.unit, label: overlay.unit, kind: '', description: '', params: {} };
+  var hkey = 'home/health/' + unit.name;
+  var h = store.health[hkey] || {};
+  var status = h.status || 'stopped';
+
+  var fieldRows =
+    '<div class="aspect-row"><span class="muted">status:</span> ' + statusChipHtml(status) + '</div>' +
+    '<div class="aspect-row"><span class="muted">pid:</span> ' + esc(fmtOrDash(h.pid)) + '</div>' +
+    '<div class="aspect-row"><span class="muted">restarts:</span> ' + esc(fmtOrDash(h.restarts)) + '</div>' +
+    '<div class="aspect-row"><span class="muted">backoff_ms:</span> ' + esc(fmtOrDash(h.backoff_ms)) + '</div>' +
+    '<div class="aspect-row"><span class="muted">last_exit_code:</span> ' + esc(fmtOrDash(h.last_exit_code)) + '</div>';
+
+  var params = unit.params || {};
+  var paramRows = Object.keys(params).map(function (pname) {
+    return renderParamRow(unit.name, pname, params[pname]);
+  }).join('');
+  var paramsHtml = paramRows || '<div class="empty-hint">No family-editable parameters.</div>';
+
+  var events = store.events.filter(function (ev) { return unitNameFromHealthKey(ev.key) === unit.name; });
+  var eventRows = events.map(renderEventRow).join('');
+  var eventsHtml = eventRows || '<div class="empty-hint">No events yet this session.</div>';
+
+  var body = '<div class="muted">' + esc(titleCase(unit.kind || '')) + '</div>' +
+    (unit.description ? '<div style="margin-top:4px;">' + esc(unit.description) + '</div>' : '') +
+    '<div class="card-label" style="margin-top:20px;">Health</div>' + fieldRows +
+    '<div class="card-label" style="margin-top:20px;">Params</div>' + paramsHtml +
+    '<div class="card-label" style="margin-top:20px;">Events</div><div class="event-feed">' + eventsHtml + '</div>';
+  return { title: unit.label, body: body };
 }
 
 // ---- interaction: delegated events ----
@@ -997,6 +1497,44 @@ document.addEventListener('click', function (e) {
   if (action === 'zone-filter') {
     store.roomsFilter = el.getAttribute('data-zone');
     renderView();
+    return;
+  }
+  if (action === 'history-detail') {
+    openHistoryDetail(el.getAttribute('data-room'), el.getAttribute('data-entity'), el.getAttribute('data-aspect'));
+    return;
+  }
+  if (action === 'entity-detail') {
+    openEntityDetail(el.getAttribute('data-room'), el.getAttribute('data-entity'));
+    return;
+  }
+  if (action === 'unit-detail') {
+    openUnitDetail(el.getAttribute('data-unit'));
+    return;
+  }
+  if (action === 'goto-rooms') {
+    store.view = 'rooms';
+    renderShell();
+    renderView();
+    return;
+  }
+  if (action === 'goto-setpoint') {
+    var gUnit = el.getAttribute('data-unit');
+    var gParam = el.getAttribute('data-param');
+    store.view = 'setpoints';
+    renderShell();
+    renderView();
+    flashParamRow(gUnit, gParam);
+    return;
+  }
+  if (action === 'range-chip') {
+    var hrs = parseInt(el.getAttribute('data-hours'), 10);
+    overlay.range = hrs;
+    fetchHistoryRange(overlay.entity.name, overlay.aspect, hrs);
+    renderOverlayContent();
+    return;
+  }
+  if (action === 'overlay-close') {
+    closeOverlay();
     return;
   }
 });
