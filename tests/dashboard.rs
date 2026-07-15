@@ -79,9 +79,9 @@ fn http_request(
     (status, value)
 }
 
-/// Minimal WebSocket client: handshake, then read exactly one text frame
-/// (the dashboard sends the snapshot first). Server frames are unmasked.
-fn ws_first_message(addr: &str, path: &str) -> Value {
+/// Minimal WebSocket client: handshake, then text frames on demand.
+/// Server frames are unmasked.
+fn ws_connect(addr: &str, path: &str) -> TcpStream {
     let mut stream = TcpStream::connect(addr).expect("connect ws");
     stream
         .set_read_timeout(Some(Duration::from_secs(30)))
@@ -105,7 +105,10 @@ fn ws_first_message(addr: &str, path: &str) -> Value {
         head.starts_with("HTTP/1.1 101"),
         "expected 101 upgrade, got {head:?}"
     );
+    stream
+}
 
+fn ws_read_message(stream: &mut TcpStream) -> Value {
     let mut prefix = [0u8; 2];
     stream.read_exact(&mut prefix).expect("frame header");
     assert_eq!(prefix[0] & 0x0f, 0x1, "expected a text frame");
@@ -121,7 +124,7 @@ fn ws_first_message(addr: &str, path: &str) -> Value {
     }
     let mut payload = vec![0u8; len as usize];
     stream.read_exact(&mut payload).expect("frame payload");
-    serde_json::from_slice(&payload).expect("snapshot is JSON")
+    serde_json::from_slice(&payload).expect("frame is JSON")
 }
 
 /// Reads a concrete key from a core queryable (last-value cache).
@@ -205,14 +208,31 @@ async fn dashboard_serves_the_family_surface() {
     let value: Value = serde_json::from_slice(&sample.payload().to_bytes()).expect("json");
     assert_eq!(value, json!(true));
 
-    // A fresh WebSocket snapshot now carries the lamp state.
-    let snapshot = ws_first_message(&addr, "/ws");
+    // A fresh WebSocket snapshot now carries the lamp state...
+    let mut ws = ws_connect(&addr, "/ws");
+    let snapshot = ws_read_message(&mut ws);
     assert_eq!(snapshot["type"], "snapshot");
     assert_eq!(snapshot["state"][LAMP_STATE], json!(true), "{snapshot}");
     assert!(
         snapshot["health"]["home/health/dashboard"]["status"].is_string(),
         "{snapshot}"
     );
+
+    // ...and live deltas follow: another command's state echo reaches the
+    // open socket (health deltas may interleave; scan a few frames).
+    let (status, reply) = http_request(
+        &addr,
+        "POST",
+        "/api/cmd",
+        &[("X-Homeostat", "family")],
+        Some(&json!({"room": "livingroom", "entity": "lamp", "aspect": "brightness", "value": 99})),
+    );
+    assert_eq!(status, 200, "{reply}");
+    let delta = (0..10)
+        .map(|_| ws_read_message(&mut ws))
+        .find(|m| m["type"] == "state" && m["key"] == "home/state/livingroom/lamp/brightness")
+        .expect("brightness delta on the open socket");
+    assert_eq!(delta["value"], json!(99));
 
     // A command outside the vocabulary is refused before the bus.
     let (status, reply) = http_request(

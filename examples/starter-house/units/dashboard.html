@@ -329,12 +329,26 @@ function handleWsMessage(msg) {
   }
 }
 
-// key like home/state/{room}/{entity}/occupancy -> track lastSeen per entity
+// key like home/state/{room}/{entity}/occupancy -> track lastSeen per entity.
+// Adapters differ on the aspect name (z2m passes through "occupancy",
+// other worlds say "presence") — no schema authority exists yet, so
+// accept both. See docs/design.md: typed vocabulary is a known gap.
+var PRESENCE_ASPECTS = ['occupancy', 'presence'];
+
 function trackLastSeen(key) {
   var parts = key.split('/');
-  if (parts[0] === 'home' && parts[1] === 'state' && parts.length >= 5 && parts[4] === 'occupancy') {
+  if (parts[0] === 'home' && parts[1] === 'state' && parts.length >= 5 &&
+      PRESENCE_ASPECTS.indexOf(parts[4]) !== -1) {
     store.lastSeen[parts[2] + '/' + parts[3]] = Date.now();
   }
+}
+
+function presenceValue(entity) {
+  for (var i = 0; i < PRESENCE_ASPECTS.length; i++) {
+    var v = stateValue(entity.room, entity.name, PRESENCE_ASPECTS[i]);
+    if (v !== undefined) return v;
+  }
+  return undefined;
 }
 
 function appendSparklinePoint(key, value) {
@@ -576,7 +590,7 @@ function widgetForLight(entity) {
 }
 
 function widgetForPresence(entity) {
-  var occ = stateValue(entity.room, entity.name, 'occupancy');
+  var occ = presenceValue(entity);
   var seenKey = entity.room + '/' + entity.name;
   var lastSeen = store.lastSeen[seenKey];
   var label = occ ? 'Motion' : 'Clear';
@@ -686,7 +700,7 @@ function renderNow() {
 
   if (presenceEntities.length > 0) {
     var pRows = presenceEntities.map(function (e) {
-      var occ = stateValue(e.room, e.name, 'occupancy');
+      var occ = presenceValue(e);
       return '<div style="display:flex;align-items:center;gap:6px;padding:3px 0;">' +
         '<span class="status-dot ' + (occ ? 'dot-on' : 'dot-off') + '"></span>' +
         '<span>' + esc(e.label) + ' &middot; ' + (occ ? 'Motion' : 'Clear') + '</span></div>';
