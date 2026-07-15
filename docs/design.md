@@ -868,6 +868,71 @@ The agent loop this enables: `read_state home/discovery/{unit}` →
 propose entity files for unconfigured records → structural pending
 plan → owner applies. The agent never touches the native bus.
 
+## Dashboard (settled 2026-07-15)
+
+The dashboard is an adapter for humans: a supervised unit like any
+other, whose protocol is HTTP + WebSocket toward browsers instead of
+MQTT toward radios. Browser ↔ dashboard unit ↔ bus; browsers never
+speak Zenoh.
+
+Decisions and why:
+
+- **Local-only access.** LAN, or WireGuard for mobile/remote devices;
+  network reachability is the credential. No accounts, no login, no
+  TLS. Two consequences worth recording: the browser is not local even
+  when the dashboard is — a public website in a family browser can fire
+  requests at LAN addresses (DNS rebinding / CSRF), so the unit
+  validates `Host`, checks `Origin` on the WebSocket, and requires a
+  custom header on writes, from day one, precisely because there is no
+  other gate. And no PWA for now: browsers demand a secure context for
+  service workers even on private addresses, so it is plain http and a
+  bookmark. A private CA is a plausible later path (WireGuard
+  onboarding already touches every device once); nothing architectural
+  depends on the choice. Deferred.
+- **Family tier only, forever.** Anyone on the network is `family`. No
+  owner mode, no admin panel, no approval surface; the owner acts
+  through git and the CLI. This is structural safety, not policy:
+  nothing structural is reachable from the dashboard, so a stolen phone
+  inside the perimeter can nudge setpoints and flip lights, not rewire
+  the house. The dashboard never grows an owner surface.
+- **Mediated, not raw bus.** Browsers speaking Zenoh directly (the
+  remote-api plugin) was rejected: it punches past the grant table, the
+  arbiter, and the manifest-declared surface, and couples every client
+  to the bus protocol. Through a unit instead: commands leave at
+  `priority = manual`, so THE FAMILY ALWAYS WINS falls out of the
+  arbiter design, arbitrated entities included; parameter edits are
+  publishes to `home/config/{unit}/{param}` validated by the existing
+  live-parameter machinery; a freshly opened page snapshots from the
+  core's last-value state mirror (the dashboard is just another late
+  joiner) and streams deltas over the WebSocket after that; charts
+  query the recorder over `home/history/**`. Almost the entire backend
+  is existing plumbing.
+- **Manual band vs exclusivity.** The dashboard needs a blanket
+  `home/cmd/**` publish, which the two-writers-on-an-exclusive-entity
+  plan error was not designed for. Settled: exclusivity constrains the
+  automation band only; manual-band units sit above it by construction.
+  Voice satellites inherit this same answer.
+- **Purely generated from manifests; layout state exists nowhere.**
+  Grouping from the entity `room` field and `zones.toml`; entity
+  widgets derived from `capability` + `features` (a light with
+  brightness/color_temp renders toggle + slider + temp control, a bare
+  sensor renders value + sparkline); parameter controls derived from
+  constraint types (min/max → slider, after/before → time picker, enum
+  → segmented control); only `editable_by = "family"` parameters appear
+  at all. Names and locale from `[naming]` — dashboard quality is a
+  function of manifest hygiene, auditable by the agent, exactly like
+  voice. A health strip from `home/health/**` (unit status, circuit
+  breakers) is family-visible by design. If generated turns out bland,
+  the escape hatch is ordering/pinning hints as text in the house repo
+  — never browser-side customization, which is exactly the hidden UI
+  state the project exists to reject.
+- **A Python unit on the SDK**, like the other adapters, serving an
+  embedded static bundle: one small SPA (Preact/Lit-scale, no
+  build-time empire), fine-grained DOM updates off the WebSocket. Live
+  state push is the dashboard's whole job, so client-side reactivity is
+  unavoidable; server-rendered-with-sprinkles was rejected on those
+  grounds.
+
 ## Voice (later phase)
  
 - Two-tier command path: a fast-path intent matcher (high precision,
@@ -933,5 +998,3 @@ Risk lives in steps 1 and 2; everything after is accretion.
 - Whether `features` should gate command contents beyond SDK constructors.
   Current lean: no separate layer.
 - Zenoh ACL hardening timeline.
-- Dashboard: generated from manifests (parameters + entities), design TBD
-  after step 4.
