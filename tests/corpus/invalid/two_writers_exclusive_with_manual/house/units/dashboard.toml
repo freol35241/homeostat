@@ -1,0 +1,12 @@
+schema = 1
+
+[unit]
+name = "dashboard"
+kind = "service"
+
+[runtime]
+command = "uv run units/dashboard.py"
+restart = "always"
+
+[bus.publishes]
+commands = { key = "home/cmd/**", capability = "light", priority = "manual" }

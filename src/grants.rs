@@ -87,8 +87,13 @@ pub fn resolve(
     grants.sort_by(|a, b| (&a.unit, &a.publish).cmp(&(&b.unit, &b.publish)));
 
     // Write-policy enforcement: two writers on an exclusive entity is an error.
+    // Exclusivity constrains the automation band only; manual-band units
+    // (dashboard, voice) sit above it by construction and never count.
     let mut writers: BTreeMap<&str, Vec<String>> = BTreeMap::new();
     for grant in &grants {
+        if grant.priority == Priority::Manual {
+            continue;
+        }
         for entity in &grant.entities {
             writers
                 .entry(entity)

@@ -1,0 +1,12 @@
+schema = 1
+
+[unit]
+name = "wake_up"
+kind = "automation"
+
+[runtime]
+command = "uv run units/wake_up.py"
+restart = "on-failure"
+
+[bus.publishes]
+lights = { key = "home/cmd/bedroom/bedroom_lamp/light", capability = "light", priority = "automation" }
