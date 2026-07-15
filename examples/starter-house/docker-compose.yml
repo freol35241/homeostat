@@ -34,6 +34,7 @@ services:
     ports:
       - "7447:7447" # the bus: plan/apply and any Zenoh observer
       - "8642:8642" # the agent surface: MCP over HTTP (units/mcp.toml)
+      - "8600:8600" # the family dashboard (units/dashboard.toml)
 
 volumes:
   z2m-data:

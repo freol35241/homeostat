@@ -40,6 +40,18 @@ State appears at `home/state/{room}/{entity}/{aspect}`, history lands in
 `data/history.db`, and the automation turns downstairs lights off after
 `off_time` (a live-editable parameter) when nobody is present.
 
+## The family dashboard
+
+`units/dashboard.toml` serves the web dashboard on `:8600` — generated
+entirely from the manifests: rooms and their devices, every
+family-editable setpoint, unit health, and a "Now" view showing what
+deviates from normal. Open `http://<host>:8600` from the LAN (or over
+WireGuard). Access is local-only by design: there are no accounts; the
+dashboard is family-tier, so nothing structural is reachable from it.
+Serving it behind a hostname other than `homeostat.lan`/`.local`? List
+it in the `HOMEOSTAT_DASHBOARD_HOSTS` environment variable
+(comma-separated) on the homeostat service.
+
 Already running Zigbee2MQTT elsewhere? Delete the `mosquitto` and
 `zigbee2mqtt` services from the compose file and point the `endpoint`
 in `units/zigbee.toml` at your existing MQTT broker instead.

@@ -1,0 +1,1093 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>homeostat</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M3 11 L12 3 L21 11 V21 H14 V14 H10 V21 H3 Z' fill='%2318181b'/%3E%3C/svg%3E">
+<style>
+:root {
+  --bg: #fafafa; --card: #ffffff; --border: #d4d4d8; --text: #18181b;
+  --muted: #71717a; --faint: #a1a1aa; --rail: #f4f4f5; --accent: #2563eb;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f0f10; --card: #18181b; --border: #3f3f46; --text: #f4f4f5;
+    --muted: #a1a1aa; --faint: #71717a; --rail: #18181b; --accent: #60a5fa;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+button, input { font-family: inherit; }
+a { color: inherit; }
+
+#app { display: flex; min-height: 100vh; }
+
+/* nav rail (desktop) */
+#rail { width: 210px; flex: 0 0 210px; background: var(--rail); border-right: 1px solid var(--border);
+  display: flex; flex-direction: column; padding: 20px 12px; }
+#rail .wordmark { font-size: 16px; font-weight: 700; padding: 4px 10px 20px; }
+#rail nav { display: flex; flex-direction: column; gap: 2px; }
+#rail nav button { text-align: left; border: none; background: transparent; color: var(--muted);
+  font-size: 13.5px; padding: 10px 12px; border-radius: 6px; cursor: pointer; min-height: 40px; }
+#rail nav button:hover { background: var(--card); }
+#rail nav button.active { background: var(--card); color: var(--text); font-weight: 600; border: 1px solid var(--border); }
+#rail .health-pin { margin-top: auto; padding: 12px 10px 4px; border-top: 1px solid var(--border); font-size: 11px; }
+#rail .health-pin .label { color: var(--faint); font-weight: 700; letter-spacing: 1px; font-size: 9.5px; margin-bottom: 8px; }
+#rail .health-pin .row { display: flex; align-items: center; gap: 6px; color: var(--muted); padding: 3px 0; }
+
+/* main column */
+#main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+#topbar { display: none; align-items: center; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+#topbar .wordmark { font-size: 15px; font-weight: 700; }
+#banner { display: none; background: #f59e0b; color: #1c1917; font-size: 12.5px; text-align: center; padding: 6px; }
+#banner.show { display: block; }
+#view { padding: 24px 28px 90px; max-width: 1100px; width: 100%; }
+h1.view-title { font-size: 20px; margin: 0 0 16px; }
+
+/* bottom tabs (mobile) */
+#tabs { display: none; position: fixed; bottom: 0; left: 0; right: 0; background: var(--card);
+  border-top: 1px solid var(--border); padding: 4px 4px calc(4px + env(safe-area-inset-bottom)); z-index: 10; }
+#tabs .row { display: flex; }
+#tabs button { flex: 1; border: none; background: transparent; color: var(--muted); font-size: 11px;
+  padding: 8px 2px; min-height: 44px; cursor: pointer; }
+#tabs button.active { color: var(--text); font-weight: 600; }
+
+@media (max-width: 720px) {
+  #rail { display: none; }
+  #topbar { display: flex; }
+  #tabs { display: block; }
+  #view { padding: 16px 14px 90px; }
+}
+
+/* toast */
+#toast { position: fixed; bottom: 70px; left: 50%; transform: translateX(-50%); background: var(--text);
+  color: var(--bg); padding: 10px 16px; border-radius: 8px; font-size: 13px; opacity: 0;
+  pointer-events: none; transition: opacity 0.2s; max-width: 90vw; z-index: 20; }
+#toast.show { opacity: 1; }
+
+/* cards / widgets */
+.card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+.card + .card { margin-top: 14px; }
+.card-label { font-size: 10px; font-weight: 700; letter-spacing: 1.2px; color: var(--faint); margin-bottom: 10px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }
+.muted { color: var(--muted); }
+.faint { color: var(--faint); }
+
+/* signal tiles */
+.tile .big { font-size: 26px; font-weight: 700; margin: 6px 0 4px; }
+.tile svg { display: block; width: 100%; height: 36px; }
+.tile .caption { font-size: 11px; color: var(--faint); }
+
+/* deviations list */
+.dev-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px;
+  padding: 10px 0; border-top: 1px solid var(--border); }
+.dev-row:first-of-type { border-top: none; padding-top: 4px; }
+.dev-main .title { font-weight: 600; font-size: 13px; }
+.dev-main .detail { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.dev-tag { font-size: 9.5px; color: var(--faint); white-space: nowrap; margin-top: 2px; }
+.equilibrium { color: var(--muted); font-size: 13px; padding: 6px 0; }
+
+/* room cards */
+.room-card { margin-bottom: 14px; }
+.room-card h3 { margin: 0 0 10px; font-size: 14px; }
+.entity-row { display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  min-height: 40px; padding: 6px 0; border-top: 1px solid var(--border); }
+.entity-row:first-of-type { border-top: none; }
+.entity-name { font-size: 13px; }
+.entity-sub { margin-top: 2px; }
+.status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+.dot-on { background: var(--text); }
+.dot-off { background: transparent; border: 1.4px solid var(--faint); }
+
+/* toggle switch */
+.toggle { width: 40px; height: 22px; border-radius: 11px; border: 1px solid var(--border);
+  background: var(--rail); position: relative; cursor: pointer; flex: 0 0 40px; }
+.toggle .knob { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%;
+  background: var(--card); border: 1px solid var(--border); transition: left 0.15s; }
+.toggle.on { background: var(--text); border-color: var(--text); }
+.toggle.on .knob { left: 20px; background: var(--card); border-color: var(--text); }
+
+/* slider row */
+.slider-row { display: flex; align-items: center; gap: 10px; padding: 6px 0 6px 18px; font-size: 12px; }
+.slider-row .slabel { flex: 0 0 70px; color: var(--muted); }
+.slider-row input[type=range] { flex: 1; accent-color: var(--text); }
+.slider-row .sval { flex: 0 0 60px; text-align: right; color: var(--text); }
+
+/* setpoint controls */
+.param-row { padding: 12px 0; border-top: 1px solid var(--border); }
+.param-row:first-of-type { border-top: none; }
+.param-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 6px; }
+.param-head .name { font-weight: 600; font-size: 13.5px; }
+.param-caption { font-size: 11px; color: var(--faint); margin-top: 4px; }
+.seg { display: flex; gap: 6px; flex-wrap: wrap; }
+.seg button { border: 1px solid var(--border); background: var(--card); color: var(--muted); border-radius: 14px;
+  padding: 6px 12px; font-size: 12px; cursor: pointer; min-height: 32px; }
+.seg button.active { background: var(--text); color: var(--bg); border-color: var(--text); }
+input[type=text], input[type=time] { border: 1px solid var(--border); background: var(--card); color: var(--text);
+  border-radius: 6px; padding: 8px 10px; font-size: 13px; }
+
+/* chips (rooms view) */
+.chips { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+.chip { border: 1px solid var(--border); background: var(--card); color: var(--muted); border-radius: 14px;
+  padding: 6px 14px; font-size: 12.5px; cursor: pointer; min-height: 32px; }
+.chip.active { background: var(--text); color: var(--bg); border-color: var(--text); }
+
+/* health cards */
+.health-card { display: flex; flex-direction: column; gap: 4px; }
+.health-head { display: flex; align-items: center; justify-content: space-between; }
+.health-head .name { font-weight: 600; font-size: 13.5px; }
+.status-badge { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); }
+.status-glyph { font-size: 12px; width: 14px; text-align: center; }
+.health-meta { font-size: 11.5px; color: var(--faint); }
+.event-feed { margin-top: 10px; }
+.event-row { font-size: 12px; padding: 6px 0; border-top: 1px solid var(--border); color: var(--muted); }
+.event-row:first-of-type { border-top: none; }
+.event-row .ts { color: var(--faint); margin-right: 6px; }
+.badge-arbitrated { font-size: 9px; letter-spacing: 0.5px; color: var(--faint); border: 1px solid var(--border);
+  border-radius: 8px; padding: 2px 6px; margin-left: 6px; }
+.aspect-row { font-size: 12px; color: var(--muted); padding: 4px 0; }
+.empty-hint { color: var(--faint); font-size: 12.5px; padding: 8px 0; }
+</style>
+</head>
+<body>
+<div id="app">
+  <aside id="rail">
+    <div class="wordmark">homeostat</div>
+    <nav id="rail-nav"></nav>
+    <div class="health-pin" id="health-pin"></div>
+  </aside>
+  <div id="main">
+    <div id="topbar">
+      <div class="wordmark">homeostat</div>
+    </div>
+    <div id="banner">reconnecting&hellip;</div>
+    <div id="view"></div>
+  </div>
+</div>
+<nav id="tabs"><div class="row" id="tabs-row"></div></nav>
+<div id="toast"></div>
+
+<script>
+'use strict';
+(function () {
+
+var VIEWS = ['now', 'setpoints', 'rooms', 'health'];
+var VIEW_LABELS = { now: 'Now', setpoints: 'Setpoints', rooms: 'Rooms', health: 'Health' };
+
+var store = {
+  model: { zones: {}, entities: [], units: [] },
+  state: {},
+  health: {},
+  config: {},
+  events: [],
+  lastSeen: {},
+  connected: false,
+  view: 'now',
+  roomsFilter: 'all'
+};
+
+var localState = {
+  sliderDrag: {},   // key -> true while user is dragging
+  sparklines: {}    // entity|aspect -> {points:[], loaded:bool, loading:bool}
+};
+
+// ---- helpers ----
+
+function byId(id) { return document.getElementById(id); }
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  });
+}
+function titleCase(s) {
+  if (!s) return '';
+  return String(s).split(/[\s_-]+/).map(function (w) {
+    return w ? w[0].toUpperCase() + w.slice(1) : w;
+  }).join(' ');
+}
+
+function entityKey(room, entity, aspect) {
+  return 'home/state/' + room + '/' + entity + '/' + aspect;
+}
+
+function unitsByName() {
+  var m = {};
+  (store.model.units || []).forEach(function (u) { m[u.name] = u; });
+  return m;
+}
+
+// current value for a given entity/aspect from the state map
+function stateValue(room, entity, aspect) {
+  return store.state[entityKey(room, entity, aspect)];
+}
+
+// numeric aspects present in state for an entity (sensor widgets)
+function numericAspectsFor(entity) {
+  var prefix = 'home/state/' + entity.room + '/' + entity.name + '/';
+  var out = [];
+  Object.keys(store.state).forEach(function (k) {
+    if (k.indexOf(prefix) === 0) {
+      var aspect = k.slice(prefix.length);
+      var v = store.state[k];
+      if (typeof v === 'number') out.push(aspect);
+    }
+  });
+  return out;
+}
+
+function unitLabel(unitName) {
+  var u = unitsByName()[unitName];
+  return u ? u.label : unitName;
+}
+
+// ---- networking ----
+
+function loadModel() {
+  fetch('/api/model').then(function (r) { return r.json(); }).then(function (m) {
+    store.model = m || store.model;
+    scheduleRender();
+  }).catch(function () { /* keep defaults; page still renders */ });
+}
+
+var ws = null;
+var wsBackoff = 1000;
+
+function connectWs() {
+  var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  try {
+    ws = new WebSocket(proto + '//' + location.host + '/ws');
+  } catch (e) {
+    scheduleReconnect();
+    return;
+  }
+  ws.onopen = function () {
+    store.connected = true;
+    wsBackoff = 1000;
+    updateBanner();
+  };
+  ws.onclose = function () {
+    store.connected = false;
+    updateBanner();
+    scheduleReconnect();
+  };
+  ws.onerror = function () {
+    try { ws.close(); } catch (e) {}
+  };
+  ws.onmessage = function (ev) {
+    var msg;
+    try { msg = JSON.parse(ev.data); } catch (e) { return; }
+    handleWsMessage(msg);
+  };
+}
+
+function scheduleReconnect() {
+  setTimeout(function () {
+    connectWs();
+  }, wsBackoff);
+  wsBackoff = Math.min(wsBackoff * 2, 30000);
+}
+
+function updateBanner() {
+  var b = byId('banner');
+  if (!b) return;
+  b.classList.toggle('show', !store.connected);
+}
+
+function handleWsMessage(msg) {
+  if (!msg || !msg.type) return;
+  if (msg.type === 'snapshot') {
+    store.state = msg.state || {};
+    store.health = msg.health || {};
+    store.config = msg.config || {};
+    scheduleRender();
+    return;
+  }
+  if (msg.type === 'state') {
+    store.state[msg.key] = msg.value;
+    trackLastSeen(msg.key);
+    appendSparklinePoint(msg.key, msg.value);
+    scheduleRender();
+    return;
+  }
+  if (msg.type === 'config') {
+    store.config[msg.key] = msg.value;
+    scheduleRender();
+    return;
+  }
+  if (msg.type === 'health') {
+    store.health[msg.key] = msg.value;
+    scheduleRender();
+    return;
+  }
+  if (msg.type === 'event') {
+    store.events.unshift({ key: msg.key, value: msg.value, ts: msg.ts || (Date.now() / 1000) });
+    if (store.events.length > 200) store.events.length = 200;
+    scheduleRender();
+    return;
+  }
+}
+
+// key like home/state/{room}/{entity}/occupancy -> track lastSeen per entity
+function trackLastSeen(key) {
+  var parts = key.split('/');
+  if (parts[0] === 'home' && parts[1] === 'state' && parts.length >= 5 && parts[4] === 'occupancy') {
+    store.lastSeen[parts[2] + '/' + parts[3]] = Date.now();
+  }
+}
+
+function appendSparklinePoint(key, value) {
+  var parts = key.split('/');
+  if (parts[0] !== 'home' || parts[1] !== 'state' || parts.length < 5) return;
+  if (typeof value !== 'number') return;
+  var entity = parts[3], aspect = parts[4];
+  var sk = entity + '|' + aspect;
+  var s = localState.sparklines[sk];
+  if (!s || !s.loaded) return; // only append once history has been fetched
+  s.points.push({ ts: new Date().toISOString(), value: value });
+  if (s.points.length > 500) s.points.shift();
+}
+
+// ---- commands ----
+
+function sendCmd(room, entity, aspect, value) {
+  fetch('/api/cmd', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Homeostat': 'family' },
+    body: JSON.stringify({ room: room, entity: entity, aspect: aspect, value: value })
+  }).then(function (r) {
+    if (!r.ok) return r.text().then(function (t) { throw new Error(t || ('HTTP ' + r.status)); });
+  }).catch(function (e) {
+    toast(errText(e));
+  });
+}
+
+function sendParam(unit, param, value, onError) {
+  fetch('/api/param', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Homeostat': 'family' },
+    body: JSON.stringify({ unit: unit, param: param, value: value })
+  }).then(function (r) {
+    if (!r.ok) return r.text().then(function (t) { throw new Error(t || ('HTTP ' + r.status)); });
+  }).catch(function (e) {
+    toast(errText(e));
+    if (onError) onError();
+  });
+}
+
+function errText(e) {
+  var msg = e && e.message ? e.message : String(e);
+  try {
+    var parsed = JSON.parse(msg);
+    if (parsed && parsed.error) return parsed.error;
+  } catch (ex) { /* not json */ }
+  return msg;
+}
+
+var toastTimer = null;
+function toast(msg) {
+  var el = byId('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(function () { el.classList.remove('show'); }, 3200);
+}
+
+// ---- history fetch (sparklines) ----
+
+function ensureHistory(entity, aspect) {
+  var sk = entity + '|' + aspect;
+  var s = localState.sparklines[sk];
+  if (s && (s.loaded || s.loading)) return;
+  localState.sparklines[sk] = { points: [], loaded: false, loading: true };
+  fetch('/api/history?entity=' + encodeURIComponent(entity) + '&aspect=' + encodeURIComponent(aspect) + '&hours=24&limit=500')
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      var pts = [];
+      (data.series || []).forEach(function (series) {
+        (series.points || []).forEach(function (p) { pts.push(p); });
+      });
+      localState.sparklines[sk] = { points: pts, loaded: true, loading: false };
+      scheduleRender();
+    })
+    .catch(function () {
+      localState.sparklines[sk] = { points: [], loaded: true, loading: false };
+    });
+}
+
+// ---- render scheduling ----
+
+var renderQueued = false;
+function scheduleRender() {
+  if (renderQueued) return;
+  renderQueued = true;
+  requestAnimationFrame(function () {
+    renderQueued = false;
+    render();
+  });
+}
+
+// ---- nav / shell ----
+
+function healthWorstAndCount() {
+  var order = { open: 0, backoff: 1, starting: 2, stopped: 2, running: 3 };
+  var worst = null;
+  var okCount = 0;
+  var total = 0;
+  Object.keys(store.health).forEach(function (k) {
+    var h = store.health[k] || {};
+    total++;
+    var status = h.status || 'running';
+    if (status === 'running') okCount++;
+    var rank = order[status];
+    if (rank === undefined) rank = 3;
+    if (worst === null || rank < worst.rank) {
+      worst = { rank: rank, status: status, key: k };
+    }
+  });
+  return { worst: worst, ok: okCount, total: total };
+}
+
+function statusGlyph(status) {
+  if (status === 'running') return '●';
+  if (status === 'backoff') return '▲';
+  if (status === 'open') return '✕';
+  return '○'; // starting / stopped / unknown
+}
+
+function unitNameFromHealthKey(key) {
+  // home/health/{unit}
+  var parts = key.split('/');
+  return parts[2] || key;
+}
+
+function renderShell() {
+  var nav = byId('rail-nav');
+  nav.innerHTML = VIEWS.map(function (v) {
+    return '<button data-view="' + v + '" class="' + (store.view === v ? 'active' : '') + '">' + VIEW_LABELS[v] + '</button>';
+  }).join('');
+
+  var tabs = byId('tabs-row');
+  tabs.innerHTML = VIEWS.map(function (v) {
+    return '<button data-view="' + v + '" class="' + (store.view === v ? 'active' : '') + '">' + VIEW_LABELS[v] + '</button>';
+  }).join('');
+
+  var hw = healthWorstAndCount();
+  var pin = byId('health-pin');
+  if (hw.total === 0) {
+    pin.innerHTML = '<div class="label">HEALTH</div><div class="row faint">no units yet</div>';
+  } else {
+    var worstLine = hw.worst.status === 'running'
+      ? ''
+      : '<div class="row">' + statusGlyph(hw.worst.status) + '&nbsp;' + esc(titleCase(unitNameFromHealthKey(hw.worst.key))) + ' &middot; ' + esc(hw.worst.status) + '</div>';
+    pin.innerHTML = '<div class="label">HEALTH</div>' + worstLine +
+      '<div class="row">● ' + hw.ok + '/' + hw.total + ' ok</div>';
+  }
+
+  updateBanner();
+}
+
+document.addEventListener('click', function (e) {
+  var btn = e.target.closest('[data-view]');
+  if (btn) {
+    store.view = btn.getAttribute('data-view');
+    renderShell();
+    renderView();
+  }
+});
+
+// ---- widget: sparkline SVG ----
+
+function sparklineSvg(points, width, height) {
+  width = width || 220;
+  height = height || 36;
+  if (!points || points.length < 2) {
+    return '<svg viewBox="0 0 ' + width + ' ' + height + '"></svg>';
+  }
+  var vals = points.map(function (p) { return p.value; }).filter(function (v) { return typeof v === 'number'; });
+  if (vals.length < 2) return '<svg viewBox="0 0 ' + width + ' ' + height + '"></svg>';
+  var min = Math.min.apply(null, vals);
+  var max = Math.max.apply(null, vals);
+  var span = (max - min) || 1;
+  var n = points.length;
+  var pad = 3;
+  var coords = points.map(function (p, i) {
+    var x = pad + (i / (n - 1)) * (width - 2 * pad);
+    var y = pad + (1 - (p.value - min) / span) * (height - 2 * pad);
+    return [x, y];
+  });
+  var d = coords.map(function (c, i) {
+    return (i === 0 ? 'M ' : 'L ') + c[0].toFixed(1) + ' ' + c[1].toFixed(1);
+  }).join(' ');
+  var last = coords[coords.length - 1];
+  return '<svg viewBox="0 0 ' + width + ' ' + height + '" preserveAspectRatio="none">' +
+    '<path d="' + d + '" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>' +
+    '<circle cx="' + last[0].toFixed(1) + '" cy="' + last[1].toFixed(1) + '" r="2.5" fill="currentColor"/>' +
+    '</svg>';
+}
+
+function minMaxCaption(points) {
+  var vals = (points || []).map(function (p) { return p.value; }).filter(function (v) { return typeof v === 'number'; });
+  if (vals.length === 0) return '';
+  var min = Math.min.apply(null, vals);
+  var max = Math.max.apply(null, vals);
+  return min.toFixed(1) + '–' + max.toFixed(1) + ' today';
+}
+
+// ---- widget: entity capability rows (shared by Rooms and generic use) ----
+
+function displayAspectValue(entity, aspect, value) {
+  if (typeof value === 'number') {
+    if (aspect.indexOf('temperature') !== -1) return value.toFixed(1) + '°';
+    return value.toFixed(1);
+  }
+  if (typeof value === 'boolean') return value ? 'true' : 'false';
+  return String(value);
+}
+
+function widgetForLight(entity) {
+  var on = !!stateValue(entity.room, entity.name, 'on');
+  var html = '<div class="entity-row">' +
+    '<span class="entity-name">' + esc(entity.label) + '</span>' +
+    '<span class="toggle ' + (on ? 'on' : '') + '" data-action="toggle-light" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '" data-value="' + (!on) + '"><span class="knob"></span></span>' +
+    '</div>';
+
+  if (entity.features && entity.features.indexOf('brightness') !== -1) {
+    var b = stateValue(entity.room, entity.name, 'brightness');
+    var bkey = entity.room + '/' + entity.name + '/brightness';
+    var pct = typeof b === 'number' ? Math.round((b / 254) * 100) : 0;
+    if (localState.sliderDrag[bkey] !== undefined) pct = localState.sliderDrag[bkey];
+    html += '<div class="slider-row entity-sub"><span class="slabel">brightness</span>' +
+      '<input type="range" min="0" max="100" value="' + pct + '" data-action="slider" data-kind="brightness" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '">' +
+      '<span class="sval">' + pct + '%</span></div>';
+  }
+  if (entity.features && entity.features.indexOf('color_temp') !== -1) {
+    var ct = stateValue(entity.room, entity.name, 'color_temp');
+    var ctkey = entity.room + '/' + entity.name + '/color_temp';
+    var mired = typeof ct === 'number' ? ct : 300;
+    if (localState.sliderDrag[ctkey] !== undefined) mired = localState.sliderDrag[ctkey];
+    var kelvin = Math.round(1e6 / mired / 100) * 100;
+    html += '<div class="slider-row entity-sub"><span class="slabel">color temp</span>' +
+      '<input type="range" min="150" max="500" value="' + mired + '" data-action="slider" data-kind="color_temp" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '">' +
+      '<span class="sval">' + kelvin + ' K</span></div>';
+  }
+  return html;
+}
+
+function widgetForPresence(entity) {
+  var occ = stateValue(entity.room, entity.name, 'occupancy');
+  var seenKey = entity.room + '/' + entity.name;
+  var lastSeen = store.lastSeen[seenKey];
+  var label = occ ? 'Motion' : 'Clear';
+  var extra = lastSeen ? '<span class="faint"> &middot; ' + relTime(lastSeen) + '</span>' : '';
+  return '<div class="entity-row">' +
+    '<span class="entity-name">' + esc(entity.label) + '</span>' +
+    '<span><span class="status-dot ' + (occ ? 'dot-on' : 'dot-off') + '"></span>' + label + extra + '</span>' +
+    '</div>';
+}
+
+function widgetForLock(entity) {
+  var locked = stateValue(entity.room, entity.name, 'locked');
+  var badge = entity.write_mode === 'arbitrated' ? '<span class="badge-arbitrated">ARBITRATED</span>' : '';
+  return '<div class="entity-row">' +
+    '<span class="entity-name">' + esc(entity.label) + badge + '</span>' +
+    '<span class="muted">' + (locked ? 'Locked' : 'Unlocked') + '</span>' +
+    '</div>';
+}
+
+function widgetForSensor(entity) {
+  var aspects = numericAspectsFor(entity);
+  if (aspects.length === 0) {
+    return '<div class="entity-row"><span class="entity-name">' + esc(entity.label) + '</span><span class="faint">no data</span></div>';
+  }
+  return aspects.map(function (aspect) {
+    var v = stateValue(entity.room, entity.name, aspect);
+    var sk = entity.name + '|' + aspect;
+    ensureHistory(entity.name, aspect); // fetched once (guarded), on first render while visible
+    var s = localState.sparklines[sk];
+    var sparkHtml = s && s.loaded ? sparklineSvg(s.points, 140, 28) : '';
+    return '<div class="entity-row">' +
+      '<span class="entity-name">' + esc(entity.label) + (aspects.length > 1 ? ' &middot; ' + esc(aspect) : '') + '</span>' +
+      '<span style="display:flex;align-items:center;gap:8px;">' +
+      (sparkHtml ? '<span style="width:80px;">' + sparkHtml + '</span>' : '') +
+      '<span class="muted">' + displayAspectValue(entity, aspect, v) + '</span></span>' +
+      '</div>';
+  }).join('');
+}
+
+function widgetGeneric(entity) {
+  var prefix = 'home/state/' + entity.room + '/' + entity.name + '/';
+  var rows = [];
+  Object.keys(store.state).forEach(function (k) {
+    if (k.indexOf(prefix) === 0) {
+      var aspect = k.slice(prefix.length);
+      rows.push('<div class="aspect-row">' + esc(aspect) + ': ' + esc(displayAspectValue(entity, aspect, store.state[k])) + '</div>');
+    }
+  });
+  if (rows.length === 0) rows.push('<div class="aspect-row faint">no data</div>');
+  return '<div class="entity-row" style="flex-direction:column;align-items:flex-start;">' +
+    '<span class="entity-name">' + esc(entity.label) + '</span>' + rows.join('') + '</div>';
+}
+
+function widgetForEntity(entity) {
+  if (entity.capability === 'light') return widgetForLight(entity);
+  if (entity.capability === 'presence') return widgetForPresence(entity);
+  if (entity.capability === 'lock') return widgetForLock(entity);
+  if (entity.capability === 'sensor') return widgetForSensor(entity);
+  return widgetGeneric(entity);
+}
+
+var CAP_ORDER = { light: 0, lock: 1, presence: 2, sensor: 3 };
+function capRank(entity) {
+  var r = CAP_ORDER[entity.capability];
+  return r === undefined ? 4 : r;
+}
+
+// ---- relative time ----
+
+function relTime(ms) {
+  var diff = Math.max(0, Date.now() - ms);
+  var mins = Math.round(diff / 60000);
+  if (mins < 1) return 'just now';
+  if (mins === 1) return '1 min ago';
+  if (mins < 60) return mins + ' min ago';
+  var hrs = Math.round(mins / 60);
+  if (hrs === 1) return '1 hr ago';
+  return hrs + ' hr ago';
+}
+
+// ---- view: Now ----
+
+function renderNow() {
+  var entities = store.model.entities || [];
+  var sensorEntities = entities.filter(function (e) { return e.capability === 'sensor'; });
+  var presenceEntities = entities.filter(function (e) { return e.capability === 'presence'; });
+
+  var tiles = [];
+  var tileCount = 0;
+  sensorEntities.forEach(function (e) {
+    if (tileCount >= 6) return;
+    numericAspectsFor(e).forEach(function (aspect) {
+      if (tileCount >= 6) return;
+      var sk = e.name + '|' + aspect;
+      ensureHistory(e.name, aspect);
+      var s = localState.sparklines[sk];
+      var v = stateValue(e.room, e.name, aspect);
+      var vDisplay = typeof v === 'number' ? displayAspectValue(e, aspect, v) : '—';
+      var spark = s && s.loaded ? sparklineSvg(s.points, 220, 36) : '';
+      var caption = s && s.loaded ? minMaxCaption(s.points) : '';
+      tiles.push('<div class="card tile"><div class="card-label">' + esc(e.label.toUpperCase()) + (numericAspectsFor(e).length > 1 ? ' &middot; ' + esc(aspect.toUpperCase()) : '') + '</div>' +
+        '<div class="big">' + vDisplay + '</div>' + spark +
+        '<div class="caption">' + esc(caption) + '</div></div>');
+      tileCount++;
+    });
+  });
+
+  if (presenceEntities.length > 0) {
+    var pRows = presenceEntities.map(function (e) {
+      var occ = stateValue(e.room, e.name, 'occupancy');
+      return '<div style="display:flex;align-items:center;gap:6px;padding:3px 0;">' +
+        '<span class="status-dot ' + (occ ? 'dot-on' : 'dot-off') + '"></span>' +
+        '<span>' + esc(e.label) + ' &middot; ' + (occ ? 'Motion' : 'Clear') + '</span></div>';
+    }).join('');
+    tiles.push('<div class="card tile"><div class="card-label">PEOPLE</div>' + pRows + '</div>');
+  }
+
+  // out of the ordinary
+  var deviations = [];
+
+  // 1. supervision
+  Object.keys(store.health).forEach(function (k) {
+    var h = store.health[k] || {};
+    var status = h.status || 'running';
+    if (status === 'running') return;
+    var unit = unitNameFromHealthKey(k);
+    var detail = [];
+    if (h.restarts) detail.push('restarts: ' + h.restarts);
+    if (h.backoff_ms) detail.push('backoff ' + h.backoff_ms + 'ms');
+    deviations.push({
+      title: unitLabel(unit),
+      detail: status + (detail.length ? ' — ' + detail.join(', ') : ''),
+      tag: 'supervision'
+    });
+  });
+
+  // 2. state: lights on
+  var litRooms = {};
+  var litCount = 0;
+  entities.filter(function (e) { return e.capability === 'light'; }).forEach(function (e) {
+    if (stateValue(e.room, e.name, 'on') === true) {
+      litCount++;
+      litRooms[e.room] = true;
+    }
+  });
+  if (litCount > 0) {
+    deviations.push({
+      title: litCount + ' light' + (litCount === 1 ? '' : 's') + ' on',
+      detail: Object.keys(litRooms).map(titleCase).join(', '),
+      tag: 'state'
+    });
+  }
+
+  // state: unlocked locks
+  entities.filter(function (e) { return e.capability === 'lock'; }).forEach(function (e) {
+    var locked = stateValue(e.room, e.name, 'locked');
+    if (locked === false) {
+      deviations.push({ title: e.label + ' unlocked', detail: '', tag: 'state' });
+    }
+  });
+
+  // 3. setpoint: config differing from manifest default
+  (store.model.units || []).forEach(function (u) {
+    var params = u.params || {};
+    Object.keys(params).forEach(function (pname) {
+      var p = params[pname];
+      var configKey = 'home/config/' + u.name + '/' + pname;
+      if (!(configKey in store.config)) return;
+      var live = store.config[configKey];
+      var def = p.default;
+      if (JSON.stringify(live) !== JSON.stringify(def)) {
+        deviations.push({
+          title: unitLabel(u.name) + ' · ' + pname,
+          detail: String(live) + ' (default ' + String(def) + ')',
+          tag: 'setpoint'
+        });
+      }
+    });
+  });
+
+  // 4. arbiter preemptions — not yet a data source; leave as future work.
+  // TODO: once the arbiter publishes preemption events, add a fourth
+  // source here that surfaces "{entity} — manual override active".
+
+  var devHtml;
+  if (deviations.length === 0) {
+    devHtml = '<div class="equilibrium">In equilibrium.</div>';
+  } else {
+    devHtml = deviations.map(function (d) {
+      return '<div class="dev-row"><div class="dev-main"><div class="title">' + esc(d.title) + '</div>' +
+        (d.detail ? '<div class="detail">' + esc(d.detail) + '</div>' : '') + '</div>' +
+        '<div class="dev-tag">' + esc(d.tag) + '</div></div>';
+    }).join('');
+  }
+
+  var html = '<h1 class="view-title">Now</h1>';
+  html += '<div class="grid">' + tiles.join('') + '</div>';
+  html += '<div class="card" style="margin-top:14px;"><div class="card-label">OUT OF THE ORDINARY' + (deviations.length ? ' — ' + deviations.length : '') + '</div>' + devHtml + '</div>';
+  byId('view').innerHTML = html;
+}
+
+// ---- view: Setpoints ----
+
+function paramConstraintCaption(p) {
+  var c = p.constraint || {};
+  if (p.type === 'time' && (c.after || c.before)) return (c.after || '') + '–' + (c.before || '');
+  if ((p.type === 'int' || p.type === 'float') && (c.min !== undefined || c.max !== undefined)) {
+    return (c.min !== undefined ? c.min : '') + '–' + (c.max !== undefined ? c.max : '');
+  }
+  if (p.type === 'enum' && p.values) return p.values.join(' / ');
+  return '';
+}
+
+function currentParamValue(unitName, pname, p) {
+  var key = 'home/config/' + unitName + '/' + pname;
+  if (key in store.config) return store.config[key];
+  return p.default;
+}
+
+function renderParamControl(unitName, pname, p) {
+  var value = currentParamValue(unitName, pname, p);
+  var id = 'param-' + unitName + '-' + pname;
+  if (p.type === 'time') {
+    return '<input type="time" id="' + id + '" value="' + esc(value) + '" data-action="param-time" data-unit="' + esc(unitName) + '" data-param="' + esc(pname) + '">';
+  }
+  if (p.type === 'bool') {
+    var on = !!value;
+    return '<span class="toggle ' + (on ? 'on' : '') + '" data-action="param-toggle" data-unit="' + esc(unitName) + '" data-param="' + esc(pname) + '" data-value="' + (!on) + '"><span class="knob"></span></span>';
+  }
+  if (p.type === 'enum' && p.values) {
+    return '<div class="seg">' + p.values.map(function (v) {
+      return '<button data-action="param-enum" data-unit="' + esc(unitName) + '" data-param="' + esc(pname) + '" data-value="' + esc(v) + '" class="' + (v === value ? 'active' : '') + '">' + esc(v) + '</button>';
+    }).join('') + '</div>';
+  }
+  if (p.type === 'int' || p.type === 'float') {
+    var c = p.constraint || {};
+    var min = c.min !== undefined ? c.min : 0;
+    var max = c.max !== undefined ? c.max : 100;
+    var step = p.type === 'float' ? 'any' : '1';
+    var slideKey = unitName + '|' + pname;
+    var shown = localState.sliderDrag[slideKey] !== undefined ? localState.sliderDrag[slideKey] : value;
+    return '<div class="slider-row" style="padding-left:0;">' +
+      '<input type="range" min="' + min + '" max="' + max + '" step="' + step + '" value="' + shown + '" data-action="param-slider" data-unit="' + esc(unitName) + '" data-param="' + esc(pname) + '">' +
+      '<span class="sval">' + shown + '</span></div>';
+  }
+  // string fallback
+  return '<input type="text" id="' + id + '" value="' + esc(value === undefined ? '' : value) + '" data-action="param-text" data-unit="' + esc(unitName) + '" data-param="' + esc(pname) + '">';
+}
+
+function renderSetpoints() {
+  var rows = [];
+  (store.model.units || []).forEach(function (u) {
+    var params = u.params || {};
+    Object.keys(params).forEach(function (pname) {
+      var p = params[pname];
+      rows.push('<div class="param-row"><div class="param-head">' +
+        '<span class="name">' + esc(u.label) + ' · ' + esc(pname) + '</span></div>' +
+        '<div>' + renderParamControl(u.name, pname, p) + '</div>' +
+        '<div class="param-caption">' + esc(paramConstraintCaption(p)) + '</div></div>');
+    });
+  });
+  var html = '<h1 class="view-title">Setpoints</h1>';
+  if (rows.length === 0) {
+    html += '<div class="card"><div class="empty-hint">No family-editable parameters.</div></div>';
+  } else {
+    html += '<div class="card">' + rows.join('') + '</div>';
+  }
+  byId('view').innerHTML = html;
+}
+
+// ---- view: Rooms ----
+
+function allZoneNames() {
+  var zones = store.model.zones || {};
+  var out = [];
+  Object.keys(zones).forEach(function (zone) {
+    out.push(zone);
+  });
+  return out;
+}
+
+function roomsInZone(zone) {
+  var zones = store.model.zones || {};
+  return zones[zone] || [];
+}
+
+function renderRooms() {
+  var zones = allZoneNames();
+  var chips = ['<button class="chip ' + (store.roomsFilter === 'all' ? 'active' : '') + '" data-action="zone-filter" data-zone="all">Whole house</button>'];
+  zones.forEach(function (z) {
+    chips.push('<button class="chip ' + (store.roomsFilter === z ? 'active' : '') + '" data-action="zone-filter" data-zone="' + esc(z) + '">' + esc(titleCase(z)) + '</button>');
+  });
+
+  var allowedRooms = null;
+  if (store.roomsFilter !== 'all') {
+    allowedRooms = roomsInZone(store.roomsFilter);
+  }
+
+  var byRoom = {};
+  (store.model.entities || []).forEach(function (e) {
+    if (!e.room) return;
+    if (allowedRooms && allowedRooms.indexOf(e.room) === -1) return;
+    if (!byRoom[e.room]) byRoom[e.room] = [];
+    byRoom[e.room].push(e);
+  });
+
+  var roomNames = Object.keys(byRoom).sort();
+  var cards = roomNames.map(function (room) {
+    var ents = byRoom[room].slice().sort(function (a, b) { return capRank(a) - capRank(b); });
+    var body = ents.map(widgetForEntity).join('');
+    return '<div class="card room-card"><h3>' + esc(titleCase(room)) + '</h3>' + body + '</div>';
+  });
+
+  var html = '<h1 class="view-title">Rooms</h1>';
+  html += '<div class="chips">' + chips.join('') + '</div>';
+  if (cards.length === 0) {
+    html += '<div class="card"><div class="empty-hint">No rooms with entities yet.</div></div>';
+  } else {
+    html += '<div class="grid">' + cards.join('') + '</div>';
+  }
+  byId('view').innerHTML = html;
+}
+
+// ---- view: Health ----
+
+function renderHealth() {
+  var units = store.model.units || [];
+  var cards = units.map(function (u) {
+    var key = 'home/health/' + u.name;
+    var h = store.health[key] || {};
+    var status = h.status || 'stopped';
+    var meta = [];
+    if (h.restarts !== undefined && h.restarts !== null) meta.push('restarts: ' + h.restarts);
+    if (h.last_exit_code !== undefined && h.last_exit_code !== null) meta.push('last exit: ' + h.last_exit_code);
+    return '<div class="card health-card"><div class="health-head">' +
+      '<span class="name">' + esc(u.label) + '</span>' +
+      '<span class="status-badge"><span class="status-glyph">' + statusGlyph(status) + '</span>' + esc(status) + '</span></div>' +
+      (meta.length ? '<div class="health-meta">' + esc(meta.join(' · ')) + '</div>' : '') +
+      '</div>';
+  });
+
+  var events = store.events.slice().sort(function (a, b) { return b.ts - a.ts; });
+  var eventRows = events.map(function (ev) {
+    var unit = unitNameFromHealthKey(ev.key);
+    var extra = Object.keys(ev.value || {}).filter(function (k) { return k !== 'kind'; })
+      .map(function (k) { return k + '=' + JSON.stringify(ev.value[k]); }).join(' ');
+    var t = new Date((ev.ts || 0) * 1000);
+    var tStr = isNaN(t.getTime()) ? '' : t.toLocaleTimeString();
+    return '<div class="event-row"><span class="ts">' + esc(tStr) + '</span>' +
+      esc(unitLabel(unit)) + ' — ' + esc((ev.value && ev.value.kind) || 'event') +
+      (extra ? ' (' + esc(extra) + ')' : '') + '</div>';
+  });
+
+  var html = '<h1 class="view-title">Health</h1>';
+  html += '<div class="grid">' + cards.join('') + '</div>';
+  html += '<div class="card event-feed"><div class="card-label">EVENTS</div>';
+  html += eventRows.length ? eventRows.join('') : '<div class="empty-hint">No events yet this session.</div>';
+  html += '</div>';
+  byId('view').innerHTML = html;
+}
+
+// ---- view dispatch ----
+
+function renderView() {
+  if (store.view === 'now') return renderNow();
+  if (store.view === 'setpoints') return renderSetpoints();
+  if (store.view === 'rooms') return renderRooms();
+  if (store.view === 'health') return renderHealth();
+}
+
+function render() {
+  renderShell();
+  renderView();
+}
+
+// ---- interaction: delegated events ----
+
+document.addEventListener('click', function (e) {
+  var el = e.target.closest('[data-action]');
+  if (!el) return;
+  var action = el.getAttribute('data-action');
+
+  if (action === 'toggle-light') {
+    var room = el.getAttribute('data-room');
+    var entity = el.getAttribute('data-entity');
+    var value = el.getAttribute('data-value') === 'true';
+    sendCmd(room, entity, 'on', value);
+    return;
+  }
+  if (action === 'param-toggle') {
+    var unit = el.getAttribute('data-unit');
+    var param = el.getAttribute('data-param');
+    var val = el.getAttribute('data-value') === 'true';
+    sendParam(unit, param, val, function () { scheduleRender(); });
+    return;
+  }
+  if (action === 'param-enum') {
+    var unit2 = el.getAttribute('data-unit');
+    var param2 = el.getAttribute('data-param');
+    var val2 = el.getAttribute('data-value');
+    sendParam(unit2, param2, val2, function () { scheduleRender(); });
+    return;
+  }
+  if (action === 'zone-filter') {
+    store.roomsFilter = el.getAttribute('data-zone');
+    renderView();
+    return;
+  }
+});
+
+document.addEventListener('change', function (e) {
+  var el = e.target;
+  if (!el.matches) return;
+
+  if (el.matches('[data-action="slider"]')) {
+    var kind = el.getAttribute('data-kind');
+    var room = el.getAttribute('data-room');
+    var entity = el.getAttribute('data-entity');
+    var key = room + '/' + entity + '/' + kind;
+    var pct = parseInt(el.value, 10);
+    var sendValue;
+    if (kind === 'brightness') {
+      sendValue = Math.round((pct / 100) * 254);
+      sendCmd(room, entity, 'brightness', sendValue);
+    } else if (kind === 'color_temp') {
+      sendValue = pct; // el.value already the mired value for color_temp
+      sendCmd(room, entity, 'color_temp', sendValue);
+    }
+    delete localState.sliderDrag[key];
+    scheduleRender();
+    return;
+  }
+  if (el.matches('[data-action="param-slider"]')) {
+    var unit = el.getAttribute('data-unit');
+    var param = el.getAttribute('data-param');
+    var slideKey = unit + '|' + param;
+    var v = el.step === 'any' ? parseFloat(el.value) : parseInt(el.value, 10);
+    sendParam(unit, param, v, function () { scheduleRender(); });
+    delete localState.sliderDrag[slideKey];
+    scheduleRender();
+    return;
+  }
+  if (el.matches('[data-action="param-time"]')) {
+    var unit2 = el.getAttribute('data-unit');
+    var param2 = el.getAttribute('data-param');
+    var prevKey = 'home/config/' + unit2 + '/' + param2;
+    var prevValue = store.config[prevKey];
+    sendParam(unit2, param2, el.value, function () {
+      el.value = prevValue !== undefined ? prevValue : el.value;
+    });
+    return;
+  }
+  if (el.matches('[data-action="param-text"]')) {
+    var unit3 = el.getAttribute('data-unit');
+    var param3 = el.getAttribute('data-param');
+    var prevKey3 = 'home/config/' + unit3 + '/' + param3;
+    var prevValue3 = store.config[prevKey3];
+    sendParam(unit3, param3, el.value, function () {
+      el.value = prevValue3 !== undefined ? prevValue3 : el.value;
+    });
+    return;
+  }
+});
+
+// live drag feedback: keep sliders responsive without re-render clobbering them
+document.addEventListener('input', function (e) {
+  var el = e.target;
+  if (!el.matches) return;
+
+  if (el.matches('[data-action="slider"]')) {
+    var kind = el.getAttribute('data-kind');
+    var room = el.getAttribute('data-room');
+    var entity = el.getAttribute('data-entity');
+    var key = room + '/' + entity + '/' + kind;
+    var pct = parseInt(el.value, 10);
+    localState.sliderDrag[key] = pct;
+    var valEl = el.parentElement.querySelector('.sval');
+    if (valEl) {
+      if (kind === 'brightness') {
+        valEl.textContent = pct + '%';
+      } else {
+        var kelvin = Math.round(1e6 / pct / 100) * 100;
+        valEl.textContent = kelvin + ' K';
+      }
+    }
+    return;
+  }
+  if (el.matches('[data-action="param-slider"]')) {
+    var unit = el.getAttribute('data-unit');
+    var param = el.getAttribute('data-param');
+    var slideKey = unit + '|' + param;
+    localState.sliderDrag[slideKey] = el.value;
+    var valEl2 = el.parentElement.querySelector('.sval');
+    if (valEl2) valEl2.textContent = el.value;
+    return;
+  }
+});
+
+// ---- relative-time ticker ----
+
+setInterval(function () {
+  if (store.view === 'rooms' || store.view === 'now') scheduleRender();
+}, 30000);
+
+// ---- boot ----
+
+render();
+loadModel();
+connectWs();
+
+})();
+</script>
+</body>
+</html>

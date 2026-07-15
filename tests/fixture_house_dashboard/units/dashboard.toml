@@ -1,0 +1,19 @@
+schema = 1
+
+[unit]
+name = "dashboard"
+kind = "service"
+description = "Family web dashboard"
+
+[runtime]
+command = "uv run ../../adapters/dashboard.py --host 127.0.0.1"
+restart = "always"
+shutdown_grace_s = 5
+
+[bus.subscribes]
+state = "home/state/**"
+health = "home/health/**"
+config = "home/config/*/*"
+
+[bus.publishes]
+lights = { key = "home/cmd/**", capability = "light", priority = "manual" }

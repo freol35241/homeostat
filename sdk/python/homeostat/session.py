@@ -22,6 +22,10 @@ def connect() -> "UnitSession":
     return UnitSession(unit, endpoint)
 
 
+class ConfigWriteError(Exception):
+    """A parameter write the core rejected (constraint, unknown key, ...)."""
+
+
 class UnitSession:
     def __init__(self, unit: str, endpoint: str):
         self.unit = unit
@@ -60,6 +64,28 @@ class UnitSession:
                 (str(sample.key_expr), json.loads(sample.payload.to_bytes()))
             )
         return values
+
+    def write_config(self, unit: str, param: str, value: Any) -> Any:
+        """Writes a parameter through the core's validating config queryable.
+
+        A GET with payload against the concrete key: the core validates the
+        value against the manifest constraint, stores it, republishes it, and
+        replies the stored value. A rejected write raises ConfigWriteError
+        with the core's message; a plain put would bypass validation.
+        """
+        key = keys.config_key(unit, param)
+        for reply in self._session.get(key, payload=json.dumps(value)):
+            sample = reply.ok
+            if sample is not None:
+                return json.loads(sample.payload.to_bytes())
+            err = reply.err
+            if err is not None:
+                try:
+                    message = json.loads(err.payload.to_bytes())["error"]
+                except (ValueError, KeyError, TypeError):
+                    message = err.payload.to_bytes().decode(errors="replace")
+                raise ConfigWriteError(message)
+        raise ConfigWriteError(f"no reply for {key} — is the core running?")
 
     def health_event(self, kind: str, **fields: Any) -> None:
         """Publishes a JSON event at home/health/{unit}/event."""

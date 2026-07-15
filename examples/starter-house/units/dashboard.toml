@@ -1,0 +1,19 @@
+schema = 1
+
+[unit]
+name = "dashboard"
+kind = "service"
+description = "Family web dashboard: generated views over state, setpoints and health"
+
+[runtime]
+command = "uv run units/dashboard.py --port 8600"
+restart = "always"
+shutdown_grace_s = 5
+
+[bus.subscribes]
+state = "home/state/**"
+health = "home/health/**"
+config = "home/config/*/*"
+
+[bus.publishes]
+lights = { key = "home/cmd/**", capability = "light", priority = "manual" }
