@@ -21,6 +21,7 @@ use common::{await_health, free_port, health_watch, process_alive, Supervisor};
 const FIXTURE: &str = "tests/fixture_house_z2m";
 const PORT_ENV: &str = "HOMEOSTAT_TEST_MQTT_PORT";
 const EVENT_KEY: &str = "home/health/zigbee/event";
+const LOCK_CMD_KEY: &str = "home/cmd/hallway/front_door/locked";
 
 /// A mosquitto broker on a free port, killed on drop.
 struct Mosquitto {
@@ -228,8 +229,9 @@ async fn z2m_state_translates_to_bus_state() {
     sup.shutdown();
 }
 
-/// (b) Bus commands translate to zigbee2mqtt/{device}/set; lock commands
-/// stay unwired until the arbiter exists.
+/// (b) Bus commands translate to zigbee2mqtt/{device}/set. The lock's
+/// arbitrated command path (home/cmd -> arbiter -> home/arbiter -> z2m) is
+/// covered separately below, in `manual_lock_command_reaches_mqtt_via_arbiter`.
 #[tokio::test(flavor = "multi_thread")]
 async fn bus_commands_translate_to_z2m_set() {
     let (mosquitto, mut sup, observer) = setup().await;
@@ -265,17 +267,6 @@ async fn bus_commands_translate_to_z2m_set() {
     assert_eq!(topic, "zigbee2mqtt/lamp_kitchen_1/set");
     let payload: Value = serde_json::from_slice(&payload).expect("set payload is JSON");
     assert_eq!(payload, json!({"brightness": 200}));
-
-    // The adapter does not even subscribe to lock command keys.
-    observer
-        .put(
-            "home/cmd/hallway/front_door/locked",
-            json!({"value": true, "priority": "manual", "actor": "test"}).to_string(),
-        )
-        .await
-        .expect("cmd put");
-    let silence = mqtt.next_message(Duration::from_millis(1500)).await;
-    assert!(silence.is_none(), "lock command reached MQTT: {silence:?}");
 
     sup.shutdown();
 }
@@ -435,6 +426,54 @@ async fn envelope_less_command_drops_with_health_event() {
     assert_eq!(topic, "zigbee2mqtt/lamp_kitchen_1/set");
     let payload: Value = serde_json::from_slice(&payload).expect("set payload is JSON");
     assert_eq!(payload, json!({"state": "OFF"}));
+
+    sup.shutdown();
+}
+
+/// (g) Arbitrated lock command, end to end (docs/design.md, Arbitrated
+/// mode): the fixture's front_door lock is arbitrated and the house runs
+/// an arbiter unit. A manual-band wish on home/cmd forwards through the
+/// arbiter to home/arbiter, which z2m now subscribes to and translates
+/// into z2m's LOCK/UNLOCK set vocabulary. While that manual lease holds, a
+/// direct automation-band wish on the same home/cmd key is refused
+/// upstream and never reaches MQTT — which is also the structural proof
+/// that z2m itself has no home/cmd subscription for the lock: if it did,
+/// the refused wish would still leak through to MQTT regardless of the
+/// arbiter's decision.
+#[tokio::test(flavor = "multi_thread")]
+async fn manual_lock_command_reaches_mqtt_via_arbiter() {
+    let (mosquitto, mut sup, observer) = setup().await;
+    let mut arbiter_watch = health_watch(&observer, "arbiter").await;
+    await_health(&mut arbiter_watch, Duration::from_secs(60), |h| {
+        h.status == HealthStatus::Running
+    })
+    .await;
+
+    let mut mqtt = Mqtt::connect(mosquitto.port, "test-lock-cmd").await;
+    mqtt.subscribe("zigbee2mqtt/+/set").await;
+
+    let manual_wish = json!({"value": true, "priority": "manual", "actor": "test"});
+    observer
+        .put(LOCK_CMD_KEY, manual_wish.to_string())
+        .await
+        .expect("cmd put");
+    let (topic, payload) = mqtt
+        .next_message(Duration::from_secs(10))
+        .await
+        .expect("set publish for lock command");
+    assert_eq!(topic, "zigbee2mqtt/lock_front_1/set");
+    let payload: Value = serde_json::from_slice(&payload).expect("set payload is JSON");
+    assert_eq!(payload, json!({"state": "LOCK"}));
+
+    // The manual lease is now held (hold_minutes = 30 in the fixture): a
+    // direct automation-band wish on the same key is refused upstream.
+    let auto_wish = json!({"value": false, "priority": "automation", "actor": "scheduler"});
+    observer
+        .put(LOCK_CMD_KEY, auto_wish.to_string())
+        .await
+        .expect("cmd put");
+    let silence = mqtt.next_message(Duration::from_millis(1500)).await;
+    assert!(silence.is_none(), "refused automation wish reached MQTT: {silence:?}");
 
     sup.shutdown();
 }

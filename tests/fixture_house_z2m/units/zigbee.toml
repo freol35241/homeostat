@@ -20,6 +20,7 @@ discovery = { key = "home/discovery/zigbee" }
 
 [bus.subscribes]
 commands = "home/cmd/{room}/{entity}/**"
+arbiter_commands = "home/arbiter/{room}/{entity}/**"
 
 [entities]
 dir = "entities/zigbee/"

@@ -65,10 +65,13 @@ ASSETS = {
     "protomaps-leaflet.js": "text/javascript",
 }
 
-# Commandable aspects per capability: "on" plus whatever features the entity
-# declares. Locks stay read-only until the arbiter exists (structural
-# enforcement lives in the adapters; the dashboard doesn't pretend otherwise).
-COMMANDABLE = {"light": {"on", "brightness", "color_temp"}}
+# Commandable aspects per capability: the capability's base aspect plus
+# whatever features the entity declares. A lock wish still just goes to
+# home/cmd at manual band like any other command — for an arbitrated entity
+# the arbiter (not the dashboard) is what enforces the family always
+# winning over automations.
+COMMANDABLE = {"light": {"on", "brightness", "color_temp"}, "lock": {"locked"}}
+BASE_ASPECT = {"light": "on", "lock": "locked"}
 
 
 def label_of(naming: dict, name: str) -> str:
@@ -281,7 +284,8 @@ def make_app(hub: Hub, model: dict, page: Path, assets_dir: Path) -> web.Applica
         if spec is None or spec["room"] != room:
             return json_error(f"unknown entity {room}/{entity}")
         allowed = COMMANDABLE.get(spec["capability"], set())
-        if aspect not in allowed or (aspect != "on" and aspect not in spec["features"]):
+        base = BASE_ASPECT.get(spec["capability"])
+        if aspect not in allowed or (aspect != base and aspect not in spec["features"]):
             return json_error(f"{spec['capability']} {entity} takes no {aspect} command")
         # priority "manual": matches this unit's [bus.publishes] declaration
         # (units/dashboard.toml) — the family always wins over automations.

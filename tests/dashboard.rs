@@ -350,6 +350,34 @@ async fn dashboard_serves_the_family_surface() {
     );
     assert_eq!(status, 400, "person entity must refuse commands: {reply}");
 
+    // A lock command is accepted: COMMANDABLE now maps lock -> {"locked"}.
+    // The wish still just goes to home/cmd at manual band, stamped the same
+    // way as any other command — for a real arbitrated entity, the arbiter
+    // (not exercised by this fixture) is what enforces the family always
+    // winning over automations (docs/design.md, Arbitrated mode).
+    let lock_cmd_sub = observer
+        .declare_subscriber("home/cmd/livingroom/front_door/locked")
+        .await
+        .expect("lock cmd subscriber");
+    let (status, reply) = http_request(
+        &addr,
+        "POST",
+        "/api/cmd",
+        &[("X-Homeostat", "family")],
+        Some(&json!({"room": "livingroom", "entity": "front_door", "aspect": "locked", "value": true})),
+    );
+    assert_eq!(status, 200, "{reply}");
+    let cmd_sample = tokio::time::timeout(Duration::from_secs(10), lock_cmd_sub.recv_async())
+        .await
+        .expect("lock cmd envelope observed within 10s")
+        .expect("sample");
+    let envelope: Value = serde_json::from_slice(&cmd_sample.payload().to_bytes()).expect("json");
+    assert_eq!(
+        envelope,
+        json!({"value": true, "priority": "manual", "actor": "dashboard"}),
+        "lock command stamps the same manual-band envelope as any other command"
+    );
+
     // 3. Parameter path: in-constraint persists, out-of-constraint refused.
     let (status, reply) = http_request(
         &addr,

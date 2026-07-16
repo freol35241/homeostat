@@ -901,11 +901,11 @@ function widgetForPresence(entity) {
 }
 
 function widgetForLock(entity) {
-  var locked = stateValue(entity.room, entity.name, 'locked');
+  var locked = !!stateValue(entity.room, entity.name, 'locked');
   var badge = entity.write_mode === 'arbitrated' ? '<span class="badge-arbitrated">ARBITRATED</span>' : '';
   return '<div class="entity-row row-clickable" data-action="entity-detail" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '">' +
     '<span class="entity-name" title="' + esc(entity.label) + '">' + esc(entity.label) + badge + '</span>' +
-    '<span class="muted">' + (locked ? 'Locked' : 'Unlocked') + '</span>' +
+    '<span class="toggle ' + (locked ? 'on' : '') + '" data-action="toggle-lock" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '" data-value="' + (!locked) + '"><span class="knob"></span></span>' +
     '</div>';
 }
 
@@ -1629,6 +1629,13 @@ document.addEventListener('click', function (e) {
     var entity = el.getAttribute('data-entity');
     var value = el.getAttribute('data-value') === 'true';
     sendCmd(room, entity, 'on', value);
+    return;
+  }
+  if (action === 'toggle-lock') {
+    var lockRoom = el.getAttribute('data-room');
+    var lockEntity = el.getAttribute('data-entity');
+    var lockValue = el.getAttribute('data-value') === 'true';
+    sendCmd(lockRoom, lockEntity, 'locked', lockValue);
     return;
   }
   if (action === 'param-toggle') {

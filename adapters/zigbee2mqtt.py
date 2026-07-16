@@ -16,9 +16,13 @@ home/cmd/{room}/{entity}/{aspect} translate to zigbee2mqtt/{id}/set. The
 entity file's `id` is the z2m topic segment; the file stem is the entity
 name. The z2m `state` field is normalized (`on` for lights/switches,
 `locked` for locks); other scalar fields pass through under their z2m
-names; nested objects (e.g. color) are deferred. Lock entities get no
-command subscription until the arbiter exists. Anything dropped emits a
-JSON event at home/health/{unit}/event instead of crashing.
+names; nested objects (e.g. color) are deferred. Arbitrated entities (e.g.
+locks) get no home/cmd subscription at all — plan-time expansion gives the
+adapter's templated cmd subscription only its non-arbitrated bound
+entities — and instead receive the arbiter's forwarded envelope on
+home/arbiter/{room}/{entity}/{aspect}, translated the same way a cmd
+envelope would be. Anything dropped emits a JSON event at
+home/health/{unit}/event instead of crashing.
 
 The retained zigbee2mqtt/bridge/devices inventory is republished at
 home/discovery/{unit}: every paired device (coordinator excluded) as a
@@ -155,6 +159,13 @@ def main():
                     session.health_event("drop", reason="invalid-command", key=key)
                     return
                 body = {"state": "ON" if value else "OFF"}
+            elif aspect == "locked":
+                if not isinstance(value, bool):
+                    session.health_event("drop", reason="invalid-command", key=key)
+                    return
+                # z2m's lock vocabulary is asymmetric: state REPORTS are
+                # LOCKED/UNLOCKED, but SET commands are LOCK/UNLOCK.
+                body = {"state": "LOCK" if value else "UNLOCK"}
             elif "/" in aspect:
                 session.health_event("drop", reason="invalid-command", key=key)
                 return
@@ -176,12 +187,17 @@ def main():
     if not subscribed.wait(timeout=30):
         raise TimeoutError("no MQTT SUBACK within 30s")
 
-    # Locks are state-only until the arbiter exists: no command subscription
-    # is the structural enforcement for arbitrated entities.
+    # An arbitrated entity has no home/cmd subscription at all — not
+    # subscribing IS the structural enforcement — and instead gets the
+    # arbiter's forwarded, post-arbitration envelope on home/arbiter/**.
     subscribers = [
         session.subscribe(keys.cmd_keyexpr(e.room, e.name), cmd_handler(e))
         for e in config.entities
-        if e.capability != "lock"
+        if e.write_mode != "arbitrated"
+    ] + [
+        session.subscribe(keys.arbiter_keyexpr(e.room, e.name), cmd_handler(e))
+        for e in config.entities
+        if e.write_mode == "arbitrated"
     ]
 
     # Both translation directions are wired up: the unit is ready.

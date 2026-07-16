@@ -1,0 +1,18 @@
+schema = 1
+
+[entity]
+# The Zigbee2MQTT topic segment: your device's friendly name (or its
+# IEEE address like 0x00158d0006aa5c6d if you never renamed it).
+id = "front_door"
+capability = "lock"
+features = []
+room = "hallway"
+
+[naming]
+sv = "ytterdörrslåset"
+en = "front door lock"
+aliases = []
+
+[write_policy]
+mode = "arbitrated"
+owner = "zigbee"

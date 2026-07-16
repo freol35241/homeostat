@@ -40,6 +40,8 @@ Expanded keys:
     -> home/state/hallway/hallway_motion/**
     -> home/state/kitchen/kitchen_ceiling/**
     -> home/state/livingroom/livingroom_lamp/**
+  zigbee subscribes arbiter_commands: home/arbiter/{room}/{entity}/**
+    -> home/arbiter/hallway/front_door_lock/**
   zigbee subscribes commands: home/cmd/{room}/{entity}/**
     -> home/cmd/hallway/hallway_motion/**
     -> home/cmd/kitchen/kitchen_ceiling/**

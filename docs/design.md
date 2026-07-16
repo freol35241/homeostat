@@ -161,14 +161,21 @@ Other scalar fields pass through under their z2m names (`brightness`,
 `temperature`, `occupancy`, ...). Composite fields (objects/arrays, e.g.
 `color`) are deferred.
 
-Commands: the payload on `home/cmd/{room}/{entity}/{aspect}` is the cmd
-envelope; the adapter unwraps its `value` and translates. `on` + boolean
-value becomes `{"state": "ON"|"OFF"}`; any other aspect passes through as
-`{aspect: value}` to `zigbee2mqtt/{id}/set`.
+Commands: the payload on `home/cmd/{room}/{entity}/{aspect}` (and, for
+arbitrated entities, `home/arbiter/{room}/{entity}/{aspect}`) is the cmd
+envelope; the adapter unwraps its `value` and translates the same way
+either way. `on` + boolean value becomes `{"state": "ON"|"OFF"}`; `locked`
++ boolean value becomes `{"state": "LOCK"|"UNLOCK"}` (z2m's lock vocabulary
+is asymmetric: state reports are `LOCKED`/`UNLOCKED`, but set commands are
+`LOCK`/`UNLOCK`); any other aspect passes through as `{aspect: value}` to
+`zigbee2mqtt/{id}/set`.
 
-Locks are state-only until the arbiter exists: the adapter declares no
-command subscription at all for lock entities — not subscribing IS the
-structural enforcement for arbitrated entities in the meantime.
+Locks are commandable only via the arbiter's output key: plan-time
+expansion gives the adapter's templated `home/cmd` subscription only its
+non-arbitrated bound entities, and its templated `home/arbiter` subscription
+only the arbitrated ones (locks, today) — the adapter physically lacks a
+cmd path to an arbitrated entity, by expansion, so a wish can only reach it
+after clearing the arbiter's lease.
 
 Dropped input never crashes the adapter and always leaves a trace: a JSON
 event at `home/health/{unit}/event`, e.g.

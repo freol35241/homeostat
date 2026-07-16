@@ -1,0 +1,14 @@
+schema = 1
+
+[entity]
+id = "front_door-1"
+capability = "lock"
+features = []
+room = "livingroom"
+
+[naming]
+en = "front door lock"
+
+[write_policy]
+mode = "shared"
+owner = "reflector"
