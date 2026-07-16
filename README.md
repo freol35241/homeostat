@@ -295,6 +295,25 @@ enforcement — a manifest edit that smuggles in a grant delta escalates to
 structural on its own. Details:
 [design record §Agent surface](docs/design.md#agent-surface-mcp).
 
+### The dashboard: the family surface
+
+A supervised web unit (`adapters/dashboard.py` + one self-contained
+HTML file) — an adapter for humans. Four views, every element generated
+from the manifests: **Now** shows the error signal (deviations from
+equilibrium: unhealthy units, lights left on, setpoints off their
+defaults) and stays deliberately empty when the house is nominal;
+**Setpoints** is every family-editable parameter as one flat list;
+**Rooms** is the spatial grid; **Health** is supervision, live. Clicking
+through opens detail panels — sensor history with ranges and a
+crosshair tooltip, entity state, unit health. Commands leave at the
+manual band (the family always wins); parameter writes go through the
+core's validating queryable; access is local-only by design (LAN /
+WireGuard, no accounts — and family-tier only: nothing structural is
+reachable from a browser). Details:
+[design record §Dashboard](docs/design.md#dashboard-settled-2026-07-15).
+
+![The dashboard: Now view with a history detail panel, desktop and phone](docs/wireframes/dashboard-mvp.svg)
+
 ## Status
 
 Pre-1.0, under active development, following the build sequence in the
@@ -306,7 +325,8 @@ design record:
 4. ✅ First automation, clock service, live parameter path
 5. ✅ Recorder / history, then plan/apply proper
 6. ✅ Agent MCP surface
-7. ⬜ Voice
+7. ✅ Dashboard (MVP)
+8. ⬜ Voice
 
 ## Development
 

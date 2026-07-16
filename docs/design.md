@@ -1033,7 +1033,7 @@ is parked; `.io`/`.org` unregistered. No trademark risk surfaced (generic
 6. Agent MCP surface (goal and settlements above, under "Agent
    surface"). DONE.
 7. Dashboard (design settled above; wireframes in `docs/wireframes/`).
-   In progress.
+   MVP DONE.
 8. Voice. Deferred — not yet begun.
 Risk lives in steps 1 and 2; everything after is accretion.
  
