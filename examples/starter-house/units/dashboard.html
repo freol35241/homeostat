@@ -6,6 +6,7 @@
 <meta name="color-scheme" content="light dark">
 <title>homeostat</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M3 11 L12 3 L21 11 V21 H14 V14 H10 V21 H3 Z' fill='%2318181b'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/assets/leaflet.css">
 <style>
 :root {
   --bg: #f6f6f7; --card: #ffffff; --border: #e4e4e7; --ink: #18181b;
@@ -136,6 +137,17 @@ h1.view-title { font-size: 20px; margin: 0 0 16px; }
 .equilibrium { display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 10px; padding: 48px 24px; color: var(--secondary); font-size: 15px; text-align: center; }
 .equilibrium .eq-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good); opacity: .55; }
+
+/* map (person entities) */
+.map-wrap { height: 320px; border-radius: 8px; overflow: hidden; background: var(--bg); }
+.map-hint { font-size: 12px; color: var(--muted); margin-top: 8px; }
+.map-nofix { font-size: 12px; color: var(--secondary); margin-top: 8px; }
+.person-marker { position: relative; }
+.person-marker-dot { width: 12px; height: 12px; border-radius: 50%; background: var(--accent);
+  border: 2px solid var(--card); box-shadow: 0 1px 2px rgba(0,0,0,.3); }
+.person-marker-label { position: absolute; left: 16px; top: -5px; white-space: nowrap; font-size: 11px;
+  font-weight: 600; color: var(--ink); background: var(--card); border: 1px solid var(--border);
+  border-radius: 4px; padding: 1px 5px; }
 
 /* room cards */
 .room-card { margin-bottom: 16px; }
@@ -277,6 +289,8 @@ input[type=text], input[type=time] { border: 1px solid var(--border); background
   <div id="chart-tooltip-time"></div>
 </div>
 
+<script src="/assets/leaflet.js"></script>
+<script src="/assets/protomaps-leaflet.js"></script>
 <script>
 'use strict';
 (function () {
@@ -956,12 +970,146 @@ function relTime(ms) {
   return hrs + ' hr ago';
 }
 
+// ---- widget: map (person entities) ----
+//
+// The map is a view over every person entity, not a per-entity row (see
+// docs/design.md, "Map and person entities"). Leaflet's map object is
+// stateful (pan/zoom, tile cache) and must not be recreated on every
+// state-delta render, so its container is a detached DOM node kept in
+// mapState and moved into a fresh slot each render, rather than rebuilt
+// from an HTML string like the rest of the view.
+
+var mapState = { container: null, map: null, tileLayer: null, markers: {}, circles: {}, fitted: false };
+
+function personEntities() {
+  return (store.model.entities || []).filter(function (e) { return e.capability === 'person'; });
+}
+
+function personLatLon(entity) {
+  var lat = stateValue(entity.room, entity.name, 'lat');
+  var lon = stateValue(entity.room, entity.name, 'lon');
+  if (typeof lat !== 'number' || typeof lon !== 'number') return null;
+  return [lat, lon];
+}
+
+function mapThemeName() {
+  return (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+}
+
+function personDivIcon(entity) {
+  return L.divIcon({
+    className: 'person-marker',
+    html: '<div class="person-marker-dot"></div><div class="person-marker-label">' + esc(entity.label) + '</div>',
+    iconSize: [12, 12],
+    iconAnchor: [6, 6]
+  });
+}
+
+function personPopupHtml(entity) {
+  var battery = stateValue(entity.room, entity.name, 'battery');
+  var fixedAt = stateValue(entity.room, entity.name, 'fixed_at');
+  var parts = [];
+  if (typeof battery === 'number') parts.push('battery ' + Math.round(battery) + '%');
+  if (typeof fixedAt === 'number') parts.push(relTime(fixedAt * 1000));
+  return '<b>' + esc(entity.label) + '</b>' + (parts.length ? '<br>' + esc(parts.join(' · ')) : '');
+}
+
+function ensureMap() {
+  if (mapState.map) return;
+  if (!mapState.container) {
+    mapState.container = document.createElement('div');
+    mapState.container.id = 'person-map';
+    mapState.container.className = 'map-wrap';
+  }
+  // No default setView: a center/zoom is set only once real fixes exist
+  // (updateMapMarkers), so no coordinate is ever hardcoded. Layers added
+  // before that point just wait for it (Leaflet defers via whenReady).
+  mapState.map = L.map(mapState.container);
+  if (store.model.tiles) {
+    mapState.tileLayer = protomapsL.leafletLayer({ url: '/tiles.pmtiles', theme: mapThemeName() }).addTo(mapState.map);
+  }
+}
+
+function updateMapMarkers(persons) {
+  var map = mapState.map;
+  var bounds = [];
+  var seen = {};
+  persons.forEach(function (e) {
+    var key = e.room + '/' + e.name;
+    seen[key] = true;
+    var latlon = personLatLon(e);
+    if (!latlon) {
+      if (mapState.markers[key]) { map.removeLayer(mapState.markers[key]); delete mapState.markers[key]; }
+      if (mapState.circles[key]) { map.removeLayer(mapState.circles[key]); delete mapState.circles[key]; }
+      return;
+    }
+    bounds.push(latlon);
+    var marker = mapState.markers[key];
+    if (!marker) {
+      marker = L.marker(latlon, { icon: personDivIcon(e) }).addTo(map);
+      mapState.markers[key] = marker;
+    } else {
+      marker.setLatLng(latlon);
+    }
+    marker.bindPopup(personPopupHtml(e));
+
+    var accuracy = stateValue(e.room, e.name, 'accuracy');
+    var circle = mapState.circles[key];
+    if (typeof accuracy === 'number') {
+      if (!circle) {
+        mapState.circles[key] = L.circle(latlon, { radius: accuracy, color: 'var(--accent)', weight: 1, fillOpacity: .1 }).addTo(map);
+      } else {
+        circle.setLatLng(latlon);
+        circle.setRadius(accuracy);
+      }
+    } else if (circle) {
+      map.removeLayer(circle);
+      delete mapState.circles[key];
+    }
+  });
+
+  Object.keys(mapState.markers).forEach(function (key) {
+    if (seen[key]) return;
+    map.removeLayer(mapState.markers[key]);
+    delete mapState.markers[key];
+    if (mapState.circles[key]) { map.removeLayer(mapState.circles[key]); delete mapState.circles[key]; }
+  });
+
+  // Fit once, when fixes first appear — repeating this on every later
+  // delta would fight anyone panning the map.
+  if (bounds.length && !mapState.fitted) {
+    if (bounds.length === 1) map.setView(bounds[0], 16);
+    else map.fitBounds(bounds, { maxZoom: 16, padding: [24, 24] });
+    mapState.fitted = true;
+  }
+}
+
+function mountMap(persons) {
+  var slot = byId('map-slot');
+  if (!slot) return;
+  ensureMap();
+  slot.appendChild(mapState.container);
+  updateMapMarkers(persons);
+  mapState.map.invalidateSize();
+}
+
+function renderMapCard(persons) {
+  var noFix = persons.filter(function (e) { return !personLatLon(e); });
+  var hint = store.model.tiles ? '' : '<div class="map-hint">no tile extract configured</div>';
+  var noFixHtml = noFix.length
+    ? '<div class="map-nofix">' + noFix.map(function (e) { return esc(e.label); }).join(', ') + ' &mdash; no fix yet</div>'
+    : '';
+  return '<div class="card" style="margin-top:16px;"><div class="card-label">Map</div>' +
+    '<div id="map-slot"></div>' + hint + noFixHtml + '</div>';
+}
+
 // ---- view: Now ----
 
 function renderNow() {
   var entities = store.model.entities || [];
   var sensorEntities = entities.filter(function (e) { return e.capability === 'sensor'; });
   var presenceEntities = entities.filter(function (e) { return e.capability === 'presence'; });
+  var persons = personEntities();
 
   var tiles = [];
   var tileCount = 0;
@@ -1087,7 +1235,9 @@ function renderNow() {
   var html = '<h1 class="view-title">Now</h1>';
   html += '<div class="grid">' + tiles.join('') + '</div>';
   html += '<div class="card" style="margin-top:16px;"><div class="card-label">Out of the ordinary' + (deviations.length ? ' — ' + deviations.length : '') + '</div>' + devHtml + '</div>';
+  if (persons.length > 0) html += renderMapCard(persons);
   byId('view').innerHTML = html;
+  if (persons.length > 0) mountMap(persons);
 }
 
 // ---- view: Setpoints ----
@@ -1202,6 +1352,7 @@ function renderRooms() {
   var byRoom = {};
   (store.model.entities || []).forEach(function (e) {
     if (!e.room) return;
+    if (e.capability === 'person') return; // the map is their widget, not a room card
     if (allowedRooms && allowedRooms.indexOf(e.room) === -1) return;
     if (!byRoom[e.room]) byRoom[e.room] = [];
     byRoom[e.room].push(e);

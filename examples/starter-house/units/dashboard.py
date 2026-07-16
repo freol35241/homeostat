@@ -22,6 +22,10 @@ a small API generated entirely from the house's text:
   POST /api/param    a parameter write through the core's validating config
                      queryable ({unit, param, value})
   GET  /api/history  recorder proxy for sparklines (?entity=..&aspect=..)
+  GET  /assets/*     vendored map libraries (Leaflet, protomaps-leaflet),
+                     allowlisted by filename
+  GET  /tiles.pmtiles  self-hosted PMTiles region extract for the map
+                     widget, from HOMEOSTAT_DASHBOARD_TILES; 404 if unset
 
 Access is local-only by design (LAN / WireGuard); network reachability is
 the credential, so the gate is structural, not auth: every request's Host
@@ -29,7 +33,9 @@ must resolve to a non-global address or an allowlisted name (DNS-rebinding
 defense), writes require the X-Homeostat header, and a WebSocket Origin, if
 present, is held to the same host rule. Extra hostnames (reverse-proxy
 setups) go in HOMEOSTAT_DASHBOARD_HOSTS, comma-separated — ports and names
-don't belong in the repo.
+don't belong in the repo. HOMEOSTAT_DASHBOARD_TILES points at the house's
+self-hosted PMTiles region extract for the map widget (never in the repo);
+unset means the map renders without a base layer.
 """
 
 import argparse
@@ -47,8 +53,17 @@ from aiohttp import WSMsgType, web
 from homeostat import ConfigWriteError, connect, house, keys
 
 ENV_HOSTS = "HOMEOSTAT_DASHBOARD_HOSTS"
+ENV_TILES = "HOMEOSTAT_DASHBOARD_TILES"
 ALLOWED_NAMES = {"localhost", "homeostat", "homeostat.lan", "homeostat.local"}
 WRITE_HEADER = "X-Homeostat"
+
+# Vendored map assets served at /assets/{name} — allowlisted by filename so
+# the route can't become a path-traversal surface.
+ASSETS = {
+    "leaflet.js": "text/javascript",
+    "leaflet.css": "text/css",
+    "protomaps-leaflet.js": "text/javascript",
+}
 
 # Commandable aspects per capability: "on" plus whatever features the entity
 # declares. Locks stay read-only until the arbiter exists (structural
@@ -107,6 +122,16 @@ def host_allowed(host_header: str) -> bool:
         return not ipaddress.ip_address(host).is_global
     except ValueError:
         return False
+
+
+def tiles_path() -> Path | None:
+    """The house's self-hosted PMTiles extract, if HOMEOSTAT_DASHBOARD_TILES
+    is set and points at a real file."""
+    raw = os.environ.get(ENV_TILES)
+    if not raw:
+        return None
+    path = Path(raw)
+    return path if path.is_file() else None
 
 
 class Hub:
@@ -204,7 +229,7 @@ async def guard(request: web.Request, handler):
     return await handler(request)
 
 
-def make_app(hub: Hub, model: dict, page: Path) -> web.Application:
+def make_app(hub: Hub, model: dict, page: Path, assets_dir: Path) -> web.Application:
     entities = {e["name"]: e for e in model["entities"]}
     units = {u["name"]: u for u in model["units"]}
 
@@ -212,7 +237,20 @@ def make_app(hub: Hub, model: dict, page: Path) -> web.Application:
         return web.FileResponse(page)
 
     async def api_model(request: web.Request) -> web.Response:
-        return web.json_response(model)
+        return web.json_response(dict(model, tiles=tiles_path() is not None))
+
+    async def api_asset(request: web.Request) -> web.StreamResponse:
+        name = request.match_info["name"]
+        content_type = ASSETS.get(name)
+        if content_type is None:
+            raise web.HTTPNotFound()
+        return web.FileResponse(assets_dir / name, headers={"Content-Type": content_type})
+
+    async def api_tiles(request: web.Request) -> web.StreamResponse:
+        path = tiles_path()
+        if path is None:
+            raise web.HTTPNotFound()
+        return web.FileResponse(path)
 
     async def ws_handler(request: web.Request) -> web.WebSocketResponse:
         origin = request.headers.get("Origin")
@@ -293,6 +331,8 @@ def make_app(hub: Hub, model: dict, page: Path) -> web.Application:
     app.router.add_post("/api/cmd", api_cmd)
     app.router.add_post("/api/param", api_param)
     app.router.add_get("/api/history", api_history)
+    app.router.add_get("/assets/{name}", api_asset)
+    app.router.add_get("/tiles.pmtiles", api_tiles)
     return app
 
 
@@ -323,11 +363,13 @@ def main() -> None:
     args = parser.parse_args()
 
     model = build_model(house.load_house("."))
-    page = Path(__file__).resolve().parent / "dashboard.html"
+    script_dir = Path(__file__).resolve().parent
+    page = script_dir / "dashboard.html"
+    assets_dir = script_dir / "assets"
     session = connect()
     hub = Hub(session)
     try:
-        asyncio.run(serve(make_app(hub, model, page), hub, args.host, args.port))
+        asyncio.run(serve(make_app(hub, model, page, assets_dir), hub, args.host, args.port))
     finally:
         session.close()
 

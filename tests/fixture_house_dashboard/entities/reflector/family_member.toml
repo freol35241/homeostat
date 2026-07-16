@@ -1,0 +1,14 @@
+schema = 1
+
+[entity]
+id = "person-1"
+capability = "person"
+features = []
+room = "person"
+
+[naming]
+en = "family member"
+
+[write_policy]
+mode = "shared"
+owner = "reflector"

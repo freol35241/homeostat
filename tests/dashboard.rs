@@ -12,6 +12,11 @@
 //!    and changes nothing.
 //! 4. The local-only gate holds: a write without the X-Homeostat header
 //!    and any request with a foreign Host are both refused.
+//! 5. The map surface: vendored assets are served allowlisted, person
+//!    entities render in `/api/model` but are never commandable, and
+//!    `/tiles.pmtiles` 404s without HOMEOSTAT_DASHBOARD_TILES and serves
+//!    Range requests when it is set (docs/design.md, "Map and person
+//!    entities").
 
 mod common;
 
@@ -77,6 +82,54 @@ fn http_request(
         serde_json::from_str(body.trim()).unwrap_or(Value::Null)
     };
     (status, value)
+}
+
+/// Like `http_request`, but keeps raw headers and body bytes instead of
+/// parsing the body as JSON — needed to assert on Range/Content-Range for
+/// the binary /tiles.pmtiles response.
+fn http_request_bytes(
+    addr: &str,
+    path: &str,
+    headers: &[(&str, &str)],
+) -> (u16, Vec<(String, String)>, Vec<u8>) {
+    let mut request = format!("GET {path} HTTP/1.1\r\nConnection: close\r\n");
+    let mut has_host = false;
+    for (name, value) in headers {
+        has_host |= name.eq_ignore_ascii_case("host");
+        request.push_str(&format!("{name}: {value}\r\n"));
+    }
+    if !has_host {
+        request.push_str(&format!("Host: {addr}\r\n"));
+    }
+    request.push_str("\r\n");
+
+    let mut stream = TcpStream::connect(addr).expect("connect dashboard");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(30)))
+        .expect("read timeout");
+    stream.write_all(request.as_bytes()).expect("send request");
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response).expect("read response");
+
+    let split_at = response
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .expect("header/body split");
+    let header_block = String::from_utf8_lossy(&response[..split_at]).to_string();
+    let body = response[split_at + 4..].to_vec();
+
+    let mut lines = header_block.split("\r\n");
+    let status_line = lines.next().unwrap_or("");
+    let status: u16 = status_line
+        .split_whitespace()
+        .nth(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or_else(|| panic!("no status line in {status_line:?}"));
+    let headers = lines
+        .filter_map(|l| l.split_once(": ").map(|(k, v)| (k.to_string(), v.to_string())))
+        .collect();
+
+    (status, headers, body)
 }
 
 /// Minimal WebSocket client: handshake, then text frames on demand.
@@ -184,9 +237,36 @@ async fn dashboard_serves_the_family_surface() {
         "20:00"
     );
 
+    // A person entity is just another entity in the model, on the
+    // reserved "person" pseudo-room — never commandable (checked below).
+    let person = model["entities"]
+        .as_array()
+        .expect("entities")
+        .iter()
+        .find(|e| e["name"] == "family_member")
+        .expect("family_member in model");
+    assert_eq!(person["capability"], "person");
+    assert_eq!(person["room"], "person");
+    assert_eq!(person["label"], "family member");
+
+    // No HOMEOSTAT_DASHBOARD_TILES in this fixture: tiles are unavailable.
+    assert_eq!(model["tiles"], json!(false), "{model}");
+
     // The page itself is served.
     let (status, _) = http_request(&addr, "GET", "/", &[], None);
     assert_eq!(status, 200);
+
+    // Vendored map assets are served, allowlisted by filename.
+    for name in ["leaflet.js", "leaflet.css", "protomaps-leaflet.js"] {
+        let (status, _) = http_request(&addr, "GET", &format!("/assets/{name}"), &[], None);
+        assert_eq!(status, 200, "asset {name}");
+    }
+    let (status, _) = http_request(&addr, "GET", "/assets/dashboard.py", &[], None);
+    assert_eq!(status, 404, "unlisted asset must 404");
+
+    // No tiles configured: the endpoint 404s rather than pretending.
+    let (status, _) = http_request(&addr, "GET", "/tiles.pmtiles", &[], None);
+    assert_eq!(status, 404, "tiles.pmtiles without HOMEOSTAT_DASHBOARD_TILES");
 
     // 2. Command path: POST -> manual-band publish -> reflector echoes state.
     let echo = observer
@@ -244,6 +324,16 @@ async fn dashboard_serves_the_family_surface() {
     );
     assert_eq!(status, 400, "{reply}");
 
+    // A person entity is never commandable: not in COMMANDABLE at all.
+    let (status, reply) = http_request(
+        &addr,
+        "POST",
+        "/api/cmd",
+        &[("X-Homeostat", "family")],
+        Some(&json!({"room": "person", "entity": "family_member", "aspect": "lat", "value": 1.0})),
+    );
+    assert_eq!(status, 400, "person entity must refuse commands: {reply}");
+
     // 3. Parameter path: in-constraint persists, out-of-constraint refused.
     let (status, reply) = http_request(
         &addr,
@@ -293,4 +383,59 @@ async fn dashboard_serves_the_family_surface() {
     assert_eq!(status, 403, "foreign Host must be refused");
 
     sup.shutdown();
+}
+
+/// 5. With HOMEOSTAT_DASHBOARD_TILES set, /tiles.pmtiles serves the file —
+/// in full, and as a Range-respecting partial response — and /api/model
+/// says so.
+#[tokio::test(flavor = "multi_thread")]
+async fn dashboard_serves_configured_tiles() {
+    let port = common::free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let tiles_path =
+        std::env::temp_dir().join(format!("homeostat-dashboard-tiles-{port}.pmtiles"));
+    let contents = b"fake-pmtiles-bytes-0123456789";
+    std::fs::write(&tiles_path, contents).expect("write fixture tiles file");
+
+    let mut sup = Supervisor::spawn_with_env(
+        FIXTURE,
+        &[
+            ("HOMEOSTAT_DASHBOARD_PORT", &port.to_string()),
+            (
+                "HOMEOSTAT_DASHBOARD_TILES",
+                tiles_path.to_str().expect("utf-8 path"),
+            ),
+        ],
+    );
+    let observer = sup.observer().await;
+    let mut dash = health_watch(&observer, "dashboard").await;
+    await_health(&mut dash, Duration::from_secs(180), |h| {
+        h.status == HealthStatus::Running
+    })
+    .await;
+
+    let (status, model) = http_request(&addr, "GET", "/api/model", &[], None);
+    assert_eq!(status, 200, "{model}");
+    assert_eq!(model["tiles"], json!(true), "{model}");
+
+    let (status, headers, body) = http_request_bytes(&addr, "/tiles.pmtiles", &[]);
+    assert_eq!(status, 200);
+    assert_eq!(body, contents);
+    assert!(
+        headers
+            .iter()
+            .any(|(k, v)| k.eq_ignore_ascii_case("accept-ranges") && v == "bytes"),
+        "{headers:?}"
+    );
+
+    let (status, headers, body) = http_request_bytes(&addr, "/tiles.pmtiles", &[("Range", "bytes=0-4")]);
+    assert_eq!(status, 206, "{headers:?}");
+    assert_eq!(body, &contents[..5]);
+    assert!(
+        headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("content-range")),
+        "{headers:?}"
+    );
+
+    sup.shutdown();
+    let _ = std::fs::remove_file(&tiles_path);
 }
