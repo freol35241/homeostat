@@ -309,10 +309,11 @@ crosshair tooltip, entity state, unit health. Commands leave at the
 manual band (the family always wins); parameter writes go through the
 core's validating queryable; access is local-only by design (LAN /
 WireGuard, no accounts — and family-tier only: nothing structural is
-reachable from a browser). Details:
+reachable from a browser). The map over person entities (OwnTracks,
+self-hosted tiles) is settled design, not yet built. Details:
 [design record §Dashboard](docs/design.md#dashboard-settled-2026-07-15).
 
-![The dashboard: Now view with a history detail panel, desktop and phone](docs/wireframes/dashboard-mvp.svg)
+![The dashboard's Now view, desktop and phone: signal tiles, people, the planned map, and the deviations feed](docs/wireframes/wireframe-hybrid-now.svg)
 
 ## Status
 
