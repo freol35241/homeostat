@@ -1,0 +1,22 @@
+schema = 1
+
+[unit]
+name = "owntracks"
+kind = "adapter"
+description = "OwnTracks phone location bridge"
+
+[runtime]
+command = "uv run units/owntracks.py"
+restart = "always"
+shutdown_grace_s = 5
+
+[discovery]
+mode = "static"
+endpoint = "mqtt://mosquitto:1883"
+
+[bus.publishes]
+state = { key = "home/state/{room}/{entity}/**" }
+discovery = { key = "home/discovery/owntracks" }
+
+[entities]
+dir = "entities/owntracks/"

@@ -1,0 +1,10 @@
+schema = 1
+
+[entity]
+id = "alice/phone"
+capability = "person"
+room = "person"
+
+[write_policy]
+mode = "shared"
+owner = "owntracks"

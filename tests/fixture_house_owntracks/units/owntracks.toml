@@ -1,0 +1,22 @@
+schema = 1
+
+[unit]
+name = "owntracks"
+kind = "adapter"
+description = "OwnTracks adapter under test"
+
+[runtime]
+command = "uv run ../../adapters/owntracks.py"
+restart = "always"
+shutdown_grace_s = 5
+
+[discovery]
+mode = "static"
+endpoint = "mqtt://127.0.0.1:${HOMEOSTAT_TEST_MQTT_PORT}"
+
+[bus.publishes]
+state = { key = "home/state/{room}/{entity}/**" }
+discovery = { key = "home/discovery/owntracks" }
+
+[entities]
+dir = "entities/owntracks/"

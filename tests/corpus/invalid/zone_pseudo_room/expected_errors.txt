@@ -1,0 +1,1 @@
+error[zone-pseudo-room] everywhere: zone includes pseudo-room "person" (zones.toml)

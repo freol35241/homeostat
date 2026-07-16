@@ -1,0 +1,13 @@
+schema = 1
+
+[entity]
+# id is the two OwnTracks topic segments (user/device); deliberately not
+# the entity name, so the tests prove binding goes through the id.
+id = "alice/phone"
+capability = "person"
+features = []
+room = "person"
+
+[write_policy]
+mode = "shared"
+owner = "owntracks"

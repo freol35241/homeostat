@@ -198,7 +198,14 @@ fn check_zones(house: &House, errors: &mut Vec<ValidationError>) {
             ));
         }
         for room in members {
-            if !rooms.contains(&room.as_str()) {
+            if PSEUDO_ROOMS.contains(&room.as_str()) {
+                errors.push(ValidationError::new(
+                    "zone-pseudo-room",
+                    zone,
+                    format!("zone includes pseudo-room \"{room}\""),
+                    file.clone(),
+                ));
+            } else if !rooms.contains(&room.as_str()) {
                 errors.push(ValidationError::new(
                     "zone-unknown-room",
                     zone,
