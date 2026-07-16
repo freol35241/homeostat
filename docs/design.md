@@ -962,18 +962,29 @@ the exploration that produced it):
   adapter benefits. Unknown aspects render generically (read-only
   value, history if recorded) rather than becoming invisible.
 - **Map and person entities.** OwnTracks (or similar) is just another
-  adapter, binding `person` entities that publish a location aspect.
+  adapter, binding `person` entities that publish location aspects.
   The map is the first widget that is a view over every entity with a
   location aspect rather than a per-entity row; it appears on `Now`
   iff any exist. The key-space reservation this forces: persons move,
   so the room-keyed space gains one reserved pseudo-room — person
-  entity files set `room = "people"` and their state lives at
-  `home/state/people/{entity}/…`; `people` can never be a physical
+  entity files set `room = "person"` and their state lives at
+  `home/state/person/{entity}/…`; `person` can never be a physical
   room or appear in a zone. Which physical room a person is in, when
   derivable, is state, never structure. Map tiles are self-hosted (a
   PMTiles region extract served by the dashboard unit — no tile
   server): fetching public tile CDNs would leak family positions as
   tile coordinates, exactly what local-only exists to prevent.
+  Settled 2026-07-16: location is scalar aspects (`lat`, `lon`,
+  `accuracy`, `battery`), not one composite object — the recorder
+  stores scalars only, so per-aspect keys make position history free;
+  atomicity of a fix was judged worth less than trails. OwnTracks
+  reaches the house over MQTT via the existing broker (the
+  zigbee2mqtt pattern), not HTTP mode — retained messages give
+  last-known position across restarts and no second ingress surface.
+  The map library (Leaflet + protomaps-leaflet) is vendored into the
+  repo and served by the dashboard unit at `/assets/` — dashboard.html
+  stays a hand-editable file and runtime stays fetch-free, but the
+  strict one-file property is traded away.
 
 ## Voice (later phase)
  

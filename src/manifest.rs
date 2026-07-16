@@ -10,6 +10,7 @@ pub const CAPABILITIES: &[&str] = &[
     "cover",
     "light",
     "lock",
+    "person",
     "presence",
     "sensor",
     "switch",
