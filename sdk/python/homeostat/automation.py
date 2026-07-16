@@ -62,8 +62,9 @@ class Context:
         manifest = tomllib.loads((root / "units" / f"{unit}.toml").read_text())
         bus = manifest.get("bus", {})
         self._subscribes: dict[str, str] = bus.get("subscribes", {})
-        self._publishes: dict[str, str] = {
-            name: spec["key"] for name, spec in bus.get("publishes", {}).items()
+        self._publishes: dict[str, dict] = {
+            name: {"key": spec["key"], "priority": spec.get("priority")}
+            for name, spec in bus.get("publishes", {}).items()
         }
         self._param_specs: dict[str, dict] = manifest.get("params", {})
         self._zones: dict[str, list[str]] = {}
@@ -138,8 +139,11 @@ class Context:
     ) -> None:
         """Publishes through a `[bus.publishes]` expression to one concrete
         key. Literal expression segments are defaults; wildcard segments
-        must be named via room/entity/aspect."""
-        expr = self._publishes[binding]
+        must be named via room/entity/aspect. cmd-class publishes are
+        wrapped in the envelope automatically (priority from the manifest's
+        publish declaration, actor this unit)."""
+        spec = self._publishes[binding]
+        expr = spec["key"]
         segments = expr.split("/")
         if segments[1] in ("state", "cmd"):
             slots = {"room": room, "entity": entity, "aspect": aspect}
@@ -161,6 +165,14 @@ class Context:
         )
         if not covered:
             raise ValueError(f"key {key!r} is outside the declared {expr!r}")
+        if segments[1] == "cmd":
+            priority = spec["priority"]
+            if priority is None:
+                raise ValueError(
+                    f"publish {binding!r} is a cmd publish with no priority "
+                    "declared in the manifest"
+                )
+            value = keys.cmd_envelope(value, priority, self.unit)
         self._session.put_json(key, value)
 
     def health_event(self, kind: str, **fields: Any) -> None:

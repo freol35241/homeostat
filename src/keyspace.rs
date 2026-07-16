@@ -2,7 +2,7 @@ use std::fmt;
 
 /// `home/{class}/...` — the classes the core owns.
 pub const CLASSES: &[&str] =
-    &["state", "cmd", "config", "meta", "health", "clock", "history", "discovery"];
+    &["state", "cmd", "arbiter", "config", "meta", "health", "clock", "history", "discovery"];
 
 /// Reserved pseudo-rooms for non-spatial entities.
 pub const PSEUDO_ROOMS: &[&str] = &["global", "person"];
@@ -78,7 +78,7 @@ impl KeyExpr {
     }
 
     /// Checks conformance with `home/{class}/{room}/{entity}/{aspect}` (for
-    /// `state`/`cmd`) or `home/{class}/...` (other classes).
+    /// `state`/`cmd`/`arbiter`) or `home/{class}/...` (other classes).
     pub fn check_schema(&self, raw: &str) -> Result<(), String> {
         match self.0.first() {
             Some(Segment::Literal(h)) if h == "home" => {}
@@ -91,7 +91,7 @@ impl KeyExpr {
             }
             _ => return Err(format!("\"{raw}\" needs a literal class segment after \"home/\"")),
         };
-        let min_len = if matches!(class, "state" | "cmd") { 5 } else { 3 };
+        let min_len = if matches!(class, "state" | "cmd" | "arbiter") { 5 } else { 3 };
         if !self.has_any_rec() && self.0.len() < min_len {
             if min_len == 5 {
                 return Err(format!(
@@ -103,9 +103,9 @@ impl KeyExpr {
         Ok(())
     }
 
-    /// The room slot exists only for `state`/`cmd` keys.
+    /// The room slot exists only for `state`/`cmd`/`arbiter` keys.
     pub fn room_slot(&self) -> Option<&Segment> {
-        if matches!(self.class(), Some("state") | Some("cmd")) {
+        if matches!(self.class(), Some("state") | Some("cmd") | Some("arbiter")) {
             self.0.get(2)
         } else {
             None
@@ -180,6 +180,7 @@ mod tests {
             "home/state/kitchen/lamp/on",
             "home/state/*/that_lamp/**",
             "home/cmd/{room}/{entity}/**",
+            "home/arbiter/{room}/{entity}/**",
         ] {
             assert_eq!(expr(s).to_string(), s);
         }
@@ -193,6 +194,8 @@ mod tests {
             "home/cmd/downstairs/**/light",
             "home/state/**",
             "home/state/{room}/{entity}/**",
+            "home/arbiter/{room}/{entity}/**",
+            "home/arbiter/hallway/front_door_lock/lock",
         ] {
             expr(s).check_schema(s).unwrap();
         }
@@ -203,6 +206,16 @@ mod tests {
         assert!(expr("house/state/a/b/c").check_schema("house/state/a/b/c").is_err());
         assert!(expr("home/telemetry/a/b/c").check_schema("home/telemetry/a/b/c").is_err());
         assert!(expr("home/state/kitchen").check_schema("home/state/kitchen").is_err());
+        assert!(expr("home/arbiter/hallway").check_schema("home/arbiter/hallway").is_err());
+    }
+
+    #[test]
+    fn arbiter_room_slot_and_reserved_word() {
+        assert_eq!(
+            expr("home/arbiter/hallway/front_door_lock/lock").room_slot(),
+            Some(&Segment::Literal("hallway".to_string()))
+        );
+        assert!(is_reserved_word("arbiter"));
     }
 
     #[test]

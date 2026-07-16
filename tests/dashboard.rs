@@ -30,6 +30,7 @@ use serde_json::{json, Value};
 use common::{await_health, health_watch, Supervisor};
 
 const FIXTURE: &str = "tests/fixture_house_dashboard";
+const LAMP_CMD: &str = "home/cmd/livingroom/lamp/on";
 const LAMP_STATE: &str = "home/state/livingroom/lamp/on";
 const OFF_TIME_KEY: &str = "home/config/evening_lights/off_time";
 
@@ -268,7 +269,12 @@ async fn dashboard_serves_the_family_surface() {
     let (status, _) = http_request(&addr, "GET", "/tiles.pmtiles", &[], None);
     assert_eq!(status, 404, "tiles.pmtiles without HOMEOSTAT_DASHBOARD_TILES");
 
-    // 2. Command path: POST -> manual-band publish -> reflector echoes state.
+    // 2. Command path: POST -> a manual-band envelope on home/cmd (priority
+    // and actor stamped server-side) -> reflector echoes the value as state.
+    let cmd_sub = observer
+        .declare_subscriber(LAMP_CMD)
+        .await
+        .expect("cmd subscriber");
     let echo = observer
         .declare_subscriber(LAMP_STATE)
         .await
@@ -281,6 +287,16 @@ async fn dashboard_serves_the_family_surface() {
         Some(&json!({"room": "livingroom", "entity": "lamp", "aspect": "on", "value": true})),
     );
     assert_eq!(status, 200, "{reply}");
+    let cmd_sample = tokio::time::timeout(Duration::from_secs(10), cmd_sub.recv_async())
+        .await
+        .expect("cmd envelope observed within 10s")
+        .expect("sample");
+    let envelope: Value = serde_json::from_slice(&cmd_sample.payload().to_bytes()).expect("json");
+    assert_eq!(
+        envelope,
+        json!({"value": true, "priority": "manual", "actor": "dashboard"}),
+        "the dashboard stamps its own manifest priority and unit name"
+    );
     let sample = tokio::time::timeout(Duration::from_secs(10), echo.recv_async())
         .await
         .expect("reflector echoed the command")

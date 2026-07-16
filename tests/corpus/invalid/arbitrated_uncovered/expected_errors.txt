@@ -1,0 +1,1 @@
+error[arbitrated-uncovered] front_door_lock: arbitrated entity "front_door_lock" has no arbiter-class publish covering it (entities/zigbee/front_door_lock.toml)

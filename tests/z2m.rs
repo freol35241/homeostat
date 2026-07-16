@@ -237,7 +237,10 @@ async fn bus_commands_translate_to_z2m_set() {
     mqtt.subscribe("zigbee2mqtt/+/set").await;
 
     observer
-        .put("home/cmd/kitchen/kitchen_lamp/on", "true")
+        .put(
+            "home/cmd/kitchen/kitchen_lamp/on",
+            json!({"value": true, "priority": "manual", "actor": "test"}).to_string(),
+        )
         .await
         .expect("cmd put");
     let (topic, payload) = mqtt
@@ -249,7 +252,10 @@ async fn bus_commands_translate_to_z2m_set() {
     assert_eq!(payload, json!({"state": "ON"}));
 
     observer
-        .put("home/cmd/kitchen/kitchen_lamp/brightness", "200")
+        .put(
+            "home/cmd/kitchen/kitchen_lamp/brightness",
+            json!({"value": 200, "priority": "manual", "actor": "test"}).to_string(),
+        )
         .await
         .expect("cmd put");
     let (topic, payload) = mqtt
@@ -262,7 +268,10 @@ async fn bus_commands_translate_to_z2m_set() {
 
     // The adapter does not even subscribe to lock command keys.
     observer
-        .put("home/cmd/hallway/front_door/locked", "true")
+        .put(
+            "home/cmd/hallway/front_door/locked",
+            json!({"value": true, "priority": "manual", "actor": "test"}).to_string(),
+        )
         .await
         .expect("cmd put");
     let silence = mqtt.next_message(Duration::from_millis(1500)).await;
@@ -384,6 +393,48 @@ async fn bridge_inventory_published_as_discovery() {
     )
     .expect("mirrored discovery is JSON");
     assert_eq!(mirrored, doc, "mirror serves the same document");
+
+    sup.shutdown();
+}
+
+/// (f) The cmd contract, THE CONTRACT: every home/cmd/** payload is an
+/// envelope `{value, priority, actor}`. A bare value with no envelope is
+/// dropped with a health event (reason "invalid-command") instead of
+/// reaching MQTT, and the adapter keeps translating afterwards.
+#[tokio::test(flavor = "multi_thread")]
+async fn envelope_less_command_drops_with_health_event() {
+    let (mosquitto, mut sup, observer) = setup().await;
+    let event_sub = observer
+        .declare_subscriber(EVENT_KEY)
+        .await
+        .expect("event subscriber");
+    let mut mqtt = Mqtt::connect(mosquitto.port, "test-no-envelope").await;
+    mqtt.subscribe("zigbee2mqtt/+/set").await;
+
+    // A bare value (the pre-envelope shape) on a cmd key is not an envelope.
+    observer
+        .put("home/cmd/kitchen/kitchen_lamp/on", "true")
+        .await
+        .expect("cmd put");
+    expect_drop_event(&event_sub, "invalid-command").await;
+    let silence = mqtt.next_message(Duration::from_millis(1500)).await;
+    assert!(silence.is_none(), "envelope-less command reached MQTT: {silence:?}");
+
+    // A properly enveloped command still works.
+    observer
+        .put(
+            "home/cmd/kitchen/kitchen_lamp/on",
+            json!({"value": false, "priority": "manual", "actor": "test"}).to_string(),
+        )
+        .await
+        .expect("cmd put");
+    let (topic, payload) = mqtt
+        .next_message(Duration::from_secs(10))
+        .await
+        .expect("set publish for enveloped command");
+    assert_eq!(topic, "zigbee2mqtt/lamp_kitchen_1/set");
+    let payload: Value = serde_json::from_slice(&payload).expect("set payload is JSON");
+    assert_eq!(payload, json!({"state": "OFF"}));
 
     sup.shutdown();
 }

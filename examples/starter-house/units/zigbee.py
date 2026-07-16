@@ -6,7 +6,7 @@
 # ]
 #
 # [tool.uv.sources]
-# homeostat = { git = "https://github.com/freol35241/homeostat", subdirectory = "sdk/python", tag = "v0.2.0" }
+# homeostat = { git = "https://github.com/freol35241/homeostat", subdirectory = "sdk/python", tag = "v0.3.0" }
 # ///
 """Zigbee2MQTT adapter: a translating subscriber.
 
@@ -141,9 +141,14 @@ def main():
             key = str(sample.key_expr)
             aspect = key.split("/", 4)[4]
             try:
-                value = json.loads(sample.payload.to_bytes())
+                payload = json.loads(sample.payload.to_bytes())
             except ValueError:
                 session.health_event("drop", reason="malformed-payload", key=key)
+                return
+            try:
+                value = keys.parse_cmd_envelope(payload)
+            except ValueError:
+                session.health_event("drop", reason="invalid-command", key=key)
                 return
             if aspect == "on":
                 if not isinstance(value, bool):

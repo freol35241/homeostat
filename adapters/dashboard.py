@@ -283,7 +283,10 @@ def make_app(hub: Hub, model: dict, page: Path, assets_dir: Path) -> web.Applica
         allowed = COMMANDABLE.get(spec["capability"], set())
         if aspect not in allowed or (aspect != "on" and aspect not in spec["features"]):
             return json_error(f"{spec['capability']} {entity} takes no {aspect} command")
-        hub.session.put_json(keys.cmd_key(room, entity, aspect), value)
+        # priority "manual": matches this unit's [bus.publishes] declaration
+        # (units/dashboard.toml) — the family always wins over automations.
+        envelope = keys.cmd_envelope(value, "manual", "dashboard")
+        hub.session.put_json(keys.cmd_key(room, entity, aspect), envelope)
         return web.json_response({"ok": True})
 
     async def api_param(request: web.Request) -> web.Response:

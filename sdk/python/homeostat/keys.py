@@ -1,8 +1,10 @@
 """Key builders for the homeostat key space (mirrors the Rust src/bus.rs).
 
-Schema: home/{class}/{room}/{entity}/{aspect} for state and cmd;
+Schema: home/{class}/{room}/{entity}/{aspect} for state, cmd, and arbiter;
 home/health/{unit}[...] and home/meta/{unit}/... for supervision.
 """
+
+from typing import Any
 
 ENV_UNIT = "HOMEOSTAT_UNIT"
 ENV_BUS = "HOMEOSTAT_BUS"
@@ -19,6 +21,41 @@ def cmd_key(room: str, entity: str, aspect: str) -> str:
 def cmd_keyexpr(room: str, entity: str) -> str:
     """Key expression matching every command aspect of one entity."""
     return f"home/cmd/{room}/{entity}/**"
+
+
+def arbiter_key(room: str, entity: str, aspect: str) -> str:
+    """The arbiter's grant output for an arbitrated entity (docs/design.md,
+    Arbitrated mode): the cmd shape, its own reserved class."""
+    return f"home/arbiter/{room}/{entity}/{aspect}"
+
+
+def arbiter_keyexpr(room: str, entity: str) -> str:
+    """Key expression matching every arbiter aspect of one entity."""
+    return f"home/arbiter/{room}/{entity}/**"
+
+
+CMD_PRIORITIES = ("automation", "agent", "family", "manual")
+
+
+def cmd_envelope(value: Any, priority: str, actor: str) -> dict:
+    """Builds a home/cmd/** payload (docs/design.md, Arbitrated mode): every
+    cmd payload is an envelope, priority stamped from the publishing unit's
+    manifest declaration, actor the unit name."""
+    return {"value": value, "priority": priority, "actor": actor}
+
+
+def parse_cmd_envelope(payload: Any) -> Any:
+    """Validates a cmd envelope, returning its value. Raises ValueError on
+    anything malformed: not an object, missing value or priority, or an
+    unknown priority — callers drop these with an "invalid-command" health
+    event."""
+    if not isinstance(payload, dict):
+        raise ValueError("cmd payload is not a JSON object")
+    if "value" not in payload or "priority" not in payload:
+        raise ValueError("cmd envelope missing value or priority")
+    if payload["priority"] not in CMD_PRIORITIES:
+        raise ValueError(f"unknown priority {payload['priority']!r}")
+    return payload["value"]
 
 
 def config_key(unit: str, param: str) -> str:

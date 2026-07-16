@@ -147,7 +147,8 @@ names containing `/` are unsupported.
 
 ### Bus payload conventions
 
-Payloads on `state` and `cmd` keys are bare JSON values.
+Payloads on `state` keys are bare JSON values; `cmd` keys carry the cmd
+envelope `{value, priority, actor}` (see Arbitrated mode).
 
 State: a z2m JSON object fans out per top-level field to
 `home/state/{room}/{entity}/{field}`. The z2m `state` field is normalized —
@@ -160,9 +161,10 @@ Other scalar fields pass through under their z2m names (`brightness`,
 `temperature`, `occupancy`, ...). Composite fields (objects/arrays, e.g.
 `color`) are deferred.
 
-Commands: the payload on `home/cmd/{room}/{entity}/{aspect}` is one JSON
-value. `on` + boolean translates to `{"state": "ON"|"OFF"}`; any other
-aspect passes through as `{aspect: value}` to `zigbee2mqtt/{id}/set`.
+Commands: the payload on `home/cmd/{room}/{entity}/{aspect}` is the cmd
+envelope; the adapter unwraps its `value` and translates. `on` + boolean
+value becomes `{"state": "ON"|"OFF"}`; any other aspect passes through as
+`{aspect: value}` to `zigbee2mqtt/{id}/set`.
 
 Locks are state-only until the arbiter exists: the adapter declares no
 command subscription at all for lock entities — not subscribing IS the
@@ -378,8 +380,9 @@ events(ts, key, payload)   -- index: (key, ts)
 ### Recorded key spaces
 
 - `home/state/**` → samples, class `state`.
-- `home/cmd/**` → samples, class `cmd` — what was commanded, when. "Who"
-  arrives when command payloads carry actors (arbiter phase).
+- `home/cmd/**` → samples, class `cmd` — the envelope's `value` into
+  samples, what was commanded, when; the full envelope into events. "Who"
+  now arrives: command payloads carry actors.
 - `home/health/**` → events: supervisor transitions and unit drop events.
   (Liveliness tokens are not samples and don't appear.)
 - `home/config/**` → events: only *accepted* writes ever land on config
@@ -704,6 +707,28 @@ owner = "zigbee"             # exactly one adapter binds each entity
   Arbitrated entities' adapters accept commands only via the arbiter's
   output key, giving structural runtime enforcement for high-stakes entities
   (locks, heat pump) without Zenoh ACLs.
+  Settled 2026-07-16: the arbiter's output is its own reserved class —
+  `home/arbiter/{room}/{entity}/{aspect}`, the cmd shape — so a wish and a
+  grant can never be confused by a subscription, and writers keep
+  publishing wishes to `home/cmd` without ever learning whether a target
+  is arbitrated. Every cmd payload is an envelope
+  `{value, priority, actor}`: the SDK stamps priority from the unit's own
+  manifest declaration and actor with the unit name, so automation code
+  doesn't change; adapters drop envelope-less commands with a health
+  event; the arbiter forwards the envelope unchanged. The write token is
+  a lease per arbitrated entity: a winning command holds the entity at
+  its band for `hold_minutes` (an arbiter parameter, family-editable);
+  equal-or-higher bands pass and take the hold — a takeover from a
+  strictly lower band publishes a preemption event — lower bands are
+  refused with an event; expiry reopens the entity to automations, so a
+  forgotten override self-heals. Arbiter events land at
+  `home/health/arbiter/event` and are recorded like any health event.
+  Plan-time structure: an adapter's templated cmd subscription expands
+  only over its non-arbitrated bound entities, and a templated
+  arbiter-class subscription expands only over the arbitrated ones — an
+  adapter physically lacks a cmd path to an arbitrated entity, by
+  expansion. An arbitrated entity not covered by some unit's
+  arbiter-class publish is a plan error.
 - Actor tiers: `owner`, `family`, `automation`, `agent`. Grant changes
   require tier >= owner.
 - v1 runtime enforcement is plan-time + trust, except arbitrated entities.

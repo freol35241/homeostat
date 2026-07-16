@@ -141,9 +141,14 @@ def main():
             key = str(sample.key_expr)
             aspect = key.split("/", 4)[4]
             try:
-                value = json.loads(sample.payload.to_bytes())
+                payload = json.loads(sample.payload.to_bytes())
             except ValueError:
                 session.health_event("drop", reason="malformed-payload", key=key)
+                return
+            try:
+                value = keys.parse_cmd_envelope(payload)
+            except ValueError:
+                session.health_event("drop", reason="invalid-command", key=key)
                 return
             if aspect == "on":
                 if not isinstance(value, bool):

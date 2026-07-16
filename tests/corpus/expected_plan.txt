@@ -2,7 +2,7 @@ Homeostat plan
   repo:  examples/house
   world: empty
 
-Units to create (5):
+Units to create (6):
 
 + adapter esphome (units/esphome.toml)
     command: uv run units/esphome.py
@@ -19,6 +19,10 @@ Units to create (5):
     command: uv run units/evening_lights.py
     params:
       off_time  type=time  default=23:00  constraint={after=20:00, before=02:00}  editable_by=family
++ service arbiter (units/arbiter.toml)
+    command: uv run units/arbiter.py
+    params:
+      hold_minutes  type=float  default=30  editable_by=family
 + service dashboard (units/dashboard.toml)
     command: uv run units/dashboard.py --port 8600
 + service recorder (units/recorder.toml)
@@ -37,7 +41,6 @@ Expanded keys:
     -> home/state/kitchen/kitchen_ceiling/**
     -> home/state/livingroom/livingroom_lamp/**
   zigbee subscribes commands: home/cmd/{room}/{entity}/**
-    -> home/cmd/hallway/front_door_lock/**
     -> home/cmd/hallway/hallway_motion/**
     -> home/cmd/kitchen/kitchen_ceiling/**
     -> home/cmd/livingroom/livingroom_lamp/**
@@ -50,6 +53,8 @@ Expanded keys:
     -> home/state/kitchen/**/presence
     -> home/state/livingroom/**/presence
     -> home/state/hallway/**/presence
+  arbiter publishes arbiter: home/arbiter/**
+  arbiter subscribes cmd: home/cmd/**
   dashboard publishes lights: home/cmd/**
   dashboard publishes locks: home/cmd/**
   dashboard subscribes config: home/config/*/*
@@ -72,4 +77,4 @@ Grant table:
     -> kitchen_ceiling  (room=kitchen, write=shared, owner=zigbee)
     -> livingroom_lamp  (room=livingroom, write=exclusive, owner=zigbee)
 
-Plan tier: structural (5 units created, 3 grants added)
+Plan tier: structural (6 units created, 3 grants added)

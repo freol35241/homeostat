@@ -1,0 +1,10 @@
+schema = 1
+
+[entity]
+id = "0x03"
+capability = "lock"
+room = "hallway"
+
+[write_policy]
+mode = "arbitrated"
+owner = "zigbee"

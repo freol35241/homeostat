@@ -1,7 +1,8 @@
 //! The reflector adapter: mirrors every command back as the corresponding
-//! state (`home/cmd/...` -> `home/state/...`, payload unchanged). Used by
+//! state (`home/cmd/...` -> `home/state/...`, the envelope's value). Used by
 //! the evening-lights fixture houses as the world the automation acts on:
-//! a light that instantly obeys.
+//! a light that instantly obeys. Envelope-less commands are dropped, like
+//! any real adapter drops invalid commands.
 
 use std::env;
 
@@ -36,7 +37,13 @@ async fn main() {
                     .key_expr()
                     .as_str()
                     .replacen("home/cmd/", "home/state/", 1);
-                let _ = session.put(key, sample.payload().to_bytes().to_vec()).await;
+                let Ok(envelope) =
+                    serde_json::from_slice::<serde_json::Value>(&sample.payload().to_bytes())
+                else {
+                    continue;
+                };
+                let Some(value) = envelope.get("value") else { continue };
+                let _ = session.put(key, value.to_string()).await;
             }
             _ = term.recv() => break,
         }

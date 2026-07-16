@@ -1,0 +1,27 @@
+schema = 1
+
+[unit]
+name = "arbiter"
+kind = "service"
+description = "Holds the write token for arbitrated entities"
+
+[runtime]
+command = "uv run units/arbiter.py"
+restart = "always"
+shutdown_grace_s = 5
+
+[bus.subscribes]
+cmd = "home/cmd/**"
+
+[bus.publishes]
+arbiter = { key = "home/arbiter/**" }
+
+[params.hold_minutes]
+type = "float"
+default = 30
+editable_by = "family"
+
+[naming]
+sv = "skiljedomare"
+en = "arbiter"
+aliases = []

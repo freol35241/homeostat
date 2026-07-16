@@ -1,0 +1,14 @@
+schema = 1
+
+[entity]
+id = "front-door-1"
+capability = "lock"
+features = []
+room = "hallway"
+
+[naming]
+en = "front door lock"
+
+[write_policy]
+mode = "arbitrated"
+owner = "reflector"

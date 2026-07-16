@@ -144,16 +144,23 @@ async fn cache_read_eventually(session: &zenoh::Session, key: &str, timeout: Dur
     }
 }
 
-/// Expects the lamp-off command within the timeout.
+/// Expects the lamp-off command within the timeout: a cmd envelope whose
+/// value is `false`, priority and actor stamped from the automation's own
+/// manifest declaration (docs/design.md, Arbitrated mode) — no automation
+/// code change needed for this, it's the SDK's Context.publish.
 async fn expect_lamp_off(sub: &Sub, timeout: Duration) {
     let sample = tokio::time::timeout(timeout, sub.recv_async())
         .await
         .expect("lamp command within timeout")
         .expect("cmd stream open");
     assert_eq!(sample.key_expr().as_str(), LAMP_CMD);
-    let value: Value =
+    let envelope: Value =
         serde_json::from_slice(&sample.payload().to_bytes()).expect("cmd payload is JSON");
-    assert_eq!(value, json!(false), "the right command is lights off");
+    assert_eq!(
+        envelope,
+        json!({"value": false, "priority": "automation", "actor": "evening_lights"}),
+        "the right command is lights off, correctly stamped"
+    );
 }
 
 /// Asserts no lamp command arrives within the window.

@@ -217,9 +217,19 @@ async fn state_lands_typed_in_store() {
         ]
     );
 
-    // Commands are recorded in the same table under class 'cmd'.
+    // A health event subscriber, reused below for the invalid-command and
+    // non-scalar drop scenarios.
+    let events = observer
+        .declare_subscriber("home/health/recorder/event")
+        .await
+        .expect("event subscriber");
+
+    // Commands are recorded in the same table under class 'cmd' — the
+    // envelope's value unwrapped into samples, the full envelope into
+    // events: the "who" audit design.md anticipated, priority and actor
+    // now travel with every command.
     let cmd = matched_publisher(&observer, "home/cmd/attic/probe/on").await;
-    put(&cmd, json!(false)).await;
+    put(&cmd, json!({"value": false, "priority": "automation", "actor": "test"})).await;
     let rows = rows_eventually(
         &db,
         "SELECT kind, value FROM samples WHERE class = 'cmd' AND entity = 'probe'",
@@ -231,6 +241,36 @@ async fn state_lands_typed_in_store() {
         SqlValue::Text("bool".into()),
         SqlValue::Integer(0),
     ]]);
+    let event_rows = rows_eventually(
+        &db,
+        "SELECT payload FROM events WHERE key = 'home/cmd/attic/probe/on'",
+        1,
+        Duration::from_secs(10),
+    )
+    .await;
+    let SqlValue::Text(envelope_text) = &event_rows[0][0] else {
+        panic!("event payload is not text: {:?}", event_rows[0][0]);
+    };
+    let envelope: Value = serde_json::from_str(envelope_text).expect("event payload is JSON");
+    assert_eq!(
+        envelope,
+        json!({"value": false, "priority": "automation", "actor": "test"}),
+        "the full envelope lands in events, not just the unwrapped value"
+    );
+
+    // An envelope-less cmd payload (the pre-envelope bare-value shape) is
+    // invalid traffic: dropped with a health event, never a samples row.
+    let bad_cmd = matched_publisher(&observer, "home/cmd/attic/probe/brightness").await;
+    put(&bad_cmd, json!(42)).await;
+    let event = await_event(&events, Duration::from_secs(10), |e| {
+        e["kind"] == "drop" && e["key"] == "home/cmd/attic/probe/brightness"
+    })
+    .await;
+    assert_eq!(event["reason"], json!("invalid-command"));
+    assert!(
+        read_rows(&db, "SELECT * FROM samples WHERE aspect = 'brightness'").is_empty(),
+        "envelope-less cmd payload became a row"
+    );
 
     // An accepted config edit lands in the events audit table (rejects
     // never reach the bus, so they can't land — pinned in step 4).
@@ -255,10 +295,6 @@ async fn state_lands_typed_in_store() {
     .await;
 
     // A non-scalar payload is dropped with a health event, never a row.
-    let events = observer
-        .declare_subscriber("home/health/recorder/event")
-        .await
-        .expect("event subscriber");
     let color = matched_publisher(&observer, "home/state/attic/probe/color").await;
     put(&color, json!({"r": 255, "g": 0, "b": 0})).await;
     let event = await_event(&events, Duration::from_secs(10), |e| e["kind"] == "drop").await;

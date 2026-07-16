@@ -14,7 +14,8 @@ named by [discovery].endpoint ("sqlite:<path>", relative to the house
 root). NOT a naive bus mirror: state/cmd payloads are decoded and typed on
 the way in — series identity is (class, entity, aspect), room is a tag, so
 an entity move is a tag transition on a continuous series. Health and
-config keys land raw in an events audit table.
+config keys land raw in an events audit table; so does every cmd envelope
+(alongside its unwrapped value in samples) — the "who" audit.
 
 Timestamps are recorder receive time (µs, UTC), assigned before any
 buffering, so a backend outage never distorts history. A failed flush
@@ -40,7 +41,7 @@ from pathlib import Path
 
 import zenoh
 
-from homeostat import house, session
+from homeostat import house, keys, session
 
 BUFFER_LIMIT = 10_000
 RETRY_S = 1.0
@@ -188,10 +189,18 @@ class Recorder:
             self.sess.health_event("drop", reason="off-schema-key", key=key)
             return
         try:
-            value = json.loads(sample.payload.to_bytes())
+            payload = json.loads(sample.payload.to_bytes())
         except ValueError:
             self.sess.health_event("drop", reason="malformed-payload", key=key)
             return
+        if parts[1] == "cmd":
+            try:
+                value = keys.parse_cmd_envelope(payload)
+            except ValueError:
+                self.sess.health_event("drop", reason="invalid-command", key=key)
+                return
+        else:
+            value = payload
         kind_value = typed(value)
         if kind_value is None:
             self.sess.health_event("drop", reason="non-scalar", key=key)
@@ -199,6 +208,12 @@ class Recorder:
         kind, stored = kind_value
         row = (ts, parts[1], parts[2], parts[3], "/".join(parts[4:]), kind, stored)
         self.writer.enqueue("samples", row)
+        if parts[1] == "cmd":
+            # The "who" audit design.md anticipated: the full envelope
+            # (value, priority, actor) lands in events alongside the
+            # unwrapped value in samples.
+            raw = sample.payload.to_bytes().decode("utf-8", errors="replace")
+            self.writer.enqueue("events", (ts, key, raw))
 
     def answer(self, query: zenoh.Query) -> None:
         try:
