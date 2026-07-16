@@ -1,0 +1,25 @@
+schema = 1
+
+[unit]
+name = "esphome"
+kind = "adapter"
+description = "ESPHome adapter under test"
+
+[runtime]
+command = "uv run ../../adapters/esphome.py"
+restart = "always"
+shutdown_grace_s = 5
+
+[discovery]
+mode = "mdns"
+service = "_esphomelib._tcp"
+
+[bus.publishes]
+state = { key = "home/state/{room}/{entity}/**" }
+discovery = { key = "home/discovery/esphome" }
+
+[bus.subscribes]
+commands = "home/cmd/{room}/{entity}/**"
+
+[entities]
+dir = "entities/esphome/"

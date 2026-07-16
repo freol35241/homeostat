@@ -1,0 +1,13 @@
+schema = 1
+
+[entity]
+id = "relay-1"
+capability = "switch"
+room = "livingroom"
+
+[naming]
+en = "relay switch"
+
+[write_policy]
+mode = "shared"
+owner = "reflector"

@@ -944,7 +944,7 @@ function widgetGeneric(entity) {
 }
 
 function widgetForEntity(entity) {
-  if (entity.capability === 'light') return widgetForLight(entity);
+  if (entity.capability === 'light' || entity.capability === 'switch') return widgetForLight(entity);
   if (entity.capability === 'presence') return widgetForPresence(entity);
   if (entity.capability === 'lock') return widgetForLock(entity);
   if (entity.capability === 'sensor') return widgetForSensor(entity);

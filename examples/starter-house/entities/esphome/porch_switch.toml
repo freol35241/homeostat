@@ -1,0 +1,17 @@
+schema = 1
+
+[entity]
+# The ESPHome device name and its switch's object_id: two segments, like
+# OwnTracks ("porch" is the node's configured `name:` in its YAML).
+id = "porch/relay"
+capability = "switch"
+room = "porch"
+
+[naming]
+sv = "verandabrytaren"
+en = "porch switch"
+aliases = []
+
+[write_policy]
+mode = "shared"
+owner = "esphome"

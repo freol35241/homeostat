@@ -1018,6 +1018,33 @@ the exploration that produced it):
   stays a hand-editable file and runtime stays fetch-free, but the
   strict one-file property is traded away.
 
+## ESPHome adapter (settled 2026-07-16)
+
+- **Native API, not MQTT mode**: TCP 6053 via aioesphomeapi — no broker
+  dependency, matches encryption-default device configs, and the same
+  dialect serves the voice satellites later. The adapter is asyncio (the
+  dashboard's precedent), one connection per bound device with the
+  library's reconnect logic.
+- **Entity binding**: `id = "{device}/{object_id}"` — the OwnTracks
+  two-segment shape. The device half resolves via mDNS
+  (`{device}.local`) by default.
+- **Credentials**: `HOMEOSTAT_ESPHOME_DEVICES` points at a TOML file
+  outside the repo carrying each device's Noise PSK and an optional
+  host override; a device without an entry is assumed plaintext.
+  Device addresses and keys never enter the repo (the boundary test).
+- **v1 vocabulary, grown by need**: switch, light (brightness /
+  color_temp features), sensor, binary_sensor — motion/occupancy device
+  classes normalize to presence, the z2m rule (adapter-native
+  vocabulary does not leak onto the bus). Unmapped types land in
+  discovery carrying their raw type: visible, not translated.
+- **Discovery**: the adapter connects only to bound devices; an mDNS
+  browse of `_esphomelib._tcp` is best-effort input to the
+  home/discovery/{unit} feed (every seen device, bound or not, with a
+  suggested stanza), never a prerequisite for the bound connections.
+- **Commands**: cmd envelopes exactly like z2m; an arbitrated ESPHome
+  entity gets the arbiter-output subscription by the same plan-time
+  expansion rule. Nothing new.
+
 ## Voice (later phase)
  
 - Two-tier command path: a fast-path intent matcher (high precision,

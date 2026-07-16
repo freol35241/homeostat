@@ -1,0 +1,10 @@
+schema = 1
+
+[entity]
+id = "shed/relay"
+capability = "switch"
+room = "shed"
+
+[write_policy]
+mode = "shared"
+owner = "esphome"

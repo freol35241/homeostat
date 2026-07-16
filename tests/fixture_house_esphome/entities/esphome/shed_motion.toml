@@ -1,0 +1,10 @@
+schema = 1
+
+[entity]
+id = "shed/motion"
+capability = "presence"
+room = "shed"
+
+[write_policy]
+mode = "shared"
+owner = "esphome"

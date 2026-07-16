@@ -30,7 +30,7 @@ class Entity:
 @dataclass
 class AdapterConfig:
     unit: str
-    endpoint: str
+    endpoint: str | None
     entities: list[Entity]
 
 
@@ -110,7 +110,10 @@ def load_adapter(unit: str, root: str | Path = ".") -> AdapterConfig:
     manifest_path = root / "units" / f"{unit}.toml"
     manifest = tomllib.loads(manifest_path.read_text())
 
-    endpoint = load_endpoint(unit, root)
+    # mDNS-discovery adapters (e.g. ESPHome) resolve each device's address
+    # individually and declare no [discovery].endpoint; only the static
+    # (single-endpoint) adapters need this populated.
+    endpoint = load_endpoint(unit, root) if "endpoint" in manifest.get("discovery", {}) else None
 
     entities = []
     entities_dir = root / manifest["entities"]["dir"]

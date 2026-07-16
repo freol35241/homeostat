@@ -378,6 +378,31 @@ async fn dashboard_serves_the_family_surface() {
         "lock command stamps the same manual-band envelope as any other command"
     );
 
+    // A switch command is accepted too: COMMANDABLE now maps switch -> {"on"}
+    // (a reflashed Sonoff relay is toggleable from the dashboard).
+    let switch_cmd_sub = observer
+        .declare_subscriber("home/cmd/livingroom/relay/on")
+        .await
+        .expect("switch cmd subscriber");
+    let (status, reply) = http_request(
+        &addr,
+        "POST",
+        "/api/cmd",
+        &[("X-Homeostat", "family")],
+        Some(&json!({"room": "livingroom", "entity": "relay", "aspect": "on", "value": true})),
+    );
+    assert_eq!(status, 200, "{reply}");
+    let cmd_sample = tokio::time::timeout(Duration::from_secs(10), switch_cmd_sub.recv_async())
+        .await
+        .expect("switch cmd envelope observed within 10s")
+        .expect("sample");
+    let envelope: Value = serde_json::from_slice(&cmd_sample.payload().to_bytes()).expect("json");
+    assert_eq!(
+        envelope,
+        json!({"value": true, "priority": "manual", "actor": "dashboard"}),
+        "switch command stamps the same manual-band envelope as any other command"
+    );
+
     // 3. Parameter path: in-constraint persists, out-of-constraint refused.
     let (status, reply) = http_request(
         &addr,
