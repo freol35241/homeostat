@@ -34,6 +34,17 @@ not the general long tail. No Home Assistant bridge in v1.
 - **Bus: Zenoh.** Pub/sub for live state and commands, queryables for reads,
   storage backends for last-known-value. Localhost and remote processes are
   indistinguishable, so machine placement is not an architectural question.
+  MQTT device traffic stays on its own broker (mosquitto), bridged only by
+  dialect adapters — the zenoh MQTT plugin/bridge was considered and
+  rejected (2026-07-17): broker retain is load-bearing (OwnTracks
+  last-known position, z2m's bridge/devices inventory) and the plugin does
+  not document it; mapping device topics into the zenoh key space would
+  dissolve the adapters-as-only-membrane boundary that keeps the core
+  owning `home/**`; and since the supervisor IS the router, plugin mode
+  would put foreign-protocol parsing inside the one process that
+  supervises everything else. Revisit only if the plugin gains a
+  documented retain story and the deployment is too constrained for a
+  broker process.
 - **Units:** every running thing is a unit: `adapter`, `automation`, or
   `service`. Uniform manifest schema, uniform supervision. Python units are
   uv-run scripts with PEP 723 inline dependencies (one hermetic venv per
