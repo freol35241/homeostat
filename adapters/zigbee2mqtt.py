@@ -34,14 +34,9 @@ anything the mapping does not cover (docs/design.md, Discovery).
 
 import json
 import os
-import signal
-import threading
-from urllib.parse import urlparse
-
-import paho.mqtt.client as mqtt
 
 import homeostat
-from homeostat import house, keys
+from homeostat import house, keys, mqtt
 
 BASE_TOPIC = "zigbee2mqtt"
 
@@ -106,9 +101,7 @@ def main():
     config = house.load_adapter(unit)
     by_id = {e.id: e for e in config.entities}
 
-    endpoint = urlparse(config.endpoint)
-    if endpoint.scheme != "mqtt":
-        raise ValueError(f"unsupported endpoint scheme: {config.endpoint}")
+    endpoint = mqtt.parse_endpoint(config.endpoint)
 
     session = homeostat.connect()
 
@@ -175,17 +168,11 @@ def main():
 
         return handler
 
-    subscribed = threading.Event()
-    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
-    client.on_message = on_z2m_message
-    client.on_connect = lambda c, *_: c.subscribe(
-        [(f"{BASE_TOPIC}/+", 0), (f"{BASE_TOPIC}/bridge/devices", 0)]
+    client = mqtt.connect(
+        endpoint,
+        on_z2m_message,
+        [(f"{BASE_TOPIC}/+", 0), (f"{BASE_TOPIC}/bridge/devices", 0)],
     )
-    client.on_subscribe = lambda *_: subscribed.set()
-    client.connect(endpoint.hostname, endpoint.port or 1883)
-    client.loop_start()
-    if not subscribed.wait(timeout=30):
-        raise TimeoutError("no MQTT SUBACK within 30s")
 
     # An arbitrated entity has no home/cmd subscription at all — not
     # subscribing IS the structural enforcement — and instead gets the
@@ -203,10 +190,7 @@ def main():
     # Both translation directions are wired up: the unit is ready.
     session.ready()
 
-    stop = threading.Event()
-    signal.signal(signal.SIGTERM, lambda *_: stop.set())
-    signal.signal(signal.SIGINT, lambda *_: stop.set())
-    stop.wait()
+    mqtt.wait_for_shutdown()
 
     for sub in subscribers:
         sub.undeclare()

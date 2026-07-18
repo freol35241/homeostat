@@ -1056,6 +1056,43 @@ the exploration that produced it):
   entity gets the arbiter-output subscription by the same plan-time
   expansion rule. Nothing new.
 
+## IVT490 heat-pump adapter (settled 2026-07-18)
+
+- **The bespoke firmware stays.** The IVT490 is interfaced by the owner's
+  own ESP8266 board (serial read of the control board, GT2 digipot
+  emulation, EXT_IN relay — github.com/freol35241/IVT490-interface-esp8266),
+  speaking its own MQTT dialect. Unlike ESPurna, there is no drop-in
+  replacement and the logic is house-specific hardware knowledge: the
+  dialect boundary settlement says the adapter absorbs it as-is.
+- **Climate vocabulary**: the capability's family-facing base aspect is
+  `setpoint` (indoor target, °C) — the climate analogue of `on`/`locked`.
+  The adapter also normalizes the current readings it can derive to
+  `indoor_temperature` and `feed_temperature`; every other state
+  parameter passes through under its firmware name. Expert knobs
+  (feed_temperature_target, outdoor_temperature_offset, vacation) are
+  commandable aspects under their own names — dialect-specific, not
+  schema vocabulary.
+- **The heat pump is an arbitrated entity** — it is the second name in
+  the arbitrated-mode sentence. All commands ride the arbiter; the
+  family's manual setpoint wins.
+- **Bounds live in the adapter**, as constants (setpoint 10–30 °C, feed
+  target 20–60 °C, outdoor offset ±10 K): device physics is dialect
+  knowledge, not house config. Out-of-range commands DROP with an
+  invalid-command health event, never silently clamp — same ethos as
+  every other adapter, and defense in depth over the firmware's own
+  clamps.
+- **Dashboard v1**: a minimal climate widget — setpoint with ±0.5 °C
+  steppers at the manual band, current temperature readout when the
+  normalized aspects are present; expert knobs stay read-only in the
+  entity detail overlay with history.
+- **MQTT boilerplate graduates to the SDK** (`homeostat.mqtt`): this is
+  the third paho adapter, the agreed rule-of-three trigger. A helper
+  function, not a transport layer — adapters still own their
+  connections.
+- Operational note: any Node-RED flow WRITING to the interface's
+  controller/set topics must be disabled when this adapter goes live —
+  one master per device. Read-only flows can coexist.
+
 ## Voice (later phase)
  
 - Two-tier command path: a fast-path intent matcher (high precision,

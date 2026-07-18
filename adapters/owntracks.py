@@ -35,14 +35,9 @@ suggested capability/features stanza (capability "person", features []).
 
 import json
 import os
-import signal
-import threading
-from urllib.parse import urlparse
-
-import paho.mqtt.client as mqtt
 
 import homeostat
-from homeostat import house, keys
+from homeostat import house, keys, mqtt
 
 BASE_TOPIC = "owntracks"
 
@@ -52,9 +47,7 @@ def main():
     config = house.load_adapter(unit)
     by_id = {e.id: e for e in config.entities}
 
-    endpoint = urlparse(config.endpoint)
-    if endpoint.scheme != "mqtt":
-        raise ValueError(f"unsupported endpoint scheme: {config.endpoint}")
+    endpoint = mqtt.parse_endpoint(config.endpoint)
 
     session = homeostat.connect()
     inventory = {}
@@ -99,23 +92,12 @@ def main():
         if "tst" in payload:
             session.put_json(keys.state_key(entity.room, entity.name, "fixed_at"), payload["tst"])
 
-    subscribed = threading.Event()
-    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
-    client.on_message = on_owntracks_message
-    client.on_connect = lambda c, *_: c.subscribe(f"{BASE_TOPIC}/+/+", 0)
-    client.on_subscribe = lambda *_: subscribed.set()
-    client.connect(endpoint.hostname, endpoint.port or 1883)
-    client.loop_start()
-    if not subscribed.wait(timeout=30):
-        raise TimeoutError("no MQTT SUBACK within 30s")
+    client = mqtt.connect(endpoint, on_owntracks_message, f"{BASE_TOPIC}/+/+")
 
     # Persons are read-only: no command subscription, unlike z2m's lights.
     session.ready()
 
-    stop = threading.Event()
-    signal.signal(signal.SIGTERM, lambda *_: stop.set())
-    signal.signal(signal.SIGINT, lambda *_: stop.set())
-    stop.wait()
+    mqtt.wait_for_shutdown()
 
     session.close()
     client.loop_stop()
