@@ -22,6 +22,9 @@ a small API generated entirely from the house's text:
   POST /api/param    a parameter write through the core's validating config
                      queryable ({unit, param, value})
   GET  /api/history  recorder proxy for sparklines (?entity=..&aspect=..)
+  GET  /api/logs     unit's captured stdout/stderr tail, for the unit detail
+                     overlay (?unit=..&lines=N), proxying the supervisor's
+                     home/meta/{unit}/log queryable
   GET  /assets/*     vendored map libraries (Leaflet, protomaps-leaflet),
                      allowlisted by filename
   GET  /tiles.pmtiles  self-hosted PMTiles region extract for the map
@@ -336,6 +339,25 @@ def make_app(hub: Hub, model: dict, page: Path, assets_dir: Path) -> web.Applica
             {"series": [{"key": key, "points": points} for key, points in replies]}
         )
 
+    async def api_logs(request: web.Request) -> web.Response:
+        unit = request.query.get("unit", "")
+        if unit not in units:
+            return json_error(f"unknown unit {unit}", status=404)
+        selector = f"home/meta/{unit}/log"
+        lines_param = request.query.get("lines")
+        if lines_param is not None:
+            try:
+                lines = int(lines_param)
+            except ValueError:
+                return json_error("lines must be an integer")
+            selector += f"?lines={max(1, min(lines, 500))}"
+        replies = await asyncio.get_running_loop().run_in_executor(
+            None, hub.session.get_json, selector
+        )
+        # A unit with no captured output yet gets no reply — empty, not an error.
+        entries = replies[0][1] if replies else []
+        return web.json_response(entries)
+
     app = web.Application(middlewares=[guard])
     app.router.add_get("/", index)
     app.router.add_get("/api/model", api_model)
@@ -343,6 +365,7 @@ def make_app(hub: Hub, model: dict, page: Path, assets_dir: Path) -> web.Applica
     app.router.add_post("/api/cmd", api_cmd)
     app.router.add_post("/api/param", api_param)
     app.router.add_get("/api/history", api_history)
+    app.router.add_get("/api/logs", api_logs)
     app.router.add_get("/assets/{name}", api_asset)
     app.router.add_get("/tiles.pmtiles", api_tiles)
     return app

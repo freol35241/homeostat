@@ -17,14 +17,17 @@
 //!    `/tiles.pmtiles` 404s without HOMEOSTAT_DASHBOARD_TILES and serves
 //!    Range requests when it is set (docs/design.md, "Map and person
 //!    entities").
+//! 6. `/api/logs` proxies a unit's captured stdout/stderr tail (docs/design.md,
+//!    "Logs and the audit trail"): known lines come back stream-tagged,
+//!    `lines=N` truncates, and an unknown unit 404s.
 
 mod common;
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use homeostat::bus::HealthStatus;
+use homeostat::bus::{self, HealthStatus};
 use serde_json::{json, Value};
 
 use common::{await_health, health_watch, Supervisor};
@@ -544,4 +547,71 @@ async fn dashboard_serves_configured_tiles() {
 
     sup.shutdown();
     let _ = std::fs::remove_file(&tiles_path);
+}
+
+/// 6. `/api/logs` proxies the supervisor's `home/meta/{unit}/log` queryable:
+/// the `logger` fixture unit (fake_adapter --print-stdout/--print-stderr)
+/// prints known lines at startup, stream-tagged and truncatable via
+/// `lines=N`; an unknown unit 404s.
+#[tokio::test(flavor = "multi_thread")]
+async fn dashboard_serves_unit_logs() {
+    let port = common::free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let mut sup =
+        Supervisor::spawn_with_env(FIXTURE, &[("HOMEOSTAT_DASHBOARD_PORT", &port.to_string())]);
+    let observer = sup.observer().await;
+
+    let mut dash = health_watch(&observer, "dashboard").await;
+    await_health(&mut dash, Duration::from_secs(180), |h| {
+        h.status == HealthStatus::Running
+    })
+    .await;
+    let mut logger = health_watch(&observer, "logger").await;
+    await_health(&mut logger, Duration::from_secs(10), |h| {
+        h.status == HealthStatus::Running
+    })
+    .await;
+
+    // Wait for the logger's known startup lines to land in its ring buffer.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let n = cache_read(&observer, &bus::log_key("logger"))
+            .await
+            .and_then(|v| v.as_array().map(|a| a.len()))
+            .unwrap_or(0);
+        if n >= 8 {
+            break;
+        }
+        assert!(Instant::now() < deadline, "logger never captured its startup lines");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    let (status, entries) = http_request(&addr, "GET", "/api/logs?unit=logger", &[], None);
+    assert_eq!(status, 200, "{entries}");
+    let rows = entries.as_array().expect("array body");
+    assert_eq!(rows.len(), 8, "{entries}");
+    assert!(
+        rows.iter()
+            .any(|e| e["stream"] == "stdout" && e["line"] == "stdout-line-0"),
+        "{entries}"
+    );
+    assert!(
+        rows.iter()
+            .any(|e| e["stream"] == "stderr" && e["line"] == "stderr-line-2"),
+        "{entries}"
+    );
+    assert!(rows[0]["ts_us"].is_number(), "{entries}");
+
+    let (status, entries) = http_request(&addr, "GET", "/api/logs?unit=logger&lines=2", &[], None);
+    assert_eq!(status, 200, "{entries}");
+    assert_eq!(
+        entries.as_array().expect("array body").len(),
+        2,
+        "lines=2 truncates to the tail: {entries}"
+    );
+
+    let (status, reply) = http_request(&addr, "GET", "/api/logs?unit=no-such-unit", &[], None);
+    assert_eq!(status, 404, "unknown unit must 404: {reply}");
+
+    sup.shutdown();
 }

@@ -236,6 +236,10 @@ input[type=text], input[type=time] { border: 1px solid var(--border); background
 .aspect-row { font-size: 12px; color: var(--secondary); padding: 6px 4px; }
 .aspect-row.row-clickable { min-height: 40px; display: flex; align-items: center; }
 .empty-hint { color: var(--muted); font-size: 12.5px; padding: 8px 0; }
+.log-feed { margin-top: 10px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px; }
+.log-line { padding: 2px 0; white-space: pre-wrap; word-break: break-all; color: var(--secondary); }
+.log-line .ts { color: var(--muted); margin-right: 6px; }
+.log-line.stderr { color: var(--critical); }
 
 /* stat row (history detail) */
 .stat-row { display: flex; gap: 16px; margin-top: 12px; flex-wrap: wrap; }
@@ -341,7 +345,8 @@ var overlay = {
   unit: null,           // for unit: unit name
   range: 24,             // hours, for history
   rangeData: {},          // hours -> {points, loaded, loading}
-  lastPoints: null
+  lastPoints: null,
+  log: null                // for unit: {lines, loaded, loading}
 };
 
 // chartId -> {coords, width, height, aspect} — populated while building chart
@@ -613,6 +618,22 @@ function fetchHistoryRange(entityName, aspect, hours) {
     .catch(function () {
       overlay.rangeData[hours] = { points: [], loaded: true, loading: false };
       if (overlay.open && overlay.type === 'history') renderOverlayContent();
+    });
+}
+
+// ---- log fetch (detail overlay, unit) ----
+
+function fetchUnitLog(unitName) {
+  overlay.log = { lines: [], loaded: false, loading: true };
+  fetch('/api/logs?unit=' + encodeURIComponent(unitName) + '&lines=100')
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      overlay.log = { lines: data || [], loaded: true, loading: false };
+      if (overlay.open && overlay.type === 'unit') renderOverlayContent();
+    })
+    .catch(function () {
+      overlay.log = { lines: [], loaded: true, loading: false };
+      if (overlay.open && overlay.type === 'unit') renderOverlayContent();
     });
 }
 
@@ -1421,6 +1442,15 @@ function renderEventRow(ev) {
     (extra ? ' (' + esc(extra) + ')' : '') + '</div>';
 }
 
+function renderLogLine(entry) {
+  var t = new Date((entry.ts_us || 0) / 1000);
+  var tStr = isNaN(t.getTime()) ? '' : t.toLocaleTimeString();
+  var tFull = isNaN(t.getTime()) ? '' : t.toLocaleString();
+  var cls = entry.stream === 'stderr' ? 'log-line stderr' : 'log-line';
+  return '<div class="' + cls + '"><span class="ts" title="' + esc(tFull) + '">' + esc(tStr) + '</span>' +
+    esc(entry.line) + '</div>';
+}
+
 function renderHealth() {
   var units = store.model.units || [];
   var cards = units.map(function (u) {
@@ -1530,6 +1560,7 @@ function openEntityDetail(room, entityName) {
 function openUnitDetail(unitName) {
   overlay.type = 'unit';
   overlay.unit = unitName;
+  fetchUnitLog(unitName);
   showOverlay();
 }
 
@@ -1641,11 +1672,17 @@ function renderUnitDetailBody() {
   var eventRows = events.map(renderEventRow).join('');
   var eventsHtml = eventRows || '<div class="empty-hint">No events yet this session.</div>';
 
+  var log = overlay.log || { lines: [], loaded: false, loading: false };
+  var logRows = log.lines.map(renderLogLine).join('');
+  var logHtml = log.loading ? '<div class="empty-hint">Loading&hellip;</div>' :
+    (logRows || '<div class="empty-hint">No output captured.</div>');
+
   var body = '<div class="muted">' + esc(titleCase(unit.kind || '')) + '</div>' +
     (unit.description ? '<div style="margin-top:4px;">' + esc(unit.description) + '</div>' : '') +
     '<div class="card-label" style="margin-top:20px;">Health</div>' + fieldRows +
     '<div class="card-label" style="margin-top:20px;">Params</div>' + paramsHtml +
-    '<div class="card-label" style="margin-top:20px;">Events</div><div class="event-feed">' + eventsHtml + '</div>';
+    '<div class="card-label" style="margin-top:20px;">Events</div><div class="event-feed">' + eventsHtml + '</div>' +
+    '<div class="card-label" style="margin-top:20px;">Log</div><div class="log-feed">' + logHtml + '</div>';
   return { title: unit.label, body: body };
 }
 
