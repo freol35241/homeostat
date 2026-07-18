@@ -56,6 +56,33 @@ Already running Zigbee2MQTT elsewhere? Delete the `mosquitto` and
 `zigbee2mqtt` services from the compose file and point the `endpoint`
 in `units/zigbee.toml` at your existing MQTT broker instead.
 
+## Devices and phones on the LAN
+
+The broker has two listeners (`mosquitto.conf`): 1883 stays inside the
+compose network — anonymous, for zigbee2mqtt and the adapters — and
+1884 is published to the LAN for MQTT clients that live outside the
+stack: the IVT490 heat-pump interface (an ESP8266 can't join a VPN)
+and OwnTracks phones. 1884 requires credentials, and `mosquitto.acl`
+confines each one to its own topic tree, so a leaked device password
+can touch that device's dialect and nothing else — never
+`zigbee2mqtt/#`.
+
+The template ships `mosquitto.passwd` empty (nobody can connect) and
+gitignored — password hashes are credentials and never belong in the
+house repo. Add a user (a throwaway container, because the running
+broker mounts the file read-only), then restart the broker:
+
+```
+docker run --rm -it -v ./mosquitto.passwd:/passwd eclipse-mosquitto:2 \
+  mosquitto_passwd /passwd ivt490
+chmod 600 mosquitto.passwd
+docker compose restart mosquitto
+```
+
+Point the heat-pump firmware's `MQTT_HOST`/`MQTT_PORT`/`MQTT_USER`/
+`MQTT_PW` and each phone's OwnTracks connection at `<host>:1884`, one
+user per client, and mirror every new user in `mosquitto.acl`.
+
 Plan and apply from the host, against the running house:
 
 ```

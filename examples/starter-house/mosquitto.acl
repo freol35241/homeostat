@@ -1,0 +1,14 @@
+# ACLs for the authenticated LAN listener (1884). One rule: every
+# credential is confined to its own topic tree — a compromised device
+# or phone password can touch its own dialect, nothing else.
+#
+# The heat-pump interface publishes state under its base topic and
+# subscribes its controller/set commands; readwrite on the tree covers
+# both directions.
+user ivt490
+topic readwrite ivt490/#
+
+# One OwnTracks user per phone, confined to their own subtree. The
+# person entity's id is "alice/phone" — the same two segments.
+user alice
+topic readwrite owntracks/alice/#

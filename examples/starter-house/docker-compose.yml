@@ -4,6 +4,12 @@ services:
     restart: unless-stopped
     volumes:
       - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./mosquitto.acl:/mosquitto/config/acl:ro
+      - ./mosquitto.passwd:/mosquitto/config/passwd:ro
+    ports:
+      # The authenticated LAN listener: heat-pump interface, OwnTracks
+      # phones. 1883 stays compose-internal on purpose (see mosquitto.conf).
+      - "1884:1884"
 
   zigbee2mqtt:
     image: koenkk/zigbee2mqtt:2

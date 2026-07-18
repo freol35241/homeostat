@@ -1,1 +1,4 @@
 data/
+# Password hashes are credentials: the file ships empty from the
+# template and your real one must never land in the house repo.
+mosquitto.passwd
