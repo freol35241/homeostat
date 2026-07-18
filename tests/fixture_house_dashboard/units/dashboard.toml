@@ -18,3 +18,4 @@ config = "home/config/*/*"
 [bus.publishes]
 lights = { key = "home/cmd/**", capability = "light", priority = "manual" }
 locks = { key = "home/cmd/**", capability = "lock", priority = "manual" }
+climate = { key = "home/cmd/**", capability = "climate", priority = "manual" }

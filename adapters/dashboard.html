@@ -183,6 +183,15 @@ input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 
   cursor: pointer; border: 2px solid var(--card); box-shadow: 0 1px 2px rgba(0,0,0,.2); }
 input[type=range]::-moz-range-track { background: var(--border); height: 2px; border-radius: 1px; }
 
+/* climate stepper */
+.stepper { display: flex; align-items: center; gap: 6px; }
+.step-btn { border: 1px solid var(--border); background: var(--card); color: var(--secondary); border-radius: 6px;
+  width: 26px; height: 26px; font-size: 14px; line-height: 1; cursor: pointer; flex: 0 0 auto;
+  display: flex; align-items: center; justify-content: center; transition: background-color 140ms ease, border-color 140ms ease; }
+.step-btn:hover { border-color: var(--muted); }
+.step-btn:disabled { opacity: .4; cursor: default; }
+.stepper-value { min-width: 42px; text-align: center; font-variant-numeric: tabular-nums; color: var(--ink); }
+
 /* setpoint controls */
 .param-row { padding: 12px 0; border-top: 1px solid var(--border); }
 .param-row:first-of-type { border-top: none; }
@@ -909,6 +918,28 @@ function widgetForLock(entity) {
     '</div>';
 }
 
+function widgetForClimate(entity) {
+  var setpoint = stateValue(entity.room, entity.name, 'setpoint');
+  var hasSetpoint = typeof setpoint === 'number';
+  var readout = hasSetpoint ? setpoint.toFixed(1) + '°' : '—';
+  var indoor = stateValue(entity.room, entity.name, 'indoor_temperature');
+  var feed = stateValue(entity.room, entity.name, 'feed_temperature');
+  var nowParts = [];
+  if (typeof indoor === 'number') nowParts.push(indoor.toFixed(1) + '° now');
+  if (typeof feed === 'number') nowParts.push(feed.toFixed(1) + '° feed');
+  var badge = entity.write_mode === 'arbitrated' ? '<span class="badge-arbitrated">ARBITRATED</span>' : '';
+  var disabledAttr = hasSetpoint ? '' : ' disabled';
+  return '<div class="entity-row row-clickable" data-action="entity-detail" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '">' +
+    '<span class="entity-name" title="' + esc(entity.label) + '">' + esc(entity.label) + badge + '</span>' +
+    '<span style="display:flex;align-items:center;gap:10px;">' +
+    (nowParts.length ? '<span class="faint">' + esc(nowParts.join(' · ')) + '</span>' : '') +
+    '<span class="stepper">' +
+    '<button class="step-btn" data-action="climate-step" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '" data-delta="-0.5"' + disabledAttr + '>&minus;</button>' +
+    '<span class="stepper-value">' + esc(readout) + '</span>' +
+    '<button class="step-btn" data-action="climate-step" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '" data-delta="0.5"' + disabledAttr + '>+</button>' +
+    '</span></span></div>';
+}
+
 function widgetForSensor(entity) {
   var aspects = numericAspectsFor(entity);
   if (aspects.length === 0) {
@@ -947,14 +978,15 @@ function widgetForEntity(entity) {
   if (entity.capability === 'light' || entity.capability === 'switch') return widgetForLight(entity);
   if (entity.capability === 'presence') return widgetForPresence(entity);
   if (entity.capability === 'lock') return widgetForLock(entity);
+  if (entity.capability === 'climate') return widgetForClimate(entity);
   if (entity.capability === 'sensor') return widgetForSensor(entity);
   return widgetGeneric(entity);
 }
 
-var CAP_ORDER = { light: 0, lock: 1, presence: 2, sensor: 3 };
+var CAP_ORDER = { light: 0, lock: 1, presence: 2, climate: 3, sensor: 4 };
 function capRank(entity) {
   var r = CAP_ORDER[entity.capability];
-  return r === undefined ? 4 : r;
+  return r === undefined ? 5 : r;
 }
 
 // ---- relative time ----
@@ -1636,6 +1668,16 @@ document.addEventListener('click', function (e) {
     var lockEntity = el.getAttribute('data-entity');
     var lockValue = el.getAttribute('data-value') === 'true';
     sendCmd(lockRoom, lockEntity, 'locked', lockValue);
+    return;
+  }
+  if (action === 'climate-step') {
+    var stepRoom = el.getAttribute('data-room');
+    var stepEntity = el.getAttribute('data-entity');
+    var current = stateValue(stepRoom, stepEntity, 'setpoint');
+    if (typeof current !== 'number') return; // no fabricated default to step from
+    var delta = parseFloat(el.getAttribute('data-delta'));
+    var next = Math.round((current + delta) * 10) / 10;
+    sendCmd(stepRoom, stepEntity, 'setpoint', next);
     return;
   }
   if (action === 'param-toggle') {

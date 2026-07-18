@@ -70,8 +70,13 @@ ASSETS = {
 # home/cmd at manual band like any other command — for an arbitrated entity
 # the arbiter (not the dashboard) is what enforces the family always
 # winning over automations.
-COMMANDABLE = {"light": {"on", "brightness", "color_temp"}, "lock": {"locked"}, "switch": {"on"}}
-BASE_ASPECT = {"light": "on", "lock": "locked", "switch": "on"}
+COMMANDABLE = {
+    "light": {"on", "brightness", "color_temp"},
+    "lock": {"locked"},
+    "switch": {"on"},
+    "climate": {"setpoint"},
+}
+BASE_ASPECT = {"light": "on", "lock": "locked", "switch": "on", "climate": "setpoint"}
 
 
 def label_of(naming: dict, name: str) -> str:

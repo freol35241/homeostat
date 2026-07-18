@@ -1,0 +1,14 @@
+schema = 1
+
+[entity]
+id = "heat_pump-1"
+capability = "climate"
+features = []
+room = "livingroom"
+
+[naming]
+en = "heat pump"
+
+[write_policy]
+mode = "shared"
+owner = "reflector"

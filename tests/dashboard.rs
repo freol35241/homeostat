@@ -403,6 +403,43 @@ async fn dashboard_serves_the_family_surface() {
         "switch command stamps the same manual-band envelope as any other command"
     );
 
+    // A climate command is accepted: COMMANDABLE now maps climate ->
+    // {"setpoint"}, the family-facing base aspect (docs/design.md, IVT490
+    // heat-pump adapter, "Climate vocabulary"). Setpoint is a float — the
+    // envelope must carry it through unmodified, same as any other value.
+    let climate_cmd_sub = observer
+        .declare_subscriber("home/cmd/livingroom/heat_pump/setpoint")
+        .await
+        .expect("climate cmd subscriber");
+    let (status, reply) = http_request(
+        &addr,
+        "POST",
+        "/api/cmd",
+        &[("X-Homeostat", "family")],
+        Some(&json!({"room": "livingroom", "entity": "heat_pump", "aspect": "setpoint", "value": 21.5})),
+    );
+    assert_eq!(status, 200, "{reply}");
+    let cmd_sample = tokio::time::timeout(Duration::from_secs(10), climate_cmd_sub.recv_async())
+        .await
+        .expect("climate cmd envelope observed within 10s")
+        .expect("sample");
+    let envelope: Value = serde_json::from_slice(&cmd_sample.payload().to_bytes()).expect("json");
+    assert_eq!(
+        envelope,
+        json!({"value": 21.5, "priority": "manual", "actor": "dashboard"}),
+        "climate setpoint command stamps the same manual-band envelope, float value intact"
+    );
+
+    // Every other climate aspect is read-only passthrough: not commandable.
+    let (status, reply) = http_request(
+        &addr,
+        "POST",
+        "/api/cmd",
+        &[("X-Homeostat", "family")],
+        Some(&json!({"room": "livingroom", "entity": "heat_pump", "aspect": "feed_temperature_target", "value": 45.0})),
+    );
+    assert_eq!(status, 400, "non-commandable climate aspect must be refused: {reply}");
+
     // 3. Parameter path: in-constraint persists, out-of-constraint refused.
     let (status, reply) = http_request(
         &addr,
