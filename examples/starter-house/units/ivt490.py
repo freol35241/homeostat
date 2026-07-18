@@ -12,41 +12,49 @@
 (settled 2026-07-18)").
 
 The bespoke ESP8266 interface board (github.com/freol35241/IVT490-interface-
-esp8266) speaks its own MQTT dialect: {base}/state (one JSON blob) and
-{base}/state/{field} (one topic per raw heat-pump field —
-lib/IVT490/IVT490.cpp's serialize_IVT490State; {base}/state/raw is the
-unparsed serial line and is ignored) mirror {base}/controller/state and
-{base}/controller/state/{field} for the onboard feedback controller
-(lib/IVT490/IVT490.h, Controller::serialize). The entity file's `id` is the
+esp8266, tracked firmware ref: the GT3_2_boiler_emulation branch) speaks
+its own MQTT dialect. Heat-pump state lives under {base}/ivt490/state: the
+whole document as one JSON blob, then — src/main.cpp's publish_json_object
+recursing into every nested JsonObject — each sub-object as its own blob
+and each scalar leaf on its own subtopic. The document (lib/IVT490/
+IVT490.cpp, State::serialize) wraps the 28 serial-protocol fields in a
+"serial" object and carries two thermistor sensor objects, "GT2" and
+"GT3_2", each {raw, filtered} — so scalars arrive at
+{base}/ivt490/state/serial/{field} and
+{base}/ivt490/state/{sensor}/{raw|filtered}. {base}/ivt490/raw is the
+unparsed serial line and is never subscribed. Controller state
+(src/Controller.h, Controller::serialize) lives at {base}/controller/state
+and {base}/controller/state/{field}: feed_temperature_target,
+indoor_temperature_feedback and outdoor_temperature_offset are
+{value, valid} objects, indoor_temperature_target is a {value} object,
+operating_mode a bare integer — field_value() unwraps the nested shapes
+and passes bare scalars through uniformly. The entity file's `id` is the
 device's own MQTT base topic — unlike Zigbee2MQTT there is no shared root;
 each interface board owns its whole topic tree — and the file stem is the
 entity name. One entity per physical heat pump.
 
-State fan-out subscribes the per-field topics only, both {base}/state/+
-and {base}/controller/state/+, and publishes each field to
-home/state/{room}/{entity}/{aspect} (state_aspect). Three fields are
-normalized to the climate vocabulary: GT1 (Framledningstemperatur, the
-feed line reading) to "feed_temperature"; the controller's
-indoor_temperature_feedback (its live indoor reading, kept fresh by the
-device's own feedback loop) to "indoor_temperature"; the controller's
-indoor_temperature_target to "setpoint" — so the bus setpoint is always
-the device's own readback, never an echo of a command. Every other field
-passes through under its firmware name; a controller field that happened
-to share a name with a raw heat-pump field would be prefixed
-(controller_{field}) to keep the two namespaces distinguishable — no such
-collision exists in the dialect today, but the guard stays live for
-whichever firmware revision changes that.
-
-ArduinoJson (v6, per platformio.ini) serializes a per-field topic's
-payload with variant.as<String>(), which falls back to serializeJson() for
-anything that is not already a string. Plain scalar fields (everything
-under {base}/state/*, plus the controller's control_value and
-vacation_mode) arrive as ordinary JSON numbers/booleans, but the
-controller's freshness-tracked fields (feed_temperature_target,
-indoor_temperature_feedback, outdoor_temperature_offset,
-indoor_temperature_target, indoor_temperature_weight) serialize as nested
-{"value": ..., "valid": ...} objects — field_value() unwraps both shapes
-uniformly.
+State fan-out subscribes the scalar levels ({base}/ivt490/state/+,
+{base}/ivt490/state/+/+ and {base}/controller/state/+; an object payload
+on any of them is a nested blob whose leaves arrive on deeper subtopics,
+and is skipped) and publishes each field to
+home/state/{room}/{entity}/{aspect}. Aspect naming (state_field): the
+"serial" wrapper is a serialization artifact and is stripped — serial
+fields keep their bare firmware names — while any other nested path joins
+its segments with underscores (GT2/raw -> "GT2_raw", GT2/filtered ->
+"GT2_filtered", likewise GT3_2), because a multi-segment aspect would fall
+outside the home/state/{room}/{entity}/{aspect} key slot; none of the
+joined names collide with a serial field name. Three fields normalize to
+the climate vocabulary: serial GT1 (Framledningstemperatur, the feed line
+reading) to "feed_temperature"; the controller's
+indoor_temperature_feedback (its live indoor reading) to
+"indoor_temperature"; the controller's indoor_temperature_target to
+"setpoint" — so the bus setpoint is always the device's own readback,
+never an echo of a command. Everything else passes through under its
+firmware name — including "vacation", a read-only state boolean in this
+firmware; a controller field that happened to share a name with a state
+aspect would be prefixed (controller_{field}) to keep the namespaces
+distinguishable — no such collision exists in the dialect today, but the
+guard stays live for whichever firmware revision changes that.
 
 The heat pump is an arbitrated entity (docs/design.md, Arbitrated mode):
 all commands ride the arbiter, and the family's manual setpoint always
@@ -54,21 +62,25 @@ wins — its templated home/cmd subscription therefore expands to nothing
 at plan time, so every command this adapter ever sees has already been
 arbitrated, on home/arbiter/{room}/{entity}/{aspect}. Commandable aspects
 (COMMANDS): "setpoint" (indoor_temperature_target, the climate base
-aspect), "feed_temperature_target", and "outdoor_temperature_offset"
+aspect), "feed_temperature_target" and "outdoor_temperature_offset"
 translate to their {base}/controller/set/{field} topics as stringified
-floats; "vacation" translates to {base}/controller/set/vacation_mode as
-"1"/"0", the same integer-string convention the dialect's own boolean
-fields use on the wire. NOTE: src/main.cpp's onMqttMessage subscribes to
-that topic but has no branch that reads it — vacation_mode is not actually
-settable over MQTT in this firmware revision. The adapter still publishes
-it faithfully as specified; fixing that is a firmware change, outside this
-adapter's dialect boundary. Bounds are adapter constants — device physics,
-not house config (setpoint 10-30 degC, feed_temperature_target 20-60 degC,
-outdoor_temperature_offset +/-10 K, vacation strictly boolean): a
-wrong-type or out-of-range command DROPS with an "invalid-command" health
-event carrying the offending aspect and value, never clamped. A malformed
-or envelope-less command (keys.parse_cmd_envelope) drops the same way,
-like every other adapter.
+floats; "operating_mode" — the GT3_2 boiler-sensor emulation — is
+strictly the integer 1, 2 or 3 (1=BAU normal, 2=BLOCK suppress heating,
+3=BOOST force heating; src/Controller.h, OperatingMode) and translates to
+{base}/controller/set/operating_mode as an integer string. The firmware's
+fifth set topic, controller/set/indoor_temperature_actual, is deliberately
+NOT a command aspect: it is the sensor-feedback input reserved for a
+future automation that streams a real indoor temperature reading into the
+device's control loop. Bounds are adapter constants — device physics, not
+house config (setpoint 10-30 degC, feed_temperature_target 20-60 degC,
+outdoor_temperature_offset +/-10 K): a wrong-type or out-of-range command
+DROPS with an "invalid-command" health event carrying the offending
+aspect and value, never clamped. A malformed or envelope-less command
+(keys.parse_cmd_envelope) drops the same way, like every other adapter.
+NOTE: the firmware's toFloat()/toInt() parse treats 0 as failure, so a
+legitimate outdoor_temperature_offset of exactly 0.0 — in range here — is
+silently discarded by the device; the adapter forwards it faithfully
+rather than working around firmware behavior.
 
 Discovery is a small, static document at home/discovery/{unit}: one
 record per bound entity carrying its base-topic id, a suggested
@@ -90,18 +102,19 @@ import os
 import homeostat
 from homeostat import house, keys, mqtt
 
-# lib/IVT490/IVT490.cpp, serialize_IVT490State: the raw heat-pump field
-# names, in their serialized order. Passthrough vocabulary for
-# {base}/state/+, and the collision guard in state_aspect().
-STATE_FIELDS = frozenset(
+# lib/IVT490/IVT490.cpp, State::serialize (GT3_2_boiler_emulation branch):
+# every aspect the state fan-out can produce — the 28 serial-protocol
+# fields (published under the stripped "serial" wrapper) plus the
+# underscore-joined thermistor sensor leaves. The collision guard in
+# state_aspect() checks controller fields against this set.
+STATE_ASPECTS = frozenset(
     {
         "GT1",
         "GT1_target",
         "GT1_LLT",
         "GT1_LL",
         "GT1_UL",
-        "GT2_heatpump",
-        "GT2_sensor",
+        "GT2",
         "GT3_1",
         "GT3_2",
         "GT3_2_LL",
@@ -124,6 +137,11 @@ STATE_FIELDS = frozenset(
         "fan",
         "SV1_open",
         "SV1_close",
+        # The GT2 and GT3_2 thermistor sensor objects, flattened.
+        "GT2_raw",
+        "GT2_filtered",
+        "GT3_2_raw",
+        "GT3_2_filtered",
     }
 )
 
@@ -133,14 +151,28 @@ ASPECT_OVERRIDES = {
     ("controller", "indoor_temperature_target"): "setpoint",
 }
 
-# Commandable aspect -> ({base}/controller/set/{field}, (min, max) or None
-# for the strictly-boolean vacation aspect (docs/design.md settlement).
+# The three operating modes of the GT3_2 boiler-sensor emulation
+# (src/Controller.h, OperatingMode): 1=BAU, 2=BLOCK, 3=BOOST.
+OPERATING_MODES = (1, 2, 3)
+
+# Commandable aspect -> ({base}/controller/set/{field}, (min, max) for the
+# float aspects, or None for the strictly-enumerated operating_mode.
 COMMANDS = {
     "setpoint": ("indoor_temperature_target", (10.0, 30.0)),
     "feed_temperature_target": ("feed_temperature_target", (20.0, 60.0)),
     "outdoor_temperature_offset": ("outdoor_temperature_offset", (-10.0, 10.0)),
-    "vacation": ("vacation_mode", None),
+    "operating_mode": ("operating_mode", None),
 }
+
+
+def state_field(segments: list[str]) -> str:
+    """Flattened subtopic path under {base}/ivt490/state to a firmware
+    field name: the "serial" wrapper object is stripped (a serialization
+    artifact, not device vocabulary), any other nested path joins with
+    underscores so the aspect stays a single key segment."""
+    if segments and segments[0] == "serial":
+        segments = segments[1:]
+    return "_".join(segments)
 
 
 def state_aspect(source: str, field: str) -> str:
@@ -151,17 +183,17 @@ def state_aspect(source: str, field: str) -> str:
     override = ASPECT_OVERRIDES.get((source, field))
     if override is not None:
         return override
-    if source == "controller" and field in STATE_FIELDS:
+    if source == "controller" and field in STATE_ASPECTS:
         return f"controller_{field}"
     return field
 
 
 def field_value(payload: bytes):
-    """Unwraps a per-field topic's payload: a plain JSON scalar passes
-    through unchanged, a nested {"value": ..., "valid": ...} object (the
-    controller's freshness-tracked fields) yields its "value" member.
-    Raises ValueError/KeyError on anything else — callers drop these with
-    a "malformed-payload" health event."""
+    """Unwraps a controller per-field payload: a plain JSON scalar passes
+    through unchanged, a nested {"value": ...[, "valid": ...]} object (the
+    controller's tracked fields) yields its "value" member. Raises
+    ValueError/KeyError on anything else — callers drop these with a
+    "malformed-payload" health event."""
     parsed = json.loads(payload)
     if isinstance(parsed, dict):
         return parsed["value"]
@@ -210,22 +242,25 @@ def main():
             seen.add(entity.id)
             session.put_json(keys.discovery_key(unit), inventory())
 
-        if len(rest) == 2 and rest[0] == "state":
-            source, field = "state", rest[1]
+        if len(rest) in (3, 4) and rest[0] == "ivt490" and rest[1] == "state":
+            try:
+                value = json.loads(msg.payload)
+            except ValueError:
+                session.health_event("drop", reason="malformed-payload", topic=msg.topic)
+                return
+            if isinstance(value, (dict, list)):
+                return  # a nested blob; its leaves arrive on deeper subtopics
+            aspect = state_aspect("state", state_field(rest[2:]))
         elif len(rest) == 3 and rest[0] == "controller" and rest[1] == "state":
-            source, field = "controller", rest[2]
+            try:
+                value = field_value(msg.payload)
+            except (ValueError, KeyError):
+                session.health_event("drop", reason="malformed-payload", topic=msg.topic)
+                return
+            aspect = state_aspect("controller", rest[2])
         else:
-            return  # a blob topic ({base}/state, {base}/controller/state)
+            return  # a whole-document blob topic
 
-        if source == "state" and field == "raw":
-            return  # the unparsed serial line, not a heat-pump field
-
-        try:
-            value = field_value(msg.payload)
-        except (ValueError, KeyError):
-            session.health_event("drop", reason="malformed-payload", topic=msg.topic)
-            return
-        aspect = state_aspect(source, field)
         session.put_json(keys.state_key(entity.room, entity.name, aspect), value)
 
     def cmd_handler(entity):
@@ -251,12 +286,16 @@ def main():
                 return
             field, bounds = command
             if bounds is None:
-                if not isinstance(value, bool):
+                if (
+                    isinstance(value, bool)
+                    or not isinstance(value, int)
+                    or value not in OPERATING_MODES
+                ):
                     session.health_event(
                         "drop", reason="invalid-command", key=key, aspect=aspect, value=value
                     )
                     return
-                body = "1" if value else "0"
+                body = str(value)
             else:
                 lo, hi = bounds
                 if isinstance(value, bool) or not isinstance(value, (int, float)) or not (
@@ -271,8 +310,14 @@ def main():
 
         return handler
 
-    topics = [(f"{e.id}/state/+", 0) for e in config.entities] + [
-        (f"{e.id}/controller/state/+", 0) for e in config.entities
+    topics = [
+        (topic, 0)
+        for e in config.entities
+        for topic in (
+            f"{e.id}/ivt490/state/+",
+            f"{e.id}/ivt490/state/+/+",
+            f"{e.id}/controller/state/+",
+        )
     ]
     client = mqtt.connect(endpoint, on_ivt_message, topics)
 

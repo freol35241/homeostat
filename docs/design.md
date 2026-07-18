@@ -1069,9 +1069,13 @@ the exploration that produced it):
   The adapter also normalizes the current readings it can derive to
   `indoor_temperature` and `feed_temperature`; every other state
   parameter passes through under its firmware name. Expert knobs
-  (feed_temperature_target, outdoor_temperature_offset, vacation) are
-  commandable aspects under their own names — dialect-specific, not
-  schema vocabulary.
+  (feed_temperature_target, outdoor_temperature_offset, operating_mode)
+  are commandable aspects under their own names — dialect-specific, not
+  schema vocabulary. The adapter tracks the firmware actually deployed:
+  the GT3_2_boiler_emulation branch (2026-07-18), whose controller adds
+  operating_mode (1 BAU / 2 BLOCK / 3 BOOST, the GT3_2 boiler-sensor
+  emulation) and has no vacation command — vacation is a read-only
+  state field there.
 - **The heat pump is an arbitrated entity** — it is the second name in
   the arbitrated-mode sentence. All commands ride the arbiter; the
   family's manual setpoint wins.

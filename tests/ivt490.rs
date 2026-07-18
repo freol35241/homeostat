@@ -205,7 +205,9 @@ async fn expect_drop_event(sub: &StateSub, reason: &str) -> Value {
 }
 
 /// (a) Scripted per-field state publishes translate to normalized and
-/// passthrough bus aspects; the raw serial line is ignored outright.
+/// passthrough bus aspects: the "serial" wrapper level is stripped, the
+/// sensor-object leaves join with underscores, nested blob topics and the
+/// raw serial line produce nothing — not even a health event.
 #[tokio::test(flavor = "multi_thread")]
 async fn ivt490_state_translates_to_bus_state() {
     let (mosquitto, mut sup, observer) = setup().await;
@@ -219,10 +221,19 @@ async fn ivt490_state_translates_to_bus_state() {
         .expect("event subscriber");
     let mut mqtt = Mqtt::connect(mosquitto.port, "test-state").await;
 
-    // GT1 (Framledningstemperatur) normalizes to feed_temperature.
-    mqtt.publish(&format!("{BASE}/state/GT1"), "21.50").await;
-    // A plain heat-pump field passes through under its firmware name.
-    mqtt.publish(&format!("{BASE}/state/GT5"), "19.80").await;
+    // Serial GT1 (Framledningstemperatur) normalizes to feed_temperature.
+    mqtt.publish(&format!("{BASE}/ivt490/state/serial/GT1"), "21.50").await;
+    // A plain serial field passes through under its firmware name.
+    mqtt.publish(&format!("{BASE}/ivt490/state/serial/GT5"), "19.80").await;
+    // A thermistor sensor leaf joins its path with underscores.
+    mqtt.publish(&format!("{BASE}/ivt490/state/GT2/filtered"), "5.30").await;
+    // The serial sub-blob (an object) is skipped: its leaves arrive on the
+    // deeper subtopics above.
+    mqtt.publish(
+        &format!("{BASE}/ivt490/state/serial"),
+        r#"{"GT1":21.5,"GT5":19.8}"#,
+    )
+    .await;
     // The controller's indoor_temperature_feedback normalizes to
     // indoor_temperature; its {value, valid} nesting is unwrapped.
     mqtt.publish(
@@ -231,29 +242,33 @@ async fn ivt490_state_translates_to_bus_state() {
     )
     .await;
     // The controller's indoor_temperature_target normalizes to setpoint —
-    // the device's own readback, not a command echo.
+    // the device's own readback ({value}-nested on the wire), not a
+    // command echo.
     mqtt.publish(
         &format!("{BASE}/controller/state/indoor_temperature_target"),
         r#"{"value":21.00}"#,
     )
     .await;
-    // The unparsed serial line is ignored outright, not even as a
-    // malformed-payload drop.
-    mqtt.publish(&format!("{BASE}/state/raw"), "0;219;not-json-at-all").await;
+    // operating_mode is a bare scalar and passes through under its name.
+    mqtt.publish(&format!("{BASE}/controller/state/operating_mode"), "1").await;
+    // The unparsed serial line is on an unsubscribed topic: nothing at all.
+    mqtt.publish(&format!("{BASE}/ivt490/raw"), "0;219;not-json-at-all").await;
 
     expect_states(
         &state_sub,
         &[
             ("home/state/utility/heatpump/feed_temperature", json!(21.5)),
             ("home/state/utility/heatpump/GT5", json!(19.8)),
+            ("home/state/utility/heatpump/GT2_filtered", json!(5.3)),
             ("home/state/utility/heatpump/indoor_temperature", json!(20.3)),
             ("home/state/utility/heatpump/setpoint", json!(21.0)),
+            ("home/state/utility/heatpump/operating_mode", json!(1)),
         ],
     )
     .await;
 
     let no_event = tokio::time::timeout(Duration::from_millis(1500), event_sub.recv_async()).await;
-    assert!(no_event.is_err(), "unexpected health event for the raw serial line");
+    assert!(no_event.is_err(), "unexpected health event for blob/raw topics");
 
     sup.shutdown();
 }
@@ -328,6 +343,60 @@ async fn out_of_range_setpoint_drops_with_invalid_command_event() {
 
     let silence = mqtt.next_message(Duration::from_millis(1500)).await;
     assert!(silence.is_none(), "out-of-range setpoint reached MQTT: {silence:?}");
+
+    sup.shutdown();
+}
+
+/// (c') operating_mode is strictly the integer 1, 2 or 3: a valid mode
+/// rides the arbiter to MQTT as an integer string, an out-of-enum integer
+/// and a non-integer both drop with the invalid-command event and never
+/// reach MQTT. (Manual band throughout: equal bands pass the arbiter, so
+/// the drops observed are the adapter's own validation, not refusals.)
+#[tokio::test(flavor = "multi_thread")]
+async fn operating_mode_enum_enforced() {
+    let (mosquitto, mut sup, observer) = setup().await;
+    let mut arbiter_watch = health_watch(&observer, "arbiter").await;
+    await_health(&mut arbiter_watch, Duration::from_secs(60), |h| {
+        h.status == HealthStatus::Running
+    })
+    .await;
+
+    let event_sub = observer
+        .declare_subscriber(EVENT_KEY)
+        .await
+        .expect("event subscriber");
+    let mut mqtt = Mqtt::connect(mosquitto.port, "test-operating-mode").await;
+    mqtt.subscribe(&format!("{BASE}/controller/set/+")).await;
+
+    let cmd_key = "home/cmd/utility/heatpump/operating_mode";
+
+    // Mode 2 (BLOCK) forwards and lands as the integer string "2".
+    let wish = json!({"value": 2, "priority": "manual", "actor": "test"});
+    observer.put(cmd_key, wish.to_string()).await.expect("cmd put");
+    let (topic, payload) = mqtt
+        .next_message(Duration::from_secs(10))
+        .await
+        .expect("set publish for operating_mode command");
+    assert_eq!(topic, format!("{BASE}/controller/set/operating_mode"));
+    assert_eq!(payload, b"2");
+
+    // 4 is outside the 1/2/3 enum: drop with event, nothing on MQTT.
+    let wish = json!({"value": 4, "priority": "manual", "actor": "test"});
+    observer.put(cmd_key, wish.to_string()).await.expect("cmd put");
+    let event = expect_drop_event(&event_sub, "invalid-command").await;
+    assert_eq!(event["aspect"], json!("operating_mode"));
+    assert_eq!(event["value"], json!(4));
+    let silence = mqtt.next_message(Duration::from_millis(1500)).await;
+    assert!(silence.is_none(), "out-of-enum operating_mode reached MQTT: {silence:?}");
+
+    // A non-integer drops the same way.
+    let wish = json!({"value": 2.5, "priority": "manual", "actor": "test"});
+    observer.put(cmd_key, wish.to_string()).await.expect("cmd put");
+    let event = expect_drop_event(&event_sub, "invalid-command").await;
+    assert_eq!(event["aspect"], json!("operating_mode"));
+    assert_eq!(event["value"], json!(2.5));
+    let silence = mqtt.next_message(Duration::from_millis(1500)).await;
+    assert!(silence.is_none(), "non-integer operating_mode reached MQTT: {silence:?}");
 
     sup.shutdown();
 }
