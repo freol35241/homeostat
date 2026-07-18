@@ -15,7 +15,11 @@ its arbitrated entities, so wishes for them never reach an owner adapter
 directly; this service subscribes every wish on home/cmd/** instead. A
 wish for a non-arbitrated entity is ignored — its own adapter consumes
 home/cmd directly. A wish for an arbitrated entity holds a lease per
-entity (not per aspect): {priority, actor, deadline}, deadline
+(entity, aspect) — the granularity of the cmd key itself, amended from
+per-entity when the heat pump showed orthogonal control dimensions
+sharing one entity (the family's setpoint must not freeze an
+automation's outdoor_temperature_offset; see docs/design.md, Arbitrated
+mode): {priority, actor, deadline}, deadline
 `time.monotonic() + hold_minutes * 60`. No active lease, an expired one,
 or an incoming priority at or above the holder's band (band order
 keys.CMD_PRIORITIES, manual highest — THE FAMILY ALWAYS WINS OVER
@@ -24,7 +28,7 @@ home/arbiter/{room}/{entity}/{aspect} (keys.arbiter_key) and takes or
 refreshes the lease at the incoming band/actor; a takeover from a
 strictly lower active holder additionally publishes a "preempt" event; an
 incoming priority strictly below the holder is refused with a "refuse"
-event and no forward. Expiry reopens the entity to automations, so a
+event and no forward. Expiry reopens the aspect to automations, so a
 forgotten override self-heals. A malformed envelope drops with an
 "invalid-command" event, like any adapter. Events land at
 home/health/arbiter/event, recorded like any health event.
@@ -58,7 +62,7 @@ def main():
 
     session = homeostat.connect()
     lock = threading.Lock()
-    leases: dict[tuple[str, str], dict] = {}
+    leases: dict[tuple[str, str, str], dict] = {}
 
     def on_config(sample):
         nonlocal hold_minutes
@@ -105,7 +109,7 @@ def main():
         incoming = keys.CMD_PRIORITIES.index(priority)
         with lock:
             now = time.monotonic()
-            lease = leases.get((room, entity))
+            lease = leases.get((room, entity, aspect))
             holder = lease if lease is not None and now < lease["deadline"] else None
             if holder is not None and incoming < keys.CMD_PRIORITIES.index(holder["priority"]):
                 action = "refuse"
@@ -116,7 +120,7 @@ def main():
                     and incoming > keys.CMD_PRIORITIES.index(holder["priority"])
                     else "forward"
                 )
-                leases[(room, entity)] = {
+                leases[(room, entity, aspect)] = {
                     "priority": priority,
                     "actor": actor,
                     "deadline": now + hold_minutes * 60,

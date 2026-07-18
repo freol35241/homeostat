@@ -734,8 +734,13 @@ owner = "zigbee"             # exactly one adapter binds each entity
   manifest declaration and actor with the unit name, so automation code
   doesn't change; adapters drop envelope-less commands with a health
   event; the arbiter forwards the envelope unchanged. The write token is
-  a lease per arbitrated entity: a winning command holds the entity at
-  its band for `hold_minutes` (an arbiter parameter, family-editable);
+  a lease per (arbitrated entity, aspect) — amended 2026-07-18 from
+  per-entity when the heat pump showed why: orthogonal control
+  dimensions share an entity (the family adjusts `setpoint`, the price
+  automation continuously drives `outdoor_temperature_offset`) and must
+  not block each other, and the aspect is already the granularity of
+  the cmd key itself. A winning command holds its aspect at its band
+  for `hold_minutes` (an arbiter parameter, family-editable);
   equal-or-higher bands pass and take the hold — a takeover from a
   strictly lower band publishes a preemption event — lower bands are
   refused with an event; expiry reopens the entity to automations, so a

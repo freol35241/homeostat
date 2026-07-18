@@ -168,6 +168,64 @@ async fn forward_preempt_refuse_and_expiry() {
     sup.shutdown();
 }
 
+/// Leases are per (entity, aspect), not per entity (docs/design.md,
+/// Arbitrated mode, amended 2026-07-18): a manual hold on one aspect must
+/// not block an automation commanding a sibling aspect of the same entity
+/// — the family's setpoint never freezes the price automation's offset —
+/// while same-aspect contention still refuses.
+#[tokio::test(flavor = "multi_thread")]
+async fn aspects_lease_independently() {
+    let (mut sup, observer) = setup().await;
+    let sibling_cmd = "home/cmd/hallway/front_door/auto_relock_delay";
+    let sibling_arbiter = "home/arbiter/hallway/front_door/auto_relock_delay";
+    let locked_sub = observer
+        .declare_subscriber(ARBITER_KEY)
+        .await
+        .expect("locked subscriber");
+    let sibling_sub = observer
+        .declare_subscriber(sibling_arbiter)
+        .await
+        .expect("sibling subscriber");
+    let event_sub = observer
+        .declare_subscriber(EVENT_KEY)
+        .await
+        .expect("event subscriber");
+
+    // Manual takes the lease on "locked" (fixture default hold_minutes is
+    // long-lived; the hold outlasts this test).
+    let manual_wish = envelope(json!(true), "manual", "owner");
+    put_cmd(&observer, &manual_wish).await;
+    let forwarded = next_json(&locked_sub, Duration::from_secs(10))
+        .await
+        .expect("manual wish forwarded");
+    assert_eq!(forwarded, manual_wish);
+
+    // An automation wish on a sibling aspect of the same entity flows —
+    // its own lease, no refusal, no event.
+    let sibling_wish = envelope(json!(30), "automation", "scheduler");
+    observer
+        .put(sibling_cmd, sibling_wish.to_string())
+        .await
+        .expect("sibling cmd put");
+    let forwarded = next_json(&sibling_sub, Duration::from_secs(10))
+        .await
+        .expect("sibling-aspect automation wish forwarded despite manual hold on locked");
+    assert_eq!(forwarded, sibling_wish);
+    expect_silence(&event_sub, Duration::from_millis(500), "event on an independent aspect").await;
+
+    // Same-aspect contention still arbitrates: automation on "locked" is
+    // refused under the manual hold.
+    put_cmd(&observer, &envelope(json!(false), "automation", "scheduler")).await;
+    let event = next_json(&event_sub, Duration::from_secs(10))
+        .await
+        .expect("refuse event");
+    assert_eq!(event["kind"], json!("refuse"));
+    assert_eq!(event["aspect"], json!("locked"));
+    expect_silence(&locked_sub, Duration::from_millis(500), "forward of a refused wish").await;
+
+    sup.shutdown();
+}
+
 /// (f) A malformed cmd envelope for an arbitrated entity drops with an
 /// "invalid-command" health event, and never reaches home/arbiter/**.
 #[tokio::test(flavor = "multi_thread")]
