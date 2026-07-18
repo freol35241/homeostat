@@ -449,7 +449,11 @@ async fn backend_outage_buffers_and_flushes() {
 /// home/history/state/{entity}/{aspect} replies the typed rows with
 /// timestamps, honoring from/to/limit (zenoh's `;`-separated selector
 /// parameters); wildcards fan out to concrete series keys; a malformed
-/// selector is an error reply.
+/// selector is an error reply. The events table gets the same query
+/// surface at home/history/events: key wildcards filter recorded event
+/// keys, from/to (here raw microseconds, not RFC3339) window the range,
+/// limit truncates keeping the newest, and cmd envelopes carry their
+/// actor into the payload.
 #[tokio::test(flavor = "multi_thread")]
 async fn read_path_returns_history() {
     let db = store_path("read");
@@ -522,6 +526,90 @@ async fn read_path_returns_history() {
         String::from_utf8_lossy(&err.payload().to_bytes()).contains("garbage"),
         "error names the violation"
     );
+
+    // The events surface: home/history/events replies one message, a JSON
+    // array of {ts, key, payload}. Supervisor health transitions already
+    // landed during setup(), so health events are present without any
+    // extra traffic.
+    let replies = history_get(&observer, "home/history/events").await;
+    assert_eq!(replies.len(), 1);
+    assert_eq!(replies[0].0, "home/history/events");
+    let rows = replies[0].1.as_array().expect("reply is an array").clone();
+    assert!(
+        rows.iter()
+            .any(|r| r["key"].as_str().expect("key is a string").starts_with("home/health/")),
+        "health events present: {rows:?}"
+    );
+    for row in &rows {
+        assert!(row["ts"].is_i64(), "events ts is raw microseconds, not RFC3339: {row}");
+    }
+
+    // Three cmd envelopes under one key prefix, spaced so from/to can
+    // bracket the middle one unambiguously.
+    let key_a = "home/cmd/attic/limitprobe/a";
+    let key_b = "home/cmd/attic/limitprobe/b";
+    let key_c = "home/cmd/attic/limitprobe/c";
+    let pub_a = matched_publisher(&observer, key_a).await;
+    let pub_b = matched_publisher(&observer, key_b).await;
+    let pub_c = matched_publisher(&observer, key_c).await;
+    put(&pub_a, json!({"value": true, "priority": "automation", "actor": "seq-a"})).await;
+    rows_eventually(
+        &db,
+        "SELECT key FROM events WHERE key = 'home/cmd/attic/limitprobe/a'",
+        1,
+        Duration::from_secs(10),
+    )
+    .await;
+
+    let before_b = now_us();
+    put(&pub_b, json!({"value": true, "priority": "automation", "actor": "seq-b"})).await;
+    rows_eventually(
+        &db,
+        "SELECT key FROM events WHERE key = 'home/cmd/attic/limitprobe/b'",
+        1,
+        Duration::from_secs(10),
+    )
+    .await;
+    let after_b = now_us();
+
+    put(&pub_c, json!({"value": true, "priority": "automation", "actor": "seq-c"})).await;
+    rows_eventually(
+        &db,
+        "SELECT key FROM events WHERE key = 'home/cmd/attic/limitprobe/c'",
+        1,
+        Duration::from_secs(10),
+    )
+    .await;
+
+    // A key wildcard narrows to just this prefix, cmd envelopes carrying
+    // their actor into the payload, ordered oldest to newest.
+    let replies =
+        history_get(&observer, "home/history/events?key=home/cmd/attic/limitprobe/**").await;
+    let rows = replies[0].1.as_array().expect("reply is an array").clone();
+    assert_eq!(rows.len(), 3, "wildcard filter narrows to the three envelopes: {rows:?}");
+    let keys: Vec<&str> = rows.iter().map(|r| r["key"].as_str().expect("key")).collect();
+    assert_eq!(keys, vec![key_a, key_b, key_c], "oldest to newest");
+    assert_eq!(rows[1]["payload"]["actor"], json!("seq-b"), "actor visible in payload");
+    assert_eq!(rows[1]["payload"]["value"], json!(true));
+    assert_eq!(rows[1]["payload"]["priority"], json!("automation"));
+
+    // from/to windows the range: only the middle envelope falls inside
+    // [before_b, after_b].
+    let selector = format!(
+        "home/history/events?key=home/cmd/attic/limitprobe/**;from={before_b};to={after_b}"
+    );
+    let replies = history_get(&observer, &selector).await;
+    let rows = replies[0].1.as_array().expect("reply is an array").clone();
+    assert_eq!(rows.len(), 1, "from/to bounds to the bracketed envelope: {rows:?}");
+    assert_eq!(rows[0]["key"], json!(key_b));
+
+    // limit truncates keeping the newest rows, still oldest-to-newest.
+    let replies =
+        history_get(&observer, "home/history/events?key=home/cmd/attic/limitprobe/**;limit=2")
+            .await;
+    let rows = replies[0].1.as_array().expect("reply is an array").clone();
+    let keys: Vec<&str> = rows.iter().map(|r| r["key"].as_str().expect("key")).collect();
+    assert_eq!(keys, vec![key_b, key_c], "limit keeps the newest, oldest-to-newest");
 
     sup.shutdown();
 }
