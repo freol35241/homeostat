@@ -2,8 +2,10 @@
 //! an agent observes the house and changes it, with authority bounded by
 //! the same plan/apply machinery as every other actor.
 //!
-//! Five tools. `read_state` and `read_history` read the live bus (the
-//! core's last-value caches, the recorder's history queryable). `propose`
+//! Seven tools. `read_state` and `read_history` read the live bus (the
+//! core's last-value caches, the recorder's history queryable); `read_logs`
+//! and `read_events` read the operational exhaust and the durable audit
+//! trail (docs/design.md, "Logs and the audit trail"). `propose`
 //! takes text — house-repo paths plus full new content — commits it to the
 //! current branch, and plans: a parameter-only plan auto-applies (zero
 //! restarts, durable by construction); anything behavioral or structural
@@ -27,7 +29,7 @@ use std::sync::Mutex;
 use serde_json::{json, Value};
 use zenoh::Session;
 
-use crate::bus::{self, ApplyRequest, ApplyResult};
+use crate::bus::{self, ApplyRequest, ApplyResult, LogEntry};
 use crate::plan::{self, Tier};
 use crate::{gitinfo, pending, world};
 
@@ -95,6 +97,8 @@ impl Server {
         match name {
             "read_state" => self.read_state(args),
             "read_history" => self.read_history(args),
+            "read_logs" => self.read_logs(args),
+            "read_events" => self.read_events(args),
             "plan" => self.plan(),
             "propose" => self.propose(args),
             "apply" => self.apply(),
@@ -179,6 +183,97 @@ impl Server {
                 }
             }
             serde_json::to_string_pretty(&Value::Object(values))
+                .map_err(|e| format!("rows do not serialize: {e}"))
+        })
+    }
+
+    /// Reads a unit's captured stdout/stderr ring buffer over the bus and
+    /// renders it as one "ts_us stream line" row per captured line —
+    /// operational exhaust for debugging, gone on supervisor restart.
+    fn read_logs(&self, args: &Value) -> Result<String, String> {
+        let unit = str_arg(args, "unit")?;
+        let mut selector = bus::log_key(unit);
+        if let Some(value) = args.get("lines") {
+            let value = value.as_u64().ok_or("\"lines\" must be a positive integer")?;
+            selector.push_str(&format!("?lines={value}"));
+        }
+        self.runtime.block_on(async {
+            let replies = self
+                .session
+                .get(&selector)
+                .await
+                .map_err(|e| format!("log read failed: {e}"))?;
+            let mut rows = Vec::new();
+            while let Ok(reply) = replies.recv_async().await {
+                match reply.result() {
+                    Ok(sample) => {
+                        let entries: Vec<LogEntry> =
+                            serde_json::from_slice(&sample.payload().to_bytes())
+                                .map_err(|e| format!("log entries do not parse: {e}"))?;
+                        for entry in entries {
+                            rows.push(format!("{} {} {}", entry.ts_us, entry.stream, entry.line));
+                        }
+                    }
+                    Err(err) => {
+                        return Err(String::from_utf8_lossy(&err.payload().to_bytes()).to_string());
+                    }
+                }
+            }
+            Ok(rows.join("\n"))
+        })
+    }
+
+    /// Reads the recorder's durable events trail over the bus: health
+    /// events, preemptions, config writes, and cmd envelopes with their
+    /// actors. Rows are {ts, key, payload}, returned as JSON text.
+    fn read_events(&self, args: &Value) -> Result<String, String> {
+        let mut params = Vec::new();
+        if let Some(value) = args.get("key") {
+            let value = value.as_str().ok_or("\"key\" must be a string")?;
+            params.push(format!("key={value}"));
+        }
+        for name in ["from", "to"] {
+            if let Some(value) = args.get(name) {
+                // Integer µs UTC, the recorder's native convention and the
+                // same unit the reply's ts carries — not read_history's
+                // RFC3339; an events range refines directly from prior rows.
+                let value = value
+                    .as_i64()
+                    .ok_or(format!("\"{name}\" must be an integer (microseconds UTC)"))?;
+                params.push(format!("{name}={value}"));
+            }
+        }
+        if let Some(value) = args.get("limit") {
+            let value = value.as_u64().ok_or("\"limit\" must be a positive integer")?;
+            params.push(format!("limit={value}"));
+        }
+        let selector = if params.is_empty() {
+            "home/history/events".to_string()
+        } else {
+            format!("home/history/events?{}", params.join(";"))
+        };
+
+        self.runtime.block_on(async {
+            let replies = self
+                .session
+                .get(&selector)
+                .await
+                .map_err(|e| format!("events read failed: {e}"))?;
+            let mut rows = Vec::new();
+            while let Ok(reply) = replies.recv_async().await {
+                match reply.result() {
+                    Ok(sample) => {
+                        let payload = sample.payload().to_bytes();
+                        if let Ok(Value::Array(mut entries)) = serde_json::from_slice(&payload) {
+                            rows.append(&mut entries);
+                        }
+                    }
+                    Err(err) => {
+                        return Err(String::from_utf8_lossy(&err.payload().to_bytes()).to_string());
+                    }
+                }
+            }
+            serde_json::to_string_pretty(&Value::Array(rows))
                 .map_err(|e| format!("rows do not serialize: {e}"))
         })
     }
@@ -427,7 +522,15 @@ fn git(root: &Path, args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-pub const TOOL_NAMES: &[&str] = &["read_state", "read_history", "plan", "propose", "apply"];
+pub const TOOL_NAMES: &[&str] = &[
+    "read_state",
+    "read_history",
+    "read_logs",
+    "read_events",
+    "plan",
+    "propose",
+    "apply",
+];
 
 /// The tool list served by tools/list.
 pub fn tools() -> Value {
@@ -459,6 +562,35 @@ pub fn tools() -> Value {
                     "limit": {"type": "integer", "description": "keep the most recent rows"}
                 },
                 "required": ["series"]
+            }
+        },
+        {
+            "name": "read_logs",
+            "description": "Read a unit's captured stdout/stderr: the last 500 lines, \
+                operational exhaust for debugging, gone on supervisor restart (not the \
+                durable trail — see read_events). One \"ts_us stream line\" row per line.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "unit": {"type": "string", "description": "unit name"},
+                    "lines": {"type": "integer", "description": "keep only the last N lines"}
+                },
+                "required": ["unit"]
+            }
+        },
+        {
+            "name": "read_events",
+            "description": "Read the durable audit trail: health events, preemptions, \
+                config writes, and cmd envelopes with their actors. Rows are \
+                {ts, key, payload}, ascending, as a JSON array.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "key": {"type": "string", "description": "a home/** key expression, wildcards allowed"},
+                    "from": {"type": "integer", "description": "microseconds UTC, same unit as the reply ts"},
+                    "to": {"type": "integer", "description": "microseconds UTC, same unit as the reply ts"},
+                    "limit": {"type": "integer", "description": "keep the most recent rows"}
+                }
             }
         },
         {

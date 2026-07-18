@@ -3,15 +3,51 @@
 
 mod common;
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use homeostat::bus::{Health, HealthStatus};
+use homeostat::bus::{Health, HealthStatus, LogEntry};
 use zenoh::sample::SampleKind;
 
 use common::{await_health, health_watch, process_alive, scan_health, Supervisor};
 
 const STATE_KEY: &str = "home/state/testroom/fake_sensor/value";
 const CRASH_KEY: &str = "home/cmd/testroom/fake_sensor/crash";
+
+/// Reads a unit's log ring buffer over the bus (`?lines=N` when given),
+/// decoding the single JSON reply into typed entries. No reply (unknown
+/// unit, or a unit with no captured output yet) reads back as empty.
+async fn get_log(session: &zenoh::Session, unit: &str, lines: Option<u32>) -> Vec<LogEntry> {
+    let mut selector = homeostat::bus::log_key(unit);
+    if let Some(n) = lines {
+        selector.push_str(&format!("?lines={n}"));
+    }
+    let replies = session.get(&selector).await.expect("log get");
+    let mut entries = Vec::new();
+    while let Ok(reply) = replies.recv_async().await {
+        if let Ok(sample) = reply.result() {
+            entries = serde_json::from_slice(&sample.payload().to_bytes())
+                .expect("log entries parse");
+        }
+    }
+    entries
+}
+
+/// Polls the log queryable until `pred` is satisfied or the deadline
+/// passes; panics on timeout with the last-seen buffer for debugging.
+async fn await_log<F>(session: &zenoh::Session, unit: &str, timeout: Duration, pred: F) -> Vec<LogEntry>
+where
+    F: Fn(&[LogEntry]) -> bool,
+{
+    let deadline = Instant::now() + timeout;
+    loop {
+        let entries = get_log(session, unit, None).await;
+        if pred(&entries) {
+            return entries;
+        }
+        assert!(Instant::now() < deadline, "log condition not met in time: {entries:?}");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
 
 fn running(h: &Health) -> bool {
     h.status == HealthStatus::Running
@@ -154,4 +190,76 @@ async fn sigkill_leaves_no_orphans() {
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+}
+
+/// (f) Log capture: a unit's stdout/stderr are tagged by stream, ordered
+/// within each stream, and truncatable from the tail via `?lines=N`.
+#[tokio::test(flavor = "multi_thread")]
+async fn log_capture_tags_and_orders_by_stream() {
+    let mut sup = Supervisor::spawn("tests/fixture_house_logs");
+    let observer = sup.observer().await;
+    let mut watch = health_watch(&observer, "logger").await;
+    await_health(&mut watch, Duration::from_secs(10), running).await;
+
+    let entries = await_log(&observer, "logger", Duration::from_secs(10), |e| e.len() >= 8).await;
+    assert_eq!(entries.len(), 8, "5 stdout + 3 stderr lines: {entries:?}");
+
+    let stdout: Vec<&str> = entries
+        .iter()
+        .filter(|e| e.stream == "stdout")
+        .map(|e| e.line.as_str())
+        .collect();
+    assert_eq!(
+        stdout,
+        vec!["stdout-line-0", "stdout-line-1", "stdout-line-2", "stdout-line-3", "stdout-line-4"],
+        "stdout lines keep source order: {entries:?}"
+    );
+    let stderr: Vec<&str> = entries
+        .iter()
+        .filter(|e| e.stream == "stderr")
+        .map(|e| e.line.as_str())
+        .collect();
+    assert_eq!(
+        stderr,
+        vec!["stderr-line-0", "stderr-line-1", "stderr-line-2"],
+        "stderr lines keep source order: {entries:?}"
+    );
+    assert!(entries.iter().all(|e| e.ts_us > 0), "{entries:?}");
+
+    // lines=N truncates to the tail of whatever order actually landed.
+    let tail = get_log(&observer, "logger", Some(3)).await;
+    assert_eq!(tail.len(), 3, "{tail:?}");
+    assert_eq!(
+        tail.iter().map(|e| &e.line).collect::<Vec<_>>(),
+        entries[entries.len() - 3..].iter().map(|e| &e.line).collect::<Vec<_>>(),
+        "lines=3 is the last 3 of the full buffer: {entries:?} vs {tail:?}"
+    );
+
+    // An unknown unit's log key gets no reply.
+    let unknown = get_log(&observer, "no-such-unit", None).await;
+    assert!(unknown.is_empty(), "{unknown:?}");
+
+    sup.shutdown();
+}
+
+/// (g) Ring-buffer eviction: printing past the 500-line capacity drops the
+/// oldest lines, keeping exactly the most recent 500.
+#[tokio::test(flavor = "multi_thread")]
+async fn log_capture_evicts_oldest_past_capacity() {
+    let mut sup = Supervisor::spawn("tests/fixture_house_logs");
+    let observer = sup.observer().await;
+    let mut watch = health_watch(&observer, "flooder").await;
+    await_health(&mut watch, Duration::from_secs(10), running).await;
+
+    let entries =
+        await_log(&observer, "flooder", Duration::from_secs(10), |e| e.len() >= 500).await;
+    assert_eq!(entries.len(), 500, "capped at the ring buffer capacity: {} entries", entries.len());
+    assert!(
+        entries.iter().all(|e| e.stream == "stdout"),
+        "flooder only writes stdout: {entries:?}"
+    );
+    assert_eq!(entries.first().unwrap().line, "stdout-line-100", "oldest 100 evicted");
+    assert_eq!(entries.last().unwrap().line, "stdout-line-599", "newest line kept");
+
+    sup.shutdown();
 }

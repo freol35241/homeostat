@@ -6,6 +6,9 @@
 //! state, and exits cleanly on SIGTERM. Test hooks: `--crash-after-ms` exits
 //! nonzero after a delay (0 = before even touching the bus, for crash-loop
 //! scenarios), and any publication on the crash key exits nonzero on demand.
+//! `--print-stdout`/`--print-stderr` print a known number of lines
+//! ("stdout-line-{i}" / "stderr-line-{i}") before touching the bus, for the
+//! supervisor's log-capture tests.
 
 use std::env;
 use std::time::Duration;
@@ -29,11 +32,23 @@ struct Args {
     /// Publishing anything on this key makes the adapter exit with code 1.
     #[arg(long, default_value = "home/cmd/testroom/fake_sensor/crash")]
     crash_key: String,
+    /// Print this many lines to stdout before touching the bus.
+    #[arg(long, default_value_t = 0)]
+    print_stdout: u32,
+    /// Print this many lines to stderr before touching the bus.
+    #[arg(long, default_value_t = 0)]
+    print_stderr: u32,
 }
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 1)]
 async fn main() {
     let args = Args::parse();
+    for i in 0..args.print_stdout {
+        println!("stdout-line-{i}");
+    }
+    for i in 0..args.print_stderr {
+        eprintln!("stderr-line-{i}");
+    }
     if args.crash_after_ms == Some(0) {
         std::process::exit(1);
     }

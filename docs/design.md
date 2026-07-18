@@ -1102,6 +1102,30 @@ the exploration that produced it):
   controller/set topics must be disabled when this adapter goes live —
   one master per device. Read-only flows can coexist.
 
+## Logs and the audit trail (settled 2026-07-18)
+
+- **Unit output is captured, not inherited.** The supervisor pipes every
+  unit's stdout/stderr, re-emits each line onto its own corresponding
+  stream tagged `[{unit}]` — `docker logs` stays THE raw stream, now
+  attributable — and keeps the last 500 lines per unit in a ring buffer
+  served by a queryable at `home/meta/{unit}/log` (`?lines=N` caps the
+  tail), each entry `{ts_us, stream, line}`. Logs are operational
+  exhaust: bounded memory, gone on supervisor restart, never recorded —
+  the events channel is the durable trail, logs are for debugging.
+- **The events table gets a query surface.** The recorder's queryable
+  grows `home/history/events` (same selector conventions as the samples
+  path: `?key=<keyexpr>;from=..;to=..;limit=..`, key wildcards
+  included), replying `{ts, key, payload}` rows — health events,
+  preemptions, config writes, and cmd envelopes with their actors
+  become askable, not just written.
+- **Agent and family access ride the existing surfaces**: MCP gains
+  `read_logs` (unit, lines) and `read_events` (key/from/to/limit); the
+  dashboard's unit detail overlay gains the log tail through a
+  dashboard.py proxy endpoint, the /api/history pattern.
+- A unit still cannot set its own health status — `home/health/{unit}`
+  stays supervisor-owned; `ready()` and health events remain the unit's
+  two voices. Degradation is derived from those, never declared.
+
 ## Voice (later phase)
  
 - Two-tier command path: a fast-path intent matcher (high precision,

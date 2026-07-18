@@ -4,6 +4,7 @@
 //! - `home/health/{unit}`        supervisor-published JSON health status
 //! - `home/health/{unit}/alive`  liveliness token declared by the unit itself
 //! - `home/meta/{unit}/manifest_hash`  sha256 of the unit's manifest file
+//! - `home/meta/{unit}/log`  ring buffer (500 lines) of captured stdout/stderr
 //! - `home/config/{unit}/{param}`  core-owned live parameter values
 //!
 //! All sessions run in peer mode with multicast scouting disabled; topology
@@ -38,6 +39,10 @@ pub fn files_hash_key(unit: &str) -> String {
 
 pub fn manifest_key(unit: &str) -> String {
     format!("home/meta/{unit}/manifest")
+}
+
+pub fn log_key(unit: &str) -> String {
+    format!("home/meta/{unit}/log")
 }
 
 pub const GRANTS_KEY: &str = "home/meta/system/grants";
@@ -113,6 +118,20 @@ pub struct Health {
     pub backoff_ms: Option<u64>,
     /// Exit code of the most recent exit, if it exited with one.
     pub last_exit_code: Option<i32>,
+}
+
+/// One captured line from a unit's stdout or stderr, held in the per-unit
+/// ring buffer and served as JSON at `home/meta/{unit}/log`. Operational
+/// exhaust, not the durable trail: bounded memory, gone on supervisor
+/// restart, never recorded.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LogEntry {
+    /// Capture time, microseconds since the Unix epoch, UTC — the same
+    /// convention the recorder uses for its own timestamps.
+    pub ts_us: i64,
+    /// "stdout" | "stderr"
+    pub stream: String,
+    pub line: String,
 }
 
 /// Payload of a GET on `home/meta/system/apply`: the apply request the CLI

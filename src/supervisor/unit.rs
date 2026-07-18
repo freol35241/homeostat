@@ -13,7 +13,7 @@ use crate::bus::{self, Health, HealthStatus};
 use crate::manifest::RestartPolicy;
 use crate::supervisor::backoff::{Breaker, Decision};
 use crate::supervisor::process;
-use crate::supervisor::HealthMap;
+use crate::supervisor::{HealthMap, LogMap};
 
 const DEFAULT_GRACE_S: u32 = 5;
 
@@ -98,6 +98,7 @@ pub async fn supervise(
     spec: UnitSpec,
     session: Session,
     map: HealthMap,
+    log: LogMap,
     mut shutdown: watch::Receiver<bool>,
 ) {
     let mut health = HealthPublisher {
@@ -159,6 +160,7 @@ pub async fn supervise(
                 }
             }
         };
+        process::capture(&mut child, &spec.name, &log);
         let pid = child.id();
 
         let outcome = loop {

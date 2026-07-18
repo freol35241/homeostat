@@ -14,6 +14,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Output, Stdio};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use homeostat::bus::HealthStatus;
@@ -282,6 +283,123 @@ async fn reads_serve_live_state_and_history() {
     let mut sup = sup;
     sup.shutdown();
     let _ = std::fs::remove_file(&db);
+}
+
+/// (a'') `read_logs` reads a unit's captured stdout/stderr, tail-truncated
+/// with `lines`, as text. `read_events` is exercised at the protocol level
+/// against a stand-in queryable: the recorder side of the contract
+/// (`home/history/events`) is a parallel, in-flight change, so this proves
+/// the tool is listed, builds the documented selector, and degrades
+/// gracefully with nothing answering — not the recorder's own behavior.
+#[tokio::test(flavor = "multi_thread")]
+async fn read_logs_and_events_over_mcp() {
+    let sup = Supervisor::spawn("tests/fixture_house_logs");
+    let observer = sup.observer().await;
+    let mut watch = health_watch(&observer, "logger").await;
+    await_health(&mut watch, Duration::from_secs(10), |h| h.status == HealthStatus::Running).await;
+
+    // Wait for the logger's known startup lines to land in its ring buffer.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let n = cache_read(&observer, &homeostat::bus::log_key("logger"))
+            .await
+            .and_then(|v| v.as_array().map(|a| a.len()))
+            .unwrap_or(0);
+        if n >= 8 {
+            break;
+        }
+        assert!(Instant::now() < deadline, "logger never captured its startup lines");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    let house = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixture_house_logs");
+    let mut mcp = Mcp::connect(&house, &sup.endpoint);
+
+    let (text, is_error) = mcp.call("read_logs", json!({"unit": "logger"}));
+    assert!(!is_error, "{text}");
+    assert_eq!(text.lines().count(), 8, "{text}");
+    assert!(
+        text.lines().any(|l| l.ends_with(" stdout stdout-line-0")),
+        "\"ts_us stream line\" rows: {text}"
+    );
+    assert!(text.lines().any(|l| l.ends_with(" stderr stderr-line-2")), "{text}");
+
+    let (text, is_error) = mcp.call("read_logs", json!({"unit": "logger", "lines": 2}));
+    assert!(!is_error, "{text}");
+    assert_eq!(text.lines().count(), 2, "lines=2 truncates to the tail: {text}");
+
+    // Unknown unit: no reply over the bus, empty text, not an error.
+    let (text, is_error) = mcp.call("read_logs", json!({"unit": "no-such-unit"}));
+    assert!(!is_error, "{text}");
+    assert_eq!(text, "");
+
+    let tools = mcp.request("tools/list", json!({}));
+    let names: Vec<&str> = tools["tools"]
+        .as_array()
+        .expect("tools array")
+        .iter()
+        .map(|t| t["name"].as_str().expect("tool name"))
+        .collect();
+    assert!(names.contains(&"read_events"), "{tools}");
+
+    // Nothing answers home/history/events in this fixture: graceful empty.
+    let (text, is_error) = mcp.call("read_events", json!({}));
+    assert!(!is_error, "{text}");
+    assert_eq!(text, "[]", "no recorder queryable: graceful empty, not an error");
+
+    // A stand-in queryable proves the selector contract:
+    // ?key=..;from=..;to=..;limit=.. against home/history/events, replying
+    // {ts, key, payload} rows.
+    let events_q = observer
+        .declare_queryable("home/history/events")
+        .await
+        .expect("events queryable");
+    let seen_params: Arc<Mutex<Option<String>>> = Arc::default();
+    let seen_params_task = seen_params.clone();
+    tokio::spawn(async move {
+        while let Ok(query) = events_q.recv_async().await {
+            *seen_params_task.lock().expect("params lock") =
+                Some(query.parameters().as_str().to_string());
+            let key = query.key_expr().to_string();
+            let payload = json!([{"ts": "2026-07-18T00:00:00Z",
+                                   "key": "home/health/logger/event",
+                                   "payload": {"kind": "started"}}]);
+            let _ = query.reply(key, payload.to_string()).await;
+        }
+    });
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let text = loop {
+        // from/to are integer µs UTC — the recorder's native convention and
+        // the reply ts's own unit, deliberately not read_history's RFC3339.
+        let (text, is_error) = mcp.call(
+            "read_events",
+            json!({
+                "key": "home/health/**",
+                "from": 1_767_225_600_000_000_i64,
+                "to": 1_798_675_200_000_000_i64,
+                "limit": 10
+            }),
+        );
+        assert!(!is_error, "{text}");
+        if text != "[]" {
+            break text;
+        }
+        assert!(Instant::now() < deadline, "the stand-in events queryable never answered");
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    let rows: Value = serde_json::from_str(&text).expect("read_events returns JSON");
+    assert_eq!(rows[0]["key"], json!("home/health/logger/event"), "{rows}");
+
+    let params = seen_params.lock().expect("params lock").clone().expect("selector observed");
+    assert!(params.contains("key=home/health/**"), "{params}");
+    assert!(params.contains("from=1767225600000000"), "{params}");
+    assert!(params.contains("to=1798675200000000"), "{params}");
+    assert!(params.contains("limit=10"), "{params}");
+
+    drop(mcp);
+    let mut sup = sup;
+    sup.shutdown();
 }
 
 /// (a') The deployed shape: the server runs as a supervised service unit

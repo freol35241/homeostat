@@ -13,7 +13,7 @@ clap = { version = "4", features = ["derive"] }
 # "unstable" for the matching-status API the integration tests use to
 # synchronize on subscriber-interest propagation.
 zenoh = { version = "1.9", features = ["unstable"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "signal", "time", "sync"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "signal", "time", "sync", "io-util"] }
 serde_json = "1.0.150"
 sha2 = "0.11.0"
 libc = "0.2.186"

@@ -8,7 +8,7 @@ pub mod backoff;
 pub mod process;
 pub mod unit;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -16,7 +16,7 @@ use std::time::Duration;
 use tokio::sync::watch;
 use zenoh::Session;
 
-use crate::bus::{self, Health, HealthStatus};
+use crate::bus::{self, Health, HealthStatus, LogEntry};
 use crate::config::ConfigStore;
 use crate::grants::Grant;
 use crate::plan::WorldUnit;
@@ -27,6 +27,11 @@ use crate::CheckResult;
 /// and the health queryable (reader). This is the last-value cache that
 /// lets late subscribers see current state without a republish loop.
 pub type HealthMap = Arc<Mutex<BTreeMap<String, Health>>>;
+
+/// Captured stdout/stderr per unit, shared between the capture tasks
+/// (writers) and the meta queryable (reader) — the ring buffer served at
+/// `home/meta/{unit}/log`. A unit with no captured output yet has no entry.
+pub type LogMap = Arc<Mutex<BTreeMap<String, VecDeque<LogEntry>>>>;
 
 /// How long an apply step waits for a (re)started unit to reach `running`
 /// before halting the walk. Breaker-open and stopped halt sooner.
@@ -56,6 +61,7 @@ pub struct Core {
     pub listen: String,
     pub store: Arc<ConfigStore>,
     pub health: HealthMap,
+    pub log: LogMap,
     world: Mutex<WorldMeta>,
     units: tokio::sync::Mutex<BTreeMap<String, UnitHandle>>,
     apply_lock: tokio::sync::Mutex<()>,
@@ -75,6 +81,7 @@ pub async fn run(check: &CheckResult, root: &Path, listen: &str) -> Result<(), S
     serve_config(&session, store.clone()).await?;
     let health: HealthMap = Arc::default();
     serve_health(&session, health.clone()).await?;
+    let log: LogMap = Arc::default();
     mirror(&session, "home/clock/*").await?;
     mirror(&session, "home/state/**").await?;
     mirror(&session, "home/discovery/*").await?;
@@ -93,6 +100,7 @@ pub async fn run(check: &CheckResult, root: &Path, listen: &str) -> Result<(), S
         listen: listen.to_string(),
         store,
         health,
+        log,
         world: Mutex::new(world),
         units: tokio::sync::Mutex::new(BTreeMap::new()),
         apply_lock: tokio::sync::Mutex::new(()),
@@ -154,6 +162,7 @@ impl Core {
             spec,
             self.session.clone(),
             self.health.clone(),
+            self.log.clone(),
             shutdown_rx,
         ));
         self.units
@@ -177,6 +186,7 @@ impl Core {
     async fn destroy(&self, name: &str) {
         self.stop(name).await;
         self.health.lock().expect("health map lock").remove(name);
+        self.log.lock().expect("log map lock").remove(name);
         self.world.lock().expect("world meta lock").units.remove(name);
         for key in [
             bus::manifest_hash_key(name),
@@ -288,7 +298,11 @@ async fn serve_meta(core: Arc<Core>) -> Result<(), String> {
         .map_err(|e| format!("failed to declare meta queryable: {e}"))?;
     tokio::spawn(async move {
         while let Ok(query) = queryable.recv_async().await {
-            let entries: Vec<(String, Vec<u8>)> = {
+            let lines_cap = query
+                .parameters()
+                .get("lines")
+                .and_then(|v| v.parse::<usize>().ok());
+            let mut entries: Vec<(String, Vec<u8>)> = {
                 let world = core.world.lock().expect("world meta lock");
                 let mut entries = Vec::new();
                 for (name, unit) in &world.units {
@@ -314,6 +328,22 @@ async fn serve_meta(core: Arc<Core>) -> Result<(), String> {
                 }
                 entries
             };
+            {
+                // A unit with no captured output yet has no entry here, so a
+                // query for it gets no reply — same as an unknown unit's
+                // manifest_hash above.
+                let log = core.log.lock().expect("log map lock");
+                for (name, buffer) in log.iter() {
+                    let tail: Vec<&LogEntry> = match lines_cap {
+                        Some(n) if n < buffer.len() => buffer.iter().skip(buffer.len() - n).collect(),
+                        _ => buffer.iter().collect(),
+                    };
+                    entries.push((
+                        bus::log_key(name),
+                        serde_json::to_vec(&tail).expect("log entries serialize"),
+                    ));
+                }
+            }
             for (key, payload) in entries {
                 if intersects(&query, &key) {
                     let _ = query.reply(key, payload).await;

@@ -1,0 +1,10 @@
+schema = 1
+
+[unit]
+name = "logger"
+kind = "service"
+description = "Prints known lines to stdout/stderr for log-capture tests"
+
+[runtime]
+command = "fake_adapter --heartbeat-ms 1000 --print-stdout 5 --print-stderr 3"
+restart = "on-failure"

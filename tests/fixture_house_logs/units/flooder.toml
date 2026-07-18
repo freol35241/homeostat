@@ -1,0 +1,10 @@
+schema = 1
+
+[unit]
+name = "flooder"
+kind = "service"
+description = "Prints more than the ring buffer capacity, for eviction tests"
+
+[runtime]
+command = "fake_adapter --heartbeat-ms 1000 --print-stdout 600 --state-key home/state/testroom/flooder_sensor/value --crash-key home/cmd/testroom/flooder_sensor/crash"
+restart = "on-failure"
