@@ -1125,6 +1125,29 @@ the exploration that produced it):
 - A unit still cannot set its own health status — `home/health/{unit}`
   stays supervisor-owned; `ready()` and health events remain the unit's
   two voices. Degradation is derived from those, never declared.
+- **A log sink was considered and rejected (2026-07-18).** The
+  supervisor's tagged stdout already is the standard export surface —
+  the 12-factor seam: the app emits an attributable line stream, the
+  platform sinks it. Durability, retention, and indexing are deployment
+  configuration (Docker logging drivers: json-file rotation, journald,
+  Loki), never house machinery — anything built here would be a worse
+  reimplementation of mature tooling, welded on. Deeper reason: "logs
+  are exhaust, events are the trail" is a design force, not just a
+  storage rule — if a line matters enough to query next week, that
+  pressure must push the unit to emit a structured health event, and a
+  durable, queryable log store inside homeostat would dissolve exactly
+  that pressure. The recorder records data; it never becomes a log
+  pipeline. (Mechanically it would also mean publishing every stdout
+  line onto the bus in the same traffic class as state and commands —
+  nothing good lives down that road.)
+- **The sanctioned extension: peripheral logs ride the adapters' own
+  stdout.** A device's or bridge's log stream (ESPHome's native-API log
+  subscription, zigbee2mqtt's bridge/logging topic) may be printed by
+  its adapter, one line per entry tagged with the device — the
+  supervisor then does the rest: `[{unit}]`-tagged docker logs, the
+  ring buffer, the dashboard tail, read_logs. One pipeline, no new
+  architecture. Gate at warning-and-up so a debug-chatty device cannot
+  drown a 500-line ring.
 
 ## Voice (later phase)
  
