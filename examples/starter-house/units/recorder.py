@@ -5,7 +5,7 @@
 # ]
 #
 # [tool.uv.sources]
-# homeostat = { git = "https://github.com/freol35241/homeostat", subdirectory = "sdk/python", tag = "v0.3.0" }
+# homeostat = { git = "https://github.com/freol35241/homeostat", subdirectory = "sdk/python", tag = "v0.4.0" }
 # ///
 """Recorder service: history end to end (see docs/design.md, step 5a).
 

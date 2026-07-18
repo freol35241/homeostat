@@ -30,7 +30,7 @@ services:
 
   homeostat:
     # HOMEOSTAT_IMAGE lets CI point this at a locally built image.
-    image: ${HOMEOSTAT_IMAGE:-ghcr.io/freol35241/homeostat:0.2.0}
+    image: ${HOMEOSTAT_IMAGE:-ghcr.io/freol35241/homeostat:0.4.0}
     restart: unless-stopped
     depends_on:
       - mosquitto
