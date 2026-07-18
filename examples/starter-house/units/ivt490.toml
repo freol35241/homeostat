@@ -1,0 +1,26 @@
+schema = 1
+
+[unit]
+name = "ivt490"
+kind = "adapter"
+description = "IVT490 heat-pump adapter (github.com/freol35241/IVT490-interface-esp8266)"
+
+[runtime]
+command = "uv run units/ivt490.py"
+restart = "always"
+shutdown_grace_s = 5
+
+[discovery]
+mode = "static"
+endpoint = "mqtt://mosquitto:1883"
+
+[bus.publishes]
+state = { key = "home/state/{room}/{entity}/**" }
+discovery = { key = "home/discovery/ivt490" }
+
+[bus.subscribes]
+commands = "home/cmd/{room}/{entity}/**"
+arbiter_commands = "home/arbiter/{room}/{entity}/**"
+
+[entities]
+dir = "entities/ivt490/"

@@ -1,0 +1,12 @@
+schema = 1
+
+[entity]
+# id is the device's own MQTT base topic; deliberately not the entity
+# name, so the tests prove binding goes through the id.
+id = "ivt490_1"
+capability = "climate"
+room = "utility"
+
+[write_policy]
+mode = "arbitrated"
+owner = "ivt490"
