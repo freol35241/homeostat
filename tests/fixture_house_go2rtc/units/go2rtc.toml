@@ -1,0 +1,11 @@
+schema = 1
+
+[unit]
+name = "go2rtc"
+kind = "service"
+description = "go2rtc restreamer under test"
+
+[runtime]
+command = "uv run ../../adapters/go2rtc.py"
+restart = "always"
+shutdown_grace_s = 5
