@@ -75,6 +75,7 @@ CREATE TABLE IF NOT EXISTS events (
   payload TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS events_key ON events (key, ts);
+CREATE INDEX IF NOT EXISTS events_ts ON events (ts);
 """
 
 
@@ -283,12 +284,20 @@ class Recorder:
             query.reply_err(json.dumps(f"store unavailable: {err}"))
             return
         try:
-            rows = conn.execute(
-                "SELECT ts, key, payload FROM events WHERE ts >= ? AND ts <= ?"
-                " ORDER BY ts DESC",
-                (from_us, to_us),
-            ).fetchall()
-            if key_pattern is not None:
+            if key_pattern is None:
+                rows = conn.execute(
+                    "SELECT ts, key, payload FROM events WHERE ts >= ? AND ts <= ?"
+                    " ORDER BY ts DESC LIMIT ?",
+                    (from_us, to_us, limit),
+                ).fetchall()
+            else:
+                # Key filtering needs zenoh wildcard semantics, so the limit
+                # can only apply after the Python-side match.
+                rows = conn.execute(
+                    "SELECT ts, key, payload FROM events WHERE ts >= ? AND ts <= ?"
+                    " ORDER BY ts DESC",
+                    (from_us, to_us),
+                ).fetchall()
                 pattern = zenoh.KeyExpr(key_pattern)
                 rows = [row for row in rows if pattern.intersects(zenoh.KeyExpr(row[1]))]
             payload = [
@@ -383,6 +392,9 @@ def init_store(db_path: Path) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     try:
+        # WAL persists in the file; set once here so the per-flush writer
+        # and read-only query connections never block each other.
+        conn.execute("PRAGMA journal_mode=WAL")
         conn.executescript(SCHEMA)
         conn.commit()
     finally:

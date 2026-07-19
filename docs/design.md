@@ -392,7 +392,7 @@ bug worth a trace — a `drop` health event at `home/health/recorder/event`
 Audit events from unit/param keys, raw JSON, no typing:
 
 ```sql
-events(ts, key, payload)   -- index: (key, ts)
+events(ts, key, payload)   -- indexes: (key, ts) and (ts)
 ```
 
 ### Recorded key spaces
