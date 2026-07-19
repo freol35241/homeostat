@@ -1149,6 +1149,69 @@ the exploration that produced it):
   architecture. Gate at warning-and-up so a debug-chatty device cannot
   drown a 500-line ring.
 
+## Cameras (settled 2026-07-19)
+
+The founding decision is a plane split, the camera analogue of "logs are
+exhaust, events are the trail": **pixels are the media plane, detections
+are data.** Everything in homeostat is small scalar JSON — the payload
+conventions, the recorder's schema, the last-value cache all assume it —
+and video is a different physical medium. The moment video bytes enter a
+homeostat process, the small core is gone.
+
+- **Event plane (bus, recorded, automatable):** a camera is an entity
+  like any other — `capability = "camera"`, a room, an adapter binding —
+  publishing scalar aspects at `home/state/{room}/{camera}/…`. v1
+  vocabulary: `motion` (bool). Automations never see pixels; they see
+  `motion = true`, exactly as they see `occupancy` from a PIR. Motion
+  transitions land in the recorder as ordinary state — the event
+  timeline is history, the frames are not.
+- **Media plane (off-bus, never recorded):** live viewing rides RTSP →
+  **go2rtc**, run as a supervised `service` unit (a single static Go
+  binary — the process model fits it like a compiled Rust unit).
+  Restreaming to WebRTC/MSE is a pure remux, no transcoding; browsers
+  never speak RTSP, and the bus at most carries pointers, never frames.
+  Convention: go2rtc stream names equal entity names, the dashboard
+  derives stream URLs from one base endpoint — no per-camera URLs on
+  the bus, no credentials near the repo. The dashboard camera widget is
+  live view via go2rtc; the media plane inherits the dashboard's
+  access story (LAN/WireGuard is the credential).
+- **Refused, deliberately** (the log-sink shape): no NVR, no motion
+  detection, no transcoding, no frame storage inside homeostat. All
+  four are mature-tooling territory; anything built here would be a
+  worse reimplementation welded on. The cameras' own SD-card loop
+  recording is the interim clip story; clips are out of scope.
+- **Frigate was evaluated and is the designated growth path, not v1**
+  — the QuestDB pattern. It is exactly z2m-shaped (an external bridge
+  with an MQTT dialect, one adapter to consume it) and would upgrade
+  the event plane to real person detection. Rejected for now on
+  hardware grounds: the house server is an i3-540 (Clarkdale, 2010) —
+  its Gen5 iGPU is below OpenVINO's Gen6/Skylake floor, there is no
+  Quick Sync and no AVX, so both accelerated and CPU inference paths
+  close. Because aspects are homeostat vocabulary (`motion`, `person` —
+  never the detector's words), adopting Frigate later changes one
+  adapter and zero automations; the key space is the stable contract.
+- **The inventory is TP-Link Tapo C200** (indoor pan/tilt). Dialect
+  facts, verified 2026-07-19: RTSP on 554 (`/stream1` HD, `/stream2`
+  SD — the substream a future detector would eat), ONVIF Profile S on
+  port 2020, local "camera account" credentials created in the Tapo
+  app with third-party compatibility enabled. The adapter consumes
+  ONVIF pull-point events for `motion` — the same source the Home
+  Assistant integration uses; Tapo firmware has broken this in the
+  past (1.3.6), so event-subscription loss must resubscribe/reconnect,
+  not crash. On-camera person detection exists but is not exposed over
+  ONVIF — it is app-only, so it is NOT an aspect until firmware
+  exposes it or a Frigate-class detector arrives. ONVIF on Tapo does
+  no PTZ; pan/tilt and privacy mode need the vendor API (pytapo) and
+  are deferred — noted for later because privacy mode ("family is
+  home → lens down") is the first camera *command* worth having, and
+  smells arbitrated.
+- **Credentials**: camera account user/pass and host per camera in an
+  out-of-repo TOML behind `HOMEOSTAT_CAMERAS` — the ESPHome-devices
+  pattern; addresses and passwords never enter the repo (the boundary
+  test). Cameras are cloud-attached by default; they belong on a
+  segment firewalled from WAN, with the app's cloud features accepted
+  as lost. No cloud in any homeostat path.
+
 ## Voice (later phase)
  
 - Two-tier command path: a fast-path intent matcher (high precision,
