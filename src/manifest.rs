@@ -6,6 +6,7 @@ use std::fmt;
 /// list grows with adapters.
 pub const CAPABILITIES: &[&str] = &[
     "binary_sensor",
+    "camera",
     "climate",
     "cover",
     "light",

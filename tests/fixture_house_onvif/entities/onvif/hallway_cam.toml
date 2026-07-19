@@ -1,0 +1,10 @@
+schema = 1
+
+[entity]
+id = "hallway_cam"
+capability = "camera"
+room = "hallway"
+
+[write_policy]
+mode = "shared"
+owner = "onvif"
