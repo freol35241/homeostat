@@ -1168,13 +1168,49 @@ homeostat process, the small core is gone.
 - **Media plane (off-bus, never recorded):** live viewing rides RTSP →
   **go2rtc**, run as a supervised `service` unit (a single static Go
   binary — the process model fits it like a compiled Rust unit).
-  Restreaming to WebRTC/MSE is a pure remux, no transcoding; browsers
-  never speak RTSP, and the bus at most carries pointers, never frames.
-  Convention: go2rtc stream names equal entity names, the dashboard
-  derives stream URLs from one base endpoint — no per-camera URLs on
-  the bus, no credentials near the repo. The dashboard camera widget is
-  live view via go2rtc; the media plane inherits the dashboard's
-  access story (LAN/WireGuard is the credential).
+  Restreaming is a pure remux, no transcoding; browsers never speak
+  RTSP, and the bus at most carries pointers, never frames. go2rtc
+  holds ONE upstream RTSP session per camera regardless of viewer
+  count — load-bearing here, since Tapo caps concurrent RTSP clients
+  at about two: viewers are free and `/stream2` stays open for a
+  future detector. Stream names equal entity ids.
+- **Browsers never speak go2rtc** — the Zenoh sentence, second verse.
+  go2rtc's API is unauthenticated and structurally capable: it adds
+  and removes streams at runtime, reads config back out (RTSP URLs
+  with credentials embedded), and its source types include `exec:` —
+  command execution. Exposing it to the LAN would hand every device
+  and every DNS-rebinding attack a surface far past "nudge setpoints",
+  recreating the raw-bus problem the dashboard exists to mediate. So
+  go2rtc binds its API to 127.0.0.1 and the dashboard mediates, with
+  the machinery it already has (Host validation, Origin-checked
+  WebSockets, the /api/history proxy pattern):
+  - `/api/camera/{entity}/live` — WebSocket, relayed byte-for-byte to
+    go2rtc's `api/ws?src={entity}`. Transport is **MSE/fMP4; WebRTC
+    is deliberately not v1**: ICE negotiates a direct peer connection
+    that structurally cannot ride the proxy, to buy sub-second
+    latency where MSE's ~0.5–1.5s is fine for glancing at a camera.
+    Revisit only if two-way talk ever matters.
+  - `/api/camera/{entity}/snapshot` — proxies go2rtc's `frame.jpeg`;
+    the room-card poster. Live streams start only on tap, in the
+    entity detail overlay — never N always-on streams.
+  - Player: go2rtc's own `video-stream.js` web component, vendored
+    into `/assets/` (the Leaflet precedent), pointed at the proxy URL.
+  Video bytes do transit the dashboard unit — as an opaque socket
+  relay. The plane split's force is that the bus, recorder, and core
+  stay scalar; the dashboard is the declared browser edge of the
+  media plane, and relaying is not processing.
+- **First foreign binary as a unit — the shim owns the token.** The
+  unit contract demands a liveliness token a Go binary cannot
+  declare. `units/go2rtc.py` is a thin SDK shim: it reads
+  `HOMEOSTAT_CAMERAS`, renders the go2rtc config (API on 127.0.0.1,
+  one stream per camera, `rtsp://user:pass@host/stream1`), spawns the
+  binary as a child, polls its API until healthy, and only then
+  declares `ready()`. Child death → shim exit → supervisor backoff;
+  the process-group sweep already guarantees no orphan. The camera
+  list has one source of truth (the credentials file, keyed by entity
+  id); the binary itself is image-build provisioning, never repo
+  content. This shim pattern is the general answer for any future
+  foreign binary.
 - **Refused, deliberately** (the log-sink shape): no NVR, no motion
   detection, no transcoding, no frame storage inside homeostat. All
   four are mature-tooling territory; anything built here would be a
