@@ -20,6 +20,10 @@
 //! 6. `/api/logs` proxies a unit's captured stdout/stderr tail (docs/design.md,
 //!    "Logs and the audit trail"): known lines come back stream-tagged,
 //!    `lines=N` truncates, and an unknown unit 404s.
+//! 7. The camera media plane (docs/design.md, Cameras): browsers never
+//!    speak go2rtc — `/api/camera/{entity}/snapshot` proxies frame.jpeg,
+//!    `/api/camera/{entity}/live` relays the MSE WebSocket byte-for-byte,
+//!    and an unknown or non-camera entity 404s.
 
 mod common;
 
@@ -612,6 +616,141 @@ async fn dashboard_serves_unit_logs() {
 
     let (status, reply) = http_request(&addr, "GET", "/api/logs?unit=no-such-unit", &[], None);
     assert_eq!(status, 404, "unknown unit must 404: {reply}");
+
+    sup.shutdown();
+}
+
+/// A fake go2rtc (tests/fake_go2rtc.py) spawned directly on a free port —
+/// the dashboard proxies reach it via HOMEOSTAT_GO2RTC, exactly as they
+/// would reach the shim-supervised real one on localhost.
+struct FakeGo2rtc {
+    child: std::process::Child,
+    port: u16,
+}
+
+impl FakeGo2rtc {
+    fn spawn(streams: &str) -> Self {
+        let port = common::free_port();
+        let child = std::process::Command::new("uv")
+            .args([
+                "run",
+                "tests/fake_go2rtc.py",
+                "--listen",
+                &format!("127.0.0.1:{port}"),
+                "--streams",
+                streams,
+            ])
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn fake go2rtc (is uv installed?)");
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while TcpStream::connect(("127.0.0.1", port)).is_err() {
+            assert!(Instant::now() < deadline, "fake go2rtc never listened on {port}");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        Self { child, port }
+    }
+}
+
+impl Drop for FakeGo2rtc {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// Sends one masked client text frame (an all-zero mask key is valid RFC
+/// 6455 masking, and XOR with zero leaves the payload readable).
+fn ws_send_text(stream: &mut TcpStream, payload: &str) {
+    let bytes = payload.as_bytes();
+    assert!(bytes.len() < 126, "small frames only in tests");
+    let mut frame = vec![0x81u8, 0x80 | bytes.len() as u8, 0, 0, 0, 0];
+    frame.extend_from_slice(bytes);
+    stream.write_all(&frame).expect("send ws frame");
+}
+
+/// Reads one server frame, returning (opcode, payload).
+fn ws_read_frame(stream: &mut TcpStream) -> (u8, Vec<u8>) {
+    let mut prefix = [0u8; 2];
+    stream.read_exact(&mut prefix).expect("frame header");
+    let mut len = (prefix[1] & 0x7f) as u64;
+    if len == 126 {
+        let mut ext = [0u8; 2];
+        stream.read_exact(&mut ext).expect("extended len");
+        len = u16::from_be_bytes(ext) as u64;
+    } else if len == 127 {
+        let mut ext = [0u8; 8];
+        stream.read_exact(&mut ext).expect("extended len");
+        len = u64::from_be_bytes(ext);
+    }
+    let mut payload = vec![0u8; len as usize];
+    stream.read_exact(&mut payload).expect("frame payload");
+    (prefix[0] & 0x0f, payload)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn dashboard_proxies_camera_media() {
+    let go2rtc = FakeGo2rtc::spawn("porch_cam");
+    let port = common::free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let go2rtc_url = format!("http://127.0.0.1:{}", go2rtc.port);
+    let mut sup = Supervisor::spawn_with_env(
+        FIXTURE,
+        &[
+            ("HOMEOSTAT_DASHBOARD_PORT", &port.to_string()),
+            ("HOMEOSTAT_GO2RTC", &go2rtc_url),
+        ],
+    );
+    let observer = sup.observer().await;
+    let mut dash = health_watch(&observer, "dashboard").await;
+    await_health(&mut dash, Duration::from_secs(180), |h| {
+        h.status == HealthStatus::Running
+    })
+    .await;
+
+    // The camera renders in the model like any entity.
+    let (status, model) = http_request(&addr, "GET", "/api/model", &[], None);
+    assert_eq!(status, 200, "{model}");
+    let cam = model["entities"]
+        .as_array()
+        .expect("entities array")
+        .iter()
+        .find(|e| e["name"] == "porch_cam")
+        .expect("porch_cam in model");
+    assert_eq!(cam["capability"], "camera", "{cam}");
+
+    // Snapshot: a JPEG straight through the proxy.
+    let (status, headers, body) = http_request_bytes(&addr, "/api/camera/porch_cam/snapshot", &[]);
+    assert_eq!(status, 200);
+    assert!(
+        headers
+            .iter()
+            .any(|(k, v)| k.eq_ignore_ascii_case("content-type") && v.starts_with("image/jpeg")),
+        "{headers:?}"
+    );
+    assert!(body.starts_with(b"\xff\xd8"), "JPEG magic, got {:?}", &body[..4.min(body.len())]);
+
+    // Unknown and non-camera entities 404 — the proxy is model-gated.
+    let (status, _) = http_request(&addr, "GET", "/api/camera/no_such_cam/snapshot", &[], None);
+    assert_eq!(status, 404);
+    let (status, _) = http_request(&addr, "GET", "/api/camera/lamp/snapshot", &[], None);
+    assert_eq!(status, 404, "a lamp is not a camera");
+
+    // Live: the MSE handshake and the fMP4 bytes relay untouched.
+    let mut ws = ws_connect(&addr, "/api/camera/porch_cam/live");
+    ws_send_text(&mut ws, "{\"type\":\"mse\"}");
+    let (opcode, payload) = ws_read_frame(&mut ws);
+    assert_eq!(opcode, 0x1, "codec answer is a text frame");
+    let answer: Value = serde_json::from_slice(&payload).expect("codec answer is JSON");
+    assert_eq!(answer["type"], "mse", "{answer}");
+    let (opcode, init) = ws_read_frame(&mut ws);
+    assert_eq!(opcode, 0x2, "init segment is a binary frame");
+    assert_eq!(init, b"\x00\x00\x00\x1cftypiso5FAKEMOOV".to_vec());
+    let (opcode, frame) = ws_read_frame(&mut ws);
+    assert_eq!(opcode, 0x2, "media segment is a binary frame");
+    assert_eq!(frame, b"\x00\x00\x00\x10moofFAKEFRAME".to_vec());
 
     sup.shutdown();
 }

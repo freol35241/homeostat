@@ -233,6 +233,11 @@ input[type=text], input[type=time] { border: 1px solid var(--border); background
 .event-row .ts { color: var(--muted); margin-right: 6px; cursor: help; }
 .badge-arbitrated { font-size: 9px; letter-spacing: .05em; color: var(--muted); border: 1px solid var(--border);
   border-radius: 8px; padding: 2px 6px; margin-left: 6px; }
+.badge-motion { font-size: 9px; letter-spacing: .05em; color: var(--accent, #e67); border: 1px solid currentColor;
+  border-radius: 8px; padding: 2px 6px; margin-left: 6px; }
+.camera-poster { width: 100%; border-radius: 8px; display: block; background: #000; min-height: 80px; }
+video-rtc { display: block; width: 100%; min-height: 180px; background: #000; border-radius: 8px; overflow: hidden; }
+video-rtc video { width: 100%; display: block; }
 .aspect-row { font-size: 12px; color: var(--secondary); padding: 6px 4px; }
 .aspect-row.row-clickable { min-height: 40px; display: flex; align-items: center; }
 .empty-hint { color: var(--muted); font-size: 12.5px; padding: 8px 0; }
@@ -304,6 +309,12 @@ input[type=text], input[type=time] { border: 1px solid var(--border); background
 
 <script src="/assets/leaflet.js"></script>
 <script src="/assets/protomaps-leaflet.js"></script>
+<script type="module">
+  // The vendored go2rtc player (assets/README.md). MSE only: WebRTC can't
+  // ride the dashboard's /api/camera proxy (docs/design.md, Cameras).
+  import { VideoRTC } from '/assets/video-rtc.js';
+  customElements.define('video-rtc', VideoRTC);
+</script>
 <script>
 'use strict';
 (function () {
@@ -995,19 +1006,34 @@ function widgetGeneric(entity) {
     '<span class="entity-name" title="' + esc(entity.label) + '">' + esc(entity.label) + '</span>' + rows.join('') + '</div>';
 }
 
+function widgetForCamera(entity) {
+  // The room-card poster (the /api/camera snapshot proxy); the live view
+  // lives in the entity detail overlay, opened on tap — never N always-on
+  // streams (docs/design.md, Cameras). The poster refreshes at most once
+  // a minute via the cache-busting bucket.
+  var motion = stateValue(entity.room, entity.name, 'motion');
+  var badge = motion === true ? '<span class="badge-motion">MOTION</span>' : '';
+  return '<div class="entity-row row-clickable" data-action="entity-detail" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '" style="flex-direction:column;align-items:stretch;gap:6px;">' +
+    '<span style="display:flex;justify-content:space-between;align-items:center;">' +
+    '<span class="entity-name" title="' + esc(entity.label) + '">' + esc(entity.label) + '</span>' + badge + '</span>' +
+    '<img class="camera-poster" loading="lazy" alt="" src="/api/camera/' + encodeURIComponent(entity.name) + '/snapshot?t=' + Math.floor(Date.now() / 60000) + '">' +
+    '</div>';
+}
+
 function widgetForEntity(entity) {
   if (entity.capability === 'light' || entity.capability === 'switch') return widgetForLight(entity);
   if (entity.capability === 'presence') return widgetForPresence(entity);
   if (entity.capability === 'lock') return widgetForLock(entity);
   if (entity.capability === 'climate') return widgetForClimate(entity);
   if (entity.capability === 'sensor') return widgetForSensor(entity);
+  if (entity.capability === 'camera') return widgetForCamera(entity);
   return widgetGeneric(entity);
 }
 
-var CAP_ORDER = { light: 0, lock: 1, presence: 2, climate: 3, sensor: 4 };
+var CAP_ORDER = { light: 0, lock: 1, presence: 2, climate: 3, sensor: 4, camera: 5 };
 function capRank(entity) {
   var r = CAP_ORDER[entity.capability];
-  return r === undefined ? 5 : r;
+  return r === undefined ? 6 : r;
 }
 
 // ---- relative time ----
@@ -1573,8 +1599,23 @@ function renderOverlayContent() {
   else if (overlay.type === 'entity') r = renderEntityDetailBody();
   else if (overlay.type === 'unit') r = renderUnitDetailBody();
   else r = { title: '', body: '' };
+  // A live camera stream must survive re-renders (every state delta
+  // re-runs this): the mounted player is carried across the innerHTML
+  // swap instead of being torn down and reconnected.
+  var live = byId('overlay-body').querySelector('video-rtc');
   byId('overlay-title').textContent = r.title;
   byId('overlay-body').innerHTML = r.body;
+  var holder = byId('overlay-body').querySelector('[data-camera-live]');
+  if (holder) {
+    var name = holder.getAttribute('data-camera-live');
+    if (!live || live.getAttribute('data-entity') !== name) {
+      live = document.createElement('video-rtc');
+      live.setAttribute('data-entity', name);
+      live.mode = 'mse';
+      live.src = '/api/camera/' + encodeURIComponent(name) + '/live';
+    }
+    holder.appendChild(live);
+  }
   wireChartInteractions(byId('overlay-body'));
 }
 
@@ -1641,10 +1682,16 @@ function renderEntityDetailBody() {
   });
   if (rows.length === 0) rows.push('<div class="aspect-row faint">no data</div>');
 
+  // A camera's detail is the live view (mounted imperatively in
+  // renderOverlayContent — a custom element can't ride innerHTML), not a
+  // Controls row: cameras take no commands.
+  var middle = entity.capability === 'camera'
+    ? '<div class="card-label" style="margin-top:20px;">Live</div>' +
+      '<div data-camera-live="' + esc(entity.name) + '"></div>'
+    : '<div class="card-label" style="margin-top:20px;">Controls</div>' + widgetForEntity(entity);
   var body = '<div class="muted" style="margin-top:2px;">' + esc(meta) + '</div>' +
     '<div class="muted" style="margin-top:6px;">' + ownerLine + '</div>' +
-    '<div class="card-label" style="margin-top:20px;">Controls</div>' +
-    widgetForEntity(entity) +
+    middle +
     '<div class="card-label" style="margin-top:20px;">State</div>' + rows.join('');
   return { title: entity.label, body: body };
 }

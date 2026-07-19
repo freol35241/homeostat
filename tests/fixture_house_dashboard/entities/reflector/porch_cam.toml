@@ -1,0 +1,13 @@
+schema = 1
+
+[entity]
+id = "porch_cam"
+capability = "camera"
+room = "livingroom"
+
+[naming]
+en = "porch camera"
+
+[write_policy]
+mode = "shared"
+owner = "reflector"

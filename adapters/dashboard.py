@@ -25,8 +25,14 @@ a small API generated entirely from the house's text:
   GET  /api/logs     unit's captured stdout/stderr tail, for the unit detail
                      overlay (?unit=..&lines=N), proxying the supervisor's
                      home/meta/{unit}/log queryable
-  GET  /assets/*     vendored map libraries (Leaflet, protomaps-leaflet),
-                     allowlisted by filename
+  GET  /api/camera/{entity}/snapshot   go2rtc frame.jpeg proxy — the room-
+                     card poster for camera entities
+  GET  /api/camera/{entity}/live       WebSocket relayed byte-for-byte to
+                     go2rtc's api/ws (MSE) — browsers never speak go2rtc
+                     (docs/design.md, Cameras); HOMEOSTAT_GO2RTC overrides
+                     the localhost default for both
+  GET  /assets/*     vendored libraries (Leaflet, protomaps-leaflet, the
+                     go2rtc player), allowlisted by filename
   GET  /tiles.pmtiles  self-hosted PMTiles region extract for the map
                      widget, from HOMEOSTAT_DASHBOARD_TILES; 404 if unset
 
@@ -43,6 +49,7 @@ unset means the map renders without a base layer.
 
 import argparse
 import asyncio
+import contextlib
 import datetime
 import ipaddress
 import json
@@ -51,21 +58,25 @@ import threading
 import time
 from pathlib import Path
 
+import aiohttp
 from aiohttp import WSMsgType, web
 
 from homeostat import ConfigWriteError, connect, house, keys
 
 ENV_HOSTS = "HOMEOSTAT_DASHBOARD_HOSTS"
 ENV_TILES = "HOMEOSTAT_DASHBOARD_TILES"
+ENV_GO2RTC = "HOMEOSTAT_GO2RTC"
+DEFAULT_GO2RTC = "http://127.0.0.1:1984"
 ALLOWED_NAMES = {"localhost", "homeostat", "homeostat.lan", "homeostat.local"}
 WRITE_HEADER = "X-Homeostat"
 
-# Vendored map assets served at /assets/{name} — allowlisted by filename so
+# Vendored assets served at /assets/{name} — allowlisted by filename so
 # the route can't become a path-traversal surface.
 ASSETS = {
     "leaflet.js": "text/javascript",
     "leaflet.css": "text/css",
     "protomaps-leaflet.js": "text/javascript",
+    "video-rtc.js": "text/javascript",
 }
 
 # Commandable aspects per capability: the capability's base aspect plus
@@ -358,7 +369,80 @@ def make_app(hub: Hub, model: dict, page: Path, assets_dir: Path) -> web.Applica
         entries = replies[0][1] if replies else []
         return web.json_response(entries)
 
+    def camera_spec(request: web.Request) -> dict | None:
+        spec = entities.get(request.match_info["entity"])
+        return spec if spec is not None and spec["capability"] == "camera" else None
+
+    def go2rtc_base() -> str:
+        return os.environ.get(ENV_GO2RTC, DEFAULT_GO2RTC).rstrip("/")
+
+    async def api_camera_snapshot(request: web.Request) -> web.Response:
+        spec = camera_spec(request)
+        if spec is None:
+            return json_error(f"unknown camera {request.match_info['entity']}", status=404)
+        try:
+            async with client["http"].get(
+                f"{go2rtc_base()}/api/frame.jpeg",
+                params={"src": spec["name"]},
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as upstream:
+                if upstream.status != 200:
+                    return json_error("snapshot unavailable", status=502)
+                body = await upstream.read()
+        except (aiohttp.ClientError, asyncio.TimeoutError):
+            return json_error("snapshot unavailable", status=502)
+        return web.Response(body=body, content_type="image/jpeg")
+
+    async def api_camera_live(request: web.Request) -> web.WebSocketResponse:
+        spec = camera_spec(request)
+        if spec is None:
+            raise web.HTTPNotFound()
+        origin = request.headers.get("Origin")
+        if origin is not None:
+            host = origin.split("://", 1)[-1].split("/", 1)[0]
+            if not host_allowed(host):
+                raise web.HTTPForbidden(text="origin not allowed")
+        ws = web.WebSocketResponse(heartbeat=30)
+        await ws.prepare(request)
+        # An opaque byte-for-byte relay to localhost go2rtc — the browser
+        # edge of the media plane. Either side closing closes both.
+        try:
+            async with client["http"].ws_connect(
+                f"{go2rtc_base()}/api/ws", params={"src": spec["name"]}
+            ) as upstream:
+
+                async def pump(source, sink) -> None:
+                    async for message in source:
+                        if message.type == WSMsgType.TEXT:
+                            await sink.send_str(message.data)
+                        elif message.type == WSMsgType.BINARY:
+                            await sink.send_bytes(message.data)
+
+                directions = [
+                    asyncio.create_task(pump(ws, upstream)),
+                    asyncio.create_task(pump(upstream, ws)),
+                ]
+                _done, pending = await asyncio.wait(
+                    directions, return_when=asyncio.FIRST_COMPLETED
+                )
+                for task in pending:
+                    task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await task
+        except aiohttp.ClientError:
+            pass  # upstream refused: the close below is the browser's signal
+        await ws.close()
+        return ws
+
+    client: dict = {}
+
+    async def outbound_client(app: web.Application):
+        client["http"] = aiohttp.ClientSession()
+        yield
+        await client["http"].close()
+
     app = web.Application(middlewares=[guard])
+    app.cleanup_ctx.append(outbound_client)
     app.router.add_get("/", index)
     app.router.add_get("/api/model", api_model)
     app.router.add_get("/ws", ws_handler)
@@ -366,6 +450,8 @@ def make_app(hub: Hub, model: dict, page: Path, assets_dir: Path) -> web.Applica
     app.router.add_post("/api/param", api_param)
     app.router.add_get("/api/history", api_history)
     app.router.add_get("/api/logs", api_logs)
+    app.router.add_get("/api/camera/{entity}/snapshot", api_camera_snapshot)
+    app.router.add_get("/api/camera/{entity}/live", api_camera_live)
     app.router.add_get("/assets/{name}", api_asset)
     app.router.add_get("/tiles.pmtiles", api_tiles)
     return app
