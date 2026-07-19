@@ -31,6 +31,19 @@ COPY src ./src
 RUN cargo build --release --locked --bin homeostat --target "$(cat /rust-target)" \
     && cp "target/$(cat /rust-target)/release/homeostat" /homeostat
 
+# go2rtc: the camera restreamer the go2rtc shim unit spawns from PATH —
+# image-build provisioning, never repo content (docs/design.md, Cameras).
+# Static Go binary, fetched per target arch and checksum-pinned.
+ARG GO2RTC_VERSION=1.9.14
+RUN case "$TARGETARCH" in \
+      amd64) sha=32d616af226bd731678ffde328b94cfb94e30339bfefc469cfb76323144615a6 ;; \
+      arm64) sha=359fabade8a7a51e81a55fe6df6b0ef81764a5e1d63179577534eaaa71904b50 ;; \
+    esac \
+    && curl -fsSL -o /go2rtc \
+      "https://github.com/AlexxIT/go2rtc/releases/download/v${GO2RTC_VERSION}/go2rtc_linux_${TARGETARCH}" \
+    && echo "$sha  /go2rtc" | sha256sum -c - \
+    && chmod +x /go2rtc
+
 FROM debian:bookworm-slim
 
 # git: plan --save, apply and the MCP repo tools shell out to it.
@@ -51,6 +64,7 @@ ENV UV_PYTHON_INSTALL_DIR=/opt/uv/python \
 RUN uv python install 3.12
 
 COPY --from=build /homeostat /usr/local/bin/homeostat
+COPY --from=build /go2rtc /usr/local/bin/go2rtc
 
 # The supervisor's bus endpoint; units and observers connect here.
 EXPOSE 7447
