@@ -1205,10 +1205,23 @@ homeostat process, the small core is gone.
   are deferred — noted for later because privacy mode ("family is
   home → lens down") is the first camera *command* worth having, and
   smells arbitrated.
+- **The adapter is `onvif.py`, named for the dialect it speaks** — the
+  esphome precedent (adapters are named for the dialect they absorb),
+  not for the vendor. Scope stays inventory-bounded: Profile S
+  pull-point events only — no PTZ, no imaging service, no capability
+  negotiation. Nothing in the event path is Tapo-flavored; the
+  Tapo-specific parts are per-camera facts (host, port, credentials),
+  which are config, not code. A vendor adapter (tapo, via pytapo)
+  exists only from the day vendor-API commands (privacy mode,
+  pan/tilt) are actually wanted — and since exactly one adapter binds
+  each entity, it then subsumes ONVIF events and takes the cameras
+  with it by a normal plan/apply migration, rather than sitting
+  beside `onvif.py`. Pre-building that path before any command exists
+  is the speculative branch.
 - **Credentials**: camera account user/pass and host per camera in an
-  out-of-repo TOML behind `HOMEOSTAT_CAMERAS` — the ESPHome-devices
-  pattern; addresses and passwords never enter the repo (the boundary
-  test). Cameras are cloud-attached by default; they belong on a
+  out-of-repo TOML behind `HOMEOSTAT_CAMERAS`, keyed by entity `id` —
+  the ESPHome-devices pattern; addresses and passwords never enter
+  the repo (the boundary test). Cameras are cloud-attached by default; they belong on a
   segment firewalled from WAN, with the app's cloud features accepted
   as lost. No cloud in any homeostat path.
 
