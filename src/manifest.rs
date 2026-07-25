@@ -13,8 +13,10 @@ pub const CAPABILITIES: &[&str] = &[
     "lock",
     "person",
     "presence",
+    "router",
     "sensor",
     "switch",
+    "vpn",
 ];
 
 pub const SUPPORTED_SCHEMA: u32 = 1;

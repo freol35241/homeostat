@@ -1,0 +1,10 @@
+schema = 1
+
+[entity]
+id = "gw/wg0"
+capability = "vpn"
+room = "global"
+
+[write_policy]
+mode = "shared"
+owner = "openwrt"

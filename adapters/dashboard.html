@@ -1274,6 +1274,24 @@ function renderNow() {
     }
   });
 
+  // state: connectivity — WAN or a VPN tunnel down
+  entities.filter(function (e) { return e.capability === 'router'; }).forEach(function (e) {
+    if (stateValue(e.room, e.name, 'wan') === false) {
+      deviations.push({
+        title: e.label + ' — WAN down', detail: '', tag: 'state',
+        action: 'entity-detail', attrs: 'data-room="' + esc(e.room) + '" data-entity="' + esc(e.name) + '"'
+      });
+    }
+  });
+  entities.filter(function (e) { return e.capability === 'vpn'; }).forEach(function (e) {
+    if (stateValue(e.room, e.name, 'up') === false) {
+      deviations.push({
+        title: e.label + ' down', detail: '', tag: 'state',
+        action: 'entity-detail', attrs: 'data-room="' + esc(e.room) + '" data-entity="' + esc(e.name) + '"'
+      });
+    }
+  });
+
   // 3. setpoint: config differing from manifest default
   (store.model.units || []).forEach(function (u) {
     var params = u.params || {};

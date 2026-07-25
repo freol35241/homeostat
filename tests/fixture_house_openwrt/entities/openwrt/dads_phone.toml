@@ -1,0 +1,10 @@
+schema = 1
+
+[entity]
+id = "aa:bb:cc:dd:ee:ff"
+capability = "presence"
+room = "global"
+
+[write_policy]
+mode = "shared"
+owner = "openwrt"

@@ -1261,6 +1261,90 @@ homeostat process, the small core is gone.
   segment firewalled from WAN, with the app's cloud features accepted
   as lost. No cloud in any homeostat path.
 
+## Network presence and connectivity (settled 2026-07-25)
+
+The founding decision is a scope split, the network analogue of "pixels
+are the media plane": **presence and connectivity state are house state;
+network metrics are observability.** Homeostat carries what regulation
+and the family consume — who is home, whether the WAN and the VPN
+tunnels are up. Throughput curves, router CPU, latency histories,
+per-interface counters are owner-facing diagnostics: mature-tooling
+territory (Prometheus + Grafana beside homeostat, blackbox probes,
+`prometheus-node-exporter-lua` on the routers), and anything built here
+would be a worse reimplementation welded on — the log-sink sentence,
+third verse. The same fact may surface on both sides (a tunnel down),
+deliberately: homeostat renders the family-facing deviation on `Now`,
+the monitoring stack the owner-facing diagnosis. No coupling in either
+direction.
+
+- **The adapter is `openwrt.py`, named for the dialect it speaks**: ubus
+  JSON-RPC over HTTP (`uhttpd-mod-ubus`, rpcd session auth) — the first
+  polling adapter (MQTT pushes, ONVIF long-polls; ubus answers questions).
+  One adapter, many routers: `HOMEOSTAT_OPENWRT` points at an out-of-repo
+  TOML keyed by router name (`host`, `username`, `password`) — the
+  ESPHome/cameras pattern; the manifest's `[discovery].endpoint` is
+  `${HOMEOSTAT_OPENWRT}` itself, the recorder's endpoint-as-store shape.
+  Operational note: a dedicated read-only rpcd ACL login per router,
+  never root. A fresh login per poll cycle; rpcd expires idle sessions.
+- **Vocabulary** (two new capabilities, `router` and `vpn`):
+  - `router`, aspect `wan` (bool): the netifd interface named `wan` is
+    up. Entity `id` = the router's name in the credentials file.
+  - `vpn`, aspect `up` (bool). `id` = `{router}/{interface}` — the
+    two-segment shape. A tunnel is a **netifd interface** (standard
+    OpenWrt practice; firewall zones demand it), which is what makes
+    WireGuard and OpenVPN one rule apart: proto `wireguard` is up iff
+    the interface is up AND the freshest peer handshake is younger than
+    180 s (adapter constant — WireGuard rekeys about every 2 minutes
+    under traffic; monitored tunnels must run persistent-keepalive, the
+    operational note); any other proto is the interface's own up flag.
+    Handshakes come from rpcd's `luci.wireguard` status call
+    (`luci-proto-wireguard`, present on any LuCI-managed WG router).
+  - WiFi presence: capability `presence` (existing vocabulary), aspect
+    `presence` (bool), `id` = the device MAC, lowercase, `room =
+    "global"` (a phone is non-spatial). A sighting is association to
+    any hostapd BSS on any configured router — the union is what makes
+    AP roaming invisible. Absence requires `away_delay_s` (parameter,
+    family-editable, default 180) of continuous non-sighting: phones
+    sleep-drop WiFi for seconds at a time, and the same debounce
+    absorbs an AP reboot.
+- **Presence fusion is an automation, not adapter magic.** Exactly one
+  adapter binds each entity, so `openwrt.py` structurally cannot write
+  onto OwnTracks-bound `person` entities — correct, not a limitation.
+  Combining WiFi sightings with location into "someone is home" is
+  house-specific behavior (which MAC is whose) and lives in the house
+  repo as an ordinary automation consuming both.
+- **Publish on transition only** (plus each entity's current value
+  after the first successful poll): a poll is a read, not an event.
+  The recorder then stores exactly the transitions, and late joiners
+  are already covered by the core's state mirror.
+- **Failure policy**: an unreachable router emits one
+  `router-unreachable` health event per down transition (the
+  backend-outage precedent) and its aspects go stale rather than
+  false — an unreachable AP contributes no sightings, and
+  `away_delay_s` is what keeps a rebooting AP from marking the family
+  away. Recovery publishes whatever actually changed during the
+  outage; a long outage marking everyone absent is accepted v1
+  behavior, documented here.
+- **Read-only, deliberately**: no cmd surface. OpenWrt can be
+  commanded (reboot, guest WiFi, tunnel up/down); the pytapo rule
+  applies — the command adapter surface is built the day a command is
+  actually wanted, and reboot smells owner-tier.
+- **Discovery** from data already fetched: associated stations
+  (suggested `presence`), tunnel-shaped interfaces (suggested `vpn`),
+  the routers themselves. DHCP-lease hostnames would make station
+  records self-identifying; deferred until bare MACs prove
+  insufficient in practice.
+- **The remote ASUS router is deferred** — the QuestDB pattern. Its
+  reachability today is owner diagnostics (a blackbox probe on the
+  monitoring side); an `asuswrt.py` arrives the day its state feeds an
+  automation or a family-facing deviation, as a sibling dialect
+  adapter, changing nothing here.
+- **Dashboard**: `wan = false` and `up = false` join the notable-state
+  vocabulary — a downed tunnel is exactly "out of the ordinary".
+  Parameters: `poll_interval_s` (owner-editable, default 30) and
+  `away_delay_s` ride the live parameter path like any other; both
+  have adapter-side fallbacks so a manifest may omit them.
+
 ## Voice (later phase)
  
 - Two-tier command path: a fast-path intent matcher (high precision,
