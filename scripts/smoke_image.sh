@@ -105,8 +105,15 @@ echo "plan from a second container matches the repo"
 docker stop -t 20 "$SUP" >/dev/null
 exit_code="$(docker inspect -f '{{.State.ExitCode}}' "$SUP")"
 [ "$exit_code" = "0" ] || fail "supervisor exited $exit_code on SIGTERM"
-docker logs "$SUP" 2>&1 | grep -q "\[homeostat\] shutting down" \
-  || fail "no clean shutdown line in the logs"
+# The log driver can lag the exit by a moment: the final lines are not
+# always readable the instant `docker stop` returns, so poll briefly.
+deadline=$((SECONDS + 10))
+until docker logs "$SUP" 2>&1 | grep -q "\[homeostat\] shutting down"; do
+  if [ "$SECONDS" -ge "$deadline" ]; then
+    fail "no clean shutdown line in the logs"
+  fi
+  sleep 1
+done
 echo "clean shutdown on SIGTERM"
 
 echo "SMOKE OK"
