@@ -1,0 +1,13 @@
+schema = 1
+
+[unit]
+name = "fuser"
+kind = "automation"
+
+[runtime]
+command = "uv run units/fuser.py"
+restart = "on-failure"
+
+[bus.publishes]
+ghost = { key = "home/state/den/ghost/level" }
+wild = { key = "home/state/*/ghost/level" }

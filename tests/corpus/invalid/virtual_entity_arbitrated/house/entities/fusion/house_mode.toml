@@ -1,0 +1,10 @@
+schema = 1
+
+[entity]
+id = "house_mode"
+capability = "switch"
+room = "global"
+
+[write_policy]
+mode = "arbitrated"
+owner = "fusion"

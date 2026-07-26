@@ -1,0 +1,21 @@
+schema = 1
+
+[unit]
+name = "fused_temperature"
+kind = "automation"
+description = "Fuses two room temperatures into a virtual downstairs sensor"
+
+[runtime]
+command = "uv run units/fused_temperature.py"
+restart = "on-failure"
+shutdown_grace_s = 5
+
+[bus.subscribes]
+livingroom = "home/state/livingroom/thermo/temperature"
+office = "home/state/office/thermo/temperature"
+
+[bus.publishes]
+fused = { key = "home/state/global/downstairs_temperature/temperature" }
+
+[entities]
+dir = "entities/fused_temperature/"

@@ -1,0 +1,1 @@
+error[invalid-manifest] tracker: [entities] is only valid for adapters and automations (units/tracker.toml)

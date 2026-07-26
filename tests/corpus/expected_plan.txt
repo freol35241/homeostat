@@ -2,7 +2,7 @@ Homeostat plan
   repo:  examples/house
   world: empty
 
-Units to create (6):
+Units to create (7):
 
 + adapter esphome (units/esphome.toml)
     command: uv run units/esphome.py
@@ -19,6 +19,10 @@ Units to create (6):
     command: uv run units/evening_lights.py
     params:
       off_time  type=time  default=23:00  constraint={after=20:00, before=02:00}  editable_by=family
++ automation fused_temperature (units/fused_temperature.toml)
+    command: uv run units/fused_temperature.py
+    entities (1):
+      downstairs_temperature  sensor  room=global  write=exclusive
 + service arbiter (units/arbiter.toml)
     command: uv run units/arbiter.py
     params:
@@ -55,6 +59,11 @@ Expanded keys:
     -> home/state/kitchen/**/presence
     -> home/state/livingroom/**/presence
     -> home/state/hallway/**/presence
+  fused_temperature publishes fused: home/state/global/downstairs_temperature/temperature
+  fused_temperature subscribes temperatures: home/state/downstairs/*/temperature (zone downstairs)
+    -> home/state/kitchen/*/temperature
+    -> home/state/livingroom/*/temperature
+    -> home/state/hallway/*/temperature
   arbiter publishes arbiter: home/arbiter/**
   arbiter subscribes cmd: home/cmd/**
   dashboard publishes lights: home/cmd/**
@@ -79,4 +88,4 @@ Grant table:
     -> kitchen_ceiling  (room=kitchen, write=shared, owner=zigbee)
     -> livingroom_lamp  (room=livingroom, write=exclusive, owner=zigbee)
 
-Plan tier: structural (6 units created, 3 grants added)
+Plan tier: structural (7 units created, 3 grants added)

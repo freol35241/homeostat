@@ -1,0 +1,16 @@
+schema = 1
+
+[entity]
+id = "downstairs_temperature"
+capability = "sensor"
+features = ["temperature"]
+room = "global"
+
+[naming]
+sv = "temperaturen där nere"
+en = "downstairs temperature"
+aliases = []
+
+[write_policy]
+mode = "exclusive"
+owner = "fused_temperature"

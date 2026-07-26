@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use crate::error::ValidationError;
 use crate::keyspace::{is_reserved_word, PSEUDO_ROOMS};
 use crate::manifest::{
-    DiscoveryMode, ParamSpec, ParamType, UnitKind, CAPABILITIES,
+    DiscoveryMode, ParamSpec, ParamType, UnitKind, WriteMode, CAPABILITIES,
 };
 use crate::repo::House;
 
@@ -99,11 +99,14 @@ fn check_manifest_shape(house: &House, errors: &mut Vec<ValidationError>) {
                 ));
             }
         } else {
-            if unit.manifest.entities.is_some() {
+            // Automations may bind entities (virtual sensors); services
+            // have never needed to and stay refused until one does.
+            if unit.manifest.entities.is_some() && unit.manifest.unit.kind != UnitKind::Automation
+            {
                 errors.push(ValidationError::new(
                     "invalid-manifest",
                     name,
-                    "[entities] is only valid for adapters",
+                    "[entities] is only valid for adapters and automations",
                     file.clone(),
                 ));
             }
@@ -147,27 +150,46 @@ fn check_entities(house: &House, errors: &mut Vec<ValidationError>) {
         let owner = &entity.file.write_policy.owner;
         match house.unit(owner) {
             None => errors.push(ValidationError::new(
-                "missing-owner-adapter",
+                "missing-owner-unit",
                 &entity.name,
-                format!("owner adapter \"{owner}\" does not exist"),
+                format!("owner unit \"{owner}\" does not exist"),
                 file.clone(),
             )),
-            Some(unit) if unit.manifest.unit.kind != UnitKind::Adapter => {
+            Some(unit)
+                if !matches!(
+                    unit.manifest.unit.kind,
+                    UnitKind::Adapter | UnitKind::Automation
+                ) =>
+            {
                 errors.push(ValidationError::new(
-                    "missing-owner-adapter",
+                    "missing-owner-unit",
                     &entity.name,
-                    format!("owner \"{owner}\" is not an adapter"),
+                    format!("owner \"{owner}\" is not an adapter or automation"),
                     file.clone(),
                 ));
             }
-            Some(_) if owner != &entity.adapter => {
+            Some(_) if owner != &entity.owner => {
                 errors.push(ValidationError::new(
                     "owner-mismatch",
                     &entity.name,
                     format!(
-                        "owner \"{owner}\" but bound by adapter \"{}\"",
-                        entity.adapter
+                        "owner \"{owner}\" but bound by unit \"{}\"",
+                        entity.owner
                     ),
+                    file.clone(),
+                ));
+            }
+            Some(unit)
+                if unit.manifest.unit.kind == UnitKind::Automation
+                    && entity.file.write_policy.mode == WriteMode::Arbitrated =>
+            {
+                // Automation-owned entities are read-only (docs/design.md,
+                // Virtual sensors): write modes govern command writers, and
+                // virtual entities take no commands.
+                errors.push(ValidationError::new(
+                    "virtual-entity-arbitrated",
+                    &entity.name,
+                    "automation-owned entities are read-only and cannot be arbitrated",
                     file.clone(),
                 ));
             }

@@ -1,0 +1,10 @@
+schema = 1
+
+[entity]
+id = "mode_switch"
+capability = "switch"
+room = "global"
+
+[write_policy]
+mode = "shared"
+owner = "fusion"

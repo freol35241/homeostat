@@ -3,8 +3,8 @@
 //! Two hashes decide "changed" cheaply before any semantic comparison:
 //! - `manifest_hash`: sha256 of the manifest file bytes.
 //! - `files_hash`: sha256 over the unit's non-manifest repo inputs — command
-//!   tokens that resolve to files (the `uv run units/foo.py` script), an
-//!   adapter's entity files, and `zones.toml` when any of the unit's key
+//!   tokens that resolve to files (the `uv run units/foo.py` script), the
+//!   unit's bound entity files, and `zones.toml` when any of the unit's key
 //!   expressions referenced a zone.
 
 use std::fs;
@@ -50,7 +50,7 @@ pub fn files_hash(root: &Path, unit: &LoadedUnit, house: &House, unit_uses_zone:
         }
     }
     let name = &unit.manifest.unit.name;
-    for entity in house.entities.iter().filter(|e| &e.adapter == name) {
+    for entity in house.entities.iter().filter(|e| &e.owner == name) {
         feed(&entity.path);
     }
     if unit_uses_zone {

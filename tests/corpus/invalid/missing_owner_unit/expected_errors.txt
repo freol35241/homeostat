@@ -1,0 +1,1 @@
+error[missing-owner-unit] some_lamp: owner unit "zwave" does not exist (entities/zigbee/some_lamp.toml)

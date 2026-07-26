@@ -298,13 +298,15 @@ pub fn walk_steps(diff: &Diff, check: &CheckResult, world: &World) -> Vec<Step> 
 }
 
 /// Edges (adapter, dependent) from a grant table: the granted entities'
-/// owner adapters must be up before the granting unit.
+/// owner adapters must be up before the granting unit. (Grants never
+/// resolve onto automation-owned entities — virtual entities are
+/// read-only — so edge sources are always adapters.)
 fn grant_edges(grants: &[Grant], check: &CheckResult) -> Vec<(String, String)> {
     let owner: BTreeMap<&str, &str> = check
         .house
         .entities
         .iter()
-        .map(|e| (e.name.as_str(), e.adapter.as_str()))
+        .map(|e| (e.name.as_str(), e.owner.as_str()))
         .collect();
     let mut edges = Vec::new();
     for grant in grants {
@@ -557,13 +559,15 @@ fn render_unit(check: &CheckResult, unit: &LoadedUnit, out: &mut String) {
     out.push_str(&format!("+ {} {} ({})\n", unit.manifest.unit.kind, name, unit.path));
     out.push_str(&format!("    command: {}\n", unit.manifest.runtime.command));
 
-    if unit.manifest.unit.kind == UnitKind::Adapter {
-        let entities: Vec<_> = check
-            .house
-            .entities
-            .iter()
-            .filter(|e| &e.adapter == name)
-            .collect();
+    let entities: Vec<_> = check
+        .house
+        .entities
+        .iter()
+        .filter(|e| &e.owner == name)
+        .collect();
+    // Adapters always render the block (an empty one is telling); other
+    // binding units (automations with virtual sensors) only when non-empty.
+    if unit.manifest.unit.kind == UnitKind::Adapter || !entities.is_empty() {
         out.push_str(&format!("    entities ({}):\n", entities.len()));
         let name_w = entities.iter().map(|e| e.name.len()).max().unwrap_or(0);
         let cap_w = entities

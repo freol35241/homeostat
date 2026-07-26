@@ -1,0 +1,12 @@
+schema = 1
+
+[unit]
+name = "tracker"
+kind = "service"
+
+[runtime]
+command = "uv run units/tracker.py"
+restart = "always"
+
+[entities]
+dir = "entities/tracker/"

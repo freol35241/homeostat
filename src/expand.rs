@@ -67,11 +67,14 @@ pub fn expand(house: &House) -> (Vec<ExpandedKey>, Vec<ValidationError>) {
 
             let mut zone = None;
             let exprs = if expr.has_template() {
-                if unit.manifest.unit.kind != UnitKind::Adapter {
+                if !matches!(
+                    unit.manifest.unit.kind,
+                    UnitKind::Adapter | UnitKind::Automation
+                ) {
                     errors.push(ValidationError::new(
-                        "template-outside-adapter",
+                        "template-outside-binding-unit",
                         subject,
-                        format!("\"{raw}\" uses {{room}}/{{entity}} templates, which only adapters may use"),
+                        format!("\"{raw}\" uses {{room}}/{{entity}} templates, which only entity-binding units (adapters and automations) may use"),
                         Some(unit.path.clone()),
                     ));
                     continue;
@@ -85,7 +88,7 @@ pub fn expand(house: &House) -> (Vec<ExpandedKey>, Vec<ValidationError>) {
                 house
                     .entities
                     .iter()
-                    .filter(|e| e.adapter == unit.manifest.unit.name)
+                    .filter(|e| e.owner == unit.manifest.unit.name)
                     .filter(|e| match expr.class() {
                         Some("cmd") => e.file.write_policy.mode != WriteMode::Arbitrated,
                         Some("arbiter") => e.file.write_policy.mode == WriteMode::Arbitrated,
@@ -170,7 +173,7 @@ mod tests {
                 write_policy: WritePolicy { mode, owner: adapter.to_string() },
             },
             path: format!("entities/{adapter}/{name}.toml"),
-            adapter: adapter.to_string(),
+            owner: adapter.to_string(),
         }
     }
 

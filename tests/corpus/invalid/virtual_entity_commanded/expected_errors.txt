@@ -1,0 +1,1 @@
+error[virtual-entity-commanded] mode_switch: "mode_switch" is bound by automation "fusion" and takes no commands (cmd publish toggler.mode) (entities/fusion/mode_switch.toml)

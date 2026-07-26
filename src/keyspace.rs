@@ -20,9 +20,9 @@ pub enum Segment {
     Any,
     /// `**` — zero or more segments.
     AnyRec,
-    /// `{room}` — expanded per bound entity, adapters only.
+    /// `{room}` — expanded per bound entity, entity-binding units only.
     RoomTemplate,
-    /// `{entity}` — expanded per bound entity, adapters only.
+    /// `{entity}` — expanded per bound entity, entity-binding units only.
     EntityTemplate,
 }
 

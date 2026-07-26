@@ -1345,6 +1345,72 @@ direction.
   `away_delay_s` ride the live parameter path like any other; both
   have adapter-side fallbacks so a manifest may omit them.
 
+## Virtual sensors: derived state (settled 2026-07-26)
+
+The founding decision: **derived state is ordinary state.** A virtual
+sensor — a fused downstairs temperature computed from the room sensors,
+the "someone is home" the presence-fusion sentence already promised — is
+an ordinary entity with an entity file, whose binding unit is an
+automation. "Exactly one adapter binds each entity" generalizes to
+**exactly one unit binds each entity**; nothing downstream can tell the
+difference, deliberately. Consumers never learn whether a temperature
+was measured or fused — the z2m sentence ("adapter-native vocabulary
+does not leak onto the bus") applied to provenance. Provenance is still
+visible where structure lives: the entity file names its owner, and the
+plan renders the automation's bound entities like an adapter's.
+
+- **Mechanics**: `[entities]` becomes legal on automations (optional;
+  still required on adapters, still an error on services until one
+  needs it). Templated state publishes expand over bound entities
+  exactly as for adapters; a single-entity producer may equally declare
+  the concrete key. The SDK already covers both (`ctx.publish` +
+  entity loading); no SDK change.
+- **Everything downstream is free, which is the argument for the entity
+  file**: the recorder (subscribes `home/state/**`), the dashboard
+  widget (capability + features → value + sparkline), the core state
+  mirror and `read_state`, notable-state vocabulary, voice grammar
+  later — all generated from the entity registry. A free-form state key
+  would be recorded but invisible to every generated surface: hidden
+  state outside the repo, exactly what the project rejects.
+- **So state keys belong to bound entities, enforced at plan time**: a
+  state-class publish must fall under an entity the unit binds —
+  templated expressions are bound by construction; concrete ones must
+  name a bound entity's room and name literally (`state-publish-unbound`
+  otherwise). This closes a pre-existing hole: nothing previously
+  stopped a unit from publishing state under an entity it never bound,
+  or under no entity at all.
+- **Read-only, v1**: automation-owned entities take no commands. A
+  cmd-class grant resolving onto one is a plan error
+  (`virtual-entity-commanded`), and arbitrated write policy on one is
+  likewise refused — write modes govern command writers, and there are
+  none. Structural consequence: grant edges still only run adapter →
+  dependent, the grant graph stays bipartite, the apply walk cannot
+  cycle. State-subscription chains between automations need no
+  ordering, as ever — a late-joining consumer reads the mirror. A
+  commandable virtual entity (a house-mode switch is the tempting
+  case) is the pytapo rule: designed the day one is actually wanted,
+  because it brings automation → automation grant edges and cycle
+  handling with it.
+- **Room**: a cross-room fusion lives in the pseudo-room `global` —
+  "downstairs" is a zone, zones never appear in keys, and the existing
+  zone-room-collision check already forbids smuggling a zone name in as
+  a room. A virtual sensor that is honestly about one room may use that
+  room. If `global` placement renders poorly, the escape hatch is the
+  dashboard's ordering/pinning hints — never a second spatial truth.
+- **Staleness is the producer's obligation**: a fusion of stale inputs
+  goes stale rather than confidently republishing — publish on
+  transition, one health event per input-loss transition (the openwrt
+  failure-policy precedent as a norm for producers). Norm, not
+  machinery: the core cannot know which inputs a fusion needs.
+- **Rejected, deliberately**: a `derived` key class (fragments the
+  vocabulary every consumer keys on); a generic fusion adapter
+  configured with rules (fusion config is a DSL — which sensors, what
+  weights, is house-specific behavior and lives in the house repo as
+  code); cross-adapter fusion inside an adapter (the membrane absorbs
+  dialects, it does not compute house behavior — an adapter derives
+  freely on its own bound entities, ivt490's normalized readings being
+  the standing example, and no further).
+
 ## Voice (later phase)
  
 - Two-tier command path: a fast-path intent matcher (high precision,

@@ -19,8 +19,9 @@ pub struct LoadedEntity {
     pub file: EntityFile,
     /// House-relative path, e.g. `entities/zigbee/kitchen_ceiling.toml`.
     pub path: String,
-    /// Name of the adapter unit whose entities dir this file lives in.
-    pub adapter: String,
+    /// Name of the unit whose entities dir this file lives in (an adapter,
+    /// or an automation for virtual sensors).
+    pub owner: String,
 }
 
 #[derive(Debug, Default)]
@@ -78,22 +79,22 @@ pub fn load(root: &Path) -> (House, Vec<ValidationError>) {
         house.units.push(LoadedUnit { manifest, path: rel });
     }
 
-    let mut entity_dirs: Vec<(String, String)> = Vec::new(); // (adapter, dir)
+    let mut entity_dirs: Vec<(String, String)> = Vec::new(); // (owner, dir)
     for unit in &house.units {
-        if unit.manifest.unit.kind != UnitKind::Adapter {
+        if !matches!(unit.manifest.unit.kind, UnitKind::Adapter | UnitKind::Automation) {
             continue;
         }
         if let Some(entities) = &unit.manifest.entities {
             entity_dirs.push((unit.manifest.unit.name.clone(), entities.dir.clone()));
         }
     }
-    for (adapter, dir) in entity_dirs {
+    for (owner, dir) in entity_dirs {
         let dir_rel = dir.trim_end_matches('/').to_string();
         let dir_abs = root.join(&dir_rel);
         if !dir_abs.is_dir() {
             errors.push(ValidationError::new(
                 "missing-entities-dir",
-                &adapter,
+                &owner,
                 format!("entities dir \"{dir}\" not found"),
                 None,
             ));
@@ -111,7 +112,7 @@ pub fn load(root: &Path) -> (House, Vec<ValidationError>) {
                 name,
                 file: entity,
                 path: rel,
-                adapter: adapter.clone(),
+                owner: owner.clone(),
             });
         }
     }

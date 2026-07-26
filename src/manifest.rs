@@ -225,7 +225,8 @@ pub struct EntityNaming {
 #[serde(deny_unknown_fields)]
 pub struct WritePolicy {
     pub mode: WriteMode,
-    /// Exactly one adapter binds each entity.
+    /// Exactly one unit binds each entity: an adapter, or an automation
+    /// for virtual sensors.
     pub owner: String,
 }
 

@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::ValidationError;
 use crate::expand::{Direction, ExpandedKey};
+use crate::keyspace::{KeyExpr, Segment};
 use crate::manifest::{Priority, UnitKind, WriteMode, CAPABILITIES};
 use crate::repo::House;
 
@@ -149,6 +150,81 @@ pub fn resolve(
         }
     }
 
+    // Automation-owned entities are read-only (docs/design.md, Virtual
+    // sensors): a cmd-class grant resolving onto one would hand commands to
+    // a producer that never takes them, and would put automation -> automation
+    // edges into the walk order.
+    for grant in &grants {
+        for name in &grant.entities {
+            let Some(entity) = house.entities.iter().find(|e| &e.name == name) else {
+                continue;
+            };
+            let automation_owned = house
+                .unit(&entity.owner)
+                .is_some_and(|u| u.manifest.unit.kind == UnitKind::Automation);
+            if automation_owned {
+                errors.push(ValidationError::new(
+                    "virtual-entity-commanded",
+                    name,
+                    format!(
+                        "\"{name}\" is bound by automation \"{}\" and takes no commands (cmd publish {}.{})",
+                        entity.owner, grant.unit, grant.publish
+                    ),
+                    Some(entity.path.clone()),
+                ));
+            }
+        }
+    }
+
+    // State keys belong to bound entities: templated state publishes are
+    // bound by construction; a concrete one must name a bound entity's room
+    // and name literally. Closes the free-form-state-key hole that virtual
+    // sensors would otherwise ride through.
+    for key in expanded {
+        if key.direction != Direction::Publishes {
+            continue;
+        }
+        let templated = KeyExpr::parse(&key.source).is_ok_and(|e| e.has_template());
+        if templated {
+            continue;
+        }
+        for expr in &key.exprs {
+            if expr.class() != Some("state") {
+                continue;
+            }
+            let unit = house.unit(&key.unit).expect("expanded key from loaded unit");
+            let subject = format!("{}.{}", key.unit, key.entry);
+            let (room, entity) = (expr.0.get(2), expr.0.get(3));
+            let (Some(Segment::Literal(room)), Some(Segment::Literal(entity))) = (room, entity)
+            else {
+                errors.push(ValidationError::new(
+                    "state-publish-unbound",
+                    subject,
+                    format!(
+                        "state publish \"{}\" needs literal room and entity segments (or {{room}}/{{entity}} templates)",
+                        key.source
+                    ),
+                    Some(unit.path.clone()),
+                ));
+                continue;
+            };
+            let bound = house.entities.iter().any(|e| {
+                &e.name == entity && e.owner == key.unit && &e.file.entity.room == room
+            });
+            if !bound {
+                errors.push(ValidationError::new(
+                    "state-publish-unbound",
+                    subject,
+                    format!(
+                        "state key \"home/state/{room}/{entity}/…\" is not under an entity bound by \"{}\"",
+                        key.unit
+                    ),
+                    Some(unit.path.clone()),
+                ));
+            }
+        }
+    }
+
     (grants, warnings, errors)
 }
 
@@ -204,7 +280,7 @@ mod tests {
                 write_policy: WritePolicy { mode, owner: adapter.to_string() },
             },
             path: format!("entities/{adapter}/{name}.toml"),
-            adapter: adapter.to_string(),
+            owner: adapter.to_string(),
         }
     }
 

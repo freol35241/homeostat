@@ -1,0 +1,2 @@
+error[state-publish-unbound] fuser.ghost: state key "home/state/den/ghost/…" is not under an entity bound by "fuser" (units/fuser.toml)
+error[state-publish-unbound] fuser.wild: state publish "home/state/*/ghost/level" needs literal room and entity segments (or {room}/{entity} templates) (units/fuser.toml)

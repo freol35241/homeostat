@@ -13,6 +13,9 @@ shutdown_grace_s = 5
 [bus.publishes]
 echo = { key = "home/state/den/probe_echo/level" }
 
+[entities]
+dir = "entities/probe/"
+
 [params.level]
 type = "int"
 default = 1

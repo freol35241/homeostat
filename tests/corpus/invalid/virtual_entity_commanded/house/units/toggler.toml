@@ -1,0 +1,12 @@
+schema = 1
+
+[unit]
+name = "toggler"
+kind = "automation"
+
+[runtime]
+command = "uv run units/toggler.py"
+restart = "on-failure"
+
+[bus.publishes]
+mode = { key = "home/cmd/global/mode_switch/on", capability = "switch", priority = "automation" }

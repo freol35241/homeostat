@@ -1,0 +1,10 @@
+schema = 1
+
+[entity]
+id = "probe_echo"
+capability = "sensor"
+room = "den"
+
+[write_policy]
+mode = "exclusive"
+owner = "probe"
