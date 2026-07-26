@@ -21,6 +21,10 @@ a small API generated entirely from the house's text:
                      band ({room, entity, aspect, value})
   POST /api/param    a parameter write through the core's validating config
                      queryable ({unit, param, value})
+  POST /api/lights/off  the whole-house darken: one manual-band off-command
+                     per bound light — group actions are manual-edge
+                     fan-outs, never a relay entity (docs/design.md,
+                     Dashboard)
   GET  /api/history  recorder proxy for sparklines (?entity=..&aspect=..)
   GET  /api/logs     unit's captured stdout/stderr tail, for the unit detail
                      overlay (?unit=..&lines=N), proxying the supervisor's
@@ -312,6 +316,18 @@ def make_app(hub: Hub, model: dict, page: Path, assets_dir: Path) -> web.Applica
         hub.session.put_json(keys.cmd_key(room, entity, aspect), envelope)
         return web.json_response({"ok": True})
 
+    async def api_lights_off(request: web.Request) -> web.Response:
+        # "Darken the whole house": family intent over a set of entities,
+        # fanned out here at the manual band where the family always wins —
+        # never relayed through a virtual entity, whose owner would
+        # re-publish at the automation band. Every light gets the command,
+        # lit or not: idempotent, and immune to stale state.
+        lights = [e for e in model["entities"] if e["capability"] == "light"]
+        envelope = keys.cmd_envelope(False, "manual", "dashboard")
+        for spec in lights:
+            hub.session.put_json(keys.cmd_key(spec["room"], spec["name"], "on"), envelope)
+        return web.json_response({"ok": True, "lights": len(lights)})
+
     async def api_param(request: web.Request) -> web.Response:
         try:
             body = await request.json()
@@ -447,6 +463,7 @@ def make_app(hub: Hub, model: dict, page: Path, assets_dir: Path) -> web.Applica
     app.router.add_get("/api/model", api_model)
     app.router.add_get("/ws", ws_handler)
     app.router.add_post("/api/cmd", api_cmd)
+    app.router.add_post("/api/lights/off", api_lights_off)
     app.router.add_post("/api/param", api_param)
     app.router.add_get("/api/history", api_history)
     app.router.add_get("/api/logs", api_logs)

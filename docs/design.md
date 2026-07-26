@@ -960,6 +960,20 @@ Decisions and why:
   plan error was not designed for. Settled: exclusivity constrains the
   automation band only; manual-band units sit above it by construction.
   Voice satellites inherit this same answer.
+- **Group actions are manual-edge fan-outs (settled 2026-07-26).**
+  "Darken the whole house" is family intent over a set of entities, so
+  the fan-out happens at the manual edge: `POST /api/lights/off` sends
+  one manual-band off-command per bound light through the dashboard's
+  existing blanket publish, surfaced on `Now` as the corrective action
+  on the lights-on deviation (the button exists exactly when there is
+  something to darken). Routing it through a commandable "scene" entity
+  was rejected: the owning automation would re-publish at the
+  automation band — demoting family intent below arbiter holds, THE
+  FAMILY ALWAYS WINS breaking precisely when the family pressed the
+  button — and would collide with exclusivity as a second
+  automation-band writer on every exclusive light. Voice inherits the
+  same answer: fast-path grammar → manual-band fan-out at the voice
+  edge.
 - **Purely generated from manifests; layout state exists nowhere.**
   Grouping from the entity `room` field and `zones.toml`; entity
   widgets derived from `capability` + `features` (a light with
@@ -1390,7 +1404,12 @@ plan renders the automation's bound entities like an adapter's.
   commandable virtual entity (a house-mode switch is the tempting
   case) is the pytapo rule: designed the day one is actually wanted,
   because it brings automation → automation grant edges and cycle
-  handling with it.
+  handling with it. When that day comes, the safe shape is a **latch**
+  — commands set the entity's own state, consumers react by
+  subscription at their own bands — never a **relay** that re-publishes
+  commands onward at the owner's band, laundering the writer's band and
+  actor (the group-action settlement under Dashboard is the standing
+  example of why).
 - **Room**: a cross-room fusion lives in the pseudo-room `global` —
   "downstairs" is a zone, zones never appear in keys, and the existing
   zone-room-collision check already forbids smuggling a zone name in as

@@ -134,6 +134,9 @@ h1.view-title { font-size: 20px; margin: 0 0 16px; }
 .dev-main .title { font-weight: 600; font-size: 13px; }
 .dev-main .detail { font-size: 12px; color: var(--secondary); margin-top: 2px; }
 .dev-tag { font-size: 10px; color: var(--muted); white-space: nowrap; margin-top: 2px; }
+.dev-btn { border: 1px solid var(--border); background: var(--card); color: var(--secondary);
+  border-radius: 14px; padding: 4px 12px; font-size: 12px; white-space: nowrap; cursor: pointer; }
+.dev-btn:hover { border-color: var(--muted); color: var(--ink); }
 .equilibrium { display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 10px; padding: 48px 24px; color: var(--secondary); font-size: 15px; text-align: center; }
 .equilibrium .eq-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good); opacity: .55; }
@@ -549,6 +552,17 @@ function sendCmd(room, entity, aspect, value) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Homeostat': 'family' },
     body: JSON.stringify({ room: room, entity: entity, aspect: aspect, value: value })
+  }).then(function (r) {
+    if (!r.ok) return r.text().then(function (t) { throw new Error(t || ('HTTP ' + r.status)); });
+  }).catch(function (e) {
+    toast(errText(e));
+  });
+}
+
+function sendLightsOff() {
+  fetch('/api/lights/off', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Homeostat': 'family' }
   }).then(function (r) {
     if (!r.ok) return r.text().then(function (t) { throw new Error(t || ('HTTP ' + r.status)); });
   }).catch(function (e) {
@@ -1259,7 +1273,10 @@ function renderNow() {
       detail: Object.keys(litRooms).map(titleCase).join(', '),
       tag: 'state',
       action: 'goto-rooms',
-      attrs: ''
+      attrs: '',
+      // The corrective action, right on the deviation: a manual-band
+      // fan-out server-side — the family always wins over automations.
+      button: { action: 'lights-off', label: 'All off' }
     });
   }
 
@@ -1325,6 +1342,7 @@ function renderNow() {
       return '<div class="dev-row row-clickable" data-action="' + d.action + '" ' + d.attrs + '>' +
         '<div class="dev-main"><div class="title" title="' + esc(d.title) + '">' + esc(d.title) + '</div>' +
         (d.detail ? '<div class="detail">' + esc(d.detail) + '</div>' : '') + '</div>' +
+        (d.button ? '<button class="dev-btn" data-action="' + d.button.action + '">' + esc(d.button.label) + '</button>' : '') +
         '<div class="dev-tag">' + esc(d.tag) + '</div></div>';
     }).join('');
   }
@@ -1758,6 +1776,10 @@ document.addEventListener('click', function (e) {
   if (!el) return;
   var action = el.getAttribute('data-action');
 
+  if (action === 'lights-off') {
+    sendLightsOff();
+    return;
+  }
   if (action === 'toggle-light') {
     var room = el.getAttribute('data-room');
     var entity = el.getAttribute('data-entity');

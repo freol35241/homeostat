@@ -754,3 +754,71 @@ async fn dashboard_proxies_camera_media() {
 
     sup.shutdown();
 }
+
+/// 8. The whole-house darken (docs/design.md, Dashboard, "Group actions
+/// are manual-edge fan-outs"): POST /api/lights/off publishes one
+/// manual-band off-command per bound light — and only lights — behind the
+/// same write gate as every other command.
+#[tokio::test(flavor = "multi_thread")]
+async fn dashboard_darkens_the_house() {
+    let port = common::free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let mut sup =
+        Supervisor::spawn_with_env(FIXTURE, &[("HOMEOSTAT_DASHBOARD_PORT", &port.to_string())]);
+    let observer = sup.observer().await;
+
+    let mut dash = health_watch(&observer, "dashboard").await;
+    await_health(&mut dash, Duration::from_secs(180), |h| {
+        h.status == HealthStatus::Running
+    })
+    .await;
+
+    let cmd_sub = observer
+        .declare_subscriber("home/cmd/**")
+        .await
+        .expect("cmd subscriber");
+
+    // The write gate holds for the fan-out like any other write.
+    let (status, reply) = http_request(&addr, "POST", "/api/lights/off", &[], None);
+    assert_eq!(status, 403, "{reply}");
+
+    let (status, reply) = http_request(
+        &addr,
+        "POST",
+        "/api/lights/off",
+        &[("X-Homeostat", "family")],
+        None,
+    );
+    assert_eq!(status, 200, "{reply}");
+    assert_eq!(
+        reply,
+        json!({"ok": true, "lights": 1}),
+        "the fixture binds exactly one light"
+    );
+
+    let sample = tokio::time::timeout(Duration::from_secs(10), cmd_sub.recv_async())
+        .await
+        .expect("light cmd within 10s")
+        .expect("sample");
+    assert_eq!(sample.key_expr().as_str(), LAMP_CMD);
+    let envelope: Value = serde_json::from_slice(&sample.payload().to_bytes()).expect("json");
+    assert_eq!(
+        envelope,
+        json!({"value": false, "priority": "manual", "actor": "dashboard"}),
+        "the fan-out is stamped like any other dashboard command"
+    );
+
+    // Only lights: the switch, lock, climate and camera entities get
+    // nothing. Same-session FIFO — anything else the fan-out had published
+    // would arrive before this window closes.
+    if let Ok(Ok(extra)) = tokio::time::timeout(Duration::from_secs(2), cmd_sub.recv_async()).await
+    {
+        panic!(
+            "unexpected command {} = {}",
+            extra.key_expr(),
+            String::from_utf8_lossy(&extra.payload().to_bytes())
+        );
+    }
+
+    sup.shutdown();
+}
