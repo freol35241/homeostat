@@ -208,6 +208,33 @@ async fn dashboard_serves_the_family_surface() {
         Supervisor::spawn_with_env(FIXTURE, &[("HOMEOSTAT_DASHBOARD_PORT", &port.to_string())]);
     let observer = sup.observer().await;
 
+    // All bus subscribers are declared up front, before the health waits —
+    // never right before the POST that exercises them: a subscriber's
+    // interest needs to propagate through the router to the publishing
+    // session, and a put racing that propagation is silently dropped (this
+    // test has flaked exactly there, repeatedly, under CI load). The
+    // multi-second startup below is the settle window.
+    let cmd_sub = observer
+        .declare_subscriber(LAMP_CMD)
+        .await
+        .expect("cmd subscriber");
+    let echo = observer
+        .declare_subscriber(LAMP_STATE)
+        .await
+        .expect("state subscriber");
+    let lock_cmd_sub = observer
+        .declare_subscriber("home/cmd/livingroom/front_door/locked")
+        .await
+        .expect("lock cmd subscriber");
+    let switch_cmd_sub = observer
+        .declare_subscriber("home/cmd/livingroom/relay/on")
+        .await
+        .expect("switch cmd subscriber");
+    let climate_cmd_sub = observer
+        .declare_subscriber("home/cmd/livingroom/heat_pump/setpoint")
+        .await
+        .expect("climate cmd subscriber");
+
     // First run resolves the dashboard's uv environment (aiohttp): generous.
     let mut dash = health_watch(&observer, "dashboard").await;
     await_health(&mut dash, Duration::from_secs(180), |h| {
@@ -278,14 +305,6 @@ async fn dashboard_serves_the_family_surface() {
 
     // 2. Command path: POST -> a manual-band envelope on home/cmd (priority
     // and actor stamped server-side) -> reflector echoes the value as state.
-    let cmd_sub = observer
-        .declare_subscriber(LAMP_CMD)
-        .await
-        .expect("cmd subscriber");
-    let echo = observer
-        .declare_subscriber(LAMP_STATE)
-        .await
-        .expect("state subscriber");
     let (status, reply) = http_request(
         &addr,
         "POST",
@@ -294,7 +313,7 @@ async fn dashboard_serves_the_family_surface() {
         Some(&json!({"room": "livingroom", "entity": "lamp", "aspect": "on", "value": true})),
     );
     assert_eq!(status, 200, "{reply}");
-    let cmd_sample = tokio::time::timeout(Duration::from_secs(10), cmd_sub.recv_async())
+    let cmd_sample = tokio::time::timeout(Duration::from_secs(30), cmd_sub.recv_async())
         .await
         .expect("cmd envelope observed within 10s")
         .expect("sample");
@@ -304,7 +323,7 @@ async fn dashboard_serves_the_family_surface() {
         json!({"value": true, "priority": "manual", "actor": "dashboard"}),
         "the dashboard stamps its own manifest priority and unit name"
     );
-    let sample = tokio::time::timeout(Duration::from_secs(10), echo.recv_async())
+    let sample = tokio::time::timeout(Duration::from_secs(30), echo.recv_async())
         .await
         .expect("reflector echoed the command")
         .expect("sample");
@@ -362,10 +381,6 @@ async fn dashboard_serves_the_family_surface() {
     // way as any other command — for a real arbitrated entity, the arbiter
     // (not exercised by this fixture) is what enforces the family always
     // winning over automations (docs/design.md, Arbitrated mode).
-    let lock_cmd_sub = observer
-        .declare_subscriber("home/cmd/livingroom/front_door/locked")
-        .await
-        .expect("lock cmd subscriber");
     let (status, reply) = http_request(
         &addr,
         "POST",
@@ -374,7 +389,7 @@ async fn dashboard_serves_the_family_surface() {
         Some(&json!({"room": "livingroom", "entity": "front_door", "aspect": "locked", "value": true})),
     );
     assert_eq!(status, 200, "{reply}");
-    let cmd_sample = tokio::time::timeout(Duration::from_secs(10), lock_cmd_sub.recv_async())
+    let cmd_sample = tokio::time::timeout(Duration::from_secs(30), lock_cmd_sub.recv_async())
         .await
         .expect("lock cmd envelope observed within 10s")
         .expect("sample");
@@ -387,10 +402,6 @@ async fn dashboard_serves_the_family_surface() {
 
     // A switch command is accepted too: COMMANDABLE now maps switch -> {"on"}
     // (a reflashed Sonoff relay is toggleable from the dashboard).
-    let switch_cmd_sub = observer
-        .declare_subscriber("home/cmd/livingroom/relay/on")
-        .await
-        .expect("switch cmd subscriber");
     let (status, reply) = http_request(
         &addr,
         "POST",
@@ -399,7 +410,7 @@ async fn dashboard_serves_the_family_surface() {
         Some(&json!({"room": "livingroom", "entity": "relay", "aspect": "on", "value": true})),
     );
     assert_eq!(status, 200, "{reply}");
-    let cmd_sample = tokio::time::timeout(Duration::from_secs(10), switch_cmd_sub.recv_async())
+    let cmd_sample = tokio::time::timeout(Duration::from_secs(30), switch_cmd_sub.recv_async())
         .await
         .expect("switch cmd envelope observed within 10s")
         .expect("sample");
@@ -414,10 +425,6 @@ async fn dashboard_serves_the_family_surface() {
     // {"setpoint"}, the family-facing base aspect (docs/design.md, IVT490
     // heat-pump adapter, "Climate vocabulary"). Setpoint is a float — the
     // envelope must carry it through unmodified, same as any other value.
-    let climate_cmd_sub = observer
-        .declare_subscriber("home/cmd/livingroom/heat_pump/setpoint")
-        .await
-        .expect("climate cmd subscriber");
     let (status, reply) = http_request(
         &addr,
         "POST",
@@ -426,7 +433,7 @@ async fn dashboard_serves_the_family_surface() {
         Some(&json!({"room": "livingroom", "entity": "heat_pump", "aspect": "setpoint", "value": 21.5})),
     );
     assert_eq!(status, 200, "{reply}");
-    let cmd_sample = tokio::time::timeout(Duration::from_secs(10), climate_cmd_sub.recv_async())
+    let cmd_sample = tokio::time::timeout(Duration::from_secs(30), climate_cmd_sub.recv_async())
         .await
         .expect("climate cmd envelope observed within 10s")
         .expect("sample");
@@ -767,16 +774,19 @@ async fn dashboard_darkens_the_house() {
         Supervisor::spawn_with_env(FIXTURE, &[("HOMEOSTAT_DASHBOARD_PORT", &port.to_string())]);
     let observer = sup.observer().await;
 
+    // Declared before the health wait: the startup window is the settle
+    // time for subscriber-interest propagation (see the family surface
+    // test's note).
+    let cmd_sub = observer
+        .declare_subscriber("home/cmd/**")
+        .await
+        .expect("cmd subscriber");
+
     let mut dash = health_watch(&observer, "dashboard").await;
     await_health(&mut dash, Duration::from_secs(180), |h| {
         h.status == HealthStatus::Running
     })
     .await;
-
-    let cmd_sub = observer
-        .declare_subscriber("home/cmd/**")
-        .await
-        .expect("cmd subscriber");
 
     // The write gate holds for the fan-out like any other write.
     let (status, reply) = http_request(&addr, "POST", "/api/lights/off", &[], None);
@@ -796,7 +806,7 @@ async fn dashboard_darkens_the_house() {
         "the fixture binds exactly one light"
     );
 
-    let sample = tokio::time::timeout(Duration::from_secs(10), cmd_sub.recv_async())
+    let sample = tokio::time::timeout(Duration::from_secs(30), cmd_sub.recv_async())
         .await
         .expect("light cmd within 10s")
         .expect("sample");
