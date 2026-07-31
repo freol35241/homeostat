@@ -1491,6 +1491,24 @@ adapter — the membrane rule.
   per-adapter (esphome drops with `device-unavailable`, MQTT dialects
   fire into the broker and let the device miss it); a uniform rule is
   the pytapo pattern — built the day something needs it.
+- **The consumer helper, shaped ahead of need (2026-07-31), built the
+  day the first consumer lands** (the promised presence fusion, by all
+  signs). Because `available` publishes on transition only, a
+  late-joining subscriber that skips the get runs blind until the next
+  transition — possibly weeks away — so the subscribe-then-get-merge
+  seed is a correctness trap every consumer would have to hand-roll.
+  That mechanical part is the SDK's: `ctx.availability(binding)`
+  returns a live per-entity map (seeded via get, updated by
+  subscription). The subscription itself is an **explicit
+  `[bus.subscribes]` binding** (`home/state/.../available`), never
+  implicit — the config-subtree carve-out is about a unit's own
+  namespace; watching *other* entities' availability is exactly the
+  declared-surface territory the manifest exists to render. Policy
+  (hold, fall back, go stale downstream) stays in the automation, as
+  above. Likely fellow traveler: the producer-side publish-on-
+  transition idiom exists twice (openwrt's `publish()`, ivt490's
+  `set_available()`); a fusion publishing its own `available` is the
+  third strike that graduates it to an SDK helper too.
 - **Rejected, deliberately**: a TTL on the core's last-value cache
   (the core cannot know cadence; silence is ambiguous by
   construction, and a lock is rightly silent for months); timestamps
