@@ -97,10 +97,12 @@ fn main() -> ExitCode {
 fn checked(path: &PathBuf, verb: &str) -> Option<CheckResult> {
     let result = homeostat::check(path);
     if !result.errors.is_empty() {
-        for line in homeostat::error::render_sorted(&result.errors) {
+        let lines = homeostat::error::render_sorted(&result.errors);
+        let count = lines.len();
+        for line in lines {
             eprintln!("{line}");
         }
-        eprintln!("\n{verb} refused: {} error(s)", result.errors.len());
+        eprintln!("\n{verb} refused: {count} error(s)");
         return None;
     }
     Some(result)
@@ -260,8 +262,9 @@ fn apply_command(path: PathBuf, bus: Option<String>, plan_file: Option<PathBuf>)
             base_commit: homeostat::gitinfo::head_commit(&path),
         };
         println!("\nApplying...");
+        let planned_steps = diff.destroys.len() + diff.creates.len() + diff.restarts.len();
         let (outcome, replied_ok) =
-            match homeostat::bus::request_apply(&session, &request).await {
+            match homeostat::bus::request_apply(&session, &request, planned_steps).await {
                 Ok(result) => result,
                 Err(err) => {
                     eprintln!("apply failed: {err}");

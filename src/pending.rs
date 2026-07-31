@@ -37,14 +37,23 @@ pub fn save(
     if !plan.ends_with('\n') {
         plan.push('\n');
     }
+    // The plan block stays a literal multi-line string for phone
+    // readability, unless the text itself contains the delimiter; the
+    // actor is arbitrary --actor input, so it is always escaped.
+    let plan_field = if plan.contains("'''") {
+        toml::Value::String(plan).to_string()
+    } else {
+        format!("'''\n{plan}'''")
+    };
     let content = format!(
         "schema = 1\n\
          id = \"{id}\"\n\
-         actor = \"{actor}\"\n\
+         actor = {actor}\n\
          created = \"{created}\"\n\
          base_commit = \"{base_commit}\"\n\
          tier = \"{tier}\"\n\
-         plan = '''\n{plan}'''\n"
+         plan = {plan_field}\n",
+        actor = toml::Value::String(actor.to_string()),
     );
     fs::write(&path, content).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
     Ok(path)

@@ -48,7 +48,13 @@ pub fn resolve(
         if key.kind == UnitKind::Adapter || key.direction != Direction::Publishes {
             continue;
         }
-        if !key.exprs.iter().any(|e| e.class() == Some("cmd")) {
+        // A templated publish that expanded to nothing has no exprs to
+        // betray its class — classify by the source, so it still gets the
+        // capability checks and the "matches no entities" warning.
+        let cmd_class = key.exprs.iter().any(|e| e.class() == Some("cmd"))
+            || (key.exprs.is_empty()
+                && KeyExpr::parse(&key.source).is_ok_and(|e| e.class() == Some("cmd")));
+        if !cmd_class {
             continue;
         }
         let unit = house.unit(&key.unit).expect("expanded key from loaded unit");
@@ -356,7 +362,7 @@ mod tests {
         let arbiter_bus = BusSection { subscribes: BTreeMap::new(), publishes };
         let house = house_with_lock(Some(arbiter_bus));
 
-        let (expanded, expand_errors) = expand(&house);
+        let (expanded, _warnings, expand_errors) = expand(&house);
         assert!(expand_errors.is_empty(), "{expand_errors:?}");
 
         // Correct expansion split: the adapter's cmd template excludes the
@@ -395,14 +401,14 @@ mod tests {
             Some(BusSection { subscribes: BTreeMap::new(), publishes })
         };
         let baseline = house_with_lock(arbiter_bus());
-        let (expanded, _) = expand(&baseline);
+        let (expanded, _, _) = expand(&baseline);
         let (grants, _, _) = resolve(&baseline, &expanded);
 
         let mut moved = house_with_lock(arbiter_bus());
         moved.entities[1].file.entity.room = "porch".to_string();
         // The publish key still names the old room, so re-expansion changes
         // the granted set — either way the tables differ.
-        let (expanded, _) = expand(&moved);
+        let (expanded, _, _) = expand(&moved);
         let (moved_grants, _, _) = resolve(&moved, &expanded);
         assert_ne!(grants, moved_grants, "a room move must change the grant table");
 
@@ -411,7 +417,7 @@ mod tests {
         // The lamp is granted to nobody; flip the lock instead, which
         // night_mode writes.
         flipped.entities[1].file.write_policy.mode = WriteMode::Shared;
-        let (expanded, _) = expand(&flipped);
+        let (expanded, _, _) = expand(&flipped);
         let (flipped_grants, _, _) = resolve(&flipped, &expanded);
         assert_ne!(grants, flipped_grants, "a write-mode flip must change the grant table");
     }
@@ -419,7 +425,7 @@ mod tests {
     #[test]
     fn arbitrated_entity_with_no_arbiter_publish_is_a_plan_error() {
         let house = house_with_lock(None);
-        let (expanded, expand_errors) = expand(&house);
+        let (expanded, _warnings, expand_errors) = expand(&house);
         assert!(expand_errors.is_empty(), "{expand_errors:?}");
 
         let (_grants, _warnings, errors) = resolve(&house, &expanded);

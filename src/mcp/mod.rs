@@ -422,9 +422,11 @@ impl Server {
         let request = ApplyRequest {
             base_commit: gitinfo::head_commit(&self.root),
         };
+        // Agent-tier applies are parameter-only by the tier gate: no walk
+        // steps to wait out.
         let (outcome, replied_ok) = self
             .runtime
-            .block_on(bus::request_apply(&self.session, &request))?;
+            .block_on(bus::request_apply(&self.session, &request, 0))?;
         outcome_text(&outcome, replied_ok)
     }
 

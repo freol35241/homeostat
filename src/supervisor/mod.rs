@@ -425,13 +425,19 @@ async fn handle_config_query(store: &ConfigStore, session: &Session, query: zeno
             return;
         }
     };
+    // Store mutation and bus put as one ordered unit (see write_lock).
+    let guard = store.write_lock().await;
     match store.write(unit, param, value) {
         Ok(stored) => {
             let text = stored.to_string();
             let _ = session.put(&key, text.clone()).await;
+            drop(guard);
             let _ = query.reply(key, text).await;
         }
-        Err(message) => reply_config_err(&query, &message).await,
+        Err(message) => {
+            drop(guard);
+            reply_config_err(&query, &message).await;
+        }
     }
 }
 
@@ -486,10 +492,18 @@ async fn mirror(session: &Session, keyexpr: &'static str) -> Result<(), String> 
         let cache = cache.clone();
         tokio::spawn(async move {
             while let Ok(sample) = sub.recv_async().await {
-                cache.lock().expect("mirror cache lock").insert(
-                    sample.key_expr().as_str().to_string(),
-                    sample.payload().to_bytes().to_vec(),
-                );
+                let mut cache = cache.lock().expect("mirror cache lock");
+                match sample.kind() {
+                    zenoh::sample::SampleKind::Put => {
+                        cache.insert(
+                            sample.key_expr().as_str().to_string(),
+                            sample.payload().to_bytes().to_vec(),
+                        );
+                    }
+                    zenoh::sample::SampleKind::Delete => {
+                        cache.remove(sample.key_expr().as_str());
+                    }
+                }
             }
         });
     }

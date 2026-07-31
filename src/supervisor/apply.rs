@@ -111,12 +111,18 @@ async fn execute(core: &Arc<Core>, request: ApplyRequest) -> ApplyResult {
     // reset to repo defaults, every subscribed unit sees the put — no
     // restart. A unit restarted later in the walk seeds via get anyway.
     let mut params = Vec::new();
-    for (unit, param, value) in core.store.replace_from_house(&check.house) {
-        let _ = core
-            .session
-            .put(bus::config_key(&unit, &param), value.to_string())
-            .await;
-        params.push(ApplyParam { unit, param, value });
+    {
+        // Swap and puts as one ordered unit: a config write racing this
+        // block would otherwise validate against the new store yet see its
+        // bus put overwritten by the older repo value below.
+        let _write_guard = core.store.write_lock().await;
+        for (unit, param, value) in core.store.replace_from_house(&check.house) {
+            let _ = core
+                .session
+                .put(bus::config_key(&unit, &param), value.to_string())
+                .await;
+            params.push(ApplyParam { unit, param, value });
+        }
     }
 
     // Parameter-level manifest changes (default/constraint/editable_by):

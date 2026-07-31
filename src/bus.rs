@@ -162,14 +162,20 @@ pub struct ApplyStep {
 /// Sends an apply request to the running supervisor and decodes its reply.
 /// The bool is false when the supervisor replied with an error reply (a
 /// refused or halted apply); the ApplyResult carries the detail either way.
+/// `planned_steps` is the caller's preview walk length: the reply timeout
+/// scales with it, since every step may legitimately take up to the
+/// supervisor's 60s readiness deadline — a fixed timeout misreported a
+/// long-but-succeeding walk as "no reply".
 pub async fn request_apply(
     session: &zenoh::Session,
     request: &ApplyRequest,
+    planned_steps: usize,
 ) -> Result<(ApplyResult, bool), String> {
+    let timeout = std::time::Duration::from_secs(120 + 90 * planned_steps as u64);
     let replies = session
         .get(APPLY_KEY)
         .payload(serde_json::to_string(request).expect("request serializes"))
-        .timeout(std::time::Duration::from_secs(600))
+        .timeout(timeout)
         .await
         .map_err(|e| e.to_string())?;
     let Ok(reply) = replies.recv_async().await else {

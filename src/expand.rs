@@ -34,9 +34,12 @@ pub struct ExpandedKey {
 }
 
 /// Expands every bus entry of every unit. Keys that fail to parse or fall
-/// outside the key-space schema produce errors and no expansion.
-pub fn expand(house: &House) -> (Vec<ExpandedKey>, Vec<ValidationError>) {
+/// outside the key-space schema produce errors and no expansion; a zone
+/// reference that expands to no rooms produces a warning — the entry is
+/// silently dead otherwise.
+pub fn expand(house: &House) -> (Vec<ExpandedKey>, Vec<String>, Vec<ValidationError>) {
     let mut expanded = Vec::new();
+    let mut warnings = Vec::new();
     let mut errors = Vec::new();
 
     for unit in &house.units {
@@ -107,6 +110,13 @@ pub fn expand(house: &House) -> (Vec<ExpandedKey>, Vec<ValidationError>) {
                 vec![expr]
             };
 
+            if exprs.is_empty() {
+                if let Some(zone) = &zone {
+                    warnings.push(format!(
+                        "{} {subject} matches nothing: zone \"{zone}\" has no rooms"
+                    , direction.verb()));
+                }
+            }
             expanded.push(ExpandedKey {
                 unit: unit.manifest.unit.name.clone(),
                 kind: unit.manifest.unit.kind,
@@ -119,7 +129,7 @@ pub fn expand(house: &House) -> (Vec<ExpandedKey>, Vec<ValidationError>) {
         }
     }
 
-    (expanded, errors)
+    (expanded, warnings, errors)
 }
 
 #[cfg(test)]
@@ -196,7 +206,7 @@ mod tests {
             zones: BTreeMap::new(),
         };
 
-        let (expanded, errors) = expand(&house);
+        let (expanded, _warnings, errors) = expand(&house);
         assert!(errors.is_empty(), "{errors:?}");
 
         let cmd = expanded.iter().find(|k| k.entry == "commands").unwrap();
@@ -218,7 +228,7 @@ mod tests {
             zones: BTreeMap::new(),
         };
 
-        let (expanded, errors) = expand(&house);
+        let (expanded, _warnings, errors) = expand(&house);
         assert!(errors.is_empty(), "{errors:?}");
         let cmd = expanded.iter().find(|k| k.entry == "commands").unwrap();
         assert!(cmd.exprs.is_empty());

@@ -106,7 +106,7 @@ pub fn load(root: &Path) -> (House, Vec<ValidationError>) {
             else {
                 continue;
             };
-            let name = file.trim_end_matches(".toml").to_string();
+            let name = file.strip_suffix(".toml").unwrap_or(&file).to_string();
             check_schema_version(entity.schema, &name, &rel, &mut errors);
             house.entities.push(LoadedEntity {
                 name,

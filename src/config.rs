@@ -70,11 +70,25 @@ impl Constraint {
 
 pub struct ConfigStore {
     params: Mutex<BTreeMap<(String, String), StoredParam>>,
+    /// Serializes every {store mutation + its bus put} pair. Without it a
+    /// config write landing between apply's store swap and apply's puts
+    /// would be overwritten on the bus by the older repo value while the
+    /// store kept the newer one — subscribers and readers disagreeing
+    /// until the next write.
+    write_order: tokio::sync::Mutex<()>,
 }
 
 impl ConfigStore {
     pub fn from_house(house: &House) -> ConfigStore {
-        ConfigStore { params: Mutex::new(build(house)) }
+        ConfigStore {
+            params: Mutex::new(build(house)),
+            write_order: tokio::sync::Mutex::new(()),
+        }
+    }
+
+    /// Held across a store mutation and the bus puts that announce it.
+    pub async fn write_lock(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.write_order.lock().await
     }
 
     /// Rebuilds the store from a new house — on apply, every parameter is
@@ -159,6 +173,13 @@ pub fn default_within_constraint(spec: &ParamSpec) -> Result<(), String> {
 pub fn default_value(spec: &ParamSpec) -> Value {
     match &spec.default {
         toml::Value::Boolean(b) => Value::from(*b),
+        // An integer default on a float param canonicalizes to the float
+        // it means: serde_json's Number(5) != Number(5.0), so leaving it
+        // integral makes every decimal write of the same value plan as
+        // perpetual drift.
+        toml::Value::Integer(i) if spec.param_type == ParamType::Float => {
+            Value::from(*i as f64)
+        }
         toml::Value::Integer(i) => Value::from(*i),
         toml::Value::Float(f) => Value::from(*f),
         toml::Value::String(s) => Value::from(s.clone()),
@@ -328,6 +349,7 @@ mod tests {
                 ("evening_lights".to_string(), "off_time".to_string()),
                 time_spec("20:00", "02:00"),
             )])),
+            write_order: tokio::sync::Mutex::new(()),
         };
         store
             .write("evening_lights", "off_time", json!("23:30"))
