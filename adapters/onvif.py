@@ -36,6 +36,11 @@ delay, with one "event-stream-lost" health event per down transition,
 never a crash. A notification that parses but carries an unusable value
 drops with a "malformed-payload" health event and the stream continues.
 
+The same transitions carry the availability signal (docs/design.md,
+"Sensor dropout and availability"): a working pull-point subscription
+publishes home/state/{room}/{entity}/available = true, its loss publishes
+false — and `motion` stands untouched on loss, stale, never false.
+
 The camera may return a subscription address with an unroutable host (NAT,
 container namespaces); only its path and query are trusted — the netloc
 stays the configured one.
@@ -188,7 +193,10 @@ async def run_camera(entity, conf: dict, session, http: aiohttp.ClientSession, s
     base_url = f"http://{host}:{port}/onvif/device_service"
     username, password = conf["username"], conf["password"]
     motion_key = keys.state_key(entity.room, entity.name, "motion")
-    up = True  # one event per down transition, not per retry
+    available_key = keys.state_key(entity.room, entity.name, "available")
+    # Tri-state: None until the first subscription attempt settles, so the
+    # first success and the first failure each publish availability once.
+    up: bool | None = None
 
     while not stop.is_set():
         try:
@@ -202,7 +210,9 @@ async def run_camera(entity, conf: dict, session, http: aiohttp.ClientSession, s
                 password,
             )
             sub_url = subscription_url(created, base_url)
-            up = True
+            if up is not True:
+                session.put_json(available_key, True)
+                up = True
             while not stop.is_set():
                 pulled = await soap_call(
                     http,
@@ -231,10 +241,11 @@ async def run_camera(entity, conf: dict, session, http: aiohttp.ClientSession, s
                     password,
                 )
         except SoapError as err:
-            if up:
+            if up is not False:
                 session.health_event(
                     "drop", reason="event-stream-lost", camera=entity.name, error=str(err)
                 )
+                session.put_json(available_key, False)
                 up = False
             with contextlib.suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(stop.wait(), timeout=RESUBSCRIBE_DELAY_S)

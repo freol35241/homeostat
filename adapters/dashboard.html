@@ -1309,6 +1309,17 @@ function renderNow() {
     }
   });
 
+  // state: a device gone quiet — the owning adapter published
+  // available = false (any capability; the aspect is orthogonal)
+  entities.forEach(function (e) {
+    if (stateValue(e.room, e.name, 'available') === false) {
+      deviations.push({
+        title: e.label + ' unresponsive', detail: '', tag: 'state',
+        action: 'entity-detail', attrs: 'data-room="' + esc(e.room) + '" data-entity="' + esc(e.name) + '"'
+      });
+    }
+  });
+
   // 3. setpoint: config differing from manifest default
   (store.model.units || []).forEach(function (u) {
     var params = u.params || {};

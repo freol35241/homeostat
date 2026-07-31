@@ -24,6 +24,16 @@ home/arbiter/{room}/{entity}/{aspect}, translated the same way a cmd
 envelope would be. Anything dropped emits a JSON event at
 home/health/{unit}/event instead of crashing.
 
+Device availability (docs/design.md, "Sensor dropout and availability"):
+the bridge's availability feature on zigbee2mqtt/{id}/availability — both
+the {"state": "online"|"offline"} payload and the legacy bare string —
+maps to the reserved base aspect home/state/{room}/{entity}/available
+(bool). Operational note: availability must be enabled in the z2m config;
+without it the aspect simply never appears (opt-in by construction). On
+loss the device's other aspects stand — stale, never false — and a native
+device field that would mint the reserved aspect drops with a
+"reserved-aspect" health event.
+
 The retained zigbee2mqtt/bridge/devices inventory is republished at
 home/discovery/{unit}: every paired device (coordinator excluded) as a
 record carrying the entity-file binding `id`, whether an entity file
@@ -116,6 +126,26 @@ def main():
                 return
             session.put_json(keys.discovery_key(unit), inventory(devices, by_id))
             return
+        # Exactly {base}/{id}/availability — two segments would be a device
+        # whose friendly name is literally "availability".
+        if msg.topic.endswith("/availability") and msg.topic.count("/") == 2:
+            entity = by_id.get(msg.topic.split("/")[1])
+            if entity is None:
+                session.health_event("drop", reason="unknown-device", topic=msg.topic)
+                return
+            raw = msg.payload.decode(errors="replace").strip()
+            try:
+                parsed = json.loads(raw)
+            except ValueError:
+                parsed = raw  # legacy availability payload: a bare string
+            state = parsed.get("state") if isinstance(parsed, dict) else parsed
+            if state not in ("online", "offline"):
+                session.health_event("drop", reason="malformed-payload", topic=msg.topic)
+                return
+            session.put_json(
+                keys.state_key(entity.room, entity.name, "available"), state == "online"
+            )
+            return
         entity = by_id.get(msg.topic.split("/", 1)[1])
         if entity is None:
             session.health_event("drop", reason="unknown-device", topic=msg.topic)
@@ -131,6 +161,11 @@ def main():
             if isinstance(value, (dict, list)):
                 continue  # composite fields (color, ...) deferred
             aspect, value = state_aspect(entity.capability, z2m_field, value)
+            if aspect == "available":
+                # Reserved for the adapter's own liveness signal — a device
+                # field must not impersonate it.
+                session.health_event("drop", reason="reserved-aspect", topic=msg.topic)
+                continue
             session.put_json(keys.state_key(entity.room, entity.name, aspect), value)
 
     def cmd_handler(entity):
@@ -171,7 +206,11 @@ def main():
     client = mqtt.connect(
         endpoint,
         on_z2m_message,
-        [(f"{BASE_TOPIC}/+", 0), (f"{BASE_TOPIC}/bridge/devices", 0)],
+        [
+            (f"{BASE_TOPIC}/+", 0),
+            (f"{BASE_TOPIC}/+/availability", 0),
+            (f"{BASE_TOPIC}/bridge/devices", 0),
+        ],
     )
 
     # An arbitrated entity has no home/cmd subscription at all — not

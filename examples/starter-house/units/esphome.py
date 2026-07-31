@@ -59,6 +59,14 @@ its record's `id` is the bare device name; failure or total absence of
 mDNS (no multicast, sandboxed network, ...) is guarded completely and
 never touches the bound-device connections, which are unaffected either
 way. Anything unusable drops with a health event; the unit never crashes.
+
+Device availability (docs/design.md, "Sensor dropout and availability"):
+the ReconnectLogic connection IS the loss signal — every bound entity of a
+device gets home/state/{room}/{entity}/available = true once its entities
+are (re)enumerated, false on disconnect. The device's other aspects stand
+on loss — stale, never false — and a sensor whose device_class/object_id
+would mint the reserved aspect drops with a "reserved-aspect" health
+event.
 """
 
 import asyncio
@@ -227,6 +235,8 @@ async def run_device(device, bound, devices_conf, session, entity_runtime, entit
                 entity_runtime[entity.name] = {"client": client, "key": info.key}
         bound_discovery[device] = records
         publish_discovery()
+        for _key, (entity, _info) in new_key_map.items():
+            session.put_json(keys.state_key(entity.room, entity.name, "available"), True)
 
         def on_state(state) -> None:
             hit = key_map.get(state.key)
@@ -234,11 +244,23 @@ async def run_device(device, bound, devices_conf, session, entity_runtime, entit
                 return
             entity, info = hit
             for aspect, value in state_values(entity, info, state):
+                if aspect == "available":
+                    # Reserved for the adapter's own liveness signal — a
+                    # device field must not impersonate it.
+                    session.health_event(
+                        "drop", reason="reserved-aspect", device=device, object_id=info.object_id
+                    )
+                    continue
                 session.put_json(keys.state_key(entity.room, entity.name, aspect), value)
 
         client.subscribe_states(on_state)
 
-    async def on_disconnect(_expected: bool) -> None:
+    async def on_disconnect(expected: bool) -> None:
+        # A requested disconnect (adapter shutdown) is not a device loss;
+        # only an unexpected one flips availability.
+        if not expected:
+            for entity, _info in key_map.values():
+                session.put_json(keys.state_key(entity.room, entity.name, "available"), False)
         with entity_lock:
             for entity, _info in key_map.values():
                 if entity_runtime.get(entity.name, {}).get("client") is client:

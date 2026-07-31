@@ -21,6 +21,7 @@ const FIXTURE: &str = "tests/fixture_house_onvif";
 const CAMERAS_ENV: &str = "HOMEOSTAT_CAMERAS";
 const EVENT_KEY: &str = "home/health/onvif/event";
 const MOTION_KEY: &str = "home/state/hallway/hallway_cam/motion";
+const AVAILABLE_KEY: &str = "home/state/hallway/hallway_cam/available";
 const USERNAME: &str = "homeostat";
 const PASSWORD: &str = "secret123";
 
@@ -142,6 +143,22 @@ async fn expect_motion(sub: &StateSub, expected: bool) {
     }
 }
 
+/// Waits for the available key to carry `expected`.
+async fn expect_available(sub: &StateSub, expected: bool) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        let sample = tokio::time::timeout_at(deadline, sub.recv_async())
+            .await
+            .unwrap_or_else(|_| panic!("no available = {expected} within 20s"))
+            .expect("state stream open");
+        let value: Value = serde_json::from_slice(&sample.payload().to_bytes())
+            .expect("state payload is JSON");
+        if value == json!(expected) {
+            return;
+        }
+    }
+}
+
 /// Reads health events until one matches the expected drop reason.
 async fn expect_drop_event(sub: &StateSub, reason: &str) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
@@ -214,6 +231,26 @@ async fn broken_subscription_resubscribes() {
     camera.control("/control/break");
     expect_drop_event(&event_sub, "event-stream-lost").await;
     trigger_until_motion(&camera, &state_sub, false).await;
+
+    sup.shutdown();
+}
+
+/// (b2) Availability rides the subscription: losing it publishes
+/// available = false alongside the health event, and the recreated
+/// subscription publishes available = true again — while `motion` stands
+/// untouched through the outage (stale, never false).
+#[tokio::test(flavor = "multi_thread")]
+async fn subscription_loss_flips_available() {
+    let (camera, _cameras_path, mut sup, observer) = setup().await;
+    let avail_sub = observer.declare_subscriber(AVAILABLE_KEY).await.expect("available subscriber");
+    let state_sub = observer.declare_subscriber(MOTION_KEY).await.expect("state subscriber");
+
+    camera.control("/control/trigger?value=true");
+    expect_motion(&state_sub, true).await;
+
+    camera.control("/control/break");
+    expect_available(&avail_sub, false).await;
+    expect_available(&avail_sub, true).await;
 
     sup.shutdown();
 }

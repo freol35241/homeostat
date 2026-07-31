@@ -25,6 +25,7 @@ const EVENT_KEY: &str = "home/health/ivt490/event";
 const SETPOINT_CMD_KEY: &str = "home/cmd/utility/heatpump/setpoint";
 const SETPOINT_ARBITER_KEY: &str = "home/arbiter/utility/heatpump/setpoint";
 const SETPOINT_SET_TOPIC: &str = "ivt490_1/controller/set/indoor_temperature_target";
+const AVAILABLE_KEY: &str = "home/state/utility/heatpump/available";
 
 /// A mosquitto broker on a free port, killed on drop.
 struct Mosquitto {
@@ -269,6 +270,36 @@ async fn ivt490_state_translates_to_bus_state() {
 
     let no_event = tokio::time::timeout(Duration::from_millis(1500), event_sub.recv_async()).await;
     assert!(no_event.is_err(), "unexpected health event for blob/raw topics");
+
+    sup.shutdown();
+}
+
+/// (a2) The receive-timer availability: a routed message flips
+/// available = true, availability_timeout_s (5 s in the fixture) of
+/// silence flips it false with a "device-silent" health event, and the
+/// next message flips it back.
+#[tokio::test(flavor = "multi_thread")]
+async fn silence_flips_available() {
+    let (mosquitto, mut sup, observer) = setup().await;
+    let state_sub = observer
+        .declare_subscriber(AVAILABLE_KEY)
+        .await
+        .expect("state subscriber");
+    let event_sub = observer
+        .declare_subscriber(EVENT_KEY)
+        .await
+        .expect("event subscriber");
+    let mut mqtt = Mqtt::connect(mosquitto.port, "test-availability").await;
+
+    mqtt.publish(&format!("{BASE}/ivt490/state/serial/GT1"), "21.50").await;
+    expect_states(&state_sub, &[(AVAILABLE_KEY, json!(true))]).await;
+
+    // Nothing more from the device: the receive timer runs out.
+    expect_states(&state_sub, &[(AVAILABLE_KEY, json!(false))]).await;
+    expect_drop_event(&event_sub, "device-silent").await;
+
+    mqtt.publish(&format!("{BASE}/ivt490/state/serial/GT1"), "21.60").await;
+    expect_states(&state_sub, &[(AVAILABLE_KEY, json!(true))]).await;
 
     sup.shutdown();
 }

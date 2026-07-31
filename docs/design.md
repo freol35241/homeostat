@@ -1430,6 +1430,82 @@ plan renders the automation's bound entities like an adapter's.
   freely on its own bound entities, ivt490's normalized readings being
   the standing example, and no further).
 
+## Sensor dropout and availability (settled 2026-07-31)
+
+The founding decision closes the gap between the two liveness layers.
+Unit dropout has been solved since step 2 (liveliness tokens, supervisor
+health); a device dropping out behind a live adapter was invisible —
+state payloads are bare values, the last-value mirror serves them
+forever, and a late joiner cannot tell a fresh reading from one whose
+sensor died days ago. The crux: **publish-on-transition makes silence
+ambiguous.** The bus cannot distinguish "no change" from "no sensor";
+only the party with protocol knowledge can — z2m's availability timers,
+an ESPHome TCP session, an ONVIF pull-point subscription, a firmware's
+known publish cadence. That is dialect knowledge, so it lives in the
+adapter — the membrane rule.
+
+- **Availability is ordinary state** — the virtual-sensor sentence
+  applied to device liveness. `available` (bool) is a base aspect in
+  the schema vocabulary, orthogonal to capability, published on
+  transition at `home/state/{room}/{entity}/available` by the entity's
+  owning unit. Opt-in, the discovery shape: an adapter with a real
+  loss signal publishes it; one with nothing to say (owntracks — a
+  retained phone position has no liveness semantics) does not fake
+  one. Everything downstream falls out unbuilt: the recorder gives
+  per-device availability history, the core state mirror covers late
+  joiners, `available = false` joins the notable-state vocabulary (a
+  dead sensor is a deviation on `Now`, family-visible exactly like a
+  downed tunnel), and automations subscribe to it like any other
+  aspect.
+- **Per adapter, the loss signal**: z2m maps the bridge's availability
+  feature through (`zigbee2mqtt/{id}/availability`, both the
+  `{"state": ...}` and legacy bare-string payloads; availability must
+  be enabled bridge-side — an operational note, not house config;
+  without it the aspect simply never appears, which is the opt-in
+  working as designed). esphome flips per device on ReconnectLogic
+  connect/disconnect. onvif flips per camera on pull-point
+  subscription loss/recreate — the same transitions that already emit
+  `event-stream-lost`. ivt490 runs a receive timer against the
+  firmware's publish cadence (`availability_timeout_s`,
+  owner-editable, adapter-side fallback 300 s — the openwrt
+  poll_interval_s shape), emitting one `device-silent` health event
+  per down transition. openwrt's own settled failure policy is this
+  norm and is unchanged.
+- **Stale-not-false graduates from openwrt policy to house-wide
+  norm**: on device loss the existing aspect values stand, `available`
+  flips, and the adapter never publishes invented values, nulls, or
+  clears keys. Unknown ≠ false; one boolean beside the values beats a
+  tri-state smeared across every aspect.
+- **`available` is reserved vocabulary**: an adapter whose open
+  passthrough could mint the aspect from a native field (a z2m field
+  name, an ESPHome object_id) drops that field with a
+  `reserved-aspect` health event instead of letting a device
+  impersonate its own liveness signal. Enumerated dialects (ivt490's
+  28 fields) need no runtime guard — a new firmware field arrives
+  only by adapter edit.
+- **Consumer policy stays in the consumer**: whether a stale input
+  means hold, fall back, or go stale downstream is house behavior —
+  the fusion argument. The virtual-sensor staleness norm now has
+  something mechanical to subscribe to instead of inventing per-input
+  timers. Commands toward an unavailable entity likewise stay
+  per-adapter (esphome drops with `device-unavailable`, MQTT dialects
+  fire into the broker and let the device miss it); a uniform rule is
+  the pytapo pattern — built the day something needs it.
+- **Rejected, deliberately**: a TTL on the core's last-value cache
+  (the core cannot know cadence; silence is ambiguous by
+  construction, and a lock is rightly silent for months); timestamps
+  as the mechanism (age without cadence knowledge answers "when", not
+  "should I trust this" — a transition-published value is supposed to
+  be old).
+- **The honest limitation, documented**: `available` is device
+  liveness, not data freshness. z2m's passive check-in timer for
+  battery devices is on the order of hours — a motion sensor dying
+  mid-`occupancy = true` stays trusted-and-wrong until the bridge
+  notices. An automation needing bounded-age input still needs its own
+  cadence timeout (house knowledge: a clock subscription plus a
+  parameter); if that pattern recurs, it graduates to an SDK helper by
+  the rule of three, never core machinery.
+
 ## Voice (later phase)
  
 - Two-tier command path: a fast-path intent matcher (high precision,

@@ -299,6 +299,50 @@ async fn bad_input_drops_with_health_event() {
     sup.shutdown();
 }
 
+/// (c2) The bridge's availability feature maps to the reserved `available`
+/// aspect — both the {"state": ...} payload and the legacy bare string —
+/// and a native device field that would mint the reserved aspect drops
+/// with a health event while its siblings still translate.
+#[tokio::test(flavor = "multi_thread")]
+async fn availability_maps_to_reserved_aspect() {
+    let (mosquitto, mut sup, observer) = setup().await;
+    let event_sub = observer
+        .declare_subscriber(EVENT_KEY)
+        .await
+        .expect("event subscriber");
+    let state_sub = observer
+        .declare_subscriber("home/state/**")
+        .await
+        .expect("state subscriber");
+    let mut mqtt = Mqtt::connect(mosquitto.port, "test-availability").await;
+
+    mqtt.publish("zigbee2mqtt/lamp_kitchen_1/availability", r#"{"state":"offline"}"#)
+        .await;
+    expect_states(
+        &state_sub,
+        &[("home/state/kitchen/kitchen_lamp/available", json!(false))],
+    )
+    .await;
+
+    mqtt.publish("zigbee2mqtt/lamp_kitchen_1/availability", "online").await;
+    expect_states(
+        &state_sub,
+        &[("home/state/kitchen/kitchen_lamp/available", json!(true))],
+    )
+    .await;
+
+    mqtt.publish("zigbee2mqtt/lamp_kitchen_1", r#"{"available":true,"brightness":42}"#)
+        .await;
+    expect_drop_event(&event_sub, "reserved-aspect").await;
+    expect_states(
+        &state_sub,
+        &[("home/state/kitchen/kitchen_lamp/brightness", json!(42))],
+    )
+    .await;
+
+    sup.shutdown();
+}
+
 /// (d) The adapter honors the step-2 unit contract: liveliness token when
 /// ready, clean SIGTERM shutdown within the grace, no orphans.
 #[tokio::test(flavor = "multi_thread")]

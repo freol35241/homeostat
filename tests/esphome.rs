@@ -5,6 +5,7 @@
 
 mod common;
 
+use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
@@ -33,6 +34,9 @@ struct FakeEsphome {
 impl FakeEsphome {
     fn spawn() -> Self {
         let port = free_port();
+        // Own process group: `uv run` wraps the actual python fake, and
+        // killing only the wrapper leaves the device alive — kill() must
+        // take the whole group for a dropout to actually happen.
         let child = Command::new("uv")
             .args([
                 "run",
@@ -45,6 +49,7 @@ impl FakeEsphome {
             .current_dir(env!("CARGO_MANIFEST_DIR"))
             .stdout(Stdio::null())
             .stderr(Stdio::null())
+            .process_group(0)
             .spawn()
             .expect("spawn fake esphome device (is uv installed?)");
         // First run resolves the fake device's own uv env: generous.
@@ -55,12 +60,18 @@ impl FakeEsphome {
         }
         Self { child, port }
     }
+
+    /// Kills the fake device and everything under it (the `uv` wrapper's
+    /// process group), reaping the wrapper.
+    fn kill(&mut self) {
+        unsafe { libc::kill(-(self.child.id() as i32), libc::SIGKILL) };
+        let _ = self.child.wait();
+    }
 }
 
 impl Drop for FakeEsphome {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        self.kill();
     }
 }
 
@@ -150,6 +161,64 @@ async fn device_state_translates_to_bus_state() {
             (RELAY_STATE_KEY, json!(false)),
             ("home/state/shed/shed_temp/temperature", json!(21.5)),
             ("home/state/shed/shed_motion/occupancy", json!(true)),
+        ],
+    )
+    .await;
+
+    sup.shutdown();
+}
+
+/// Polls the core state mirror until `key` holds `expected` — the
+/// late-joiner read path (subscribe, then get, merge): the connect-time
+/// availability publish races any subscriber a test declares, and the
+/// mirror is exactly what a late joiner is supposed to consult.
+async fn await_mirror(observer: &zenoh::Session, key: &str, expected: &Value) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        let replies = observer.get(key).await.expect("mirror get");
+        while let Ok(reply) = replies.recv_async().await {
+            if let Ok(sample) = reply.result() {
+                if let Ok(value) =
+                    serde_json::from_slice::<Value>(&sample.payload().to_bytes())
+                {
+                    if &value == expected {
+                        return;
+                    }
+                }
+            }
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "mirror never held {key} = {expected}"
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
+/// (a2) Availability rides the connection: every bound entity of the
+/// device gets available = true once its entities are enumerated
+/// (verified through the core mirror, the late-joiner path), and
+/// available = false when the device drops.
+#[tokio::test(flavor = "multi_thread")]
+async fn device_dropout_flips_available() {
+    let (mut device, _devices_path, mut sup, observer) = setup().await;
+    let state_sub = observer
+        .declare_subscriber("home/state/**")
+        .await
+        .expect("state subscriber");
+
+    await_mirror(&observer, "home/state/shed/relay/available", &json!(true)).await;
+    await_mirror(&observer, "home/state/shed/shed_temp/available", &json!(true)).await;
+    await_mirror(&observer, "home/state/shed/shed_motion/available", &json!(true)).await;
+
+    device.kill();
+
+    expect_states(
+        &state_sub,
+        &[
+            ("home/state/shed/relay/available", json!(false)),
+            ("home/state/shed/shed_temp/available", json!(false)),
+            ("home/state/shed/shed_motion/available", json!(false)),
         ],
     )
     .await;
