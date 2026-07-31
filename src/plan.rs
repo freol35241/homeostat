@@ -339,7 +339,7 @@ pub fn walk_steps(diff: &Diff, check: &CheckResult, world: &World) -> Vec<Step> 
     let mut steps = Vec::new();
 
     let stop_set: BTreeSet<String> = diff.destroys.iter().cloned().collect();
-    let old_edges = grant_edges(&world.grants, check);
+    let old_edges = grant_edges(&world.grants);
     let mut stops = ordered(&stop_set, &old_edges, |name| {
         world.units.get(name).and_then(world_kind_order).unwrap_or(3)
     });
@@ -348,7 +348,7 @@ pub fn walk_steps(diff: &Diff, check: &CheckResult, world: &World) -> Vec<Step> 
 
     let mut start_set: BTreeSet<String> = diff.creates.iter().cloned().collect();
     start_set.extend(diff.restarts.iter().map(|r| r.name.clone()));
-    let new_edges = grant_edges(&check.grants, check);
+    let new_edges = grant_edges(&check.grants);
     let creates: BTreeSet<&String> = diff.creates.iter().collect();
     for unit in ordered(&start_set, &new_edges, |name| {
         check.house.unit(name).map(|u| kind_order(u.manifest.unit.kind)).unwrap_or(3)
@@ -360,23 +360,16 @@ pub fn walk_steps(diff: &Diff, check: &CheckResult, world: &World) -> Vec<Step> 
 }
 
 /// Edges (adapter, dependent) from a grant table: the granted entities'
-/// owner adapters must be up before the granting unit. (Grants never
-/// resolve onto automation-owned entities — virtual entities are
-/// read-only — so edge sources are always adapters.)
-fn grant_edges(grants: &[Grant], check: &CheckResult) -> Vec<(String, String)> {
-    let owner: BTreeMap<&str, &str> = check
-        .house
-        .entities
-        .iter()
-        .map(|e| (e.name.as_str(), e.owner.as_str()))
-        .collect();
+/// owner adapters must be up before the granting unit. The owner rides in
+/// the grant itself, so edges hold even for entities the repo no longer
+/// declares. (Grants never resolve onto automation-owned entities —
+/// virtual entities are read-only — so edge sources are always adapters.)
+fn grant_edges(grants: &[Grant]) -> Vec<(String, String)> {
     let mut edges = Vec::new();
     for grant in grants {
         for entity in &grant.entities {
-            if let Some(adapter) = owner.get(entity.as_str()) {
-                if *adapter != grant.unit {
-                    edges.push((adapter.to_string(), grant.unit.clone()));
-                }
+            if entity.owner != grant.unit {
+                edges.push((entity.owner.clone(), grant.unit.clone()));
             }
         }
     }
@@ -532,7 +525,7 @@ pub fn render(check: &CheckResult, root: &Path, repo_label: &str, world: &World)
         if !diff.grant_adds.is_empty() || !diff.grant_removes.is_empty() {
             out.push_str("\nGrant changes:\n\n");
             for grant in &diff.grant_adds {
-                render_grant(check, grant, '+', &mut out);
+                render_grant(grant, '+', &mut out);
             }
             for grant in &diff.grant_removes {
                 out.push_str(&format!(
@@ -541,7 +534,12 @@ pub fn render(check: &CheckResult, root: &Path, repo_label: &str, world: &World)
                     grant.publish,
                     grant.capability,
                     grant.priority,
-                    grant.entities.join(", "),
+                    grant
+                        .entities
+                        .iter()
+                        .map(|e| e.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", "),
                 ));
             }
         }
@@ -551,7 +549,7 @@ pub fn render(check: &CheckResult, root: &Path, repo_label: &str, world: &World)
             out.push_str("  (none)\n");
         }
         for grant in &check.grants {
-            render_grant(check, grant, ' ', &mut out);
+            render_grant(grant, ' ', &mut out);
         }
     }
 
@@ -608,24 +606,17 @@ fn summarize(diff: &Diff) -> String {
     parts.join(", ")
 }
 
-fn render_grant(check: &CheckResult, grant: &Grant, mark: char, out: &mut String) {
+fn render_grant(grant: &Grant, mark: char, out: &mut String) {
     let prefix = if mark == ' ' { "  ".to_string() } else { format!("  {mark} ") };
     out.push_str(&format!(
         "{prefix}{}.{}  capability={}  priority={}\n",
         grant.unit, grant.publish, grant.capability, grant.priority
     ));
-    let width = grant.entities.iter().map(|e| e.len()).max().unwrap_or(0);
-    for name in &grant.entities {
-        let Some(entity) = check.house.entities.iter().find(|e| &e.name == name) else {
-            out.push_str(&format!("    -> {name}\n"));
-            continue;
-        };
+    let width = grant.entities.iter().map(|e| e.name.len()).max().unwrap_or(0);
+    for entity in &grant.entities {
         out.push_str(&format!(
             "    -> {:width$}  (room={}, write={}, owner={})\n",
-            name,
-            entity.file.entity.room,
-            entity.file.write_policy.mode,
-            entity.file.write_policy.owner,
+            entity.name, entity.room, entity.write, entity.owner,
         ));
     }
 }

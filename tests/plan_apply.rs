@@ -426,6 +426,39 @@ async fn structural_change_starts_units_in_grant_order() {
     let _ = std::fs::remove_dir_all(&house);
 }
 
+/// (c2) Moving a granted entity between rooms is structural, not a bare
+/// adapter restart: the grant table records each granted entity's room,
+/// so the move surfaces as a grant delta the owner reviews.
+#[tokio::test(flavor = "multi_thread")]
+async fn entity_move_plans_as_structural() {
+    let house = temp_house("move");
+    let mut sup = Supervisor::spawn_at(&house, &[]);
+    let observer = sup.observer().await;
+    await_base_units(&observer).await;
+
+    add_watcher_pair(&house, "beacon", "den", "beacon_lamp", "watcher");
+    edit(&house, "units/beacon.toml", "fake_adapter --crash-after-ms 0", "fake_adapter");
+    let house_arg = house.to_str().expect("utf-8 path");
+    let apply = cli(&["apply", house_arg, "--bus", &sup.endpoint]);
+    assert_cli_ok(&apply);
+
+    edit(
+        &house,
+        "entities/beacon/beacon_lamp.toml",
+        "room = \"den\"",
+        "room = \"attic\"",
+    );
+
+    let plan = cli(&["plan", house_arg, "--bus", &sup.endpoint]);
+    assert_cli_ok(&plan);
+    let text = stdout(&plan);
+    assert!(text.contains("Plan tier: structural"), "{text}");
+    assert!(text.contains("Grant changes:"), "the move renders as a grant delta: {text}");
+
+    sup.shutdown();
+    let _ = std::fs::remove_dir_all(&house);
+}
+
 /// (d) A unit that fails to become ready mid-walk halts the apply in
 /// place and reports position: earlier units keep running, later units
 /// are never started, and a re-plan shows exactly the remaining work.

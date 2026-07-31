@@ -17,8 +17,22 @@ pub struct Grant {
     pub publish: String,
     pub capability: String,
     pub priority: Priority,
-    /// Names of granted entities (key match + capability match), sorted.
-    pub entities: Vec<String>,
+    /// Granted entities (key match + capability match), sorted by name.
+    pub entities: Vec<GrantEntity>,
+}
+
+/// A granted entity with the policy facts the grant table is the record
+/// of. Because these live in the table, an entity move, a write-mode
+/// flip, or a re-binding IS a grant-table delta — and any grant delta
+/// escalates the plan to structural (docs/design.md, Plan/apply
+/// mechanics), with the owner shown exactly what changed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GrantEntity {
+    pub name: String,
+    pub room: String,
+    pub write: WriteMode,
+    /// The binding adapter — the walk-order edge source.
+    pub owner: String,
 }
 
 /// Resolves the grant table and enforces write policy.
@@ -60,7 +74,7 @@ pub fn resolve(
             continue;
         }
 
-        let mut granted: Vec<String> = house
+        let mut granted: Vec<GrantEntity> = house
             .entities
             .iter()
             .filter(|e| e.file.entity.capability == capability)
@@ -68,9 +82,14 @@ pub fn resolve(
                 let prefix = ["home", "cmd", e.file.entity.room.as_str(), e.name.as_str()];
                 key.exprs.iter().any(|expr| expr.matches_prefix(&prefix))
             })
-            .map(|e| e.name.clone())
+            .map(|e| GrantEntity {
+                name: e.name.clone(),
+                room: e.file.entity.room.clone(),
+                write: e.file.write_policy.mode,
+                owner: e.owner.clone(),
+            })
             .collect();
-        granted.sort();
+        granted.sort_by(|a, b| a.name.cmp(&b.name));
         granted.dedup();
 
         if granted.is_empty() {
@@ -97,7 +116,7 @@ pub fn resolve(
         }
         for entity in &grant.entities {
             writers
-                .entry(entity)
+                .entry(entity.name.as_str())
                 .or_default()
                 .push(format!("{}.{}", grant.unit, grant.publish));
         }
@@ -155,7 +174,8 @@ pub fn resolve(
     // a producer that never takes them, and would put automation -> automation
     // edges into the walk order.
     for grant in &grants {
-        for name in &grant.entities {
+        for granted in &grant.entities {
+            let name = &granted.name;
             let Some(entity) = house.entities.iter().find(|e| &e.name == name) else {
                 continue;
             };
@@ -350,7 +370,50 @@ mod tests {
         assert!(errors.is_empty(), "{errors:?}");
         assert!(warnings.is_empty(), "{warnings:?}");
         let night_mode = grants.iter().find(|g| g.unit == "night_mode").unwrap();
-        assert_eq!(night_mode.entities, vec!["lock".to_string()]);
+        assert_eq!(
+            night_mode.entities,
+            vec![GrantEntity {
+                name: "lock".to_string(),
+                room: "hallway".to_string(),
+                write: WriteMode::Arbitrated,
+                owner: "zigbee".to_string(),
+            }]
+        );
+    }
+
+    /// The tier-escalation property behind docs/design.md's "entity moves,
+    /// write-policy changes" structural rule: a room move or a write-mode
+    /// flip changes the resolved grant table, so it diffs as a grant delta.
+    #[test]
+    fn entity_move_and_policy_flip_change_the_grant_table() {
+        let arbiter_bus = || {
+            let mut publishes = BTreeMap::new();
+            publishes.insert(
+                "forwarded".to_string(),
+                PublishSpec { key: "home/arbiter/**".to_string(), capability: None, priority: None },
+            );
+            Some(BusSection { subscribes: BTreeMap::new(), publishes })
+        };
+        let baseline = house_with_lock(arbiter_bus());
+        let (expanded, _) = expand(&baseline);
+        let (grants, _, _) = resolve(&baseline, &expanded);
+
+        let mut moved = house_with_lock(arbiter_bus());
+        moved.entities[1].file.entity.room = "porch".to_string();
+        // The publish key still names the old room, so re-expansion changes
+        // the granted set — either way the tables differ.
+        let (expanded, _) = expand(&moved);
+        let (moved_grants, _, _) = resolve(&moved, &expanded);
+        assert_ne!(grants, moved_grants, "a room move must change the grant table");
+
+        let mut flipped = house_with_lock(arbiter_bus());
+        flipped.entities[0].file.write_policy.mode = WriteMode::Exclusive;
+        // The lamp is granted to nobody; flip the lock instead, which
+        // night_mode writes.
+        flipped.entities[1].file.write_policy.mode = WriteMode::Shared;
+        let (expanded, _) = expand(&flipped);
+        let (flipped_grants, _, _) = resolve(&flipped, &expanded);
+        assert_ne!(grants, flipped_grants, "a write-mode flip must change the grant table");
     }
 
     #[test]
