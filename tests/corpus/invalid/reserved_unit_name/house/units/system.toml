@@ -1,0 +1,9 @@
+schema = 1
+
+[unit]
+name = "system"
+kind = "automation"
+
+[runtime]
+command = "uv run units/system.py"
+restart = "on-failure"

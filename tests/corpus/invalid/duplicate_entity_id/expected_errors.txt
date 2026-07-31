@@ -1,0 +1,1 @@
+error[duplicate-entity-id] hue-01: bound to "hue" by entities/hue/lamp_a.toml and entities/hue/lamp_b.toml

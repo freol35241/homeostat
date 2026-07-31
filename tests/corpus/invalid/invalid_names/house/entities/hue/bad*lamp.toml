@@ -1,0 +1,10 @@
+schema = 1
+
+[entity]
+id = "hue-02"
+capability = "light"
+room = "attic"
+
+[write_policy]
+mode = "shared"
+owner = "hue"

@@ -1,0 +1,20 @@
+schema = 1
+
+[unit]
+name = "hue"
+kind = "adapter"
+
+[runtime]
+command = "uv run units/hue.py"
+restart = "always"
+
+[discovery]
+mode = "static"
+endpoint = "http://localhost:8080"
+
+[entities]
+dir = "entities/hue/"
+
+[params."bad/param"]
+type = "int"
+default = 1

@@ -12,6 +12,7 @@ use crate::repo::House;
 pub fn validate(house: &House) -> Vec<ValidationError> {
     let mut errors = Vec::new();
 
+    check_names(house, &mut errors);
     check_duplicates(house, &mut errors);
     check_manifest_shape(house, &mut errors);
     check_entities(house, &mut errors);
@@ -19,6 +20,91 @@ pub fn validate(house: &House) -> Vec<ValidationError> {
     check_params(house, &mut errors);
 
     errors
+}
+
+/// Whether a name is usable as exactly one bus key segment. Anything else
+/// either breaks the fixed key schema (`/`), is meaningful to the bus
+/// (`*`, `$`, `?`, `#`), or invites whitespace/encoding surprises — and a
+/// bad unit name would panic the supervisor's liveliness subscriber.
+fn valid_segment(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'))
+}
+
+/// Every name that becomes a key segment: unit and parameter names
+/// (`home/config/{unit}/{param}`, `home/meta/{unit}/...`), entity and room
+/// names (`home/state/{room}/{entity}/{aspect}`), zone names (expanded in
+/// key expressions). The unit name `system` is refused outright: the core
+/// serves `home/meta/system/**` itself.
+fn check_names(house: &House, errors: &mut Vec<ValidationError>) {
+    let segment_message = |what: &str, name: &str| {
+        format!(
+            "{what} \"{name}\" must be a single key segment (letters, digits, \"_\", \"-\", \".\")"
+        )
+    };
+    for unit in &house.units {
+        let name = &unit.manifest.unit.name;
+        let file = Some(unit.path.clone());
+        if !valid_segment(name) {
+            errors.push(ValidationError::new(
+                "invalid-name",
+                name,
+                segment_message("unit name", name),
+                file.clone(),
+            ));
+        } else if name == "system" {
+            errors.push(ValidationError::new(
+                "reserved-unit-name",
+                name,
+                "unit name \"system\" is reserved for the core's meta keys",
+                file.clone(),
+            ));
+        }
+        if let Some(params) = &unit.manifest.params {
+            for param in params.keys() {
+                if !valid_segment(param) {
+                    errors.push(ValidationError::new(
+                        "invalid-name",
+                        format!("{name}.{param}"),
+                        segment_message("parameter name", param),
+                        file.clone(),
+                    ));
+                }
+            }
+        }
+    }
+    for entity in &house.entities {
+        let file = Some(entity.path.clone());
+        if !valid_segment(&entity.name) {
+            errors.push(ValidationError::new(
+                "invalid-name",
+                &entity.name,
+                segment_message("entity name", &entity.name),
+                file.clone(),
+            ));
+        }
+        let room = &entity.file.entity.room;
+        if !valid_segment(room) {
+            errors.push(ValidationError::new(
+                "invalid-name",
+                &entity.name,
+                segment_message("room", room),
+                file,
+            ));
+        }
+    }
+    for zone in house.zones.keys() {
+        if !valid_segment(zone) {
+            errors.push(ValidationError::new(
+                "invalid-name",
+                zone,
+                segment_message("zone name", zone),
+                Some("zones.toml".to_string()),
+            ));
+        }
+    }
 }
 
 fn check_duplicates(house: &House, errors: &mut Vec<ValidationError>) {
@@ -52,6 +138,28 @@ fn check_duplicates(house: &House, errors: &mut Vec<ValidationError>) {
                 "duplicate-entity-name",
                 name,
                 format!("defined in {}", paths.join(" and ")),
+                None,
+            ));
+        }
+    }
+
+    // The binding `id` is the device address within one owner's namespace;
+    // two files sharing it would silently collapse to whichever the
+    // adapter's `by_id` map keeps last.
+    let mut entity_ids: BTreeMap<(&str, &str), Vec<&str>> = BTreeMap::new();
+    for entity in &house.entities {
+        entity_ids
+            .entry((&entity.owner, &entity.file.entity.id))
+            .or_default()
+            .push(&entity.path);
+    }
+    for ((owner, id), mut paths) in entity_ids {
+        if paths.len() > 1 {
+            paths.sort();
+            errors.push(ValidationError::new(
+                "duplicate-entity-id",
+                id,
+                format!("bound to \"{owner}\" by {}", paths.join(" and ")),
                 None,
             ));
         }

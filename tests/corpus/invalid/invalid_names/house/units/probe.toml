@@ -1,0 +1,9 @@
+schema = 1
+
+[unit]
+name = "bad*unit"
+kind = "automation"
+
+[runtime]
+command = "uv run units/probe.py"
+restart = "on-failure"
