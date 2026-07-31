@@ -165,6 +165,24 @@ async fn expect_drop_event(sub: &StateSub, reason: &str) {
     }
 }
 
+/// Reads health events until one matches the expected kind — degraded
+/// conditions publish kind = condition (the backend-outage precedent),
+/// unlike dropped-input events.
+async fn expect_event_kind(sub: &StateSub, kind: &str) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        let sample = tokio::time::timeout_at(deadline, sub.recv_async())
+            .await
+            .unwrap_or_else(|_| panic!("no \"{kind}\" health event within 20s"))
+            .expect("event stream open");
+        let event: Value = serde_json::from_slice(&sample.payload().to_bytes())
+            .expect("health event is JSON");
+        if event["kind"] == kind {
+            return;
+        }
+    }
+}
+
 /// (a) A phone associating to an AP becomes `presence = true` on the bus;
 /// dropping off flips it back after the away delay — and the discovery
 /// feed shows the sighted station bound to its entity.
@@ -245,7 +263,7 @@ async fn unreachable_router_drops_once_and_recovers() {
     let event_sub = observer.declare_subscriber(EVENT_KEY).await.expect("event subscriber");
 
     router.control("/control/break");
-    expect_drop_event(&event_sub, "router-unreachable").await;
+    expect_event_kind(&event_sub, "router-unreachable").await;
 
     router.control("/control/restore");
     router.control("/control/wan?up=false");

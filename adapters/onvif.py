@@ -263,7 +263,7 @@ async def run_camera(entity, conf: dict, session, http: aiohttp.ClientSession, s
                 await asyncio.wait_for(stop.wait(), timeout=RESUBSCRIBE_DELAY_S)
 
 
-async def serve(unit, session, config, cameras_conf) -> None:
+async def serve(session, config, cameras_conf) -> None:
     loop = asyncio.get_running_loop()
     stop = asyncio.Event()
     for sig in (signal.SIGTERM, signal.SIGINT):
@@ -297,7 +297,7 @@ def main() -> None:
 
     session = homeostat.connect()
     try:
-        asyncio.run(serve(unit, session, config, cameras_conf))
+        asyncio.run(serve(session, config, cameras_conf))
     finally:
         session.close()
 

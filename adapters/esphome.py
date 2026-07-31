@@ -287,7 +287,7 @@ async def mdns_browse(unit, session, by_device, unbound_discovery, publish_disco
     try:
         aiozc = AsyncZeroconf()
     except Exception as err:
-        session.health_event("drop", reason="mdns-unavailable", error=str(err))
+        session.health_event("mdns-unavailable", error=str(err))
         return
 
     def on_change(zc, service_type, name, state_change) -> None:
@@ -321,7 +321,7 @@ async def mdns_browse(unit, session, by_device, unbound_discovery, publish_disco
     try:
         browser = AsyncServiceBrowser(aiozc.zeroconf, MDNS_SERVICE, handlers=[on_change])
     except Exception as err:
-        session.health_event("drop", reason="mdns-unavailable", error=str(err))
+        session.health_event("mdns-unavailable", error=str(err))
         await aiozc.async_close()
         return
 

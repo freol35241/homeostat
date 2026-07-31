@@ -7,9 +7,10 @@
 //! - `home/meta/{unit}/log`  ring buffer (500 lines) of captured stdout/stderr
 //! - `home/config/{unit}/{param}`  core-owned live parameter values
 //!
-//! All sessions run in peer mode with multicast scouting disabled; topology
-//! is explicit (the supervisor listens, everyone else connects). This keeps
-//! parallel test buses isolated and makes localhost deterministic.
+//! Topology is explicit, with multicast scouting disabled: the supervisor
+//! runs in router mode on a fixed listen endpoint and everyone else
+//! connects in client mode. This keeps parallel test buses isolated and
+//! makes localhost deterministic.
 
 use serde::{Deserialize, Serialize};
 use zenoh::Config;
@@ -90,7 +91,8 @@ fn base_config(mode: &str) -> Config {
 }
 
 /// Supervision status of a unit, published as JSON at `home/health/{unit}`
-/// on every transition and refreshed periodically for late subscribers.
+/// on every transition; late joiners read current health through the
+/// supervisor's health queryable on the same key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum HealthStatus {

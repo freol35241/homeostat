@@ -205,6 +205,24 @@ async fn expect_drop_event(sub: &StateSub, reason: &str) -> Value {
     }
 }
 
+/// Reads health events until one matches the expected kind — degraded
+/// conditions publish kind = condition (the backend-outage precedent),
+/// unlike dropped-input events.
+async fn expect_event_kind(sub: &StateSub, kind: &str) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let sample = tokio::time::timeout_at(deadline, sub.recv_async())
+            .await
+            .unwrap_or_else(|_| panic!("no \"{kind}\" health event within 10s"))
+            .expect("event stream open");
+        let event: Value = serde_json::from_slice(&sample.payload().to_bytes())
+            .expect("health event is JSON");
+        if event["kind"] == kind {
+            return;
+        }
+    }
+}
+
 /// (a) Scripted per-field state publishes translate to normalized and
 /// passthrough bus aspects: the "serial" wrapper level is stripped, the
 /// sensor-object leaves join with underscores, nested blob topics and the
@@ -296,7 +314,7 @@ async fn silence_flips_available() {
 
     // Nothing more from the device: the receive timer runs out.
     expect_states(&state_sub, &[(AVAILABLE_KEY, json!(false))]).await;
-    expect_drop_event(&event_sub, "device-silent").await;
+    expect_event_kind(&event_sub, "device-silent").await;
 
     mqtt.publish(&format!("{BASE}/ivt490/state/serial/GT1"), "21.60").await;
     expect_states(&state_sub, &[(AVAILABLE_KEY, json!(true))]).await;

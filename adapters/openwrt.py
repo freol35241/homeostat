@@ -250,10 +250,12 @@ class Adapter:
         self.noted: set = set()  # degraded conditions already announced
         self.last_seen: dict[str, float] = {}  # mac -> monotonic sighting time
 
-    def note(self, key: tuple, reason: str, **fields) -> None:
-        """One health event per down transition of a degraded condition."""
+    def note(self, key: tuple, kind: str, **fields) -> None:
+        """One health event per down transition of a degraded condition.
+        Degraded conditions publish kind = condition (the recorder's
+        backend-outage precedent) — nothing was dropped."""
         if key not in self.noted:
-            self.session.health_event("drop", reason=reason, **fields)
+            self.session.health_event(kind, **fields)
             self.noted.add(key)
 
     def clear(self, key: tuple) -> None:
@@ -283,7 +285,7 @@ class Adapter:
             except UbusError as err:
                 if self.reachable.get(name, True):
                     self.session.health_event(
-                        "drop", reason="router-unreachable", router=name, error=str(err)
+                        "router-unreachable", router=name, error=str(err)
                     )
                 self.reachable[name] = False
                 continue
@@ -294,7 +296,7 @@ class Adapter:
                 # a crash loop — one bad router never takes the unit down.
                 if self.reachable.get(name, True):
                     self.session.health_event(
-                        "drop", reason="router-poll-failed", router=name, error=str(err)
+                        "router-poll-failed", router=name, error=str(err)
                     )
                 self.reachable[name] = False
                 continue

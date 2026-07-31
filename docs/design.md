@@ -52,8 +52,10 @@ not the general long tail. No Home Assistant bridge in v1.
 - **Process model:** plain OS processes supervised by the core
   (Erlang/actor-model lineage: fault isolation and language boundaries, not
   microservices). NOT containerized internally. The whole system may run
-  inside ONE container as a deployment boundary on a shared host; the core is
-  then PID 1 (it must reap orphans and forward signals). Host networking is
+  inside ONE container as a deployment boundary on a shared host; the image
+  then runs tini as PID 1 (reaping orphans, forwarding signals) with the
+  core as its child — the core itself does per-unit process-group
+  termination and sweeps, not global reaping. Host networking is
   required for mDNS/ESPHome discovery and Zenoh scouting. Config repo mounts
   as a volume.
 - **Supervision:** liveliness tokens on the bus, not just PIDs. Restart with
@@ -1037,7 +1039,8 @@ the exploration that produced it):
   server): fetching public tile CDNs would leak family positions as
   tile coordinates, exactly what local-only exists to prevent.
   Settled 2026-07-16: location is scalar aspects (`lat`, `lon`,
-  `accuracy`, `battery`), not one composite object — the recorder
+  `accuracy`, `battery`, and `fixed_at`, the fix's epoch timestamp
+  from OwnTracks `tst`), not one composite object — the recorder
   stores scalars only, so per-aspect keys make position history free;
   atomicity of a fix was judged worth less than trails. OwnTracks
   reaches the house over MQTT via the existing broker (the

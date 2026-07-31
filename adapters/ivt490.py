@@ -410,7 +410,9 @@ def main():
             now = time.monotonic()
             for entity in config.entities:
                 if now - last_rx[entity.id] > timeout and set_available(entity, False):
-                    session.health_event("drop", reason="device-silent", topic=entity.id)
+                    # A degraded condition, not dropped input: kind =
+                    # condition, the recorder's backend-outage precedent.
+                    session.health_event("device-silent", topic=entity.id)
 
     watchdog_thread = threading.Thread(target=watchdog, daemon=True)
     watchdog_thread.start()
