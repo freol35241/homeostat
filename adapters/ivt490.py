@@ -114,35 +114,17 @@ import time
 
 import homeostat
 from homeostat import house, keys, mqtt
+from homeostat.params import LiveParams
 
 PARAM_DEFAULTS = {"availability_timeout_s": 300.0}
 
 
-class LiveParams:
-    """availability_timeout_s from home/config/{unit}/*, live. Subscribe
-    first, then get (the step-4 read pattern); the adapter-side default
-    lets a manifest omit the parameter."""
-
-    def __init__(self, session):
-        self._values = dict(PARAM_DEFAULTS)
-        self._sub = session.subscribe(keys.config_keyexpr(session.unit), self._on_config)
-        for key, value in session.get_json(keys.config_keyexpr(session.unit)):
-            self._store(key.rsplit("/", 1)[-1], value)
-
-    def _on_config(self, sample) -> None:
-        try:
-            value = json.loads(sample.payload.to_bytes())
-        except ValueError:
-            return
-        self._store(str(sample.key_expr).rsplit("/", 1)[-1], value)
-
-    def _store(self, name: str, value) -> None:
-        if name in self._values and isinstance(value, (int, float)) and not isinstance(value, bool):
-            self._values[name] = value
+class Params(LiveParams):
+    """availability_timeout_s from home/config/{unit}/*, live."""
 
     @property
     def availability_timeout_s(self) -> float:
-        return max(0.1, self._values["availability_timeout_s"])
+        return max(0.1, self.get("availability_timeout_s"))
 
 
 # lib/IVT490/IVT490.cpp, State::serialize (GT3_2_boiler_emulation branch):
@@ -262,7 +244,7 @@ def main():
     endpoint = mqtt.parse_endpoint(config.endpoint)
 
     session = homeostat.connect()
-    params = LiveParams(session)
+    params = Params(session, PARAM_DEFAULTS)
     seen: set[str] = set()
 
     # Receive-timer availability (see module docstring): last_rx is seeded
@@ -385,17 +367,10 @@ def main():
     ]
     client = mqtt.connect(endpoint, on_ivt_message, topics)
 
-    # An arbitrated entity has no home/cmd subscription at all — not
-    # subscribing IS the structural enforcement — and instead gets the
-    # arbiter's forwarded, post-arbitration envelope on home/arbiter/**.
     subscribers = [
-        session.subscribe(keys.cmd_keyexpr(e.room, e.name), cmd_handler(e))
+        session.subscribe(expr, cmd_handler(e))
         for e in config.entities
-        if e.write_mode != "arbitrated"
-    ] + [
-        session.subscribe(keys.arbiter_keyexpr(e.room, e.name), cmd_handler(e))
-        for e in config.entities
-        if e.write_mode == "arbitrated"
+        for expr in keys.command_keyexprs(e)
     ]
 
     session.put_json(keys.discovery_key(unit), inventory())

@@ -207,11 +207,7 @@ pub fn resolve(
     // and name literally. Closes the free-form-state-key hole that virtual
     // sensors would otherwise ride through.
     for key in expanded {
-        if key.direction != Direction::Publishes {
-            continue;
-        }
-        let templated = KeyExpr::parse(&key.source).is_ok_and(|e| e.has_template());
-        if templated {
+        if key.direction != Direction::Publishes || key.templated {
             continue;
         }
         for expr in &key.exprs {

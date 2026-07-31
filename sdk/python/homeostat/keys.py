@@ -34,6 +34,16 @@ def arbiter_keyexpr(room: str, entity: str) -> str:
     return f"home/arbiter/{room}/{entity}/**"
 
 
+def command_keyexprs(entity) -> list[str]:
+    """The key expressions on which one bound entity receives commands:
+    home/cmd for plain entities. An arbitrated entity gets no home/cmd
+    subscription at all — not subscribing IS the structural enforcement —
+    and instead receives the arbiter's forwarded envelope."""
+    if entity.write_mode == "arbitrated":
+        return [arbiter_keyexpr(entity.room, entity.name)]
+    return [cmd_keyexpr(entity.room, entity.name)]
+
+
 CMD_PRIORITIES = ("automation", "agent", "family", "manual")
 
 
@@ -66,10 +76,6 @@ def config_key(unit: str, param: str) -> str:
 def config_keyexpr(unit: str) -> str:
     """Key expression matching every parameter of one unit."""
     return f"home/config/{unit}/*"
-
-
-CLOCK_MINUTE = "home/clock/minute"
-CLOCK_DATE = "home/clock/date"
 
 
 def history_key(space: str, entity: str, aspect: str) -> str:

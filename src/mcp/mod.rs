@@ -469,37 +469,15 @@ fn outcome_text(outcome: &ApplyResult, replied_ok: bool) -> Result<String, Strin
         return Err(format!("apply refused: {error}"));
     }
     let mut out = String::new();
-    for param in &outcome.params {
-        out.push_str(&format!(
-            "  parameter {}/{} = {}\n",
-            param.unit, param.param, param.value
-        ));
-    }
-    for unit in &outcome.refreshes {
-        out.push_str(&format!("  manifest refreshed: {unit}\n"));
-    }
-    for step in &outcome.steps {
-        match &step.error {
-            None => out.push_str(&format!("  {} {}: ok\n", step.action, step.unit)),
-            Some(error) => out.push_str(&format!(
-                "  {} {}: FAILED ({error})\n",
-                step.action, step.unit
-            )),
-        }
+    for line in outcome.detail_lines() {
+        out.push_str(&line);
+        out.push('\n');
     }
     if outcome.ok && replied_ok {
         out.push_str("Applied.\n");
         Ok(out)
     } else {
-        Err(format!(
-            "{out}apply halted at {}; not reached: {}",
-            outcome.halted_at.as_deref().unwrap_or("?"),
-            if outcome.not_reached.is_empty() {
-                "none".to_string()
-            } else {
-                outcome.not_reached.join(", ")
-            },
-        ))
+        Err(format!("{out}{}", outcome.halt_summary()))
     }
 }
 

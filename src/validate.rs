@@ -451,7 +451,8 @@ fn check_param(subject: &str, spec: &ParamSpec, path: &str, errors: &mut Vec<Val
     // never plans, let alone reaches a running unit. Skipped when this
     // param already has errors — a default judged against a malformed
     // constraint would only add noise.
-    if default_ok && errors.len() == before {
+    // errors.len() == before already implies the default matched its type.
+    if errors.len() == before {
         if let Err(message) = crate::config::default_within_constraint(spec) {
             errors.push(ValidationError::new(
                 "invalid-default",

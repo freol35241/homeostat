@@ -281,38 +281,14 @@ fn render_outcome(outcome: &ApplyResult, replied_ok: bool) -> ExitCode {
         eprintln!("apply refused: {error}");
         return ExitCode::FAILURE;
     }
-    for param in &outcome.params {
-        println!("  parameter {}/{} = {}", param.unit, param.param, param.value);
-    }
-    for unit in &outcome.refreshes {
-        println!("  manifest refreshed: {unit}");
-    }
-    for step in &outcome.steps {
-        match &step.error {
-            None => println!("  {} {}: ok", step.action, step.unit),
-            Some(error) => println!("  {} {}: FAILED ({error})", step.action, step.unit),
-        }
+    for line in outcome.detail_lines() {
+        println!("{line}");
     }
     if outcome.ok && replied_ok {
         println!("Applied.");
         ExitCode::SUCCESS
     } else {
-        let position = outcome
-            .steps
-            .iter()
-            .filter(|s| s.ok)
-            .count();
-        eprintln!(
-            "apply halted at {} (step {}/{}); not reached: {}",
-            outcome.halted_at.as_deref().unwrap_or("?"),
-            position + 1,
-            outcome.steps.len() + outcome.not_reached.len(),
-            if outcome.not_reached.is_empty() {
-                "none".to_string()
-            } else {
-                outcome.not_reached.join(", ")
-            },
-        );
+        eprintln!("{}", outcome.halt_summary());
         ExitCode::FAILURE
     }
 }

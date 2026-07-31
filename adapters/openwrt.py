@@ -52,6 +52,7 @@ import aiohttp
 
 import homeostat
 from homeostat import house, keys
+from homeostat.params import LiveParams
 
 NULL_SID = "0" * 32
 HTTP_TIMEOUT_S = 10
@@ -128,35 +129,16 @@ def wireguard_fresh(iface_status, now_epoch: float) -> bool:
     return latest > 0 and now_epoch - latest < WG_HANDSHAKE_FRESH_S
 
 
-class LiveParams:
-    """poll_interval_s / away_delay_s from home/config/{unit}/*, live.
-    Subscribe first, then get (the step-4 read pattern); adapter-side
-    defaults let a manifest omit either parameter."""
-
-    def __init__(self, session):
-        self._values = dict(PARAM_DEFAULTS)
-        self._sub = session.subscribe(keys.config_keyexpr(session.unit), self._on_config)
-        for key, value in session.get_json(keys.config_keyexpr(session.unit)):
-            self._store(key.rsplit("/", 1)[-1], value)
-
-    def _on_config(self, sample) -> None:
-        try:
-            value = json.loads(sample.payload.to_bytes())
-        except ValueError:
-            return
-        self._store(str(sample.key_expr).rsplit("/", 1)[-1], value)
-
-    def _store(self, name: str, value) -> None:
-        if name in self._values and isinstance(value, (int, float)) and not isinstance(value, bool):
-            self._values[name] = value
+class Params(LiveParams):
+    """poll_interval_s / away_delay_s from home/config/{unit}/*, live."""
 
     @property
     def poll_interval_s(self) -> float:
-        return max(1, self._values["poll_interval_s"])
+        return max(1, self.get("poll_interval_s"))
 
     @property
     def away_delay_s(self) -> float:
-        return max(0, self._values["away_delay_s"])
+        return max(0, self.get("away_delay_s"))
 
 
 def load_routers(endpoint: str | None) -> dict:
@@ -243,7 +225,7 @@ class Adapter:
         self.router_entities = router_entities
         self.vpn_entities = vpn_entities
         self.trackers = trackers
-        self.params = LiveParams(session)
+        self.params = Params(session, PARAM_DEFAULTS)
         self.published: dict[str, object] = {}
         self.last_discovery: str | None = None
         self.reachable: dict[str, bool] = {}

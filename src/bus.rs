@@ -198,7 +198,6 @@ pub async fn request_apply(
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApplyResult {
     pub ok: bool,
-    pub tier: Option<String>,
     pub params: Vec<ApplyParam>,
     /// Units whose manifest was refreshed at parameter level (no restart).
     #[serde(default)]
@@ -209,4 +208,43 @@ pub struct ApplyResult {
     /// Units the walk never reached.
     pub not_reached: Vec<String>,
     pub error: Option<String>,
+}
+
+impl ApplyResult {
+    /// The per-item lines the CLI and the MCP surface both render.
+    pub fn detail_lines(&self) -> Vec<String> {
+        let mut lines = Vec::new();
+        for param in &self.params {
+            lines.push(format!(
+                "  parameter {}/{} = {}",
+                param.unit, param.param, param.value
+            ));
+        }
+        for unit in &self.refreshes {
+            lines.push(format!("  manifest refreshed: {unit}"));
+        }
+        for step in &self.steps {
+            lines.push(match &step.error {
+                None => format!("  {} {}: ok", step.action, step.unit),
+                Some(error) => format!("  {} {}: FAILED ({error})", step.action, step.unit),
+            });
+        }
+        lines
+    }
+
+    /// The halt-position line for a failed apply.
+    pub fn halt_summary(&self) -> String {
+        let position = self.steps.iter().filter(|s| s.ok).count();
+        format!(
+            "apply halted at {} (step {}/{}); not reached: {}",
+            self.halted_at.as_deref().unwrap_or("?"),
+            position + 1,
+            self.steps.len() + self.not_reached.len(),
+            if self.not_reached.is_empty() {
+                "none".to_string()
+            } else {
+                self.not_reached.join(", ")
+            },
+        )
+    }
 }

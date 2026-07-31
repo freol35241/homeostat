@@ -62,7 +62,6 @@ async fn handle(core: Arc<Core>, query: zenoh::query::Query) {
 fn failure(error: String) -> ApplyResult {
     ApplyResult {
         ok: false,
-        tier: None,
         params: Vec::new(),
         refreshes: Vec::new(),
         steps: Vec::new(),
@@ -86,7 +85,6 @@ async fn execute(core: &Arc<Core>, request: ApplyRequest) -> ApplyResult {
     if diff.is_empty() {
         return ApplyResult {
             ok: true,
-            tier: None,
             params: Vec::new(),
             refreshes: Vec::new(),
             steps: Vec::new(),
@@ -216,7 +214,6 @@ async fn execute(core: &Arc<Core>, request: ApplyRequest) -> ApplyResult {
     }
     ApplyResult {
         ok,
-        tier: Some(tier.to_string()),
         params,
         refreshes,
         steps,

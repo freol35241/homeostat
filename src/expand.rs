@@ -28,6 +28,9 @@ pub struct ExpandedKey {
     pub direction: Direction,
     /// The expression as written in the manifest.
     pub source: String,
+    /// Whether the source used {room}/{entity} templates — carried here so
+    /// consumers never re-parse `source` to recover it.
+    pub templated: bool,
     /// Zone name, when the room slot referenced a zone.
     pub zone: Option<String>,
     pub exprs: Vec<KeyExpr>,
@@ -68,8 +71,9 @@ pub fn expand(house: &House) -> (Vec<ExpandedKey>, Vec<String>, Vec<ValidationEr
                 }
             };
 
+            let templated = expr.has_template();
             let mut zone = None;
-            let exprs = if expr.has_template() {
+            let exprs = if templated {
                 if !matches!(
                     unit.manifest.unit.kind,
                     UnitKind::Adapter | UnitKind::Automation
@@ -123,6 +127,7 @@ pub fn expand(house: &House) -> (Vec<ExpandedKey>, Vec<String>, Vec<ValidationEr
                 entry: entry.clone(),
                 direction,
                 source: raw.to_string(),
+                templated,
                 zone,
                 exprs,
             });

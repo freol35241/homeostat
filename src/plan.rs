@@ -340,9 +340,15 @@ pub fn walk_steps(diff: &Diff, check: &CheckResult, world: &World) -> Vec<Step> 
 
     let stop_set: BTreeSet<String> = diff.destroys.iter().cloned().collect();
     let old_edges = grant_edges(&world.grants);
-    let mut stops = ordered(&stop_set, &old_edges, |name| {
-        world.units.get(name).and_then(world_kind_order).unwrap_or(3)
-    });
+    // Kinds once per unit up front: kind_of runs per comparison inside
+    // ordered, and the world's kind lives in unparsed manifest TOML.
+    let stop_kinds: BTreeMap<String, u8> = stop_set
+        .iter()
+        .map(|name| {
+            (name.clone(), world.units.get(name).and_then(world_kind_order).unwrap_or(3))
+        })
+        .collect();
+    let mut stops = ordered(&stop_set, &old_edges, |name| stop_kinds[name]);
     stops.reverse();
     steps.extend(stops.into_iter().map(|unit| Step { unit, action: StepAction::Stop }));
 

@@ -38,10 +38,27 @@ def load_endpoint(unit: str, root: str | Path = ".") -> str:
     """The unit's [discovery] endpoint with ${VAR} expansion. An unset
     variable is a startup error (visible via the supervisor's backoff)."""
     manifest = tomllib.loads((Path(root) / "units" / f"{unit}.toml").read_text())
+    return _expand_endpoint(manifest)
+
+
+def _expand_endpoint(manifest: dict) -> str:
     endpoint = os.path.expandvars(manifest["discovery"]["endpoint"])
     if "$" in endpoint:
         raise ValueError(f"unset variable in discovery endpoint: {endpoint}")
     return endpoint
+
+
+def _entity_from(path: Path, data: dict, default_owner: str) -> Entity:
+    return Entity(
+        name=path.stem,
+        id=data["entity"]["id"],
+        capability=data["entity"]["capability"],
+        room=data["entity"]["room"],
+        features=data["entity"].get("features", []),
+        write_mode=data["write_policy"]["mode"],
+        owner=data["write_policy"].get("owner", default_owner),
+        naming=dict(data.get("naming", {})),
+    )
 
 
 @dataclass
@@ -89,19 +106,7 @@ def load_house(root: str | Path = ".") -> HouseModel:
         if entities_dir is None:
             continue
         for path in sorted((root / entities_dir).glob("*.toml")):
-            data = tomllib.loads(path.read_text())
-            entities.append(
-                Entity(
-                    name=path.stem,
-                    id=data["entity"]["id"],
-                    capability=data["entity"]["capability"],
-                    room=data["entity"]["room"],
-                    features=data["entity"].get("features", []),
-                    write_mode=data["write_policy"]["mode"],
-                    owner=data["write_policy"].get("owner", unit["name"]),
-                    naming=dict(data.get("naming", {})),
-                )
-            )
+            entities.append(_entity_from(path, tomllib.loads(path.read_text()), unit["name"]))
     return HouseModel(zones=zones, units=units, entities=entities)
 
 
@@ -113,20 +118,12 @@ def load_adapter(unit: str, root: str | Path = ".") -> AdapterConfig:
     # mDNS-discovery adapters (e.g. ESPHome) resolve each device's address
     # individually and declare no [discovery].endpoint; only the static
     # (single-endpoint) adapters need this populated.
-    endpoint = load_endpoint(unit, root) if "endpoint" in manifest.get("discovery", {}) else None
+    endpoint = (
+        _expand_endpoint(manifest) if "endpoint" in manifest.get("discovery", {}) else None
+    )
 
     entities = []
     entities_dir = root / manifest["entities"]["dir"]
     for path in sorted(entities_dir.glob("*.toml")):
-        data = tomllib.loads(path.read_text())
-        entities.append(
-            Entity(
-                name=path.stem,
-                id=data["entity"]["id"],
-                capability=data["entity"]["capability"],
-                room=data["entity"]["room"],
-                features=data["entity"].get("features", []),
-                write_mode=data["write_policy"]["mode"],
-            )
-        )
+        entities.append(_entity_from(path, tomllib.loads(path.read_text()), unit))
     return AdapterConfig(unit=unit, endpoint=endpoint, entities=entities)

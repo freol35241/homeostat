@@ -399,17 +399,9 @@ async def serve(unit, session, config, devices_conf) -> None:
         by_device.setdefault(device, {})[object_id] = entity
 
     subscribers = [
-        session.subscribe(
-            keys.cmd_keyexpr(e.room, e.name), cmd_handler(e, entity_runtime, entity_lock, loop, session)
-        )
+        session.subscribe(expr, cmd_handler(e, entity_runtime, entity_lock, loop, session))
         for e in config.entities
-        if e.write_mode != "arbitrated"
-    ] + [
-        session.subscribe(
-            keys.arbiter_keyexpr(e.room, e.name), cmd_handler(e, entity_runtime, entity_lock, loop, session)
-        )
-        for e in config.entities
-        if e.write_mode == "arbitrated"
+        for expr in keys.command_keyexprs(e)
     ]
 
     devices = [

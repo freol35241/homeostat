@@ -226,17 +226,10 @@ def main():
         ],
     )
 
-    # An arbitrated entity has no home/cmd subscription at all — not
-    # subscribing IS the structural enforcement — and instead gets the
-    # arbiter's forwarded, post-arbitration envelope on home/arbiter/**.
     subscribers = [
-        session.subscribe(keys.cmd_keyexpr(e.room, e.name), cmd_handler(e))
+        session.subscribe(expr, cmd_handler(e))
         for e in config.entities
-        if e.write_mode != "arbitrated"
-    ] + [
-        session.subscribe(keys.arbiter_keyexpr(e.room, e.name), cmd_handler(e))
-        for e in config.entities
-        if e.write_mode == "arbitrated"
+        for expr in keys.command_keyexprs(e)
     ]
 
     # Both translation directions are wired up: the unit is ready.
