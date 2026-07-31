@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 use zenoh::handlers::FifoChannelHandler;
 use zenoh::pubsub::Subscriber;
 
-use common::{await_health, health_watch, process_alive, Supervisor};
+use common::{await_health, config_write, health_watch, process_alive, Supervisor};
 
 const FIXTURE: &str = "tests/fixture_house_arbiter";
 const CMD_KEY: &str = "home/cmd/hallway/front_door/locked";
@@ -43,20 +43,6 @@ async fn put_cmd(session: &zenoh::Session, payload: &Value) {
         .put(CMD_KEY, payload.to_string())
         .await
         .expect("cmd put");
-}
-
-/// Writes a parameter through the core's query-with-payload write path
-/// (same mechanic as tests/evening.rs's config_write and the dashboard's
-/// /api/param).
-async fn config_write(session: &zenoh::Session, key: &str, value: Value) -> Value {
-    let replies = session
-        .get(key)
-        .payload(value.to_string())
-        .await
-        .expect("config write query");
-    let reply = replies.recv_async().await.expect("config write reply");
-    serde_json::from_slice(&reply.result().expect("write accepted").payload().to_bytes())
-        .expect("ok reply is JSON")
 }
 
 /// Next sample within the timeout, decoded as JSON.
@@ -105,7 +91,9 @@ async fn forward_preempt_refuse_and_expiry() {
     // Shrink hold_minutes now, before the manual takeover below: the next
     // lease taken (by the manual wish) is computed from the new value, so
     // it will expire in well under a second once we wait it out in (d).
-    let written = config_write(&observer, HOLD_MINUTES_KEY, json!(0.01)).await;
+    let written = config_write(&observer, HOLD_MINUTES_KEY, json!(0.01))
+        .await
+        .expect("write accepted");
     assert_eq!(written, json!(0.01));
 
     // (b) A manual wish preempts the still-active (strictly lower)

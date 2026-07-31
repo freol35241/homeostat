@@ -10,42 +10,17 @@
 
 mod common;
 
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::path::Path;
 use std::time::Duration;
 
-use homeostat::bus::HealthStatus;
 use serde_json::{json, Value};
 
-use common::{await_health, health_watch, Supervisor};
+use common::{
+    assert_cli_ok, await_base_units, cache_read, cli, config_write, git_commit_all,
+    git_init_commit, meta_read, running_pid, stderr, stdout, temp_house, Supervisor,
+};
 
-fn fixture() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixture_house_apply")
-}
-
-/// A fresh editable copy of the fixture house in a temp dir.
-fn temp_house(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "homeostat-apply-{tag}-{}",
-        std::process::id()
-    ));
-    let _ = std::fs::remove_dir_all(&dir);
-    copy_dir(&fixture(), &dir);
-    dir
-}
-
-fn copy_dir(src: &Path, dst: &Path) {
-    std::fs::create_dir_all(dst).expect("create dir");
-    for entry in std::fs::read_dir(src).expect("read fixture dir") {
-        let entry = entry.expect("dir entry");
-        let target = dst.join(entry.file_name());
-        if entry.path().is_dir() {
-            copy_dir(&entry.path(), &target);
-        } else {
-            std::fs::copy(entry.path(), &target).expect("copy fixture file");
-        }
-    }
-}
+const FIXTURE: &str = "tests/fixture_house_apply";
 
 /// Replaces `from` with `to` in a house file; the pattern must be present.
 fn edit(house: &Path, rel: &str, from: &str, to: &str) {
@@ -55,118 +30,12 @@ fn edit(house: &Path, rel: &str, from: &str, to: &str) {
     std::fs::write(&path, text.replace(from, to)).expect("write house file");
 }
 
-fn git(house: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(house)
-        .args(["-c", "user.name=test", "-c", "user.email=test@example.com"])
-        .args(args)
-        .output()
-        .expect("run git");
-    assert!(
-        output.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8_lossy(&output.stdout).trim().to_string()
-}
-
-fn git_init_commit(house: &Path) -> String {
-    git(house, &["init", "-q", "-b", "main"]);
-    git_commit_all(house, "initial")
-}
-
-fn git_commit_all(house: &Path, message: &str) -> String {
-    git(house, &["add", "-A"]);
-    git(house, &["commit", "-qm", message]);
-    git(house, &["rev-parse", "HEAD"])
-}
-
-/// Runs the homeostat CLI, returning its output.
-fn cli(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_homeostat"))
-        .args(args)
-        .env_remove(homeostat::bus::ENV_BUS)
-        .output()
-        .expect("run homeostat CLI")
-}
-
-fn stdout(output: &Output) -> String {
-    String::from_utf8_lossy(&output.stdout).to_string()
-}
-
-fn stderr(output: &Output) -> String {
-    String::from_utf8_lossy(&output.stderr).to_string()
-}
-
-fn assert_cli_ok(output: &Output) {
-    assert!(
-        output.status.success(),
-        "CLI failed\nstdout:\n{}\nstderr:\n{}",
-        stdout(output),
-        stderr(output)
-    );
-}
-
-/// Reads a concrete key from a core queryable, decoding JSON.
-async fn cache_read(session: &zenoh::Session, key: &str) -> Option<Value> {
-    let replies = session.get(key).await.expect("cache read query");
-    while let Ok(reply) = replies.recv_async().await {
-        if let Ok(sample) = reply.result() {
-            return Some(
-                serde_json::from_slice(&sample.payload().to_bytes()).expect("reply is JSON"),
-            );
-        }
-    }
-    None
-}
-
-/// Reads a concrete key from a core queryable as a raw string (meta values
-/// like hashes and commits are not JSON).
-async fn meta_read(session: &zenoh::Session, key: &str) -> Option<String> {
-    let replies = session.get(key).await.expect("meta read query");
-    while let Ok(reply) = replies.recv_async().await {
-        if let Ok(sample) = reply.result() {
-            return Some(String::from_utf8_lossy(&sample.payload().to_bytes()).to_string());
-        }
-    }
-    None
-}
-
-/// The unit's current pid per the health queryable; panics unless running.
-async fn running_pid(session: &zenoh::Session, unit: &str) -> u64 {
-    let health = cache_read(session, &homeostat::bus::health_key(unit))
-        .await
-        .unwrap_or_else(|| panic!("no health served for {unit}"));
-    assert_eq!(health["status"], json!("running"), "{unit} health: {health}");
-    health["pid"].as_u64().expect("running unit has a pid")
-}
-
-/// Waits until both fixture units are running and returns (probe pid,
-/// reflector pid). Generous timeout: the first run resolves probe's uv env.
-async fn await_base_units(session: &zenoh::Session) -> (u64, u64) {
-    let mut probe = health_watch(session, "probe").await;
-    await_health(&mut probe, Duration::from_secs(120), |h| {
-        h.status == HealthStatus::Running
-    })
-    .await;
-    let mut reflector = health_watch(session, "reflector").await;
-    await_health(&mut reflector, Duration::from_secs(30), |h| {
-        h.status == HealthStatus::Running
-    })
-    .await;
-    (
-        running_pid(session, "probe").await,
-        running_pid(session, "reflector").await,
-    )
-}
-
 /// (a) A behavioral change — the automation's code edited — plans as
 /// behavioral and apply restarts exactly that unit: the adapter's pid
 /// survives, and applied_commit updates to the repo's HEAD.
 #[tokio::test(flavor = "multi_thread")]
 async fn behavioral_change_restarts_exactly_that_unit() {
-    let house = temp_house("behavioral");
+    let house = temp_house(FIXTURE, "apply-behavioral");
     git_init_commit(&house);
     let mut sup = Supervisor::spawn_at(&house, &[]);
     let observer = sup.observer().await;
@@ -211,7 +80,7 @@ async fn behavioral_change_restarts_exactly_that_unit() {
 /// config update to a state key).
 #[tokio::test(flavor = "multi_thread")]
 async fn parameter_default_change_applies_with_zero_restarts() {
-    let house = temp_house("parameter");
+    let house = temp_house(FIXTURE, "apply-parameter");
     let mut sup = Supervisor::spawn_at(&house, &[]);
     let observer = sup.observer().await;
     let echo_sub = observer
@@ -265,29 +134,13 @@ async fn parameter_default_change_applies_with_zero_restarts() {
     let _ = std::fs::remove_dir_all(&house);
 }
 
-/// Writes a parameter through the core's query-with-payload write path.
-async fn config_write(session: &zenoh::Session, key: &str, value: Value) -> Result<Value, String> {
-    let replies = session
-        .get(key)
-        .payload(value.to_string())
-        .await
-        .expect("config write query");
-    let reply = replies.recv_async().await.expect("config write reply");
-    match reply.result() {
-        Ok(sample) => {
-            Ok(serde_json::from_slice(&sample.payload().to_bytes()).expect("ok reply is JSON"))
-        }
-        Err(err) => Err(String::from_utf8_lossy(&err.payload().to_bytes()).to_string()),
-    }
-}
-
 /// (b2) A constraint-only manifest edit plans as parameter-only with the
 /// delta rendered, and apply takes effect live with zero restarts: the
 /// running store enforces the tightened constraint and the served meta
 /// manifest updates, so a re-plan shows no changes.
 #[tokio::test(flavor = "multi_thread")]
 async fn constraint_only_change_refreshes_without_restart() {
-    let house = temp_house("constraint");
+    let house = temp_house(FIXTURE, "apply-constraint");
     let mut sup = Supervisor::spawn_at(&house, &[]);
     let observer = sup.observer().await;
     let (probe_pid, reflector_pid) = await_base_units(&observer).await;
@@ -383,7 +236,7 @@ fn add_watcher_pair(house: &Path, adapter: &str, room: &str, entity: &str, autom
 /// automation. Untouched units keep their pids.
 #[tokio::test(flavor = "multi_thread")]
 async fn structural_change_starts_units_in_grant_order() {
-    let house = temp_house("structural");
+    let house = temp_house(FIXTURE, "apply-structural");
     let mut sup = Supervisor::spawn_at(&house, &[]);
     let observer = sup.observer().await;
     let (probe_pid, reflector_pid) = await_base_units(&observer).await;
@@ -431,7 +284,7 @@ async fn structural_change_starts_units_in_grant_order() {
 /// so the move surfaces as a grant delta the owner reviews.
 #[tokio::test(flavor = "multi_thread")]
 async fn entity_move_plans_as_structural() {
-    let house = temp_house("move");
+    let house = temp_house(FIXTURE, "apply-move");
     let mut sup = Supervisor::spawn_at(&house, &[]);
     let observer = sup.observer().await;
     await_base_units(&observer).await;
@@ -464,7 +317,7 @@ async fn entity_move_plans_as_structural() {
 /// are never started, and a re-plan shows exactly the remaining work.
 #[tokio::test(flavor = "multi_thread")]
 async fn failing_unit_halts_walk_in_place() {
-    let house = temp_house("halt");
+    let house = temp_house(FIXTURE, "apply-halt");
     let mut sup = Supervisor::spawn_at(&house, &[]);
     let observer = sup.observer().await;
     let (probe_pid, reflector_pid) = await_base_units(&observer).await;
@@ -517,7 +370,7 @@ async fn failing_unit_halts_walk_in_place() {
 /// (e) A pending plan whose base commit is stale refuses to apply.
 #[tokio::test(flavor = "multi_thread")]
 async fn stale_pending_plan_refuses_to_apply() {
-    let house = temp_house("stale");
+    let house = temp_house(FIXTURE, "apply-stale");
     git_init_commit(&house);
     let mut sup = Supervisor::spawn_at(&house, &[]);
     let observer = sup.observer().await;

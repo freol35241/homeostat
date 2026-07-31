@@ -20,7 +20,7 @@ use zenoh::handlers::FifoChannelHandler;
 use zenoh::pubsub::Subscriber;
 use zenoh::sample::Sample;
 
-use common::{await_health, health_watch, Supervisor};
+use common::{await_health, health_watch, matched_publisher, Supervisor};
 
 const FIXTURE: &str = "tests/fixture_house_virtual";
 const FUSED_STATE: &str = "home/state/global/downstairs_temperature/temperature";
@@ -28,26 +28,6 @@ const LIVINGROOM_STATE: &str = "home/state/livingroom/thermo/temperature";
 const OFFICE_STATE: &str = "home/state/office/thermo/temperature";
 
 type Sub = Subscriber<FifoChannelHandler<Sample>>;
-type Publisher = zenoh::pubsub::Publisher<'static>;
-
-/// Declares a publisher and waits until a subscriber matches it, so
-/// nothing this publisher puts is ever write-side filtered.
-async fn matched_publisher(session: &zenoh::Session, key: &'static str) -> Publisher {
-    let publisher = session.declare_publisher(key).await.expect("publisher");
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-    loop {
-        let status = publisher.matching_status().await.expect("matching status");
-        if status.matching() {
-            return publisher;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "no subscriber matched {}",
-            publisher.key_expr()
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-}
 
 async fn next_sample(sub: &Sub, timeout: Duration) -> Value {
     let sample = tokio::time::timeout(timeout, sub.recv_async())

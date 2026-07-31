@@ -25,7 +25,10 @@ use zenoh::handlers::FifoChannelHandler;
 use zenoh::pubsub::Subscriber;
 use zenoh::sample::Sample;
 
-use common::{await_health, health_watch, Supervisor};
+use common::{
+    await_health, await_matching, cache_read, config_write, health_watch, matched_publisher,
+    Publisher, Supervisor,
+};
 
 const SIM_FIXTURE: &str = "tests/fixture_house_evening_sim";
 const OFF_TIME_KEY: &str = "home/config/evening_lights/off_time";
@@ -34,34 +37,6 @@ const LAMP_STATE: &str = "home/state/livingroom/lamp/on";
 const PRESENCE_STATE: &str = "home/state/livingroom/presence_sensor/presence";
 
 type Sub = Subscriber<FifoChannelHandler<Sample>>;
-type Publisher = zenoh::pubsub::Publisher<'static>;
-
-/// Declares a publisher and waits until a subscriber matches it, so
-/// nothing this publisher puts is ever write-side filtered.
-async fn matched_publisher(session: &zenoh::Session, key: &'static str) -> Publisher {
-    let publisher = session.declare_publisher(key).await.expect("publisher");
-    await_matching(&publisher).await;
-    publisher
-}
-
-async fn await_matching(publisher: &Publisher) {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-    loop {
-        let status = publisher
-            .matching_status()
-            .await
-            .expect("matching status");
-        if status.matching() {
-            return;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "no subscriber matched {}",
-            publisher.key_expr()
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-}
 
 /// Spawns the sim fixture, waits for the automation and the reflector
 /// (generous timeout: first run resolves the automation's uv env), and
@@ -95,37 +70,6 @@ async fn tick(session: &zenoh::Session, hh_mm: &str) {
 
 async fn put_state(publisher: &Publisher, value: Value) {
     publisher.put(value.to_string()).await.expect("state put");
-}
-
-/// Writes a parameter through the core's query-with-payload write path.
-async fn config_write(session: &zenoh::Session, key: &str, value: Value) -> Result<Value, String> {
-    let replies = session
-        .get(key)
-        .payload(value.to_string())
-        .await
-        .expect("config write query");
-    let reply = replies
-        .recv_async()
-        .await
-        .expect("config write reply");
-    match reply.result() {
-        Ok(sample) => Ok(serde_json::from_slice(&sample.payload().to_bytes())
-            .expect("ok reply is JSON")),
-        Err(err) => Err(String::from_utf8_lossy(&err.payload().to_bytes()).to_string()),
-    }
-}
-
-/// Reads a concrete key from a core queryable (last-value cache).
-async fn cache_read(session: &zenoh::Session, key: &str) -> Option<Value> {
-    let replies = session.get(key).await.expect("cache read query");
-    while let Ok(reply) = replies.recv_async().await {
-        if let Ok(sample) = reply.result() {
-            return Some(
-                serde_json::from_slice(&sample.payload().to_bytes()).expect("reply is JSON"),
-            );
-        }
-    }
-    None
 }
 
 /// Like `cache_read`, retrying until a value shows up (for values that

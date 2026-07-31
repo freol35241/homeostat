@@ -12,11 +12,9 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
-use zenoh::handlers::FifoChannelHandler;
-use zenoh::pubsub::Subscriber;
-use zenoh::sample::{Sample, SampleKind};
+use zenoh::sample::SampleKind;
 
-use common::{free_port, Supervisor};
+use common::{expect_event_kind, expect_state, free_port, Supervisor};
 
 const FIXTURE: &str = "tests/fixture_house_openwrt";
 const ROUTERS_ENV: &str = "HOMEOSTAT_OPENWRT";
@@ -128,59 +126,6 @@ async fn setup() -> (FakeOpenwrt, PathBuf, Supervisor, zenoh::Session) {
         .expect("liveliness stream open");
     assert_eq!(token.kind(), SampleKind::Put);
     (router, routers_path, sup, observer)
-}
-
-type StateSub = Subscriber<FifoChannelHandler<Sample>>;
-
-/// Waits for a key to carry `expected`.
-async fn expect_state(sub: &StateSub, expected: Value) {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
-    loop {
-        let sample = tokio::time::timeout_at(deadline, sub.recv_async())
-            .await
-            .unwrap_or_else(|_| panic!("no value {expected} within 20s"))
-            .expect("state stream open");
-        let value: Value = serde_json::from_slice(&sample.payload().to_bytes())
-            .expect("state payload is JSON");
-        if value == expected {
-            return;
-        }
-    }
-}
-
-/// Reads health events until one matches the expected drop reason.
-async fn expect_drop_event(sub: &StateSub, reason: &str) {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
-    loop {
-        let sample = tokio::time::timeout_at(deadline, sub.recv_async())
-            .await
-            .unwrap_or_else(|_| panic!("no \"{reason}\" health event within 20s"))
-            .expect("event stream open");
-        let event: Value = serde_json::from_slice(&sample.payload().to_bytes())
-            .expect("health event is JSON");
-        assert_eq!(event["kind"], "drop", "unexpected event kind: {event}");
-        if event["reason"] == reason {
-            return;
-        }
-    }
-}
-
-/// Reads health events until one matches the expected kind — degraded
-/// conditions publish kind = condition (the backend-outage precedent),
-/// unlike dropped-input events.
-async fn expect_event_kind(sub: &StateSub, kind: &str) {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
-    loop {
-        let sample = tokio::time::timeout_at(deadline, sub.recv_async())
-            .await
-            .unwrap_or_else(|_| panic!("no \"{kind}\" health event within 20s"))
-            .expect("event stream open");
-        let event: Value = serde_json::from_slice(&sample.payload().to_bytes())
-            .expect("health event is JSON");
-        if event["kind"] == kind {
-            return;
-        }
-    }
 }
 
 /// (a) A phone associating to an AP becomes `presence = true` on the bus;

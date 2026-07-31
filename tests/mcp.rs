@@ -13,124 +13,19 @@ mod common;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, ChildStdout, Command, Output, Stdio};
+use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use homeostat::bus::HealthStatus;
 use serde_json::{json, Value};
 
-use common::{await_health, free_port, health_watch, Supervisor};
+use common::{
+    await_base_units, await_health, cache_read, cli, free_port, git, git_init_commit,
+    health_watch, matched_publisher, meta_read, running_pid, temp_house, Supervisor,
+};
 
-fn fixture() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixture_house_apply")
-}
-
-/// A fresh editable copy of the fixture house in a temp dir.
-fn temp_house(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("homeostat-mcp-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    copy_dir(&fixture(), &dir);
-    dir
-}
-
-fn copy_dir(src: &Path, dst: &Path) {
-    std::fs::create_dir_all(dst).expect("create dir");
-    for entry in std::fs::read_dir(src).expect("read fixture dir") {
-        let entry = entry.expect("dir entry");
-        let target = dst.join(entry.file_name());
-        if entry.path().is_dir() {
-            copy_dir(&entry.path(), &target);
-        } else {
-            std::fs::copy(entry.path(), &target).expect("copy fixture file");
-        }
-    }
-}
-
-fn git(house: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(house)
-        .args(["-c", "user.name=test", "-c", "user.email=test@example.com"])
-        .args(args)
-        .output()
-        .expect("run git");
-    assert!(
-        output.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8_lossy(&output.stdout).trim().to_string()
-}
-
-fn git_init_commit(house: &Path) -> String {
-    git(house, &["init", "-q", "-b", "main"]);
-    git(house, &["add", "-A"]);
-    git(house, &["commit", "-qm", "initial"]);
-    git(house, &["rev-parse", "HEAD"])
-}
-
-/// Runs the homeostat CLI, returning its output.
-fn cli(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_homeostat"))
-        .args(args)
-        .env_remove(homeostat::bus::ENV_BUS)
-        .output()
-        .expect("run homeostat CLI")
-}
-
-/// Reads a concrete key from a core queryable, decoding JSON.
-async fn cache_read(session: &zenoh::Session, key: &str) -> Option<Value> {
-    let replies = session.get(key).await.expect("cache read query");
-    while let Ok(reply) = replies.recv_async().await {
-        if let Ok(sample) = reply.result() {
-            return Some(
-                serde_json::from_slice(&sample.payload().to_bytes()).expect("reply is JSON"),
-            );
-        }
-    }
-    None
-}
-
-/// Reads a concrete key from a core queryable as a raw string (meta values
-/// like commits are not JSON).
-async fn meta_read(session: &zenoh::Session, key: &str) -> Option<String> {
-    let replies = session.get(key).await.expect("meta read query");
-    while let Ok(reply) = replies.recv_async().await {
-        if let Ok(sample) = reply.result() {
-            return Some(String::from_utf8_lossy(&sample.payload().to_bytes()).to_string());
-        }
-    }
-    None
-}
-
-/// The unit's current pid per the health queryable; panics unless running.
-async fn running_pid(session: &zenoh::Session, unit: &str) -> u64 {
-    let health = cache_read(session, &homeostat::bus::health_key(unit))
-        .await
-        .unwrap_or_else(|| panic!("no health served for {unit}"));
-    assert_eq!(health["status"], json!("running"), "{unit} health: {health}");
-    health["pid"].as_u64().expect("running unit has a pid")
-}
-
-/// Waits until both fixture units are running and returns (probe pid,
-/// reflector pid). Generous timeout: the first run resolves probe's uv env.
-async fn await_base_units(session: &zenoh::Session) -> (u64, u64) {
-    let mut probe = health_watch(session, "probe").await;
-    await_health(&mut probe, Duration::from_secs(120), |h| {
-        h.status == HealthStatus::Running
-    })
-    .await;
-    let mut reflector = health_watch(session, "reflector").await;
-    await_health(&mut reflector, Duration::from_secs(30), |h| {
-        h.status == HealthStatus::Running
-    })
-    .await;
-    (
-        running_pid(session, "probe").await,
-        running_pid(session, "reflector").await,
-    )
-}
+const FIXTURE: &str = "tests/fixture_house_apply";
 
 /// An MCP client over the server's stdio transport: `homeostat mcp` as a
 /// child process, one JSON-RPC line per request. `connect` performs the
@@ -221,19 +116,7 @@ async fn reads_serve_live_state_and_history() {
 
     // Publish once a subscriber (the core state mirror, the recorder)
     // matches, so the put is never write-side filtered.
-    let publisher = observer
-        .declare_publisher("home/state/attic/mcp_probe/level")
-        .await
-        .expect("publisher");
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-    loop {
-        let status = publisher.matching_status().await.expect("matching status");
-        if status.matching() {
-            break;
-        }
-        assert!(tokio::time::Instant::now() < deadline, "no subscriber matched");
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    let publisher = matched_publisher(&observer, "home/state/attic/mcp_probe/level").await;
     publisher.put("7").await.expect("state put");
 
     let house = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixture_house_recorder");
@@ -407,7 +290,7 @@ async fn read_logs_and_events_over_mcp() {
 /// and answers MCP over POST.
 #[tokio::test(flavor = "multi_thread")]
 async fn http_transport_runs_as_supervised_unit() {
-    let house = temp_house("http");
+    let house = temp_house(FIXTURE, "mcp-http");
     let port = free_port();
     std::fs::write(
         house.join("units/mcp.toml"),
@@ -517,7 +400,7 @@ fn http_post(addr: &str, message: &Value) -> Result<(u16, Value), String> {
 /// lands, the running unit sees the value with no restart.
 #[tokio::test(flavor = "multi_thread")]
 async fn parameter_propose_commits_and_auto_applies() {
-    let house = temp_house("param");
+    let house = temp_house(FIXTURE, "mcp-param");
     git_init_commit(&house);
     let mut sup = Supervisor::spawn_at(&house, &[]);
     let observer = sup.observer().await;
@@ -569,7 +452,7 @@ async fn parameter_propose_commits_and_auto_applies() {
 /// constraint named; repo and world unchanged, nothing committed.
 #[tokio::test(flavor = "multi_thread")]
 async fn out_of_constraint_propose_is_rejected_and_reverted() {
-    let house = temp_house("reject");
+    let house = temp_house(FIXTURE, "mcp-reject");
     let base = git_init_commit(&house);
     let mut sup = Supervisor::spawn_at(&house, &[]);
     let observer = sup.observer().await;
@@ -624,7 +507,7 @@ const WATCHER: &str = "schema = 1\n\n[unit]\nname = \"watcher\"\nkind = \"automa
 /// plan and the walk runs in grant order.
 #[tokio::test(flavor = "multi_thread")]
 async fn structural_propose_awaits_owner_approval() {
-    let house = temp_house("structural");
+    let house = temp_house(FIXTURE, "mcp-structural");
     git_init_commit(&house);
     let mut sup = Supervisor::spawn_at(&house, &[]);
     let observer = sup.observer().await;
@@ -700,7 +583,7 @@ async fn structural_propose_awaits_owner_approval() {
 /// applies and the live value stands.
 #[tokio::test(flavor = "multi_thread")]
 async fn grant_delta_in_manifest_edit_escalates_to_structural() {
-    let house = temp_house("smuggle");
+    let house = temp_house(FIXTURE, "mcp-smuggle");
     git_init_commit(&house);
     let mut sup = Supervisor::spawn_at(&house, &[]);
     let observer = sup.observer().await;

@@ -4,19 +4,16 @@
 
 mod common;
 
-use std::collections::{HashMap, VecDeque};
-use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use homeostat::bus::HealthStatus;
-use rumqttc::{AsyncClient, Event, Incoming, MqttOptions, QoS};
-use serde_json::{json, Value};
-use zenoh::handlers::FifoChannelHandler;
-use zenoh::pubsub::Subscriber;
-use zenoh::sample::{Sample, SampleKind};
+use serde_json::json;
+use zenoh::sample::SampleKind;
 
-use common::{await_health, free_port, health_watch, process_alive, Supervisor};
+use common::{
+    await_health, expect_drop_event, expect_event_kind, expect_states, health_watch,
+    process_alive, Mosquitto, Mqtt, Supervisor,
+};
 
 const FIXTURE: &str = "tests/fixture_house_ivt490";
 const PORT_ENV: &str = "HOMEOSTAT_TEST_MQTT_PORT";
@@ -26,126 +23,6 @@ const SETPOINT_CMD_KEY: &str = "home/cmd/utility/heatpump/setpoint";
 const SETPOINT_ARBITER_KEY: &str = "home/arbiter/utility/heatpump/setpoint";
 const SETPOINT_SET_TOPIC: &str = "ivt490_1/controller/set/indoor_temperature_target";
 const AVAILABLE_KEY: &str = "home/state/utility/heatpump/available";
-
-/// A mosquitto broker on a free port, killed on drop.
-struct Mosquitto {
-    child: Child,
-    port: u16,
-    conf: PathBuf,
-}
-
-impl Mosquitto {
-    fn spawn() -> Self {
-        let port = free_port();
-        let conf = std::env::temp_dir().join(format!("homeostat-ivt490-{port}.conf"));
-        std::fs::write(&conf, format!("listener {port} 127.0.0.1\nallow_anonymous true\n"))
-            .expect("write mosquitto config");
-        // Debian puts mosquitto in /usr/sbin, which is not always on PATH.
-        let child = ["mosquitto", "/usr/sbin/mosquitto"]
-            .iter()
-            .find_map(|bin| {
-                Command::new(bin)
-                    .args(["-c", conf.to_str().expect("utf-8 conf path")])
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .spawn()
-                    .ok()
-            })
-            .expect("spawn mosquitto (is it installed?)");
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while std::net::TcpStream::connect(("127.0.0.1", port)).is_err() {
-            assert!(Instant::now() < deadline, "mosquitto never listened on {port}");
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        Self { child, port, conf }
-    }
-}
-
-impl Drop for Mosquitto {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        let _ = std::fs::remove_file(&self.conf);
-    }
-}
-
-/// An MQTT test client: publishes are acknowledged (QoS 1) before returning,
-/// incoming messages are buffered so acks and messages can interleave.
-struct Mqtt {
-    client: AsyncClient,
-    events: tokio::sync::mpsc::UnboundedReceiver<Event>,
-    inbox: VecDeque<(String, Vec<u8>)>,
-}
-
-impl Mqtt {
-    async fn connect(port: u16, id: &str) -> Self {
-        let mut opts = MqttOptions::new(id, "127.0.0.1", port);
-        opts.set_keep_alive(Duration::from_secs(5));
-        let (client, mut eventloop) = AsyncClient::new(opts, 64);
-        let (tx, events) = tokio::sync::mpsc::unbounded_channel();
-        tokio::spawn(async move {
-            while let Ok(event) = eventloop.poll().await {
-                if tx.send(event).is_err() {
-                    break;
-                }
-            }
-        });
-        let mut mqtt = Self { client, events, inbox: VecDeque::new() };
-        mqtt.await_event(|i| matches!(i, Incoming::ConnAck(_))).await;
-        mqtt
-    }
-
-    async fn subscribe(&mut self, topic: &str) {
-        self.client
-            .subscribe(topic, QoS::AtLeastOnce)
-            .await
-            .expect("mqtt subscribe");
-        self.await_event(|i| matches!(i, Incoming::SubAck(_))).await;
-    }
-
-    async fn publish(&mut self, topic: &str, payload: &str) {
-        self.client
-            .publish(topic, QoS::AtLeastOnce, false, payload)
-            .await
-            .expect("mqtt publish");
-        self.await_event(|i| matches!(i, Incoming::PubAck(_))).await;
-    }
-
-    /// Reads events until `pred` matches, buffering message publishes.
-    async fn await_event<F: Fn(&Incoming) -> bool>(&mut self, pred: F) {
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-        loop {
-            let event = tokio::time::timeout_at(deadline, self.events.recv())
-                .await
-                .expect("mqtt event within 10s")
-                .expect("mqtt event loop alive");
-            match event {
-                Event::Incoming(Incoming::Publish(p)) => {
-                    self.inbox.push_back((p.topic.clone(), p.payload.to_vec()));
-                }
-                Event::Incoming(incoming) if pred(&incoming) => return,
-                _ => {}
-            }
-        }
-    }
-
-    /// Next subscribed message, or None if the timeout elapses first.
-    async fn next_message(&mut self, timeout: Duration) -> Option<(String, Vec<u8>)> {
-        if let Some(msg) = self.inbox.pop_front() {
-            return Some(msg);
-        }
-        let deadline = tokio::time::Instant::now() + timeout;
-        loop {
-            let event = tokio::time::timeout_at(deadline, self.events.recv())
-                .await
-                .ok()?
-                .expect("mqtt event loop alive");
-            if let Event::Incoming(Incoming::Publish(p)) = event {
-                return Some((p.topic.clone(), p.payload.to_vec()));
-            }
-        }
-    }
-}
 
 /// Spawns broker + supervisor on the fixture and waits for the adapter's
 /// liveliness token (generous timeout: first run resolves the uv env).
@@ -166,61 +43,6 @@ async fn setup() -> (Mosquitto, Supervisor, zenoh::Session) {
         .expect("liveliness stream open");
     assert_eq!(token.kind(), SampleKind::Put);
     (mosquitto, sup, observer)
-}
-
-type StateSub = Subscriber<FifoChannelHandler<Sample>>;
-
-/// Collects state samples until every `expected` (key, value) has appeared.
-async fn expect_states(sub: &StateSub, expected: &[(&str, Value)]) {
-    let mut seen: HashMap<String, Value> = HashMap::new();
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    while expected
-        .iter()
-        .any(|(key, value)| seen.get(*key) != Some(value))
-    {
-        let sample = tokio::time::timeout_at(deadline, sub.recv_async())
-            .await
-            .unwrap_or_else(|_| panic!("missing state keys; saw {seen:?}"))
-            .expect("state stream open");
-        let value: Value = serde_json::from_slice(&sample.payload().to_bytes())
-            .expect("state payload is JSON");
-        seen.insert(sample.key_expr().as_str().to_string(), value);
-    }
-}
-
-/// Reads health events until one matches the expected drop reason.
-async fn expect_drop_event(sub: &StateSub, reason: &str) -> Value {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    loop {
-        let sample = tokio::time::timeout_at(deadline, sub.recv_async())
-            .await
-            .unwrap_or_else(|_| panic!("no \"{reason}\" health event within 10s"))
-            .expect("event stream open");
-        let event: Value = serde_json::from_slice(&sample.payload().to_bytes())
-            .expect("health event is JSON");
-        assert_eq!(event["kind"], "drop", "unexpected event kind: {event}");
-        if event["reason"] == reason {
-            return event;
-        }
-    }
-}
-
-/// Reads health events until one matches the expected kind — degraded
-/// conditions publish kind = condition (the backend-outage precedent),
-/// unlike dropped-input events.
-async fn expect_event_kind(sub: &StateSub, kind: &str) {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    loop {
-        let sample = tokio::time::timeout_at(deadline, sub.recv_async())
-            .await
-            .unwrap_or_else(|_| panic!("no \"{kind}\" health event within 10s"))
-            .expect("event stream open");
-        let event: Value = serde_json::from_slice(&sample.payload().to_bytes())
-            .expect("health event is JSON");
-        if event["kind"] == kind {
-            return;
-        }
-    }
 }
 
 /// (a) Scripted per-field state publishes translate to normalized and

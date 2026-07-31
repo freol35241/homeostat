@@ -24,12 +24,13 @@ use zenoh::handlers::FifoChannelHandler;
 use zenoh::pubsub::Subscriber;
 use zenoh::sample::Sample;
 
-use common::{await_health, health_watch, Supervisor};
+use common::{
+    await_health, config_write, health_watch, matched_publisher, Publisher, Supervisor,
+};
 
 const FIXTURE: &str = "tests/fixture_house_recorder";
 
 type Sub = Subscriber<FifoChannelHandler<Sample>>;
-type Publisher = zenoh::pubsub::Publisher<'static>;
 
 /// A per-test store path: unique like the harness's per-test bus port.
 fn store_path(test: &str) -> PathBuf {
@@ -54,28 +55,6 @@ async fn setup(db: &Path) -> (Supervisor, zenoh::Session) {
     })
     .await;
     (sup, observer)
-}
-
-/// Declares a publisher and waits until a subscriber matches it, so
-/// nothing this publisher puts is ever write-side filtered.
-async fn matched_publisher(session: &zenoh::Session, key: &str) -> Publisher {
-    let publisher = session
-        .declare_publisher(key.to_string())
-        .await
-        .expect("publisher");
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-    loop {
-        let status = publisher.matching_status().await.expect("matching status");
-        if status.matching() {
-            return publisher;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "no subscriber matched {}",
-            publisher.key_expr()
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
 }
 
 async fn put(publisher: &Publisher, value: Value) {
@@ -136,17 +115,6 @@ where
             return event;
         }
     }
-}
-
-/// Writes a parameter through the core's query-with-payload write path.
-async fn config_write(session: &zenoh::Session, key: &str, value: Value) {
-    let replies = session
-        .get(key)
-        .payload(value.to_string())
-        .await
-        .expect("config write query");
-    let reply = replies.recv_async().await.expect("config write reply");
-    assert!(reply.result().is_ok(), "config write accepted");
 }
 
 /// Ok replies for a history get, as (concrete key, decoded rows).
@@ -274,7 +242,9 @@ async fn state_lands_typed_in_store() {
 
     // An accepted config edit lands in the events audit table (rejects
     // never reach the bus, so they can't land — pinned in step 4).
-    config_write(&observer, "home/config/evening_lights/off_time", json!("21:30")).await;
+    config_write(&observer, "home/config/evening_lights/off_time", json!("21:30"))
+        .await
+        .expect("config write accepted");
     let rows = rows_eventually(
         &db,
         "SELECT payload FROM events \

@@ -11,11 +11,9 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
-use zenoh::handlers::FifoChannelHandler;
-use zenoh::pubsub::Subscriber;
-use zenoh::sample::{Sample, SampleKind};
+use zenoh::sample::SampleKind;
 
-use common::{free_port, Supervisor};
+use common::{expect_drop_event, expect_state, free_port, StateSub, Supervisor};
 
 const FIXTURE: &str = "tests/fixture_house_onvif";
 const CAMERAS_ENV: &str = "HOMEOSTAT_CAMERAS";
@@ -125,57 +123,6 @@ async fn setup() -> (FakeOnvif, PathBuf, Supervisor, zenoh::Session) {
     (camera, cameras_path, sup, observer)
 }
 
-type StateSub = Subscriber<FifoChannelHandler<Sample>>;
-
-/// Waits for the motion key to carry `expected`.
-async fn expect_motion(sub: &StateSub, expected: bool) {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
-    loop {
-        let sample = tokio::time::timeout_at(deadline, sub.recv_async())
-            .await
-            .unwrap_or_else(|_| panic!("no motion = {expected} within 20s"))
-            .expect("state stream open");
-        let value: Value = serde_json::from_slice(&sample.payload().to_bytes())
-            .expect("state payload is JSON");
-        if value == json!(expected) {
-            return;
-        }
-    }
-}
-
-/// Waits for the available key to carry `expected`.
-async fn expect_available(sub: &StateSub, expected: bool) {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
-    loop {
-        let sample = tokio::time::timeout_at(deadline, sub.recv_async())
-            .await
-            .unwrap_or_else(|_| panic!("no available = {expected} within 20s"))
-            .expect("state stream open");
-        let value: Value = serde_json::from_slice(&sample.payload().to_bytes())
-            .expect("state payload is JSON");
-        if value == json!(expected) {
-            return;
-        }
-    }
-}
-
-/// Reads health events until one matches the expected drop reason.
-async fn expect_drop_event(sub: &StateSub, reason: &str) {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
-    loop {
-        let sample = tokio::time::timeout_at(deadline, sub.recv_async())
-            .await
-            .unwrap_or_else(|_| panic!("no \"{reason}\" health event within 20s"))
-            .expect("event stream open");
-        let event: Value = serde_json::from_slice(&sample.payload().to_bytes())
-            .expect("health event is JSON");
-        assert_eq!(event["kind"], "drop", "unexpected event kind: {event}");
-        if event["reason"] == reason {
-            return;
-        }
-    }
-}
-
 /// Triggers repeatedly until the motion key carries `expected` — used
 /// after a subscription break, when triggers race the resubscription (a
 /// trigger before the new subscription exists is lost, like a real
@@ -209,9 +156,9 @@ async fn motion_events_translate_to_bus_state() {
     let state_sub = observer.declare_subscriber(MOTION_KEY).await.expect("state subscriber");
 
     camera.control("/control/trigger?value=true");
-    expect_motion(&state_sub, true).await;
+    expect_state(&state_sub, json!(true)).await;
     camera.control("/control/trigger?value=false");
-    expect_motion(&state_sub, false).await;
+    expect_state(&state_sub, json!(false)).await;
 
     sup.shutdown();
 }
@@ -226,7 +173,7 @@ async fn broken_subscription_resubscribes() {
     let event_sub = observer.declare_subscriber(EVENT_KEY).await.expect("event subscriber");
 
     camera.control("/control/trigger?value=true");
-    expect_motion(&state_sub, true).await;
+    expect_state(&state_sub, json!(true)).await;
 
     camera.control("/control/break");
     expect_drop_event(&event_sub, "event-stream-lost").await;
@@ -246,11 +193,11 @@ async fn subscription_loss_flips_available() {
     let state_sub = observer.declare_subscriber(MOTION_KEY).await.expect("state subscriber");
 
     camera.control("/control/trigger?value=true");
-    expect_motion(&state_sub, true).await;
+    expect_state(&state_sub, json!(true)).await;
 
     camera.control("/control/break");
-    expect_available(&avail_sub, false).await;
-    expect_available(&avail_sub, true).await;
+    expect_state(&avail_sub, json!(false)).await;
+    expect_state(&avail_sub, json!(true)).await;
 
     sup.shutdown();
 }
@@ -267,7 +214,7 @@ async fn malformed_motion_value_drops_with_health_event() {
     expect_drop_event(&event_sub, "malformed-payload").await;
 
     camera.control("/control/trigger?value=true");
-    expect_motion(&state_sub, true).await;
+    expect_state(&state_sub, json!(true)).await;
 
     sup.shutdown();
 }

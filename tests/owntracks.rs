@@ -4,113 +4,20 @@
 
 mod common;
 
-use std::collections::HashMap;
-use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use homeostat::bus::HealthStatus;
-use rumqttc::{AsyncClient, Event, Incoming, MqttOptions, QoS};
 use serde_json::{json, Value};
-use zenoh::handlers::FifoChannelHandler;
-use zenoh::pubsub::Subscriber;
 use zenoh::sample::SampleKind;
 
-use common::{await_health, free_port, health_watch, process_alive, Supervisor};
+use common::{
+    await_health, expect_drop_event, expect_states, health_watch, process_alive, Mosquitto, Mqtt,
+    Supervisor,
+};
 
 const FIXTURE: &str = "tests/fixture_house_owntracks";
 const PORT_ENV: &str = "HOMEOSTAT_TEST_MQTT_PORT";
 const EVENT_KEY: &str = "home/health/owntracks/event";
-
-/// A mosquitto broker on a free port, killed on drop.
-struct Mosquitto {
-    child: Child,
-    port: u16,
-    conf: PathBuf,
-}
-
-impl Mosquitto {
-    fn spawn() -> Self {
-        let port = free_port();
-        let conf = std::env::temp_dir().join(format!("homeostat-owntracks-{port}.conf"));
-        std::fs::write(&conf, format!("listener {port} 127.0.0.1\nallow_anonymous true\n"))
-            .expect("write mosquitto config");
-        // Debian puts mosquitto in /usr/sbin, which is not always on PATH.
-        let child = ["mosquitto", "/usr/sbin/mosquitto"]
-            .iter()
-            .find_map(|bin| {
-                Command::new(bin)
-                    .args(["-c", conf.to_str().expect("utf-8 conf path")])
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .spawn()
-                    .ok()
-            })
-            .expect("spawn mosquitto (is it installed?)");
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while std::net::TcpStream::connect(("127.0.0.1", port)).is_err() {
-            assert!(Instant::now() < deadline, "mosquitto never listened on {port}");
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        Self { child, port, conf }
-    }
-}
-
-impl Drop for Mosquitto {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        let _ = std::fs::remove_file(&self.conf);
-    }
-}
-
-/// An MQTT test client: publishes are acknowledged (QoS 1) before returning.
-struct Mqtt {
-    client: AsyncClient,
-    events: tokio::sync::mpsc::UnboundedReceiver<Event>,
-}
-
-impl Mqtt {
-    async fn connect(port: u16, id: &str) -> Self {
-        let mut opts = MqttOptions::new(id, "127.0.0.1", port);
-        opts.set_keep_alive(Duration::from_secs(5));
-        let (client, mut eventloop) = AsyncClient::new(opts, 64);
-        let (tx, events) = tokio::sync::mpsc::unbounded_channel();
-        tokio::spawn(async move {
-            while let Ok(event) = eventloop.poll().await {
-                if tx.send(event).is_err() {
-                    break;
-                }
-            }
-        });
-        let mut mqtt = Self { client, events };
-        mqtt.await_event(|i| matches!(i, Incoming::ConnAck(_))).await;
-        mqtt
-    }
-
-    async fn publish(&mut self, topic: &str, payload: &str) {
-        self.client
-            .publish(topic, QoS::AtLeastOnce, false, payload)
-            .await
-            .expect("mqtt publish");
-        self.await_event(|i| matches!(i, Incoming::PubAck(_))).await;
-    }
-
-    async fn await_event<F: Fn(&Incoming) -> bool>(&mut self, pred: F) {
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-        loop {
-            let event = tokio::time::timeout_at(deadline, self.events.recv())
-                .await
-                .expect("mqtt event within 10s")
-                .expect("mqtt event loop alive");
-            if let Event::Incoming(incoming) = event {
-                if pred(&incoming) {
-                    return;
-                }
-            }
-        }
-    }
-}
 
 /// Spawns broker + supervisor on the fixture and waits for the adapter's
 /// liveliness token (generous timeout: first run resolves the uv env).
@@ -131,43 +38,6 @@ async fn setup() -> (Mosquitto, Supervisor, zenoh::Session) {
         .expect("liveliness stream open");
     assert_eq!(token.kind(), SampleKind::Put);
     (mosquitto, sup, observer)
-}
-
-type StateSub = Subscriber<FifoChannelHandler<zenoh::sample::Sample>>;
-
-/// Collects state samples until every `expected` (key, value) has appeared.
-async fn expect_states(sub: &StateSub, expected: &[(&str, Value)]) {
-    let mut seen: HashMap<String, Value> = HashMap::new();
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    while expected
-        .iter()
-        .any(|(key, value)| seen.get(*key) != Some(value))
-    {
-        let sample = tokio::time::timeout_at(deadline, sub.recv_async())
-            .await
-            .unwrap_or_else(|_| panic!("missing state keys; saw {seen:?}"))
-            .expect("state stream open");
-        let value: Value = serde_json::from_slice(&sample.payload().to_bytes())
-            .expect("state payload is JSON");
-        seen.insert(sample.key_expr().as_str().to_string(), value);
-    }
-}
-
-/// Reads health events until one matches the expected drop reason.
-async fn expect_drop_event(sub: &StateSub, reason: &str) {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    loop {
-        let sample = tokio::time::timeout_at(deadline, sub.recv_async())
-            .await
-            .unwrap_or_else(|_| panic!("no \"{reason}\" health event within 10s"))
-            .expect("event stream open");
-        let event: Value = serde_json::from_slice(&sample.payload().to_bytes())
-            .expect("health event is JSON");
-        assert_eq!(event["kind"], "drop", "unexpected event kind: {event}");
-        if event["reason"] == reason {
-            return;
-        }
-    }
 }
 
 /// (a) A location fix translates to the scalar per-aspect state keys under

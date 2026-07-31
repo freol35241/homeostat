@@ -12,11 +12,12 @@ use std::time::{Duration, Instant};
 
 use homeostat::bus::HealthStatus;
 use serde_json::{json, Value};
-use zenoh::handlers::FifoChannelHandler;
-use zenoh::pubsub::Subscriber;
-use zenoh::sample::{Sample, SampleKind};
+use zenoh::sample::SampleKind;
 
-use common::{await_health, free_port, health_watch, process_alive, Supervisor};
+use common::{
+    await_health, expect_drop_event, expect_states, free_port, health_watch, process_alive,
+    Supervisor,
+};
 
 const FIXTURE: &str = "tests/fixture_house_esphome";
 const DEVICES_ENV: &str = "HOMEOSTAT_ESPHOME_DEVICES";
@@ -108,43 +109,6 @@ async fn setup() -> (FakeEsphome, PathBuf, Supervisor, zenoh::Session) {
         .expect("liveliness stream open");
     assert_eq!(token.kind(), SampleKind::Put);
     (device, devices_path, sup, observer)
-}
-
-type StateSub = Subscriber<FifoChannelHandler<Sample>>;
-
-/// Collects state samples until every `expected` (key, value) has appeared.
-async fn expect_states(sub: &StateSub, expected: &[(&str, Value)]) {
-    let mut seen: std::collections::HashMap<String, Value> = std::collections::HashMap::new();
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
-    while expected
-        .iter()
-        .any(|(key, value)| seen.get(*key) != Some(value))
-    {
-        let sample = tokio::time::timeout_at(deadline, sub.recv_async())
-            .await
-            .unwrap_or_else(|_| panic!("missing state keys; saw {seen:?}"))
-            .expect("state stream open");
-        let value: Value = serde_json::from_slice(&sample.payload().to_bytes())
-            .expect("state payload is JSON");
-        seen.insert(sample.key_expr().as_str().to_string(), value);
-    }
-}
-
-/// Reads health events until one matches the expected drop reason.
-async fn expect_drop_event(sub: &StateSub, reason: &str) {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
-    loop {
-        let sample = tokio::time::timeout_at(deadline, sub.recv_async())
-            .await
-            .unwrap_or_else(|_| panic!("no \"{reason}\" health event within 20s"))
-            .expect("event stream open");
-        let event: Value = serde_json::from_slice(&sample.payload().to_bytes())
-            .expect("health event is JSON");
-        assert_eq!(event["kind"], "drop", "unexpected event kind: {event}");
-        if event["reason"] == reason {
-            return;
-        }
-    }
 }
 
 /// (a) The fake device's initial states translate to the correct home/state
