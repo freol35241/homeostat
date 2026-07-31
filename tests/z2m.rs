@@ -299,6 +299,53 @@ async fn bad_input_drops_with_health_event() {
     sup.shutdown();
 }
 
+/// (c1b) Structurally malformed bridge/devices entries — non-dict rows, a
+/// non-string id, a string definition, a non-list features — skip like
+/// id-less ones instead of raising out of paho's network thread (which
+/// would leave the adapter deaf but "running"); well-formed rows still
+/// publish and translation keeps working afterwards.
+#[tokio::test(flavor = "multi_thread")]
+async fn malformed_inventory_entries_do_not_kill_the_translator() {
+    let (mosquitto, mut sup, observer) = setup().await;
+    let discovery_sub = observer
+        .declare_subscriber("home/discovery/zigbee")
+        .await
+        .expect("discovery subscriber");
+    let state_sub = observer
+        .declare_subscriber("home/state/**")
+        .await
+        .expect("state subscriber");
+    let mut mqtt = Mqtt::connect(mosquitto.port, "test-poison").await;
+
+    mqtt.publish(
+        "zigbee2mqtt/bridge/devices",
+        r#"["stray", 7, {"friendly_name": {"nested": true}},
+            {"friendly_name": "weird_def_1", "definition": "not-a-table"},
+            {"friendly_name": "lamp_kitchen_1", "type": "Router",
+             "definition": {"vendor": "acme",
+                            "exposes": [{"type": "light", "features": "none"}]}}]"#,
+    )
+    .await;
+
+    let sample = tokio::time::timeout(Duration::from_secs(10), discovery_sub.recv_async())
+        .await
+        .expect("discovery document within 10s")
+        .expect("discovery sample");
+    let doc: Value =
+        serde_json::from_slice(&sample.payload().to_bytes()).expect("discovery is JSON");
+    let records = doc.as_array().expect("discovery is an array");
+    let ids: Vec<&str> = records.iter().filter_map(|r| r["id"].as_str()).collect();
+    assert!(ids.contains(&"lamp_kitchen_1"), "well-formed row survives: {doc}");
+    assert!(ids.contains(&"weird_def_1"), "string definition tolerated: {doc}");
+    assert_eq!(records.len(), 2, "garbage rows skipped: {doc}");
+
+    // The network thread survived the poison payload: still translating.
+    mqtt.publish("zigbee2mqtt/lamp_kitchen_1", r#"{"state":"ON"}"#).await;
+    expect_states(&state_sub, &[("home/state/kitchen/kitchen_lamp/on", json!(true))]).await;
+
+    sup.shutdown();
+}
+
 /// (c2) The bridge's availability feature maps to the reserved `available`
 /// aspect — both the {"state": ...} payload and the legacy bare string —
 /// and a native device field that would mint the reserved aspect drops
