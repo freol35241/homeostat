@@ -12,6 +12,7 @@ teardown.
 
 import signal
 import threading
+import traceback
 from urllib.parse import ParseResult, urlparse
 
 import paho.mqtt.client as mqtt
@@ -40,7 +41,18 @@ def connect(endpoint: ParseResult, on_message, topics, *, timeout: float = 30) -
     """
     subscribed = threading.Event()
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
-    client.on_message = on_message
+
+    def guarded(client, userdata, msg):
+        try:
+            on_message(client, userdata, msg)
+        except Exception:
+            # paho re-raises callback exceptions out of its network thread,
+            # which would leave the adapter deaf while its liveliness token
+            # still says running. Drop the message with a trace instead;
+            # the supervisor captures stderr at home/meta/{unit}/log.
+            traceback.print_exc()
+
+    client.on_message = guarded
     client.on_connect = lambda c, *_: c.subscribe(topics)
     client.on_subscribe = lambda *_: subscribed.set()
     client.connect(endpoint.hostname, endpoint.port or 1883)

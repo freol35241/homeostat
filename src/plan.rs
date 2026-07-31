@@ -98,12 +98,24 @@ pub struct ParamChange {
     pub repo: Value,
 }
 
+/// A unit whose manifest changed at parameter level only (the fields
+/// `param_level_only` strips): no restart, but the running world must
+/// refresh — the config store re-enforces the new constraints and the
+/// served meta manifest updates so plans and the dashboard see it.
+#[derive(Debug)]
+pub struct Refresh {
+    pub name: String,
+    /// Per-param deltas, rendered "param: field old -> new".
+    pub changes: Vec<String>,
+}
+
 #[derive(Debug, Default)]
 pub struct Diff {
     pub creates: Vec<String>,
     pub destroys: Vec<String>,
     pub restarts: Vec<Restart>,
     pub params: Vec<ParamChange>,
+    pub refreshes: Vec<Refresh>,
     pub grant_adds: Vec<Grant>,
     pub grant_removes: Vec<Grant>,
 }
@@ -114,6 +126,7 @@ impl Diff {
             && self.destroys.is_empty()
             && self.restarts.is_empty()
             && self.params.is_empty()
+            && self.refreshes.is_empty()
             && self.grant_adds.is_empty()
             && self.grant_removes.is_empty()
     }
@@ -159,8 +172,9 @@ pub fn diff(check: &CheckResult, root: &Path, world: &World) -> Diff {
             content::uses_zone(name, &check.expanded),
         );
         let files_changed = files != world_unit.files_hash;
-        let manifest_changed = content::manifest_hash(&manifest_bytes) != world_unit.manifest_hash
-            && !param_level_only(&manifest_bytes, &world_unit.manifest);
+        let hash_changed = content::manifest_hash(&manifest_bytes) != world_unit.manifest_hash;
+        let param_level = hash_changed && param_level_only(&manifest_bytes, &world_unit.manifest);
+        let manifest_changed = hash_changed && !param_level;
         if manifest_changed || files_changed {
             let reason = match (manifest_changed, files_changed) {
                 (true, true) => "manifest and unit files changed",
@@ -168,6 +182,11 @@ pub fn diff(check: &CheckResult, root: &Path, world: &World) -> Diff {
                 _ => "unit files changed",
             };
             diff.restarts.push(Restart { name: name.clone(), reason: reason.to_string() });
+        } else if param_level {
+            diff.refreshes.push(Refresh {
+                name: name.clone(),
+                changes: refresh_changes(&manifest_bytes, &world_unit.manifest),
+            });
         }
 
         // Parameter diffs: live value vs repo default. One rule covers both
@@ -240,6 +259,49 @@ fn strip_param_values(manifest: &mut toml::Value) {
             table.remove("constraint");
             table.remove("editable_by");
         }
+    }
+}
+
+/// The per-param deltas behind a parameter-level manifest change: the
+/// stripped fields compared between the world's manifest and the repo's.
+/// Empty when the manifests differ only in formatting or comments.
+fn refresh_changes(repo: &[u8], world: &[u8]) -> Vec<String> {
+    let params = |bytes: &[u8]| -> toml::value::Table {
+        std::str::from_utf8(bytes)
+            .ok()
+            .and_then(|text| toml::from_str::<toml::Value>(text).ok())
+            .and_then(|m| m.get("params").and_then(|p| p.as_table()).cloned())
+            .unwrap_or_default()
+    };
+    let old = params(world);
+    let mut changes = Vec::new();
+    for (param, spec) in params(repo) {
+        for field in ["default", "constraint", "editable_by"] {
+            let new_value = spec.get(field);
+            let old_value = old.get(&param).and_then(|s| s.get(field));
+            if new_value != old_value {
+                changes.push(format!(
+                    "{param}: {field} {} -> {}",
+                    policy_value(old_value),
+                    policy_value(new_value)
+                ));
+            }
+        }
+    }
+    changes
+}
+
+fn policy_value(value: Option<&toml::Value>) -> String {
+    match value {
+        None => "(none)".to_string(),
+        Some(toml::Value::Table(table)) => {
+            let parts: Vec<String> = table
+                .iter()
+                .map(|(k, v)| format!("{k}={}", display_value(v)))
+                .collect();
+            format!("{{{}}}", parts.join(", "))
+        }
+        Some(other) => display_value(other),
     }
 }
 
@@ -445,6 +507,17 @@ pub fn render(check: &CheckResult, root: &Path, repo_label: &str, world: &World)
         }
     }
 
+    if !diff.refreshes.is_empty() {
+        out.push_str(&format!("\nManifest refreshes ({}):\n\n", diff.refreshes.len()));
+        for refresh in &diff.refreshes {
+            let unit = check.house.unit(&refresh.name).expect("refresh of a repo unit");
+            out.push_str(&format!("  ~ {} ({})\n", refresh.name, unit.path));
+            for change in &refresh.changes {
+                out.push_str(&format!("      {change}\n"));
+            }
+        }
+    }
+
     if !created.is_empty() {
         out.push_str("\nExpanded keys:\n\n");
         for unit in &created {
@@ -522,6 +595,9 @@ fn summarize(diff: &Diff) -> String {
             diff.params.len(),
             if diff.params.len() == 1 { "" } else { "s" }
         ));
+    }
+    if !diff.refreshes.is_empty() {
+        parts.push(count(diff.refreshes.len(), "manifest", "manifests", "refreshed"));
     }
     if !diff.grant_adds.is_empty() {
         parts.push(count(diff.grant_adds.len(), "grant", "grants", "added"));
@@ -691,5 +767,46 @@ constraint = { min = 0, max = 10 }
             String::from_utf8_lossy(old)
         );
         assert!(!param_level_only(added_param.as_bytes(), old));
+    }
+
+    #[test]
+    fn refresh_changes_render_stripped_field_deltas() {
+        let old = br#"
+schema = 1
+[unit]
+name = "probe"
+kind = "automation"
+[runtime]
+command = "uv run units/probe.py"
+restart = "on-failure"
+[params.level]
+type = "int"
+default = 1
+constraint = { min = 0, max = 10 }
+editable_by = "family"
+"#;
+        let tightened = String::from_utf8_lossy(old).replace("max = 10", "max = 5");
+        assert!(param_level_only(tightened.as_bytes(), old));
+        assert_eq!(
+            refresh_changes(tightened.as_bytes(), old),
+            vec!["level: constraint {max=10, min=0} -> {max=5, min=0}"]
+        );
+
+        let owner_only =
+            String::from_utf8_lossy(old).replace("editable_by = \"family\"", "editable_by = \"owner\"");
+        assert_eq!(
+            refresh_changes(owner_only.as_bytes(), old),
+            vec!["level: editable_by family -> owner"]
+        );
+
+        let dropped = String::from_utf8_lossy(old).replace("editable_by = \"family\"\n", "");
+        assert_eq!(
+            refresh_changes(dropped.as_bytes(), old),
+            vec!["level: editable_by family -> (none)"]
+        );
+
+        let comment_only = format!("{}\n# a comment\n", String::from_utf8_lossy(old));
+        assert!(param_level_only(comment_only.as_bytes(), old));
+        assert_eq!(refresh_changes(comment_only.as_bytes(), old), Vec::<String>::new());
     }
 }

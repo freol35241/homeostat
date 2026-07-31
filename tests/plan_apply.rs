@@ -227,10 +227,11 @@ async fn parameter_default_change_applies_with_zero_restarts() {
     assert_cli_ok(&plan);
     let text = stdout(&plan);
     assert!(
-        text.contains("Plan tier: parameter-only (1 parameter change)"),
+        text.contains("Plan tier: parameter-only (1 parameter change, 1 manifest refreshed)"),
         "{text}"
     );
     assert!(text.contains("~ probe/level  live=1  repo=5"), "{text}");
+    assert!(text.contains("level: default 1 -> 5"), "{text}");
 
     let apply = cli(&["apply", house_arg, "--bus", &sup.endpoint]);
     assert_cli_ok(&apply);
@@ -259,6 +260,87 @@ async fn parameter_default_change_applies_with_zero_restarts() {
         Some(json!(5)),
         "the core cache serves the repo value"
     );
+
+    sup.shutdown();
+    let _ = std::fs::remove_dir_all(&house);
+}
+
+/// Writes a parameter through the core's query-with-payload write path.
+async fn config_write(session: &zenoh::Session, key: &str, value: Value) -> Result<Value, String> {
+    let replies = session
+        .get(key)
+        .payload(value.to_string())
+        .await
+        .expect("config write query");
+    let reply = replies.recv_async().await.expect("config write reply");
+    match reply.result() {
+        Ok(sample) => {
+            Ok(serde_json::from_slice(&sample.payload().to_bytes()).expect("ok reply is JSON"))
+        }
+        Err(err) => Err(String::from_utf8_lossy(&err.payload().to_bytes()).to_string()),
+    }
+}
+
+/// (b2) A constraint-only manifest edit plans as parameter-only with the
+/// delta rendered, and apply takes effect live with zero restarts: the
+/// running store enforces the tightened constraint and the served meta
+/// manifest updates, so a re-plan shows no changes.
+#[tokio::test(flavor = "multi_thread")]
+async fn constraint_only_change_refreshes_without_restart() {
+    let house = temp_house("constraint");
+    let mut sup = Supervisor::spawn_at(&house, &[]);
+    let observer = sup.observer().await;
+    let (probe_pid, reflector_pid) = await_base_units(&observer).await;
+
+    // 7 is inside the fixture's {min = 0, max = 10}.
+    config_write(&observer, "home/config/probe/level", json!(7))
+        .await
+        .expect("write inside the original constraint");
+
+    edit(&house, "units/probe.toml", "max = 10", "max = 5");
+
+    let house_arg = house.to_str().expect("utf-8 path");
+    let plan = cli(&["plan", house_arg, "--bus", &sup.endpoint]);
+    assert_cli_ok(&plan);
+    let text = stdout(&plan);
+    assert!(
+        text.contains("Plan tier: parameter-only (1 parameter change, 1 manifest refreshed)"),
+        "{text}"
+    );
+    assert!(text.contains("Manifest refreshes (1):"), "{text}");
+    assert!(
+        text.contains("level: constraint {max=10, min=0} -> {max=5, min=0}"),
+        "{text}"
+    );
+
+    let apply = cli(&["apply", house_arg, "--bus", &sup.endpoint]);
+    assert_cli_ok(&apply);
+    let text = stdout(&apply);
+    assert!(text.contains("manifest refreshed: probe"), "{text}");
+    assert!(!text.contains("restart"), "no restart steps: {text}");
+
+    // The live store enforces the new constraint immediately...
+    let refused = config_write(&observer, "home/config/probe/level", json!(7))
+        .await
+        .expect_err("7 is above the tightened max");
+    assert!(refused.contains("above max 5"), "{refused}");
+
+    // ...the served manifest is the new one, and nothing restarted.
+    let manifest = meta_read(&observer, &homeostat::bus::manifest_key("probe"))
+        .await
+        .expect("meta manifest served");
+    assert!(manifest.contains("max = 5"), "{manifest}");
+    assert_eq!(running_pid(&observer, "probe").await, probe_pid, "zero restarts");
+    assert_eq!(running_pid(&observer, "reflector").await, reflector_pid);
+
+    // The world now matches the repo: the refresh landed durably.
+    let replan = cli(&["plan", house_arg, "--bus", &sup.endpoint]);
+    assert_cli_ok(&replan);
+    assert!(stdout(&replan).contains("No changes."), "{}", stdout(&replan));
+
+    config_write(&observer, "home/config/probe/level", json!(4))
+        .await
+        .expect("writes inside the new constraint still pass");
 
     sup.shutdown();
     let _ = std::fs::remove_dir_all(&house);

@@ -65,8 +65,15 @@ def suggest(exposes):
     None when no confident mapping exists — the raw definition rides
     along in the record either way, so nothing becomes invisible."""
     for exp in exposes:
+        if not isinstance(exp, dict):
+            continue
         if exp.get("type") == "light":
-            inner = {f.get("property") for f in exp.get("features", [])}
+            features = exp.get("features")
+            inner = {
+                f.get("property")
+                for f in (features if isinstance(features, list) else [])
+                if isinstance(f, dict)
+            }
             return {
                 "capability": "light",
                 "features": ["brightness"] if "brightness" in inner else [],
@@ -82,12 +89,18 @@ def inventory(devices, by_id):
     """The complete discovery document from one bridge/devices payload."""
     records = []
     for dev in devices:
+        # Structurally malformed entries skip like id-less ones below: a
+        # surprise inventory shape must never take the translator down.
+        if not isinstance(dev, dict):
+            continue
         if dev.get("type") == "Coordinator":
             continue
         dev_id = dev.get("friendly_name") or dev.get("ieee_address")
-        if not dev_id:
+        if not dev_id or not isinstance(dev_id, str):
             continue
-        definition = dev.get("definition") or {}
+        definition = dev.get("definition")
+        if not isinstance(definition, dict):
+            definition = {}
         entity = by_id.get(dev_id)
         records.append(
             {

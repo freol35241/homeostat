@@ -192,6 +192,9 @@ pub struct ApplyResult {
     pub ok: bool,
     pub tier: Option<String>,
     pub params: Vec<ApplyParam>,
+    /// Units whose manifest was refreshed at parameter level (no restart).
+    #[serde(default)]
+    pub refreshes: Vec<String>,
     pub steps: Vec<ApplyStep>,
     /// Unit at which the walk halted in place, if it did.
     pub halted_at: Option<String>,

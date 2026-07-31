@@ -281,6 +281,9 @@ fn render_outcome(outcome: &ApplyResult, replied_ok: bool) -> ExitCode {
     for param in &outcome.params {
         println!("  parameter {}/{} = {}", param.unit, param.param, param.value);
     }
+    for unit in &outcome.refreshes {
+        println!("  manifest refreshed: {unit}");
+    }
     for step in &outcome.steps {
         match &step.error {
             None => println!("  {} {}: ok", step.action, step.unit),

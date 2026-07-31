@@ -473,6 +473,9 @@ fn outcome_text(outcome: &ApplyResult, replied_ok: bool) -> Result<String, Strin
             param.unit, param.param, param.value
         ));
     }
+    for unit in &outcome.refreshes {
+        out.push_str(&format!("  manifest refreshed: {unit}\n"));
+    }
     for step in &outcome.steps {
         match &step.error {
             None => out.push_str(&format!("  {} {}: ok\n", step.action, step.unit)),

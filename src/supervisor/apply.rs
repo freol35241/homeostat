@@ -64,6 +64,7 @@ fn failure(error: String) -> ApplyResult {
         ok: false,
         tier: None,
         params: Vec::new(),
+        refreshes: Vec::new(),
         steps: Vec::new(),
         halted_at: None,
         not_reached: Vec::new(),
@@ -87,6 +88,7 @@ async fn execute(core: &Arc<Core>, request: ApplyRequest) -> ApplyResult {
             ok: true,
             tier: None,
             params: Vec::new(),
+            refreshes: Vec::new(),
             steps: Vec::new(),
             halted_at: None,
             not_reached: Vec::new(),
@@ -115,6 +117,24 @@ async fn execute(core: &Arc<Core>, request: ApplyRequest) -> ApplyResult {
             .put(bus::config_key(&unit, &param), value.to_string())
             .await;
         params.push(ApplyParam { unit, param, value });
+    }
+
+    // Parameter-level manifest changes (default/constraint/editable_by):
+    // the store rebuild above already enforces the new spec; recording the
+    // unit refreshes the served meta so later plans and manifest readers
+    // see the new manifest without a restart.
+    let mut refreshes = Vec::new();
+    for refresh in &diff.refreshes {
+        let loaded = check
+            .house
+            .unit(&refresh.name)
+            .expect("refresh of a repo unit");
+        core.record_unit(
+            &refresh.name,
+            plan::world_unit_from_repo(&core.root, loaded, &check.house, &check.expanded),
+        )
+        .await;
+        refreshes.push(refresh.name.clone());
     }
 
     let walk = plan::walk_steps(&diff, &check, &world);
@@ -181,6 +201,7 @@ async fn execute(core: &Arc<Core>, request: ApplyRequest) -> ApplyResult {
         ok,
         tier: Some(tier.to_string()),
         params,
+        refreshes,
         steps,
         halted_at,
         not_reached,
