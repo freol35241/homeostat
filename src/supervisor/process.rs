@@ -91,7 +91,13 @@ where
                     _ => eprintln!("[{unit}] {line}"),
                 }
                 let mut buffers = log.lock().expect("log map lock");
-                let buffer = buffers.entry(unit.clone()).or_default();
+                // Append-only: the entry is created at launch and removed at
+                // destroy. A final line drained after destroy must not
+                // re-create it — a phantom entry would keep the unit alive
+                // in the served meta space and re-plan as a destroy forever.
+                let Some(buffer) = buffers.get_mut(&unit) else {
+                    continue;
+                };
                 if buffer.len() >= LOG_CAPACITY {
                     buffer.pop_front();
                 }

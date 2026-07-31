@@ -107,17 +107,21 @@ pub async fn supervise(
         unit: spec.name.clone(),
         map,
     };
-    let token_sub = session
-        .liveliness()
-        .declare_subscriber(bus::liveliness_key(&spec.name))
-        .history(true)
-        .await
-        .expect("liveliness subscriber");
 
     let mut breaker = Breaker::new();
     let mut restarts: u32 = 0;
 
     loop {
+        // A fresh subscriber per incarnation: reusing one across restarts
+        // lets a queued Put from the previous incarnation mark the next one
+        // running before its child even connected. history(true) still
+        // catches a token declared between spawn and here.
+        let token_sub = session
+            .liveliness()
+            .declare_subscriber(bus::liveliness_key(&spec.name))
+            .history(true)
+            .await
+            .expect("liveliness subscriber");
         health
             .set(Health {
                 status: HealthStatus::Starting,
@@ -153,6 +157,17 @@ pub async fn supervise(
                     Decision::Restart { delay } => {
                         restarts += 1;
                         if wait_backoff(&mut health, restarts, delay, &mut shutdown).await {
+                            // Shutdown during the backoff: report stopped,
+                            // as the exit-path backoff below does.
+                            health
+                                .set(Health {
+                                    status: HealthStatus::Stopped,
+                                    pid: None,
+                                    restarts,
+                                    backoff_ms: None,
+                                    last_exit_code: None,
+                                })
+                                .await;
                             break;
                         }
                         continue;
@@ -174,15 +189,21 @@ pub async fn supervise(
                 }
                 sample = token_sub.recv_async() => {
                     if let Ok(sample) = sample {
-                        if sample.kind() == SampleKind::Put {
-                            health.set(Health {
-                                status: HealthStatus::Running,
-                                pid,
-                                restarts,
-                                backoff_ms: None,
-                                last_exit_code: None,
-                            }).await;
-                        }
+                        // Put: the unit declared its token — running. Delete
+                        // while the child is still alive: the token dropped
+                        // (or a stale token from the previous incarnation
+                        // just cleared) — back to starting until it returns.
+                        let status = match sample.kind() {
+                            SampleKind::Put => HealthStatus::Running,
+                            SampleKind::Delete => HealthStatus::Starting,
+                        };
+                        health.set(Health {
+                            status,
+                            pid,
+                            restarts,
+                            backoff_ms: None,
+                            last_exit_code: None,
+                        }).await;
                     }
                 }
             }

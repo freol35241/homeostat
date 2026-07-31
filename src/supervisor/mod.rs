@@ -10,6 +10,7 @@ pub mod unit;
 
 use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -65,6 +66,10 @@ pub struct Core {
     world: Mutex<WorldMeta>,
     units: tokio::sync::Mutex<BTreeMap<String, UnitHandle>>,
     apply_lock: tokio::sync::Mutex<()>,
+    /// Set (under the units lock) when shutdown begins: `launch` refuses
+    /// and an in-flight apply walk halts, so no unit can slip into the
+    /// drained units map and miss the shutdown signal.
+    shutting_down: AtomicBool,
 }
 
 /// Runs the supervisor until SIGTERM/SIGINT. Assumes the house already
@@ -104,6 +109,7 @@ pub async fn run(check: &CheckResult, root: &Path, listen: &str) -> Result<(), S
         world: Mutex::new(world),
         units: tokio::sync::Mutex::new(BTreeMap::new()),
         apply_lock: tokio::sync::Mutex::new(()),
+        shutting_down: AtomicBool::new(false),
     });
     serve_meta(core.clone()).await?;
     apply::serve(core.clone()).await?;
@@ -117,6 +123,9 @@ pub async fn run(check: &CheckResult, root: &Path, listen: &str) -> Result<(), S
     println!("[homeostat] shutting down");
     let handles: Vec<UnitHandle> = {
         let mut units = core.units.lock().await;
+        // Flagged under the lock: a concurrent launch either sees the flag
+        // and refuses, or inserted before the drain and gets the signal.
+        core.shutting_down.store(true, Ordering::SeqCst);
         std::mem::take(&mut *units).into_values().collect()
     };
     for handle in &handles {
@@ -130,6 +139,11 @@ pub async fn run(check: &CheckResult, root: &Path, listen: &str) -> Result<(), S
 }
 
 impl Core {
+    /// Whether shutdown began; an in-flight apply walk halts on this.
+    fn shutting_down(&self) -> bool {
+        self.shutting_down.load(Ordering::SeqCst)
+    }
+
     /// The world as this supervisor would report it over the bus.
     pub fn snapshot(&self) -> crate::plan::World {
         let world = self.world.lock().expect("world meta lock");
@@ -150,13 +164,23 @@ impl Core {
 
     /// Spawns a fresh supervision task for `spec`. The health entry is set
     /// to `starting` synchronously so a reader never sees the previous
-    /// incarnation's terminal state after this returns.
+    /// incarnation's terminal state after this returns. A no-op once
+    /// shutdown began — a unit spawned into a closing supervisor would
+    /// never receive the shutdown signal.
     async fn launch(&self, spec: UnitSpec) {
         let name = spec.name.clone();
+        let mut units = self.units.lock().await;
+        if self.shutting_down.load(Ordering::SeqCst) {
+            return;
+        }
         self.health
             .lock()
             .expect("health map lock")
             .insert(name.clone(), initial_health());
+        // The log entry exists for the unit's whole lifetime (capture only
+        // appends to an existing entry), so a destroyed unit's final lines
+        // cannot resurrect it in the served meta space.
+        self.log.lock().expect("log map lock").entry(name.clone()).or_default();
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let task = tokio::spawn(unit::supervise(
             spec,
@@ -165,10 +189,7 @@ impl Core {
             self.log.clone(),
             shutdown_rx,
         ));
-        self.units
-            .lock()
-            .await
-            .insert(name, UnitHandle { shutdown: shutdown_tx, task });
+        units.insert(name, UnitHandle { shutdown: shutdown_tx, task });
     }
 
     /// Stops a unit's supervision task (graceful per the unit contract) and

@@ -42,7 +42,9 @@ pub async fn read(session: &Session, endpoint: &str) -> Result<World, String> {
                 world.applied_commit =
                     Some(String::from_utf8_lossy(&payload).to_string());
             }
-            ["home", "meta", unit, field] => {
+            // Only the unit-identity fields define a world unit; a stray
+            // `log` reply must not conjure one up.
+            ["home", "meta", unit, field @ ("manifest" | "manifest_hash" | "files_hash")] => {
                 let entry = world.units.entry(unit.to_string()).or_insert_with(|| WorldUnit {
                     manifest: Vec::new(),
                     manifest_hash: String::new(),
@@ -53,10 +55,7 @@ pub async fn read(session: &Session, endpoint: &str) -> Result<World, String> {
                     "manifest_hash" => {
                         entry.manifest_hash = String::from_utf8_lossy(&payload).to_string()
                     }
-                    "files_hash" => {
-                        entry.files_hash = String::from_utf8_lossy(&payload).to_string()
-                    }
-                    _ => {}
+                    _ => entry.files_hash = String::from_utf8_lossy(&payload).to_string(),
                 }
             }
             _ => {}

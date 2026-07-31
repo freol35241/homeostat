@@ -143,6 +143,17 @@ async fn execute(core: &Arc<Core>, request: ApplyRequest) -> ApplyResult {
     let mut not_reached = Vec::new();
 
     for (index, step) in walk.iter().enumerate() {
+        if core.shutting_down() {
+            steps.push(ApplyStep {
+                unit: step.unit.clone(),
+                action: step.action.to_string(),
+                ok: false,
+                error: Some("supervisor shutting down".to_string()),
+            });
+            halted_at = Some(step.unit.clone());
+            not_reached = walk[index + 1..].iter().map(|s| s.unit.clone()).collect();
+            break;
+        }
         let outcome: Result<(), String> = match step.action {
             StepAction::Stop => {
                 core.destroy(&step.unit).await;
