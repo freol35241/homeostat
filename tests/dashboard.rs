@@ -330,11 +330,24 @@ async fn dashboard_serves_the_family_surface() {
     let value: Value = serde_json::from_slice(&sample.payload().to_bytes()).expect("json");
     assert_eq!(value, json!(true));
 
-    // A fresh WebSocket snapshot now carries the lamp state...
-    let mut ws = ws_connect(&addr, "/ws");
-    let snapshot = ws_read_message(&mut ws);
-    assert_eq!(snapshot["type"], "snapshot");
-    assert_eq!(snapshot["state"][LAMP_STATE], json!(true), "{snapshot}");
+    // A fresh WebSocket snapshot now carries the lamp state. The echo we
+    // observed above proves the reflector published it, but router fan-out
+    // to the dashboard's own subscriber is unordered with respect to ours —
+    // reconnect until the dashboard's cache has caught up.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let (mut ws, snapshot) = loop {
+        let mut ws = ws_connect(&addr, "/ws");
+        let snapshot = ws_read_message(&mut ws);
+        assert_eq!(snapshot["type"], "snapshot");
+        if snapshot["state"][LAMP_STATE] == json!(true) {
+            break (ws, snapshot);
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "snapshot never carried the lamp state: {snapshot}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
     assert!(
         snapshot["health"]["home/health/dashboard"]["status"].is_string(),
         "{snapshot}"

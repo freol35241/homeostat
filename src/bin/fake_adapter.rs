@@ -26,6 +26,10 @@ struct Args {
     /// Exit with code 1 after this many milliseconds (0: immediately).
     #[arg(long)]
     crash_after_ms: Option<u64>,
+    /// Exit cleanly (code 0, token undeclared) after this many
+    /// milliseconds — a oneshot's natural end, for restart-policy tests.
+    #[arg(long)]
+    exit_after_ms: Option<u64>,
     /// Key to publish the heartbeat counter on.
     #[arg(long, default_value = "home/state/testroom/fake_sensor/value")]
     state_key: String,
@@ -79,6 +83,10 @@ async fn main() {
         args.crash_after_ms.unwrap_or(u64::MAX),
     ));
     tokio::pin!(crash_deadline);
+    let exit_deadline = tokio::time::sleep(Duration::from_millis(
+        args.exit_after_ms.unwrap_or(u64::MAX),
+    ));
+    tokio::pin!(exit_deadline);
 
     let mut counter: u64 = 0;
     loop {
@@ -89,6 +97,7 @@ async fn main() {
             }
             _ = crash_sub.recv_async() => std::process::exit(1),
             _ = &mut crash_deadline, if args.crash_after_ms.is_some() => std::process::exit(1),
+            _ = &mut exit_deadline, if args.exit_after_ms.is_some() => break,
             _ = term.recv() => break,
         }
     }

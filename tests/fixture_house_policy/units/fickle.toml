@@ -1,0 +1,10 @@
+schema = 1
+
+[unit]
+name = "fickle"
+kind = "service"
+description = "Crashes once: restart never must settle at stopped"
+
+[runtime]
+command = "fake_adapter --crash-after-ms 300 --heartbeat-ms 50"
+restart = "never"

@@ -34,6 +34,10 @@ struct FakeEsphome {
 
 impl FakeEsphome {
     fn spawn() -> Self {
+        Self::spawn_with_args(&[])
+    }
+
+    fn spawn_with_args(extra: &[&str]) -> Self {
         let port = free_port();
         // Own process group: `uv run` wraps the actual python fake, and
         // killing only the wrapper leaves the device alive — kill() must
@@ -47,6 +51,7 @@ impl FakeEsphome {
                 "--name",
                 "shed",
             ])
+            .args(extra)
             .current_dir(env!("CARGO_MANIFEST_DIR"))
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -90,7 +95,11 @@ fn devices_file(port: u16) -> PathBuf {
 /// adapter's liveliness token (generous timeout: first run resolves the uv
 /// env for aioesphomeapi/zeroconf too).
 async fn setup() -> (FakeEsphome, PathBuf, Supervisor, zenoh::Session) {
-    let device = FakeEsphome::spawn();
+    setup_with(&[]).await
+}
+
+async fn setup_with(device_args: &[&str]) -> (FakeEsphome, PathBuf, Supervisor, zenoh::Session) {
+    let device = FakeEsphome::spawn_with_args(device_args);
     let devices_path = devices_file(device.port);
     let sup = Supervisor::spawn_with_env(
         FIXTURE,
@@ -186,6 +195,44 @@ async fn device_dropout_flips_available() {
         ],
     )
     .await;
+
+    // A command at the dead device drops with device-unavailable
+    // (docs/design.md, Sensor dropout) instead of silently vanishing.
+    let event_sub = observer.declare_subscriber(EVENT_KEY).await.expect("event subscriber");
+    observer
+        .put(
+            RELAY_CMD_KEY,
+            json!({"value": true, "priority": "manual", "actor": "test"}).to_string(),
+        )
+        .await
+        .expect("cmd put");
+    expect_drop_event(&event_sub, "device-unavailable").await;
+
+    sup.shutdown();
+}
+
+/// (a3) An ESPHome entity whose object_id would mint the reserved
+/// `available` aspect drops with a health event while its siblings still
+/// translate — the z2m twin of this rule has its own test in z2m.rs.
+#[tokio::test(flavor = "multi_thread")]
+async fn reserved_aspect_field_drops_with_health_event() {
+    let (_device, _devices_path, mut sup, observer) = setup_with(&["--reserved-sensor"]).await;
+    let event_sub = observer.declare_subscriber(EVENT_KEY).await.expect("event subscriber");
+    let state_sub = observer.declare_subscriber(RELAY_STATE_KEY).await.expect("state subscriber");
+    expect_states(&state_sub, &[(RELAY_STATE_KEY, json!(false))]).await;
+
+    // The relay command makes the device rebroadcast both the switch and
+    // the reserved-aspect sensor: the switch translates, the reserved one
+    // drops with a trace.
+    observer
+        .put(
+            RELAY_CMD_KEY,
+            json!({"value": true, "priority": "manual", "actor": "test"}).to_string(),
+        )
+        .await
+        .expect("cmd put");
+    expect_drop_event(&event_sub, "reserved-aspect").await;
+    expect_states(&state_sub, &[(RELAY_STATE_KEY, json!(true))]).await;
 
     sup.shutdown();
 }

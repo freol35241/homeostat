@@ -396,6 +396,32 @@ fn http_post(addr: &str, message: &Value) -> Result<(u16, Value), String> {
     Ok((status, value))
 }
 
+/// (a''') The standalone `plan` tool renders the live world — every other
+/// test reaches planning only through propose.
+#[tokio::test(flavor = "multi_thread")]
+async fn plan_tool_renders_the_live_world() {
+    let mut sup = Supervisor::spawn("tests/fixture_house");
+    let observer = sup.observer().await;
+    let mut watch = health_watch(&observer, "fake").await;
+    await_health(&mut watch, Duration::from_secs(30), |h| {
+        h.status == HealthStatus::Running
+    })
+    .await;
+    let house = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixture_house");
+    let mut mcp = Mcp::connect(&house, &sup.endpoint);
+
+    let (text, is_error) = mcp.call("plan", json!({}));
+    assert!(!is_error, "{text}");
+    assert!(text.contains("Homeostat plan"), "{text}");
+    assert!(
+        text.contains("No changes. The world matches the repo."),
+        "the freshly started world matches its repo: {text}"
+    );
+
+    drop(mcp);
+    sup.shutdown();
+}
+
 /// (b) A parameter propose within constraints auto-applies: the commit
 /// lands, the running unit sees the value with no restart.
 #[tokio::test(flavor = "multi_thread")]

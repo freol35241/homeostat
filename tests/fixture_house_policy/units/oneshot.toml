@@ -1,0 +1,10 @@
+schema = 1
+
+[unit]
+name = "oneshot"
+kind = "service"
+description = "Exits cleanly: on-failure must settle at stopped"
+
+[runtime]
+command = "fake_adapter --exit-after-ms 300 --heartbeat-ms 50"
+restart = "on-failure"

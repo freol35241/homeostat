@@ -99,7 +99,10 @@ async fn crash_restarts_with_exponential_backoff() {
 
     let mut backoffs: Vec<u64> = Vec::new();
     let mut seen_restarts = 0;
+    let mut crashes = 0;
     while backoffs.len() < 3 {
+        crashes += 1;
+        assert!(crashes <= 10, "no clean doubling run within 10 crashes: {backoffs:?}");
         await_health(&mut watch, Duration::from_secs(10), running).await;
         // The crash command has no last-value storage behind it yet, so a
         // put can land before the fresh incarnation subscribes; resend
@@ -120,7 +123,14 @@ async fn crash_restarts_with_exponential_backoff() {
             }
         };
         seen_restarts = backoff.restarts;
-        backoffs.push(backoff.backoff_ms.expect("backoff_ms present"));
+        let ms = backoff.backoff_ms.expect("backoff_ms present");
+        if ms == 100 {
+            // An incarnation that survived past the 5s stability window
+            // before its crash command landed legitimately reset the
+            // breaker; the doubling run starts over.
+            backoffs.clear();
+        }
+        backoffs.push(ms);
     }
     assert_eq!(backoffs, vec![100, 200, 400], "exponential backoff delays");
 
@@ -260,6 +270,33 @@ async fn log_capture_evicts_oldest_past_capacity() {
     );
     assert_eq!(entries.first().unwrap().line, "stdout-line-100", "oldest 100 evicted");
     assert_eq!(entries.last().unwrap().line, "stdout-line-599", "newest line kept");
+
+    sup.shutdown();
+}
+
+/// (g) Restart-policy terminal states (docs/design.md, health key schema):
+/// a clean exit under `on-failure` and any exit under `never` both settle
+/// at `stopped` with the exit code recorded, and neither restarts.
+#[tokio::test(flavor = "multi_thread")]
+async fn restart_policy_terminal_states_read_stopped() {
+    let mut sup = Supervisor::spawn("tests/fixture_house_policy");
+    let observer = sup.observer().await;
+
+    let mut oneshot = health_watch(&observer, "oneshot").await;
+    let health = await_health(&mut oneshot, Duration::from_secs(30), |h| {
+        h.status == HealthStatus::Stopped
+    })
+    .await;
+    assert_eq!(health.last_exit_code, Some(0), "oneshot exited cleanly");
+    assert_eq!(health.restarts, 0, "a clean exit under on-failure never restarts");
+
+    let mut fickle = health_watch(&observer, "fickle").await;
+    let health = await_health(&mut fickle, Duration::from_secs(30), |h| {
+        h.status == HealthStatus::Stopped
+    })
+    .await;
+    assert_eq!(health.last_exit_code, Some(1), "fickle crashed");
+    assert_eq!(health.restarts, 0, "restart = never means never");
 
     sup.shutdown();
 }

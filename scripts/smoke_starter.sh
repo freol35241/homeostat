@@ -36,6 +36,12 @@ fail() {
 }
 
 cp -r "$REPO/examples/starter-house" "$WORK/house"
+# The example maps the MCP port fixed for the README's UX; the smoke run
+# swaps in a free host port so parallel runs (or a busy 8642) never collide.
+MCP_PORT="$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
+sed -i "s/\"8642:8642\"/\"127.0.0.1:${MCP_PORT}:8642\"/" "$WORK/house/docker-compose.yml"
+grep -q "${MCP_PORT}:8642" "$WORK/house/docker-compose.yml" \
+  || { echo "SMOKE FAIL: could not rewrite the MCP port mapping" >&2; exit 1; }
 git -C "$WORK/house" init -q
 git -C "$WORK/house" -c user.name=smoke -c user.email=smoke@example.com \
   add -A
@@ -62,12 +68,12 @@ for unit in clock recorder zigbee evening_lights mcp; do
 done
 
 # The agent surface answers MCP over the published HTTP port.
-init="$(curl -s -m 10 -X POST http://127.0.0.1:8642 \
+init="$(curl -s -m 10 -X POST "http://127.0.0.1:${MCP_PORT}" \
   -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}')"
 echo "$init" | grep -q '"name":"homeostat"' \
   || fail "MCP initialize did not answer over HTTP: $init"
-echo "agent surface answers on :8642"
+echo "agent surface answers on :${MCP_PORT}"
 
 CID="$(compose ps -q homeostat)"
 compose stop --timeout 20 homeostat >/dev/null 2>&1

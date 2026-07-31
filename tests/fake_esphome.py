@@ -54,7 +54,7 @@ SENSOR_STATE_RESPONSE = 25
 SWITCH_STATE_RESPONSE = 26
 SWITCH_COMMAND_REQUEST = 33
 
-SWITCH_KEY, SENSOR_KEY, BINARY_SENSOR_KEY = 1, 2, 3
+SWITCH_KEY, SENSOR_KEY, BINARY_SENSOR_KEY, RESERVED_SENSOR_KEY = 1, 2, 3, 4
 
 
 def encode_varint(value: int) -> bytes:
@@ -99,18 +99,31 @@ class Device:
     """Shared state across connections (a real device has exactly one, but
     the test harness is honest about it being possible to reconnect)."""
 
-    def __init__(self, name: str):
+    def __init__(self, name: str, reserved_sensor: bool = False):
         self.name = name
         self.state = {"relay": False, "temperature": 21.5, "motion": True}
+        # When set, the device also exposes a sensor whose object_id is the
+        # reserved "available" aspect — the adapter must drop its states.
+        self.reserved_sensor = reserved_sensor
         self.subscribers: set[asyncio.StreamWriter] = set()
 
     def broadcast_switch(self) -> None:
         msg = api_pb2.SwitchStateResponse(key=SWITCH_KEY, state=self.state["relay"])
         for writer in set(self.subscribers):
             writer.write(encode_message(SWITCH_STATE_RESPONSE, msg))
+            if self.reserved_sensor:
+                # Re-announce the reserved-aspect sensor too, so tests can
+                # provoke its (dropped) state on demand instead of racing
+                # the connect-time send.
+                writer.write(
+                    encode_message(
+                        SENSOR_STATE_RESPONSE,
+                        api_pb2.SensorStateResponse(key=RESERVED_SENSOR_KEY, state=1.0),
+                    )
+                )
 
 
-async def send_entity_list(writer: asyncio.StreamWriter) -> None:
+async def send_entity_list(writer: asyncio.StreamWriter, device: "Device") -> None:
     writer.write(
         encode_message(
             LIST_ENTITIES_SWITCH_RESPONSE,
@@ -141,6 +154,15 @@ async def send_entity_list(writer: asyncio.StreamWriter) -> None:
             ),
         )
     )
+    if device.reserved_sensor:
+        writer.write(
+            encode_message(
+                LIST_ENTITIES_SENSOR_RESPONSE,
+                api_pb2.ListEntitiesSensorResponse(
+                    object_id="available", key=RESERVED_SENSOR_KEY, name="Available"
+                ),
+            )
+        )
     writer.write(encode_message(LIST_ENTITIES_DONE_RESPONSE, api_pb2.ListEntitiesDoneResponse()))
     await writer.drain()
 
@@ -164,6 +186,13 @@ async def send_states(writer: asyncio.StreamWriter, device: Device) -> None:
             api_pb2.BinarySensorStateResponse(key=BINARY_SENSOR_KEY, state=device.state["motion"]),
         )
     )
+    if device.reserved_sensor:
+        writer.write(
+            encode_message(
+                SENSOR_STATE_RESPONSE,
+                api_pb2.SensorStateResponse(key=RESERVED_SENSOR_KEY, state=1.0),
+            )
+        )
     await writer.drain()
 
 
@@ -192,7 +221,7 @@ def make_handler(device: Device):
                     writer.write(encode_message(DEVICE_INFO_RESPONSE, resp))
                     await writer.drain()
                 elif msg_type == LIST_ENTITIES_REQUEST:
-                    await send_entity_list(writer)
+                    await send_entity_list(writer, device)
                 elif msg_type == SUBSCRIBE_STATES_REQUEST:
                     device.subscribers.add(writer)
                     await send_states(writer, device)
@@ -222,9 +251,10 @@ async def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=int(os.environ.get("FAKE_ESPHOME_PORT", "6053")))
     parser.add_argument("--name", default="fake-esphome")
+    parser.add_argument("--reserved-sensor", action="store_true")
     args = parser.parse_args()
 
-    device = Device(args.name)
+    device = Device(args.name, reserved_sensor=args.reserved_sensor)
     server = await asyncio.start_server(make_handler(device), "127.0.0.1", args.port)
     async with server:
         await server.serve_forever()
