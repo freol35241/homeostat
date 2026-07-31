@@ -40,6 +40,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import tomllib
 import urllib.error
@@ -83,13 +84,15 @@ def render_config(cameras: dict, listen: str) -> dict:
     }
 
 
-def await_api(listen: str, child: subprocess.Popen) -> None:
+def await_api(listen: str, child: subprocess.Popen, stopping: threading.Event) -> None:
     """Polls /api/streams until go2rtc answers; a child that dies first, or
     never answers, is a startup error (visible through the supervisor's
-    backoff)."""
+    backoff) — unless the supervisor itself commanded the stop."""
     deadline = time.monotonic() + READY_TIMEOUT_S
     while time.monotonic() < deadline:
         if child.poll() is not None:
+            if stopping.is_set():
+                sys.exit(0)
             sys.exit(f"go2rtc exited with {child.returncode} before its API answered")
         try:
             with urllib.request.urlopen(f"http://{listen}/api/streams", timeout=1):
@@ -106,7 +109,7 @@ def main() -> None:
     config_file = tempfile.NamedTemporaryFile(
         mode="w", suffix=".json", prefix="go2rtc-", delete=False
     )
-    stopping = False
+    stopping = threading.Event()
     try:
         json.dump(render_config(cameras, listen), config_file)
         config_file.close()
@@ -116,14 +119,13 @@ def main() -> None:
             sys.exit("go2rtc not on PATH (it is image-build provisioning, never repo content)")
 
         def on_signal(signum, frame) -> None:
-            nonlocal stopping
-            stopping = True
+            stopping.set()
             child.terminate()
 
         for sig in (signal.SIGTERM, signal.SIGINT):
             signal.signal(sig, on_signal)
 
-        await_api(listen, child)
+        await_api(listen, child, stopping)
         session = homeostat.connect()
         try:
             session.ready()
@@ -132,7 +134,7 @@ def main() -> None:
             session.close()
         # A child that dies on its own is a unit failure, whatever its
         # exit code claims — go2rtc has no business exiting.
-        sys.exit(0 if stopping else 1 if code == 0 else code)
+        sys.exit(0 if stopping.is_set() else 1 if code == 0 else code)
     finally:
         os.unlink(config_file.name)
 

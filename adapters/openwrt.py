@@ -189,6 +189,14 @@ def classify(entities, routers, session):
                 continue
             vpn_entities.append(entity)
         elif entity.capability == "presence":
+            if entity.id != entity.id.lower():
+                # Sightings are lowercased; an uppercase MAC would just
+                # read absent forever with no trace.
+                session.health_event(
+                    "drop", reason="malformed-id", entity=entity.name,
+                    error="device MAC must be lowercase",
+                )
+                continue
             trackers.append(entity)
         else:
             session.health_event(

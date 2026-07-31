@@ -56,6 +56,7 @@ import tomllib
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
+from xml.sax.saxutils import escape
 from xml.etree import ElementTree
 
 import aiohttp
@@ -108,7 +109,7 @@ def security_header(username: str, password: str) -> str:
     return (
         f'<wsse:Security xmlns:wsse="{WSSE}" xmlns:wsu="{WSU}">'
         "<wsse:UsernameToken>"
-        f"<wsse:Username>{username}</wsse:Username>"
+        f"<wsse:Username>{escape(username)}</wsse:Username>"
         f'<wsse:Password Type="{PASSWORD_DIGEST}">{digest}</wsse:Password>'
         f"<wsse:Nonce>{base64.b64encode(nonce).decode()}</wsse:Nonce>"
         f"<wsu:Created>{created}</wsu:Created>"

@@ -229,7 +229,11 @@ class Recorder:
 
     def answer(self, query: zenoh.Query) -> None:
         asked = zenoh.KeyExpr(str(query.key_expr))
-        if asked.intersects(EVENTS_KEY):
+        # Events only when the selector sits inside the events key: the two
+        # paths disagree on from/to conventions (integer µs vs RFC3339), so
+        # one query cannot serve both — and a wildcard like home/history/**
+        # must fan out over the sample series, not silently drop them.
+        if EVENTS_KEY.includes(asked):
             self._answer_events(query)
         else:
             self._answer_samples(query, asked)
@@ -292,11 +296,18 @@ class Recorder:
                 ).fetchall()
             else:
                 # Key filtering needs zenoh wildcard semantics, so the limit
-                # can only apply after the Python-side match.
+                # can only apply after the Python-side match — but a LIKE on
+                # the pattern's literal prefix bounds what gets materialized
+                # (the default range is all of history).
+                wildcards = [i for i, ch in enumerate(key_pattern) if ch in "*$"]
+                prefix = key_pattern[: wildcards[0]] if wildcards else key_pattern
+                like = (
+                    prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+                )
                 rows = conn.execute(
                     "SELECT ts, key, payload FROM events WHERE ts >= ? AND ts <= ?"
-                    " ORDER BY ts DESC",
-                    (from_us, to_us),
+                    " AND key LIKE ? ESCAPE '\\' ORDER BY ts DESC",
+                    (from_us, to_us, like),
                 ).fetchall()
                 pattern = zenoh.KeyExpr(key_pattern)
                 rows = [row for row in rows if pattern.intersects(zenoh.KeyExpr(row[1]))]

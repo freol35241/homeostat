@@ -55,6 +55,11 @@ def main():
         boundary = now.replace(second=0, microsecond=0) + datetime.timedelta(minutes=1)
         if stop.wait(timeout=(boundary - now).total_seconds()):
             break
+        if datetime.datetime.now(zone) < boundary:
+            # Event.wait measures monotonic time; NTP slewing the wall
+            # clock back would republish the previous minute (and fire
+            # minute-tick automations twice). Wait out the remainder.
+            continue
         try:
             zone = ZoneInfo(ctx.params.timezone)
         except Exception:

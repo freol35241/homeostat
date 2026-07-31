@@ -99,9 +99,11 @@ def main():
 
     mqtt.wait_for_shutdown()
 
-    session.close()
+    # The MQTT loop stops first: an in-flight on_message during teardown
+    # would otherwise put on a closed zenoh session.
     client.loop_stop()
     client.disconnect()
+    session.close()
 
 
 if __name__ == "__main__":

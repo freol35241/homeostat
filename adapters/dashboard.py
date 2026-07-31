@@ -203,22 +203,35 @@ class Hub:
             }
 
     def _decode(self, sample):
-        return str(sample.key_expr), json.loads(sample.payload.to_bytes())
+        key = str(sample.key_expr)
+        try:
+            return key, json.loads(sample.payload.to_bytes())
+        except ValueError:
+            # Dropped input always leaves a trace; zenoh would just log
+            # the callback exception and lose the delta silently.
+            self.session.health_event("drop", reason="malformed-payload", key=key)
+            return None
 
     def _on_state(self, sample) -> None:
-        key, value = self._decode(sample)
+        if (decoded := self._decode(sample)) is None:
+            return
+        key, value = decoded
         with self.lock:
             self.state[key] = value
         self._emit({"type": "state", "key": key, "value": value})
 
     def _on_config(self, sample) -> None:
-        key, value = self._decode(sample)
+        if (decoded := self._decode(sample)) is None:
+            return
+        key, value = decoded
         with self.lock:
             self.config[key] = value
         self._emit({"type": "config", "key": key, "value": value})
 
     def _on_health(self, sample) -> None:
-        key, value = self._decode(sample)
+        if (decoded := self._decode(sample)) is None:
+            return
+        key, value = decoded
         segments = key.split("/")
         if len(segments) == 3:  # home/health/{unit}: supervision status
             with self.lock:
@@ -354,10 +367,14 @@ def make_app(hub: Hub, model: dict, page: Path, assets_dir: Path) -> web.Applica
         aspect = request.query.get("aspect", "")
         if not entity or not aspect:
             return json_error("entity and aspect are required")
-        hours = min(float(request.query.get("hours", "24")), 24 * 31)
-        limit = min(int(request.query.get("limit", "500")), 5000)
         now = datetime.datetime.now(datetime.timezone.utc)
-        start = now - datetime.timedelta(hours=hours)
+        try:
+            hours = min(float(request.query.get("hours", "24")), 24 * 31)
+            limit = min(int(request.query.get("limit", "500")), 5000)
+            start = now - datetime.timedelta(hours=hours)
+        except (ValueError, OverflowError):
+            # timedelta raises on NaN/inf hours; same 400 as bad `lines`.
+            return json_error("hours and limit must be numbers")
         selector = (
             f"{keys.history_key('state', entity, aspect)}"
             f"?from={start.isoformat(timespec='seconds')}"

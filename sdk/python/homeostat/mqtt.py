@@ -13,7 +13,7 @@ teardown.
 import signal
 import threading
 import traceback
-from urllib.parse import ParseResult, urlparse
+from urllib.parse import ParseResult, unquote, urlparse
 
 import paho.mqtt.client as mqtt
 
@@ -55,6 +55,13 @@ def connect(endpoint: ParseResult, on_message, topics, *, timeout: float = 30) -
     client.on_message = guarded
     client.on_connect = lambda c, *_: c.subscribe(topics)
     client.on_subscribe = lambda *_: subscribed.set()
+    if endpoint.username:
+        # mqtt://user:pass@host — silently dropping these misdiagnoses an
+        # auth-requiring broker as a SUBACK timeout.
+        client.username_pw_set(
+            unquote(endpoint.username),
+            unquote(endpoint.password) if endpoint.password else None,
+        )
     client.connect(endpoint.hostname, endpoint.port or 1883)
     client.loop_start()
     if not subscribed.wait(timeout=timeout):
