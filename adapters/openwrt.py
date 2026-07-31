@@ -111,14 +111,18 @@ async def login(http, url: str, username: str, password: str) -> str:
     return sid
 
 
-def wireguard_fresh(iface_status: dict, now_epoch: float) -> bool:
+def wireguard_fresh(iface_status, now_epoch: float) -> bool:
     """A live tunnel has some peer handshake younger than the freshness
-    window; peers arrive as a list or dict depending on the luci version."""
-    peers = iface_status.get("peers", [])
+    window; peers arrive as a list or dict depending on the luci version.
+    Entries of any other shape count as no handshake — this runs outside
+    the per-router poll guard, so it must not raise."""
+    peers = iface_status.get("peers", []) if isinstance(iface_status, dict) else []
     if isinstance(peers, dict):
         peers = list(peers.values())
     latest = 0
     for peer in peers:
+        if not isinstance(peer, dict):
+            continue
         with contextlib.suppress(TypeError, ValueError):
             latest = max(latest, int(peer.get("latest_handshake", 0)))
     return latest > 0 and now_epoch - latest < WG_HANDSHAKE_FRESH_S
@@ -272,6 +276,17 @@ class Adapter:
                 if self.reachable.get(name, True):
                     self.session.health_event(
                         "drop", reason="router-unreachable", router=name, error=str(err)
+                    )
+                self.reachable[name] = False
+                continue
+            except Exception as err:
+                # A payload shape this build did not anticipate (hostapd
+                # clients as a list, a non-dict wireguard peer, ...): the
+                # router answered, the answer just did not parse. Stale, not
+                # a crash loop — one bad router never takes the unit down.
+                if self.reachable.get(name, True):
+                    self.session.health_event(
+                        "drop", reason="router-poll-failed", router=name, error=str(err)
                     )
                 self.reachable[name] = False
                 continue

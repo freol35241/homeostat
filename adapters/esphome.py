@@ -212,6 +212,13 @@ async def run_device(device, bound, devices_conf, session, entity_runtime, entit
             infos, _services = await client.list_entities_services()
         except Exception as err:
             session.health_event("drop", reason="list-entities-failed", device=device, error=str(err))
+            # ReconnectLogic is already READY at this point: returning would
+            # leave the device connected but with no state subscription and
+            # no retry ever scheduled. Dropping the connection re-enters its
+            # retry loop instead (suppressed: raising out of on_connect
+            # would kill the reconnect task outright).
+            with contextlib.suppress(Exception):
+                await client.disconnect()
             return
         records = []
         new_key_map = {}

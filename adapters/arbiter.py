@@ -64,8 +64,10 @@ def main():
     lock = threading.Lock()
     leases: dict[tuple[str, str, str], dict] = {}
 
+    live = False
+
     def on_config(sample):
-        nonlocal hold_minutes
+        nonlocal hold_minutes, live
         param = str(sample.key_expr).rsplit("/", 1)[1]
         if param != PARAM:
             return
@@ -75,16 +77,20 @@ def main():
             return
         with lock:
             hold_minutes = float(value)
+            live = True
 
     # Subscribe, then get, merge: the get covers everything published
     # before this subscription, the subscriber everything after (the same
-    # ordering automation.Context uses for [params.*]).
+    # ordering automation.Context uses for [params.*]). The seed never
+    # overwrites a value the subscription already delivered — the served
+    # reply may predate a write that raced this startup.
     config_sub = session.subscribe(keys.config_keyexpr(unit), on_config)
     served = dict(session.get_json(keys.config_keyexpr(unit)))
     seeded = served.get(keys.config_key(unit, PARAM))
     if seeded is not None:
         with lock:
-            hold_minutes = float(seeded)
+            if not live:
+                hold_minutes = float(seeded)
 
     def cmd_handler(sample):
         key = str(sample.key_expr)

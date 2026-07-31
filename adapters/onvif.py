@@ -189,11 +189,18 @@ async def run_camera(entity, conf: dict, session, http: aiohttp.ClientSession, s
     """One pull-point event stream for one camera: subscribe, long-poll,
     renew, forever; any fault recreates the subscription from scratch
     after a delay (one health event per down transition)."""
-    host, port = resolve_host_port(conf)
-    base_url = f"http://{host}:{port}/onvif/device_service"
-    username, password = conf["username"], conf["password"]
     motion_key = keys.state_key(entity.room, entity.name, "motion")
     available_key = keys.state_key(entity.room, entity.name, "available")
+    try:
+        host, port = resolve_host_port(conf)
+        username, password = conf["username"], conf["password"]
+    except (KeyError, ValueError) as err:
+        # Unusable camera config: no amount of resubscribing fixes it.
+        # The event is the trace; the camera reads unavailable.
+        session.health_event("drop", reason="camera-misconfigured", camera=entity.name, error=str(err))
+        session.put_json(available_key, False)
+        return
+    base_url = f"http://{host}:{port}/onvif/device_service"
     # Tri-state: None until the first subscription attempt settles, so the
     # first success and the first failure each publish availability once.
     up: bool | None = None
@@ -240,7 +247,11 @@ async def run_camera(entity, conf: dict, session, http: aiohttp.ClientSession, s
                     username,
                     password,
                 )
-        except SoapError as err:
+        except Exception as err:
+            # ANY fault recreates the subscription after the delay — a
+            # non-SOAP surprise (bad reply shape, a failed put) must not
+            # silently end this camera's stream while the unit reads ready.
+            # (CancelledError is BaseException and still cancels the task.)
             if up is not False:
                 session.health_event(
                     "drop", reason="event-stream-lost", camera=entity.name, error=str(err)

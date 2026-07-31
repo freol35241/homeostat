@@ -286,8 +286,12 @@ def make_app(hub: Hub, model: dict, page: Path, assets_dir: Path) -> web.Applica
                 raise web.HTTPForbidden(text="origin not allowed")
         ws = web.WebSocketResponse(heartbeat=30)
         await ws.prepare(request)
-        await ws.send_str(json.dumps(hub.snapshot()))
+        # Registered before the snapshot: a delta landing between the
+        # snapshot build and registration would otherwise miss this client
+        # for good. The other order is harmless — a delta broadcast racing
+        # the snapshot is included in or superseded by it.
         hub.clients.add(ws)
+        await ws.send_str(json.dumps(hub.snapshot()))
         try:
             async for message in ws:  # client sends nothing; drain until close
                 if message.type == WSMsgType.ERROR:

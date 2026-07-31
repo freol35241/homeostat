@@ -88,6 +88,8 @@ class Context:
             served = dict(self._session.get_json(keys.config_keyexpr(unit)))
             with self._lock:
                 for name, spec in self._param_specs.items():
+                    if name in self._param_values:
+                        continue  # the subscription already delivered fresher
                     self._param_values[name] = served.get(
                         keys.config_key(unit, name), spec["default"]
                     )

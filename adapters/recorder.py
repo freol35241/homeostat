@@ -301,7 +301,7 @@ class Recorder:
                 pattern = zenoh.KeyExpr(key_pattern)
                 rows = [row for row in rows if pattern.intersects(zenoh.KeyExpr(row[1]))]
             payload = [
-                {"ts": ts, "key": key, "payload": json.loads(text)}
+                {"ts": ts, "key": key, "payload": event_payload(text)}
                 for ts, key, text in reversed(rows[:limit])
             ]
             query.reply("home/history/events", json.dumps(payload))
@@ -309,6 +309,16 @@ class Recorder:
             query.reply_err(json.dumps(f"store unavailable: {err}"))
         finally:
             conn.close()
+
+
+def event_payload(text: str):
+    """Events are recorded raw (any bus client can put on these keys), so
+    a non-JSON row must serve as its string — one poison row must never
+    break every events query that reaches it."""
+    try:
+        return json.loads(text)
+    except ValueError:
+        return text
 
 
 def split_selector(raw: str) -> dict[str, str]:
