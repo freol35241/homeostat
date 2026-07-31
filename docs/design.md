@@ -1049,7 +1049,12 @@ the exploration that produced it):
   The map library (Leaflet + protomaps-leaflet) is vendored into the
   repo and served by the dashboard unit at `/assets/` — dashboard.html
   stays a hand-editable file and runtime stays fetch-free, but the
-  strict one-file property is traded away.
+  strict one-file property is traded away. The same trade later
+  (2026-07-31) extracted the page's pure decision logic (the Now-view
+  deviation rules, WebSocket store application, presence-key parsing)
+  into `assets/dashboard-logic.js` so `node --test tests/js` — Node's
+  built-in runner, zero packages — can pin it; the DOM wiring stays in
+  the page and stays untested by design.
 
 ## ESPHome adapter (settled 2026-07-16)
 

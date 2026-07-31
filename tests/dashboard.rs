@@ -291,8 +291,9 @@ async fn dashboard_serves_the_family_surface() {
     let (status, _) = http_request(&addr, "GET", "/", &[], None);
     assert_eq!(status, 200);
 
-    // Vendored map assets are served, allowlisted by filename.
-    for name in ["leaflet.js", "leaflet.css", "protomaps-leaflet.js"] {
+    // Vendored map assets and the extracted page logic are served,
+    // allowlisted by filename.
+    for name in ["leaflet.js", "leaflet.css", "protomaps-leaflet.js", "dashboard-logic.js"] {
         let (status, _) = http_request(&addr, "GET", &format!("/assets/{name}"), &[], None);
         assert_eq!(status, 200, "asset {name}");
     }

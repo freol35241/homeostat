@@ -14,3 +14,7 @@ bumping this table.
 
 Leaflet's `images/` directory is intentionally omitted: the map uses
 `divIcon` markers and no layers control, so nothing references it.
+
+`dashboard-logic.js` is NOT vendored — it is this repo's own code, the
+dashboard page's pure decision logic extracted from dashboard.html so
+`node --test tests/js` can pin it. Edit it like any source file.

@@ -32,6 +32,9 @@ jobs:
           uv sync --script tests/fixture_house_apply/units/probe.py
           uv sync --script tests/fixture_house_virtual/units/fused_temperature.py
       - run: cargo test
+      # The dashboard's extracted decision logic (adapters/assets/
+      # dashboard-logic.js): Node's built-in runner, no packages.
+      - run: node --test tests/js
 
   # The container image is packaging, not logic: build it and smoke-test
   # that the supervisor boots a real house inside it. See
