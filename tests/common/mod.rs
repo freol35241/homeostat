@@ -423,6 +423,33 @@ pub async fn expect_state(sub: &StateSub, expected: Value) {
     }
 }
 
+/// Polls the core state mirror until `key` holds `expected` — the
+/// late-joiner read path. Publishes that predate a test's subscriber
+/// (connect-time availability, first states) are only observable here.
+#[allow(dead_code)] // each test binary uses its own subset of the harness
+pub async fn await_mirror(observer: &zenoh::Session, key: &str, expected: &serde_json::Value) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    loop {
+        let replies = observer.get(key).await.expect("mirror get");
+        while let Ok(reply) = replies.recv_async().await {
+            if let Ok(sample) = reply.result() {
+                if let Ok(value) =
+                    serde_json::from_slice::<serde_json::Value>(&sample.payload().to_bytes())
+                {
+                    if &value == expected {
+                        return;
+                    }
+                }
+            }
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "mirror never held {key} = {expected}"
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
 /// Reads health events until one matches the expected drop reason.
 #[allow(dead_code)] // each test binary uses its own subset of the harness
 pub async fn expect_drop_event(sub: &StateSub, reason: &str) -> Value {

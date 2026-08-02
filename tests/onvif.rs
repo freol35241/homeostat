@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 use zenoh::sample::SampleKind;
 
-use common::{expect_drop_event, expect_state, free_port, StateSub, Supervisor};
+use common::{await_mirror, expect_drop_event, expect_state, free_port, StateSub, Supervisor};
 
 const FIXTURE: &str = "tests/fixture_house_onvif";
 const CAMERAS_ENV: &str = "HOMEOSTAT_CAMERAS";
@@ -120,13 +120,20 @@ async fn setup() -> (FakeOnvif, PathBuf, Supervisor, zenoh::Session) {
         .expect("adapter liveliness token within 90s")
         .expect("liveliness stream open");
     assert_eq!(token.kind(), SampleKind::Put);
+    // Ready fires with the subscription attempt merely in flight; a trigger
+    // before the pull-point subscription exists lands in zero queues and is
+    // lost (a real camera's events during an outage are too). available =
+    // true is the adapter's own signal that the subscription is up.
+    await_mirror(&observer, AVAILABLE_KEY, &json!(true)).await;
     (camera, cameras_path, sup, observer)
 }
 
-/// Triggers repeatedly until the motion key carries `expected` — used
-/// after a subscription break, when triggers race the resubscription (a
-/// trigger before the new subscription exists is lost, like a real
-/// camera's events during an outage).
+/// Triggers repeatedly until the motion key carries `expected`. Triggers
+/// are lossy by design: one fans out only to the subscriptions existing
+/// at that instant, and the adapter abandons its subscription on any
+/// fault (a trigger stranded in an abandoned queue is a real camera's
+/// event during an outage) — so every test drives triggers through a
+/// retry, never one-shot.
 async fn trigger_until_motion(camera: &FakeOnvif, sub: &StateSub, expected: bool) {
     let value = if expected { "true" } else { "false" };
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
@@ -147,6 +154,27 @@ async fn trigger_until_motion(camera: &FakeOnvif, sub: &StateSub, expected: bool
     }
 }
 
+/// Like `trigger_until_motion`, for trigger values whose observable
+/// effect is a health event rather than state.
+async fn trigger_until_event(camera: &FakeOnvif, sub: &StateSub, value: &str, reason: &str) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        camera.control(&format!("/control/trigger?value={value}"));
+        let recv = tokio::time::timeout(Duration::from_secs(1), sub.recv_async()).await;
+        if let Ok(Ok(sample)) = recv {
+            let event: Value = serde_json::from_slice(&sample.payload().to_bytes())
+                .expect("health event is JSON");
+            if event["reason"] == reason {
+                return;
+            }
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "no \"{reason}\" health event within 30s of re-triggering"
+        );
+    }
+}
+
 /// (a) On-camera motion events translate to the camera entity's `motion`
 /// aspect — the event plane in one assertion: pixels stay off the bus,
 /// detections ride it as ordinary scalar state.
@@ -155,10 +183,8 @@ async fn motion_events_translate_to_bus_state() {
     let (camera, _cameras_path, mut sup, observer) = setup().await;
     let state_sub = observer.declare_subscriber(MOTION_KEY).await.expect("state subscriber");
 
-    camera.control("/control/trigger?value=true");
-    expect_state(&state_sub, json!(true)).await;
-    camera.control("/control/trigger?value=false");
-    expect_state(&state_sub, json!(false)).await;
+    trigger_until_motion(&camera, &state_sub, true).await;
+    trigger_until_motion(&camera, &state_sub, false).await;
 
     sup.shutdown();
 }
@@ -172,8 +198,7 @@ async fn broken_subscription_resubscribes() {
     let state_sub = observer.declare_subscriber(MOTION_KEY).await.expect("state subscriber");
     let event_sub = observer.declare_subscriber(EVENT_KEY).await.expect("event subscriber");
 
-    camera.control("/control/trigger?value=true");
-    expect_state(&state_sub, json!(true)).await;
+    trigger_until_motion(&camera, &state_sub, true).await;
 
     camera.control("/control/break");
     expect_drop_event(&event_sub, "event-stream-lost").await;
@@ -192,8 +217,7 @@ async fn subscription_loss_flips_available() {
     let avail_sub = observer.declare_subscriber(AVAILABLE_KEY).await.expect("available subscriber");
     let state_sub = observer.declare_subscriber(MOTION_KEY).await.expect("state subscriber");
 
-    camera.control("/control/trigger?value=true");
-    expect_state(&state_sub, json!(true)).await;
+    trigger_until_motion(&camera, &state_sub, true).await;
 
     camera.control("/control/break");
     expect_state(&avail_sub, json!(false)).await;
@@ -210,11 +234,9 @@ async fn malformed_motion_value_drops_with_health_event() {
     let state_sub = observer.declare_subscriber(MOTION_KEY).await.expect("state subscriber");
     let event_sub = observer.declare_subscriber(EVENT_KEY).await.expect("event subscriber");
 
-    camera.control("/control/trigger?value=banana");
-    expect_drop_event(&event_sub, "malformed-payload").await;
+    trigger_until_event(&camera, &event_sub, "banana", "malformed-payload").await;
 
-    camera.control("/control/trigger?value=true");
-    expect_state(&state_sub, json!(true)).await;
+    trigger_until_motion(&camera, &state_sub, true).await;
 
     sup.shutdown();
 }

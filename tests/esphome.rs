@@ -15,8 +15,8 @@ use serde_json::{json, Value};
 use zenoh::sample::SampleKind;
 
 use common::{
-    await_health, expect_drop_event, expect_states, free_port, health_watch, process_alive,
-    Supervisor,
+    await_health, await_mirror, expect_drop_event, expect_states, free_port, health_watch,
+    process_alive, Supervisor,
 };
 
 const FIXTURE: &str = "tests/fixture_house_esphome";
@@ -139,33 +139,6 @@ async fn device_state_translates_to_bus_state() {
     .await;
 
     sup.shutdown();
-}
-
-/// Polls the core state mirror until `key` holds `expected` — the
-/// late-joiner read path (subscribe, then get, merge): the connect-time
-/// availability publish races any subscriber a test declares, and the
-/// mirror is exactly what a late joiner is supposed to consult.
-async fn await_mirror(observer: &zenoh::Session, key: &str, expected: &Value) {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
-    loop {
-        let replies = observer.get(key).await.expect("mirror get");
-        while let Ok(reply) = replies.recv_async().await {
-            if let Ok(sample) = reply.result() {
-                if let Ok(value) =
-                    serde_json::from_slice::<Value>(&sample.payload().to_bytes())
-                {
-                    if &value == expected {
-                        return;
-                    }
-                }
-            }
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "mirror never held {key} = {expected}"
-        );
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
 }
 
 /// (a2) Availability rides the connection: every bound entity of the
