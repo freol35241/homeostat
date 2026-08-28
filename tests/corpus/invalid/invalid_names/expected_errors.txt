@@ -1,5 +1,5 @@
-error[invalid-name] bad*lamp: entity name "bad*lamp" must be a single key segment (letters, digits, "_", "-", ".") (entities/hue/bad*lamp.toml)
 error[invalid-name] bad*unit: unit name "bad*unit" must be a single key segment (letters, digits, "_", "-", ".") (units/probe.toml)
+error[invalid-name] bad+lamp: entity name "bad+lamp" must be a single key segment (letters, digits, "_", "-", ".") (entities/hue/bad+lamp.toml)
 error[invalid-name] bad/zone: zone name "bad/zone" must be a single key segment (letters, digits, "_", "-", ".") (zones.toml)
 error[invalid-name] hue.bad/param: parameter name "bad/param" must be a single key segment (letters, digits, "_", "-", ".") (units/hue.toml)
 error[invalid-name] lamp: room "attic/loft" must be a single key segment (letters, digits, "_", "-", ".") (entities/hue/lamp.toml)
