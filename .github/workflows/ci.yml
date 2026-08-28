@@ -10,6 +10,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # sync_starter.sh --check reads adapters/ at the tag the starter
+          # pins; a shallow checkout has no tags to read.
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - uses: astral-sh/setup-uv@v6
@@ -37,6 +41,10 @@ jobs:
       # shell expands the glob — newer Node treats a bare directory
       # argument as a module path and dies with MODULE_NOT_FOUND.
       - run: node --test tests/js/*.test.js
+      # examples/starter-house ships generated copies of adapters/; this
+      # fails the build the moment one is edited by hand or a release
+      # forgets to regenerate them.
+      - run: scripts/sync_starter.sh --check
 
   # The container image is packaging, not logic: build it and smoke-test
   # that the supervisor boots a real house inside it. See

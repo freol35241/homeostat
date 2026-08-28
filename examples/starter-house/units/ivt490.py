@@ -6,7 +6,7 @@
 # ]
 #
 # [tool.uv.sources]
-# homeostat = { git = "https://github.com/freol35241/homeostat", subdirectory = "sdk/python", tag = "v0.4.0" }
+# homeostat = { git = "https://github.com/freol35241/homeostat", subdirectory = "sdk/python", tag = "v0.5.0" }
 # ///
 """IVT490 heat-pump adapter (docs/design.md, "IVT490 heat-pump adapter
 (settled 2026-07-18)").
@@ -91,6 +91,17 @@ inventory pattern — discovering devices never bound by any entity file —
 is overkill for a dialect with exactly one address per entity file, known
 up front.
 
+Device availability (docs/design.md, "Sensor dropout and availability"):
+this firmware publishes continuously — every serial telegram fans out —
+so silence IS the loss signal. A receive timer flips
+home/state/{room}/{entity}/available to false after
+availability_timeout_s (parameter, owner-editable, adapter-side default
+300 s) without a single routed message from that device's base topic,
+with one "device-silent" health event per down transition; any routed
+message flips it back to true. The timer is seeded at startup, so a
+device that never speaks goes false after one timeout. On loss every
+other aspect stands — stale, never false.
+
 Operational note: any Node-RED flow WRITING to this device's
 controller/set topics must be disabled before this adapter goes live —
 one master per device; read-only flows can coexist.
@@ -98,9 +109,23 @@ one master per device; read-only flows can coexist.
 
 import json
 import os
+import threading
+import time
 
 import homeostat
 from homeostat import house, keys, mqtt
+from homeostat.params import LiveParams
+
+PARAM_DEFAULTS = {"availability_timeout_s": 300.0}
+
+
+class Params(LiveParams):
+    """availability_timeout_s from home/config/{unit}/*, live."""
+
+    @property
+    def availability_timeout_s(self) -> float:
+        return max(0.1, self.get("availability_timeout_s"))
+
 
 # lib/IVT490/IVT490.cpp, State::serialize (GT3_2_boiler_emulation branch):
 # every aspect the state fan-out can produce — the 28 serial-protocol
@@ -219,7 +244,25 @@ def main():
     endpoint = mqtt.parse_endpoint(config.endpoint)
 
     session = homeostat.connect()
+    params = Params(session, PARAM_DEFAULTS)
     seen: set[str] = set()
+
+    # Receive-timer availability (see module docstring): last_rx is seeded
+    # now so a device that never speaks flips false after one timeout.
+    availability_lock = threading.Lock()
+    last_rx = {e.id: time.monotonic() for e in config.entities}
+    available: dict[str, bool] = {}
+
+    def set_available(entity, value: bool) -> bool:
+        """Publishes on transition only; returns True when it was one. The
+        publish stays under the lock so the receive path and the watchdog
+        cannot interleave decision and publication."""
+        with availability_lock:
+            if available.get(entity.name) == value:
+                return False
+            available[entity.name] = value
+            session.put_json(keys.state_key(entity.room, entity.name, "available"), value)
+        return True
 
     def inventory():
         return [
@@ -237,6 +280,9 @@ def main():
         entity, rest = route(msg.topic, config.entities)
         if entity is None:
             return
+
+        last_rx[entity.id] = time.monotonic()
+        set_available(entity, True)
 
         if entity.id not in seen:
             seen.add(entity.id)
@@ -321,26 +367,38 @@ def main():
     ]
     client = mqtt.connect(endpoint, on_ivt_message, topics)
 
-    # An arbitrated entity has no home/cmd subscription at all — not
-    # subscribing IS the structural enforcement — and instead gets the
-    # arbiter's forwarded, post-arbitration envelope on home/arbiter/**.
     subscribers = [
-        session.subscribe(keys.cmd_keyexpr(e.room, e.name), cmd_handler(e))
+        session.subscribe(expr, cmd_handler(e))
         for e in config.entities
-        if e.write_mode != "arbitrated"
-    ] + [
-        session.subscribe(keys.arbiter_keyexpr(e.room, e.name), cmd_handler(e))
-        for e in config.entities
-        if e.write_mode == "arbitrated"
+        for expr in keys.command_keyexprs(e)
     ]
 
     session.put_json(keys.discovery_key(unit), inventory())
+
+    stop = threading.Event()
+
+    def watchdog():
+        while True:
+            timeout = params.availability_timeout_s
+            if stop.wait(min(1.0, timeout / 4)):
+                return
+            now = time.monotonic()
+            for entity in config.entities:
+                if now - last_rx[entity.id] > timeout and set_available(entity, False):
+                    # A degraded condition, not dropped input: kind =
+                    # condition, the recorder's backend-outage precedent.
+                    session.health_event("device-silent", topic=entity.id)
+
+    watchdog_thread = threading.Thread(target=watchdog, daemon=True)
+    watchdog_thread.start()
 
     # Both translation directions are wired up: the unit is ready.
     session.ready()
 
     mqtt.wait_for_shutdown()
 
+    stop.set()
+    watchdog_thread.join(timeout=5)
     for sub in subscribers:
         sub.undeclare()
     session.close()

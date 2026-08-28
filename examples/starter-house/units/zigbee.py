@@ -6,7 +6,7 @@
 # ]
 #
 # [tool.uv.sources]
-# homeostat = { git = "https://github.com/freol35241/homeostat", subdirectory = "sdk/python", tag = "v0.4.0" }
+# homeostat = { git = "https://github.com/freol35241/homeostat", subdirectory = "sdk/python", tag = "v0.5.0" }
 # ///
 """Zigbee2MQTT adapter: a translating subscriber.
 
@@ -65,8 +65,15 @@ def suggest(exposes):
     None when no confident mapping exists — the raw definition rides
     along in the record either way, so nothing becomes invisible."""
     for exp in exposes:
+        if not isinstance(exp, dict):
+            continue
         if exp.get("type") == "light":
-            inner = {f.get("property") for f in exp.get("features", [])}
+            features = exp.get("features")
+            inner = {
+                f.get("property")
+                for f in (features if isinstance(features, list) else [])
+                if isinstance(f, dict)
+            }
             return {
                 "capability": "light",
                 "features": ["brightness"] if "brightness" in inner else [],
@@ -82,12 +89,18 @@ def inventory(devices, by_id):
     """The complete discovery document from one bridge/devices payload."""
     records = []
     for dev in devices:
+        # Structurally malformed entries skip like id-less ones below: a
+        # surprise inventory shape must never take the translator down.
+        if not isinstance(dev, dict):
+            continue
         if dev.get("type") == "Coordinator":
             continue
         dev_id = dev.get("friendly_name") or dev.get("ieee_address")
-        if not dev_id:
+        if not dev_id or not isinstance(dev_id, str):
             continue
-        definition = dev.get("definition") or {}
+        definition = dev.get("definition")
+        if not isinstance(definition, dict):
+            definition = {}
         entity = by_id.get(dev_id)
         records.append(
             {
@@ -213,17 +226,10 @@ def main():
         ],
     )
 
-    # An arbitrated entity has no home/cmd subscription at all — not
-    # subscribing IS the structural enforcement — and instead gets the
-    # arbiter's forwarded, post-arbitration envelope on home/arbiter/**.
     subscribers = [
-        session.subscribe(keys.cmd_keyexpr(e.room, e.name), cmd_handler(e))
+        session.subscribe(expr, cmd_handler(e))
         for e in config.entities
-        if e.write_mode != "arbitrated"
-    ] + [
-        session.subscribe(keys.arbiter_keyexpr(e.room, e.name), cmd_handler(e))
-        for e in config.entities
-        if e.write_mode == "arbitrated"
+        for expr in keys.command_keyexprs(e)
     ]
 
     # Both translation directions are wired up: the unit is ready.
@@ -231,11 +237,13 @@ def main():
 
     mqtt.wait_for_shutdown()
 
+    # The MQTT loop stops first: an in-flight on_message during teardown
+    # would otherwise put on a closed zenoh session.
+    client.loop_stop()
+    client.disconnect()
     for sub in subscribers:
         sub.undeclare()
     session.close()
-    client.loop_stop()
-    client.disconnect()
 
 
 if __name__ == "__main__":

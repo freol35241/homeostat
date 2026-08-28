@@ -7,7 +7,7 @@
 # ]
 #
 # [tool.uv.sources]
-# homeostat = { git = "https://github.com/freol35241/homeostat", subdirectory = "sdk/python", tag = "v0.4.0" }
+# homeostat = { git = "https://github.com/freol35241/homeostat", subdirectory = "sdk/python", tag = "v0.5.0" }
 # ///
 """ESPHome adapter: native API, not MQTT (see docs/design.md, "ESPHome
 adapter (settled 2026-07-16)").
@@ -212,6 +212,13 @@ async def run_device(device, bound, devices_conf, session, entity_runtime, entit
             infos, _services = await client.list_entities_services()
         except Exception as err:
             session.health_event("drop", reason="list-entities-failed", device=device, error=str(err))
+            # ReconnectLogic is already READY at this point: returning would
+            # leave the device connected but with no state subscription and
+            # no retry ever scheduled. Dropping the connection re-enters its
+            # retry loop instead (suppressed: raising out of on_connect
+            # would kill the reconnect task outright).
+            with contextlib.suppress(Exception):
+                await client.disconnect()
             return
         records = []
         new_key_map = {}
@@ -280,7 +287,7 @@ async def mdns_browse(unit, session, by_device, unbound_discovery, publish_disco
     try:
         aiozc = AsyncZeroconf()
     except Exception as err:
-        session.health_event("drop", reason="mdns-unavailable", error=str(err))
+        session.health_event("mdns-unavailable", error=str(err))
         return
 
     def on_change(zc, service_type, name, state_change) -> None:
@@ -314,7 +321,7 @@ async def mdns_browse(unit, session, by_device, unbound_discovery, publish_disco
     try:
         browser = AsyncServiceBrowser(aiozc.zeroconf, MDNS_SERVICE, handlers=[on_change])
     except Exception as err:
-        session.health_event("drop", reason="mdns-unavailable", error=str(err))
+        session.health_event("mdns-unavailable", error=str(err))
         await aiozc.async_close()
         return
 
@@ -392,17 +399,9 @@ async def serve(unit, session, config, devices_conf) -> None:
         by_device.setdefault(device, {})[object_id] = entity
 
     subscribers = [
-        session.subscribe(
-            keys.cmd_keyexpr(e.room, e.name), cmd_handler(e, entity_runtime, entity_lock, loop, session)
-        )
+        session.subscribe(expr, cmd_handler(e, entity_runtime, entity_lock, loop, session))
         for e in config.entities
-        if e.write_mode != "arbitrated"
-    ] + [
-        session.subscribe(
-            keys.arbiter_keyexpr(e.room, e.name), cmd_handler(e, entity_runtime, entity_lock, loop, session)
-        )
-        for e in config.entities
-        if e.write_mode == "arbitrated"
+        for expr in keys.command_keyexprs(e)
     ]
 
     devices = [

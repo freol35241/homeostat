@@ -6,7 +6,7 @@
 # ]
 #
 # [tool.uv.sources]
-# homeostat = { git = "https://github.com/freol35241/homeostat", subdirectory = "sdk/python", tag = "v0.4.0" }
+# homeostat = { git = "https://github.com/freol35241/homeostat", subdirectory = "sdk/python", tag = "v0.5.0" }
 # ///
 """OwnTracks adapter: a translating subscriber, same shape as Zigbee2MQTT.
 
@@ -99,9 +99,11 @@ def main():
 
     mqtt.wait_for_shutdown()
 
-    session.close()
+    # The MQTT loop stops first: an in-flight on_message during teardown
+    # would otherwise put on a closed zenoh session.
     client.loop_stop()
     client.disconnect()
+    session.close()
 
 
 if __name__ == "__main__":

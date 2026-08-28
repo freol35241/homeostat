@@ -5,7 +5,7 @@
 # ]
 #
 # [tool.uv.sources]
-# homeostat = { git = "https://github.com/freol35241/homeostat", subdirectory = "sdk/python", tag = "v0.4.0" }
+# homeostat = { git = "https://github.com/freol35241/homeostat", subdirectory = "sdk/python", tag = "v0.5.0" }
 # ///
 """Clock service: civil time on the bus (see docs/design.md).
 
@@ -55,6 +55,11 @@ def main():
         boundary = now.replace(second=0, microsecond=0) + datetime.timedelta(minutes=1)
         if stop.wait(timeout=(boundary - now).total_seconds()):
             break
+        if datetime.datetime.now(zone) < boundary:
+            # Event.wait measures monotonic time; NTP slewing the wall
+            # clock back would republish the previous minute (and fire
+            # minute-tick automations twice). Wait out the remainder.
+            continue
         try:
             zone = ZoneInfo(ctx.params.timezone)
         except Exception:
