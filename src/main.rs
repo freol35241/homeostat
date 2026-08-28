@@ -153,7 +153,7 @@ fn plan_command(path: PathBuf, bus: Option<String>, save: bool, actor: String) -
         }
         let Some(base_commit) = homeostat::gitinfo::head_commit(&path) else {
             eprintln!(
-                "plan --save needs a base commit: {} is not a git repository root",
+                "plan --save needs a base commit: {} is not inside a git repository",
                 path.display()
             );
             return ExitCode::FAILURE;
@@ -214,7 +214,7 @@ fn apply_command(path: PathBuf, bus: Option<String>, plan_file: Option<PathBuf>)
         };
         let Some(head) = homeostat::gitinfo::head_commit(&path) else {
             eprintln!(
-                "apply --plan refused: {} is not a git repository root, \
+                "apply --plan refused: {} is not inside a git repository, \
                  so the plan's base commit cannot be checked",
                 path.display()
             );

@@ -140,7 +140,7 @@ pub struct LogEntry {
 /// sends to the running supervisor (see docs/design.md, step 5b).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApplyRequest {
-    /// The repo's HEAD when the house root is a git worktree root;
+    /// The enclosing repo's HEAD when the house is inside a git worktree;
     /// published at `home/meta/system/applied_commit` on success.
     pub base_commit: Option<String>,
 }

@@ -314,7 +314,7 @@ impl Server {
             .ok_or("propose needs a non-empty \"files\" array")?;
         if gitinfo::head_commit(&self.root).is_none() {
             return Err(format!(
-                "propose needs the house root to be a git worktree root with a commit: {}",
+                "propose needs the house to be inside a git worktree with a commit: {}",
                 self.root.display()
             ));
         }
@@ -358,19 +358,22 @@ impl Server {
         for (path, _) in &edits {
             git(&self.root, &["add", "--", path])?;
         }
-        git(
-            &self.root,
-            &[
-                "-c",
-                "user.name=homeostat-agent",
-                "-c",
-                "user.email=agent@homeostat.local",
-                "commit",
-                "-q",
-                "-m",
-                message,
-            ],
-        )?;
+        // Pathspec-limited: the house may be a subdirectory of a larger
+        // repo whose index carries someone else's staged work, and a bare
+        // commit would sweep it in.
+        let mut commit: Vec<&str> = vec![
+            "-c",
+            "user.name=homeostat-agent",
+            "-c",
+            "user.email=agent@homeostat.local",
+            "commit",
+            "-q",
+            "-m",
+            message,
+            "--",
+        ];
+        commit.extend(edits.iter().map(|(path, _)| path.as_str()));
+        git(&self.root, &commit)?;
         let head = gitinfo::head_commit(&self.root)
             .ok_or("the commit landed but HEAD is unreadable")?;
 

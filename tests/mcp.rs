@@ -474,6 +474,49 @@ async fn parameter_propose_commits_and_auto_applies() {
     let _ = std::fs::remove_dir_all(&house);
 }
 
+/// (b2) The propose commit is pathspec-limited: a house may sit in a repo
+/// whose index carries someone else's staged work, and the agent's commit
+/// must contain its own files only.
+#[tokio::test(flavor = "multi_thread")]
+async fn propose_commits_only_its_own_files() {
+    let house = temp_house(FIXTURE, "mcp-pathspec");
+    git_init_commit(&house);
+    let mut sup = Supervisor::spawn_at(&house, &[]);
+    let observer = sup.observer().await;
+    await_base_units(&observer).await;
+
+    // Someone else stages an unrelated change before the agent proposes.
+    std::fs::write(house.join("DEPLOY.md"), "half-finished infra edit\n").expect("write");
+    git(&house, &["add", "DEPLOY.md"]);
+
+    let manifest = std::fs::read_to_string(house.join("units/probe.toml")).expect("read manifest");
+    let mut mcp = Mcp::connect(&house, &sup.endpoint);
+    let (text, is_error) = mcp.call(
+        "propose",
+        json!({
+            "files": [{"path": "units/probe.toml",
+                       "content": manifest.replace("default = 1", "default = 5")}],
+            "message": "raise level default to 5"
+        }),
+    );
+    assert!(!is_error, "{text}");
+
+    assert_eq!(
+        git(&house, &["show", "--name-only", "--format=", "HEAD"]),
+        "units/probe.toml",
+        "the commit carries the agent's file and nothing else"
+    );
+    assert_eq!(
+        git(&house, &["status", "--porcelain"]),
+        "A  DEPLOY.md",
+        "the unrelated change is still staged, still uncommitted"
+    );
+
+    drop(mcp);
+    sup.shutdown();
+    let _ = std::fs::remove_dir_all(&house);
+}
+
 /// (c) An out-of-constraint parameter propose is rejected with the
 /// constraint named; repo and world unchanged, nothing committed.
 #[tokio::test(flavor = "multi_thread")]
