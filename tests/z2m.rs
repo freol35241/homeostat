@@ -11,8 +11,8 @@ use serde_json::{json, Value};
 use zenoh::sample::SampleKind;
 
 use common::{
-    await_health, expect_drop_event, expect_states, health_watch, process_alive, Mosquitto, Mqtt,
-    Supervisor,
+    await_health, expect_drop_event, expect_event_kind, expect_states, health_watch, process_alive,
+    temp_house, Mosquitto, Mqtt, Supervisor,
 };
 
 const FIXTURE: &str = "tests/fixture_house_z2m";
@@ -407,4 +407,228 @@ async fn manual_lock_command_reaches_mqtt_via_arbiter() {
     assert!(silence.is_none(), "refused automation wish reached MQTT: {silence:?}");
 
     sup.shutdown();
+}
+
+/// Copies the fixture with the adapter's base topic moved onto the
+/// endpoint path (and optionally a short inventory timeout), so one
+/// fixture serves the default and non-default prefixes alike. The
+/// fixture's relative command has to become absolute: the copy lives in
+/// a temp dir, not two levels under the repo.
+fn house_with_base(tag: &str, base: &str, inventory_timeout_s: Option<f64>) -> std::path::PathBuf {
+    let house = temp_house(FIXTURE, tag);
+    let path = house.join("units/zigbee.toml");
+    let repo = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut manifest = std::fs::read_to_string(&path).expect("read manifest");
+    manifest = manifest.replace(
+        "${HOMEOSTAT_TEST_MQTT_PORT}\"",
+        &format!("${{HOMEOSTAT_TEST_MQTT_PORT}}/{base}\""),
+    );
+    manifest = manifest.replace(
+        "uv run ../../adapters/",
+        &format!("uv run {}/adapters/", repo.display()),
+    );
+    if let Some(timeout) = inventory_timeout_s {
+        manifest.push_str(&format!(
+            "\n[params.inventory_timeout_s]\ntype = \"float\"\ndefault = {timeout}\n\
+             editable_by = \"owner\"\n"
+        ));
+    }
+    std::fs::write(&path, manifest).expect("write manifest");
+    house
+}
+
+/// Spawns broker + supervisor on a base-topic variant of the fixture.
+async fn setup_at(house: &std::path::Path) -> (Mosquitto, Supervisor, zenoh::Session) {
+    let mosquitto = Mosquitto::spawn();
+    let sup = Supervisor::spawn_at(house, &[(PORT_ENV, &mosquitto.port.to_string())]);
+    let observer = sup.observer().await;
+    let token_sub = observer
+        .liveliness()
+        .declare_subscriber("home/health/zigbee/alive")
+        .history(true)
+        .await
+        .expect("liveliness subscriber");
+    let token = tokio::time::timeout(Duration::from_secs(60), token_sub.recv_async())
+        .await
+        .expect("adapter liveliness token within 60s")
+        .expect("liveliness stream open");
+    assert_eq!(token.kind(), SampleKind::Put);
+    (mosquitto, sup, observer)
+}
+
+/// (h) A non-default, multi-segment base topic works in every direction.
+/// The prefix comes from the endpoint path, and every topic the adapter
+/// parses is relative to it — splitting at a fixed segment would break the
+/// moment the prefix carries its own slash.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_non_default_base_topic_translates_both_directions() {
+    let house = house_with_base("z2m-prefixed", "VP52/zigbee2mqtt", None);
+    let (mosquitto, mut sup, observer) = setup_at(&house).await;
+    let state_sub = observer
+        .declare_subscriber("home/state/**")
+        .await
+        .expect("state subscriber");
+    let discovery_sub = observer
+        .declare_subscriber("home/discovery/zigbee")
+        .await
+        .expect("discovery subscriber");
+    let mut mqtt = Mqtt::connect(mosquitto.port, "test-prefixed").await;
+
+    mqtt.publish(
+        "VP52/zigbee2mqtt/lamp_kitchen_1",
+        r#"{"state":"ON","brightness":128}"#,
+    )
+    .await;
+    expect_states(
+        &state_sub,
+        &[
+            ("home/state/kitchen/kitchen_lamp/on", json!(true)),
+            ("home/state/kitchen/kitchen_lamp/brightness", json!(128)),
+        ],
+    )
+    .await;
+
+    // Availability: the topic now has one more slash than the default
+    // prefix produces, which the old fixed-position parse mis-read.
+    mqtt.publish(
+        "VP52/zigbee2mqtt/lamp_kitchen_1/availability",
+        r#"{"state":"online"}"#,
+    )
+    .await;
+    expect_states(
+        &state_sub,
+        &[("home/state/kitchen/kitchen_lamp/available", json!(true))],
+    )
+    .await;
+
+    mqtt.publish(
+        "VP52/zigbee2mqtt/bridge/devices",
+        r#"[{"ieee_address":"0x1","friendly_name":"lamp_kitchen_1","definition":null}]"#,
+    )
+    .await;
+    let sample = tokio::time::timeout(Duration::from_secs(10), discovery_sub.recv_async())
+        .await
+        .expect("discovery document within 10s")
+        .expect("discovery sample");
+    let discovery: Value =
+        serde_json::from_slice(&sample.payload().to_bytes()).expect("discovery is JSON");
+    assert!(
+        discovery.to_string().contains("lamp_kitchen_1"),
+        "inventory republished under the moved prefix: {discovery}"
+    );
+
+    // And commands go out under the same prefix.
+    let mut set_sub = Mqtt::connect(mosquitto.port, "test-prefixed-set").await;
+    set_sub.subscribe("VP52/zigbee2mqtt/+/set").await;
+    observer
+        .put(
+            "home/cmd/kitchen/kitchen_lamp/on",
+            json!({"value": true, "priority": "manual", "actor": "test"}).to_string(),
+        )
+        .await
+        .expect("cmd put");
+    let (topic, payload) = set_sub
+        .next_message(Duration::from_secs(10))
+        .await
+        .expect("set publish for on command");
+    assert_eq!(topic, "VP52/zigbee2mqtt/lamp_kitchen_1/set");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&payload).expect("set payload is JSON"),
+        json!({"state": "ON"})
+    );
+
+    sup.shutdown();
+    let _ = std::fs::remove_dir_all(&house);
+}
+
+/// (i) A base topic that matches nothing subscribes SUCCESSFULLY and then
+/// hears nothing — no SUBACK timeout, no error. The adapter must say so
+/// rather than sit there healthy and permanently deaf.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_base_topic_that_matches_nothing_reports_bridge_silent() {
+    let house = house_with_base("z2m-deaf", "wrong/prefix", Some(1.0));
+    let (mosquitto, mut sup, observer) = setup_at(&house).await;
+    let event_sub = observer
+        .declare_subscriber(EVENT_KEY)
+        .await
+        .expect("event subscriber");
+
+    // The estate is alive under the real prefix; the adapter is listening
+    // somewhere else entirely.
+    let mut mqtt = Mqtt::connect(mosquitto.port, "test-deaf").await;
+    mqtt.publish(
+        "zigbee2mqtt/bridge/devices",
+        r#"[{"ieee_address":"0x1","friendly_name":"lamp_kitchen_1","definition":null}]"#,
+    )
+    .await;
+
+    expect_event_kind(&event_sub, "bridge-silent").await;
+    let mut watch = health_watch(&observer, "zigbee").await;
+    await_health(&mut watch, Duration::from_secs(10), |h| {
+        h.status == HealthStatus::Running
+    })
+    .await;
+
+    sup.shutdown();
+    let _ = std::fs::remove_dir_all(&house);
+}
+
+/// (j) A broker that requires auth: the password reaches the adapter from
+/// HOMEOSTAT_MQTT_CREDENTIALS, a file outside the repo. The manifest keeps
+/// no secret, and the password is one URL parsing would mangle — `@` and
+/// `/` in an inline mqtt://user:pass@host silently reparse the host.
+#[tokio::test(flavor = "multi_thread")]
+async fn broker_credentials_come_from_a_file_outside_the_repo() {
+    const USER: &str = "homeostat";
+    const PASSWORD: &str = "p@ss/w0rd#1";
+
+    let mosquitto = Mosquitto::spawn_with_auth(USER, PASSWORD);
+    let creds = std::env::temp_dir().join(format!("homeostat-mqtt-creds-{}.toml", std::process::id()));
+    std::fs::write(
+        &creds,
+        format!("[\"127.0.0.1\"]\nusername = \"{USER}\"\npassword = \"{PASSWORD}\"\n"),
+    )
+    .expect("write credentials");
+
+    let sup = Supervisor::spawn_with_env(
+        FIXTURE,
+        &[
+            (PORT_ENV, &mosquitto.port.to_string()),
+            ("HOMEOSTAT_MQTT_CREDENTIALS", creds.to_str().expect("utf-8")),
+        ],
+    );
+    let observer = sup.observer().await;
+    let token_sub = observer
+        .liveliness()
+        .declare_subscriber("home/health/zigbee/alive")
+        .history(true)
+        .await
+        .expect("liveliness subscriber");
+    let token = tokio::time::timeout(Duration::from_secs(60), token_sub.recv_async())
+        .await
+        .expect("adapter connects to the authenticated broker within 60s")
+        .expect("liveliness stream open");
+    assert_eq!(token.kind(), SampleKind::Put);
+
+    // Proof it is really talking to the broker, not merely alive.
+    let state_sub = observer
+        .declare_subscriber("home/state/**")
+        .await
+        .expect("state subscriber");
+    let mut mqtt = Mqtt::connect_auth(mosquitto.port, "test-auth", USER, PASSWORD).await;
+    mqtt.publish("zigbee2mqtt/lamp_kitchen_1", r#"{"state":"ON"}"#).await;
+    expect_states(&state_sub, &[("home/state/kitchen/kitchen_lamp/on", json!(true))]).await;
+
+    let manifest = std::fs::read_to_string(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(FIXTURE).join("units/zigbee.toml"),
+    )
+    .expect("read manifest");
+    assert!(
+        !manifest.contains(PASSWORD),
+        "the password must never sit in a unit manifest"
+    );
+
+    let mut sup = sup;
+    sup.shutdown();
+    let _ = std::fs::remove_file(&creds);
 }

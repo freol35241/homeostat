@@ -272,10 +272,37 @@ pub struct Mosquitto {
 #[allow(dead_code)] // each test binary uses its own subset of the harness
 impl Mosquitto {
     pub fn spawn() -> Self {
+        Self::spawn_conf(|port, _| format!("listener {port} 127.0.0.1\nallow_anonymous true\n"))
+    }
+
+    /// A broker that REQUIRES the given credentials — no anonymous
+    /// fallback, so a unit that cannot present a password never connects.
+    #[allow(dead_code)] // each test binary uses its own subset of the harness
+    pub fn spawn_with_auth(username: &str, password: &str) -> Self {
+        let passwd = std::env::temp_dir().join(format!(
+            "homeostat-mqtt-passwd-{}-{username}",
+            std::process::id()
+        ));
+        std::fs::write(&passwd, format!("{username}:{password}\n")).expect("write passwd");
+        // mosquitto refuses a plaintext password file: hash it in place.
+        let hashed = Command::new("mosquitto_passwd")
+            .args(["-U", passwd.to_str().expect("utf-8 passwd path")])
+            .status()
+            .expect("run mosquitto_passwd")
+            .success();
+        assert!(hashed, "mosquitto_passwd failed");
+        let passwd_arg = passwd.to_str().expect("utf-8 passwd path").to_string();
+        Self::spawn_conf(move |port, _| {
+            format!(
+                "listener {port} 127.0.0.1\nallow_anonymous false\npassword_file {passwd_arg}\n"
+            )
+        })
+    }
+
+    fn spawn_conf(body: impl Fn(u16, &Path) -> String) -> Self {
         let port = free_port();
         let conf = std::env::temp_dir().join(format!("homeostat-mqtt-{port}.conf"));
-        std::fs::write(&conf, format!("listener {port} 127.0.0.1\nallow_anonymous true\n"))
-            .expect("write mosquitto config");
+        std::fs::write(&conf, body(port, &conf)).expect("write mosquitto config");
         // Debian puts mosquitto in /usr/sbin, which is not always on PATH.
         let child = ["mosquitto", "/usr/sbin/mosquitto"]
             .iter()
@@ -316,9 +343,21 @@ pub struct Mqtt {
 
 #[allow(dead_code)] // each test binary uses its own subset of the harness
 impl Mqtt {
+    #[allow(dead_code)] // each test binary uses its own subset of the harness
+    pub async fn connect_auth(port: u16, id: &str, username: &str, password: &str) -> Self {
+        Self::connect_with(port, id, Some((username, password))).await
+    }
+
     pub async fn connect(port: u16, id: &str) -> Self {
+        Self::connect_with(port, id, None).await
+    }
+
+    async fn connect_with(port: u16, id: &str, auth: Option<(&str, &str)>) -> Self {
         let mut opts = MqttOptions::new(id, "127.0.0.1", port);
         opts.set_keep_alive(Duration::from_secs(5));
+        if let Some((username, password)) = auth {
+            opts.set_credentials(username, password);
+        }
         let (client, mut eventloop) = AsyncClient::new(opts, 64);
         let (tx, events) = tokio::sync::mpsc::unbounded_channel();
         tokio::spawn(async move {

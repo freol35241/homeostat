@@ -151,12 +151,32 @@ expanded by the adapter — endpoints are opaque to the core, and ports or
 credentials don't belong in the repo. An unset variable is a startup error
 (the supervisor's backoff makes it visible).
 
+Broker credentials (revised 2026-08-29): `${VAR}` in the endpoint still
+works and stays the lighter option, but URL syntax cannot carry every
+password — `@`, `/` or `#` in one silently reparses the host rather than
+failing — so `HOMEOSTAT_MQTT_CREDENTIALS` may instead name a TOML outside
+the repo, keyed by broker hostname, read in the SDK so every MQTT adapter
+gets it. Inline credentials win when both are present. A broker that
+requires auth must never force its password into a unit manifest.
+
 Entity binding for z2m: the entity file's `id` is the Zigbee2MQTT topic
-segment (`zigbee2mqtt/{id}` — the friendly name or IEEE address), the file
+segment (`{base}/{id}` — the friendly name or IEEE address), the file
 stem is the bus entity name, `room` comes from the entity file. The base
-topic `zigbee2mqtt` is a constant for now; the adapter subscribes
-`zigbee2mqtt/+`, which keeps `bridge/#` traffic out and means friendly
-names containing `/` are unsupported.
+topic is the endpoint's path (`mqtt://broker:1883/VP52/zigbee2mqtt`),
+defaulting to `zigbee2mqtt` (revised 2026-08-29 — an estate that has run
+a non-default prefix for years cannot move it, because Home Assistant and
+Node-RED address it directly). It is not a secret, so the repo is its
+place; it is not runtime-tunable, so it is not a param. The adapter
+subscribes `{base}/+`, which keeps `bridge/#` traffic out and means
+friendly names containing `/` are unsupported.
+
+A wrong base topic is the failure worth designing against: the
+subscription SUCCEEDS and matches nothing, so there is no SUBACK timeout
+and no error — an adapter permanently deaf while reporting healthy, the
+shape of bug this project keeps finding. The retained
+`{base}/bridge/devices` inventory is therefore proof of life: silence
+past `inventory_timeout_s` (parameter, owner-editable, default 30 s)
+emits one `bridge-silent` health event naming the base topic in use.
 
 ### Bus payload conventions
 
