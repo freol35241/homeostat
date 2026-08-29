@@ -5,7 +5,7 @@
 # ]
 #
 # [tool.uv.sources]
-# homeostat = { git = "https://github.com/freol35241/homeostat", subdirectory = "sdk/python", tag = "v0.7.0" }
+# homeostat = { git = "https://github.com/freol35241/homeostat", subdirectory = "sdk/python", tag = "v0.8.0" }
 # ///
 """Arbiter service: the write-token holder for arbitrated entities (see
 docs/design.md, Arbitrated mode, "Settled 2026-07-16").
