@@ -22,6 +22,12 @@ silence past inventory_timeout_s (parameter, owner-editable, adapter-side
 default 30 s) emits one "bridge-silent" health event naming the base topic
 actually in use.
 
+That guard covers boot only. Mid-run the bridge's own retained
+{base}/bridge/state carries online/offline, and one "bridge-silent" event
+goes out per down transition — the inventory cannot serve here, because
+z2m republishes bridge/devices only on CHANGE, so its silence never
+distinguishes a dead bridge from a stable estate.
+
 Broker credentials come from HOMEOSTAT_MQTT_CREDENTIALS (a TOML outside
 the repo, keyed by hostname) unless the endpoint carries them inline; a
 broker that needs auth must not force its password into a unit manifest.
@@ -79,6 +85,19 @@ class Params(LiveParams):
     @property
     def inventory_timeout_s(self) -> float:
         return max(0.1, self.get("inventory_timeout_s"))
+
+
+def availability_state(payload: bytes):
+    """`online`/`offline` from an availability-shaped payload — the
+    {"state": ...} object or the legacy bare string — or None if it is
+    neither. Shared by device availability and the bridge's own state."""
+    raw = payload.decode(errors="replace").strip()
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        parsed = raw  # legacy availability payload: a bare string
+    state = parsed.get("state") if isinstance(parsed, dict) else parsed
+    return state if state in ("online", "offline") else None
 
 
 def state_aspect(capability: str, z2m_field: str, value):
@@ -160,9 +179,12 @@ def main():
     session = homeostat.connect()
     params = Params(session, PARAM_DEFAULTS)
     inventory_seen = threading.Event()
-    # Device ids the bridge has told us about, bound or not. Mutated and
-    # read on the paho callback thread only.
+    # Device ids the bridge has told us about, bound or not, and the
+    # bridge's last known liveness. Mutated and read on the paho callback
+    # thread only. `online` starts unknown, so a bridge already offline at
+    # boot reports on its first state message.
     known: set[str] = set()
+    bridge = {"online": None}
 
     def unbound(topic: str, dev_id: str) -> None:
         """A device the BRIDGE knows but no entity file binds is a steady
@@ -192,6 +214,20 @@ def main():
             known.update(record["id"] for record in records)
             session.put_json(keys.discovery_key(unit), records)
             return
+        if rest == "bridge/state":
+            # The bridge's own liveness. The inventory cannot carry this:
+            # z2m republishes bridge/devices only on CHANGE, so its silence
+            # never distinguishes a dead bridge from a stable estate.
+            state = availability_state(msg.payload)
+            if state is None:
+                session.health_event("drop", reason="malformed-payload", topic=msg.topic)
+                return
+            online = state == "online"
+            if not online and bridge["online"] is not False:
+                # One event per down transition, the ivt490 precedent.
+                session.health_event("bridge-silent", base_topic=base, state="offline")
+            bridge["online"] = online
+            return
         # Exactly {base}/{id}/availability — two segments would be a device
         # whose friendly name is literally "availability".
         if rest.endswith("/availability") and rest.count("/") == 1:
@@ -200,13 +236,8 @@ def main():
             if entity is None:
                 unbound(msg.topic, dev_id)
                 return
-            raw = msg.payload.decode(errors="replace").strip()
-            try:
-                parsed = json.loads(raw)
-            except ValueError:
-                parsed = raw  # legacy availability payload: a bare string
-            state = parsed.get("state") if isinstance(parsed, dict) else parsed
-            if state not in ("online", "offline"):
+            state = availability_state(msg.payload)
+            if state is None:
                 session.health_event("drop", reason="malformed-payload", topic=msg.topic)
                 return
             session.put_json(
@@ -277,6 +308,7 @@ def main():
             (f"{base}/+", 0),
             (f"{base}/+/availability", 0),
             (f"{base}/bridge/devices", 0),
+            (f"{base}/bridge/state", 0),
         ],
     )
 

@@ -681,3 +681,40 @@ async fn a_known_but_unbound_device_does_not_report_every_message() {
     sup.shutdown();
     drop(mosquitto);
 }
+
+/// (l) Mid-run bridge liveness. The boot watchdog is one-shot and cannot
+/// see a bridge that dies later; the bridge's own retained state can, and
+/// the inventory cannot — z2m republishes it only on change, so its
+/// silence never distinguishes a dead bridge from a stable estate.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_bridge_going_offline_mid_run_reports_once_per_transition() {
+    let (mosquitto, mut sup, observer) = setup().await;
+    let event_sub = observer
+        .declare_subscriber(EVENT_KEY)
+        .await
+        .expect("event subscriber");
+    let mut mqtt = Mqtt::connect(mosquitto.port, "test-bridge-state").await;
+
+    // A healthy bridge says so, repeatedly, and that is not an event.
+    for _ in 0..2 {
+        mqtt.publish("zigbee2mqtt/bridge/state", r#"{"state":"online"}"#).await;
+    }
+    mqtt.publish("zigbee2mqtt/bridge/state", r#"{"state":"offline"}"#).await;
+    let event = next_event(&event_sub).await;
+    assert_eq!(event["kind"], json!("bridge-silent"), "{event}");
+    assert_eq!(event["state"], json!("offline"), "{event}");
+
+    // Still offline is not a new transition; the legacy bare-string form
+    // is understood the same way device availability understands it.
+    mqtt.publish("zigbee2mqtt/bridge/state", "offline").await;
+    mqtt.publish("zigbee2mqtt/bridge/state", "certainly not a state").await;
+    let event = next_event(&event_sub).await;
+    assert_eq!(
+        event["reason"],
+        json!("malformed-payload"),
+        "a repeat offline must not re-report: {event}"
+    );
+
+    sup.shutdown();
+    drop(mosquitto);
+}

@@ -203,6 +203,13 @@ shape of bug this project keeps finding. The retained
 past `inventory_timeout_s` (parameter, owner-editable, default 30 s)
 emits one `bridge-silent` health event naming the base topic in use.
 
+That covers boot. Mid-run liveness rides the bridge's own retained
+`{base}/bridge/state` (online/offline), one `bridge-silent` per down
+transition — the ivt490 `device-silent` precedent. A re-arming inventory
+timer would be the WRONG mechanism and was rejected: z2m republishes
+`bridge/devices` only on change, so its silence cannot distinguish a dead
+bridge from a stable estate and the timer would fire on a healthy one.
+
 ### Bus payload conventions
 
 Payloads on `state` keys are bare JSON values; `cmd` keys carry the cmd
