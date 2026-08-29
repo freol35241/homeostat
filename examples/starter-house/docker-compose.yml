@@ -38,7 +38,16 @@ services:
       - .:/house
       - uv-cache:/var/cache/uv
     ports:
-      - "7447:7447" # the bus: plan/apply and any Zenoh observer
+      # The bus (7447) is deliberately NOT published. Reaching it is full
+      # authority over the house: the cmd envelope's priority and actor are
+      # self-declared, so anything that can publish can command every
+      # entity, outbid the arbiter, and forge state. Nothing here needs it
+      # — plan and apply run through `docker compose exec` (see README), on
+      # this container's own loopback, and a sibling container reaches it
+      # over the compose network. Publish it only for a Zenoh observer, and
+      # know that `127.0.0.1:7447:7447` is NOT a boundary: any container on
+      # network_mode: host — Home Assistant, zigbee2mqtt — shares the
+      # host's loopback and reaches it too.
       - "8642:8642" # the agent surface: MCP over HTTP (units/mcp.toml)
       - "8600:8600" # the family dashboard (units/dashboard.toml)
 

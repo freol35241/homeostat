@@ -999,7 +999,14 @@ speak Zenoh.
 Decisions and why:
 
 - **Local-only access.** LAN, or WireGuard for mobile/remote devices;
-  network reachability is the credential. No accounts, no login, no
+  network reachability is the credential. Which is why the BUS is the
+  port that matters most (added 2026-08-29, from a live deployment):
+  a cmd envelope's `priority` and `actor` are self-declared and validated
+  only for shape, so anything that can publish on 7447 can command every
+  entity, outbid the arbiter by claiming the top band, and forge state.
+  The starter therefore does not publish it — and note `127.0.0.1:7447`
+  is not a boundary either, since a container on `network_mode: host`
+  shares the host's loopback, which is how the exposure was found. No accounts, no login, no
   TLS. Two consequences worth recording: the browser is not local even
   when the dashboard is — a public website in a family browser can fire
   requests at LAN addresses (DNS rebinding / CSRF), so the unit

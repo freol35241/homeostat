@@ -2,7 +2,11 @@
 # deployed house needs — git for the repo surface, uv and a pre-installed
 # Python for the units. Run it with the house repo mounted at /house:
 #
-#   docker run -v /path/to/house:/house -p 7447:7447 ghcr.io/freol35241/homeostat
+#   docker run -v /path/to/house:/house ghcr.io/freol35241/homeostat
+#
+# Note what is NOT published: the bus. Reaching 7447 is full authority
+# over the house (docs/design.md, Local-only access), and nothing outside
+# the container network needs it.
 #
 # The builder stage always runs on the build host's architecture and
 # cross-compiles toward $TARGETARCH, so a multi-arch `docker buildx build`
@@ -66,7 +70,9 @@ RUN uv python install 3.12
 COPY --from=build /homeostat /usr/local/bin/homeostat
 COPY --from=build /go2rtc /usr/local/bin/go2rtc
 
-# The supervisor's bus endpoint; units and observers connect here.
+# The supervisor's bus endpoint; units and sibling containers connect
+# here over the container network. Publishing it to the host hands every
+# reachable client full authority — see the note at the top.
 EXPOSE 7447
 ENTRYPOINT ["/usr/bin/tini", "--", "homeostat"]
 CMD ["up", "/house", "--listen", "tcp/0.0.0.0:7447"]
