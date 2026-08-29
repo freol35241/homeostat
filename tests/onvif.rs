@@ -240,3 +240,40 @@ async fn malformed_motion_value_drops_with_health_event() {
 
     sup.shutdown();
 }
+
+/// (d) The VP52 shape: the subscribe is accepted, the long poll runs, and
+/// Renew is refused with HTTP 400. From outside the process that is
+/// indistinguishable from a refused subscribe unless the event says which
+/// call failed and what the camera said — so it does, and it backs off
+/// instead of retrying a live camera at a fixed cadence forever.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_refused_renew_names_the_call_and_backs_off() {
+    let (camera, _cameras_path, mut sup, observer) = setup().await;
+    let state_sub = observer.declare_subscriber(MOTION_KEY).await.expect("state subscriber");
+    let event_sub = observer.declare_subscriber(EVENT_KEY).await.expect("event subscriber");
+
+    trigger_until_motion(&camera, &state_sub, true).await;
+    camera.control("/control/reject-renew");
+
+    let event = expect_drop_event(&event_sub, "event-stream-lost").await;
+    let error = event["error"].as_str().expect("error is a string");
+    assert!(
+        error.starts_with("Renew: HTTP 400"),
+        "the failing call is named, not just its status: {error}"
+    );
+    assert!(
+        error.contains("renew refused"),
+        "the camera's own fault reason survives into the event: {error}"
+    );
+    assert_eq!(event["consecutive_failures"], json!(1), "{event}");
+    assert_eq!(event["retry_in_s"], json!(5), "{event}");
+
+    // The subscribe still succeeds, so the stream recovers and fails
+    // again — and the second failure reports as the second, with a longer
+    // wait, rather than as another first.
+    let event = expect_drop_event(&event_sub, "event-stream-lost").await;
+    assert_eq!(event["consecutive_failures"], json!(2), "{event}");
+    assert_eq!(event["retry_in_s"], json!(10), "{event}");
+
+    sup.shutdown();
+}

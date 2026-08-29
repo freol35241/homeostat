@@ -80,6 +80,10 @@ class FakeCamera:
         self.password = password
         self.subscriptions: dict[str, asyncio.Queue] = {}
         self.ids = itertools.count()
+        # VP52's shape: the subscribe is accepted and the long poll runs,
+        # then Renew is refused. A bare status code cannot tell that apart
+        # from a refused subscribe.
+        self.reject_renew = False
 
     def authenticated(self, root: ElementTree.Element) -> bool:
         token = root.find(".//{*}UsernameToken")
@@ -127,6 +131,16 @@ class FakeCamera:
         if queue is None:
             return fault()
         if root.find(f".//{{{WSNT_NS}}}Renew") is not None:
+            if self.reject_renew:
+                return web.Response(
+                    status=400,
+                    text=(
+                        f'<s:Envelope xmlns:s="{SOAP_ENV}"><s:Body><s:Fault>'
+                        "<s:Reason><s:Text>ter:InvalidArgVal renew refused</s:Text>"
+                        "</s:Reason></s:Fault></s:Body></s:Envelope>"
+                    ),
+                    content_type="application/soap+xml",
+                )
             return soap(
                 f"<wsnt:RenewResponse><wsnt:TerminationTime>{now()}</wsnt:TerminationTime>"
                 "</wsnt:RenewResponse>"
@@ -154,6 +168,10 @@ class FakeCamera:
             queue.put_nowait(value)
         return web.json_response({"subscriptions": len(self.subscriptions)})
 
+    async def reject_renews(self, request: web.Request) -> web.Response:
+        self.reject_renew = True
+        return web.json_response({"reject_renew": True})
+
     async def break_subscriptions(self, request: web.Request) -> web.Response:
         count = len(self.subscriptions)
         self.subscriptions.clear()
@@ -173,6 +191,7 @@ def main() -> None:
     app.router.add_post("/onvif/{sub_id}", camera.subscription)
     app.router.add_post("/control/trigger", camera.trigger)
     app.router.add_post("/control/break", camera.break_subscriptions)
+    app.router.add_post("/control/reject-renew", camera.reject_renews)
     web.run_app(app, host="127.0.0.1", port=args.port, print=None)
 
 

@@ -31,9 +31,19 @@ CreatePullPointSubscription, PullMessages (a long poll), Renew, and a
 WS-Security UsernameToken digest header on each. Tapo firmware has broken
 pull-point subscriptions before (the 1.3.6 regression), so ANY fault on
 the event stream — HTTP error, SOAP fault, timeout, unparseable envelope —
-tears the subscription down and recreates it from scratch after a short
-delay, with one "event-stream-lost" health event per down transition,
-never a crash. A notification that parses but carries an unusable value
+tears the subscription down and recreates it from scratch, with one
+"event-stream-lost" health event per down transition, never a crash. Every
+error names the call that produced it and carries the fault's reason: a
+camera that accepts CreatePullPointSubscription and rejects Renew is a
+different problem from one that rejects the subscribe, and a bare status
+code cannot tell them apart from outside the process. The retry backs off
+from RESUBSCRIBE_DELAY_S toward RESUBSCRIBE_MAX_S and the event carries
+the consecutive-failure count, because a camera whose subscribe succeeds
+and whose stream then fails oscillates -- up flips back on each new
+subscription, so "one per down transition" would otherwise mean one per
+cycle, forever, against a live camera. A COMPLETED round trip resets
+both -- a successful subscribe alone does not, or a camera that refuses
+only Renew would reset the count every cycle and never back off. A notification that parses but carries an unusable value
 drops with a "malformed-payload" health event and the stream continues.
 
 The same transitions carry the availability signal (docs/design.md,
@@ -69,7 +79,14 @@ DEFAULT_PORT = 2020  # Tapo's ONVIF service port; override per camera with host:
 PULL_TIMEOUT = "PT10S"
 TERMINATION_TIME = "PT60S"
 RESUBSCRIBE_DELAY_S = 5
+# A camera that rejects one call rejects it again: back off toward
+# RESUBSCRIBE_MAX_S rather than hammering a live camera at a fixed cadence
+# forever. Any success resets it.
+RESUBSCRIBE_MAX_S = 300
 HTTP_TIMEOUT_S = 30  # must exceed the PT10S long poll
+# A SOAP fault's reason lives in the body; enough of it to be diagnostic,
+# bounded because it is going into a health event.
+FAULT_EXCERPT = 300
 
 SOAP_ENV = "http://www.w3.org/2003/05/soap-envelope"
 WSSE = "http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd"
@@ -131,7 +148,30 @@ class SoapError(Exception):
     """Any failure of a SOAP round trip: HTTP status, fault, bad XML."""
 
 
-async def soap_call(http: aiohttp.ClientSession, url: str, body: str, username: str, password: str) -> ElementTree.Element:
+def fault_detail(text: str) -> str:
+    """The fault's Reason/Text, or a bounded excerpt of whatever the
+    camera actually said. A bare status code cannot distinguish which of
+    four calls a camera objected to, or why."""
+    with contextlib.suppress(ElementTree.ParseError):
+        root = ElementTree.fromstring(text)
+        reason = root.find(f".//{{{SOAP_ENV}}}Reason/{{{SOAP_ENV}}}Text")
+        if reason is not None and (reason.text or "").strip():
+            return reason.text.strip()[:FAULT_EXCERPT]
+    return " ".join(text.split())[:FAULT_EXCERPT]
+
+
+async def soap_call(
+    http: aiohttp.ClientSession,
+    url: str,
+    body: str,
+    username: str,
+    password: str,
+    op: str,
+) -> ElementTree.Element:
+    """`op` names the call in every error it can raise: a camera that
+    accepts CreatePullPointSubscription and rejects Renew is a completely
+    different problem from one that rejects the subscribe, and "HTTP 400"
+    alone cannot tell them apart from outside the process."""
     try:
         async with http.post(
             url,
@@ -141,17 +181,17 @@ async def soap_call(http: aiohttp.ClientSession, url: str, body: str, username: 
         ) as response:
             text = await response.text()
             if response.status != 200:
-                raise SoapError(f"HTTP {response.status}")
+                raise SoapError(f"{op}: HTTP {response.status}: {fault_detail(text)}")
     except aiohttp.ClientError as err:
-        raise SoapError(str(err)) from err
+        raise SoapError(f"{op}: {err}") from err
     except asyncio.TimeoutError as err:
-        raise SoapError("timeout") from err
+        raise SoapError(f"{op}: timeout") from err
     try:
         root = ElementTree.fromstring(text)
     except ElementTree.ParseError as err:
-        raise SoapError(f"unparseable response: {err}") from err
+        raise SoapError(f"{op}: unparseable response: {err}") from err
     if root.find(f".//{{{SOAP_ENV}}}Fault") is not None:
-        raise SoapError("SOAP fault")
+        raise SoapError(f"{op}: SOAP fault: {fault_detail(text)}")
     return root
 
 
@@ -205,6 +245,13 @@ async def run_camera(entity, conf: dict, session, http: aiohttp.ClientSession, s
     # Tri-state: None until the first subscription attempt settles, so the
     # first success and the first failure each publish availability once.
     up: bool | None = None
+    # A camera whose subscribe SUCCEEDS and whose stream then fails
+    # oscillates: up flips back to True each cycle, so "one event per down
+    # transition" becomes one event per cycle. Count the consecutive
+    # failures and back off, so a persistently broken camera is legible as
+    # persistent instead of arriving as a steady drip.
+    failures = 0
+    delay = RESUBSCRIBE_DELAY_S
 
     while not stop.is_set():
         try:
@@ -216,6 +263,7 @@ async def run_camera(entity, conf: dict, session, http: aiohttp.ClientSession, s
                 "</tev:CreatePullPointSubscription>",
                 username,
                 password,
+                "CreatePullPointSubscription",
             )
             sub_url = subscription_url(created, base_url)
             if up is not True:
@@ -231,6 +279,7 @@ async def run_camera(entity, conf: dict, session, http: aiohttp.ClientSession, s
                     "</tev:PullMessages>",
                     username,
                     password,
+                    "PullMessages",
                 )
                 for value, error in motion_values(pulled):
                     if error is not None:
@@ -247,20 +296,34 @@ async def run_camera(entity, conf: dict, session, http: aiohttp.ClientSession, s
                     "</wsnt:Renew>",
                     username,
                     password,
+                    "Renew",
                 )
+                # Progress is a COMPLETED round trip, not merely a
+                # successful subscribe: a camera that accepts the
+                # subscribe and refuses Renew would otherwise reset the
+                # count every cycle and never back off at all.
+                failures = 0
+                delay = RESUBSCRIBE_DELAY_S
         except Exception as err:
             # ANY fault recreates the subscription after the delay — a
             # non-SOAP surprise (bad reply shape, a failed put) must not
             # silently end this camera's stream while the unit reads ready.
             # (CancelledError is BaseException and still cancels the task.)
+            failures += 1
             if up is not False:
                 session.health_event(
-                    "drop", reason="event-stream-lost", camera=entity.name, error=str(err)
+                    "drop",
+                    reason="event-stream-lost",
+                    camera=entity.name,
+                    error=str(err),
+                    consecutive_failures=failures,
+                    retry_in_s=delay,
                 )
                 session.put_json(available_key, False)
                 up = False
             with contextlib.suppress(asyncio.TimeoutError):
-                await asyncio.wait_for(stop.wait(), timeout=RESUBSCRIBE_DELAY_S)
+                await asyncio.wait_for(stop.wait(), timeout=delay)
+            delay = min(delay * 2, RESUBSCRIBE_MAX_S)
 
 
 async def serve(session, config, cameras_conf) -> None:
