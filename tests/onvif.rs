@@ -13,7 +13,10 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 use zenoh::sample::SampleKind;
 
-use common::{await_mirror, expect_drop_event, expect_state, free_port, next_event, StateSub, Supervisor};
+use common::{
+    await_mirror, cache_read, expect_drop_event, expect_state, free_port, next_event, StateSub,
+    Supervisor,
+};
 
 const FIXTURE: &str = "tests/fixture_house_onvif";
 const CAMERAS_ENV: &str = "HOMEOSTAT_CAMERAS";
@@ -153,7 +156,22 @@ async fn setup() -> (FakeOnvif, PathBuf, Supervisor, zenoh::Session) {
 /// fault (a trigger stranded in an abandoned queue is a real camera's
 /// event during an outage) — so every test drives triggers through a
 /// retry, never one-shot.
-async fn trigger_until_motion(camera: &FakeOnvif, sub: &StateSub, expected: bool) {
+///
+/// The retry alone is not enough now that `motion` publishes on change. A
+/// subscription propagates to the publishing peer asynchronously after
+/// `declare_subscriber().await` returns locally, so a sample published
+/// inside that window is simply gone — and re-triggering the same value
+/// can no longer produce another, because the adapter has already
+/// published it. Retrying used to self-correct only because every
+/// notification was republished. So each miss also asks the core's
+/// last-value mirror (`home/state/**`), which is request/response and
+/// immune to the race: it settles whether the edge happened at all.
+async fn trigger_until_motion(
+    camera: &FakeOnvif,
+    sub: &StateSub,
+    session: &zenoh::Session,
+    expected: bool,
+) {
     let value = if expected { "true" } else { "false" };
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
@@ -165,6 +183,8 @@ async fn trigger_until_motion(camera: &FakeOnvif, sub: &StateSub, expected: bool
             if value == json!(expected) {
                 return;
             }
+        } else if cache_read(session, MOTION_KEY).await == Some(json!(expected)) {
+            return;
         }
         assert!(
             tokio::time::Instant::now() < deadline,
@@ -202,8 +222,8 @@ async fn motion_events_translate_to_bus_state() {
     let (camera, _cameras_path, mut sup, observer) = setup().await;
     let state_sub = observer.declare_subscriber(MOTION_KEY).await.expect("state subscriber");
 
-    trigger_until_motion(&camera, &state_sub, true).await;
-    trigger_until_motion(&camera, &state_sub, false).await;
+    trigger_until_motion(&camera, &state_sub, &observer, true).await;
+    trigger_until_motion(&camera, &state_sub, &observer, false).await;
 
     sup.shutdown();
 }
@@ -217,11 +237,11 @@ async fn broken_subscription_resubscribes() {
     let state_sub = observer.declare_subscriber(MOTION_KEY).await.expect("state subscriber");
     let event_sub = observer.declare_subscriber(EVENT_KEY).await.expect("event subscriber");
 
-    trigger_until_motion(&camera, &state_sub, true).await;
+    trigger_until_motion(&camera, &state_sub, &observer, true).await;
 
     camera.control("/control/break");
     expect_drop_event(&event_sub, "event-stream-lost").await;
-    trigger_until_motion(&camera, &state_sub, false).await;
+    trigger_until_motion(&camera, &state_sub, &observer, false).await;
 
     sup.shutdown();
 }
@@ -236,7 +256,7 @@ async fn subscription_loss_flips_available() {
     let avail_sub = observer.declare_subscriber(AVAILABLE_KEY).await.expect("available subscriber");
     let state_sub = observer.declare_subscriber(MOTION_KEY).await.expect("state subscriber");
 
-    trigger_until_motion(&camera, &state_sub, true).await;
+    trigger_until_motion(&camera, &state_sub, &observer, true).await;
 
     camera.control("/control/break");
     expect_state(&avail_sub, json!(false)).await;
@@ -255,7 +275,7 @@ async fn malformed_motion_value_drops_with_health_event() {
 
     trigger_until_event(&camera, &event_sub, "banana", "malformed-payload").await;
 
-    trigger_until_motion(&camera, &state_sub, true).await;
+    trigger_until_motion(&camera, &state_sub, &observer, true).await;
 
     sup.shutdown();
 }
@@ -276,7 +296,7 @@ async fn a_camera_without_a_subscription_manager_keeps_streaming() {
     // available = true is published once, at the first subscription, which
     // is before this subscriber exists — so the assertion below is that
     // NOTHING arrives on it, i.e. no transition at all.
-    trigger_until_motion(&camera, &state_sub, true).await;
+    trigger_until_motion(&camera, &state_sub, &observer, true).await;
     camera.control("/control/reject-renew");
 
     // The refusal is reported once, naming the call — and as its own kind,
@@ -289,8 +309,8 @@ async fn a_camera_without_a_subscription_manager_keeps_streaming() {
     // And the stream carries on: motion still flows, with no availability
     // transition at all. If the Renew fault were treated as a loss, an
     // available=false would arrive before this motion does.
-    trigger_until_motion(&camera, &state_sub, false).await;
-    trigger_until_motion(&camera, &state_sub, true).await;
+    trigger_until_motion(&camera, &state_sub, &observer, false).await;
+    trigger_until_motion(&camera, &state_sub, &observer, true).await;
 
     sup.shutdown();
     assert!(
@@ -309,7 +329,7 @@ async fn a_camera_without_a_subscription_manager_rotates_its_subscription() {
     let state_sub = observer.declare_subscriber(MOTION_KEY).await.expect("state subscriber");
     let avail_sub = observer.declare_subscriber(AVAILABLE_KEY).await.expect("available subscriber");
 
-    trigger_until_motion(&camera, &state_sub, true).await;
+    trigger_until_motion(&camera, &state_sub, &observer, true).await;
     camera.control("/control/reject-renew");
     let before = camera.created();
 
@@ -328,7 +348,7 @@ async fn a_camera_without_a_subscription_manager_rotates_its_subscription() {
 
     // The rotation is invisible from the bus: motion keeps flowing and
     // availability never moves, because nothing was ever lost.
-    trigger_until_motion(&camera, &state_sub, false).await;
+    trigger_until_motion(&camera, &state_sub, &observer, false).await;
     assert!(
         avail_sub.try_recv().expect("available channel open").is_none(),
         "a rotation must not surface as an availability transition"
@@ -348,7 +368,7 @@ async fn a_renew_fault_from_a_lost_subscription_is_still_a_loss() {
     let state_sub = observer.declare_subscriber(MOTION_KEY).await.expect("state subscriber");
     let event_sub = observer.declare_subscriber(EVENT_KEY).await.expect("event subscriber");
 
-    trigger_until_motion(&camera, &state_sub, true).await;
+    trigger_until_motion(&camera, &state_sub, &observer, true).await;
     camera.control("/control/break-on-renew");
 
     let event = next_event(&event_sub).await;
@@ -359,7 +379,7 @@ async fn a_renew_fault_from_a_lost_subscription_is_still_a_loss() {
     assert_eq!(event["reason"], json!("event-stream-lost"), "{event}");
 
     // ...and it recovers the ordinary way.
-    trigger_until_motion(&camera, &state_sub, false).await;
+    trigger_until_motion(&camera, &state_sub, &observer, false).await;
 
     sup.shutdown();
 }
@@ -374,7 +394,7 @@ async fn repeated_notifications_publish_one_transition() {
     let (camera, _cameras_path, mut sup, observer) = setup().await;
     let state_sub = observer.declare_subscriber(MOTION_KEY).await.expect("state subscriber");
 
-    trigger_until_motion(&camera, &state_sub, true).await;
+    trigger_until_motion(&camera, &state_sub, &observer, true).await;
 
     // The camera says what it has already said, repeatedly. These are not
     // lossy the way a first trigger is: the subscription that carried the

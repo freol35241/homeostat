@@ -1337,9 +1337,9 @@ homeostat process, the small core is gone.
   not crash. **A C200 notification is not a transition**, verified
   against two of them 2026-08-29: it sends `MotionAlarm` on every
   evaluation tick, so one real motion episode arrived as 417 identical
-  `true`s in 56 seconds. The adapter absorbs that the way it absorbs any
-  other dialect quirk — `motion` publishes on change, which is the
-  producer norm regardless. On-camera person detection exists but is not exposed over
+  `true`s in 56 seconds. The adapter absorbs that as it absorbs any
+  other dialect quirk: `motion` publishes on change, the producer norm.
+  On-camera person detection exists but is not exposed over
   ONVIF — it is app-only, so it is NOT an aspect until firmware
   exposes it or a Frigate-class detector arrives. ONVIF on Tapo does
   no PTZ; pan/tilt and privacy mode need the vendor API (pytapo) and
