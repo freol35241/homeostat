@@ -7,7 +7,7 @@
 # ]
 #
 # [tool.uv.sources]
-# homeostat = { git = "https://github.com/freol35241/homeostat", subdirectory = "sdk/python", tag = "v0.6.0" }
+# homeostat = { git = "https://github.com/freol35241/homeostat", subdirectory = "sdk/python", tag = "v0.7.0" }
 # ///
 """ESPHome adapter: native API, not MQTT (see docs/design.md, "ESPHome
 adapter (settled 2026-07-16)").
