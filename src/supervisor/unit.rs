@@ -136,6 +136,9 @@ pub async fn supervise(
             (bus::ENV_UNIT, spec.name.as_str()),
             (bus::ENV_BUS, spec.endpoint.as_str()),
         ];
+        // Before the long-lived `uv run` parent exists, not after: see
+        // process::prewarm.
+        process::prewarm(&spec.command, &spec.cwd).await;
         let started = Instant::now();
         let mut child = match process::spawn(&spec.command, &spec.cwd, &env) {
             Ok(child) => child,
