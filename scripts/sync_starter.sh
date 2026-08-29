@@ -23,7 +23,7 @@
 set -euo pipefail
 
 # Bumped with the starter's compose image at each release.
-SDK_TAG="v0.8.0"
+SDK_TAG="v0.9.0"
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 UNITS="$REPO/examples/starter-house/units"
@@ -53,7 +53,12 @@ assets/video-rtc.js:assets/video-rtc.js
 # [tool.uv.sources] block at all: the image bundles the wheel and points
 # UV_FIND_LINKS at it. Idempotent, so --check compares like with like.
 pin_sdk() {
-  sed -e 's|^#     "homeostat".*|#     "homeostat=='"${SDK_TAG#v}"'",|' \
+  # Matches an unpinned "homeostat", AND an already-pinned
+  # "homeostat==X.Y.Z", -- the starter-only units are rewritten in place,
+  # so a pattern that only matched the unpinned form would silently leave
+  # them on the previous release. It did, and --check could not see it:
+  # the check compares against this same transform.
+  sed -e 's|^\(# *\)"homeostat[^"]*",|\1"homeostat=='"${SDK_TAG#v}"'",|' \
       -e '/^# \[tool\.uv\.sources\]$/d' \
       -e '/^# homeostat = /d' \
     | awk '
