@@ -1,11 +1,8 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "homeostat",
+#     "homeostat==0.8.0",
 # ]
-#
-# [tool.uv.sources]
-# homeostat = { git = "https://github.com/freol35241/homeostat", subdirectory = "sdk/python", tag = "v0.8.0" }
 # ///
 """Arbiter service: the write-token holder for arbitrated entities (see
 docs/design.md, Arbitrated mode, "Settled 2026-07-16").

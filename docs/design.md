@@ -1664,17 +1664,29 @@ adapter — the membrane rule.
   choice => private. Identical in a stranger's house => public.
 - Generic automations graduate from private to public SDK helpers/examples.
 - Invariant: the public tool never sees the private repo except locally.
-- SDK distribution (settled 2026-07-05): house units pin the SDK as a uv
-  git source — `{ git = "https://github.com/freol35241/homeostat",
-  subdirectory = "sdk/python", tag = "vX.Y.Z" }` in the PEP 723 header —
-  never a vendored copy. The pin lives in the unit script, which
+- SDK distribution (settled 2026-07-05, REVISED 2026-08-29): a house unit
+  names `homeostat==X.Y.Z` in its PEP 723 dependencies and carries NO
+  `[tool.uv.sources]` block. The image bundles the SDK wheel and sets
+  `UV_FIND_LINKS`, so the unit resolves it locally — no clone at first
+  boot, no network for the SDK, and the pin is still a version in the unit
+  script that `files_hash` covers, which is the property the original
+  settlement was for. The git source it replaces cost an order of
+  magnitude in memory (38.4 MB against 4.0 MB in the long-lived `uv run`
+  parent, see Supervision); a version pin was already the anticipated end
+  state here ("PyPI publication later keeps the same shape"), and it
+  resolves from PyPI unchanged if that ever happens. What it costs: a
+  house pinning a version the running image does not bundle fails to
+  resolve at unit start — the version-floor hazard, in its loudest and
+  most diagnosable form. In-repo `adapters/` keep a relative `path`
+  source, so tests still exercise the working-tree SDK; never a vendored
+  copy. The pin lives in the unit script, which
   files_hash covers, so an SDK bump is a visible behavioral change to
   plan/apply; a vendored copy sits outside change detection and was
   rejected for exactly that reason. In-repo adapters and fixtures keep
   relative `path` sources so tests exercise the working-tree SDK. PyPI
   publication later keeps the same shape (`homeostat==X.Y.Z`).
 
-  Measured 2026-08-29, recorded as a finding and NOT a decision: the
+  Measured 2026-08-29, and acted on, recorded as a finding and NOT a decision: the
   source form dominates a unit's resident memory. Same heavy environment
   (aioesphomeapi + zeroconf), warm, uv 0.9 in the release image — git
   source 38.4 MB in the long-lived `uv run` parent, a built wheel 4.0 MB,
@@ -1684,8 +1696,8 @@ adapter — the membrane rule.
   costs is the property this settlement was chosen FOR — the pin lives in
   the unit script, `files_hash` covers it, and an SDK bump is a visible
   behavioral change to plan/apply. A wheel pinned by version keeps that;
-  a wheel pinned by path or floated does not. Not changed on the strength
-  of a memory measurement alone.
+  a wheel pinned by path or floated does not — which is why the revision
+  above pins by VERSION and bundles the wheel rather than naming a path.
 
   The trap:
   "pin by git source" reads as "pin to a release", but an adapter copied

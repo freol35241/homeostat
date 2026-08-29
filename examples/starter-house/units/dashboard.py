@@ -1,12 +1,9 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "homeostat",
+#     "homeostat==0.8.0",
 #     "aiohttp>=3.9",
 # ]
-#
-# [tool.uv.sources]
-# homeostat = { git = "https://github.com/freol35241/homeostat", subdirectory = "sdk/python", tag = "v0.8.0" }
 # ///
 """Dashboard service: the family's web surface (see docs/design.md, Dashboard).
 

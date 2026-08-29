@@ -1,13 +1,10 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "homeostat",
+#     "homeostat==0.8.0",
 #     "aioesphomeapi>=45,<46",
 #     "zeroconf>=0.130,<1",
 # ]
-#
-# [tool.uv.sources]
-# homeostat = { git = "https://github.com/freol35241/homeostat", subdirectory = "sdk/python", tag = "v0.8.0" }
 # ///
 """ESPHome adapter: native API, not MQTT (see docs/design.md, "ESPHome
 adapter (settled 2026-07-16)").

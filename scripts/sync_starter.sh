@@ -24,7 +24,6 @@ set -euo pipefail
 
 # Bumped with the starter's compose image at each release.
 SDK_TAG="v0.8.0"
-SDK_LINE='# homeostat = { git = "https://github.com/freol35241/homeostat", subdirectory = "sdk/python", tag = "'"$SDK_TAG"'" }'
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 UNITS="$REPO/examples/starter-house/units"
@@ -50,6 +49,22 @@ assets/dashboard-logic.js:assets/dashboard-logic.js
 assets/video-rtc.js:assets/video-rtc.js
 "
 
+# A shipped unit names `homeostat==VERSION` and carries no
+# [tool.uv.sources] block at all: the image bundles the wheel and points
+# UV_FIND_LINKS at it. Idempotent, so --check compares like with like.
+pin_sdk() {
+  sed -e 's|^#     "homeostat".*|#     "homeostat=='"${SDK_TAG#v}"'",|' \
+      -e '/^# \[tool\.uv\.sources\]$/d' \
+      -e '/^# homeostat = /d' \
+    | awk '
+      # Drop the now-empty "#" separator that preceded the sources block:
+      # only when the next line closes the PEP 723 header.
+      /^#$/ { held = 1; next }
+      held && !/^# \/\/\/$/ { print "#" }
+      { held = 0; print }
+    '
+}
+
 check=0
 [ "${1:-}" = "--check" ] && check=1
 stale=""
@@ -68,7 +83,7 @@ for pair in $FILES; do
   [ -f "$REPO/adapters/$src" ] || { echo "missing adapters/$src" >&2; exit 1; }
   case "$src" in
     # Only a unit script carries an SDK source line; assets copy verbatim.
-    *.py) source_at_tag "$src" | sed 's|^# homeostat = .*|'"$SDK_LINE"'|' > "$tmp" ;;
+    *.py) source_at_tag "$src" | pin_sdk > "$tmp" ;;
     *) source_at_tag "$src" > "$tmp" ;;
   esac
   if [ "$check" = 1 ]; then
@@ -81,8 +96,8 @@ done
 
 # Starter-only units (evening_lights.py) take the pin and nothing else.
 for unit in "$UNITS"/*.py; do
-  grep -q '^# homeostat = ' "$unit" || continue
-  sed 's|^# homeostat = .*|'"$SDK_LINE"'|' "$unit" > "$tmp"
+  grep -q '^# *"homeostat' "$unit" || continue
+  pin_sdk < "$unit" > "$tmp"
   if [ "$check" = 1 ]; then
     cmp -s "$tmp" "$unit" || stale="$stale $(basename "$unit"):sdk-pin"
   else

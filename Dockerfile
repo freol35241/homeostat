@@ -61,11 +61,26 @@ RUN apt-get update \
 
 COPY --from=ghcr.io/astral-sh/uv:0.9 /uv /uvx /usr/local/bin/
 ENV UV_PYTHON_INSTALL_DIR=/opt/uv/python \
-    UV_CACHE_DIR=/var/cache/uv
+    UV_CACHE_DIR=/var/cache/uv \
+    UV_FIND_LINKS=/opt/homeostat-wheels
 # Pre-install the interpreter so first boot doesn't download one. Unit
 # dependencies still resolve on first run; mount /var/cache/uv to keep
 # them across container replacements.
 RUN uv python install 3.12
+
+# The SDK as a wheel the units resolve locally. A unit declares
+# `homeostat==X.Y.Z` and no [tool.uv.sources]; UV_FIND_LINKS above points
+# uv here, so there is no clone on first boot and no network needed for
+# the SDK. It also costs an order of magnitude less memory than a git
+# source: the `uv run` parent that supervises each unit for its whole
+# lifetime holds ~4 MB against ~38 MB for a heavy environment resolved
+# from git (docs/design.md, Supervision).
+COPY sdk/python /tmp/sdk
+# mkdir first: uv reads UV_FIND_LINKS on every invocation, `uv build`
+# included, and fails outright if the directory is not there yet.
+RUN mkdir -p /opt/homeostat-wheels \
+    && uv build --wheel /tmp/sdk -o /opt/homeostat-wheels \
+    && rm -rf /tmp/sdk
 
 COPY --from=build /homeostat /usr/local/bin/homeostat
 COPY --from=build /go2rtc /usr/local/bin/go2rtc
