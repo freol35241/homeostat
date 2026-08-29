@@ -363,3 +363,47 @@ async fn a_renew_fault_from_a_lost_subscription_is_still_a_loss() {
 
     sup.shutdown();
 }
+
+/// (g) A notification is not a transition. A Tapo C200 re-asserts motion on
+/// every evaluation tick — one real episode against VP52's cameras arrived
+/// as 417 identical `true`s in 56 seconds, 456 recorded rows for two edges —
+/// so `motion` publishes on CHANGE and the next sample on the key is always
+/// the next edge.
+#[tokio::test(flavor = "multi_thread")]
+async fn repeated_notifications_publish_one_transition() {
+    let (camera, _cameras_path, mut sup, observer) = setup().await;
+    let state_sub = observer.declare_subscriber(MOTION_KEY).await.expect("state subscriber");
+
+    trigger_until_motion(&camera, &state_sub, true).await;
+
+    // The camera says what it has already said, repeatedly. These are not
+    // lossy the way a first trigger is: the subscription that carried the
+    // rising edge is still the live one.
+    for _ in 0..10 {
+        camera.control("/control/trigger?value=true");
+    }
+    let repeat = tokio::time::timeout(Duration::from_secs(5), state_sub.recv_async()).await;
+    assert!(
+        repeat.is_err(),
+        "motion republished with no transition: {:?}",
+        repeat.map(|s| s.map(|s| s.payload().try_to_string().map(|c| c.into_owned())))
+    );
+
+    // ...and a real edge still gets through. Asserting on the VALUE rather
+    // than retrying until false is the point: a duplicate arriving here
+    // must fail the test, not be waited past.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        camera.control("/control/trigger?value=false");
+        let recv = tokio::time::timeout(Duration::from_secs(1), state_sub.recv_async()).await;
+        if let Ok(Ok(sample)) = recv {
+            let value: Value = serde_json::from_slice(&sample.payload().to_bytes())
+                .expect("state payload is JSON");
+            assert_eq!(value, json!(false), "the next sample after a rise must be the fall");
+            break;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "no falling edge within 30s");
+    }
+
+    sup.shutdown();
+}

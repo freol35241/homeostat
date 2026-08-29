@@ -46,6 +46,14 @@ both -- a successful subscribe alone does not, or a camera that refuses
 only Renew would reset the count every cycle and never back off. A notification that parses but carries an unusable value
 drops with a "malformed-payload" health event and the stream continues.
 
+`motion` is published on CHANGE, not per notification. A notification is
+not a transition: a Tapo C200 sends MotionAlarm on every evaluation tick,
+so one real episode against VP52's cameras arrived as 417 identical `true`s
+in 56 seconds — 456 recorded rows for what is semantically two edges. The
+adapter therefore compares against the last value it published and stays
+silent otherwise, which is also what makes it behave like the other
+event-driven adapters, where the device itself speaks only on change.
+
 The same transitions carry the availability signal (docs/design.md,
 "Sensor dropout and availability"): a working pull-point subscription
 publishes home/state/{room}/{entity}/available = true, its loss publishes
@@ -282,6 +290,14 @@ async def run_camera(entity, conf: dict, session, http: aiohttp.ClientSession, s
     # first Renew fault and stays false: re-asking every rotation would
     # fault every rotation.
     renews = True
+    # The last motion value published, so a camera that re-asserts what it
+    # already said does not republish it. Cameras differ on what a
+    # notification means: a Tapo C200 sends MotionAlarm on every evaluation
+    # tick, so one real episode arrives as hundreds of identical `true`s.
+    # Kept across resubscription deliberately -- the camera's state did not
+    # change because our subscription broke, and `motion` is documented to
+    # stand through a loss rather than go false.
+    last_motion: bool | None = None
     loop = asyncio.get_running_loop()
 
     while not stop.is_set():
@@ -333,8 +349,9 @@ async def run_camera(entity, conf: dict, session, http: aiohttp.ClientSession, s
                         session.health_event(
                             "drop", reason="malformed-payload", camera=entity.name, error=error
                         )
-                    else:
+                    elif value != last_motion:
                         session.put_json(motion_key, value)
+                        last_motion = value
                 if renews:
                     try:
                         await soap_call(

@@ -1334,7 +1334,12 @@ homeostat process, the small core is gone.
   ONVIF pull-point events for `motion` — the same source the Home
   Assistant integration uses; Tapo firmware has broken this in the
   past (1.3.6), so event-subscription loss must resubscribe/reconnect,
-  not crash. On-camera person detection exists but is not exposed over
+  not crash. **A C200 notification is not a transition**, verified
+  against two of them 2026-08-29: it sends `MotionAlarm` on every
+  evaluation tick, so one real motion episode arrived as 417 identical
+  `true`s in 56 seconds. The adapter absorbs that the way it absorbs any
+  other dialect quirk — `motion` publishes on change, which is the
+  producer norm regardless. On-camera person detection exists but is not exposed over
   ONVIF — it is app-only, so it is NOT an aspect until firmware
   exposes it or a Frigate-class detector arrives. ONVIF on Tapo does
   no PTZ; pan/tilt and privacy mode need the vendor API (pytapo) and
