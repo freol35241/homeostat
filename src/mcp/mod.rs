@@ -314,7 +314,7 @@ impl Server {
             .ok_or("propose needs a non-empty \"files\" array")?;
         if gitinfo::head_commit(&self.root).is_none() {
             return Err(format!(
-                "propose needs the house to be inside a git worktree with a commit: {}",
+                "propose needs the house root to be a git worktree root with a commit: {}",
                 self.root.display()
             ));
         }
@@ -403,9 +403,8 @@ impl Server {
         for (path, _) in edits {
             git(&self.root, &["add", "--", path])?;
         }
-        // Pathspec-limited: the house may be a subdirectory of a larger
-        // repo whose index carries someone else's staged work, and a bare
-        // commit would sweep it in.
+        // Pathspec-limited: a bare commit takes whatever else is staged,
+        // and the agent is not the only writer of a house repo.
         let mut commit: Vec<&str> = vec![
             "-c",
             "user.name=homeostat-agent",
