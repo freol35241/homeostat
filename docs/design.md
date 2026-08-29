@@ -851,6 +851,16 @@ owner = "zigbee"             # exactly one adapter binds each entity
   exempt. Voice-initiated changes commit with the transcript as the message.
 ## Agent surface (MCP)
  
+The HTTP transport carries the same three gates as the dashboard (added
+2026-08-29, reviewing it against Local-only access): `Host` non-global or
+known, `Origin` absent or allowed, and `X-Homeostat` on every request. It
+had none of them, and the design's own reasoning applies with more force
+here than to the dashboard — this surface writes and commits to the house
+repo. Without the header a cross-origin `text/plain` POST is a CORS
+"simple request": no preflight, so a page in a family browser could drive
+`propose` blind. `HOMEOSTAT_MCP_HOSTS` extends the name allowlist. An
+HTTP MCP client must send the header; stdio is unaffected.
+
 Tools: `read_state`, `read_history`, `propose`, `plan`, `apply`. The agent
 never touches the bus directly for structural work; it manipulates text and
 goes through plan/apply like every other actor. Agent-authored parameter

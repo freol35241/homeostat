@@ -350,6 +350,75 @@ async fn http_transport_runs_as_supervised_unit() {
 
 /// One HTTP POST: connect, send, read the full response. Retries while the
 /// server's listener may still be coming up.
+/// The agent surface writes and commits to the house repo, and
+/// reachability is its only credential (docs/design.md, Local-only
+/// access). A page in a family browser can reach a LAN address, so the
+/// three dashboard gates apply here too — and the header is the one a
+/// cross-origin `fetch` cannot add without a preflight this server
+/// refuses.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_http_surface_refuses_what_a_browser_can_send() {
+    let house = temp_house(FIXTURE, "mcp-gate");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
+    std::fs::write(
+        house.join("units/mcp.toml"),
+        format!(
+            "schema = 1\n\n[unit]\nname = \"mcp\"\nkind = \"service\"\n\n\
+             [runtime]\ncommand = \"homeostat mcp --http {addr}\"\n\
+             restart = \"always\"\nshutdown_grace_s = 5\n"
+        ),
+    )
+    .expect("write mcp manifest");
+    git_init_commit(&house);
+    let mut sup = Supervisor::spawn_at(&house, &[]);
+    let observer = sup.observer().await;
+    await_base_units(&observer).await;
+
+    let call = json!({
+        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": "propose", "arguments": {
+            "files": [{"path": "units/probe.toml", "content": "schema = 1\n"}],
+            "message": "from a browser"
+        }}
+    });
+    let head = git(&house, &["rev-parse", "HEAD"]);
+
+    // Wait for the unit, using a request that IS allowed.
+    let ping = json!({"jsonrpc": "2.0", "id": 0, "method": "tools/list"});
+    let (status, _) = http_post_retry(&addr, &ping, Duration::from_secs(60));
+    assert_eq!(status, 200, "the surface is up");
+
+    // The CSRF shape: a simple cross-origin POST carries no X-Homeostat.
+    let (status, _) = http_post_with(&addr, &call, &[]).expect("request sent");
+    assert_eq!(status, 403, "a request with no X-Homeostat is refused");
+
+    // A browser on a page the house does not serve.
+    let (status, _) = http_post_with(
+        &addr,
+        &call,
+        &[("X-Homeostat", "1"), ("Origin", "https://evil.example")],
+    )
+    .expect("request sent");
+    assert_eq!(status, 403, "a foreign Origin is refused");
+
+    // ...and none of it reached a tool.
+    assert_eq!(git(&house, &["rev-parse", "HEAD"]), head, "nothing committed");
+    assert_eq!(git(&house, &["status", "--porcelain"]), "", "nothing written");
+
+    // The house's own page is fine, as is a non-browser client.
+    let (status, _) = http_post_with(
+        &addr,
+        &ping,
+        &[("X-Homeostat", "1"), ("Origin", "http://homeostat.lan:8642")],
+    )
+    .expect("request sent");
+    assert_eq!(status, 200, "the house's own origin is allowed");
+
+    sup.shutdown();
+    let _ = std::fs::remove_dir_all(&house);
+}
+
 fn http_post_retry(addr: &str, message: &Value, timeout: Duration) -> (u16, Value) {
     let deadline = Instant::now() + timeout;
     loop {
@@ -364,15 +433,25 @@ fn http_post_retry(addr: &str, message: &Value, timeout: Duration) -> (u16, Valu
 }
 
 fn http_post(addr: &str, message: &Value) -> Result<(u16, Value), String> {
+    http_post_with(addr, message, &[("X-Homeostat", "1")])
+}
+
+/// A raw POST with exactly the given extra headers, for the gate tests.
+fn http_post_with(
+    addr: &str,
+    message: &Value,
+    extra: &[(&str, &str)],
+) -> Result<(u16, Value), String> {
     let body = message.to_string();
     let mut stream = TcpStream::connect(addr).map_err(|e| e.to_string())?;
     stream
         .set_read_timeout(Some(Duration::from_secs(30)))
         .map_err(|e| e.to_string())?;
+    let extra: String = extra.iter().map(|(n, v)| format!("{n}: {v}\r\n")).collect();
     let request = format!(
         "POST /mcp HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\n\
          Accept: application/json, text/event-stream\r\nConnection: close\r\n\
-         Content-Length: {}\r\n\r\n{body}",
+         {extra}Content-Length: {}\r\n\r\n{body}",
         body.len()
     );
     stream.write_all(request.as_bytes()).map_err(|e| e.to_string())?;
@@ -388,7 +467,9 @@ fn http_post(addr: &str, message: &Value) -> Result<(u16, Value), String> {
         .split_once("\r\n\r\n")
         .map(|(_, body)| body)
         .unwrap_or("");
-    let value = if body.is_empty() {
+    // A refusal answers in plain text on purpose — nothing about the
+    // house is echoed to a caller that failed the gate.
+    let value = if body.is_empty() || status == 403 {
         Value::Null
     } else {
         serde_json::from_str(body).map_err(|e| format!("body is not JSON: {e}: {body:?}"))?

@@ -95,8 +95,15 @@ The house runs its own agent surface: `units/mcp.toml` serves MCP over
 HTTP on `:8642`. Connect any MCP client, e.g.:
 
 ```
-claude mcp add --transport http homeostat http://<host>:8642
+claude mcp add --transport http homeostat http://<host>:8642 \
+  --header "X-Homeostat: 1"
 ```
+
+The header is required. Reachability is this surface's only credential,
+and it can write and commit to your house repo — without the header a
+web page open in a family browser could drive it at your LAN address
+without ever reading a reply. Set `HOMEOSTAT_MCP_HOSTS` if you reach the
+house by a name other than `homeostat`/`homeostat.lan`/`homeostat.local`.
 
 The agent gets five tools — `read_state`, `read_history`, `plan`,
 `propose`, `apply` — with tier-gated authority: it can read everything,
