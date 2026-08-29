@@ -81,6 +81,30 @@ Supervisor -> unit, at spawn:
   alive and poison the next incarnation.
 - Environment: `HOMEOSTAT_UNIT` (the unit's name) and `HOMEOSTAT_BUS` (the
   Zenoh endpoint to connect to, e.g. `tcp/127.0.0.1:7447`).
+- **`uv run` parents hold real memory** (measured 2026-08-29 on a live
+  seven-unit house and reproduced in the release image). The parent stays
+  alive for the unit's lifetime and its `Pss_Anon` scales with what the
+  unit's environment CONTAINS, on every run — not with whether that run
+  installed it. Warm, uv 0.9, same machine:
+
+  | unit shape | warm parent |
+  |---|---|
+  | paho-mqtt + git-pinned SDK | 3.8 MB |
+  | aioesphomeapi + zeroconf + git-pinned SDK | 38.4 MB |
+  | aioesphomeapi + zeroconf + PATH-pinned SDK | 4.0 MB |
+
+  The git-vs-path source is the dominant factor for a heavy environment,
+  which is why in-repo benching misses it entirely: `adapters/` use a path
+  source and every vendored house uses a git one. A live house measured
+  223 MB of 443 MB in these parents.
+
+  The supervisor's `uv sync --script` prewarm removes only the COLD-install
+  spike — worth having, because it otherwise persists for the life of the
+  units, but measured at ~15-25 MB on a real house, NOT the ~180 MB the
+  v0.8.0 commit message claims. That claim was made from a path-sourced
+  bench and is wrong; this table is the correction. The remaining ~150 MB
+  is the git-source-plus-heavy-deps interaction, and a wheel-installed SDK
+  is the lever that would reach it (see SDK distribution).
 
 Unit -> bus, obligations:
 
@@ -1648,7 +1672,22 @@ adapter — the membrane rule.
   plan/apply; a vendored copy sits outside change detection and was
   rejected for exactly that reason. In-repo adapters and fixtures keep
   relative `path` sources so tests exercise the working-tree SDK. PyPI
-  publication later keeps the same shape (`homeostat==X.Y.Z`). The trap:
+  publication later keeps the same shape (`homeostat==X.Y.Z`).
+
+  Measured 2026-08-29, recorded as a finding and NOT a decision: the
+  source form dominates a unit's resident memory. Same heavy environment
+  (aioesphomeapi + zeroconf), warm, uv 0.9 in the release image — git
+  source 38.4 MB in the long-lived `uv run` parent, a built wheel 4.0 MB,
+  a path source 4.0 MB. Four heavy units on a live house is ~136 MB of the
+  223 MB measured in parents there. Publishing the SDK would therefore buy
+  an order of magnitude more than the supervisor's prewarm did. What it
+  costs is the property this settlement was chosen FOR — the pin lives in
+  the unit script, `files_hash` covers it, and an SDK bump is a visible
+  behavioral change to plan/apply. A wheel pinned by version keeps that;
+  a wheel pinned by path or floated does not. Not changed on the strength
+  of a memory measurement alone.
+
+  The trap:
   "pin by git source" reads as "pin to a release", but an adapter copied
   from main against the newest *tag's* SDK raises AttributeError on
   whatever the SDK has grown since — adapter and SDK must come from the
