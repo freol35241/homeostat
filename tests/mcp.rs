@@ -517,6 +517,83 @@ async fn propose_commits_only_its_own_files() {
     let _ = std::fs::remove_dir_all(&house);
 }
 
+/// (b3) A failure after the writes unwinds completely: nothing written,
+/// nothing staged. A `git add` that refuses (the path is gitignored) used
+/// to leave the file on disk and the house dirty.
+#[tokio::test(flavor = "multi_thread")]
+async fn propose_that_fails_after_writing_leaves_no_trace() {
+    let house = temp_house(FIXTURE, "mcp-unwind");
+    std::fs::write(house.join(".gitignore"), "units/probe.toml\n").expect("write");
+    git_init_commit(&house);
+    let mut sup = Supervisor::spawn_at(&house, &[]);
+    let observer = sup.observer().await;
+    await_base_units(&observer).await;
+
+    let before = std::fs::read_to_string(house.join("units/probe.toml")).expect("read");
+    let head = git(&house, &["rev-parse", "HEAD"]);
+    let mut mcp = Mcp::connect(&house, &sup.endpoint);
+    let (text, is_error) = mcp.call(
+        "propose",
+        json!({
+            "files": [{"path": "units/probe.toml",
+                       "content": before.replace("default = 1", "default = 5")}],
+            "message": "raise level default to 5"
+        }),
+    );
+    assert!(is_error, "an unstageable path must fail: {text}");
+
+    assert_eq!(
+        std::fs::read_to_string(house.join("units/probe.toml")).expect("read"),
+        before,
+        "the file is restored"
+    );
+    assert_eq!(git(&house, &["rev-parse", "HEAD"]), head, "nothing committed");
+    assert_eq!(
+        git(&house, &["status", "--porcelain"]),
+        "",
+        "nothing left written or staged"
+    );
+
+    drop(mcp);
+    sup.shutdown();
+    let _ = std::fs::remove_dir_all(&house);
+}
+
+/// (b4) A committed symlink pointing out of the house does not carry a
+/// proposed write with it.
+#[tokio::test(flavor = "multi_thread")]
+async fn propose_cannot_write_through_a_symlink_out_of_the_house() {
+    let house = temp_house(FIXTURE, "mcp-symlink");
+    let outside = house.parent().expect("parent").join("mcp-symlink-outside");
+    let _ = std::fs::remove_dir_all(&outside);
+    std::fs::create_dir_all(&outside).expect("create outside");
+    std::os::unix::fs::symlink(&outside, house.join("cfg")).expect("symlink");
+    git_init_commit(&house);
+    let mut sup = Supervisor::spawn_at(&house, &[]);
+    let observer = sup.observer().await;
+    await_base_units(&observer).await;
+
+    let mut mcp = Mcp::connect(&house, &sup.endpoint);
+    let (text, is_error) = mcp.call(
+        "propose",
+        json!({
+            "files": [{"path": "cfg/hosts", "content": "escaped\n"}],
+            "message": "write through the symlink"
+        }),
+    );
+    assert!(is_error, "a write resolving outside the house must fail: {text}");
+    assert!(
+        !outside.join("hosts").exists(),
+        "nothing may be written outside the house repo"
+    );
+    assert_eq!(git(&house, &["status", "--porcelain"]), "");
+
+    drop(mcp);
+    sup.shutdown();
+    let _ = std::fs::remove_dir_all(&house);
+    let _ = std::fs::remove_dir_all(&outside);
+}
+
 /// (c) An out-of-constraint parameter propose is rejected with the
 /// constraint named; repo and world unchanged, nothing committed.
 #[tokio::test(flavor = "multi_thread")]

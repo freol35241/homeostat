@@ -591,14 +591,23 @@ auto-invalidation), otherwise recomputes the plan fresh against worktree
 + bus — the file is a review artifact, not an execution script. Approval
 UX beyond this arrives with the agent surface.
 
-`applied_commit` exists only when the house root is itself a git worktree
-root (`git rev-parse --show-toplevel` == the house root — a nested
-fixture directory must not inherit the enclosing repo's HEAD). Then the
-CLI passes HEAD (suffixed `-dirty` when the worktree has uncommitted
-changes) with the apply request and the supervisor publishes it at
+`applied_commit` exists whenever the house is inside a git worktree; the
+house need NOT be the worktree root (revised 2026-08-28 — a house may
+live in a subdirectory of a larger repo that carries unrelated content
+and its own deploy pipeline). The CLI passes that repo's HEAD (suffixed
+`-dirty`) with the apply request and the supervisor publishes it at
 `home/meta/system/applied_commit` after a fully applied walk. A non-git
 house applies fine but records no commit and cannot save pending plans.
 Integration tests git-init fixture copies in temp dirs.
+
+Only the house subtree counts toward `-dirty`: `git status --porcelain
+-- .` scoped to the house, so a sibling directory's edits neither dirty
+the house nor invalidate its pending plans, while a house AT the root is
+the same rule with an empty prefix. Two consequences of dropping the
+worktree-root test: a house checked out inside any larger repo now
+records that repo's HEAD, so "roll back with git checkout" means the
+enclosing repo; and the agent's `propose` commits are pathspec-limited
+so they never sweep an enclosing index (see the MCP surface).
 
 ### Rollback
 

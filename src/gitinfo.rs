@@ -24,14 +24,18 @@ pub fn head_commit(root: &Path) -> Option<String> {
     // `status --porcelain` prints paths relative to the worktree root, so
     // the house's own plans/ carries the house's prefix within the repo.
     let plans = format!("{}plans/", git(root, &["rev-parse", "--show-prefix"])?);
-    let dirty = git(root, &["status", "--porcelain", "--", "."])
+    // core.quotePath would C-quote any non-ASCII path ("hus-\303\245/..."),
+    // which no longer matches the raw prefix --show-prefix returns, and a
+    // house's own saved plan would then mark it dirty and invalidate itself.
+    let dirty = git(root, &["-c", "core.quotePath=false", "status", "--porcelain", "--", "."])
         .map(|s| s.lines().any(|line| !under_plans(line, &plans)))?;
     Some(if dirty { format!("{head}-dirty") } else { head })
 }
 
 /// Whether a `status --porcelain` line's path is under the house's
-/// `plans/`. A rename counts only when both sides are; quoted (unusual)
-/// paths never match and so still count as dirty.
+/// `plans/`. A rename counts only when both sides are; paths git still
+/// quotes even with quotePath off (a literal quote or newline in the
+/// name) never match and so count as dirty.
 fn under_plans(line: &str, plans: &str) -> bool {
     line.get(3..)
         .map(|path| path.split(" -> ").all(|p| p.starts_with(plans)))
@@ -116,6 +120,29 @@ mod tests {
         let dir = repo("plans");
         let house = dir.join("sub");
         let clean = head_commit(&house).expect("head");
+        fs::create_dir_all(house.join("plans/pending")).unwrap();
+        fs::write(house.join("plans/pending/x.plan"), "schema = 1\n").unwrap();
+        assert_eq!(head_commit(&house), Some(clean));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_non_ascii_house_name_does_not_let_a_plan_dirty_itself() {
+        // git C-quotes non-ASCII paths under core.quotePath, which would
+        // stop the plans/ exemption matching and make a saved plan
+        // invalidate the commit it was planned against.
+        let dir = std::env::temp_dir()
+            .join(format!("homeostat-gitinfo-utf8-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let house = dir.join("hus-å");
+        fs::create_dir_all(&house).unwrap();
+        fs::write(house.join("zones.toml"), "schema = 1\n").unwrap();
+        run(&dir, &["init", "-q", "-b", "main"]);
+        run(&dir, &["add", "-A"]);
+        run(&dir, &["commit", "-qm", "initial"]);
+
+        let clean = head_commit(&house).expect("head");
+        assert!(!clean.ends_with("-dirty"));
         fs::create_dir_all(house.join("plans/pending")).unwrap();
         fs::write(house.join("plans/pending/x.plan"), "schema = 1\n").unwrap();
         assert_eq!(head_commit(&house), Some(clean));

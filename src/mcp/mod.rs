@@ -333,47 +333,17 @@ impl Server {
             edits.push((path.to_string(), content.to_string()));
         }
 
-        // Write, validate, and on a validation failure restore every file:
-        // an invalid repo is never committed, the working tree stays clean.
+        // Everything from the first write to the commit unwinds as one:
+        // a failure anywhere — a write, validation, add, commit — leaves
+        // the repo exactly as it was. Only a landed commit is kept.
         let mut originals: Vec<(String, Option<Vec<u8>>)> = Vec::new();
-        for (path, content) in &edits {
-            let full = self.root.join(path);
-            originals.push((path.clone(), fs::read(&full).ok()));
-            if let Some(parent) = full.parent() {
-                fs::create_dir_all(parent)
-                    .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
+        let check = match self.write_and_commit(&edits, message, &mut originals) {
+            Ok(check) => check,
+            Err(err) => {
+                self.unwind(&edits, &originals);
+                return Err(err);
             }
-            fs::write(&full, content)
-                .map_err(|e| format!("cannot write {}: {e}", full.display()))?;
-        }
-        let check = crate::check(&self.root);
-        if !check.errors.is_empty() {
-            self.restore(&originals);
-            return Err(format!(
-                "propose reverted: the repo would fail validation\n{}",
-                crate::error::render_sorted(&check.errors).join("\n")
-            ));
-        }
-
-        for (path, _) in &edits {
-            git(&self.root, &["add", "--", path])?;
-        }
-        // Pathspec-limited: the house may be a subdirectory of a larger
-        // repo whose index carries someone else's staged work, and a bare
-        // commit would sweep it in.
-        let mut commit: Vec<&str> = vec![
-            "-c",
-            "user.name=homeostat-agent",
-            "-c",
-            "user.email=agent@homeostat.local",
-            "commit",
-            "-q",
-            "-m",
-            message,
-            "--",
-        ];
-        commit.extend(edits.iter().map(|(path, _)| path.as_str()));
-        git(&self.root, &commit)?;
+        };
         let head = gitinfo::head_commit(&self.root)
             .ok_or("the commit landed but HEAD is unreadable")?;
 
@@ -401,6 +371,91 @@ impl Server {
              `homeostat apply --plan {saved}`.",
             saved = saved.display()
         ))
+    }
+
+    /// Writes the edits, validates the repo, then stages and commits
+    /// exactly those paths. Every error path is unwound by the caller.
+    fn write_and_commit(
+        &self,
+        edits: &[(String, String)],
+        message: &str,
+        originals: &mut Vec<(String, Option<Vec<u8>>)>,
+    ) -> Result<crate::CheckResult, String> {
+        for (path, content) in edits {
+            let full = self.root.join(path);
+            self.inside_house(&full)?;
+            originals.push((path.clone(), fs::read(&full).ok()));
+            if let Some(parent) = full.parent() {
+                fs::create_dir_all(parent)
+                    .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
+            }
+            fs::write(&full, content)
+                .map_err(|e| format!("cannot write {}: {e}", full.display()))?;
+        }
+        let check = crate::check(&self.root);
+        if !check.errors.is_empty() {
+            return Err(format!(
+                "propose reverted: the repo would fail validation\n{}",
+                crate::error::render_sorted(&check.errors).join("\n")
+            ));
+        }
+
+        for (path, _) in edits {
+            git(&self.root, &["add", "--", path])?;
+        }
+        // Pathspec-limited: the house may be a subdirectory of a larger
+        // repo whose index carries someone else's staged work, and a bare
+        // commit would sweep it in.
+        let mut commit: Vec<&str> = vec![
+            "-c",
+            "user.name=homeostat-agent",
+            "-c",
+            "user.email=agent@homeostat.local",
+            "commit",
+            "-q",
+            "-m",
+            message,
+            "--",
+        ];
+        commit.extend(edits.iter().map(|(path, _)| path.as_str()));
+        git(&self.root, &commit)?;
+        Ok(check)
+    }
+
+    /// A proposed path must land inside the house even after symlinks: a
+    /// committed symlink pointing out of the worktree would otherwise
+    /// carry the write with it. Checks the deepest existing ancestor,
+    /// since the target itself usually does not exist yet.
+    fn inside_house(&self, full: &Path) -> Result<(), String> {
+        let root = self
+            .root
+            .canonicalize()
+            .map_err(|e| format!("cannot resolve {}: {e}", self.root.display()))?;
+        let mut probe: &Path = full;
+        loop {
+            if let Ok(real) = probe.canonicalize() {
+                return if real.starts_with(&root) {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "\"{}\" resolves outside the house repo",
+                        full.display()
+                    ))
+                };
+            }
+            probe = probe
+                .parent()
+                .ok_or_else(|| format!("cannot resolve {}", full.display()))?;
+        }
+    }
+
+    /// Puts the repo back: unstage whatever reached the index, then
+    /// restore every file that was written.
+    fn unwind(&self, edits: &[(String, String)], originals: &[(String, Option<Vec<u8>>)]) {
+        for (path, _) in edits {
+            let _ = git(&self.root, &["reset", "-q", "--", path]);
+        }
+        self.restore(originals);
     }
 
     fn checked_world(&self) -> Result<(crate::CheckResult, plan::World), String> {
@@ -451,7 +506,12 @@ impl Server {
 /// A proposed path must stay inside the house repo and out of the spaces
 /// the machinery owns (git internals, plan artifacts).
 fn check_repo_path(path: &str) -> Result<(), String> {
+    // A leading ':' makes the string git pathspec MAGIC, which `--` does
+    // NOT disable: ":/x" means "x at the top of the enclosing worktree",
+    // so add/commit would reach clean out of the house. Every component
+    // is Normal either way, so the type system does not catch this.
     let ok = !path.is_empty()
+        && !path.starts_with(':')
         && Path::new(path)
             .components()
             .all(|c| matches!(c, Component::Normal(_)))
@@ -462,7 +522,7 @@ fn check_repo_path(path: &str) -> Result<(), String> {
     } else {
         Err(format!(
             "\"{path}\" is not a plain repo-relative path (no absolute paths, no .., \
-             not under .git/ or plans/)"
+             no leading ':', not under .git/ or plans/)"
         ))
     }
 }
@@ -618,4 +678,36 @@ pub fn tools() -> Value {
             "inputSchema": {"type": "object", "properties": {}}
         }
     ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::check_repo_path;
+
+    #[test]
+    fn pathspec_magic_is_refused() {
+        // ":/x" is git top-magic that `--` does not disable: add/commit
+        // would resolve it against the enclosing worktree's root and
+        // sweep in work the agent never wrote.
+        for path in [":/deploy.sh", ":(top)deploy.sh", ":!units/probe.toml", ":"] {
+            assert!(
+                check_repo_path(path).is_err(),
+                "{path} must be refused as a proposed path"
+            );
+        }
+    }
+
+    #[test]
+    fn plain_repo_relative_paths_are_accepted() {
+        for path in ["units/probe.toml", "entities/esphome/lamp.toml", "zones.toml"] {
+            assert!(check_repo_path(path).is_ok(), "{path} must be accepted");
+        }
+    }
+
+    #[test]
+    fn escapes_and_reserved_spaces_are_refused() {
+        for path in ["", "../x", "/etc/passwd", ".git/config", "plans/pending/x.plan"] {
+            assert!(check_repo_path(path).is_err(), "{path} must be refused");
+        }
+    }
 }
