@@ -53,7 +53,22 @@ false — and `motion` stands untouched on loss, stale, never false.
 
 The camera may return a subscription address with an unroutable host (NAT,
 container namespaces); only its path and query are trusted — the netloc
-stays the configured one.
+stays the configured one. This is load-bearing, not defensive: a Tapo
+tested in the field advertises a per-subscription port (1024, 1025, ...)
+that nothing can connect to, so without the rewrite every call after the
+subscribe would time out.
+
+Renew and Unsubscribe are the WS-BaseNotification SubscriptionManager
+operations, and firmware that serves pull points happily may implement
+NEITHER — the same Tapo answers CreatePullPointSubscription and
+PullMessages with 200 and both of those with 400, and its own
+GetServiceCapabilities reports the SubscriptionManager interfaces absent.
+A Renew fault is therefore NOT a stream loss (the pull just succeeded):
+the adapter stops renewing that camera, keeps pulling, and rotates the
+subscription RESUBSCRIBE_BEFORE_S before InitialTerminationTime expires,
+unsubscribing the old one best-effort. Availability does not flap, because
+nothing was lost. Learned from behaviour rather than negotiated: no
+capability calls, per the scope above.
 """
 
 import asyncio
@@ -78,6 +93,13 @@ ENV_CAMERAS = "HOMEOSTAT_CAMERAS"
 DEFAULT_PORT = 2020  # Tapo's ONVIF service port; override per camera with host:port
 PULL_TIMEOUT = "PT10S"
 TERMINATION_TIME = "PT60S"
+TERMINATION_S = 60
+# Re-create a subscription this long before it expires, for cameras with
+# no working Renew. The old one lingers until it times out, so this also
+# bounds the overlap: at 40 s against a PT60S termination, at most two per
+# camera are live at once, well under the MaxPullPoints these firmwares
+# advertise.
+RESUBSCRIBE_BEFORE_S = 40
 RESUBSCRIBE_DELAY_S = 5
 # A camera that rejects one call rejects it again: back off toward
 # RESUBSCRIBE_MAX_S rather than hammering a live camera at a fixed cadence
@@ -252,6 +274,11 @@ async def run_camera(entity, conf: dict, session, http: aiohttp.ClientSession, s
     # persistent instead of arriving as a steady drip.
     failures = 0
     delay = RESUBSCRIBE_DELAY_S
+    # Whether this camera's SubscriptionManager answers. Set false by the
+    # first Renew fault and stays false: re-asking every rotation would
+    # fault every rotation.
+    renews = True
+    loop = asyncio.get_running_loop()
 
     while not stop.is_set():
         try:
@@ -266,6 +293,7 @@ async def run_camera(entity, conf: dict, session, http: aiohttp.ClientSession, s
                 "CreatePullPointSubscription",
             )
             sub_url = subscription_url(created, base_url)
+            created_at = loop.time()
             if up is not True:
                 session.put_json(available_key, True)
                 up = True
@@ -288,22 +316,51 @@ async def run_camera(entity, conf: dict, session, http: aiohttp.ClientSession, s
                         )
                     else:
                         session.put_json(motion_key, value)
-                await soap_call(
-                    http,
-                    sub_url,
-                    f'<wsnt:Renew xmlns:wsnt="{WSNT_NS}">'
-                    f"<wsnt:TerminationTime>{TERMINATION_TIME}</wsnt:TerminationTime>"
-                    "</wsnt:Renew>",
-                    username,
-                    password,
-                    "Renew",
-                )
+                if renews:
+                    try:
+                        await soap_call(
+                            http,
+                            sub_url,
+                            f'<wsnt:Renew xmlns:wsnt="{WSNT_NS}">'
+                            f"<wsnt:TerminationTime>{TERMINATION_TIME}</wsnt:TerminationTime>"
+                            "</wsnt:Renew>",
+                            username,
+                            password,
+                            "Renew",
+                        )
+                    except SoapError as err:
+                        # Renew and Unsubscribe are the WS-BaseNotification
+                        # SubscriptionManager operations, and firmware that
+                        # serves pull points happily may implement neither.
+                        # The STREAM is fine — PullMessages just worked — so
+                        # this is not a loss: stop renewing and rotate the
+                        # subscription before it expires instead. Learned
+                        # from behaviour, not from GetServiceCapabilities:
+                        # no capability negotiation (see the module docstring).
+                        renews = False
+                        session.health_event(
+                            "renew-unsupported", camera=entity.name, error=str(err)
+                        )
                 # Progress is a COMPLETED round trip, not merely a
                 # successful subscribe: a camera that accepts the
                 # subscribe and refuses Renew would otherwise reset the
                 # count every cycle and never back off at all.
                 failures = 0
                 delay = RESUBSCRIBE_DELAY_S
+                if not renews and loop.time() - created_at >= RESUBSCRIBE_BEFORE_S:
+                    # Best effort: a camera with a working SubscriptionManager
+                    # is left clean, and the one that got us here refuses this
+                    # too, which is exactly why the rotation exists.
+                    with contextlib.suppress(SoapError):
+                        await soap_call(
+                            http,
+                            sub_url,
+                            f'<wsnt:Unsubscribe xmlns:wsnt="{WSNT_NS}"/>',
+                            username,
+                            password,
+                            "Unsubscribe",
+                        )
+                    break
         except Exception as err:
             # ANY fault recreates the subscription after the delay — a
             # non-SOAP surprise (bad reply shape, a failed put) must not

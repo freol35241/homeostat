@@ -84,6 +84,7 @@ class FakeCamera:
         # then Renew is refused. A bare status code cannot tell that apart
         # from a refused subscribe.
         self.reject_renew = False
+        self.created = 0
 
     def authenticated(self, root: ElementTree.Element) -> bool:
         token = root.find(".//{*}UsernameToken")
@@ -111,6 +112,7 @@ class FakeCamera:
             return fault()
         sub_id = f"sub_{next(self.ids)}"
         self.subscriptions[sub_id] = asyncio.Queue()
+        self.created += 1
         # A deliberately unroutable netloc: the adapter must keep the
         # configured host and trust only the path.
         return soap(
@@ -168,6 +170,9 @@ class FakeCamera:
             queue.put_nowait(value)
         return web.json_response({"subscriptions": len(self.subscriptions)})
 
+    async def stats(self, request: web.Request) -> web.Response:
+        return web.json_response({"created": self.created})
+
     async def reject_renews(self, request: web.Request) -> web.Response:
         self.reject_renew = True
         return web.json_response({"reject_renew": True})
@@ -192,6 +197,7 @@ def main() -> None:
     app.router.add_post("/control/trigger", camera.trigger)
     app.router.add_post("/control/break", camera.break_subscriptions)
     app.router.add_post("/control/reject-renew", camera.reject_renews)
+    app.router.add_post("/control/stats", camera.stats)
     web.run_app(app, host="127.0.0.1", port=args.port, print=None)
 
 

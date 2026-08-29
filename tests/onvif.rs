@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 use zenoh::sample::SampleKind;
 
-use common::{await_mirror, expect_drop_event, expect_state, free_port, StateSub, Supervisor};
+use common::{await_mirror, expect_drop_event, expect_state, free_port, next_event, StateSub, Supervisor};
 
 const FIXTURE: &str = "tests/fixture_house_onvif";
 const CAMERAS_ENV: &str = "HOMEOSTAT_CAMERAS";
@@ -73,6 +73,25 @@ impl FakeOnvif {
         let mut response = String::new();
         stream.read_to_string(&mut response).expect("read control response");
         assert!(response.starts_with("HTTP/1.1 200"), "control {path}: {response}");
+    }
+
+    /// How many subscriptions the camera has handed out, from its own
+    /// count — the only way to see a rotation from outside the adapter.
+    fn created(&self) -> u64 {
+        let mut stream = std::net::TcpStream::connect(("127.0.0.1", self.port))
+            .expect("connect to fake camera control");
+        stream
+            .write_all(
+                "POST /control/stats HTTP/1.1\r\nHost: 127.0.0.1\r\n\
+                 Content-Length: 0\r\nConnection: close\r\n\r\n"
+                    .as_bytes(),
+            )
+            .expect("write stats request");
+        let mut response = String::new();
+        stream.read_to_string(&mut response).expect("read stats response");
+        let body = response.rsplit("\r\n\r\n").next().expect("stats body");
+        let value: Value = serde_json::from_str(body).expect("stats is JSON");
+        value["created"].as_u64().expect("created is a number")
     }
 }
 
@@ -241,39 +260,79 @@ async fn malformed_motion_value_drops_with_health_event() {
     sup.shutdown();
 }
 
-/// (d) The VP52 shape: the subscribe is accepted, the long poll runs, and
-/// Renew is refused with HTTP 400. From outside the process that is
-/// indistinguishable from a refused subscribe unless the event says which
-/// call failed and what the camera said — so it does, and it backs off
-/// instead of retrying a live camera at a fixed cadence forever.
+/// (d) The VP52 shape, diagnosed on real hardware: a Tapo answers
+/// CreatePullPointSubscription and PullMessages with 200 and Renew with
+/// 400, because it implements no WS-BaseNotification SubscriptionManager.
+/// The pull stream is FINE, so this must not read as a stream loss — the
+/// old behaviour tore the subscription down and flapped `available`
+/// roughly every 17 s, indefinitely, against a live camera.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_refused_renew_names_the_call_and_backs_off() {
+async fn a_camera_without_a_subscription_manager_keeps_streaming() {
     let (camera, _cameras_path, mut sup, observer) = setup().await;
     let state_sub = observer.declare_subscriber(MOTION_KEY).await.expect("state subscriber");
+    let avail_sub = observer.declare_subscriber(AVAILABLE_KEY).await.expect("available subscriber");
     let event_sub = observer.declare_subscriber(EVENT_KEY).await.expect("event subscriber");
 
+    // available = true is published once, at the first subscription, which
+    // is before this subscriber exists — so the assertion below is that
+    // NOTHING arrives on it, i.e. no transition at all.
     trigger_until_motion(&camera, &state_sub, true).await;
     camera.control("/control/reject-renew");
 
-    let event = expect_drop_event(&event_sub, "event-stream-lost").await;
+    // The refusal is reported once, naming the call — and as its own kind,
+    // not as a dropped message.
+    let event = next_event(&event_sub).await;
+    assert_eq!(event["kind"], json!("renew-unsupported"), "{event}");
     let error = event["error"].as_str().expect("error is a string");
-    assert!(
-        error.starts_with("Renew: HTTP 400"),
-        "the failing call is named, not just its status: {error}"
-    );
-    assert!(
-        error.contains("renew refused"),
-        "the camera's own fault reason survives into the event: {error}"
-    );
-    assert_eq!(event["consecutive_failures"], json!(1), "{event}");
-    assert_eq!(event["retry_in_s"], json!(5), "{event}");
+    assert!(error.starts_with("Renew: HTTP 400"), "the call is named: {error}");
 
-    // The subscribe still succeeds, so the stream recovers and fails
-    // again — and the second failure reports as the second, with a longer
-    // wait, rather than as another first.
-    let event = expect_drop_event(&event_sub, "event-stream-lost").await;
-    assert_eq!(event["consecutive_failures"], json!(2), "{event}");
-    assert_eq!(event["retry_in_s"], json!(10), "{event}");
+    // And the stream carries on: motion still flows, with no availability
+    // transition at all. If the Renew fault were treated as a loss, an
+    // available=false would arrive before this motion does.
+    trigger_until_motion(&camera, &state_sub, false).await;
+    trigger_until_motion(&camera, &state_sub, true).await;
+
+    sup.shutdown();
+    assert!(
+        avail_sub.try_recv().expect("available channel open").is_none(),
+        "availability must not flap: the pull stream was never lost"
+    );
+}
+
+/// (e) ...and the subscription is ROTATED before it expires, which is what
+/// keeps such a camera working past InitialTerminationTime. Without a
+/// working Renew the stream would otherwise simply stop after PT60S.
+/// Slow by nature: the rotation is a real wall-clock interval.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_camera_without_a_subscription_manager_rotates_its_subscription() {
+    let (camera, _cameras_path, mut sup, observer) = setup().await;
+    let state_sub = observer.declare_subscriber(MOTION_KEY).await.expect("state subscriber");
+    let avail_sub = observer.declare_subscriber(AVAILABLE_KEY).await.expect("available subscriber");
+
+    trigger_until_motion(&camera, &state_sub, true).await;
+    camera.control("/control/reject-renew");
+    let before = camera.created();
+
+    // RESUBSCRIBE_BEFORE_S is 40s against a PT60S termination.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(90);
+    loop {
+        if camera.created() > before {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the subscription was never rotated: still {before} after 90s"
+        );
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+
+    // The rotation is invisible from the bus: motion keeps flowing and
+    // availability never moves, because nothing was ever lost.
+    trigger_until_motion(&camera, &state_sub, false).await;
+    assert!(
+        avail_sub.try_recv().expect("available channel open").is_none(),
+        "a rotation must not surface as an availability transition"
+    );
 
     sup.shutdown();
 }
