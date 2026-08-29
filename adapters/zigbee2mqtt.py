@@ -160,6 +160,18 @@ def main():
     session = homeostat.connect()
     params = Params(session, PARAM_DEFAULTS)
     inventory_seen = threading.Event()
+    # Device ids the bridge has told us about, bound or not. Mutated and
+    # read on the paho callback thread only.
+    known: set[str] = set()
+
+    def unbound(topic: str, dev_id: str) -> None:
+        """A device the BRIDGE knows but no entity file binds is a steady
+        state, not a dropped message — discovery already reports it with
+        configured=false, and the discovery-first workflow guarantees a
+        period where every device is in exactly this state. Only a device
+        absent from the inventory entirely is an anomaly worth an event."""
+        if dev_id not in known:
+            session.health_event("drop", reason="unknown-device", topic=topic)
 
     def on_z2m_message(client, userdata, msg):
         # Everything routed here matched a {base}/... subscription, so the
@@ -175,14 +187,18 @@ def main():
             if not isinstance(devices, list):
                 session.health_event("drop", reason="malformed-payload", topic=msg.topic)
                 return
-            session.put_json(keys.discovery_key(unit), inventory(devices, by_id))
+            records = inventory(devices, by_id)
+            known.clear()
+            known.update(record["id"] for record in records)
+            session.put_json(keys.discovery_key(unit), records)
             return
         # Exactly {base}/{id}/availability — two segments would be a device
         # whose friendly name is literally "availability".
         if rest.endswith("/availability") and rest.count("/") == 1:
-            entity = by_id.get(rest.split("/")[0])
+            dev_id = rest.split("/")[0]
+            entity = by_id.get(dev_id)
             if entity is None:
-                session.health_event("drop", reason="unknown-device", topic=msg.topic)
+                unbound(msg.topic, dev_id)
                 return
             raw = msg.payload.decode(errors="replace").strip()
             try:
@@ -199,7 +215,7 @@ def main():
             return
         entity = by_id.get(rest)
         if entity is None:
-            session.health_event("drop", reason="unknown-device", topic=msg.topic)
+            unbound(msg.topic, rest)
             return
         try:
             payload = json.loads(msg.payload)

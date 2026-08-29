@@ -11,8 +11,8 @@ use serde_json::{json, Value};
 use zenoh::sample::SampleKind;
 
 use common::{
-    await_health, expect_drop_event, expect_event_kind, expect_states, health_watch, process_alive,
-    temp_house, Mosquitto, Mqtt, Supervisor,
+    await_health, expect_drop_event, expect_event_kind, expect_states, health_watch, next_event,
+    process_alive, temp_house, Mosquitto, Mqtt, Supervisor,
 };
 
 const FIXTURE: &str = "tests/fixture_house_z2m";
@@ -631,4 +631,53 @@ async fn broker_credentials_come_from_a_file_outside_the_repo() {
     let mut sup = sup;
     sup.shutdown();
     let _ = std::fs::remove_file(&creds);
+}
+
+/// (k) A device the bridge knows but no entity file binds is a steady
+/// state, not a dropped message: it must not emit an event per publish.
+/// The discovery-first workflow makes that the NORMAL condition, so the
+/// event would run forever on a house mid-configuration.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_known_but_unbound_device_does_not_report_every_message() {
+    let (mosquitto, mut sup, observer) = setup().await;
+    let event_sub = observer
+        .declare_subscriber(EVENT_KEY)
+        .await
+        .expect("event subscriber");
+    let discovery_sub = observer
+        .declare_subscriber("home/discovery/zigbee")
+        .await
+        .expect("discovery subscriber");
+    let mut mqtt = Mqtt::connect(mosquitto.port, "test-unbound").await;
+
+    // The bridge knows snzb_03_01; the fixture binds no entity to it.
+    mqtt.publish(
+        "zigbee2mqtt/bridge/devices",
+        r#"[{"ieee_address":"0x1","friendly_name":"snzb_03_01","definition":null}]"#,
+    )
+    .await;
+    tokio::time::timeout(Duration::from_secs(10), discovery_sub.recv_async())
+        .await
+        .expect("inventory processed within 10s")
+        .expect("discovery sample");
+
+    for _ in 0..3 {
+        mqtt.publish("zigbee2mqtt/snzb_03_01", r#"{"occupancy":true}"#).await;
+    }
+    // A sentinel the adapter definitely reports, published last. The
+    // assertion is strict on the NEXT event: any unknown-device emitted
+    // for snzb_03_01 would arrive ahead of it.
+    mqtt.publish("zigbee2mqtt/lamp_kitchen_1", "certainly not json").await;
+    assert_eq!(
+        next_event(&event_sub).await["reason"],
+        json!("malformed-payload"),
+        "a known-but-unbound device must not report each publish"
+    );
+
+    // ...whereas a device the bridge has never mentioned still reports.
+    mqtt.publish("zigbee2mqtt/ghost_device", r#"{"state":"ON"}"#).await;
+    assert_eq!(next_event(&event_sub).await["reason"], json!("unknown-device"));
+
+    sup.shutdown();
+    drop(mosquitto);
 }

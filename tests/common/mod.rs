@@ -491,6 +491,18 @@ pub async fn await_mirror(observer: &zenoh::Session, key: &str, expected: &serde
 
 /// Reads health events until one matches the expected drop reason.
 #[allow(dead_code)] // each test binary uses its own subset of the harness
+/// The NEXT health event, whatever it is. Unlike `expect_drop_event` this
+/// does not scan past events that do not match — which is the point when
+/// the assertion is that some event must NOT have been emitted.
+#[allow(dead_code)] // each test binary uses its own subset of the harness
+pub async fn next_event(sub: &StateSub) -> Value {
+    let sample = tokio::time::timeout(Duration::from_secs(20), sub.recv_async())
+        .await
+        .expect("a health event within 20s")
+        .expect("event stream open");
+    serde_json::from_slice(&sample.payload().to_bytes()).expect("health event is JSON")
+}
+
 pub async fn expect_drop_event(sub: &StateSub, reason: &str) -> Value {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
     loop {

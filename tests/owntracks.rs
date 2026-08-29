@@ -11,8 +11,8 @@ use serde_json::{json, Value};
 use zenoh::sample::SampleKind;
 
 use common::{
-    await_health, expect_drop_event, expect_states, health_watch, process_alive, Mosquitto, Mqtt,
-    Supervisor,
+    await_health, expect_drop_event, expect_states, health_watch, next_event, process_alive,
+    Mosquitto, Mqtt, Supervisor,
 };
 
 const FIXTURE: &str = "tests/fixture_house_owntracks";
@@ -253,4 +253,42 @@ async fn seen_devices_published_as_discovery() {
     assert_eq!(mirrored, doc, "mirror serves the same document");
 
     sup.shutdown();
+}
+
+/// An unbound phone keeps publishing forever, so the unknown-device event
+/// fires once on first sight and then stays quiet — discovery already
+/// carries the pair with configured=false.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unbound_phone_reports_once_not_per_fix() {
+    let (mosquitto, mut sup, observer) = setup().await;
+    let event_sub = observer
+        .declare_subscriber(EVENT_KEY)
+        .await
+        .expect("event subscriber");
+    let mut mqtt = Mqtt::connect(mosquitto.port, "test-unbound").await;
+
+    for lat in [1.0, 2.0, 3.0] {
+        mqtt.publish(
+            "owntracks/carol/phone",
+            &format!(r#"{{"_type":"location","lat":{lat},"lon":4.0}}"#),
+        )
+        .await;
+    }
+    assert_eq!(
+        next_event(&event_sub).await["reason"],
+        json!("unknown-device"),
+        "first sight reports once"
+    );
+
+    // A sentinel published last, asserted strictly: any further
+    // unknown-device from carol's remaining two fixes would precede it.
+    mqtt.publish("owntracks/alice/phone", "certainly not json").await;
+    assert_eq!(
+        next_event(&event_sub).await["reason"],
+        json!("malformed-payload"),
+        "an unbound phone must not report every fix"
+    );
+
+    sup.shutdown();
+    drop(mosquitto);
 }

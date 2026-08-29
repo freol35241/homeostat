@@ -170,6 +170,17 @@ place; it is not runtime-tunable, so it is not a param. The adapter
 subscribes `{base}/+`, which keeps `bridge/#` traffic out and means
 friendly names containing `/` are unsupported.
 
+An unbound device is not a dropped message (revised 2026-08-29, from a
+live 12-device bridge): `unknown-device` fires only when the device is
+not in the adapter's own discovery view — for z2m, absent from
+`bridge/devices` entirely; for OwnTracks, whose view grows incrementally,
+on first sight and then never again. A device the bridge knows but no
+entity file binds is a steady state that discovery already reports with
+`configured: false`, and the discovery-first workflow makes it the normal
+condition for a house mid-configuration. Reporting it per publish
+measured 107 events/hour from ONE device, forever, into the recorder's
+store.
+
 A wrong base topic is the failure worth designing against: the
 subscription SUCCEEDS and matches nothing, so there is no SUBACK timeout
 and no error — an adapter permanently deaf while reporting healthy, the
