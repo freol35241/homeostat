@@ -265,7 +265,7 @@ mod tests {
         LoadedUnit {
             manifest: UnitManifest {
                 schema: 1,
-                unit: UnitSection { name: name.to_string(), kind, description: None },
+                unit: UnitSection { name: name.to_string(), kind, description: None, inputs: None },
                 runtime: RuntimeSection {
                     command: "true".to_string(),
                     restart: RestartPolicy::Always,

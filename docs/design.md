@@ -170,6 +170,20 @@ place; it is not runtime-tunable, so it is not a param. The adapter
 subscribes `{base}/+`, which keeps `bridge/#` traffic out and means
 friendly names containing `/` are unsupported.
 
+House-wide inputs (added 2026-08-29, from a live standup): change
+detection is per-unit — a unit's `files_hash` covers its command, its own
+entity files and its zone. The dashboard breaks that assumption, because
+its model is a view over the WHOLE house: entities bound to another
+adapter change what it should render while changing none of its own
+files, so `apply` restarted the adapter, reported success, and left the
+page confidently wrong — rendering, responsive, missing a room that
+exists. A unit declares `[unit] inputs = "house"` (default `own`) and
+every manifest, every entity file and `zones.toml` feed its hash. The
+dashboard also rebuilds its model per `/api/model` request, keeping the
+last good one if a rebuild fails, so a browser refresh suffices even
+without a restart. `mcp` needs neither: it re-reads the repo per request
+already.
+
 An unbound device is not a dropped message (revised 2026-08-29, from a
 live 12-device bridge): `unknown-device` fires only when the device is
 not in the adapter's own discovery view — for z2m, absent from

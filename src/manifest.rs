@@ -40,6 +40,20 @@ pub struct UnitSection {
     pub name: String,
     pub kind: UnitKind,
     pub description: Option<String>,
+    /// Which repo files are this unit's inputs. Absent means `own` — the
+    /// unit's command, its own entity files, its zone if it uses one.
+    pub inputs: Option<UnitInputs>,
+}
+
+/// A unit whose model spans the WHOLE house (the dashboard) is changed by
+/// any entity or manifest anywhere, not just by files it owns. Per-unit
+/// change detection cannot infer that, so the unit declares it: otherwise
+/// `apply` reports success while leaving the unit confidently stale.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UnitInputs {
+    Own,
+    House,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
