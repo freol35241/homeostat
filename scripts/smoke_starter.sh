@@ -67,13 +67,23 @@ for unit in clock recorder zigbee evening_lights mcp; do
   echo "$unit is running"
 done
 
-# The agent surface answers MCP over the published HTTP port.
-init="$(curl -s -m 10 -X POST "http://127.0.0.1:${MCP_PORT}" \
+# The agent surface refuses a request without the write header — the
+# shape a cross-origin browser POST can produce (docs/design.md, Agent
+# surface). Asserted before the happy path, so a surface that answered
+# everything could not pass this smoke.
+refused="$(curl -s -m 10 -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:${MCP_PORT}" \
   -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}')"
+[ "$refused" = "403" ] \
+  || fail "MCP answered a request with no X-Homeostat header: HTTP $refused"
+
+# ...and answers a client that carries it.
+init="$(curl -s -m 10 -X POST "http://127.0.0.1:${MCP_PORT}" \
+  -H 'Content-Type: application/json' -H 'X-Homeostat: 1' \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}')"
 echo "$init" | grep -q '"name":"homeostat"' \
   || fail "MCP initialize did not answer over HTTP: $init"
-echo "agent surface answers on :${MCP_PORT}"
+echo "agent surface answers on :${MCP_PORT}, and refuses an un-headered POST"
 
 CID="$(compose ps -q homeostat)"
 compose stop --timeout 20 homeostat >/dev/null 2>&1
