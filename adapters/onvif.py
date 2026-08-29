@@ -63,12 +63,16 @@ operations, and firmware that serves pull points happily may implement
 NEITHER — the same Tapo answers CreatePullPointSubscription and
 PullMessages with 200 and both of those with 400, and its own
 GetServiceCapabilities reports the SubscriptionManager interfaces absent.
-A Renew fault is therefore NOT a stream loss (the pull just succeeded):
-the adapter stops renewing that camera, keeps pulling, and rotates the
+A Renew fault has two causes and they must be told apart: firmware with no
+SubscriptionManager, where the stream is fine, or a subscription that is
+genuinely gone, where it is dead. The NEXT pull decides — it succeeds in
+the first case and fails in the second — so the adapter withholds judgment
+for one round trip rather than concluding from the fault alone. On the
+first reading it stops renewing that camera, keeps pulling, and rotates the
 subscription RESUBSCRIBE_BEFORE_S before InitialTerminationTime expires,
-unsubscribing the old one best-effort. Availability does not flap, because
-nothing was lost. Learned from behaviour rather than negotiated: no
-capability calls, per the scope above.
+unsubscribing the old one best-effort; availability does not flap, because
+nothing was lost. On the second the ordinary loss path runs. Learned from
+behaviour rather than negotiated: no capability calls, per the scope above.
 """
 
 import asyncio
@@ -294,6 +298,9 @@ async def run_camera(entity, conf: dict, session, http: aiohttp.ClientSession, s
             )
             sub_url = subscription_url(created, base_url)
             created_at = loop.time()
+            # A fresh subscription: believe Renew works until it says
+            # otherwise AND a pull confirms the stream survived it.
+            renew_fault: SoapError | None = None
             if up is not True:
                 session.put_json(available_key, True)
                 up = True
@@ -309,6 +316,18 @@ async def run_camera(entity, conf: dict, session, http: aiohttp.ClientSession, s
                     password,
                     "PullMessages",
                 )
+                if renew_fault is not None:
+                    # The pull above succeeded, so the stream was never
+                    # lost: this firmware serves pull points and does not
+                    # implement the SubscriptionManager. Stop renewing and
+                    # rotate the subscription before it expires instead.
+                    # Learned from behaviour, not from GetServiceCapabilities:
+                    # no capability negotiation (see the module docstring).
+                    renews = False
+                    session.health_event(
+                        "renew-unsupported", camera=entity.name, error=str(renew_fault)
+                    )
+                    renew_fault = None
                 for value, error in motion_values(pulled):
                     if error is not None:
                         session.health_event(
@@ -329,18 +348,16 @@ async def run_camera(entity, conf: dict, session, http: aiohttp.ClientSession, s
                             "Renew",
                         )
                     except SoapError as err:
-                        # Renew and Unsubscribe are the WS-BaseNotification
-                        # SubscriptionManager operations, and firmware that
-                        # serves pull points happily may implement neither.
-                        # The STREAM is fine — PullMessages just worked — so
-                        # this is not a loss: stop renewing and rotate the
-                        # subscription before it expires instead. Learned
-                        # from behaviour, not from GetServiceCapabilities:
-                        # no capability negotiation (see the module docstring).
-                        renews = False
-                        session.health_event(
-                            "renew-unsupported", camera=entity.name, error=str(err)
-                        )
+                        # A Renew fault has two causes and they need
+                        # telling apart: firmware with no SubscriptionManager
+                        # (the stream is fine), or a subscription that is
+                        # genuinely gone (the stream is dead). Do not
+                        # conclude yet — the NEXT pull decides, because it
+                        # succeeds in the first case and fails in the
+                        # second. Concluding here marks a camera whose
+                        # subscription merely expired as permanently
+                        # renew-less.
+                        renew_fault = err
                 # Progress is a COMPLETED round trip, not merely a
                 # successful subscribe: a camera that accepts the
                 # subscribe and refuses Renew would otherwise reset the

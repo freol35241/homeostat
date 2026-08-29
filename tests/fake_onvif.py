@@ -84,6 +84,7 @@ class FakeCamera:
         # then Renew is refused. A bare status code cannot tell that apart
         # from a refused subscribe.
         self.reject_renew = False
+        self.break_on_renew = False
         self.created = 0
 
     def authenticated(self, root: ElementTree.Element) -> bool:
@@ -133,6 +134,13 @@ class FakeCamera:
         if queue is None:
             return fault()
         if root.find(f".//{{{WSNT_NS}}}Renew") is not None:
+            if self.break_on_renew:
+                # The race CI caught: the subscription really is gone, and
+                # Renew is the call that discovers it. The next pull must
+                # fail too, which is how the adapter tells this apart from
+                # firmware that simply has no SubscriptionManager.
+                self.subscriptions.clear()
+                return fault()
             if self.reject_renew:
                 return web.Response(
                     status=400,
@@ -170,6 +178,10 @@ class FakeCamera:
             queue.put_nowait(value)
         return web.json_response({"subscriptions": len(self.subscriptions)})
 
+    async def break_on_renews(self, request: web.Request) -> web.Response:
+        self.break_on_renew = True
+        return web.json_response({"break_on_renew": True})
+
     async def stats(self, request: web.Request) -> web.Response:
         return web.json_response({"created": self.created})
 
@@ -198,6 +210,7 @@ def main() -> None:
     app.router.add_post("/control/break", camera.break_subscriptions)
     app.router.add_post("/control/reject-renew", camera.reject_renews)
     app.router.add_post("/control/stats", camera.stats)
+    app.router.add_post("/control/break-on-renew", camera.break_on_renews)
     web.run_app(app, host="127.0.0.1", port=args.port, print=None)
 
 

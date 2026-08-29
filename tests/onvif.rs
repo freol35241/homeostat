@@ -336,3 +336,30 @@ async fn a_camera_without_a_subscription_manager_rotates_its_subscription() {
 
     sup.shutdown();
 }
+
+/// (f) The other cause of a Renew fault, and the one CI caught as a race:
+/// the subscription is genuinely GONE, and Renew is merely the call that
+/// discovers it. Concluding "no SubscriptionManager" from the fault alone
+/// would mark a perfectly capable camera as renew-less forever. The next
+/// pull disambiguates — here it fails, so this is an ordinary loss.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_renew_fault_from_a_lost_subscription_is_still_a_loss() {
+    let (camera, _cameras_path, mut sup, observer) = setup().await;
+    let state_sub = observer.declare_subscriber(MOTION_KEY).await.expect("state subscriber");
+    let event_sub = observer.declare_subscriber(EVENT_KEY).await.expect("event subscriber");
+
+    trigger_until_motion(&camera, &state_sub, true).await;
+    camera.control("/control/break-on-renew");
+
+    let event = next_event(&event_sub).await;
+    assert_eq!(
+        event["kind"], json!("drop"),
+        "a vanished subscription is a loss, not a firmware quirk: {event}"
+    );
+    assert_eq!(event["reason"], json!("event-stream-lost"), "{event}");
+
+    // ...and it recovers the ordinary way.
+    trigger_until_motion(&camera, &state_sub, false).await;
+
+    sup.shutdown();
+}
