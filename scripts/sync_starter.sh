@@ -95,3 +95,21 @@ if [ -n "$stale" ]; then
   echo "run scripts/sync_starter.sh and commit the result" >&2
   exit 1
 fi
+
+# The release version lives in four places and they must agree. Cargo's was
+# left at 0.1.0 through eight releases, so every published binary reported
+# 0.1.0 -- a habit is not enough, and a version nobody can trust is worse
+# than no version at all.
+version="${SDK_TAG#v}"
+bad=""
+check_version() {
+  grep -qF "$2" "$REPO/$1" || bad="$bad\n  $1: expected $2"
+}
+check_version Cargo.toml "version = \"$version\""
+check_version sdk/python/pyproject.toml "version = \"$version\""
+check_version examples/starter-house/docker-compose.yml "homeostat:$version}"
+if [ -n "$bad" ]; then
+  echo "version drift against SDK_TAG=$SDK_TAG:$(printf "$bad")" >&2
+  echo "cutting a release bumps all four together" >&2
+  exit 1
+fi
