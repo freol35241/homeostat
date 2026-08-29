@@ -6,7 +6,7 @@
 # ]
 #
 # [tool.uv.sources]
-# homeostat = { git = "https://github.com/freol35241/homeostat", subdirectory = "sdk/python", tag = "v0.5.0" }
+# homeostat = { git = "https://github.com/freol35241/homeostat", subdirectory = "sdk/python", tag = "v0.6.0" }
 # ///
 """OwnTracks adapter: a translating subscriber, same shape as Zigbee2MQTT.
 
@@ -55,7 +55,8 @@ def main():
     def on_owntracks_message(client, userdata, msg):
         _, user, device = msg.topic.split("/")
         dev_id = f"{user}/{device}"
-        if dev_id not in inventory:
+        first_sight = dev_id not in inventory
+        if first_sight:
             entity = by_id.get(dev_id)
             inventory[dev_id] = {
                 "id": dev_id,
@@ -80,7 +81,13 @@ def main():
 
         entity = by_id.get(dev_id)
         if entity is None:
-            session.health_event("drop", reason="unknown-device", topic=msg.topic)
+            # Once, on first sight. A phone nobody has bound yet keeps
+            # publishing forever, and discovery already carries it with
+            # configured=false — repeating the event per fix would bury
+            # the health feed during exactly the discovery-first pass the
+            # design asks for.
+            if first_sight:
+                session.health_event("drop", reason="unknown-device", topic=msg.topic)
             return
 
         session.put_json(keys.state_key(entity.room, entity.name, "lat"), payload["lat"])

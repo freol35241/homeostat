@@ -6,7 +6,7 @@
 # ]
 #
 # [tool.uv.sources]
-# homeostat = { git = "https://github.com/freol35241/homeostat", subdirectory = "sdk/python", tag = "v0.5.0" }
+# homeostat = { git = "https://github.com/freol35241/homeostat", subdirectory = "sdk/python", tag = "v0.6.0" }
 # ///
 """Dashboard service: the family's web surface (see docs/design.md, Dashboard).
 
@@ -60,6 +60,7 @@ import json
 import os
 import threading
 import time
+import traceback
 from pathlib import Path
 
 import aiohttp
@@ -269,15 +270,44 @@ async def guard(request: web.Request, handler):
     return await handler(request)
 
 
-def make_app(hub: Hub, model: dict, page: Path, assets_dir: Path) -> web.Application:
-    entities = {e["name"]: e for e in model["entities"]}
-    units = {u["name"]: u for u in model["units"]}
+class Model:
+    """The dashboard's view of the whole house, rebuilt on demand.
+
+    Its inputs are every manifest and every entity file of every unit, so
+    a binding added to another adapter changes what this page should show
+    while changing none of this unit's own files. The manifest declares
+    `inputs = "house"` so `apply` restarts it, and this rebuild means a
+    browser refresh is enough even without one — the failure being avoided
+    is a dashboard that renders confidently and omits a room that exists.
+    """
+
+    def __init__(self) -> None:
+        self.model = build_model(house.load_house("."))
+        self._index()
+
+    def _index(self) -> None:
+        self.entities = {e["name"]: e for e in self.model["entities"]}
+        self.units = {u["name"]: u for u in self.model["units"]}
+
+    def reload(self) -> None:
+        try:
+            self.model = build_model(house.load_house("."))
+        except Exception:
+            # A half-written edit must not blank the page: keep the last
+            # good model and leave a trace (captured at home/meta/{unit}/log).
+            traceback.print_exc()
+            return
+        self._index()
+
+
+def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Application:
 
     async def index(request: web.Request) -> web.StreamResponse:
         return web.FileResponse(page)
 
     async def api_model(request: web.Request) -> web.Response:
-        return web.json_response(dict(model, tiles=tiles_path() is not None))
+        model.reload()
+        return web.json_response(dict(model.model, tiles=tiles_path() is not None))
 
     async def api_asset(request: web.Request) -> web.StreamResponse:
         name = request.match_info["name"]
@@ -321,7 +351,7 @@ def make_app(hub: Hub, model: dict, page: Path, assets_dir: Path) -> web.Applica
             aspect, value = str(body["aspect"]), body["value"]
         except (ValueError, KeyError):
             return json_error("body must be {room, entity, aspect, value}")
-        spec = entities.get(entity)
+        spec = model.entities.get(entity)
         if spec is None or spec["room"] != room:
             return json_error(f"unknown entity {room}/{entity}")
         allowed = COMMANDABLE.get(spec["capability"], set())
@@ -340,7 +370,7 @@ def make_app(hub: Hub, model: dict, page: Path, assets_dir: Path) -> web.Applica
         # never relayed through a virtual entity, whose owner would
         # re-publish at the automation band. Every light gets the command,
         # lit or not: idempotent, and immune to stale state.
-        lights = [e for e in model["entities"] if e["capability"] == "light"]
+        lights = [e for e in model.model["entities"] if e["capability"] == "light"]
         envelope = keys.cmd_envelope(False, "manual", "dashboard")
         for spec in lights:
             hub.session.put_json(keys.cmd_key(spec["room"], spec["name"], "on"), envelope)
@@ -352,7 +382,7 @@ def make_app(hub: Hub, model: dict, page: Path, assets_dir: Path) -> web.Applica
             unit, param, value = str(body["unit"]), str(body["param"]), body["value"]
         except (ValueError, KeyError):
             return json_error("body must be {unit, param, value}")
-        spec = units.get(unit)
+        spec = model.units.get(unit)
         if spec is None or param not in spec["params"]:
             return json_error(f"no family-editable param {unit}.{param}")
         try:
@@ -390,7 +420,7 @@ def make_app(hub: Hub, model: dict, page: Path, assets_dir: Path) -> web.Applica
 
     async def api_logs(request: web.Request) -> web.Response:
         unit = request.query.get("unit", "")
-        if unit not in units:
+        if unit not in model.units:
             return json_error(f"unknown unit {unit}", status=404)
         selector = f"home/meta/{unit}/log"
         lines_param = request.query.get("lines")
@@ -408,7 +438,7 @@ def make_app(hub: Hub, model: dict, page: Path, assets_dir: Path) -> web.Applica
         return web.json_response(entries)
 
     def camera_spec(request: web.Request) -> dict | None:
-        spec = entities.get(request.match_info["entity"])
+        spec = model.entities.get(request.match_info["entity"])
         return spec if spec is not None and spec["capability"] == "camera" else None
 
     def go2rtc_base() -> str:
@@ -522,7 +552,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    model = build_model(house.load_house("."))
+    model = Model()
     script_dir = Path(__file__).resolve().parent
     page = script_dir / "dashboard.html"
     assets_dir = script_dir / "assets"

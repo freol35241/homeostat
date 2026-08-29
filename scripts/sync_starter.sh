@@ -23,7 +23,7 @@
 set -euo pipefail
 
 # Bumped with the starter's compose image at each release.
-SDK_TAG="v0.5.0"
+SDK_TAG="v0.6.0"
 SDK_LINE='# homeostat = { git = "https://github.com/freol35241/homeostat", subdirectory = "sdk/python", tag = "'"$SDK_TAG"'" }'
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
