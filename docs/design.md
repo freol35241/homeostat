@@ -1064,6 +1064,18 @@ Decisions and why:
   plan error was not designed for. Settled: exclusivity constrains the
   automation band only; manual-band units sit above it by construction.
   Voice satellites inherit this same answer.
+- **The dashboard honours its own grant table (settled 2026-09-07, #11).**
+  Grants resolve at plan time and nothing on the bus re-checks them, so
+  a blanket `home/cmd/**` publish granted for `light` could still carry a
+  `climate` setpoint if the unit chose to send one — and the dashboard
+  did, gating only on the capability's vocabulary. Settled: the dashboard
+  derives the capabilities it may command from its own manifest's
+  cmd-class publishes, refuses `/api/cmd` for any other, and marks each
+  entity `commandable` in the model so the page renders ungranted
+  controls inert. This is the unit keeping its declaration, not a
+  boundary: a unit that opens its own session can publish anything. If
+  the grant table is ever to constrain rather than describe, that is a
+  bus credential per unit, not a check in each adapter.
 - **Group actions are manual-edge fan-outs (settled 2026-07-26).**
   "Darken the whole house" is family intent over a set of entities, so
   the fan-out happens at the manual edge: `POST /api/lights/off` sends

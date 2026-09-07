@@ -171,6 +171,7 @@ h1.view-title { font-size: 20px; margin: 0 0 16px; }
   background: var(--card); border: 1px solid var(--border); box-shadow: 0 1px 2px rgba(0,0,0,.2);
   transition: left 140ms ease; }
 .toggle.on { background: var(--accent); }
+.toggle.disabled { opacity: .4; cursor: default; }
 .toggle.on .knob { left: 20px; border-color: var(--accent); }
 
 /* slider row */
@@ -872,11 +873,18 @@ function displayAspectValue(entity, aspect, value) {
   return String(value);
 }
 
+// Controls render inert when this dashboard's manifest does not grant the
+// entity's capability (model.commandable): the server refuses such a
+// command anyway, and a live-looking control for it would misreport the
+// grant table.
+function controlDisabled(entity) { return !entity.commandable; }
+
 function widgetForLight(entity) {
   var on = !!stateValue(entity.room, entity.name, 'on');
+  var inert = controlDisabled(entity);
   var html = '<div class="entity-row row-clickable" data-action="entity-detail" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '">' +
     '<span class="entity-name" title="' + esc(entity.label) + '">' + esc(entity.label) + '</span>' +
-    '<span class="toggle ' + (on ? 'on' : '') + '" data-action="toggle-light" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '" data-value="' + (!on) + '"><span class="knob"></span></span>' +
+    '<span class="toggle ' + (on ? 'on' : '') + (inert ? ' disabled' : '') + '"' + (inert ? '' : ' data-action="toggle-light"') + ' data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '" data-value="' + (!on) + '"><span class="knob"></span></span>' +
     '</div>';
 
   if (entity.features && entity.features.indexOf('brightness') !== -1) {
@@ -885,7 +893,7 @@ function widgetForLight(entity) {
     var pct = typeof b === 'number' ? Math.round((b / 254) * 100) : 0;
     if (localState.sliderDrag[bkey] !== undefined) pct = localState.sliderDrag[bkey];
     html += '<div class="slider-row entity-sub"><span class="slabel">brightness</span>' +
-      '<input type="range" min="0" max="100" value="' + pct + '" data-action="slider" data-kind="brightness" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '">' +
+      '<input type="range" min="0" max="100" value="' + pct + '"' + (inert ? ' disabled' : '') + ' data-action="slider" data-kind="brightness" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '">' +
       '<span class="sval">' + pct + '%</span></div>';
   }
   if (entity.features && entity.features.indexOf('color_temp') !== -1) {
@@ -895,7 +903,7 @@ function widgetForLight(entity) {
     if (localState.sliderDrag[ctkey] !== undefined) mired = localState.sliderDrag[ctkey];
     var kelvin = Math.round(1e6 / mired / 100) * 100;
     html += '<div class="slider-row entity-sub"><span class="slabel">color temp</span>' +
-      '<input type="range" min="150" max="500" value="' + mired + '" data-action="slider" data-kind="color_temp" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '">' +
+      '<input type="range" min="150" max="500" value="' + mired + '"' + (inert ? ' disabled' : '') + ' data-action="slider" data-kind="color_temp" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '">' +
       '<span class="sval">' + kelvin + ' K</span></div>';
   }
   return html;
@@ -918,7 +926,7 @@ function widgetForLock(entity) {
   var badge = entity.write_mode === 'arbitrated' ? '<span class="badge-arbitrated">ARBITRATED</span>' : '';
   return '<div class="entity-row row-clickable" data-action="entity-detail" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '">' +
     '<span class="entity-name" title="' + esc(entity.label) + '">' + esc(entity.label) + badge + '</span>' +
-    '<span class="toggle ' + (locked ? 'on' : '') + '" data-action="toggle-lock" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '" data-value="' + (!locked) + '"><span class="knob"></span></span>' +
+    '<span class="toggle ' + (locked ? 'on' : '') + (controlDisabled(entity) ? ' disabled' : '') + '"' + (controlDisabled(entity) ? '' : ' data-action="toggle-lock"') + ' data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '" data-value="' + (!locked) + '"><span class="knob"></span></span>' +
     '</div>';
 }
 
@@ -932,7 +940,7 @@ function widgetForClimate(entity) {
   if (typeof indoor === 'number') nowParts.push(indoor.toFixed(1) + '° now');
   if (typeof feed === 'number') nowParts.push(feed.toFixed(1) + '° feed');
   var badge = entity.write_mode === 'arbitrated' ? '<span class="badge-arbitrated">ARBITRATED</span>' : '';
-  var disabledAttr = hasSetpoint ? '' : ' disabled';
+  var disabledAttr = hasSetpoint && !controlDisabled(entity) ? '' : ' disabled';
   return '<div class="entity-row row-clickable" data-action="entity-detail" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '">' +
     '<span class="entity-name" title="' + esc(entity.label) + '">' + esc(entity.label) + badge + '</span>' +
     '<span style="display:flex;align-items:center;gap:10px;">' +

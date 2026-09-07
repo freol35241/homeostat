@@ -6,7 +6,9 @@
 //!    features and naming; units with family-editable params only.
 //! 2. The WebSocket snapshot carries current bus state, and a command
 //!    POSTed with the write header is published at the concrete cmd key —
-//!    observed via the reflector echoing it back as state.
+//!    observed via the reflector echoing it back as state. A command for a
+//!    capability the dashboard's own manifest does not grant is refused
+//!    before the bus, and the model marks the entity not commandable.
 //! 3. A parameter write within constraints persists through the core's
 //!    validating config queryable; an out-of-constraint write is refused
 //!    and changes nothing.
@@ -416,8 +418,26 @@ async fn dashboard_serves_the_family_surface() {
         "lock command stamps the same manual-band envelope as any other command"
     );
 
-    // A switch command is accepted too: COMMANDABLE now maps switch -> {"on"}
-    // (a reflashed Sonoff relay is toggleable from the dashboard).
+    // A switch command is refused: the capability is in COMMANDABLE, but
+    // this dashboard's manifest (units/dashboard.toml) grants light, lock
+    // and climate and NOT switch — the grant table `plan` prints is what
+    // the unit honours (#11). The model says so too, so the page renders
+    // the relay read-only rather than as a toggle that silently works.
+    let (status, model) = http_request(&addr, "GET", "/api/model", &[], None);
+    assert_eq!(status, 200, "{model}");
+    let commandable = |name: &str| {
+        model["entities"]
+            .as_array()
+            .expect("entities")
+            .iter()
+            .find(|e| e["name"] == name)
+            .unwrap_or_else(|| panic!("{name} in model"))["commandable"]
+            .clone()
+    };
+    assert_eq!(commandable("lamp"), json!(true), "granted light");
+    assert_eq!(commandable("heat_pump"), json!(true), "granted climate");
+    assert_eq!(commandable("relay"), json!(false), "ungranted switch");
+    assert_eq!(commandable("family_member"), json!(false), "person is never commandable");
     let (status, reply) = http_request(
         &addr,
         "POST",
@@ -425,16 +445,12 @@ async fn dashboard_serves_the_family_surface() {
         &[("X-Homeostat", "family")],
         Some(&json!({"room": "livingroom", "entity": "relay", "aspect": "on", "value": true})),
     );
-    assert_eq!(status, 200, "{reply}");
-    let cmd_sample = tokio::time::timeout(Duration::from_secs(30), switch_cmd_sub.recv_async())
-        .await
-        .expect("switch cmd envelope observed within 10s")
-        .expect("sample");
-    let envelope: Value = serde_json::from_slice(&cmd_sample.payload().to_bytes()).expect("json");
-    assert_eq!(
-        envelope,
-        json!({"value": true, "priority": "manual", "actor": "dashboard"}),
-        "switch command stamps the same manual-band envelope as any other command"
+    assert_eq!(status, 400, "ungranted capability must be refused: {reply}");
+    assert!(
+        tokio::time::timeout(Duration::from_secs(3), switch_cmd_sub.recv_async())
+            .await
+            .is_err(),
+        "an ungranted command must never reach the bus"
     );
 
     // A climate command is accepted: COMMANDABLE now maps climate ->
