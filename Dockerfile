@@ -89,5 +89,17 @@ COPY --from=build /go2rtc /usr/local/bin/go2rtc
 # here over the container network. Publishing it to the host hands every
 # reachable client full authority — see the note at the top.
 EXPOSE 7447
+
+# The loopback face of that same endpoint, so `docker exec <container>
+# homeostat apply /house` reaches the supervisor running as this
+# container's PID 1 without the operator restating an address the image
+# already knows. An explicit --bus still wins. Kept in step with the CMD
+# below by hand: if the listen address ever becomes configurable at
+# runtime, both must come from that one source instead — a stale value
+# here would apply against the wrong bus, which is worse than the error
+# it replaces. Note this also reaches a one-shot `docker compose run`
+# container, where nothing listens on 7447: `plan --save` there fails on
+# connect rather than with the "pass --bus" message.
+ENV HOMEOSTAT_BUS=tcp/127.0.0.1:7447
 ENTRYPOINT ["/usr/bin/tini", "--", "homeostat"]
 CMD ["up", "/house", "--listen", "tcp/0.0.0.0:7447"]
