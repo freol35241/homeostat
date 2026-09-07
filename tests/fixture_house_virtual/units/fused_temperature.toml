@@ -17,5 +17,13 @@ office = "home/state/office/thermo/temperature"
 [bus.publishes]
 fused = { key = "home/state/global/downstairs_temperature/temperature" }
 
+# Staleness is house knowledge: a source silent longer than this drops out
+# of the mean until it publishes again (docs/design.md, Availability).
+[params.source_max_age_s]
+type = "float"
+default = 3600
+constraint = { min = 1 }
+editable_by = "owner"
+
 [entities]
 dir = "entities/fused_temperature/"
