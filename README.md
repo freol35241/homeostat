@@ -293,7 +293,7 @@ on a phone, that auto-invalidates when the repo moves.
 ### The agent surface: MCP
 
 `homeostat mcp` serves the tools `read_state`, `read_history`, `read_logs`,
-`read_events`, `plan`, `propose`, `apply` and `explain` over stdio, or over HTTP as a supervised service unit
+`read_events`, `plan`, `propose`, `apply`, `explain` and `schema` over stdio, or over HTTP as a supervised service unit
 in a deployed house. The agent never touches the bus directly for
 structural work: `propose` takes file contents, commits, and plans. A
 parameter-only plan auto-applies (the commit *is* the edit); anything
@@ -304,7 +304,11 @@ structural on its own. A refused plan or propose names each failure by
 code and carries the rule behind every code inline; `explain` (and
 `homeostat explain <code>` on the CLI) serves the same paragraphs on
 demand, so the authoring contract's rules are readable in-band rather
-than from the validator's source. Details:
+than from the validator's source. The manifest contract itself is
+served the same way: `schema` (and `homeostat schema` on the CLI) returns
+JSON Schema derived from the core's own parser, and
+[docs/manifest.md](docs/manifest.md) is that schema rendered, generated
+and pinned by a test. Details:
 [design record §Agent surface](docs/design.md#agent-surface-mcp).
 
 ### The dashboard: the family surface
@@ -346,6 +350,10 @@ design record:
 ```
 cargo test
 ```
+
+Writing a unit? The field-level contract is [docs/manifest.md](docs/manifest.md)
+(generated from the parser's structs; `homeostat schema` serves the same as
+JSON) and the validator's rules are `homeostat explain`.
 
 Integration tests run the real binary against real infrastructure — a live
 supervisor, a real mosquitto broker on a free port, a real SQLite store —

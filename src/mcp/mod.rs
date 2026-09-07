@@ -103,6 +103,7 @@ impl Server {
             "propose" => self.propose(args),
             "apply" => self.apply(),
             "explain" => explain(args),
+            "schema" => schema(args),
             _ => Err(format!("unknown tool \"{name}\"")),
         }
     }
@@ -579,7 +580,22 @@ pub const TOOL_NAMES: &[&str] = &[
     "propose",
     "apply",
     "explain",
+    "schema",
 ];
+
+/// The `schema` tool: the manifest contract as JSON Schema, one file kind
+/// or all three — what an agent reads before authoring a unit, instead of
+/// the validator's source.
+fn schema(args: &Value) -> Result<String, String> {
+    let value = match args.get("file").and_then(Value::as_str) {
+        None => crate::schema::all(),
+        Some(name) => match crate::schema::File::parse(name) {
+            Some(file) => crate::schema::json(file),
+            None => return Err(format!("unknown file kind \"{name}\": expected unit, entity or zones")),
+        },
+    };
+    Ok(serde_json::to_string_pretty(&value).expect("schema serializes"))
+}
 
 /// The `explain` tool: the registered paragraph for one error code, or
 /// every code with its paragraph when none is given. Refused plans already
@@ -656,6 +672,20 @@ pub fn tools() -> Value {
                     "from": {"type": "integer", "description": "microseconds UTC, same unit as the reply ts"},
                     "to": {"type": "integer", "description": "microseconds UTC, same unit as the reply ts"},
                     "limit": {"type": "integer", "description": "keep the most recent rows"}
+                }
+            }
+        },
+        {
+            "name": "schema",
+            "description": "The manifest contract as JSON Schema, derived from the core's \
+                own parser: every section and field of a unit manifest, an entity file \
+                and zones.toml, with descriptions and which kinds accept what. Read it \
+                before authoring a unit; pair it with explain for the validator's rules.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "file": {"type": "string", "enum": ["unit", "entity", "zones"],
+                             "description": "one file kind; omit for all three"}
                 }
             }
         },
