@@ -147,11 +147,11 @@ def build_model(model: house.HouseModel, granted: set[str]) -> dict:
                 "label": label_of(u.naming, u.name),
                 "kind": u.kind,
                 "description": u.description,
-                "params": {
-                    name: spec
-                    for name, spec in u.params.items()
-                    if spec.get("editable_by") == "family"
-                },
+                # Every param, owner-level included: visibility is
+                # house-wide, so a tuning constant off its default shows
+                # as a deviation and reads in the unit overlay. Only the
+                # WRITE is family-gated, at /api/param (#10).
+                "params": u.params,
             }
             for u in model.units
         ],
@@ -421,7 +421,9 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
             return json_error("body must be {unit, param, value}")
         spec = model.units.get(unit)
         if spec is None or param not in spec["params"]:
-            return json_error(f"no family-editable param {unit}.{param}")
+            return json_error(f"no param {unit}.{param}")
+        if spec["params"][param].get("editable_by") != "family":
+            return json_error(f"{unit}.{param} is not family-editable")
         try:
             stored = await asyncio.get_running_loop().run_in_executor(
                 None, hub.session.write_config, unit, param, value

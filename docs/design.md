@@ -1096,8 +1096,12 @@ Decisions and why:
   brightness/color_temp renders toggle + slider + temp control, a bare
   sensor renders value + sparkline); parameter controls derived from
   constraint types (min/max → slider, after/before → time picker, enum
-  → segmented control); only `editable_by = "family"` parameters appear
-  at all. Names and locale from `[naming]` — dashboard quality is a
+  → segmented control). Every parameter is visible — an owner-level
+  tuning constant reads in the unit overlay against its manifest default
+  and counts as a deviation when off it — but only `editable_by =
+  "family"` parameters get a control, and `/api/param` is the write gate
+  (revised 2026-09-07, #10: hiding owner params made a house running off
+  its manifest indistinguishable from one running it). Names and locale from `[naming]` — dashboard quality is a
   function of manifest hygiene, auditable by the agent, exactly like
   voice. Health (`home/health/**`: unit status, circuit breakers) is
   family-visible by design. If generated turns out bland,

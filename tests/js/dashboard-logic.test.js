@@ -14,7 +14,14 @@ function model(overrides) {
     {
       zones: {},
       units: [
-        { name: 'evening_lights', label: 'Evening lights', params: { off_time: { type: 'time', default: '23:00' } } },
+        {
+          name: 'evening_lights',
+          label: 'Evening lights',
+          params: {
+            off_time: { type: 'time', default: '23:00', editable_by: 'family' },
+            grace_minutes: { type: 'int', default: 5, editable_by: 'owner' },
+          },
+        },
         { name: 'zigbee', label: 'Zigbee', params: {} },
       ],
       entities: [
@@ -108,6 +115,14 @@ test('a live setpoint off its manifest default deviates; matching or unserved do
 
   assert.deepEqual(deviations(null, null, { 'home/config/evening_lights/off_time': '23:00' }), []);
   assert.deepEqual(deviations(null, null, {}), [], 'no served value: no verdict');
+});
+
+test('an owner param off its default deviates too, tapping to the unit rather than an editor', () => {
+  const off = deviations(null, null, { 'home/config/evening_lights/grace_minutes': 10 });
+  assert.equal(off.length, 1);
+  assert.equal(off[0].tag, 'setpoint');
+  assert.equal(off[0].detail, '10 (default 5)');
+  assert.deepEqual(off[0].target, { type: 'unit', unit: 'evening_lights' });
 });
 
 test('deviations render in a stable order: supervision, state, setpoints', () => {
