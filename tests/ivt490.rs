@@ -47,8 +47,10 @@ async fn setup() -> (Mosquitto, Supervisor, zenoh::Session) {
 
 /// (a) Scripted per-field state publishes translate to normalized and
 /// passthrough bus aspects: the "serial" wrapper level is stripped, the
-/// sensor-object leaves join with underscores, nested blob topics and the
-/// raw serial line produce nothing — not even a health event.
+/// sensor-object leaves join with underscores, a controller field's
+/// `valid` predicate becomes its own {aspect}_valid boolean, and nested
+/// blob topics and the raw serial line produce nothing — not even a
+/// health event.
 #[tokio::test(flavor = "multi_thread")]
 async fn ivt490_state_translates_to_bus_state() {
     let (mosquitto, mut sup, observer) = setup().await;
@@ -76,10 +78,18 @@ async fn ivt490_state_translates_to_bus_state() {
     )
     .await;
     // The controller's indoor_temperature_feedback normalizes to
-    // indoor_temperature; its {value, valid} nesting is unwrapped.
+    // indoor_temperature; its {value, valid} nesting is unwrapped, the
+    // flag surfacing as indoor_temperature_valid.
     mqtt.publish(
         &format!("{BASE}/controller/state/indoor_temperature_feedback"),
         r#"{"value":20.30,"valid":true}"#,
+    )
+    .await;
+    // A field the device has stopped believing still publishes its value —
+    // stale and absent must stay distinguishable — with the flag false.
+    mqtt.publish(
+        &format!("{BASE}/controller/state/outdoor_temperature_offset"),
+        r#"{"value":-2.50,"valid":false}"#,
     )
     .await;
     // The controller's indoor_temperature_target normalizes to setpoint —
@@ -102,6 +112,12 @@ async fn ivt490_state_translates_to_bus_state() {
             ("home/state/utility/heatpump/GT5", json!(19.8)),
             ("home/state/utility/heatpump/GT2_filtered", json!(5.3)),
             ("home/state/utility/heatpump/indoor_temperature", json!(20.3)),
+            ("home/state/utility/heatpump/indoor_temperature_valid", json!(true)),
+            ("home/state/utility/heatpump/outdoor_temperature_offset", json!(-2.5)),
+            (
+                "home/state/utility/heatpump/outdoor_temperature_offset_valid",
+                json!(false),
+            ),
             ("home/state/utility/heatpump/setpoint", json!(21.0)),
             ("home/state/utility/heatpump/operating_mode", json!(1)),
         ],

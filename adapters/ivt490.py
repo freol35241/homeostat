@@ -27,11 +27,11 @@ unparsed serial line and is never subscribed. Controller state
 and {base}/controller/state/{field}: feed_temperature_target,
 indoor_temperature_feedback and outdoor_temperature_offset are
 {value, valid} objects, indoor_temperature_target is a {value} object,
-operating_mode a bare integer — field_value() unwraps the nested shapes
-and passes bare scalars through uniformly. The entity file's `id` is the
-device's own MQTT base topic — unlike Zigbee2MQTT there is no shared root;
-each interface board owns its whole topic tree — and the file stem is the
-entity name. One entity per physical heat pump.
+operating_mode a bare integer — field_value() unwraps the nested shapes,
+keeping the flag, and passes bare scalars through uniformly. The entity
+file's `id` is the device's own MQTT base topic — unlike Zigbee2MQTT
+there is no shared root; each interface board owns its whole topic tree —
+and the file stem is the entity name. One entity per physical heat pump.
 
 State fan-out subscribes the scalar levels ({base}/ivt490/state/+,
 {base}/ivt490/state/+/+ and {base}/controller/state/+; an object payload
@@ -55,6 +55,21 @@ firmware; a controller field that happened to share a name with a state
 aspect would be prefixed (controller_{field}) to keep the namespaces
 distinguishable — no such collision exists in the dialect today, but the
 guard stays live for whichever firmware revision changes that.
+
+The controller's validity flags are aspects of their own. Each field the
+firmware timestamps carries a `valid` predicate (src/Controller.h) that
+goes false once the reading ages past the device's validity window, at
+which point the control loop silently drops that term and falls back to
+curve-only control on the filtered outdoor sensor. Publishing the value
+alone would leave a confident-looking number on the bus that the device
+itself has stopped believing, so a {value, valid} field also publishes
+home/state/{room}/{entity}/{aspect}_valid as a boolean — the same
+distinction adapters/onvif.py keeps for motion, here reported by the
+device rather than inferred. "Stale" and "absent" stay distinguishable
+live and in the recorder afterwards, which is what makes "when did it go
+stale" answerable months later. A {value}-only field grows no such
+aspect. (These are read-only observations; `available` remains the
+receive-timer signal below, unaffected.)
 
 The heat pump is an arbitrated entity (docs/design.md, Arbitrated mode):
 all commands ride the arbiter, and the family's manual setpoint always
@@ -214,15 +229,16 @@ def state_aspect(source: str, field: str) -> str:
 
 
 def field_value(payload: bytes):
-    """Unwraps a controller per-field payload: a plain JSON scalar passes
-    through unchanged, a nested {"value": ...[, "valid": ...]} object (the
-    controller's tracked fields) yields its "value" member. Raises
-    ValueError/KeyError on anything else — callers drop these with a
-    "malformed-payload" health event."""
+    """Unwraps a controller per-field payload into (value, valid): a plain
+    JSON scalar passes through as (scalar, None), a nested
+    {"value": ...[, "valid": ...]} object (the controller's tracked fields)
+    yields its "value" member and its "valid" flag, None when the field
+    carries none. Raises ValueError/KeyError on anything else — callers
+    drop these with a "malformed-payload" health event."""
     parsed = json.loads(payload)
     if isinstance(parsed, dict):
-        return parsed["value"]
-    return parsed
+        return parsed["value"], parsed.get("valid")
+    return parsed, None
 
 
 def route(topic: str, entities):
@@ -299,11 +315,19 @@ def main():
             aspect = state_aspect("state", state_field(rest[2:]))
         elif len(rest) == 3 and rest[0] == "controller" and rest[1] == "state":
             try:
-                value = field_value(msg.payload)
+                value, valid = field_value(msg.payload)
             except (ValueError, KeyError):
                 session.health_event("drop", reason="malformed-payload", topic=msg.topic)
                 return
             aspect = state_aspect("controller", rest[2])
+            if valid is not None:
+                # Ahead of the value, so a consumer reacting to the new
+                # value reads this snapshot's validity from the mirror and
+                # never the previous one's.
+                session.put_json(
+                    keys.state_key(entity.room, entity.name, f"{aspect}_valid"),
+                    bool(valid),
+                )
         else:
             return  # a whole-document blob topic
 
