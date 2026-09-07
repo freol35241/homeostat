@@ -60,6 +60,11 @@ enum Command {
         #[arg(long)]
         http: Option<String>,
     },
+    /// Explain a validation error code (all of them without an argument).
+    Explain {
+        /// The code from `error[<code>]`, e.g. state-publish-unbound.
+        code: Option<String>,
+    },
     /// Validate a house repo, then run its units under supervision.
     Up {
         /// Path to the house repo.
@@ -77,6 +82,7 @@ fn main() -> ExitCode {
         Command::Plan { path, bus, save, actor } => plan_command(path, bus, save, actor),
         Command::Apply { path, bus, plan } => apply_command(path, bus, plan),
         Command::Mcp { path, bus, http } => mcp_command(path, bus, http),
+        Command::Explain { code } => explain_command(code),
         Command::Up { path, listen } => {
             let Some(result) = checked(&path, "up") else {
                 return ExitCode::FAILURE;
@@ -102,10 +108,35 @@ fn checked(path: &PathBuf, verb: &str) -> Option<CheckResult> {
         for line in lines {
             eprintln!("{line}");
         }
+        eprintln!();
+        for line in homeostat::error::explanations(&result.errors) {
+            eprintln!("{line}");
+        }
         eprintln!("\n{verb} refused: {count} error(s)");
         return None;
     }
     Some(result)
+}
+
+fn explain_command(code: Option<String>) -> ExitCode {
+    match code {
+        Some(code) => match homeostat::error::explain(&code) {
+            Some(text) => {
+                println!("{code}: {text}");
+                ExitCode::SUCCESS
+            }
+            None => {
+                eprintln!("unknown error code \"{code}\"; `homeostat explain` lists them");
+                ExitCode::FAILURE
+            }
+        },
+        None => {
+            for (code, text) in homeostat::error::CODES {
+                println!("{code}: {text}\n");
+            }
+            ExitCode::SUCCESS
+        }
+    }
 }
 
 /// The endpoint from --bus, falling back to HOMEOSTAT_BUS.

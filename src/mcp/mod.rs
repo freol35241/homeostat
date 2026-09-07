@@ -102,6 +102,7 @@ impl Server {
             "plan" => self.plan(),
             "propose" => self.propose(args),
             "apply" => self.apply(),
+            "explain" => explain(args),
             _ => Err(format!("unknown tool \"{name}\"")),
         }
     }
@@ -395,8 +396,9 @@ impl Server {
         let check = crate::check(&self.root);
         if !check.errors.is_empty() {
             return Err(format!(
-                "propose reverted: the repo would fail validation\n{}",
-                crate::error::render_sorted(&check.errors).join("\n")
+                "propose reverted: the repo would fail validation\n{}\n\n{}",
+                crate::error::render_sorted(&check.errors).join("\n"),
+                crate::error::explanations(&check.errors).join("\n")
             ));
         }
 
@@ -461,8 +463,9 @@ impl Server {
         let check = crate::check(&self.root);
         if !check.errors.is_empty() {
             return Err(format!(
-                "the house repo fails validation\n{}",
-                crate::error::render_sorted(&check.errors).join("\n")
+                "the house repo fails validation\n{}\n\n{}",
+                crate::error::render_sorted(&check.errors).join("\n"),
+                crate::error::explanations(&check.errors).join("\n")
             ));
         }
         let world = self
@@ -575,7 +578,25 @@ pub const TOOL_NAMES: &[&str] = &[
     "plan",
     "propose",
     "apply",
+    "explain",
 ];
+
+/// The `explain` tool: the registered paragraph for one error code, or
+/// every code with its paragraph when none is given. Refused plans already
+/// carry these inline; this is for an agent reading a code elsewhere (a
+/// pending plan, a log) or surveying the contract before authoring.
+fn explain(args: &Value) -> Result<String, String> {
+    match args.get("code").and_then(Value::as_str) {
+        Some(code) => crate::error::explain(code)
+            .map(|text| format!("{code}: {text}"))
+            .ok_or_else(|| format!("unknown error code \"{code}\"")),
+        None => Ok(crate::error::CODES
+            .iter()
+            .map(|(code, text)| format!("{code}: {text}"))
+            .collect::<Vec<_>>()
+            .join("\n\n")),
+    }
+}
 
 /// The tool list served by tools/list.
 pub fn tools() -> Value {
@@ -635,6 +656,19 @@ pub fn tools() -> Value {
                     "from": {"type": "integer", "description": "microseconds UTC, same unit as the reply ts"},
                     "to": {"type": "integer", "description": "microseconds UTC, same unit as the reply ts"},
                     "limit": {"type": "integer", "description": "keep the most recent rows"}
+                }
+            }
+        },
+        {
+            "name": "explain",
+            "description": "Explain a validation error code from a refused plan or \
+                propose (the <code> in error[<code>]): the rule and why it exists. \
+                Without a code, every code the core can emit, with its explanation \
+                — the authoring contract's rules in one read.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "code": {"type": "string", "description": "an error code, e.g. state-publish-unbound"}
                 }
             }
         },
