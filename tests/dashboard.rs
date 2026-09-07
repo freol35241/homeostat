@@ -23,7 +23,9 @@
 //! 7. The camera media plane (docs/design.md, Cameras): browsers never
 //!    speak go2rtc — `/api/camera/{entity}/snapshot` proxies frame.jpeg,
 //!    `/api/camera/{entity}/live` relays the MSE WebSocket byte-for-byte,
-//!    and an unknown or non-camera entity 404s.
+//!    both addressing the stream by the camera's entity id (how the shim
+//!    names it) rather than its entity name, and an unknown or non-camera
+//!    entity 404s.
 
 mod common;
 
@@ -713,7 +715,9 @@ fn ws_read_frame(stream: &mut TcpStream) -> (u8, Vec<u8>) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn dashboard_proxies_camera_media() {
-    let go2rtc = FakeGo2rtc::spawn("porch_cam");
+    // The fake serves only the stream go2rtc would really have: named by
+    // the entity's id, which the fixture keeps distinct from its name.
+    let go2rtc = FakeGo2rtc::spawn("porch_cam_native");
     let port = common::free_port();
     let addr = format!("127.0.0.1:{port}");
     let go2rtc_url = format!("http://127.0.0.1:{}", go2rtc.port);
@@ -741,6 +745,10 @@ async fn dashboard_proxies_camera_media() {
         .find(|e| e["name"] == "porch_cam")
         .expect("porch_cam in model");
     assert_eq!(cam["capability"], "camera", "{cam}");
+    assert!(
+        cam.get("id").is_none(),
+        "the adapter-native id stays server-side, out of the browser model: {cam}"
+    );
 
     // Snapshot: a JPEG straight through the proxy.
     let (status, headers, body) = http_request_bytes(&addr, "/api/camera/porch_cam/snapshot", &[]);

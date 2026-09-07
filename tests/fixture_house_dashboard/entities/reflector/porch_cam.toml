@@ -1,7 +1,10 @@
 schema = 1
 
 [entity]
-id = "porch_cam"
+# Deliberately NOT the file stem: go2rtc names the stream by this id, so a
+# dashboard proxying by entity name would ask for a stream that does not
+# exist and the player would go black with no error anywhere.
+id = "porch_cam_native"
 capability = "camera"
 room = "livingroom"
 

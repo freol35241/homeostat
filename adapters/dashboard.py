@@ -34,7 +34,10 @@ a small API generated entirely from the house's text:
   GET  /api/camera/{entity}/live       WebSocket relayed byte-for-byte to
                      go2rtc's api/ws (MSE) — browsers never speak go2rtc
                      (docs/design.md, Cameras); HOMEOSTAT_GO2RTC overrides
-                     the localhost default for both
+                     the localhost default for both. Both address the
+                     stream by the camera's entity id, which is how the
+                     go2rtc shim names it — resolved server-side, since
+                     ids are not part of the browser-facing model
   GET  /assets/*     vendored libraries (Leaflet, protomaps-leaflet, the
                      go2rtc player), allowlisted by filename
   GET  /tiles.pmtiles  self-hosted PMTiles region extract for the map
@@ -282,22 +285,30 @@ class Model:
     """
 
     def __init__(self) -> None:
-        self.model = build_model(house.load_house("."))
-        self._index()
+        self._rebuild(house.load_house("."))
 
-    def _index(self) -> None:
+    def _rebuild(self, loaded: house.HouseModel) -> None:
+        self.model = build_model(loaded)
         self.entities = {e["name"]: e for e in self.model["entities"]}
         self.units = {u["name"]: u for u in self.model["units"]}
+        # go2rtc names each stream by entity id (adapters/go2rtc.py renders
+        # its config from the same HOMEOSTAT_CAMERAS keys the onvif adapter
+        # addresses cameras by), so the media proxies must ask for the id —
+        # and it is not in the browser-facing model, which carries only what
+        # the page renders. Resolved here, server-side, where it stays.
+        self.stream_names = {
+            e.name: e.id for e in loaded.entities if e.capability == "camera"
+        }
 
     def reload(self) -> None:
         try:
-            self.model = build_model(house.load_house("."))
+            loaded = house.load_house(".")
         except Exception:
             # A half-written edit must not blank the page: keep the last
             # good model and leave a trace (captured at home/meta/{unit}/log).
             traceback.print_exc()
             return
-        self._index()
+        self._rebuild(loaded)
 
 
 def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Application:
@@ -437,21 +448,25 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         entries = replies[0][1] if replies else []
         return web.json_response(entries)
 
-    def camera_spec(request: web.Request) -> dict | None:
+    def camera_stream(request: web.Request) -> str | None:
+        """The go2rtc stream name for a bound camera entity, or None for an
+        unknown or non-camera entity (the proxies' 404)."""
         spec = model.entities.get(request.match_info["entity"])
-        return spec if spec is not None and spec["capability"] == "camera" else None
+        if spec is None or spec["capability"] != "camera":
+            return None
+        return model.stream_names[spec["name"]]
 
     def go2rtc_base() -> str:
         return os.environ.get(ENV_GO2RTC, DEFAULT_GO2RTC).rstrip("/")
 
     async def api_camera_snapshot(request: web.Request) -> web.Response:
-        spec = camera_spec(request)
-        if spec is None:
+        stream = camera_stream(request)
+        if stream is None:
             return json_error(f"unknown camera {request.match_info['entity']}", status=404)
         try:
             async with client["http"].get(
                 f"{go2rtc_base()}/api/frame.jpeg",
-                params={"src": spec["name"]},
+                params={"src": stream},
                 timeout=aiohttp.ClientTimeout(total=10),
             ) as upstream:
                 if upstream.status != 200:
@@ -462,8 +477,8 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         return web.Response(body=body, content_type="image/jpeg")
 
     async def api_camera_live(request: web.Request) -> web.WebSocketResponse:
-        spec = camera_spec(request)
-        if spec is None:
+        stream = camera_stream(request)
+        if stream is None:
             raise web.HTTPNotFound()
         origin = request.headers.get("Origin")
         if origin is not None:
@@ -476,7 +491,7 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         # edge of the media plane. Either side closing closes both.
         try:
             async with client["http"].ws_connect(
-                f"{go2rtc_base()}/api/ws", params={"src": spec["name"]}
+                f"{go2rtc_base()}/api/ws", params={"src": stream}
             ) as upstream:
 
                 async def pump(source, sink) -> None:
