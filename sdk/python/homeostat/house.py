@@ -68,6 +68,7 @@ class UnitInfo:
     description: str = ""
     naming: dict = field(default_factory=dict)
     params: dict = field(default_factory=dict)
+    publishes: dict = field(default_factory=dict)  # [bus.publishes], as declared
 
 
 @dataclass
@@ -100,6 +101,7 @@ def load_house(root: str | Path = ".") -> HouseModel:
                 description=unit.get("description", ""),
                 naming=dict(manifest.get("naming", {})),
                 params=dict(manifest.get("params", {})),
+                publishes=dict(manifest.get("bus", {}).get("publishes", {})),
             )
         )
         entities_dir = manifest.get("entities", {}).get("dir")
