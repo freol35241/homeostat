@@ -10,20 +10,22 @@
 """Fused temperature: the first virtual sensor (docs/design.md, Virtual
 sensors).
 
-Publishes the mean of its source temperatures onto the entity it binds,
-on transition only — an input update that does not move the mean
-publishes nothing.
+Publishes the mean of its fresh source temperatures onto the entity it
+binds, on transition only — an input update that does not move the mean
+publishes nothing. A source silent for longer than `source_max_age_s`
+leaves the mean until it publishes again: `available` is device liveness,
+not data freshness, so the staleness policy is the automation's own.
 """
 
 import threading
 
-from homeostat import automation
+from homeostat import Freshness, automation
 
 
 def main():
     ctx = automation.context()
     lock = threading.Lock()
-    sources: dict[str, float] = {}
+    sources = Freshness()
     last: float | None = None
 
     def on_temperature(key, value):
@@ -31,8 +33,9 @@ def main():
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             return
         with lock:
-            sources[key] = float(value)
-            fused = round(sum(sources.values()) / len(sources), 2)
+            sources.seen(key, float(value))
+            fresh = sources.fresh(ctx.params.source_max_age_s)
+            fused = round(sum(fresh.values()) / len(fresh), 2)
             if fused == last:
                 return
             last = fused

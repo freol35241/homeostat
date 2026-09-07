@@ -36,6 +36,8 @@ jobs:
           uv sync --script tests/fixture_house_apply/units/probe.py
           uv sync --script tests/fixture_house_virtual/units/fused_temperature.py
       - run: cargo test
+      # The SDK's bus-free helpers (sdk/python/tests): stdlib unittest.
+      - run: uv run --no-project --with-editable sdk/python python -m unittest discover sdk/python/tests
       # The dashboard's extracted decision logic (adapters/assets/
       # dashboard-logic.js): Node's built-in runner, no packages. The
       # shell expands the glob — newer Node treats a bare directory

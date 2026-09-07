@@ -1651,9 +1651,22 @@ adapter — the membrane rule.
   battery devices is on the order of hours — a motion sensor dying
   mid-`occupancy = true` stays trusted-and-wrong until the bridge
   notices. An automation needing bounded-age input still needs its own
-  cadence timeout (house knowledge: a clock subscription plus a
-  parameter); if that pattern recurs, it graduates to an SDK helper by
-  the rule of three, never core machinery.
+  cadence (house knowledge: a parameter), never a core TTL. The
+  bookkeeping behind it is the SDK's `Freshness` (2026-09-07, #7,
+  graduated from a real fusion's private copy rather than waiting for
+  the rule of three, because the shape was already settled by use):
+  latest value and monotonic seen-time per source, `fresh(max_age_s)`
+  at recompute. The triggering sample is age zero by construction, so
+  the fresh set is never empty — the trap is closed once, in the
+  helper. It owns no timer: reacting to outright silence is a
+  `home/clock/minute` subscription calling the same `fresh()`.
+- **Availability must be able to say "no information".** A backend
+  configured without availability at all (z2m with no `availability:`
+  block publishes no such topics) yields an empty map that reads as
+  everything-is-up. When `ctx.availability()` is built it returns three
+  states per entity — up, down, unknown — and unknown is the honest
+  answer for an entity whose adapter never published `available`
+  (recorded 2026-09-07 from #7, ahead of the helper).
 
 ## Voice (later phase)
  
