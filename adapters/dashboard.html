@@ -201,6 +201,8 @@ input[type=range]::-moz-range-track { background: var(--border); height: 2px; bo
 .param-row.flash-highlight { animation: flash-highlight 1.5s ease; }
 @keyframes flash-highlight { from { background: var(--accent-tint); } to { background: transparent; } }
 .param-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 6px; }
+.param-readonly { font-size: 14px; }
+.tier-badge { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; margin-left: 4px; vertical-align: middle; }
 .param-head .name { font-weight: 600; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .param-caption { font-size: 12px; color: var(--muted); margin-top: 4px; cursor: help; }
 .seg { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -1285,20 +1287,36 @@ function renderParamControl(unitName, pname, p) {
   return '<input type="text" id="' + id + '" value="' + esc(value === undefined ? '' : value) + '" data-action="param-text" data-unit="' + esc(unitName) + '" data-param="' + esc(pname) + '">';
 }
 
-// shared by the Setpoints view and the unit-detail overlay
+function familyEditable(p) { return p.editable_by === 'family'; }
+
+// shared by the Setpoints view and the unit-detail overlay. A param the
+// family cannot edit renders its live value against the manifest default
+// instead of a control: visible, not writable (/api/param is the gate).
 function renderParamRow(unitName, pname, p) {
+  var body;
+  if (familyEditable(p)) {
+    body = '<div>' + renderParamControl(unitName, pname, p) + '</div>';
+  } else {
+    var value = currentParamValue(unitName, pname, p);
+    var offDefault = JSON.stringify(value) !== JSON.stringify(p.default);
+    body = '<div class="param-readonly">' + esc(String(value)) +
+      (offDefault ? ' <span class="faint">(default ' + esc(String(p.default)) + ')</span>' : '') +
+      ' <span class="tier-badge">' + esc(p.editable_by || 'owner') + '</span></div>';
+  }
   return '<div class="param-row" id="paramrow-' + unitName + '-' + pname + '"><div class="param-head">' +
     '<span class="name" title="' + esc(unitLabel(unitName)) + ' · ' + esc(pname) + '">' + esc(unitLabel(unitName)) + ' · ' + esc(pname) + '</span></div>' +
-    '<div>' + renderParamControl(unitName, pname, p) + '</div>' +
+    body +
     '<div class="param-caption" title="' + esc(JSON.stringify(p.constraint || {})) + '">' + esc(paramConstraintCaption(p)) + '</div></div>';
 }
 
+// Setpoints is the family's levers: family-editable params only. Owner
+// params show read-only in the unit overlay (Health -> unit).
 function renderSetpoints() {
   var rows = [];
   (store.model.units || []).forEach(function (u) {
     var params = u.params || {};
     Object.keys(params).forEach(function (pname) {
-      rows.push(renderParamRow(u.name, pname, params[pname]));
+      if (familyEditable(params[pname])) rows.push(renderParamRow(u.name, pname, params[pname]));
     });
   });
   var html = '<h1 class="view-title">Setpoints</h1>';
@@ -1631,7 +1649,7 @@ function renderUnitDetailBody() {
   var paramRows = Object.keys(params).map(function (pname) {
     return renderParamRow(unit.name, pname, params[pname]);
   }).join('');
-  var paramsHtml = paramRows || '<div class="empty-hint">No family-editable parameters.</div>';
+  var paramsHtml = paramRows || '<div class="empty-hint">No parameters.</div>';
 
   var events = store.events.filter(function (ev) { return unitNameFromHealthKey(ev.key) === unit.name; });
   var eventRows = events.map(renderEventRow).join('');

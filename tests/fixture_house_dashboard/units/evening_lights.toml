@@ -24,6 +24,14 @@ default = "22:00"
 constraint = { after = "20:00", before = "02:00" }
 editable_by = "family"
 
+# An owner-level tuning constant: visible on the dashboard, never writable
+# from it (#10).
+[params.grace_minutes]
+type = "int"
+default = 5
+constraint = { min = 0, max = 60 }
+editable_by = "owner"
+
 [naming]
 sv = "kvällsbelysning"
 en = "evening lights"

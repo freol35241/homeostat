@@ -3,7 +3,8 @@
 //!
 //! Success criteria (docs/design.md, Dashboard):
 //! 1. `/api/model` renders the manifests: entities with capability,
-//!    features and naming; units with family-editable params only.
+//!    features and naming; units with every param and its `editable_by`,
+//!    of which only family ones are writable.
 //! 2. The WebSocket snapshot carries current bus state, and a command
 //!    POSTed with the write header is published at the concrete cmd key —
 //!    observed via the reflector echoing it back as state.
@@ -273,6 +274,12 @@ async fn dashboard_serves_the_family_surface() {
         evening["params"]["off_time"]["constraint"]["after"],
         "20:00"
     );
+    assert_eq!(evening["params"]["off_time"]["editable_by"], "family");
+    // Owner params are in the model too, carrying their tier, so the page
+    // can show them read-only and count them as deviations when off their
+    // default (#10). Visibility is house-wide; only the write is gated.
+    assert_eq!(evening["params"]["grace_minutes"]["default"], json!(5));
+    assert_eq!(evening["params"]["grace_minutes"]["editable_by"], "owner");
 
     // A person entity is just another entity in the model, on the
     // reserved "person" pseudo-room — never commandable (checked below).
@@ -497,6 +504,21 @@ async fn dashboard_serves_the_family_surface() {
     assert_eq!(
         cache_read(&observer, OFF_TIME_KEY).await,
         Some(json!("21:30")),
+        "refused write must change nothing"
+    );
+
+    // An owner param is visible but not writable from the family surface.
+    let (status, reply) = http_request(
+        &addr,
+        "POST",
+        "/api/param",
+        &[("X-Homeostat", "family")],
+        Some(&json!({"unit": "evening_lights", "param": "grace_minutes", "value": 10})),
+    );
+    assert_eq!(status, 400, "owner param write must be refused: {reply}");
+    assert_eq!(
+        cache_read(&observer, "home/config/evening_lights/grace_minutes").await,
+        Some(json!(5)),
         "refused write must change nothing"
     );
 
