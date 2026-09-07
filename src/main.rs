@@ -60,6 +60,15 @@ enum Command {
         #[arg(long)]
         http: Option<String>,
     },
+    /// Print the manifest contract: JSON Schema for one file kind (all
+    /// three without an argument), or the Markdown reference.
+    Schema {
+        /// unit | entity | zones
+        file: Option<String>,
+        /// Render docs/manifest.md instead of JSON.
+        #[arg(long)]
+        markdown: bool,
+    },
     /// Explain a validation error code (all of them without an argument).
     Explain {
         /// The code from `error[<code>]`, e.g. state-publish-unbound.
@@ -83,6 +92,7 @@ fn main() -> ExitCode {
         Command::Apply { path, bus, plan } => apply_command(path, bus, plan),
         Command::Mcp { path, bus, http } => mcp_command(path, bus, http),
         Command::Explain { code } => explain_command(code),
+        Command::Schema { file, markdown } => schema_command(file, markdown),
         Command::Up { path, listen } => {
             let Some(result) = checked(&path, "up") else {
                 return ExitCode::FAILURE;
@@ -116,6 +126,26 @@ fn checked(path: &PathBuf, verb: &str) -> Option<CheckResult> {
         return None;
     }
     Some(result)
+}
+
+fn schema_command(file: Option<String>, markdown: bool) -> ExitCode {
+    use homeostat::schema;
+    if markdown {
+        print!("{}", schema::markdown());
+        return ExitCode::SUCCESS;
+    }
+    let value = match file {
+        None => schema::all(),
+        Some(name) => match schema::File::parse(&name) {
+            Some(file) => schema::json(file),
+            None => {
+                eprintln!("unknown file kind \"{name}\": expected unit, entity or zones");
+                return ExitCode::FAILURE;
+            }
+        },
+    };
+    println!("{}", serde_json::to_string_pretty(&value).expect("schema serializes"));
+    ExitCode::SUCCESS
 }
 
 fn explain_command(code: Option<String>) -> ExitCode {

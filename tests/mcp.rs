@@ -239,6 +239,19 @@ async fn read_logs_and_events_over_mcp() {
     assert!(text.starts_with("parse-error: "), "{text}");
     assert!(text.contains("\nstate-publish-unbound: "), "{text}");
 
+    // schema: the manifest contract, from the parser's own structs.
+    let (text, is_error) = mcp.call("schema", json!({"file": "unit"}));
+    assert!(!is_error, "{text}");
+    let schema: Value = serde_json::from_str(&text).expect("schema is JSON");
+    assert_eq!(schema["additionalProperties"], json!(false), "{text}");
+    assert!(schema["properties"]["params"].is_object(), "{text}");
+    let (text, is_error) = mcp.call("schema", json!({}));
+    assert!(!is_error, "{text}");
+    let all: Value = serde_json::from_str(&text).expect("schemas are JSON");
+    assert!(all["entity"]["properties"]["write_policy"].is_object(), "{text}");
+    let (text, is_error) = mcp.call("schema", json!({"file": "house"}));
+    assert!(is_error, "{text}");
+
     // Nothing answers home/history/events in this fixture: graceful empty.
     let (text, is_error) = mcp.call("read_events", json!({}));
     assert!(!is_error, "{text}");

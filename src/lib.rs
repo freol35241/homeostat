@@ -11,6 +11,7 @@ pub mod mcp;
 pub mod pending;
 pub mod plan;
 pub mod repo;
+pub mod schema;
 pub mod supervisor;
 pub mod validate;
 pub mod world;
