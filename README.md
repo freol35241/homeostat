@@ -292,15 +292,19 @@ on a phone, that auto-invalidates when the repo moves.
 
 ### The agent surface: MCP
 
-`homeostat mcp` serves five tools — `read_state`, `read_history`, `plan`,
-`propose`, `apply` — over stdio, or over HTTP as a supervised service unit
+`homeostat mcp` serves the tools `read_state`, `read_history`, `read_logs`,
+`read_events`, `plan`, `propose`, `apply` and `explain` over stdio, or over HTTP as a supervised service unit
 in a deployed house. The agent never touches the bus directly for
 structural work: `propose` takes file contents, commits, and plans. A
 parameter-only plan auto-applies (the commit *is* the edit); anything
 behavioral or structural is saved as a pending plan for the owner to apply
 with `homeostat apply --plan <file>`. The tier derivation is the
 enforcement — a manifest edit that smuggles in a grant delta escalates to
-structural on its own. Details:
+structural on its own. A refused plan or propose names each failure by
+code and carries the rule behind every code inline; `explain` (and
+`homeostat explain <code>` on the CLI) serves the same paragraphs on
+demand, so the authoring contract's rules are readable in-band rather
+than from the validator's source. Details:
 [design record §Agent surface](docs/design.md#agent-surface-mcp).
 
 ### The dashboard: the family surface

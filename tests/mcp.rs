@@ -224,6 +224,20 @@ async fn read_logs_and_events_over_mcp() {
         .map(|t| t["name"].as_str().expect("tool name"))
         .collect();
     assert!(names.contains(&"read_events"), "{tools}");
+    assert!(names.contains(&"explain"), "{tools}");
+
+    // explain: the registered paragraph for a code; unknown code is an
+    // error result; no code lists them all.
+    let (text, is_error) = mcp.call("explain", json!({"code": "state-publish-unbound"}));
+    assert!(!is_error, "{text}");
+    assert!(text.starts_with("state-publish-unbound: "), "{text}");
+    assert!(text.contains("entity file"), "{text}");
+    let (text, is_error) = mcp.call("explain", json!({"code": "no-such-code"}));
+    assert!(is_error, "{text}");
+    let (text, is_error) = mcp.call("explain", json!({}));
+    assert!(!is_error, "{text}");
+    assert!(text.starts_with("parse-error: "), "{text}");
+    assert!(text.contains("\nstate-publish-unbound: "), "{text}");
 
     // Nothing answers home/history/events in this fixture: graceful empty.
     let (text, is_error) = mcp.call("read_events", json!({}));

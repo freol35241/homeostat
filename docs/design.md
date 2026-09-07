@@ -885,9 +885,19 @@ repo. Without the header a cross-origin `text/plain` POST is a CORS
 `propose` blind. `HOMEOSTAT_MCP_HOSTS` extends the name allowlist. An
 HTTP MCP client must send the header; stdio is unaffected.
 
-Tools: `read_state`, `read_history`, `propose`, `plan`, `apply`. The agent
-never touches the bus directly for structural work; it manipulates text and
-goes through plan/apply like every other actor. Agent-authored parameter
+Tools: `read_state`, `read_history`, `read_logs`, `read_events`, `propose`,
+`plan`, `apply`, `explain`. The agent never touches the bus directly for
+structural work; it manipulates text and goes through plan/apply like every
+other actor.
+
+**Error codes are the contract's rules, served in-band (2026-09-07, #4).**
+Every validation failure carries a stable code, and `src/error.rs` holds the
+one registry mapping each code to a paragraph: the rule and why it exists. A
+test asserts the registry and the codes the source emits are the same set.
+A refused plan or propose appends the paragraphs for the codes it hit, the
+`explain` tool and `homeostat explain <code>` serve them on demand, and no
+code without one is fitted. The manifest's field-level contract is the
+other half, generated from the structs (see below). Agent-authored parameter
 edits within constraints auto-apply; structural changes land as pending
 plans for owner approval.
  
