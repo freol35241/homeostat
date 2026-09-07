@@ -418,7 +418,8 @@ async fn backend_outage_buffers_and_flushes() {
 /// (d) The read path returns what was written: a get on
 /// home/history/state/{entity}/{aspect} replies the typed rows with
 /// timestamps, honoring from/to/limit (zenoh's `;`-separated selector
-/// parameters); wildcards fan out to concrete series keys; a malformed
+/// parameters) — limit keeps the newest rows, with or without an explicit
+/// window; wildcards fan out to concrete series keys; a malformed
 /// selector is an error reply. The events table gets the same query
 /// surface at home/history/events: key wildcards filter recorded event
 /// keys, from/to (here raw microseconds, not RFC3339) window the range,
@@ -471,6 +472,20 @@ async fn read_path_returns_history() {
         .map(|r| &r["value"])
         .collect();
     assert_eq!(values, vec![&json!(2.5), &json!(3.5)]);
+
+    // ...including inside an explicit from/to window: the newest in the
+    // window, never its far end. A small limit is how a caller asks "what
+    // has this been doing lately", and answering with the oldest rows makes
+    // a live series look dead.
+    let selector = format!(
+        "home/history/state/meter/power?from={};to={};limit=2",
+        timestamps[0], timestamps[2]
+    );
+    let replies = history_get(&observer, &selector).await;
+    let values: Vec<&Value> = replies[0].1.as_array().expect("array").iter()
+        .map(|r| &r["value"])
+        .collect();
+    assert_eq!(values, vec![&json!(2.5), &json!(3.5)], "newest in the window");
 
     // from narrows the range (reusing a reply timestamp verbatim).
     let selector = format!("home/history/state/meter/power?from={}", timestamps[1]);
