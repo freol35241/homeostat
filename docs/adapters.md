@@ -353,7 +353,9 @@ protocol endpoint, never with mocks of the bus. The pattern, from
   or out-of-range one drops with the right event and nothing reaches the
   device); availability if published; the discovery document and its
   descriptor; and the unit contract (liveliness when ready, clean SIGTERM
-  exit inside `shutdown_grace_s`, no orphan).
+  exit inside `shutdown_grace_s`, no orphan) — one call to
+  `common::assert_unit_contract(&mut sup, &observer, "<unit>")`, the
+  conformance check every adapter suite ends with.
 - Run `uv sync --script adapters/<adapter>.py` before `cargo test` so
   dependency resolution never eats into supervision timeouts.
 

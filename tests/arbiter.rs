@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 use zenoh::handlers::FifoChannelHandler;
 use zenoh::pubsub::Subscriber;
 
-use common::{await_health, config_write, health_watch, process_alive, Supervisor};
+use common::{assert_unit_contract, await_health, config_write, health_watch, Supervisor};
 
 const FIXTURE: &str = "tests/fixture_house_arbiter";
 const CMD_KEY: &str = "home/cmd/hallway/front_door/locked";
@@ -264,18 +264,5 @@ async fn malformed_envelope_drops_with_health_event() {
 #[tokio::test(flavor = "multi_thread")]
 async fn adapter_honors_unit_contract() {
     let (mut sup, observer) = setup().await;
-    let mut watch = health_watch(&observer, "arbiter").await;
-    let health = await_health(&mut watch, Duration::from_secs(10), |h| {
-        h.status == HealthStatus::Running
-    })
-    .await;
-    let pid = health.pid.expect("running unit has a pid");
-    assert!(process_alive(pid), "arbiter alive before shutdown");
-
-    sup.signal(libc::SIGTERM);
-    // shutdown_grace_s = 5 in the fixture; a graceful exit must fit inside
-    // it with margin only for reaping and bus teardown.
-    let code = sup.wait_exit(Duration::from_secs(7));
-    assert_eq!(code, Some(0), "supervisor exit code");
-    assert!(!process_alive(pid), "arbiter must not outlive the supervisor");
+    assert_unit_contract(&mut sup, &observer, "arbiter").await;
 }
