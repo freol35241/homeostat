@@ -359,7 +359,9 @@ Integration tests run the real binary against real infrastructure — a live
 supervisor, a real mosquitto broker on a free port, a real SQLite store —
 never mocks. The invalid-manifest corpus in `tests/corpus/invalid/` pairs
 each broken house with its complete expected error list. CI needs
-`mosquitto` and `uv` installed. CI also builds the container image and
+`mosquitto`, `uv` and `node` installed; the devcontainer provides all
+three, so `cargo test` and `node --test tests/js/*.test.js` run the same
+suite CI does. CI also builds the container image and
 runs `scripts/smoke_image.sh` against it — a packaging test that boots a
 minimal house in the image and asserts a unit reaches `running`, the bus
 answers a second container, and SIGTERM shuts down cleanly.
