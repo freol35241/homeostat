@@ -422,8 +422,12 @@ dual path: the identical engine runs in both.
 What makes the backend swappable later is the read path: history reads go
 over the bus (below), so the store is recorder-private. Outgrowing SQLite
 means a behavioral change to one unit, not a structural change to the
-system. QuestDB remains the designated growth path if volume or analytical
-queries ever demand it. DuckDB was considered and rejected as the store —
+system. The designated growth path is tiering, not an engine swap: hot
+weeks stay in SQLite, closed months roll out to Parquet files, and DuckDB
+reads across both. Both engines stay embedded, there is still no server,
+and the tests still only ever touch SQLite. QuestDB was the earlier
+designation and is withdrawn: it is JVM-based, which is exactly what this
+section refuses. DuckDB was considered and rejected as the store —
 the recorder's workload is high-frequency tiny appends plus small indexed
 range reads (OLTP-shaped, SQLite's grain), while DuckDB is a columnar OLAP
 engine that is weak at frequent single-row inserts and single-process by
