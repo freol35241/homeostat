@@ -48,7 +48,9 @@ not the general long tail. No Home Assistant bridge in v1.
 - **Units:** every running thing is a unit: `adapter`, `automation`, or
   `service`. Uniform manifest schema, uniform supervision. Python units are
   uv-run scripts with PEP 723 inline dependencies (one hermetic venv per
-  process). Rust units are compiled binaries.
+  process). Rust units are compiled binaries. The unit is the atom of
+  authority, failure, and change; how many rules a unit script hosts is
+  the author's call (see Unit granularity).
 - **Process model:** plain OS processes supervised by the core
   (Erlang/actor-model lineage: fault isolation and language boundaries, not
   microservices). NOT containerized internally. The whole system may run
@@ -76,16 +78,31 @@ Supervisor -> unit, at spawn:
   gets `PR_SET_PDEATHSIG(SIGKILL)`, so even a SIGKILLed supervisor cannot
   leak orphans. If the direct child exits on its own, the supervisor sweeps
   the remainder of its process group before applying the restart policy —
-  a unit's descendants (e.g. the interpreter under a `uv run` wrapper)
+  a unit's descendants (a shell wrapper's child, a relay a unit manages)
   never outlive its leader, so a survivor can't keep the liveliness token
   alive and poison the next incarnation.
 - Environment: `HOMEOSTAT_UNIT` (the unit's name) and `HOMEOSTAT_BUS` (the
   Zenoh endpoint to connect to, e.g. `tcp/127.0.0.1:7447`).
-- **`uv run` parents hold real memory** (measured 2026-08-29 on a live
-  seven-unit house and reproduced in the release image). The parent stays
-  alive for the unit's lifetime and its `Pss_Anon` scales with what the
-  unit's environment CONTAINS, on every run — not with whether that run
-  installed it. Warm, uv 0.9, same machine:
+- **`uv run` is resolved away at spawn** (settled 2026-09-08). For a
+  command of the form `uv run [flags] <script.py> [args]` the supervisor
+  runs `uv sync --script` and then `uv python find --script` in processes
+  that exit, and execs the environment's interpreter on the script
+  directly. The interpreter is the unit's process-group leader and the
+  direct holder of `PR_SET_PDEATHSIG`; there is no long-lived wrapper. The
+  PEP 723 block stays the single authority on dependencies, `files_hash`
+  still covers the pin, and the manifest still says `uv run` — the
+  resolution is a supervisor mechanic, not a manifest contract. Resolution
+  happens per incarnation, so a restart after an SDK bump picks up the new
+  environment. If uv cannot resolve the script the original command is
+  spawned unchanged, so a broken script fails exactly where and how it did
+  before. Verified on the evening fixture: three interpreters as direct
+  children of the supervisor, each its own group leader, nothing between.
+
+  Why (measured 2026-08-29 on a live seven-unit house and reproduced in
+  the release image): the `uv run` parent stayed alive for the unit's
+  lifetime doing nothing but `wait()`, and its `Pss_Anon` scaled with
+  what the unit's environment CONTAINED, on every run — not with whether
+  that run installed it. Warm, uv 0.9, same machine:
 
   | unit shape | warm parent |
   |---|---|
@@ -93,18 +110,18 @@ Supervisor -> unit, at spawn:
   | aioesphomeapi + zeroconf + git-pinned SDK | 38.4 MB |
   | aioesphomeapi + zeroconf + PATH-pinned SDK | 4.0 MB |
 
-  The git-vs-path source is the dominant factor for a heavy environment,
-  which is why in-repo benching misses it entirely: `adapters/` use a path
-  source and every vendored house uses a git one. A live house measured
-  223 MB of 443 MB in these parents.
-
-  The supervisor's `uv sync --script` prewarm removes only the COLD-install
-  spike — worth having, because it otherwise persists for the life of the
-  units, but measured at ~15-25 MB on a real house, NOT the ~180 MB the
-  v0.8.0 commit message claims. That claim was made from a path-sourced
-  bench and is wrong; this table is the correction. The remaining ~150 MB
-  is the git-source-plus-heavy-deps interaction, and a wheel-installed SDK
-  is the lever that would reach it (see SDK distribution).
+  The git-vs-path source was the dominant factor for a heavy environment,
+  which is why in-repo benching missed it entirely: `adapters/` use a path
+  source and every vendored house used a git one. A live house measured
+  223 MB of 443 MB in these parents. The earlier `uv sync --script`
+  prewarm (v0.8.0) removed only the COLD-install spike, measured at
+  ~15-25 MB on a real house, NOT the ~180 MB its commit message claimed;
+  the wheel-distributed SDK (see SDK distribution) reached the git-source
+  share; exec'ing the interpreter removes the parent altogether, warm or
+  cold, whatever the source. A second thing it closes: `PR_SET_PDEATHSIG`
+  only ever reached the direct child, so a SIGKILLed supervisor left the
+  interpreter under a dead `uv run` orphaned. With the interpreter as the
+  direct child, the kernel reaches it.
 
 Unit -> bus, obligations:
 
@@ -1805,6 +1822,49 @@ adapter — the membrane rule.
   states per entity — up, down, unknown — and unknown is the honest
   answer for an entity whose adapter never published `available`
   (recorded 2026-09-07 from #7, ahead of the helper).
+
+## Unit granularity: the atom is the unit, not the automation (settled 2026-09-08)
+
+The question was whether every automation, however small, should be its
+own `uv`-run process. The answer is that the question conflates two
+things. **The unit is the atom**: of authority (its manifest's grants,
+subscribes, publishes, params), of failure (its liveliness token, backoff,
+breaker, process group), and of change (its `files_hash`, its step in the
+apply walk). Those three boundaries coinciding on one process is the
+architectural payoff of the process model, and nothing here moves any of
+them. **What a unit contains is the author's call.** A unit script may
+host several rules — several `ctx.subscribe` handlers, a minute-tick
+handler, a fused sensor — and the SDK already supports it: the Context is
+callback-driven with no limit on subscriptions, and the manifest expresses
+the union of what the rules need. No SDK or schema change; this is a
+statement of what was always legal.
+
+- **The grouping rule is shared blast radius, not size.** Rules belong in
+  one unit when they should live and die together: one throws on the next
+  tick and the others going down with it is acceptable, they share a
+  restart, they share `home/health/{unit}`, and an edit to any of them is a
+  behavioral change to all of them at plan time. "All the evening
+  lighting" is one unit; "evening lighting" and "the heat-pump setback" are
+  two, however small each is, because nobody wants a bug in one to restart
+  the other.
+- **Authority is the union, deliberately.** A unit that hosts three rules
+  holds the grants all three need, and any of them can use any of them —
+  the grant table cannot tell rules apart, only units. That is the cost of
+  bundling and the reason the boundary stays at the process: a rule that
+  must not be able to touch what its neighbour touches is a separate unit.
+- **What a unit costs** (measured 2026-09-08, dev container, warm): a
+  minimal Python unit — zenoh and the SDK imported, nothing else — is
+  ~12 MB resident. That is the floor per unit now that the `uv run` parent
+  is gone (see Supervision); a heavy adapter is more, a trivial automation
+  is not less. Forty trivial units is ~0.5 GB, fine on a NUC or a Pi 4,
+  not on a Pi Zero. The lever if that ever binds is bundling by the rule
+  above, not a shared runner.
+- **Rejected: a multi-tenant automation runner** — one service hosting
+  many small rules with an in-process scheduler. It reintroduces shared
+  authority and shared failure across rules that did not choose it, and
+  the moment it grows per-rule health and restart it is the supervisor
+  rebuilt in Python. That is the Home Assistant model the project set out
+  to leave.
 
 ## Voice (later phase)
  

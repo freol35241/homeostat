@@ -136,11 +136,11 @@ pub async fn supervise(
             (bus::ENV_UNIT, spec.name.as_str()),
             (bus::ENV_BUS, spec.endpoint.as_str()),
         ];
-        // Before the long-lived `uv run` parent exists, not after: see
-        // process::prewarm.
-        process::prewarm(&spec.command, &spec.cwd).await;
+        // Per incarnation, not once: a restart after an SDK bump must pick
+        // up the new environment. See process::resolve.
+        let command = process::resolve(&spec.command, &spec.cwd).await;
         let started = Instant::now();
-        let mut child = match process::spawn(&spec.command, &spec.cwd, &env) {
+        let mut child = match process::spawn(&command, &spec.cwd, &env) {
             Ok(child) => child,
             Err(err) => {
                 eprintln!("[homeostat] {}: spawn failed: {err}", spec.name);
