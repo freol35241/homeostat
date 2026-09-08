@@ -79,7 +79,53 @@ pub fn markdown() -> String {
         out.push_str(&format!("## {}\n\n", file.title()));
         render_file(&json(file), &mut out);
     }
+    render_vocabulary(&mut out);
     out
+}
+
+/// The capability vocabulary (manifest.rs, VOCABULARY): the base aspect,
+/// the named optional aspects, and the notable reading per capability,
+/// plus the aspects every capability shares. What docs/adapters.md points
+/// at instead of carrying its own copy.
+fn render_vocabulary(out: &mut String) {
+    out.push_str("## Capability vocabulary\n\n");
+    out.push_str(
+        "What an entity of each capability publishes under which names \
+         (docs/adapters.md, State). The base aspect is what commands target \
+         and the dashboard widget renders; the other named aspects are what \
+         `features` may declare or the vocabulary reserves; notable is the \
+         reading that counts as a deviation on `Now`. Anything else an \
+         adapter publishes passes through under its native name.\n\n",
+    );
+    out.push_str("| Capability | Base aspect | Other named aspects | Notable | Notes |\n|---|---|---|---|---|\n");
+    for c in crate::manifest::VOCABULARY {
+        let base = c
+            .base
+            .map(|b| format!("`{b}`"))
+            .unwrap_or_else(|| "—".into());
+        let aspects = if c.aspects.is_empty() {
+            "—".to_string()
+        } else {
+            c.aspects
+                .iter()
+                .map(|a| format!("`{a}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let notable = c
+            .notable
+            .map(|n| format!("`{n}`"))
+            .unwrap_or_else(|| "—".into());
+        out.push_str(&format!(
+            "| `{}` | {base} | {aspects} | {notable} | {} |\n",
+            c.name,
+            c.note.replace('|', "\\|")
+        ));
+    }
+    out.push_str("\nEvery capability may also publish:\n\n");
+    for (aspect, desc) in crate::manifest::COMMON_ASPECTS {
+        out.push_str(&format!("- `{aspect}` — {desc}\n"));
+    }
 }
 
 fn render_file(schema: &Value, out: &mut String) {
@@ -123,7 +169,11 @@ fn render_file(schema: &Value, out: &mut String) {
                         }
                     }
                 }
-                let req = if required.contains(&field.as_str()) { "yes" } else { "no" };
+                let req = if required.contains(&field.as_str()) {
+                    "yes"
+                } else {
+                    "no"
+                };
                 let desc = spec
                     .get("description")
                     .and_then(Value::as_str)
@@ -160,7 +210,12 @@ fn enum_values(node: &Value) -> Option<Vec<(String, Option<String>)>> {
                 .map(|d| d.replace('\n', " "));
             out.push((value.to_string(), desc));
         } else if let Some(values) = v.get("enum").and_then(Value::as_array) {
-            out.extend(values.iter().filter_map(Value::as_str).map(|v| (v.to_string(), None)));
+            out.extend(
+                values
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(|v| (v.to_string(), None)),
+            );
         } else {
             return None;
         }
@@ -175,13 +230,20 @@ fn type_name(spec: &Value) -> (String, Vec<String>) {
         return (format!("[{name}](#{})", name.to_lowercase()), vec![name]);
     }
     if let Some(any) = spec.get("anyOf").and_then(Value::as_array) {
-        let inner: Vec<&Value> = any.iter().filter(|s| s.get("type") != Some(&json!("null"))).collect();
+        let inner: Vec<&Value> = any
+            .iter()
+            .filter(|s| s.get("type") != Some(&json!("null")))
+            .collect();
         if inner.len() == 1 {
             return type_name(inner[0]);
         }
     }
     if let Some(values) = spec.get("enum").and_then(Value::as_array) {
-        let list: Vec<String> = values.iter().filter_map(Value::as_str).map(|v| format!("`{v}`")).collect();
+        let list: Vec<String> = values
+            .iter()
+            .filter_map(Value::as_str)
+            .map(|v| format!("`{v}`"))
+            .collect();
         return (list.join(" \\| "), vec![]);
     }
     let ty = match spec.get("type") {
@@ -196,7 +258,10 @@ fn type_name(spec: &Value) -> (String, Vec<String>) {
     };
     match ty.as_str() {
         "array" => {
-            let (inner, refs) = spec.get("items").map(type_name).unwrap_or(("any".into(), vec![]));
+            let (inner, refs) = spec
+                .get("items")
+                .map(type_name)
+                .unwrap_or(("any".into(), vec![]));
             (format!("list of {inner}"), refs)
         }
         "object" => match spec.get("additionalProperties") {
@@ -230,6 +295,16 @@ mod tests {
         assert!(param.get("default").is_some(), "{unit}");
         assert!(param.get("constraint").is_some(), "{unit}");
         assert!(param["type"]["$ref"].is_string(), "{param}");
+    }
+
+    #[test]
+    fn vocabulary_covers_every_capability_once() {
+        use crate::manifest::{CAPABILITIES, VOCABULARY};
+        let names: Vec<&str> = VOCABULARY.iter().map(|c| c.name).collect();
+        assert_eq!(
+            names, CAPABILITIES,
+            "VOCABULARY rows must match CAPABILITIES, in order"
+        );
     }
 
     #[test]

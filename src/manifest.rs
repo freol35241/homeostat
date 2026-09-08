@@ -4,7 +4,8 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 /// Capabilities known to the core. DESIGN.md does not enumerate these; this
-/// list grows with adapters.
+/// list grows with adapters. The aspect vocabulary of each is `VOCABULARY`
+/// below; a test keeps the two in step.
 pub const CAPABILITIES: &[&str] = &[
     "binary_sensor",
     "camera",
@@ -18,6 +19,121 @@ pub const CAPABILITIES: &[&str] = &[
     "sensor",
     "switch",
     "vpn",
+];
+
+/// One capability's aspect vocabulary: what an adapter binding it must
+/// publish under which names, and what the family surfaces act on. This
+/// is the public schema's side of "adapters speak homeostat vocabulary"
+/// (docs/design.md, Dashboard): the base aspect is what commands target
+/// and the dashboard widget renders; features are the optional aspects
+/// an entity file may declare; notable names the reading that counts as
+/// a deviation on `Now`. Rendered into docs/manifest.md.
+#[derive(Debug, Clone, Copy)]
+pub struct Capability {
+    pub name: &'static str,
+    /// The aspect the capability's widget and cmd grant act on, if any.
+    pub base: Option<&'static str>,
+    /// Optional aspects an entity may declare in `features`, and other
+    /// names the vocabulary reserves for this capability.
+    pub aspects: &'static [&'static str],
+    /// The reading and value that is out of the ordinary, if any.
+    pub notable: Option<&'static str>,
+    pub note: &'static str,
+}
+
+pub const VOCABULARY: &[Capability] = &[
+    Capability {
+        name: "binary_sensor",
+        base: None,
+        aspects: &[],
+        notable: None,
+        note: "A boolean under its native name.",
+    },
+    Capability {
+        name: "camera",
+        base: None,
+        aspects: &["motion"],
+        notable: None,
+        note: "`motion` (bool). Media rides the go2rtc plane, never the bus.",
+    },
+    Capability {
+        name: "climate",
+        base: Some("setpoint"),
+        aspects: &["indoor_temperature", "feed_temperature"],
+        notable: None,
+        note: "`setpoint` in °C is the family lever; the two readings are normalized when the device has them.",
+    },
+    Capability {
+        name: "cover",
+        base: None,
+        aspects: &[],
+        notable: None,
+        note: "Reserved; no adapter binds it yet.",
+    },
+    Capability {
+        name: "light",
+        base: Some("on"),
+        aspects: &["brightness", "color_temp"],
+        notable: Some("on = true"),
+        note: "`brightness` 0–254 (the Zigbee2MQTT scale the dashboard assumes), `color_temp` in mired.",
+    },
+    Capability {
+        name: "lock",
+        base: Some("locked"),
+        aspects: &[],
+        notable: Some("locked = false"),
+        note: "",
+    },
+    Capability {
+        name: "person",
+        base: None,
+        aspects: &["lat", "lon", "accuracy", "battery", "fixed_at"],
+        notable: None,
+        note: "Scalar position aspects; `fixed_at` is the fix's epoch timestamp. Room is always `person`.",
+    },
+    Capability {
+        name: "presence",
+        base: None,
+        aspects: &["occupancy", "presence"],
+        notable: None,
+        note: "Either spelling is accepted; adapters pass their native one through.",
+    },
+    Capability {
+        name: "router",
+        base: None,
+        aspects: &["wan"],
+        notable: Some("wan = false"),
+        note: "",
+    },
+    Capability {
+        name: "sensor",
+        base: None,
+        aspects: &[],
+        notable: None,
+        note: "Numeric aspects under descriptive names (`temperature`, `humidity`); widgets come from what is published.",
+    },
+    Capability {
+        name: "switch",
+        base: Some("on"),
+        aspects: &[],
+        notable: None,
+        note: "",
+    },
+    Capability {
+        name: "vpn",
+        base: None,
+        aspects: &["up"],
+        notable: Some("up = false"),
+        note: "",
+    },
+];
+
+/// Aspects every capability shares: `available` (device liveness, opt-in,
+/// notable when false) and `{aspect}_valid` beside a reading the device
+/// itself may stop trusting. Rendered with the vocabulary.
+pub const COMMON_ASPECTS: &[(&str, &str)] = &[
+    ("available", "bool, published on transition by the owning adapter when the protocol has a real loss signal; `false` is notable (docs/design.md, Availability)."),
+    ("{aspect}_valid", "bool beside a reading the device itself may stop trusting; the value stands, the flag says stale."),
 ];
 
 pub const SUPPORTED_SCHEMA: u32 = 1;
