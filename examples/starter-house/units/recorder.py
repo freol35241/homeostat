@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "homeostat==0.9.0",
+#     "homeostat==0.10.0",
 # ]
 # ///
 """Recorder service: history end to end (see docs/design.md, step 5a).
@@ -55,17 +55,32 @@ DEFAULT_QUERY_LIMIT = 1000
 DEFAULT_EVENTS_LIMIT = 500
 EVENTS_KEY = zenoh.KeyExpr("home/history/events")
 
+# Store layout, stamped in PRAGMA user_version. Version 0 was one wide
+# samples table repeating class/room/entity/aspect/kind as TEXT on every
+# row (and again in its index); measured at ~113 bytes a row against ~25
+# for this layout, which is what bounds the file between retentions.
+STORE_VERSION = 1
+
 SCHEMA = """
-CREATE TABLE IF NOT EXISTS samples (
-  ts INTEGER NOT NULL,
+CREATE TABLE IF NOT EXISTS series (
+  id INTEGER PRIMARY KEY,
   class TEXT NOT NULL,
-  room TEXT NOT NULL,
   entity TEXT NOT NULL,
   aspect TEXT NOT NULL,
-  kind TEXT NOT NULL,
-  value NOT NULL
+  UNIQUE (class, entity, aspect)
 );
-CREATE INDEX IF NOT EXISTS samples_series ON samples (class, entity, aspect, ts);
+CREATE TABLE IF NOT EXISTS rooms (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE
+);
+CREATE TABLE IF NOT EXISTS samples (
+  series_id INTEGER NOT NULL REFERENCES series (id),
+  ts INTEGER NOT NULL,
+  room_id INTEGER NOT NULL REFERENCES rooms (id),
+  kind INTEGER NOT NULL,
+  value NOT NULL,
+  PRIMARY KEY (series_id, ts)
+) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS events (
   ts INTEGER NOT NULL,
   key TEXT NOT NULL,
@@ -73,7 +88,18 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE INDEX IF NOT EXISTS events_key ON events (key, ts);
 CREATE INDEX IF NOT EXISTS events_ts ON events (ts);
+CREATE VIEW IF NOT EXISTS history AS
+  SELECT ts, class, rooms.name AS room, entity, aspect,
+         CASE kind WHEN 0 THEN 'bool' WHEN 1 THEN 'number' ELSE 'string' END AS kind,
+         value
+  FROM samples
+  JOIN series ON series.id = samples.series_id
+  JOIN rooms ON rooms.id = samples.room_id;
 """
+
+# samples.kind codes, in the order the history view spells them out; the
+# wire and the docs keep the names.
+KINDS = ("bool", "number", "string")
 
 
 def now_us() -> int:
@@ -150,9 +176,17 @@ class Writer:
         conn = sqlite3.connect(self.db_path, timeout=2.0)
         try:
             with conn:
+                self._intern(conn, rows)
                 conn.executemany(
-                    "INSERT INTO samples VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    [row for table, row in rows if table == "samples"],
+                    "INSERT OR IGNORE INTO samples VALUES ("
+                    "  (SELECT id FROM series WHERE class = ? AND entity = ? AND aspect = ?),"
+                    "  ?, (SELECT id FROM rooms WHERE name = ?), ?, ?)",
+                    [
+                        (space, entity, aspect, ts, room, kind, value)
+                        for ts, space, room, entity, aspect, kind, value in (
+                            row for table, row in rows if table == "samples"
+                        )
+                    ],
                 )
                 conn.executemany(
                     "INSERT INTO events VALUES (?, ?, ?)",
@@ -160,6 +194,18 @@ class Writer:
                 )
         finally:
             conn.close()
+
+    def _intern(self, conn: sqlite3.Connection, rows: list) -> None:
+        """Ensures every series and room the batch names has an id, so the
+        per-row inserts are id lookups."""
+        conn.executemany(
+            "INSERT OR IGNORE INTO series (class, entity, aspect) VALUES (?, ?, ?)",
+            {(r[1], r[3], r[4]) for t, r in rows if t == "samples"},
+        )
+        conn.executemany(
+            "INSERT OR IGNORE INTO rooms (name) VALUES (?)",
+            {(r[2],) for t, r in rows if t == "samples"},
+        )
 
 
 def typed(value):
@@ -173,8 +219,8 @@ def typed(value):
     return None
 
 
-def decode(kind: str, value):
-    return bool(value) if kind == "bool" else value
+def decode(kind: int, value):
+    return bool(value) if KINDS[kind] == "bool" else value
 
 
 class Recorder:
@@ -215,7 +261,7 @@ class Recorder:
             self.sess.health_event("drop", reason="non-scalar", key=key)
             return
         kind, stored = kind_value
-        row = (ts, parts[1], parts[2], parts[3], "/".join(parts[4:]), kind, stored)
+        row = (ts, parts[1], parts[2], parts[3], "/".join(parts[4:]), KINDS.index(kind), stored)
         self.writer.enqueue("samples", row)
         if parts[1] == "cmd":
             # The "who" audit design.md anticipated: the full envelope
@@ -248,20 +294,20 @@ class Recorder:
             return
         try:
             series = conn.execute(
-                "SELECT DISTINCT class, entity, aspect FROM samples"
+                "SELECT id, class, entity, aspect FROM series"
             ).fetchall()
-            for space, entity, aspect in series:
+            for series_id, space, entity, aspect in series:
                 series_key = f"home/history/{space}/{entity}/{aspect}"
                 if not asked.intersects(zenoh.KeyExpr(series_key)):
                     continue
                 rows = conn.execute(
                     "SELECT ts, room, kind, value FROM ("
-                    "  SELECT ts, room, kind, value FROM samples"
-                    "  WHERE class = ? AND entity = ? AND aspect = ?"
-                    "    AND ts >= ? AND ts <= ?"
+                    "  SELECT ts, rooms.name AS room, kind, value FROM samples"
+                    "  JOIN rooms ON rooms.id = samples.room_id"
+                    "  WHERE series_id = ? AND ts >= ? AND ts <= ?"
                     "  ORDER BY ts DESC LIMIT ?"
                     ") ORDER BY ts ASC",
-                    (space, entity, aspect, from_us, to_us, limit),
+                    (series_id, from_us, to_us, limit),
                 ).fetchall()
                 payload = [
                     {"ts": iso_utc(ts), "room": room, "value": decode(kind, value)}
@@ -405,18 +451,62 @@ def parse_event_params(raw: str) -> tuple[str | None, int, int, int]:
 
 
 def init_store(db_path: Path) -> None:
-    """Creates the store and its schema. Must succeed before ready(): a
-    recorder that never had a working store must not claim readiness."""
+    """Creates the store and its schema, or migrates an older layout in
+    place. Must succeed before ready(): a recorder that never had a
+    working store must not claim readiness."""
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     try:
-        # WAL persists in the file; set once here so the per-flush writer
-        # and read-only query connections never block each other.
+        # Both pragmas persist in the file. Incremental auto_vacuum so a
+        # future retention delete can return pages to the filesystem — it
+        # only takes effect before the file's first page is written (or
+        # across a VACUUM), which is why it is a schema decision and comes
+        # first. WAL so the per-flush writer and read-only query
+        # connections never block each other.
+        conn.execute("PRAGMA auto_vacuum=INCREMENTAL")
         conn.execute("PRAGMA journal_mode=WAL")
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        if version == 0 and has_v0_samples(conn):
+            migrate_v0(conn)
         conn.executescript(SCHEMA)
+        conn.execute(f"PRAGMA user_version={STORE_VERSION}")
         conn.commit()
     finally:
         conn.close()
+
+
+def has_v0_samples(conn: sqlite3.Connection) -> bool:
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(samples)")}
+    return "class" in columns
+
+
+def migrate_v0(conn: sqlite3.Connection) -> None:
+    """Version 0 -> 1: the wide samples table becomes series + rooms +
+    narrow samples. One explicit transaction, so a crash mid-way leaves the
+    version-0 file intact for the next start; the VACUUM after it is what
+    switches an existing file to auto_vacuum."""
+    conn.execute("BEGIN")
+    conn.execute("ALTER TABLE samples RENAME TO samples_v0")
+    for statement in SCHEMA.split(";\n"):
+        if statement.strip():
+            conn.execute(statement)
+    conn.execute(
+        "INSERT INTO series (class, entity, aspect)"
+        " SELECT DISTINCT class, entity, aspect FROM samples_v0"
+    )
+    conn.execute("INSERT INTO rooms (name) SELECT DISTINCT room FROM samples_v0")
+    conn.execute(
+        "INSERT OR IGNORE INTO samples"
+        " SELECT series.id, ts, rooms.id, CASE kind"
+        + "".join(f" WHEN '{name}' THEN {code}" for code, name in enumerate(KINDS))
+        + " END, value FROM samples_v0"
+        " JOIN series ON series.class = samples_v0.class"
+        "   AND series.entity = samples_v0.entity AND series.aspect = samples_v0.aspect"
+        " JOIN rooms ON rooms.name = samples_v0.room"
+    )
+    conn.execute("DROP TABLE samples_v0")
+    conn.execute("COMMIT")
+    conn.execute("VACUUM")
 
 
 def main():

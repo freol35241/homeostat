@@ -95,7 +95,8 @@
   /* The Now view's "out of the ordinary" list, in render order. Each
    * record: { tag, title, detail, target, button? } where target names
    * what a tap opens — {type:'unit', unit}, {type:'rooms'},
-   * {type:'entity', room, entity}, or {type:'setpoint', unit, param} —
+   * {type:'entity', room, entity}, {type:'setpoint', unit, param} (a
+   * family-editable param) or {type:'unit', unit} (an owner param) —
    * and button is the optional corrective action. */
   function computeDeviations(model, state, health, config) {
     var entities = model.entities || [];
@@ -184,11 +185,17 @@
         var live = config[configKey];
         var def = params[pname].default;
         if (JSON.stringify(live) !== JSON.stringify(def)) {
+          // A family param taps through to its editor on Setpoints; an
+          // owner param is read-only here, so it taps to the unit overlay
+          // where it is shown against its default.
+          var family = params[pname].editable_by === 'family';
           deviations.push({
             tag: 'setpoint',
             title: (labels[u.name] || u.name) + ' · ' + pname,
             detail: String(live) + ' (default ' + String(def) + ')',
-            target: { type: 'setpoint', unit: u.name, param: pname }
+            target: family
+              ? { type: 'setpoint', unit: u.name, param: pname }
+              : { type: 'unit', unit: u.name }
           });
         }
       });
