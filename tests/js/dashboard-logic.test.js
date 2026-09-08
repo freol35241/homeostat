@@ -213,3 +213,128 @@ test('presenceValue prefers occupancy, falls back to presence', () => {
   );
   assert.equal(logic.presenceValue({}, entity), undefined);
 });
+
+// ---- aspect descriptors ----
+
+const HEAT_PUMP = { name: 'heat_pump', room: 'utility', capability: 'climate', label: 'Heat pump' };
+
+function descriptor() {
+  return {
+    schema: 1,
+    groups: ['control', 'readings'],
+    fields: {
+      setpoint: {
+        label: 'indoor target', kind: 'temperature', group: 'control',
+        command: { type: 'float', constraint: { min: 10, max: 30 }, step: 0.5, editable_by: 'family' },
+      },
+      operating_mode: {
+        label: 'mode', kind: 'enum', group: 'control',
+        values: [{ value: 1, label: 'normal' }, { value: 2, label: 'block' }, { value: 3, label: 'boost' }],
+        command: { type: 'enum', editable_by: 'family' },
+      },
+      feed_temperature_target: {
+        label: 'feed target', kind: 'temperature', group: 'control',
+        command: { type: 'float', constraint: { min: 20, max: 60 }, editable_by: 'owner' },
+      },
+      indoor_temperature: { label: 'indoor', kind: 'temperature', group: 'readings', valid: 'indoor_temperature_valid' },
+      compressor: { label: 'compressor', kind: 'boolean', group: 'readings' },
+      alarm: { label: 'alarm', kind: 'boolean', group: 'readings', notable: true },
+      never_published: { label: 'ghost', kind: 'number', group: 'readings' },
+    },
+  };
+}
+
+function heatPumpState(overrides) {
+  return Object.assign({
+    'home/state/utility/heat_pump/setpoint': 21,
+    'home/state/utility/heat_pump/operating_mode': 2,
+    'home/state/utility/heat_pump/feed_temperature_target': 38,
+    'home/state/utility/heat_pump/indoor_temperature': 20.3,
+    'home/state/utility/heat_pump/indoor_temperature_valid': false,
+    'home/state/utility/heat_pump/compressor': true,
+    'home/state/utility/heat_pump/GT3_2_raw': 47.25,
+    'home/state/utility/heat_pump/available': true,
+    'home/state/kitchen/kitchen_lamp/on': true,
+  }, overrides || {});
+}
+
+test('a described entity plans sections in descriptor order, diagnostics last and collapsed', () => {
+  const plan = logic.aspectPlan(HEAT_PUMP, heatPumpState(), descriptor(), true);
+  assert.deepEqual(plan.map((s) => s.group), ['control', 'readings', 'diagnostics']);
+  assert.deepEqual(plan.map((s) => s.collapsed), [false, false, true]);
+  assert.deepEqual(plan[0].rows.map((r) => r.aspect), ['setpoint', 'operating_mode', 'feed_temperature_target']);
+  // undescribed aspects fall to diagnostics, sorted; a foreign entity's keys never appear
+  assert.deepEqual(plan[2].rows.map((r) => r.aspect), ['GT3_2_raw', 'available']);
+  // a described field with no state is not a row
+  assert.ok(!plan[1].rows.some((r) => r.aspect === 'never_published'));
+});
+
+test('described rows carry labels, kind formatting and the consumed validity flag', () => {
+  const plan = logic.aspectPlan(HEAT_PUMP, heatPumpState(), descriptor(), true);
+  const readings = plan[1].rows;
+  const indoor = readings.find((r) => r.aspect === 'indoor_temperature');
+  assert.equal(indoor.label, 'indoor');
+  assert.equal(indoor.display, '20.3°');
+  assert.equal(indoor.stale, true, 'valid === false marks the reading stale');
+  assert.ok(!readings.some((r) => r.aspect === 'indoor_temperature_valid'), 'the flag is consumed, not listed');
+  assert.equal(readings.find((r) => r.aspect === 'compressor').display, 'on');
+  const mode = plan[0].rows.find((r) => r.aspect === 'operating_mode');
+  assert.equal(mode.display, 'block', 'enum values render their label');
+  assert.equal(plan[2].rows.find((r) => r.aspect === 'GT3_2_raw').display, '47.3', 'undescribed: one decimal');
+});
+
+test('controls follow the command type and tier; ungranted renders inert', () => {
+  const granted = logic.aspectPlan(HEAT_PUMP, heatPumpState(), descriptor(), true)[0].rows;
+  assert.deepEqual(granted[0].control, { kind: 'stepper', step: 0.5, min: 10, max: 30, disabled: false });
+  assert.equal(granted[1].control.kind, 'segment');
+  assert.equal(granted[1].control.values.length, 3);
+  assert.deepEqual(granted[2].control, { kind: 'readonly', tier: 'owner' }, 'owner commands read, never write');
+  const inert = logic.aspectPlan(HEAT_PUMP, heatPumpState(), descriptor(), false)[0].rows;
+  assert.equal(inert[0].control.disabled, true);
+  assert.equal(inert[1].control.disabled, true);
+  assert.equal(logic.controlFor({ command: { type: 'int', constraint: { min: 0, max: 5 }, editable_by: 'family' } }, true).kind, 'slider');
+  assert.equal(logic.controlFor({ label: 'x' }, true), null, 'no command, no control');
+});
+
+test('an undescribed entity plans one flat state section, as before', () => {
+  const plan = logic.aspectPlan(HEAT_PUMP, heatPumpState(), undefined, true);
+  assert.equal(plan.length, 1);
+  assert.equal(plan[0].group, 'state');
+  assert.equal(plan[0].collapsed, false);
+  assert.deepEqual(plan[0].rows.map((r) => r.aspect), [
+    'GT3_2_raw', 'available', 'compressor', 'feed_temperature_target', 'indoor_temperature',
+    'indoor_temperature_valid', 'operating_mode', 'setpoint',
+  ]);
+  assert.equal(plan[0].rows.find((r) => r.aspect === 'compressor').display, 'true');
+  assert.equal(plan[0].rows.find((r) => r.aspect === 'indoor_temperature').display, '20.3°');
+  assert.equal(plan[0].rows[0].control, null);
+});
+
+test('formatAspect handles the kinds and the empty value', () => {
+  assert.equal(logic.formatAspect('x', { kind: 'temperature_delta' }, 1.5), '+1.5°');
+  assert.equal(logic.formatAspect('x', { kind: 'temperature_delta' }, -2), '-2.0°');
+  assert.equal(logic.formatAspect('x', { kind: 'percent' }, 87.6), '88%');
+  assert.equal(logic.formatAspect('x', { kind: 'number' }, 3.14159), '3.14');
+  assert.equal(logic.formatAspect('x', null, undefined), '—');
+});
+
+test('a notable described aspect deviates when true', () => {
+  const m = model({ entities: [HEAT_PUMP] });
+  const aspects = { heat_pump: descriptor() };
+  const on = logic.computeDeviations(m, heatPumpState({ 'home/state/utility/heat_pump/alarm': true }), {}, {}, aspects);
+  assert.equal(on.length, 1);
+  assert.equal(on[0].title, 'Heat pump — alarm');
+  assert.deepEqual(on[0].target, { type: 'entity', room: 'utility', entity: 'heat_pump' });
+  assert.deepEqual(logic.computeDeviations(m, heatPumpState({ 'home/state/utility/heat_pump/alarm': false }), {}, {}, aspects), []);
+  assert.deepEqual(logic.computeDeviations(m, heatPumpState({ 'home/state/utility/heat_pump/alarm': true }), {}, {}, {}), [], 'undescribed: no verdict');
+});
+
+test('aspect descriptors ride the snapshot and arrive as deltas', () => {
+  const store = { state: {}, health: {}, config: {}, events: [], aspects: {} };
+  logic.applyMessage(store, { type: 'snapshot', state: {}, health: {}, config: {}, aspects: { heat_pump: { fields: {} } } });
+  assert.deepEqual(Object.keys(store.aspects), ['heat_pump']);
+  assert.equal(logic.applyMessage(store, { type: 'aspects', entity: 'lamp', value: { fields: { on: {} } } }), 'aspects');
+  assert.deepEqual(Object.keys(store.aspects).sort(), ['heat_pump', 'lamp']);
+  logic.applyMessage(store, { type: 'snapshot', state: {} });
+  assert.deepEqual(store.aspects, {}, 'a snapshot without descriptors clears them');
+});

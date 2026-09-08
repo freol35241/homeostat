@@ -9,7 +9,10 @@
 //!    POSTed with the write header is published at the concrete cmd key —
 //!    observed via the reflector echoing it back as state. A command for a
 //!    capability the dashboard's own manifest does not grant is refused
-//!    before the bus, and the model marks the entity not commandable.
+//!    before the bus, and the model marks the entity not commandable. An
+//!    aspect descriptor in the owning adapter's discovery record admits
+//!    the family-editable commands it declares, within their constraints,
+//!    and rides the snapshot (docs/design.md, Aspect descriptors).
 //! 3. A parameter write within constraints persists through the core's
 //!    validating config queryable; an out-of-constraint write is refused
 //!    and changes nothing.
@@ -239,6 +242,10 @@ async fn dashboard_serves_the_family_surface() {
         .declare_subscriber("home/cmd/livingroom/heat_pump/setpoint")
         .await
         .expect("climate cmd subscriber");
+    let mode_cmd_sub = observer
+        .declare_subscriber("home/cmd/livingroom/heat_pump/*")
+        .await
+        .expect("mode cmd subscriber");
 
     // First run resolves the dashboard's uv environment (aiohttp): generous.
     let mut dash = health_watch(&observer, "dashboard").await;
@@ -492,6 +499,93 @@ async fn dashboard_serves_the_family_surface() {
         Some(&json!({"room": "livingroom", "entity": "heat_pump", "aspect": "feed_temperature_target", "value": 45.0})),
     );
     assert_eq!(status, 400, "non-commandable climate aspect must be refused: {reply}");
+
+    // 2b. Aspect descriptors (docs/design.md, Aspect descriptors): the
+    // owning adapter's discovery record may describe an entity's aspects
+    // and declare commands beyond the capability's vocabulary. A
+    // family-editable one is admitted at /api/cmd within its constraint;
+    // an owner-tier one stays refused; and the descriptor rides the
+    // WebSocket snapshot so the page can render it.
+    observer
+        .put(
+            "home/discovery/reflector",
+            json!([{
+                "id": "heat_pump-1", "configured": true, "entity": "heat_pump", "bound": true,
+                "suggested": {"capability": "climate", "features": []},
+                "aspects": {
+                    "schema": 1,
+                    "groups": ["control"],
+                    "fields": {
+                        "operating_mode": {
+                            "label": "mode", "kind": "enum", "group": "control",
+                            "values": [{"value": 1, "label": "normal"}, {"value": 2, "label": "block"}],
+                            "command": {"type": "enum", "editable_by": "family"}
+                        },
+                        "feed_temperature_target": {
+                            "label": "feed target", "kind": "temperature", "group": "control",
+                            "command": {"type": "float", "constraint": {"min": 20, "max": 60}, "editable_by": "owner"}
+                        }
+                    }
+                }
+            }])
+            .to_string(),
+        )
+        .await
+        .expect("discovery publish");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let snapshot = loop {
+        let mut ws = ws_connect(&addr, "/ws");
+        let snapshot = ws_read_message(&mut ws);
+        if snapshot["aspects"]["heat_pump"]["fields"]["operating_mode"]["label"] == json!("mode") {
+            break snapshot;
+        }
+        assert!(Instant::now() < deadline, "snapshot never carried the descriptor: {snapshot}");
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    assert_eq!(snapshot["aspects"]["heat_pump"]["groups"], json!(["control"]));
+    let (status, reply) = http_request(
+        &addr,
+        "POST",
+        "/api/cmd",
+        &[("X-Homeostat", "family")],
+        Some(&json!({"room": "livingroom", "entity": "heat_pump", "aspect": "operating_mode", "value": 2})),
+    );
+    assert_eq!(status, 200, "descriptor-declared family command: {reply}");
+    // The wildcard subscriber also saw the earlier setpoint command; the
+    // descriptor command is the next envelope on a different key.
+    let cmd_sample = loop {
+        let sample = tokio::time::timeout(Duration::from_secs(30), mode_cmd_sub.recv_async())
+            .await
+            .expect("descriptor command envelope observed")
+            .expect("sample");
+        if sample.key_expr().as_str() == "home/cmd/livingroom/heat_pump/operating_mode" {
+            break sample;
+        }
+    };
+    let envelope: Value = serde_json::from_slice(&cmd_sample.payload().to_bytes()).expect("json");
+    assert_eq!(envelope, json!({"value": 2, "priority": "manual", "actor": "dashboard"}));
+    let (status, reply) = http_request(
+        &addr,
+        "POST",
+        "/api/cmd",
+        &[("X-Homeostat", "family")],
+        Some(&json!({"room": "livingroom", "entity": "heat_pump", "aspect": "operating_mode", "value": 4})),
+    );
+    assert_eq!(status, 400, "a value outside the declared enum is refused: {reply}");
+    let (status, reply) = http_request(
+        &addr,
+        "POST",
+        "/api/cmd",
+        &[("X-Homeostat", "family")],
+        Some(&json!({"room": "livingroom", "entity": "heat_pump", "aspect": "feed_temperature_target", "value": 45.0})),
+    );
+    assert_eq!(status, 400, "an owner-tier descriptor command stays refused: {reply}");
+    assert!(
+        tokio::time::timeout(Duration::from_secs(2), mode_cmd_sub.recv_async())
+            .await
+            .is_err(),
+        "refused descriptor commands never reach the bus"
+    );
 
     // 3. Parameter path: in-constraint persists, out-of-constraint refused.
     let (status, reply) = http_request(

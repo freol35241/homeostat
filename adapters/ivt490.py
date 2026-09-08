@@ -112,9 +112,11 @@ rather than working around firmware behavior.
 
 Discovery is a small, static document at home/discovery/{unit}: one
 record per bound entity carrying its base-topic id, a suggested
-capability "climate" stanza, and a `bound` flag that starts false and
-flips permanently true (with a republish) the first time that base topic
-is actually seen on the broker. The OwnTracks/Zigbee2MQTT incremental
+capability "climate" stanza, the entity's aspect descriptor (ASPECT_FIELDS
+— labels, kinds, groups and the command vocabulary the dashboard renders;
+docs/design.md, Aspect descriptors), and a `bound` flag that starts false
+and flips permanently true (with a republish) the first time that base
+topic is actually seen on the broker. The OwnTracks/Zigbee2MQTT incremental
 inventory pattern — discovering devices never bound by any entity file —
 is overkill for a dialect with exactly one address per entity file, known
 up front.
@@ -225,6 +227,80 @@ COMMANDS = {
     "operating_mode": ("operating_mode", None),
 }
 
+# The aspect descriptor (docs/design.md, Aspect descriptors) this adapter
+# publishes in each bound entity's discovery record: labels, kinds and
+# groups for the aspects worth a family-facing name, and the command
+# vocabulary the dashboard may render — bounds straight from COMMANDS so
+# there is one source. The family tier gets the two levers that are
+# family intent (the indoor target and the GT3_2 emulation's mode — BOOST
+# is "more hot water now"); feed target and curve offset are owner tuning,
+# visible with a badge, written only through the bus. Every aspect not
+# named here still publishes and renders, in the page's diagnostics group
+# under its firmware name.
+ASPECT_GROUPS = ["control", "readings", "limits"]
+ASPECT_FIELDS = {
+    "setpoint": {"label": "indoor target", "kind": "temperature", "group": "control"},
+    "operating_mode": {
+        "label": "mode",
+        "kind": "enum",
+        "group": "control",
+        "values": [
+            {"value": 1, "label": "normal"},
+            {"value": 2, "label": "block"},
+            {"value": 3, "label": "boost"},
+        ],
+    },
+    "feed_temperature_target": {"label": "feed target", "kind": "temperature", "group": "control"},
+    "outdoor_temperature_offset": {
+        "label": "curve offset",
+        "kind": "temperature_delta",
+        "group": "control",
+    },
+    "indoor_temperature": {
+        "label": "indoor",
+        "kind": "temperature",
+        "group": "readings",
+        "valid": "indoor_temperature_valid",
+    },
+    "feed_temperature": {"label": "feed line", "kind": "temperature", "group": "readings"},
+    "GT1_target": {"label": "feed line target (curve)", "kind": "temperature", "group": "readings"},
+    "GT2": {"label": "outdoor", "kind": "temperature", "group": "readings"},
+    "GT3_1": {"label": "hot water", "kind": "temperature", "group": "readings"},
+    "GT3_2": {"label": "hot water tank", "kind": "temperature", "group": "readings"},
+    "GT5": {"label": "room sensor", "kind": "temperature", "group": "readings"},
+    "GT6": {"label": "compressor", "kind": "temperature", "group": "readings"},
+    "compressor": {"label": "compressor running", "kind": "boolean", "group": "readings"},
+    "electricity_supplement": {"label": "electric backup", "kind": "boolean", "group": "readings"},
+    "vacation": {"label": "vacation", "kind": "boolean", "group": "readings"},
+    "alarm": {"label": "alarm", "kind": "boolean", "group": "readings", "notable": True},
+    "GT1_LL": {"label": "feed lower limit", "kind": "temperature", "group": "limits"},
+    "GT1_UL": {"label": "feed upper limit", "kind": "temperature", "group": "limits"},
+    "GT3_2_LL": {"label": "tank lower limit", "kind": "temperature", "group": "limits"},
+    "GT3_2_UL": {"label": "tank upper limit", "kind": "temperature", "group": "limits"},
+}
+COMMAND_TIER = {
+    "setpoint": "family",
+    "operating_mode": "family",
+    "feed_temperature_target": "owner",
+    "outdoor_temperature_offset": "owner",
+}
+COMMAND_STEP = {"setpoint": 0.5}
+
+
+def aspect_descriptor(entity) -> dict:
+    """ASPECT_FIELDS plus a `command` on each aspect this entity takes
+    commands for (commands_for: a fed input has one master, so it is
+    described but not commandable)."""
+    fields = {aspect: dict(field) for aspect, field in ASPECT_FIELDS.items()}
+    for aspect, (_field, bounds) in commands_for(entity).items():
+        command = {"type": "enum" if bounds is None else "float", "editable_by": COMMAND_TIER[aspect]}
+        if bounds is not None:
+            command["constraint"] = {"min": bounds[0], "max": bounds[1]}
+        if aspect in COMMAND_STEP:
+            command["step"] = COMMAND_STEP[aspect]
+        fields[aspect]["command"] = command
+    return {"schema": 1, "groups": list(ASPECT_GROUPS), "fields": fields}
+
 
 def state_field(segments: list[str]) -> str:
     """Flattened subtopic path under {base}/ivt490/state to a firmware
@@ -323,6 +399,7 @@ def main():
                 "entity": e.name,
                 "bound": e.id in seen,
                 "suggested": {"capability": "climate", "features": []},
+                "aspects": aspect_descriptor(e),
             }
             for e in config.entities
         ]

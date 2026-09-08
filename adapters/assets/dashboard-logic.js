@@ -70,7 +70,12 @@
       store.state = msg.state || {};
       store.health = msg.health || {};
       store.config = msg.config || {};
+      store.aspects = msg.aspects || {};
       return 'snapshot';
+    }
+    if (msg.type === 'aspects') {
+      store.aspects[msg.entity] = msg.value;
+      return 'aspects';
     }
     if (msg.type === 'state') {
       store.state[msg.key] = msg.value;
@@ -98,7 +103,8 @@
    * {type:'entity', room, entity}, {type:'setpoint', unit, param} (a
    * family-editable param) or {type:'unit', unit} (an owner param) —
    * and button is the optional corrective action. */
-  function computeDeviations(model, state, health, config) {
+  function computeDeviations(model, state, health, config, aspects) {
+    aspects = aspects || {};
     var entities = model.entities || [];
     var units = model.units || [];
     var labels = {};
@@ -176,6 +182,18 @@
       }
     });
 
+    // state: an aspect its adapter's descriptor marks notable, when true
+    // (an alarm flag, say) — vocabulary the adapter declares, never house
+    // configuration
+    entities.forEach(function (e) {
+      var fields = (aspects[e.name] && aspects[e.name].fields) || {};
+      Object.keys(fields).forEach(function (aspect) {
+        if (fields[aspect].notable && stateValue(state, e.room, e.name, aspect) === true) {
+          deviations.push(entityRow(e, e.label + ' — ' + (fields[aspect].label || aspect)));
+        }
+      });
+    });
+
     // 3. setpoint: live config differing from the manifest default
     units.forEach(function (u) {
       var params = u.params || {};
@@ -208,6 +226,124 @@
     return deviations;
   }
 
+
+  /* ---- aspect descriptors (docs/design.md, Aspect descriptors) ----
+   * An adapter may describe an entity's aspects in its discovery record:
+   * { schema, groups: [name...], fields: { aspect: { label, kind, group,
+   * values?, valid?, notable?, command? } } }. The page renders the
+   * description through the widgets it already has; this is the pure
+   * mapping from descriptor + state to a render plan. */
+  var DIAGNOSTICS = 'diagnostics';
+
+  // Display text for one value: the field's kind decides, falling back to
+  // the undescribed rule (one decimal; a degree sign when the aspect name
+  // says temperature).
+  function formatAspect(aspect, field, value) {
+    if (value === undefined || value === null) return '—';
+    var kind = field && field.kind;
+    if (kind === 'enum' && field.values) {
+      for (var i = 0; i < field.values.length; i++) {
+        if (field.values[i].value === value) return field.values[i].label;
+      }
+      return String(value);
+    }
+    if (typeof value === 'number') {
+      if (kind === 'temperature') return value.toFixed(1) + '°';
+      if (kind === 'temperature_delta') return (value > 0 ? '+' : '') + value.toFixed(1) + '°';
+      if (kind === 'percent') return Math.round(value) + '%';
+      if (kind === 'number') return String(Math.round(value * 100) / 100);
+      if (aspect.indexOf('temperature') !== -1) return value.toFixed(1) + '°';
+      return value.toFixed(1);
+    }
+    if (typeof value === 'boolean') {
+      if (kind === 'boolean') return value ? 'on' : 'off';
+      return value ? 'true' : 'false';
+    }
+    return String(value);
+  }
+
+  // The control a described command renders as — the param-control
+  // shapes: an enum is a segmented control, a float with a step is a
+  // stepper, any other number a slider. A command the family may not
+  // edit reads its value with a tier badge instead. `commandable` is the
+  // dashboard's own grant on the capability: without it the control is
+  // inert, as for every other widget.
+  function controlFor(field, commandable) {
+    var cmd = field && field.command;
+    if (!cmd) return null;
+    var tier = cmd.editable_by || 'owner';
+    if (tier !== 'family') return { kind: 'readonly', tier: tier };
+    var c = cmd.constraint || {};
+    if (cmd.type === 'enum') {
+      return { kind: 'segment', values: field.values || [], disabled: !commandable };
+    }
+    if (cmd.type === 'float' || cmd.type === 'int') {
+      if (cmd.step) {
+        return { kind: 'stepper', step: cmd.step, min: c.min, max: c.max, disabled: !commandable };
+      }
+      return {
+        kind: 'slider', min: c.min !== undefined ? c.min : 0, max: c.max !== undefined ? c.max : 100,
+        step: cmd.type === 'int' ? 1 : 'any', disabled: !commandable
+      };
+    }
+    return null;
+  }
+
+  /* Sections of rows for an entity's detail, in render order: the
+   * descriptor's groups as listed, then diagnostics for every present
+   * aspect it does not describe (an undescribed entity is one 'state'
+   * section — exactly today's flat list). A described field's `valid`
+   * pointer names the boolean aspect that marks the value stale; that
+   * aspect is consumed into the row's `stale` flag rather than listed.
+   * Rows: { aspect, label, value, display, stale, numeric, control }. */
+  function aspectPlan(entity, state, descriptor, commandable) {
+    var prefix = 'home/state/' + entity.room + '/' + entity.name + '/';
+    var present = {};
+    Object.keys(state).forEach(function (k) {
+      if (k.indexOf(prefix) === 0) present[k.slice(prefix.length)] = state[k];
+    });
+    var fields = (descriptor && descriptor.fields) || {};
+    var described = Object.keys(fields).length > 0;
+    var validOf = {};
+    Object.keys(fields).forEach(function (a) {
+      if (fields[a].valid) validOf[fields[a].valid] = a;
+    });
+    var order = ((descriptor && descriptor.groups) || []).slice();
+    var rest = described ? DIAGNOSTICS : 'state';
+    if (order.indexOf(rest) === -1) order.push(rest);
+    var byGroup = {};
+    order.forEach(function (g) { byGroup[g] = []; });
+
+    var row = function (aspect, field) {
+      var value = present[aspect];
+      var stale = !!(field && field.valid && present[field.valid] === false);
+      return {
+        aspect: aspect,
+        label: (field && field.label) || aspect,
+        value: value,
+        display: formatAspect(aspect, field, value),
+        stale: stale,
+        numeric: typeof value === 'number',
+        control: controlFor(field, commandable)
+      };
+    };
+
+    Object.keys(fields).forEach(function (aspect) {
+      if (!(aspect in present)) return;
+      var group = fields[aspect].group;
+      if (!group || !byGroup[group]) group = rest;
+      byGroup[group].push(row(aspect, fields[aspect]));
+    });
+    Object.keys(present).sort().forEach(function (aspect) {
+      if (fields[aspect] || validOf[aspect]) return;
+      byGroup[rest].push(row(aspect, null));
+    });
+
+    return order.filter(function (g) { return byGroup[g].length > 0; }).map(function (g) {
+      return { group: g, label: titleCase(g), rows: byGroup[g], collapsed: g === DIAGNOSTICS };
+    });
+  }
+
   return {
     PRESENCE_ASPECTS: PRESENCE_ASPECTS,
     titleCase: titleCase,
@@ -217,6 +353,9 @@
     presenceEntityFromKey: presenceEntityFromKey,
     unitNameFromHealthKey: unitNameFromHealthKey,
     applyMessage: applyMessage,
-    computeDeviations: computeDeviations
+    computeDeviations: computeDeviations,
+    formatAspect: formatAspect,
+    controlFor: controlFor,
+    aspectPlan: aspectPlan
   };
 });

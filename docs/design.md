@@ -1041,7 +1041,10 @@ array at `home/discovery/{unit}`, each record carrying
   invisible; agent-side-only mapping would push a per-protocol table
   into every agent;
 - `description` — the raw protocol descriptor verbatim (for z2m: the
-  definition with its `exposes`), so richer consumers can dig.
+  definition with its `exposes`), so richer consumers can dig;
+- `aspects` (optional, bound records only) — the entity's aspect
+  descriptor for the dashboard (see "Aspect descriptors (settled
+  2026-09-08)").
 
 Decisions and why:
 
@@ -1290,7 +1293,10 @@ the exploration that produced it):
 - **Dashboard v1**: a minimal climate widget — setpoint with ±0.5 °C
   steppers at the manual band, current temperature readout when the
   normalized aspects are present; expert knobs stay read-only in the
-  entity detail overlay with history.
+  entity detail overlay with history. Superseded in the overlay
+  (2026-09-08) by the adapter's aspect descriptor — see "Aspect
+  descriptors": labelled, grouped readings, mode as a family control,
+  the owner knobs badged.
 - **MQTT boilerplate graduates to the SDK** (`homeostat.mqtt`): this is
   the third paho adapter, the agreed rule-of-three trigger. A helper
   function, not a transport layer — adapters still own their
@@ -1298,6 +1304,64 @@ the exploration that produced it):
 - Operational note: any Node-RED flow WRITING to the interface's
   controller/set topics must be disabled when this adapter goes live —
   one master per device. Read-only flows can coexist.
+
+## Aspect descriptors (settled 2026-09-08)
+
+The dashboard renders parameters well and aspects badly, for one reason:
+a param arrives with a type, a constraint and an `editable_by`, and the
+page has a small engine turning that into a slider, a segmented control
+or a read-only value with a tier badge; an aspect arrives with a name
+and a value. The heat pump made this concrete — thirty-odd rows of raw
+firmware names in the detail overlay, and no way to reach the expert
+knobs the adapter takes commands for. A hand-built IVT490 panel was
+rejected on the settled rule that the dashboard owns rendering and
+adapters never do. The gap is metadata, so the fix is metadata.
+
+- **An adapter may describe an entity's aspects**, in the same
+  vocabulary the schema already uses for params: per entity, a
+  `{schema, groups, fields}` document where each field carries `label`,
+  `kind` (`temperature`, `temperature_delta`, `percent`, `number`,
+  `boolean`, `enum` with `values: [{value, label}]`), `group`, an
+  optional `valid` naming the boolean aspect that marks the value
+  stale, an optional `notable` flag, and — for aspects the adapter takes
+  commands on — `command: {type, constraint, step?, editable_by}`, the
+  ParamSpec fields verbatim. The firmware names never become schema;
+  they get labels.
+- **It rides the discovery record.** The descriptor is the `aspects`
+  member of the entity's record at `home/discovery/{unit}`. Considered
+  and rejected: a key under `home/meta/` (core-owned: the supervisor
+  serves that whole space to late joiners, so a unit publishing there is
+  invisible to a fresh reader) and a new class (a second self-description
+  document per adapter, with its own key shape, for the same purpose
+  discovery already serves — the adapter describing its devices in
+  homeostat vocabulary). Discovery is mirrored, declared, and already
+  per-entity; the dashboard lifts descriptors out of it and forwards
+  only those to browsers. Nothing in core changes.
+- **The dashboard still owns every widget.** It maps descriptor
+  vocabulary onto the param-control shapes it has (float with a step →
+  stepper, other numbers → slider, enum → segmented control, owner tier
+  → value with badge) and groups rows as the descriptor says, with every
+  undescribed aspect demoted to a collapsed diagnostics group rather
+  than hidden. An undescribed entity renders exactly as before. The
+  mapping is pure and pinned by `node --test tests/js`.
+- **Commands widen by the same rule that gates params.** `/api/cmd`
+  admits an aspect the descriptor declares a family-editable command
+  for, checked against the declared constraint — a courtesy before the
+  bus; the adapter's own bounds remain the enforcement, and the grant
+  table (the capability, from the dashboard's own manifest) is checked
+  first, unchanged. Owner-tier commands read in the overlay and are
+  written only through the bus. For the heat pump: indoor target and
+  the GT3_2 emulation's mode (BOOST is "more hot water now") are family
+  intent; feed target and curve offset are owner tuning.
+- **`notable` is a deviation source.** A described boolean marked
+  notable that reads true (the pump's alarm flag) lands on `Now` as an
+  entity deviation — the adapter declaring vocabulary, still never house
+  configuration.
+- **Reach.** Nothing here is heat-pump specific: any adapter can label
+  `battery` a percent and `linkquality` diagnostics. Grown by need, not
+  ahead of it. Locale (`{en, sv}` labels, the `[naming]` shape) is the
+  obvious next step and is deferred with the dashboard's English-first
+  settlement.
 
 ### Device feeds: an input wired to one source (settled 2026-09-08, #9)
 
