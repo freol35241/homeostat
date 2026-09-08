@@ -171,6 +171,7 @@ h1.view-title { font-size: 20px; margin: 0 0 16px; }
   background: var(--card); border: 1px solid var(--border); box-shadow: 0 1px 2px rgba(0,0,0,.2);
   transition: left 140ms ease; }
 .toggle.on { background: var(--accent); }
+.toggle.disabled { opacity: .4; cursor: default; }
 .toggle.on .knob { left: 20px; border-color: var(--accent); }
 
 /* slider row */
@@ -201,6 +202,8 @@ input[type=range]::-moz-range-track { background: var(--border); height: 2px; bo
 .param-row.flash-highlight { animation: flash-highlight 1.5s ease; }
 @keyframes flash-highlight { from { background: var(--accent-tint); } to { background: transparent; } }
 .param-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 6px; }
+.param-readonly { font-size: 14px; }
+.tier-badge { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; margin-left: 4px; vertical-align: middle; }
 .param-head .name { font-weight: 600; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .param-caption { font-size: 12px; color: var(--muted); margin-top: 4px; cursor: help; }
 .seg { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -872,11 +875,18 @@ function displayAspectValue(entity, aspect, value) {
   return String(value);
 }
 
+// Controls render inert when this dashboard's manifest does not grant the
+// entity's capability (model.commandable): the server refuses such a
+// command anyway, and a live-looking control for it would misreport the
+// grant table.
+function controlDisabled(entity) { return !entity.commandable; }
+
 function widgetForLight(entity) {
   var on = !!stateValue(entity.room, entity.name, 'on');
+  var inert = controlDisabled(entity);
   var html = '<div class="entity-row row-clickable" data-action="entity-detail" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '">' +
     '<span class="entity-name" title="' + esc(entity.label) + '">' + esc(entity.label) + '</span>' +
-    '<span class="toggle ' + (on ? 'on' : '') + '" data-action="toggle-light" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '" data-value="' + (!on) + '"><span class="knob"></span></span>' +
+    '<span class="toggle ' + (on ? 'on' : '') + (inert ? ' disabled' : '') + '"' + (inert ? '' : ' data-action="toggle-light"') + ' data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '" data-value="' + (!on) + '"><span class="knob"></span></span>' +
     '</div>';
 
   if (entity.features && entity.features.indexOf('brightness') !== -1) {
@@ -885,7 +895,7 @@ function widgetForLight(entity) {
     var pct = typeof b === 'number' ? Math.round((b / 254) * 100) : 0;
     if (localState.sliderDrag[bkey] !== undefined) pct = localState.sliderDrag[bkey];
     html += '<div class="slider-row entity-sub"><span class="slabel">brightness</span>' +
-      '<input type="range" min="0" max="100" value="' + pct + '" data-action="slider" data-kind="brightness" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '">' +
+      '<input type="range" min="0" max="100" value="' + pct + '"' + (inert ? ' disabled' : '') + ' data-action="slider" data-kind="brightness" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '">' +
       '<span class="sval">' + pct + '%</span></div>';
   }
   if (entity.features && entity.features.indexOf('color_temp') !== -1) {
@@ -895,7 +905,7 @@ function widgetForLight(entity) {
     if (localState.sliderDrag[ctkey] !== undefined) mired = localState.sliderDrag[ctkey];
     var kelvin = Math.round(1e6 / mired / 100) * 100;
     html += '<div class="slider-row entity-sub"><span class="slabel">color temp</span>' +
-      '<input type="range" min="150" max="500" value="' + mired + '" data-action="slider" data-kind="color_temp" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '">' +
+      '<input type="range" min="150" max="500" value="' + mired + '"' + (inert ? ' disabled' : '') + ' data-action="slider" data-kind="color_temp" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '">' +
       '<span class="sval">' + kelvin + ' K</span></div>';
   }
   return html;
@@ -918,7 +928,7 @@ function widgetForLock(entity) {
   var badge = entity.write_mode === 'arbitrated' ? '<span class="badge-arbitrated">ARBITRATED</span>' : '';
   return '<div class="entity-row row-clickable" data-action="entity-detail" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '">' +
     '<span class="entity-name" title="' + esc(entity.label) + '">' + esc(entity.label) + badge + '</span>' +
-    '<span class="toggle ' + (locked ? 'on' : '') + '" data-action="toggle-lock" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '" data-value="' + (!locked) + '"><span class="knob"></span></span>' +
+    '<span class="toggle ' + (locked ? 'on' : '') + (controlDisabled(entity) ? ' disabled' : '') + '"' + (controlDisabled(entity) ? '' : ' data-action="toggle-lock"') + ' data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '" data-value="' + (!locked) + '"><span class="knob"></span></span>' +
     '</div>';
 }
 
@@ -932,7 +942,7 @@ function widgetForClimate(entity) {
   if (typeof indoor === 'number') nowParts.push(indoor.toFixed(1) + '° now');
   if (typeof feed === 'number') nowParts.push(feed.toFixed(1) + '° feed');
   var badge = entity.write_mode === 'arbitrated' ? '<span class="badge-arbitrated">ARBITRATED</span>' : '';
-  var disabledAttr = hasSetpoint ? '' : ' disabled';
+  var disabledAttr = hasSetpoint && !controlDisabled(entity) ? '' : ' disabled';
   return '<div class="entity-row row-clickable" data-action="entity-detail" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '">' +
     '<span class="entity-name" title="' + esc(entity.label) + '">' + esc(entity.label) + badge + '</span>' +
     '<span style="display:flex;align-items:center;gap:10px;">' +
@@ -1285,20 +1295,36 @@ function renderParamControl(unitName, pname, p) {
   return '<input type="text" id="' + id + '" value="' + esc(value === undefined ? '' : value) + '" data-action="param-text" data-unit="' + esc(unitName) + '" data-param="' + esc(pname) + '">';
 }
 
-// shared by the Setpoints view and the unit-detail overlay
+function familyEditable(p) { return p.editable_by === 'family'; }
+
+// shared by the Setpoints view and the unit-detail overlay. A param the
+// family cannot edit renders its live value against the manifest default
+// instead of a control: visible, not writable (/api/param is the gate).
 function renderParamRow(unitName, pname, p) {
+  var body;
+  if (familyEditable(p)) {
+    body = '<div>' + renderParamControl(unitName, pname, p) + '</div>';
+  } else {
+    var value = currentParamValue(unitName, pname, p);
+    var offDefault = JSON.stringify(value) !== JSON.stringify(p.default);
+    body = '<div class="param-readonly">' + esc(String(value)) +
+      (offDefault ? ' <span class="faint">(default ' + esc(String(p.default)) + ')</span>' : '') +
+      ' <span class="tier-badge">' + esc(p.editable_by || 'owner') + '</span></div>';
+  }
   return '<div class="param-row" id="paramrow-' + unitName + '-' + pname + '"><div class="param-head">' +
     '<span class="name" title="' + esc(unitLabel(unitName)) + ' · ' + esc(pname) + '">' + esc(unitLabel(unitName)) + ' · ' + esc(pname) + '</span></div>' +
-    '<div>' + renderParamControl(unitName, pname, p) + '</div>' +
+    body +
     '<div class="param-caption" title="' + esc(JSON.stringify(p.constraint || {})) + '">' + esc(paramConstraintCaption(p)) + '</div></div>';
 }
 
+// Setpoints is the family's levers: family-editable params only. Owner
+// params show read-only in the unit overlay (Health -> unit).
 function renderSetpoints() {
   var rows = [];
   (store.model.units || []).forEach(function (u) {
     var params = u.params || {};
     Object.keys(params).forEach(function (pname) {
-      rows.push(renderParamRow(u.name, pname, params[pname]));
+      if (familyEditable(params[pname])) rows.push(renderParamRow(u.name, pname, params[pname]));
     });
   });
   var html = '<h1 class="view-title">Setpoints</h1>';
@@ -1631,7 +1657,7 @@ function renderUnitDetailBody() {
   var paramRows = Object.keys(params).map(function (pname) {
     return renderParamRow(unit.name, pname, params[pname]);
   }).join('');
-  var paramsHtml = paramRows || '<div class="empty-hint">No family-editable parameters.</div>';
+  var paramsHtml = paramRows || '<div class="empty-hint">No parameters.</div>';
 
   var events = store.events.filter(function (ev) { return unitNameFromHealthKey(ev.key) === unit.name; });
   var eventRows = events.map(renderEventRow).join('');

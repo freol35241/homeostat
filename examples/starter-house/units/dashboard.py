@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "homeostat==0.9.0",
+#     "homeostat==0.10.0",
 #     "aiohttp>=3.9",
 # ]
 # ///
@@ -12,7 +12,9 @@ bus. Serves dashboard.html (one self-contained file next to this script) and
 a small API generated entirely from the house's text:
 
   GET  /api/model    manifests rendered for the browser (zones, entities,
-                     units; params filtered to editable_by = "family")
+                     units; params filtered to editable_by = "family";
+                     each entity marked commandable iff this unit's own
+                     manifest grants its capability)
   GET  /ws           snapshot of state/health/config, then live deltas
   POST /api/cmd      one command toward a device, published at the manual
                      band ({room, entity, aspect, value})
@@ -31,7 +33,10 @@ a small API generated entirely from the house's text:
   GET  /api/camera/{entity}/live       WebSocket relayed byte-for-byte to
                      go2rtc's api/ws (MSE) — browsers never speak go2rtc
                      (docs/design.md, Cameras); HOMEOSTAT_GO2RTC overrides
-                     the localhost default for both
+                     the localhost default for both. Both address the
+                     stream by the camera's entity id, which is how the
+                     go2rtc shim names it — resolved server-side, since
+                     ids are not part of the browser-facing model
   GET  /assets/*     vendored libraries (Leaflet, protomaps-leaflet, the
                      go2rtc player), allowlisted by filename
   GET  /tiles.pmtiles  self-hosted PMTiles region extract for the map
@@ -96,11 +101,28 @@ COMMANDABLE = {
 BASE_ASPECT = {"light": "on", "lock": "locked", "switch": "on", "climate": "setpoint"}
 
 
+def granted_capabilities(publishes: dict) -> set[str]:
+    """The capabilities this unit's [bus.publishes] grants it: the ones on
+    its cmd-class publishes, which is exactly what `plan` resolves into the
+    grant table. A capability COMMANDABLE knows but this manifest does not
+    name is refused at /api/cmd and rendered read-only, so the running
+    dashboard cannot do what its own grant table says it cannot. Grants
+    resolve at plan time (docs/design.md, Grants), so this is the unit
+    honouring its declaration, not a boundary against a unit that lies."""
+    return {
+        spec["capability"]
+        for spec in publishes.values()
+        if isinstance(spec, dict)
+        and spec.get("key", "").startswith("home/cmd/")
+        and "capability" in spec
+    }
+
+
 def label_of(naming: dict, name: str) -> str:
     return naming.get("en") or name.replace("_", " ")
 
 
-def build_model(model: house.HouseModel) -> dict:
+def build_model(model: house.HouseModel, granted: set[str]) -> dict:
     return {
         "zones": model.zones,
         "entities": [
@@ -112,6 +134,7 @@ def build_model(model: house.HouseModel) -> dict:
                 "room": e.room,
                 "write_mode": e.write_mode,
                 "owner": e.owner,
+                "commandable": e.capability in granted,
             }
             for e in model.entities
         ],
@@ -121,11 +144,11 @@ def build_model(model: house.HouseModel) -> dict:
                 "label": label_of(u.naming, u.name),
                 "kind": u.kind,
                 "description": u.description,
-                "params": {
-                    name: spec
-                    for name, spec in u.params.items()
-                    if spec.get("editable_by") == "family"
-                },
+                # Every param, owner-level included: visibility is
+                # house-wide, so a tuning constant off its default shows
+                # as a deviation and reads in the unit overlay. Only the
+                # WRITE is family-gated, at /api/param (#10).
+                "params": u.params,
             }
             for u in model.units
         ],
@@ -278,23 +301,33 @@ class Model:
     is a dashboard that renders confidently and omits a room that exists.
     """
 
-    def __init__(self) -> None:
-        self.model = build_model(house.load_house("."))
-        self._index()
+    def __init__(self, unit: str) -> None:
+        self.unit = unit
+        self._rebuild(house.load_house("."))
 
-    def _index(self) -> None:
+    def _rebuild(self, loaded: house.HouseModel) -> None:
+        own = next(u for u in loaded.units if u.name == self.unit)
+        self.model = build_model(loaded, granted_capabilities(own.publishes))
         self.entities = {e["name"]: e for e in self.model["entities"]}
         self.units = {u["name"]: u for u in self.model["units"]}
+        # go2rtc names each stream by entity id (adapters/go2rtc.py renders
+        # its config from the same HOMEOSTAT_CAMERAS keys the onvif adapter
+        # addresses cameras by), so the media proxies must ask for the id —
+        # and it is not in the browser-facing model, which carries only what
+        # the page renders. Resolved here, server-side, where it stays.
+        self.stream_names = {
+            e.name: e.id for e in loaded.entities if e.capability == "camera"
+        }
 
     def reload(self) -> None:
         try:
-            self.model = build_model(house.load_house("."))
+            loaded = house.load_house(".")
         except Exception:
             # A half-written edit must not blank the page: keep the last
             # good model and leave a trace (captured at home/meta/{unit}/log).
             traceback.print_exc()
             return
-        self._index()
+        self._rebuild(loaded)
 
 
 def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Application:
@@ -351,6 +384,8 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         spec = model.entities.get(entity)
         if spec is None or spec["room"] != room:
             return json_error(f"unknown entity {room}/{entity}")
+        if not spec["commandable"]:
+            return json_error(f"dashboard is not granted {spec['capability']} ({entity})")
         allowed = COMMANDABLE.get(spec["capability"], set())
         base = BASE_ASPECT.get(spec["capability"])
         if aspect not in allowed or (aspect != base and aspect not in spec["features"]):
@@ -367,7 +402,9 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         # never relayed through a virtual entity, whose owner would
         # re-publish at the automation band. Every light gets the command,
         # lit or not: idempotent, and immune to stale state.
-        lights = [e for e in model.model["entities"] if e["capability"] == "light"]
+        lights = [
+            e for e in model.model["entities"] if e["capability"] == "light" and e["commandable"]
+        ]
         envelope = keys.cmd_envelope(False, "manual", "dashboard")
         for spec in lights:
             hub.session.put_json(keys.cmd_key(spec["room"], spec["name"], "on"), envelope)
@@ -381,7 +418,9 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
             return json_error("body must be {unit, param, value}")
         spec = model.units.get(unit)
         if spec is None or param not in spec["params"]:
-            return json_error(f"no family-editable param {unit}.{param}")
+            return json_error(f"no param {unit}.{param}")
+        if spec["params"][param].get("editable_by") != "family":
+            return json_error(f"{unit}.{param} is not family-editable")
         try:
             stored = await asyncio.get_running_loop().run_in_executor(
                 None, hub.session.write_config, unit, param, value
@@ -434,21 +473,25 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         entries = replies[0][1] if replies else []
         return web.json_response(entries)
 
-    def camera_spec(request: web.Request) -> dict | None:
+    def camera_stream(request: web.Request) -> str | None:
+        """The go2rtc stream name for a bound camera entity, or None for an
+        unknown or non-camera entity (the proxies' 404)."""
         spec = model.entities.get(request.match_info["entity"])
-        return spec if spec is not None and spec["capability"] == "camera" else None
+        if spec is None or spec["capability"] != "camera":
+            return None
+        return model.stream_names[spec["name"]]
 
     def go2rtc_base() -> str:
         return os.environ.get(ENV_GO2RTC, DEFAULT_GO2RTC).rstrip("/")
 
     async def api_camera_snapshot(request: web.Request) -> web.Response:
-        spec = camera_spec(request)
-        if spec is None:
+        stream = camera_stream(request)
+        if stream is None:
             return json_error(f"unknown camera {request.match_info['entity']}", status=404)
         try:
             async with client["http"].get(
                 f"{go2rtc_base()}/api/frame.jpeg",
-                params={"src": spec["name"]},
+                params={"src": stream},
                 timeout=aiohttp.ClientTimeout(total=10),
             ) as upstream:
                 if upstream.status != 200:
@@ -459,8 +502,8 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         return web.Response(body=body, content_type="image/jpeg")
 
     async def api_camera_live(request: web.Request) -> web.WebSocketResponse:
-        spec = camera_spec(request)
-        if spec is None:
+        stream = camera_stream(request)
+        if stream is None:
             raise web.HTTPNotFound()
         origin = request.headers.get("Origin")
         if origin is not None:
@@ -473,7 +516,7 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         # edge of the media plane. Either side closing closes both.
         try:
             async with client["http"].ws_connect(
-                f"{go2rtc_base()}/api/ws", params={"src": spec["name"]}
+                f"{go2rtc_base()}/api/ws", params={"src": stream}
             ) as upstream:
 
                 async def pump(source, sink) -> None:
@@ -549,7 +592,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    model = Model()
+    model = Model(os.environ[keys.ENV_UNIT])
     script_dir = Path(__file__).resolve().parent
     page = script_dir / "dashboard.html"
     assets_dir = script_dir / "assets"

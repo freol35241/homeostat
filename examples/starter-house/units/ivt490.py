@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "homeostat==0.9.0",
+#     "homeostat==0.10.0",
 #     "paho-mqtt>=2,<3",
 # ]
 # ///
@@ -24,11 +24,11 @@ unparsed serial line and is never subscribed. Controller state
 and {base}/controller/state/{field}: feed_temperature_target,
 indoor_temperature_feedback and outdoor_temperature_offset are
 {value, valid} objects, indoor_temperature_target is a {value} object,
-operating_mode a bare integer — field_value() unwraps the nested shapes
-and passes bare scalars through uniformly. The entity file's `id` is the
-device's own MQTT base topic — unlike Zigbee2MQTT there is no shared root;
-each interface board owns its whole topic tree — and the file stem is the
-entity name. One entity per physical heat pump.
+operating_mode a bare integer — field_value() unwraps the nested shapes,
+keeping the flag, and passes bare scalars through uniformly. The entity
+file's `id` is the device's own MQTT base topic — unlike Zigbee2MQTT
+there is no shared root; each interface board owns its whole topic tree —
+and the file stem is the entity name. One entity per physical heat pump.
 
 State fan-out subscribes the scalar levels ({base}/ivt490/state/+,
 {base}/ivt490/state/+/+ and {base}/controller/state/+; an object payload
@@ -53,6 +53,21 @@ aspect would be prefixed (controller_{field}) to keep the namespaces
 distinguishable — no such collision exists in the dialect today, but the
 guard stays live for whichever firmware revision changes that.
 
+The controller's validity flags are aspects of their own. Each field the
+firmware timestamps carries a `valid` predicate (src/Controller.h) that
+goes false once the reading ages past the device's validity window, at
+which point the control loop silently drops that term and falls back to
+curve-only control on the filtered outdoor sensor. Publishing the value
+alone would leave a confident-looking number on the bus that the device
+itself has stopped believing, so a {value, valid} field also publishes
+home/state/{room}/{entity}/{aspect}_valid as a boolean — the same
+distinction adapters/onvif.py keeps for motion, here reported by the
+device rather than inferred. "Stale" and "absent" stay distinguishable
+live and in the recorder afterwards, which is what makes "when did it go
+stale" answerable months later. A {value}-only field grows no such
+aspect. (These are read-only observations; `available` remains the
+receive-timer signal below, unaffected.)
+
 The heat pump is an arbitrated entity (docs/design.md, Arbitrated mode):
 all commands ride the arbiter, and the family's manual setpoint always
 wins — its templated home/cmd subscription therefore expands to nothing
@@ -65,10 +80,23 @@ floats; "operating_mode" — the GT3_2 boiler-sensor emulation — is
 strictly the integer 1, 2 or 3 (1=BAU normal, 2=BLOCK suppress heating,
 3=BOOST force heating; src/Controller.h, OperatingMode) and translates to
 {base}/controller/set/operating_mode as an integer string. The firmware's
-fifth set topic, controller/set/indoor_temperature_actual, is deliberately
-NOT a command aspect: it is the sensor-feedback input reserved for a
-future automation that streams a real indoor temperature reading into the
-device's control loop. Bounds are adapter constants — device physics, not
+fifth set topic, controller/set/indoor_temperature_actual, is NOT a command
+aspect: it is a sensor-feedback input, a continuous signal with one master
+rather than contestable intent (docs/design.md, "Device feeds"). It and
+outdoor_temperature_offset are the FEEDABLE inputs: an entity file wires
+one with `[inputs] <input> = { entity, aspect }`, and the adapter then
+subscribes that source's state key and forwards each sample to
+{base}/controller/set/{input} as a stringified float, NOT retained — the
+firmware's own validity window is what ends a stale feed, and a retained
+value would outlive its source across a device reconnect. While the
+source's `available` is false nothing is forwarded, and the topic's
+retained slot is cleared once (an empty retained publish) so a value left
+by a previous master cannot stand in for a source that has gone. A wired
+input is no longer a command aspect for that entity (one master), so a
+command naming it drops with invalid-command like any unknown aspect. An
+input name the adapter does not know is a configuration error and the
+unit refuses to start, which the supervisor makes visible. Bounds are
+adapter constants — device physics, not
 house config (setpoint 10-30 degC, feed_temperature_target 20-60 degC,
 outdoor_temperature_offset +/-10 K): a wrong-type or out-of-range command
 DROPS with an "invalid-command" health event carrying the offending
@@ -177,6 +205,14 @@ ASPECT_OVERRIDES = {
 # (src/Controller.h, OperatingMode): 1=BAU, 2=BLOCK, 3=BOOST.
 OPERATING_MODES = (1, 2, 3)
 
+# Device inputs an entity file may wire to a source (docs/design.md, Device
+# feeds). Values forwarded as floats within the same physical bounds as the
+# matching command where one exists.
+FEEDABLE = {
+    "indoor_temperature_actual": (-50.0, 60.0),
+    "outdoor_temperature_offset": (-10.0, 10.0),
+}
+
 # Commandable aspect -> ({base}/controller/set/{field}, (min, max) for the
 # float aspects, or None for the strictly-enumerated operating_mode.
 COMMANDS = {
@@ -211,15 +247,16 @@ def state_aspect(source: str, field: str) -> str:
 
 
 def field_value(payload: bytes):
-    """Unwraps a controller per-field payload: a plain JSON scalar passes
-    through unchanged, a nested {"value": ...[, "valid": ...]} object (the
-    controller's tracked fields) yields its "value" member. Raises
-    ValueError/KeyError on anything else — callers drop these with a
-    "malformed-payload" health event."""
+    """Unwraps a controller per-field payload into (value, valid): a plain
+    JSON scalar passes through as (scalar, None), a nested
+    {"value": ...[, "valid": ...]} object (the controller's tracked fields)
+    yields its "value" member and its "valid" flag, None when the field
+    carries none. Raises ValueError/KeyError on anything else — callers
+    drop these with a "malformed-payload" health event."""
     parsed = json.loads(payload)
     if isinstance(parsed, dict):
-        return parsed["value"]
-    return parsed
+        return parsed["value"], parsed.get("valid")
+    return parsed, None
 
 
 def route(topic: str, entities):
@@ -234,9 +271,23 @@ def route(topic: str, entities):
     return None, None
 
 
+def commands_for(entity) -> dict:
+    """COMMANDS minus any aspect whose set field this entity feeds: a fed
+    input has one master."""
+    fed = set(entity.inputs)
+    return {aspect: cmd for aspect, cmd in COMMANDS.items() if cmd[0] not in fed}
+
+
 def main():
     unit = os.environ[keys.ENV_UNIT]
     config = house.load_adapter(unit)
+    for entity in config.entities:
+        unknown = set(entity.inputs) - set(FEEDABLE)
+        if unknown:
+            raise SystemExit(
+                f"{entity.name}: unknown input(s) {sorted(unknown)}; "
+                f"this adapter feeds {sorted(FEEDABLE)}"
+            )
 
     endpoint = mqtt.parse_endpoint(config.endpoint)
 
@@ -296,11 +347,19 @@ def main():
             aspect = state_aspect("state", state_field(rest[2:]))
         elif len(rest) == 3 and rest[0] == "controller" and rest[1] == "state":
             try:
-                value = field_value(msg.payload)
+                value, valid = field_value(msg.payload)
             except (ValueError, KeyError):
                 session.health_event("drop", reason="malformed-payload", topic=msg.topic)
                 return
             aspect = state_aspect("controller", rest[2])
+            if valid is not None:
+                # Ahead of the value, so a consumer reacting to the new
+                # value reads this snapshot's validity from the mirror and
+                # never the previous one's.
+                session.put_json(
+                    keys.state_key(entity.room, entity.name, f"{aspect}_valid"),
+                    bool(valid),
+                )
         else:
             return  # a whole-document blob topic
 
@@ -321,7 +380,7 @@ def main():
                 session.health_event("drop", reason="invalid-command", key=key)
                 return
 
-            command = COMMANDS.get(aspect)
+            command = commands_for(entity).get(aspect)
             if command is None:
                 session.health_event(
                     "drop", reason="invalid-command", key=key, aspect=aspect, value=value
@@ -369,6 +428,53 @@ def main():
         for e in config.entities
         for expr in keys.command_keyexprs(e)
     ]
+
+    def feed_handler(entity, input_name, source):
+        """Forwards the source aspect while the source is available; on
+        loss, clears the set topic's retained slot once."""
+        lo, hi = FEEDABLE[input_name]
+        topic = f"{entity.id}/controller/set/{input_name}"
+        state = {"available": True}
+        value_key = keys.state_key(source.room, source.entity, source.aspect)
+        available_key = keys.state_key(source.room, source.entity, "available")
+
+        def handler(sample):
+            key = str(sample.key_expr)
+            try:
+                payload = json.loads(sample.payload.to_bytes())
+            except ValueError:
+                session.health_event("drop", reason="malformed-payload", key=key)
+                return
+            if key == available_key:
+                if payload is False and state["available"]:
+                    state["available"] = False
+                    client.publish(topic, b"", retain=True)
+                    session.health_event("feed-source-lost", input=input_name, key=value_key)
+                elif payload is True:
+                    state["available"] = True
+                return
+            if not state["available"]:
+                return
+            if isinstance(payload, bool) or not isinstance(payload, (int, float)) or not (
+                lo <= payload <= hi
+            ):
+                session.health_event(
+                    "drop", reason="invalid-feed", input=input_name, key=key, value=payload
+                )
+                return
+            client.publish(topic, str(float(payload)), retain=False)
+
+        return handler
+
+    for e in config.entities:
+        for input_name, source in e.inputs.items():
+            handler = feed_handler(e, input_name, source)
+            subscribers.append(
+                session.subscribe(keys.state_key(source.room, source.entity, source.aspect), handler)
+            )
+            subscribers.append(
+                session.subscribe(keys.state_key(source.room, source.entity, "available"), handler)
+            )
 
     session.put_json(keys.discovery_key(unit), inventory())
 
