@@ -1263,6 +1263,62 @@ the exploration that produced it):
   controller/set topics must be disabled when this adapter goes live —
   one master per device. Read-only flows can coexist.
 
+### Device feeds: an input wired to one source (settled 2026-09-08, #9)
+
+The firmware's fifth set topic, `controller/set/indoor_temperature_actual`,
+was reserved "for a future automation" with no plan behind the reservation.
+#9 arrived with that automation built and verified and nowhere to deliver
+to. Settling it also reframed the offset: at the reporting house
+`outdoor_temperature_offset` is likewise written continuously by an
+automation, so "feedback versus command" is not a property of the value.
+
+- **What a feed is.** A command is discrete intent that may be contested:
+  it rides the arbiter, has a band, the family can override it. A feed is a
+  continuous signal with exactly one master, where the failure that
+  matters is staleness, not conflict. Which of a device's inputs are fed is
+  a per-house decision — the same input is a command in one house and a
+  feed in another — so the wiring lives in the entity file, beside the
+  other device-specific knowledge (the base topic).
+- **The reference is entity + aspect, not a bus key and not a unit.** The
+  house already has an identity layer between the two: entities, whose
+  aspects the bus keys derive from. A derived value becomes a virtual
+  entity precisely so it has that identity (recorder, dashboard,
+  `read_state`); the reporter's fusion already publishes to one. The
+  automation is the wrong granularity — a unit publishes several things,
+  and what is consumed is one signal. The core resolves the reference to
+  a key at plan time and prints it, exactly as it resolves grants.
+- **Shape.** The adapter declares which device inputs are feedable (for
+  ivt490: `indoor_temperature_actual`, `outdoor_temperature_offset`). The
+  entity file wires them:
+
+  ```toml
+  [inputs]
+  indoor_temperature_actual = { entity = "indoor_temperature", aspect = "temperature" }
+  ```
+
+  A wired input has one master by construction, so it stops being a
+  command aspect for that entity; an unwired offset stays a command, as
+  today. The plan validates that the source entity exists, that its owner
+  publishes the aspect where that is knowable (automation-owned entities
+  name their aspects literally in `[bus.publishes]`), and renders the
+  edge. The automation side needs nothing new.
+- **Staleness is the device's.** Each fed input carries the firmware's
+  own validity window (`{value, valid}`, #12): the adapter forwards while
+  the source is available and stops when it is not, and the device drops
+  the term and falls back to curve control on its own. No adapter-side
+  timeout; the honest signal is already on the bus as `{aspect}_valid`.
+- **A feed is a dependency edge the other way round.** Grants run
+  automation → device; a feed runs device → automation's entity. A
+  control loop that reads the pump's state and feeds a term back is
+  legitimately cyclic, and the apply walk tolerates it (ties by kind)
+  rather than refusing it.
+- **Rejected**: a fifth command aspect marked non-arbitrated and
+  non-family (mechanically enough, and a misdescription that would put
+  sensor feedback in the grant table next to setpoints); a new grant kind
+  (machinery for what an entity-file reference expresses); the adapter
+  subscribing a raw bus key (bypasses the identity layer the rest of the
+  design leans on).
+
 ## Logs and the audit trail (settled 2026-07-18)
 
 - **Unit output is captured, not inherited.** The supervisor pipes every
