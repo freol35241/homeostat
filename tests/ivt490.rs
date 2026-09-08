@@ -130,6 +130,41 @@ async fn ivt490_state_translates_to_bus_state() {
     let no_event = tokio::time::timeout(Duration::from_millis(1500), event_sub.recv_async()).await;
     assert!(no_event.is_err(), "unexpected health event for blob/raw topics");
 
+    // The discovery record carries the entity's aspect descriptor
+    // (docs/design.md, Aspect descriptors): the dashboard's vocabulary for
+    // the aspects above, with command bounds straight from the adapter's
+    // own COMMANDS table — the family tier gets the setpoint alone (mode
+    // is automation-driven at the reporting house), the owner-tier knobs
+    // are described but not family-writable, and the
+    // input this fixture feeds (indoor_temperature_actual is not a
+    // command; outdoor_temperature_offset is not fed here) keeps its
+    // command.
+    let replies = observer.get("home/discovery/ivt490").await.expect("discovery query");
+    let mut inventory = None;
+    while let Ok(reply) = replies.recv_async().await {
+        if let Ok(sample) = reply.result() {
+            inventory = serde_json::from_slice::<serde_json::Value>(&sample.payload().to_bytes()).ok();
+        }
+    }
+    let inventory = inventory.expect("discovery inventory served");
+    let record = &inventory[0];
+    assert_eq!(record["entity"], json!("heatpump"), "{inventory}");
+    let fields = &record["aspects"]["fields"];
+    assert_eq!(record["aspects"]["groups"], json!(["control", "readings", "status", "limits"]));
+    assert_eq!(
+        fields["setpoint"]["command"],
+        json!({"type": "float", "editable_by": "family", "constraint": {"min": 10.0, "max": 30.0}, "step": 0.5})
+    );
+    assert_eq!(fields["operating_mode"]["command"], json!({"type": "enum", "editable_by": "owner"}));
+    assert_eq!(fields["operating_mode"]["values"][2], json!({"value": 3, "label": "boost"}));
+    assert_eq!(fields["feed_temperature_target"]["command"]["editable_by"], json!("owner"));
+    assert_eq!(fields["GT2"]["label"], json!("outdoor (GT2)"), "labels keep the firmware code");
+    assert_eq!(fields["indoor_temperature"]["valid"], json!("indoor_temperature_valid"));
+    assert_eq!(fields["alarm"]["notable"], json!(true));
+    assert_eq!(fields["GT6"]["label"], json!("hot gas (GT6)"), "IVT490.h: Hetgastemperatur");
+    assert_eq!(fields["electricity_supplement"]["kind"], json!("percent"), "IVT490.h: procent utnyttjande");
+    assert!(fields.get("GT2_raw").is_none(), "undescribed aspects are simply absent");
+
     sup.shutdown();
 }
 

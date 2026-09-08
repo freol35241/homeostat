@@ -18,9 +18,15 @@ a small API generated entirely from the house's text:
                      units; params filtered to editable_by = "family";
                      each entity marked commandable iff this unit's own
                      manifest grants its capability)
-  GET  /ws           snapshot of state/health/config, then live deltas
+  GET  /ws           snapshot of state/health/config plus every aspect
+                     descriptor adapters publish in their discovery
+                     records (docs/design.md, Aspect descriptors), then
+                     live deltas
   POST /api/cmd      one command toward a device, published at the manual
-                     band ({room, entity, aspect, value})
+                     band ({room, entity, aspect, value}): the capability's
+                     vocabulary, or an aspect the entity's descriptor
+                     declares a family-editable command, checked against
+                     the descriptor's constraint
   POST /api/param    a parameter write through the core's validating config
                      queryable ({unit, param, value})
   POST /api/lights/off  the whole-house darken: one manual-band off-command
@@ -158,6 +164,54 @@ def build_model(model: house.HouseModel, granted: set[str]) -> dict:
     }
 
 
+def descriptors_in(inventory) -> dict[str, dict]:
+    """The aspect descriptors a discovery document carries, by entity
+    name: records binding an entity (`entity` set) that describe its
+    aspects (`aspects`, a {schema, groups, fields} object). Anything else
+    in the document — unbound devices, raw protocol descriptions — is the
+    agent's business, not the page's."""
+    if not isinstance(inventory, list):
+        return {}
+    return {
+        r["entity"]: r["aspects"]
+        for r in inventory
+        if isinstance(r, dict)
+        and isinstance(r.get("entity"), str)
+        and isinstance(r.get("aspects"), dict)
+    }
+
+
+def descriptor_command(descriptor: dict | None, aspect: str) -> dict | None:
+    """The family-editable command a descriptor declares for `aspect`, with
+    the field's `values` folded in for enums — or None: undescribed, no
+    command, or a tier the family may not write (the /api/param rule)."""
+    field = ((descriptor or {}).get("fields") or {}).get(aspect)
+    if not isinstance(field, dict):
+        return None
+    command = field.get("command")
+    if not isinstance(command, dict) or command.get("editable_by") != "family":
+        return None
+    return dict(command, values=field.get("values") or [])
+
+
+def command_value_ok(command: dict, value) -> bool:
+    """Whether `value` satisfies a descriptor command: a member of an
+    enum's values, or a number within the float/int constraint. A
+    courtesy check before the bus — the adapter's own bounds are the
+    enforcement (docs/design.md, IVT490: bounds live in the adapter)."""
+    if command.get("type") == "enum":
+        return any(isinstance(v, dict) and v.get("value") == value for v in command["values"])
+    if command.get("type") in ("float", "int"):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return False
+        if command["type"] == "int" and not float(value).is_integer():
+            return False
+        c = command.get("constraint") or {}
+        lo, hi = c.get("min"), c.get("max")
+        return (lo is None or value >= lo) and (hi is None or value <= hi)
+    return False
+
+
 def host_allowed(host_header: str) -> bool:
     """Host (and WS Origin host) must be a non-global address or a known
     name. A rebound public domain arrives as its own name and is refused."""
@@ -195,6 +249,11 @@ class Hub:
         self.state: dict[str, object] = {}
         self.health: dict[str, object] = {}
         self.config: dict[str, object] = {}
+        # entity name -> its adapter's aspect descriptor, lifted out of
+        # home/discovery/{unit} records: the page renders described
+        # aspects through the param-control shapes, and /api/cmd admits
+        # the family-editable commands a descriptor declares.
+        self.aspects: dict[str, dict] = {}
         self.loop: asyncio.AbstractEventLoop | None = None
         self.clients: set[web.WebSocketResponse] = set()
         self._subs = []
@@ -207,6 +266,7 @@ class Hub:
             self.session.subscribe("home/state/**", self._on_state),
             self.session.subscribe("home/health/**", self._on_health),
             self.session.subscribe("home/config/*/*", self._on_config),
+            self.session.subscribe("home/discovery/*", self._on_discovery),
         ]
         for key, value in self.session.get_json("home/state/**"):
             with self.lock:
@@ -217,6 +277,10 @@ class Hub:
         for key, value in self.session.get_json("home/config/*/*"):
             with self.lock:
                 self.config.setdefault(key, value)
+        for _key, value in self.session.get_json("home/discovery/*"):
+            for entity, descriptor in descriptors_in(value).items():
+                with self.lock:
+                    self.aspects.setdefault(entity, descriptor)
 
     def snapshot(self) -> dict:
         with self.lock:
@@ -225,6 +289,7 @@ class Hub:
                 "state": dict(self.state),
                 "health": dict(self.health),
                 "config": dict(self.config),
+                "aspects": dict(self.aspects),
             }
 
     def _decode(self, sample):
@@ -244,6 +309,17 @@ class Hub:
         with self.lock:
             self.state[key] = value
         self._emit({"type": "state", "key": key, "value": value})
+
+    def _on_discovery(self, sample) -> None:
+        if (decoded := self._decode(sample)) is None:
+            return
+        _key, value = decoded
+        for entity, descriptor in descriptors_in(value).items():
+            with self.lock:
+                if self.aspects.get(entity) == descriptor:
+                    continue
+                self.aspects[entity] = descriptor
+            self._emit({"type": "aspects", "entity": entity, "value": descriptor})
 
     def _on_config(self, sample) -> None:
         if (decoded := self._decode(sample)) is None:
@@ -391,8 +467,14 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
             return json_error(f"dashboard is not granted {spec['capability']} ({entity})")
         allowed = COMMANDABLE.get(spec["capability"], set())
         base = BASE_ASPECT.get(spec["capability"])
-        if aspect not in allowed or (aspect != base and aspect not in spec["features"]):
-            return json_error(f"{spec['capability']} {entity} takes no {aspect} command")
+        vocabulary = aspect in allowed and (aspect == base or aspect in spec["features"])
+        if not vocabulary:
+            with hub.lock:
+                command = descriptor_command(hub.aspects.get(entity), aspect)
+            if command is None:
+                return json_error(f"{spec['capability']} {entity} takes no {aspect} command")
+            if not command_value_ok(command, value):
+                return json_error(f"{entity} {aspect}: {value!r} is outside the declared constraint")
         # priority "manual": matches this unit's [bus.publishes] declaration
         # (units/dashboard.toml) — the family always wins over automations.
         envelope = keys.cmd_envelope(value, "manual", "dashboard")

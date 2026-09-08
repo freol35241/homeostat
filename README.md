@@ -206,7 +206,10 @@ home/cmd/kitchen/kitchen_lamp/on  true
 ```
 
 Unknown devices and malformed payloads are dropped with a health event at
-`home/health/{unit}/event`, never a crash. Details and conventions:
+`home/health/{unit}/event`, never a crash. The full contract an adapter
+must honour — files, lifecycle, state and command rules, health
+vocabulary, discovery, testing — is [docs/adapters.md](docs/adapters.md);
+the reasoning is in the
 [design record §Zigbee2MQTT](docs/design.md#zigbee2mqtt-adapter-and-python-sdk-settled-in-step-3).
 
 Adapters that can enumerate their periphery also publish a discovery

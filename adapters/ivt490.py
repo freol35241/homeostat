@@ -112,9 +112,11 @@ rather than working around firmware behavior.
 
 Discovery is a small, static document at home/discovery/{unit}: one
 record per bound entity carrying its base-topic id, a suggested
-capability "climate" stanza, and a `bound` flag that starts false and
-flips permanently true (with a republish) the first time that base topic
-is actually seen on the broker. The OwnTracks/Zigbee2MQTT incremental
+capability "climate" stanza, the entity's aspect descriptor (ASPECT_FIELDS
+— labels, kinds, groups and the command vocabulary the dashboard renders;
+docs/design.md, Aspect descriptors), and a `bound` flag that starts false
+and flips permanently true (with a republish) the first time that base
+topic is actually seen on the broker. The OwnTracks/Zigbee2MQTT incremental
 inventory pattern — discovering devices never bound by any entity file —
 is overkill for a dialect with exactly one address per entity file, known
 up front.
@@ -225,6 +227,105 @@ COMMANDS = {
     "operating_mode": ("operating_mode", None),
 }
 
+# The aspect descriptor (docs/design.md, Aspect descriptors) this adapter
+# publishes in each bound entity's discovery record: labels, kinds and
+# groups for the aspects worth a family-facing name, and the command
+# vocabulary the dashboard may render — bounds straight from COMMANDS so
+# there is one source. The family tier gets the one lever that is family
+# intent, the indoor target; the GT3_2 emulation's mode is driven by an
+# automation at the reporting house, so it is owner tuning like the feed
+# target and curve offset — visible with a badge, written only through
+# the bus. Labels keep the firmware's sensor code in parentheses so the
+# page and the manual agree on what a reading is. Every aspect not named
+# here still publishes and renders, in the page's diagnostics group under
+# its firmware name.
+ASPECT_GROUPS = ["control", "readings", "status", "limits"]
+# Labels follow lib/IVT490/IVT490.h's field comments (Swedish, the pump's
+# own manual vocabulary) with the firmware code kept in parentheses.
+T = "temperature"
+ASPECT_FIELDS = {
+    "setpoint": {"label": "indoor target", "kind": T, "group": "control"},
+    "operating_mode": {
+        "label": "mode",
+        "kind": "enum",
+        "group": "control",
+        "values": [
+            {"value": 1, "label": "normal"},
+            {"value": 2, "label": "block"},
+            {"value": 3, "label": "boost"},
+        ],
+    },
+    "feed_temperature_target": {"label": "feed target", "kind": T, "group": "control"},
+    "outdoor_temperature_offset": {
+        "label": "curve offset",
+        "kind": "temperature_delta",
+        "group": "control",
+    },
+    # readings: temperatures (Framledning, ute, tappvarmvatten, ...)
+    "indoor_temperature": {
+        "label": "indoor",
+        "kind": T,
+        "group": "readings",
+        "valid": "indoor_temperature_valid",
+    },
+    "feed_temperature": {"label": "feed line (GT1)", "kind": T, "group": "readings"},
+    "GT1_target": {"label": "feed line target (GT1_target)", "kind": T, "group": "readings"},
+    "GT2": {"label": "outdoor (GT2)", "kind": T, "group": "readings"},
+    "GT3_1": {"label": "tap hot water (GT3_1)", "kind": T, "group": "readings"},
+    "GT3_2": {"label": "hot water tank (GT3_2)", "kind": T, "group": "readings"},
+    "GT3_3": {"label": "heating water (GT3_3)", "kind": T, "group": "readings"},
+    "GT3_3_target": {"label": "heating water target (GT3_3_target)", "kind": T, "group": "readings"},
+    "GT3_4": {"label": "extra accumulator tank (GT3_4)", "kind": T, "group": "readings"},
+    "GT5": {"label": "indoor sensor (GT5)", "kind": T, "group": "readings"},
+    "GT6": {"label": "hot gas (GT6)", "kind": T, "group": "readings"},
+    # status: what is running, switching, or tripped
+    "compressor": {"label": "compressor", "kind": "boolean", "group": "status"},
+    "electricity_supplement": {
+        "label": "electric backup use (electricity_supplement)",
+        "kind": "percent",
+        "group": "status",
+    },
+    "fan": {"label": "fan", "kind": "boolean", "group": "status"},
+    "P1": {"label": "circulation pump (P1)", "kind": "boolean", "group": "status"},
+    "SV1_open": {"label": "shunt opening (SV1_open)", "kind": "boolean", "group": "status"},
+    "SV1_close": {"label": "shunt closing (SV1_close)", "kind": "boolean", "group": "status"},
+    "GP1": {"label": "low-pressure switch (GP1)", "kind": "boolean", "group": "status"},
+    "GP2": {"label": "high-pressure switch (GP2)", "kind": "boolean", "group": "status"},
+    "GP3": {"label": "defrost switch (GP3)", "kind": "boolean", "group": "status"},
+    "vacation": {"label": "vacation mode (lowered feed)", "kind": "boolean", "group": "status"},
+    "alarm": {"label": "alarm", "kind": "boolean", "group": "status", "notable": True},
+    # limits: the pump's own bounds
+    "GT1_LL": {"label": "feed lower limit (GT1_LL)", "kind": T, "group": "limits"},
+    "GT1_UL": {"label": "feed upper limit (GT1_UL)", "kind": T, "group": "limits"},
+    "GT1_LLT": {"label": "feed lower limit for backup (GT1_LLT)", "kind": T, "group": "limits"},
+    "GT3_2_LL": {"label": "tank lower limit (GT3_2_LL)", "kind": T, "group": "limits"},
+    "GT3_2_UL": {"label": "tank upper limit (GT3_2_UL)", "kind": T, "group": "limits"},
+    "GT3_2_ULT": {"label": "tank upper limit for backup (GT3_2_ULT)", "kind": T, "group": "limits"},
+    "GT3_3_LL": {"label": "heating water lower limit (GT3_3_LL)", "kind": T, "group": "limits"},
+}
+COMMAND_TIER = {
+    "setpoint": "family",
+    "operating_mode": "owner",
+    "feed_temperature_target": "owner",
+    "outdoor_temperature_offset": "owner",
+}
+COMMAND_STEP = {"setpoint": 0.5}
+
+
+def aspect_descriptor(entity) -> dict:
+    """ASPECT_FIELDS plus a `command` on each aspect this entity takes
+    commands for (commands_for: a fed input has one master, so it is
+    described but not commandable)."""
+    fields = {aspect: dict(field) for aspect, field in ASPECT_FIELDS.items()}
+    for aspect, (_field, bounds) in commands_for(entity).items():
+        command = {"type": "enum" if bounds is None else "float", "editable_by": COMMAND_TIER[aspect]}
+        if bounds is not None:
+            command["constraint"] = {"min": bounds[0], "max": bounds[1]}
+        if aspect in COMMAND_STEP:
+            command["step"] = COMMAND_STEP[aspect]
+        fields[aspect]["command"] = command
+    return {"schema": 1, "groups": list(ASPECT_GROUPS), "fields": fields}
+
 
 def state_field(segments: list[str]) -> str:
     """Flattened subtopic path under {base}/ivt490/state to a firmware
@@ -323,6 +424,7 @@ def main():
                 "entity": e.name,
                 "bound": e.id in seen,
                 "suggested": {"capability": "climate", "features": []},
+                "aspects": aspect_descriptor(e),
             }
             for e in config.entities
         ]

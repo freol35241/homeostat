@@ -17,6 +17,7 @@ shutdown_grace_s = 5
 state = "home/state/**"
 health = "home/health/**"
 config = "home/config/*/*"
+discovery = "home/discovery/*"
 
 [bus.publishes]
 lights = { key = "home/cmd/**", capability = "light", priority = "manual" }

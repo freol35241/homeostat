@@ -246,6 +246,13 @@ video-rtc { display: block; width: 100%; min-height: 180px; background: #000; bo
 video-rtc video { width: 100%; display: block; }
 .aspect-row { font-size: 12px; color: var(--secondary); padding: 6px 4px; }
 .aspect-row.row-clickable { min-height: 40px; display: flex; align-items: center; }
+/* described aspects (docs/design.md, Aspect descriptors): label · value, a control when declared */
+.aspect-row.described { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 40px; }
+.aspect-row .aspect-label { color: var(--ink); font-size: 13px; }
+.aspect-row .aspect-value { color: var(--secondary); font-variant-numeric: tabular-nums; }
+.aspect-row .aspect-value.stale { color: var(--muted); text-decoration: line-through dotted; }
+.aspect-row .stale-mark { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin-left: 6px; }
+.group-toggle { background: none; border: none; color: var(--muted); font: inherit; font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; cursor: pointer; padding: 0; margin-top: 20px; }
 .empty-hint { color: var(--muted); font-size: 12.5px; padding: 8px 0; }
 .log-feed { margin-top: 10px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px; }
 .log-line { padding: 2px 0; white-space: pre-wrap; word-break: break-all; color: var(--secondary); }
@@ -342,6 +349,7 @@ var store = {
   state: {},
   health: {},
   config: {},
+  aspects: {},      // entity -> its adapter's aspect descriptor (from discovery)
   events: [],
   lastSeen: {},
   connected: false,
@@ -364,7 +372,8 @@ var overlay = {
   range: 24,             // hours, for history
   rangeData: {},          // hours -> {points, loaded, loading}
   lastPoints: null,
-  log: null                // for unit: {lines, loaded, loading}
+  log: null,               // for unit: {lines, loaded, loading}
+  expanded: {}              // for entity: group -> true when a collapsed section is opened
 };
 
 // chartId -> {coords, width, height, aspect} — populated while building chart
@@ -1208,7 +1217,7 @@ function renderNow() {
   // out of the ordinary — the rules live in dashboard-logic.js; here each
   // record's target maps onto the tap wiring.
   var deviations = logic.computeDeviations(
-    store.model, store.state, store.health, store.config
+    store.model, store.state, store.health, store.config, store.aspects
   );
 
   function deviationAttrs(target) {
@@ -1524,6 +1533,7 @@ function openEntityDetail(room, entityName) {
   if (!entity) return;
   overlay.type = 'entity';
   overlay.entity = entity;
+  overlay.expanded = {};
   showOverlay();
 }
 
@@ -1604,6 +1614,46 @@ function renderHistoryDetailBody() {
   return { title: label, body: body };
 }
 
+// One planned row of an entity's detail: the label and the value, plus the
+// control the descriptor declared — the param-control shapes, wired to
+// /api/cmd instead of /api/param. A numeric row without a control taps
+// through to its history.
+function renderAspectRow(entity, r) {
+  var attrs = ' data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '" data-aspect="' + esc(r.aspect) + '"';
+  var value = '<span class="aspect-value' + (r.stale ? ' stale' : '') + '" title="' + esc(r.aspect) + '">' + esc(r.display) + '</span>' +
+    (r.stale ? '<span class="stale-mark">stale</span>' : '');
+  var c = r.control;
+  if (!c) {
+    var clickable = r.numeric ? ' row-clickable" data-action="history-detail"' + attrs : '"';
+    return '<div class="aspect-row described' + clickable + '>' +
+      '<span class="aspect-label">' + esc(r.label) + '</span>' + value + '</div>';
+  }
+  var control;
+  var disabledAttr = c.disabled ? ' disabled' : '';
+  if (c.kind === 'readonly') {
+    control = value + '<span class="tier-badge">' + esc(c.tier) + '</span>';
+  } else if (c.kind === 'stepper') {
+    var canStep = r.numeric && !c.disabled;
+    control = '<span class="stepper">' +
+      '<button class="step-btn" data-action="aspect-step"' + attrs + ' data-delta="' + (-c.step) + '"' + (canStep ? '' : ' disabled') + '>&minus;</button>' +
+      '<span class="stepper-value">' + esc(r.display) + '</span>' +
+      '<button class="step-btn" data-action="aspect-step"' + attrs + ' data-delta="' + c.step + '"' + (canStep ? '' : ' disabled') + '>+</button></span>';
+  } else if (c.kind === 'segment') {
+    control = '<div class="seg">' + c.values.map(function (v) {
+      return '<button data-action="aspect-enum"' + attrs + ' data-value="' + esc(JSON.stringify(v.value)) + '" class="' + (v.value === r.value ? 'active' : '') + '"' + disabledAttr + '>' + esc(v.label) + '</button>';
+    }).join('') + '</div>';
+  } else if (c.kind === 'slider') {
+    var slideKey = entity.name + '|' + r.aspect;
+    var shown = localState.sliderDrag[slideKey] !== undefined ? localState.sliderDrag[slideKey] : r.value;
+    control = '<div class="slider-row" style="padding-left:0;">' +
+      '<input type="range" min="' + c.min + '" max="' + c.max + '" step="' + c.step + '" value="' + esc(shown) + '" data-action="aspect-slider"' + attrs + disabledAttr + '>' +
+      '<span class="sval">' + esc(shown) + '</span></div>';
+  } else {
+    control = value;
+  }
+  return '<div class="aspect-row described"><span class="aspect-label">' + esc(r.label) + '</span>' + control + '</div>';
+}
+
 function renderEntityDetailBody() {
   var entity = overlay.entity;
   var meta = titleCase(entity.room) + ' · ' + titleCase(entity.capability) +
@@ -1611,32 +1661,35 @@ function renderEntityDetailBody() {
   var badge = entity.write_mode === 'arbitrated' ? '<span class="badge-arbitrated">ARBITRATED</span>' : '';
   var ownerLine = 'Owned by ' + esc(unitLabel(entity.owner)) + ' · ' + esc(entity.write_mode) + badge;
 
-  var prefix = 'home/state/' + entity.room + '/' + entity.name + '/';
-  var rows = [];
-  Object.keys(store.state).sort().forEach(function (k) {
-    if (k.indexOf(prefix) !== 0) return;
-    var aspect = k.slice(prefix.length);
-    var v = store.state[k];
-    if (typeof v === 'number') {
-      rows.push('<div class="aspect-row row-clickable" data-action="history-detail" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '" data-aspect="' + esc(aspect) + '">' +
-        esc(aspect) + ': ' + esc(displayAspectValue(entity, aspect, v)) + '</div>');
-    } else {
-      rows.push('<div class="aspect-row">' + esc(aspect) + ': ' + esc(displayAspectValue(entity, aspect, v)) + '</div>');
-    }
+  // Sections come from the adapter's aspect descriptor when it published
+  // one (dashboard-logic.js, aspectPlan); an undescribed entity gets the
+  // one flat State list. A described entity's declared commands render in
+  // their own group, so the capability's Controls row is not repeated.
+  var descriptor = store.aspects[entity.name];
+  var plan = logic.aspectPlan(entity, store.state, descriptor, !controlDisabled(entity));
+  var sections = plan.map(function (section) {
+    var open = !section.collapsed || overlay.expanded[section.group];
+    var head = section.collapsed
+      ? '<button class="group-toggle" data-action="toggle-group" data-group="' + esc(section.group) + '">' +
+        esc(section.label) + ' (' + section.rows.length + ') ' + (open ? '&#9662;' : '&#9656;') + '</button>'
+      : '<div class="card-label" style="margin-top:20px;">' + esc(section.label) + '</div>';
+    return head + (open ? section.rows.map(function (r) { return renderAspectRow(entity, r); }).join('') : '');
   });
-  if (rows.length === 0) rows.push('<div class="aspect-row faint">no data</div>');
+  if (sections.length === 0) sections.push('<div class="card-label" style="margin-top:20px;">State</div><div class="aspect-row faint">no data</div>');
 
   // A camera's detail is the live view (mounted imperatively in
   // renderOverlayContent — a custom element can't ride innerHTML), not a
   // Controls row: cameras take no commands.
-  var middle = entity.capability === 'camera'
-    ? '<div class="card-label" style="margin-top:20px;">Live</div>' +
-      '<div data-camera-live="' + esc(entity.name) + '"></div>'
-    : '<div class="card-label" style="margin-top:20px;">Controls</div>' + widgetForEntity(entity);
+  var middle = '';
+  if (entity.capability === 'camera') {
+    middle = '<div class="card-label" style="margin-top:20px;">Live</div>' +
+      '<div data-camera-live="' + esc(entity.name) + '"></div>';
+  } else if (!descriptor) {
+    middle = '<div class="card-label" style="margin-top:20px;">Controls</div>' + widgetForEntity(entity);
+  }
   var body = '<div class="muted" style="margin-top:2px;">' + esc(meta) + '</div>' +
     '<div class="muted" style="margin-top:6px;">' + ownerLine + '</div>' +
-    middle +
-    '<div class="card-label" style="margin-top:20px;">State</div>' + rows.join('');
+    middle + sections.join('');
   return { title: entity.label, body: body };
 }
 
@@ -1710,6 +1763,27 @@ document.addEventListener('click', function (e) {
     var delta = parseFloat(el.getAttribute('data-delta'));
     var next = Math.round((current + delta) * 10) / 10;
     sendCmd(stepRoom, stepEntity, 'setpoint', next);
+    return;
+  }
+  if (action === 'aspect-step') {
+    var aRoom = el.getAttribute('data-room');
+    var aEntity = el.getAttribute('data-entity');
+    var aAspect = el.getAttribute('data-aspect');
+    var aCurrent = stateValue(aRoom, aEntity, aAspect);
+    if (typeof aCurrent !== 'number') return; // no fabricated default to step from
+    var aNext = Math.round((aCurrent + parseFloat(el.getAttribute('data-delta'))) * 100) / 100;
+    sendCmd(aRoom, aEntity, aAspect, aNext);
+    return;
+  }
+  if (action === 'aspect-enum') {
+    sendCmd(el.getAttribute('data-room'), el.getAttribute('data-entity'), el.getAttribute('data-aspect'),
+      JSON.parse(el.getAttribute('data-value')));
+    return;
+  }
+  if (action === 'toggle-group') {
+    var group = el.getAttribute('data-group');
+    overlay.expanded[group] = !overlay.expanded[group];
+    renderOverlayContent();
     return;
   }
   if (action === 'param-toggle') {
@@ -1803,6 +1877,15 @@ document.addEventListener('change', function (e) {
     scheduleRender();
     return;
   }
+  if (el.matches('[data-action="aspect-slider"]')) {
+    var sRoom = el.getAttribute('data-room');
+    var sEntity = el.getAttribute('data-entity');
+    var sAspect = el.getAttribute('data-aspect');
+    sendCmd(sRoom, sEntity, sAspect, el.step === 'any' ? parseFloat(el.value) : parseInt(el.value, 10));
+    delete localState.sliderDrag[sEntity + '|' + sAspect];
+    scheduleRender();
+    return;
+  }
   if (el.matches('[data-action="param-time"]')) {
     var unit2 = el.getAttribute('data-unit');
     var param2 = el.getAttribute('data-param');
@@ -1855,6 +1938,12 @@ document.addEventListener('input', function (e) {
     localState.sliderDrag[slideKey] = el.value;
     var valEl2 = el.parentElement.querySelector('.sval');
     if (valEl2) valEl2.textContent = el.value;
+    return;
+  }
+  if (el.matches('[data-action="aspect-slider"]')) {
+    localState.sliderDrag[el.getAttribute('data-entity') + '|' + el.getAttribute('data-aspect')] = el.value;
+    var valEl3 = el.parentElement.querySelector('.sval');
+    if (valEl3) valEl3.textContent = el.value;
     return;
   }
 });
