@@ -360,6 +360,34 @@
     });
   }
 
+  /* The room-card row for a described entity (#32): at most two headline
+   * readings and the family-editable controls. Headline is a convention,
+   * not vocabulary — the first two control-less rows of the first group
+   * that has any, so the adapter's own ordering decides — revisited if an
+   * adapter ever needs to say otherwise. Card labels drop a trailing
+   * "(CODE)" the overlay keeps: "feed line (GT1)" reads as "feed line". */
+  function cardPlan(entity, state, descriptor, commandable) {
+    var sections = aspectPlan(entity, state, descriptor, commandable);
+    var controls = [];
+    var readings = [];
+    sections.forEach(function (s) {
+      if (s.group === DIAGNOSTICS) return;
+      s.rows.forEach(function (r) {
+        if (r.control && r.control.kind !== 'readonly') controls.push(r);
+      });
+      if (readings.length === 0) {
+        readings = s.rows.filter(function (r) { return !r.control; }).slice(0, 2);
+      }
+    });
+    readings = readings.map(function (r) {
+      var short = {};
+      Object.keys(r).forEach(function (k) { short[k] = r[k]; });
+      short.label = r.label.replace(/\s*\([^)]*\)$/, '');
+      return short;
+    });
+    return { readings: readings, controls: controls };
+  }
+
   return {
     PRESENCE_ASPECTS: PRESENCE_ASPECTS,
     titleCase: titleCase,
@@ -372,6 +400,7 @@
     computeDeviations: computeDeviations,
     formatAspect: formatAspect,
     controlFor: controlFor,
-    aspectPlan: aspectPlan
+    aspectPlan: aspectPlan,
+    cardPlan: cardPlan
   };
 });

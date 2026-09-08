@@ -246,6 +246,15 @@ video-rtc { display: block; width: 100%; min-height: 180px; background: #000; bo
 video-rtc video { width: 100%; display: block; }
 .aspect-row { font-size: 12px; color: var(--secondary); padding: 6px 4px; }
 .aspect-row.row-clickable { min-height: 40px; display: flex; align-items: center; }
+/* described entity on a room card: head line with the first control, readings under it */
+.entity-row.described-card { flex-direction: column; align-items: stretch; gap: 4px; }
+.described-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 28px; }
+.described-readings { display: flex; flex-wrap: wrap; gap: 2px 6px; font-size: 12px; color: var(--muted); }
+.described-readings b { font-weight: 500; color: var(--secondary); font-variant-numeric: tabular-nums; }
+.described-readings .stale, .described-readings .stale b { color: var(--muted); text-decoration: line-through dotted; }
+.described-readings .sep { color: var(--border); }
+.described-readings .card-badge { margin-left: auto; }
+.described-readings .card-badge .badge-arbitrated { margin-left: 0; }
 /* described aspects (docs/design.md, Aspect descriptors): label · value, a control when declared */
 .aspect-row.described { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 40px; }
 .aspect-row .aspect-label { color: var(--ink); font-size: 13px; }
@@ -1011,7 +1020,30 @@ function widgetForCamera(entity) {
     '</div>';
 }
 
+// The room-card row for an entity whose adapter published an aspect
+// descriptor (#32): name and the first family control on one line, the
+// headline readings underneath — never the readout-wrapped-around-a-
+// stepper row the undescribed climate widget degrades to in a narrow
+// column. Which readings are headline is dashboard-logic.js's cardPlan.
+function widgetForDescribed(entity) {
+  var plan = logic.cardPlan(entity, store.state, store.aspects[entity.name], !controlDisabled(entity));
+  var badge = entity.write_mode === 'arbitrated' ? '<span class="badge-arbitrated">ARBITRATED</span>' : '';
+  var control = plan.controls.length ? renderAspectControl(entity, plan.controls[0]) : '';
+  var readings = plan.readings.map(function (r) {
+    return '<span class="card-reading' + (r.stale ? ' stale' : '') + '" title="' + esc(r.aspect) + '">' +
+      esc(r.label) + ' <b>' + esc(r.display) + '</b></span>';
+  }).join('<span class="sep">&middot;</span>');
+  // The badge rides the readings line: inside the ellipsed name it clips
+  // to a stub in a narrow column, and the head line belongs to the control.
+  return '<div class="entity-row described-card row-clickable" data-action="entity-detail" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '">' +
+    '<div class="described-head"><span class="entity-name" title="' + esc(entity.label) + '">' + esc(entity.label) + '</span>' + control + '</div>' +
+    (readings || badge ? '<div class="described-readings">' + readings + (badge ? '<span class="card-badge">' + badge + '</span>' : '') + '</div>' : '') +
+    '</div>';
+}
+
 function widgetForEntity(entity) {
+  var described = !!store.aspects[entity.name];
+  if (described && (entity.capability === 'climate' || !BESPOKE_WIDGET[entity.capability])) return widgetForDescribed(entity);
   if (entity.capability === 'light' || entity.capability === 'switch') return widgetForLight(entity);
   if (entity.capability === 'presence') return widgetForPresence(entity);
   if (entity.capability === 'lock') return widgetForLock(entity);
@@ -1022,6 +1054,9 @@ function widgetForEntity(entity) {
 }
 
 var CAP_ORDER = { light: 0, lock: 1, presence: 2, climate: 3, sensor: 4, camera: 5 };
+// Capabilities whose card widget is the capability's own (a toggle, a
+// sparkline, a poster) rather than the descriptor-driven row.
+var BESPOKE_WIDGET = { light: true, switch: true, presence: true, lock: true, sensor: true, camera: true };
 function capRank(entity) {
   var r = CAP_ORDER[entity.capability];
   return r === undefined ? 6 : r;
@@ -1620,14 +1655,26 @@ function renderHistoryDetailBody() {
 // through to its history.
 function renderAspectRow(entity, r) {
   var attrs = ' data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '" data-aspect="' + esc(r.aspect) + '"';
-  var value = '<span class="aspect-value' + (r.stale ? ' stale' : '') + '" title="' + esc(r.aspect) + '">' + esc(r.display) + '</span>' +
-    (r.stale ? '<span class="stale-mark">stale</span>' : '');
-  var c = r.control;
-  if (!c) {
+  var value = aspectValueSpan(r);
+  if (!r.control) {
     var clickable = r.numeric ? ' row-clickable" data-action="history-detail"' + attrs : '"';
     return '<div class="aspect-row described' + clickable + '>' +
       '<span class="aspect-label">' + esc(r.label) + '</span>' + value + '</div>';
   }
+  return '<div class="aspect-row described"><span class="aspect-label">' + esc(r.label) + '</span>' + renderAspectControl(entity, r) + '</div>';
+}
+
+function aspectValueSpan(r) {
+  return '<span class="aspect-value' + (r.stale ? ' stale' : '') + '" title="' + esc(r.aspect) + '">' + esc(r.display) + '</span>' +
+    (r.stale ? '<span class="stale-mark">stale</span>' : '');
+}
+
+// The control markup for a planned row with a control (overlay and room
+// card alike): the param-control shapes wired to /api/cmd.
+function renderAspectControl(entity, r) {
+  var attrs = ' data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '" data-aspect="' + esc(r.aspect) + '"';
+  var value = aspectValueSpan(r);
+  var c = r.control;
   var control;
   var disabledAttr = c.disabled ? ' disabled' : '';
   if (c.kind === 'readonly') {
@@ -1651,7 +1698,7 @@ function renderAspectRow(entity, r) {
   } else {
     control = value;
   }
-  return '<div class="aspect-row described"><span class="aspect-label">' + esc(r.label) + '</span>' + control + '</div>';
+  return control;
 }
 
 function renderEntityDetailBody() {
