@@ -1319,6 +1319,48 @@ automation, so "feedback versus command" is not a property of the value.
   subscribing a raw bus key (bypasses the identity layer the rest of the
   design leans on).
 
+Settled on the reporter's confirmation (2026-09-08, same thread), built
+in the same change:
+
+- **Not retained, and cleared on loss.** The reporting house's Node-RED
+  writer published `indoor_temperature_actual` retained, so "stop
+  forwarding" would have stopped nothing: the broker keeps serving the
+  last value to the pump across a reconnect, and the firmware's validity
+  window becomes the only thing that ends a stale feed. A fed value is
+  therefore published NOT retained, and when the source's `available`
+  goes false the adapter clears the topic's retained slot once (an empty
+  retained publish — which this firmware's parse discards, so it is a
+  clear, not a zero) and reports `feed-source-lost`. Cutover note: clear
+  the topic when switching masters, or the old writer's retained value
+  outlives it.
+- **No adapter-side refresh cadence, for now.** The adapter forwards each
+  source sample and nothing between samples; a transition-only source
+  plus a device validity window shorter than its quiet periods is a
+  house tuning question (publish on a cadence, or lengthen the window),
+  not adapter machinery. Revisit if the firmware turns out to need a
+  retained value after reboot.
+- **The adapter is the authority on input names.** The core validates the
+  reference (entity exists, an automation-owned source publishes the
+  aspect, the fed entity is a device); which inputs exist is dialect
+  knowledge, and an unknown one refuses to start, visibly.
+- **Source ownership is unrestricted.** Nothing in the reference needs to
+  know who owns the source; an adapter-owned aspect is as feedable as a
+  virtual sensor's. Only the *fed* side must be a device
+  (`virtual-entity-fed`).
+- **A per-house decision can cut through one automation.** At the
+  reporting house one computation writes both `outdoor_temperature_offset`
+  (a feed under this shape) and `operating_mode` (contestable, rightly
+  arbitrated), so half its output goes by feed and half by arbiter with
+  no guarantee they land together. Recorded, not mechanised: the two
+  halves genuinely have different governance, and coupling them would
+  push feed semantics into the arbiter. An automation that needs the
+  pair to move together holds the mode lease and feeds the offset
+  against it.
+- **Feeds are not walk-order edges.** They appear in the plan beside the
+  grant table and in the manifest reference; the apply walk still orders
+  by grants only, so the loop an automation closes through a device
+  never needs untangling.
+
 ## Logs and the audit trail (settled 2026-07-18)
 
 - **Unit output is captured, not inherited.** The supervisor pipes every

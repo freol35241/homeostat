@@ -16,6 +16,18 @@ from pathlib import Path
 
 
 @dataclass
+class InputSource:
+    """Where a fed device input reads from: one aspect of one entity, i.e.
+    the state key home/state/{room}/{entity}/{aspect}. The room is resolved
+    from the source entity's file; the entity file names only entity and
+    aspect (docs/design.md, Device feeds)."""
+
+    room: str
+    entity: str
+    aspect: str
+
+
+@dataclass
 class Entity:
     name: str  # file stem: the globally unique entity name
     id: str  # adapter-native address (for z2m: the topic segment)
@@ -25,6 +37,8 @@ class Entity:
     write_mode: str = "shared"
     owner: str = ""
     naming: dict = field(default_factory=dict)
+    # [inputs]: adapter input name -> resolved source. Empty for most.
+    inputs: dict[str, InputSource] = field(default_factory=dict)
 
 
 @dataclass
@@ -49,6 +63,7 @@ def _expand_endpoint(manifest: dict) -> str:
 
 
 def _entity_from(path: Path, data: dict, default_owner: str) -> Entity:
+    # [inputs] is resolved in load_adapter, which sees every entity file.
     return Entity(
         name=path.stem,
         id=data["entity"]["id"],
@@ -127,5 +142,15 @@ def load_adapter(unit: str, root: str | Path = ".") -> AdapterConfig:
     entities = []
     entities_dir = root / manifest["entities"]["dir"]
     for path in sorted(entities_dir.glob("*.toml")):
-        entities.append(_entity_from(path, tomllib.loads(path.read_text()), unit))
+        data = tomllib.loads(path.read_text())
+        entity = _entity_from(path, data, unit)
+        if data.get("inputs"):
+            # Resolve each source's room from the house's entity files; the
+            # plan has already validated that the entity exists.
+            rooms = {e.name: e.room for e in load_house(root).entities}
+            entity.inputs = {
+                name: InputSource(room=rooms[src["entity"]], entity=src["entity"], aspect=src["aspect"])
+                for name, src in data["inputs"].items()
+            }
+        entities.append(entity)
     return AdapterConfig(unit=unit, endpoint=endpoint, entities=entities)

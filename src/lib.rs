@@ -24,6 +24,7 @@ pub struct CheckResult {
     pub house: repo::House,
     pub expanded: Vec<expand::ExpandedKey>,
     pub grants: Vec<grants::Grant>,
+    pub feeds: Vec<grants::Feed>,
     pub warnings: Vec<String>,
     pub errors: Vec<ValidationError>,
 }
@@ -38,10 +39,13 @@ pub fn check(root: &Path) -> CheckResult {
     let (grants, grant_warnings, grant_errors) = grants::resolve(&house, &expanded);
     warnings.extend(grant_warnings);
     errors.extend(grant_errors);
+    let (feeds, feed_errors) = grants::resolve_feeds(&house, &expanded);
+    errors.extend(feed_errors);
     CheckResult {
         house,
         expanded,
         grants,
+        feeds,
         warnings,
         errors,
     }

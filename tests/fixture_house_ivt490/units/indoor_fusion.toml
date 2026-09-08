@@ -1,0 +1,27 @@
+schema = 1
+
+[unit]
+name = "indoor_fusion"
+kind = "automation"
+description = "Virtual indoor temperature the heat pump is fed from"
+
+[runtime]
+command = "uv run ../fixture_house_virtual/units/fused_temperature.py"
+restart = "on-failure"
+shutdown_grace_s = 5
+
+[bus.subscribes]
+livingroom = "home/state/livingroom/thermo/temperature"
+office = "home/state/office/thermo/temperature"
+
+[bus.publishes]
+fused = { key = "home/state/global/indoor_temperature/temperature" }
+
+[params.source_max_age_s]
+type = "float"
+default = 3600
+constraint = { min = 1 }
+editable_by = "owner"
+
+[entities]
+dir = "entities/indoor_fusion/"

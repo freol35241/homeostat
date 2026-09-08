@@ -35,6 +35,96 @@ pub struct GrantEntity {
     pub owner: String,
 }
 
+/// One resolved feed: a device input wired to a source aspect
+/// (docs/design.md, Device feeds). Rendered in the plan next to the grant
+/// table; not a walk-order edge — a control loop that reads a device and
+/// feeds a term back is legitimately cyclic.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Feed {
+    /// The fed entity and its adapter's input name.
+    pub entity: String,
+    pub input: String,
+    /// The source, resolved.
+    pub source_entity: String,
+    pub source_aspect: String,
+    pub source_owner: String,
+    pub key: String,
+}
+
+/// Resolves every `[inputs]` block: the source exists, the target is a
+/// device, and an automation-owned source actually publishes the aspect.
+pub fn resolve_feeds(house: &House, expanded: &[ExpandedKey]) -> (Vec<Feed>, Vec<ValidationError>) {
+    let mut feeds = Vec::new();
+    let mut errors = Vec::new();
+    for entity in &house.entities {
+        let Some(inputs) = &entity.file.inputs else { continue };
+        let file = Some(entity.path.clone());
+        let owner_is_automation = house
+            .unit(&entity.owner)
+            .map(|u| u.manifest.unit.kind == UnitKind::Automation)
+            .unwrap_or(false);
+        if owner_is_automation {
+            errors.push(ValidationError::new(
+                "virtual-entity-fed",
+                &entity.name,
+                "automation-owned entities have no device inputs to feed",
+                file.clone(),
+            ));
+            continue;
+        }
+        for (input, source) in inputs {
+            let subject = format!("{}.{input}", entity.name);
+            let Some(src) = house.entities.iter().find(|e| e.name == source.entity) else {
+                errors.push(ValidationError::new(
+                    "input-unknown-entity",
+                    subject,
+                    format!("source entity \"{}\" does not exist", source.entity),
+                    file.clone(),
+                ));
+                continue;
+            };
+            let key = format!(
+                "home/state/{}/{}/{}",
+                src.file.entity.room, src.name, source.aspect
+            );
+            let src_is_automation = house
+                .unit(&src.owner)
+                .map(|u| u.manifest.unit.kind == UnitKind::Automation)
+                .unwrap_or(false);
+            if src_is_automation {
+                let published = expanded.iter().any(|k| {
+                    k.unit == src.owner
+                        && k.direction == Direction::Publishes
+                        && k.exprs.iter().any(|e| {
+                            e.matches_prefix(&key.split('/').collect::<Vec<_>>())
+                        })
+                });
+                if !published {
+                    errors.push(ValidationError::new(
+                        "input-unpublished-aspect",
+                        subject,
+                        format!(
+                            "\"{}\" does not publish {key}; a fed aspect must be in its owner's [bus.publishes]",
+                            src.owner
+                        ),
+                        file.clone(),
+                    ));
+                    continue;
+                }
+            }
+            feeds.push(Feed {
+                entity: entity.name.clone(),
+                input: input.clone(),
+                source_entity: src.name.clone(),
+                source_aspect: source.aspect.clone(),
+                source_owner: src.owner.clone(),
+                key,
+            });
+        }
+    }
+    (feeds, errors)
+}
+
 /// Resolves the grant table and enforces write policy.
 pub fn resolve(
     house: &House,
@@ -300,6 +390,7 @@ mod tests {
                 },
                 naming: None,
                 write_policy: WritePolicy { mode, owner: adapter.to_string() },
+                inputs: None,
             },
             path: format!("entities/{adapter}/{name}.toml"),
             owner: adapter.to_string(),

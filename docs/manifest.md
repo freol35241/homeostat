@@ -176,6 +176,7 @@ a key segment (`invalid-name`).
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `entity` | [EntitySection](#entitysection) | yes |  |
+| `inputs` | table of name → [InputSource](#inputsource) | no | `[inputs]`: device inputs fed from one source each, keyed by the adapter's own input name (e.g. `indoor_temperature_actual`). A fed input is a continuous signal with one master, not a command: it stops being a command aspect for this entity, never rides the arbiter, and staleness is the device's own validity window. Only a device entity can be fed (`virtual-entity-fed`); the adapter is the authority on which input names exist. |
 | `naming` | [EntityNaming](#entitynaming) | no |  |
 | `schema` | integer | yes | Contract version. Must be 1. |
 | `write_policy` | [WritePolicy](#writepolicy) | yes |  |
@@ -190,6 +191,17 @@ a key segment (`invalid-name`).
 | `features` | list of string | no | Optional aspects beyond the capability's base, as the adapter names them (`brightness`, `color_temp` on a light). For a sensor it is descriptive only; its widgets come from the numeric aspects it publishes. |
 | `id` | string | yes | The adapter-native address (a zigbee2mqtt friendly name, an ESPHome node, a camera's go2rtc stream). Unique per adapter (`duplicate-entity-id`). |
 | `room` | string | yes | The single source of spatial truth for this entity. A key segment; not `home` or a key class (`reserved-room-name`). The pseudo-rooms `global` and `person` are for entities with no place. |
+
+### InputSource
+
+The source of a fed input: an entity and one of its aspects, i.e. the
+state key `home/state/{room}/{entity}/{aspect}`. The plan resolves it
+and prints the edge, as it does a grant.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `aspect` | string | yes | The aspect to read. When the source is automation-owned, that automation's `[bus.publishes]` must cover the key (`input-unpublished-aspect`). |
+| `entity` | string | yes | Name of the source entity; must exist (`input-unknown-entity`). Any owner will do — an automation's virtual sensor or another adapter's device. |
 
 ### EntityNaming
 

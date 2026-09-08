@@ -319,6 +319,30 @@ pub struct EntityFile {
     pub entity: EntitySection,
     pub naming: Option<EntityNaming>,
     pub write_policy: WritePolicy,
+    /// `[inputs]`: device inputs fed from one source each, keyed by the
+    /// adapter's own input name (e.g. `indoor_temperature_actual`). A fed
+    /// input is a continuous signal with one master, not a command: it
+    /// stops being a command aspect for this entity, never rides the
+    /// arbiter, and staleness is the device's own validity window. Only a
+    /// device entity can be fed (`virtual-entity-fed`); the adapter is the
+    /// authority on which input names exist.
+    pub inputs: Option<BTreeMap<String, InputSource>>,
+}
+
+/// The source of a fed input: an entity and one of its aspects, i.e. the
+/// state key `home/state/{room}/{entity}/{aspect}`. The plan resolves it
+/// and prints the edge, as it does a grant.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct InputSource {
+    /// Name of the source entity; must exist (`input-unknown-entity`). Any
+    /// owner will do — an automation's virtual sensor or another adapter's
+    /// device.
+    pub entity: String,
+    /// The aspect to read. When the source is automation-owned, that
+    /// automation's `[bus.publishes]` must cover the key
+    /// (`input-unpublished-aspect`).
+    pub aspect: String,
 }
 
 /// `[entity]`: what the device is and where.
