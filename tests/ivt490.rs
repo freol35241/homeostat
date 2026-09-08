@@ -150,7 +150,7 @@ async fn ivt490_state_translates_to_bus_state() {
     let record = &inventory[0];
     assert_eq!(record["entity"], json!("heatpump"), "{inventory}");
     let fields = &record["aspects"]["fields"];
-    assert_eq!(record["aspects"]["groups"], json!(["control", "readings", "limits"]));
+    assert_eq!(record["aspects"]["groups"], json!(["control", "readings", "status", "limits"]));
     assert_eq!(
         fields["setpoint"]["command"],
         json!({"type": "float", "editable_by": "family", "constraint": {"min": 10.0, "max": 30.0}, "step": 0.5})
@@ -161,6 +161,8 @@ async fn ivt490_state_translates_to_bus_state() {
     assert_eq!(fields["GT2"]["label"], json!("outdoor (GT2)"), "labels keep the firmware code");
     assert_eq!(fields["indoor_temperature"]["valid"], json!("indoor_temperature_valid"));
     assert_eq!(fields["alarm"]["notable"], json!(true));
+    assert_eq!(fields["GT6"]["label"], json!("hot gas (GT6)"), "IVT490.h: Hetgastemperatur");
+    assert_eq!(fields["electricity_supplement"]["kind"], json!("percent"), "IVT490.h: procent utnyttjande");
     assert!(fields.get("GT2_raw").is_none(), "undescribed aspects are simply absent");
 
     sup.shutdown();
