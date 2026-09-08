@@ -223,6 +223,26 @@ pub const CODES: &[(&str, &str)] = &[
          bind one before the first arbitrated entity plans.",
     ),
     (
+        "virtual-entity-fed",
+        "An `[inputs]` block sits on an entity bound by an automation. A fed \
+         input is a device's control input (docs/design.md, Device feeds); a \
+         virtual entity has no device behind it and nothing to feed.",
+    ),
+    (
+        "input-unknown-entity",
+        "An `[inputs]` entry names a source entity that no unit binds. The \
+         source is referenced by entity name and aspect — the identity the \
+         bus keys derive from — so the entity must exist in the house.",
+    ),
+    (
+        "input-unpublished-aspect",
+        "An `[inputs]` entry reads an aspect of an automation-owned entity \
+         that the automation's `[bus.publishes]` does not cover. Virtual \
+         sensors name their aspects literally in the publish key, so a feed \
+         from one is checked at plan time; nothing would ever arrive on the \
+         key otherwise.",
+    ),
+    (
         "state-publish-unbound",
         "A publish under `home/state/` must name, literally, the room and entity \
          of an entity this unit binds (or use `{room}`/`{entity}` templates). \

@@ -10,3 +10,9 @@ room = "utility"
 [write_policy]
 mode = "arbitrated"
 owner = "ivt490"
+
+# The device's indoor-temperature feedback input is fed from the fusion's
+# virtual sensor (docs/design.md, Device feeds): tests publish that
+# entity's state directly and assert the forward on MQTT.
+[inputs]
+indoor_temperature_actual = { entity = "indoor_temperature", aspect = "temperature" }

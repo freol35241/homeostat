@@ -1,0 +1,11 @@
+schema = 1
+
+[entity]
+id = "indoor_temperature"
+capability = "sensor"
+features = ["temperature"]
+room = "global"
+
+[write_policy]
+mode = "exclusive"
+owner = "indoor_fusion"

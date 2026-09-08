@@ -559,6 +559,18 @@ pub fn render(check: &CheckResult, root: &Path, repo_label: &str, world: &World)
         }
     }
 
+    // Device feeds: printed only when the house wires any, so a house
+    // without them renders exactly as before.
+    if !check.feeds.is_empty() {
+        out.push_str("\nFeeds:\n\n");
+        for feed in &check.feeds {
+            out.push_str(&format!(
+                "  {}.{}  <-  {}.{}  ({}, owner={})\n",
+                feed.entity, feed.input, feed.source_entity, feed.source_aspect, feed.key, feed.source_owner
+            ));
+        }
+    }
+
     if !check.warnings.is_empty() {
         out.push_str("\nWarnings:\n\n");
         for warning in &check.warnings {

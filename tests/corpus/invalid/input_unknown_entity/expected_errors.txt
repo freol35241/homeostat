@@ -1,0 +1,1 @@
+error[input-unknown-entity] thermostat.indoor_temperature_actual: source entity "indoor_temperature" does not exist (entities/zigbee/thermostat.toml)

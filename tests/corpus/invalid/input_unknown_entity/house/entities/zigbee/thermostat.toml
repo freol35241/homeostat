@@ -1,0 +1,13 @@
+schema = 1
+
+[entity]
+id = "0x08"
+capability = "climate"
+room = "bedroom"
+
+[write_policy]
+mode = "shared"
+owner = "zigbee"
+
+[inputs]
+indoor_temperature_actual = { entity = "indoor_temperature", aspect = "temperature" }

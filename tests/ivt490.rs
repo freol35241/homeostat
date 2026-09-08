@@ -23,6 +23,9 @@ const SETPOINT_CMD_KEY: &str = "home/cmd/utility/heatpump/setpoint";
 const SETPOINT_ARBITER_KEY: &str = "home/arbiter/utility/heatpump/setpoint";
 const SETPOINT_SET_TOPIC: &str = "ivt490_1/controller/set/indoor_temperature_target";
 const AVAILABLE_KEY: &str = "home/state/utility/heatpump/available";
+const FEED_SOURCE_KEY: &str = "home/state/global/indoor_temperature/temperature";
+const FEED_SOURCE_AVAILABLE_KEY: &str = "home/state/global/indoor_temperature/available";
+const FEED_SET_TOPIC: &str = "ivt490_1/controller/set/indoor_temperature_actual";
 
 /// Spawns broker + supervisor on the fixture and waits for the adapter's
 /// liveliness token (generous timeout: first run resolves the uv env).
@@ -198,6 +201,84 @@ async fn manual_setpoint_reaches_mqtt_via_arbiter_then_automation_refused() {
         .expect("cmd put");
     let silence = mqtt.next_message(Duration::from_millis(1500)).await;
     assert!(silence.is_none(), "refused automation wish reached MQTT: {silence:?}");
+
+    sup.shutdown();
+}
+
+/// (b2) A fed input (docs/design.md, Device feeds): the fixture wires the
+/// heat pump's indoor_temperature_actual to the fusion's virtual sensor.
+/// Each source sample is forwarded to the device's set topic as a float,
+/// not retained; while the source is unavailable nothing is forwarded and
+/// the topic's retained slot is cleared once; a command naming the fed
+/// input is refused, since a fed input has one master.
+#[tokio::test(flavor = "multi_thread")]
+async fn fed_input_follows_its_source_and_stops_on_loss() {
+    let (mosquitto, mut sup, observer) = setup().await;
+    let mut mqtt = Mqtt::connect(mosquitto.port, "test-feed").await;
+    mqtt.subscribe(&format!("{BASE}/controller/set/+")).await;
+    let event_sub = observer
+        .declare_subscriber(EVENT_KEY)
+        .await
+        .expect("event subscriber");
+
+    // A source sample forwards, as a float.
+    observer.put(FEED_SOURCE_KEY, "21.3").await.expect("state put");
+    let (topic, payload) = mqtt
+        .next_message(Duration::from_secs(10))
+        .await
+        .expect("feed forwarded to the set topic");
+    assert_eq!(topic, FEED_SET_TOPIC);
+    assert_eq!(payload, b"21.3");
+
+    // Not retained: a fresh subscriber sees nothing.
+    let mut late = Mqtt::connect(mosquitto.port, "test-feed-late").await;
+    late.subscribe(FEED_SET_TOPIC).await;
+    let retained = late.next_message(Duration::from_millis(1000)).await;
+    assert!(retained.is_none(), "a fed value must not be retained: {retained:?}");
+
+    // Source goes unavailable: the retained slot is cleared once (an empty
+    // retained publish) and a following sample is not forwarded.
+    observer
+        .put(FEED_SOURCE_AVAILABLE_KEY, "false")
+        .await
+        .expect("available put");
+    let (topic, payload) = mqtt
+        .next_message(Duration::from_secs(10))
+        .await
+        .expect("retained slot cleared on source loss");
+    assert_eq!((topic.as_str(), payload.as_slice()), (FEED_SET_TOPIC, &b""[..]));
+    expect_event_kind(&event_sub, "feed-source-lost").await;
+    observer.put(FEED_SOURCE_KEY, "22.0").await.expect("state put");
+    let silence = mqtt.next_message(Duration::from_millis(1500)).await;
+    assert!(silence.is_none(), "sample forwarded while source unavailable: {silence:?}");
+
+    // Source returns: forwarding resumes.
+    observer
+        .put(FEED_SOURCE_AVAILABLE_KEY, "true")
+        .await
+        .expect("available put");
+    observer.put(FEED_SOURCE_KEY, "22.5").await.expect("state put");
+    let (topic, payload) = mqtt
+        .next_message(Duration::from_secs(10))
+        .await
+        .expect("feed resumes with the source");
+    assert_eq!((topic.as_str(), payload.as_slice()), (FEED_SET_TOPIC, &b"22.5"[..]));
+
+    // One master: a command naming the fed input drops with invalid-command
+    // and nothing reaches MQTT. (indoor_temperature_actual was never a
+    // command aspect; outdoor_temperature_offset would be, and is wired
+    // the same way at the reporting house.)
+    let wish = json!({"value": 20.0, "priority": "manual", "actor": "test"});
+    observer
+        .put(
+            "home/arbiter/utility/heatpump/indoor_temperature_actual",
+            wish.to_string(),
+        )
+        .await
+        .expect("arbiter put");
+    expect_drop_event(&event_sub, "invalid-command").await;
+    let silence = mqtt.next_message(Duration::from_millis(1000)).await;
+    assert!(silence.is_none(), "command on a fed input reached MQTT: {silence:?}");
 
     sup.shutdown();
 }
