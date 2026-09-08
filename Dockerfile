@@ -51,7 +51,7 @@ RUN case "$TARGETARCH" in \
 FROM debian:bookworm-slim
 
 # git: plan --save, apply and the MCP repo tools shell out to it.
-# tini: PID 1 — forwards signals and reaps orphans left by `uv run` wrappers.
+# tini: PID 1 — forwards signals and reaps any orphan a unit leaves behind.
 # tzdata: the uv-managed CPython reads /usr/share/zoneinfo for zoneinfo.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git tini tzdata ca-certificates \
@@ -71,10 +71,7 @@ RUN uv python install 3.12
 # The SDK as a wheel the units resolve locally. A unit declares
 # `homeostat==X.Y.Z` and no [tool.uv.sources]; UV_FIND_LINKS above points
 # uv here, so there is no clone on first boot and no network needed for
-# the SDK. It also costs an order of magnitude less memory than a git
-# source: the `uv run` parent that supervises each unit for its whole
-# lifetime holds ~4 MB against ~38 MB for a heavy environment resolved
-# from git (docs/design.md, Supervision).
+# the SDK (docs/design.md, SDK distribution).
 COPY sdk/python /tmp/sdk
 # mkdir first: uv reads UV_FIND_LINKS on every invocation, `uv build`
 # included, and fails outright if the directory is not there yet.

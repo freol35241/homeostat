@@ -17,54 +17,85 @@ use crate::supervisor::LogMap;
 /// operational exhaust, not the durable trail (see docs/design.md).
 pub const LOG_CAPACITY: usize = 500;
 
-/// Spawns a unit command. The command string is whitespace-tokenized and
-/// exec'd directly — no shell, so no quoting in v1 manifests. Lookup uses
-/// PATH; relative paths resolve against the house repo root (the cwd).
-/// Stdout/stderr are piped, not inherited: `capture` re-emits and buffers
-/// them once the child is spawned.
-/// Materialises a `uv run` unit's environment before it is spawned.
+/// Resolves the command a unit is actually exec'd with. For a `uv run`
+/// unit this materialises the script's environment and returns the
+/// environment's interpreter invoked on the script directly; anything
+/// else comes back unchanged.
 ///
-/// `uv run` stays alive as the unit's parent, and when it CREATES the
-/// environment it holds the resolver/installer heap for the child's whole
-/// lifetime: measured 46-55 MB per unit against the adapters' real
-/// dependency trees, against ~6 MB when the environment already exists.
-/// A release bumps the SDK pin, which changes every unit's environment
-/// hash, so every unit pays it on every upgrade until something restarts
-/// it — a seven-unit house measured 223 MB of 443 MB resident in parents
-/// doing nothing but `wait()`. Doing the install in a process that then
-/// EXITS hands `uv run` a warm environment and gives the memory back.
+/// `uv run` would otherwise stay alive as the unit's parent for its whole
+/// lifetime, doing nothing but `wait()` — and holding real memory while it
+/// does: 4 MB warm at best, 25-55 MB when the environment was created or
+/// resolved from a git source, so a seven-unit house measured 223 MB of
+/// 443 MB resident in these parents. Syncing the environment in a process
+/// that EXITS, then exec'ing its interpreter, keeps the PEP 723 metadata as
+/// the single authority on the unit's dependencies and removes the parent
+/// entirely: the interpreter IS the unit's process-group leader.
 ///
-/// Best effort: on failure `uv run` does the same work itself and reports
-/// it the same way, so a broken script or a missing network fails exactly
-/// where it did before. Startup cost is unchanged — the install happens
-/// either way, just in a process that does not outlive it.
-pub async fn prewarm(command: &str, cwd: &Path) {
-    let Some(script) = uv_script(command) else {
-        return;
+/// Best effort: if uv cannot resolve the script (no PEP 723 block, a broken
+/// dependency, no network) the original `uv run` command is returned, so
+/// the failure is reported exactly where and how it was before.
+pub async fn resolve(command: &str, cwd: &Path) -> String {
+    let Some((script, args)) = uv_script(command) else {
+        return command.to_string();
     };
-    let _ = Command::new("uv")
+    let synced = Command::new("uv")
         .args(["sync", "--script", script])
         .current_dir(cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
+        .await
+        .is_ok_and(|status| status.success());
+    if !synced {
+        return command.to_string();
+    }
+    let found = Command::new("uv")
+        .args(["python", "find", "--script", script])
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
         .await;
+    let interpreter = match found {
+        Ok(output) if output.status.success() => {
+            String::from_utf8_lossy(&output.stdout).trim().to_string()
+        }
+        _ => return command.to_string(),
+    };
+    if interpreter.is_empty() || interpreter.contains(char::is_whitespace) {
+        // The command is re-tokenized on whitespace at spawn; a path that
+        // would not survive that round trip is left to `uv run`.
+        return command.to_string();
+    }
+    let mut resolved = format!("{interpreter} {script}");
+    for arg in args {
+        resolved.push(' ');
+        resolved.push_str(arg);
+    }
+    resolved
 }
 
-/// The script in a `uv run [flags] <script.py>` command. None for anything
-/// else — a binary on PATH, `homeostat mcp`, a test fake — which is left
-/// exactly as it was.
-fn uv_script(command: &str) -> Option<&str> {
+/// The script in a `uv run [flags] <script.py> [args]` command and the
+/// arguments that follow it. None for anything else — a binary on PATH,
+/// `homeostat mcp`, a test fake — which is left exactly as it was.
+fn uv_script(command: &str) -> Option<(&str, Vec<&str>)> {
     let mut parts = command.split_whitespace();
     if parts.next()? != "uv" || parts.next()? != "run" {
         return None;
     }
     // By extension, not by position: `--script` may precede it, and a
     // flag's VALUE must never be mistaken for the script.
-    parts.find(|token| token.ends_with(".py"))
+    let script = parts.find(|token| token.ends_with(".py"))?;
+    Some((script, parts.collect()))
 }
 
+/// Spawns a unit command. The command string is whitespace-tokenized and
+/// exec'd directly — no shell, so no quoting in v1 manifests. Lookup uses
+/// PATH; relative paths resolve against the house repo root (the cwd).
+/// Stdout/stderr are piped, not inherited: `capture` re-emits and buffers
+/// them once the child is spawned.
 pub fn spawn(command: &str, cwd: &Path, env: &[(&str, &str)]) -> io::Result<Child> {
     let mut parts = command.split_whitespace();
     let argv0 = parts
@@ -163,8 +194,9 @@ fn now_us() -> i64 {
 
 /// Graceful termination: SIGTERM to the unit's process group, wait up to
 /// `grace`, then SIGKILL the group. Waits for the whole group, not just
-/// the direct child: a `uv run` wrapper exits ahead of its interpreter,
-/// and the survivor gets the rest of the grace before the sweep.
+/// the direct child: a unit that wraps or spawns something (a shell
+/// wrapper, a relay it manages) may exit ahead of it, and the survivor
+/// gets the rest of the grace before the sweep.
 pub async fn terminate(child: &mut Child, grace: Duration) {
     let Some(pid) = child.id() else {
         return; // already reaped
@@ -191,9 +223,8 @@ fn group_alive(pgid: u32) -> bool {
 }
 
 /// Sweeps a unit's process group after its leader exited on its own. A
-/// wrapper like `uv run` leaves its interpreter child behind; a survivor
-/// would keep the unit's liveliness token alive and poison the next
-/// incarnation's supervision.
+/// wrapper or a managed child left behind would keep the unit's liveliness
+/// token alive and poison the next incarnation's supervision.
 pub fn sweep_group(pid: u32) {
     signal_group(pid, libc::SIGKILL);
 }
@@ -209,16 +240,22 @@ mod tests {
     use super::uv_script;
 
     #[test]
-    fn uv_run_commands_yield_their_script() {
-        assert_eq!(uv_script("uv run units/clock.py"), Some("units/clock.py"));
+    fn uv_run_commands_yield_their_script_and_args() {
+        assert_eq!(
+            uv_script("uv run units/clock.py"),
+            Some(("units/clock.py", vec![]))
+        );
         assert_eq!(
             uv_script("uv run units/dashboard.py --port 8600"),
-            Some("units/dashboard.py")
+            Some(("units/dashboard.py", vec!["--port", "8600"]))
         );
-        assert_eq!(uv_script("uv run --script units/x.py"), Some("units/x.py"));
+        assert_eq!(
+            uv_script("uv run --script units/x.py"),
+            Some(("units/x.py", vec![]))
+        );
         assert_eq!(
             uv_script("uv run ../../adapters/zigbee2mqtt.py"),
-            Some("../../adapters/zigbee2mqtt.py")
+            Some(("../../adapters/zigbee2mqtt.py", vec![]))
         );
     }
 
