@@ -422,8 +422,12 @@ dual path: the identical engine runs in both.
 What makes the backend swappable later is the read path: history reads go
 over the bus (below), so the store is recorder-private. Outgrowing SQLite
 means a behavioral change to one unit, not a structural change to the
-system. QuestDB remains the designated growth path if volume or analytical
-queries ever demand it. DuckDB was considered and rejected as the store —
+system. The designated growth path is tiering, not an engine swap: hot
+weeks stay in SQLite, closed months roll out to Parquet files, and DuckDB
+reads across both. Both engines stay embedded, there is still no server,
+and the tests still only ever touch SQLite. QuestDB was the earlier
+designation and is withdrawn: it is JVM-based, which is exactly what this
+section refuses. DuckDB was considered and rejected as the store —
 the recorder's workload is high-frequency tiny appends plus small indexed
 range reads (OLTP-shaped, SQLite's grain), while DuckDB is a columnar OLAP
 engine that is weak at frequent single-row inserts and single-process by
@@ -442,19 +446,34 @@ services, still an error on automations.
 
 ### Schema
 
-Two tables. Scalar samples from room/entity/aspect keys:
+Scalar samples from room/entity/aspect keys, normalised so the file is
+bounded by sample count rather than by repeated strings — the store layout
+version is stamped in `PRAGMA user_version` and `init_store()` migrates an
+older file in place (version 0 was one wide `samples` table with every
+tag as TEXT on every row: measured at ~113 bytes a row against ~25 here):
 
 ```sql
-samples(ts, class, room, entity, aspect, kind, value)
+series(id, class, entity, aspect)     -- UNIQUE (class, entity, aspect)
+rooms(id, name)                       -- UNIQUE (name)
+samples(series_id, ts, room_id, kind, value)
+  -- PRIMARY KEY (series_id, ts), WITHOUT ROWID: the table is the index
   -- ts:     µs since epoch, UTC, recorder receive time
   -- class:  'state' | 'cmd'
-  -- kind:   'bool' | 'number' | 'string'; value stored natively per kind
-  -- index:  (class, entity, aspect, ts)
+  -- kind:   0 bool | 1 number | 2 string; value stored natively per kind
+history                               -- a view joining the three back to
+  -- (ts, class, room, entity, aspect, kind, value) with kind spelled out,
+  -- for anything that opens the file directly (the tests, DuckDB ATTACH)
 ```
 
-Series identity is `(class, entity, aspect)`; `room` is a tag column. An
-entity move is consecutive rows whose tag changes — one continuous series,
-never a new one.
+Series identity is a `series` row; `room` is a tag carried per sample. An
+entity move is consecutive samples whose tag changes — one continuous
+series, never a new one. Two samples for one series in the same
+microsecond collide on the primary key and the later one is dropped.
+
+The file is created with `auto_vacuum = INCREMENTAL` (and a migrated file
+is VACUUMed into it): it can only be set before the first page is
+written, and it is what lets a future retention delete return pages to
+the filesystem instead of leaving a file that never shrinks.
 
 The timestamp is recorder receive time, not the zenoh sample timestamp:
 sample timestamps are optional (client sessions don't stamp by default),

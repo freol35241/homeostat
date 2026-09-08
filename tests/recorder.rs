@@ -161,7 +161,7 @@ async fn state_lands_typed_in_store() {
 
     let rows = rows_eventually(
         &db,
-        "SELECT class, room, aspect, kind, value FROM samples \
+        "SELECT class, room, aspect, kind, value FROM history \
          WHERE entity = 'probe' ORDER BY aspect",
         3,
         Duration::from_secs(20),
@@ -200,7 +200,7 @@ async fn state_lands_typed_in_store() {
     put(&cmd, json!({"value": false, "priority": "automation", "actor": "test"})).await;
     let rows = rows_eventually(
         &db,
-        "SELECT kind, value FROM samples WHERE class = 'cmd' AND entity = 'probe'",
+        "SELECT kind, value FROM history WHERE class = 'cmd' AND entity = 'probe'",
         1,
         Duration::from_secs(10),
     )
@@ -236,7 +236,7 @@ async fn state_lands_typed_in_store() {
     .await;
     assert_eq!(event["reason"], json!("invalid-command"));
     assert!(
-        read_rows(&db, "SELECT * FROM samples WHERE aspect = 'brightness'").is_empty(),
+        read_rows(&db, "SELECT * FROM history WHERE aspect = 'brightness'").is_empty(),
         "envelope-less cmd payload became a row"
     );
 
@@ -271,7 +271,7 @@ async fn state_lands_typed_in_store() {
     assert_eq!(event["reason"], json!("non-scalar"));
     assert_eq!(event["key"], json!("home/state/attic/probe/color"));
     assert!(
-        read_rows(&db, "SELECT * FROM samples WHERE aspect = 'color'").is_empty(),
+        read_rows(&db, "SELECT * FROM history WHERE aspect = 'color'").is_empty(),
         "non-scalar payload became a row"
     );
 
@@ -289,7 +289,7 @@ async fn entity_move_is_a_tag_transition() {
     put(&attic, json!(true)).await;
     rows_eventually(
         &db,
-        "SELECT room FROM samples WHERE entity = 'rover'",
+        "SELECT room FROM history WHERE entity = 'rover'",
         1,
         Duration::from_secs(20),
     )
@@ -302,7 +302,7 @@ async fn entity_move_is_a_tag_transition() {
     // In the store: one series identity, the room tag transitions.
     let rows = rows_eventually(
         &db,
-        "SELECT class, entity, aspect, room, value FROM samples \
+        "SELECT class, entity, aspect, room, value FROM history \
          WHERE entity = 'rover' ORDER BY ts",
         2,
         Duration::from_secs(10),
@@ -352,7 +352,7 @@ async fn backend_outage_buffers_and_flushes() {
     put(&gauge, json!(1)).await;
     rows_eventually(
         &db,
-        "SELECT value FROM samples WHERE entity = 'gauge'",
+        "SELECT value FROM history WHERE entity = 'gauge'",
         1,
         Duration::from_secs(20),
     )
@@ -370,7 +370,7 @@ async fn backend_outage_buffers_and_flushes() {
 
     // Nothing landed while down (the store is still readable).
     assert_eq!(
-        read_rows(&db, "SELECT value FROM samples WHERE entity = 'gauge'").len(),
+        read_rows(&db, "SELECT value FROM history WHERE entity = 'gauge'").len(),
         1,
         "sample leaked into an unwritable store"
     );
@@ -394,7 +394,7 @@ async fn backend_outage_buffers_and_flushes() {
     // receive-time timestamps — the outage is invisible in the data.
     let rows = rows_eventually(
         &db,
-        "SELECT value, ts FROM samples WHERE entity = 'gauge' ORDER BY ts",
+        "SELECT value, ts FROM history WHERE entity = 'gauge' ORDER BY ts",
         3,
         Duration::from_secs(10),
     )
@@ -436,7 +436,7 @@ async fn read_path_returns_history() {
     }
     rows_eventually(
         &db,
-        "SELECT value FROM samples WHERE entity = 'meter'",
+        "SELECT value FROM history WHERE entity = 'meter'",
         3,
         Duration::from_secs(20),
     )
@@ -595,6 +595,87 @@ async fn read_path_returns_history() {
     let rows = replies[0].1.as_array().expect("reply is an array").clone();
     let keys: Vec<&str> = rows.iter().map(|r| r["key"].as_str().expect("key")).collect();
     assert_eq!(keys, vec![key_b, key_c], "limit keeps the newest, oldest-to-newest");
+
+    sup.shutdown();
+}
+
+/// (e) A version-0 store (one wide samples table, no auto_vacuum) is
+/// migrated in place on startup: the rows survive with their series
+/// identity and room tags, the file is stamped, and the recorder keeps
+/// writing into it.
+#[tokio::test(flavor = "multi_thread")]
+async fn v0_store_migrates_in_place() {
+    let db = store_path("migrate");
+    {
+        let conn = Connection::open(&db).expect("create v0 store");
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL;
+             CREATE TABLE samples (ts INTEGER NOT NULL, class TEXT NOT NULL,
+               room TEXT NOT NULL, entity TEXT NOT NULL, aspect TEXT NOT NULL,
+               kind TEXT NOT NULL, value NOT NULL);
+             CREATE INDEX samples_series ON samples (class, entity, aspect, ts);
+             CREATE TABLE events (ts INTEGER NOT NULL, key TEXT NOT NULL, payload TEXT NOT NULL);
+             INSERT INTO samples VALUES (1, 'state', 'attic', 'rover', 'on', 'bool', 1);
+             INSERT INTO samples VALUES (2, 'state', 'cellar', 'rover', 'on', 'bool', 0);
+             INSERT INTO samples VALUES (3, 'state', 'attic', 'probe', 'temperature', 'number', 21.5);
+             INSERT INTO events VALUES (4, 'home/config/x/y', '1');",
+        )
+        .expect("populate v0 store");
+    }
+    let (mut sup, observer) = setup(&db).await;
+
+    let rows = read_rows(
+        &db,
+        "SELECT ts, class, room, entity, aspect, kind, value FROM history ORDER BY ts",
+    );
+    let row = |ts: i64, room: &str, entity: &str, aspect: &str, kind: &str, value: SqlValue| {
+        vec![
+            SqlValue::Integer(ts),
+            SqlValue::Text("state".into()),
+            SqlValue::Text(room.into()),
+            SqlValue::Text(entity.into()),
+            SqlValue::Text(aspect.into()),
+            SqlValue::Text(kind.into()),
+            value,
+        ]
+    };
+    assert_eq!(
+        rows,
+        vec![
+            row(1, "attic", "rover", "on", "bool", SqlValue::Integer(1)),
+            row(2, "cellar", "rover", "on", "bool", SqlValue::Integer(0)),
+            row(3, "attic", "probe", "temperature", "number", SqlValue::Real(21.5)),
+        ]
+    );
+    assert_eq!(
+        read_rows(&db, "SELECT payload FROM events WHERE key = 'home/config/x/y'"),
+        vec![vec![SqlValue::Text("1".into())]],
+        "events survive untouched"
+    );
+    assert_eq!(read_rows(&db, "PRAGMA user_version"), vec![vec![SqlValue::Integer(1)]]);
+    assert_eq!(
+        read_rows(&db, "PRAGMA auto_vacuum"),
+        vec![vec![SqlValue::Integer(2)]],
+        "the VACUUM switched the file to incremental auto_vacuum"
+    );
+
+    // The migrated store keeps recording: one series, the room tag moves on.
+    let attic = matched_publisher(&observer, "home/state/attic/rover/on").await;
+    put(&attic, json!(true)).await;
+    rows_eventually(
+        &db,
+        "SELECT ts FROM history WHERE entity = 'rover'",
+        3,
+        Duration::from_secs(20),
+    )
+    .await;
+    assert_eq!(
+        read_rows(&db, "SELECT count(*) FROM series WHERE entity = 'rover'"),
+        vec![vec![SqlValue::Integer(1)]]
+    );
+    let replies = history_get(&observer, "home/history/state/rover/on").await;
+    assert_eq!(replies.len(), 1);
+    assert_eq!(replies[0].1.as_array().expect("array").len(), 3);
 
     sup.shutdown();
 }
