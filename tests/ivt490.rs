@@ -133,8 +133,9 @@ async fn ivt490_state_translates_to_bus_state() {
     // The discovery record carries the entity's aspect descriptor
     // (docs/design.md, Aspect descriptors): the dashboard's vocabulary for
     // the aspects above, with command bounds straight from the adapter's
-    // own COMMANDS table — the family tier gets setpoint and mode, the
-    // owner-tier knobs are described but not family-writable, and the
+    // own COMMANDS table — the family tier gets the setpoint alone (mode
+    // is automation-driven at the reporting house), the owner-tier knobs
+    // are described but not family-writable, and the
     // input this fixture feeds (indoor_temperature_actual is not a
     // command; outdoor_temperature_offset is not fed here) keeps its
     // command.
@@ -154,9 +155,10 @@ async fn ivt490_state_translates_to_bus_state() {
         fields["setpoint"]["command"],
         json!({"type": "float", "editable_by": "family", "constraint": {"min": 10.0, "max": 30.0}, "step": 0.5})
     );
-    assert_eq!(fields["operating_mode"]["command"], json!({"type": "enum", "editable_by": "family"}));
+    assert_eq!(fields["operating_mode"]["command"], json!({"type": "enum", "editable_by": "owner"}));
     assert_eq!(fields["operating_mode"]["values"][2], json!({"value": 3, "label": "boost"}));
     assert_eq!(fields["feed_temperature_target"]["command"]["editable_by"], json!("owner"));
+    assert_eq!(fields["GT2"]["label"], json!("outdoor (GT2)"), "labels keep the firmware code");
     assert_eq!(fields["indoor_temperature"]["valid"], json!("indoor_temperature_valid"));
     assert_eq!(fields["alarm"]["notable"], json!(true));
     assert!(fields.get("GT2_raw").is_none(), "undescribed aspects are simply absent");

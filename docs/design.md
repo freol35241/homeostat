@@ -1295,8 +1295,8 @@ the exploration that produced it):
   normalized aspects are present; expert knobs stay read-only in the
   entity detail overlay with history. Superseded in the overlay
   (2026-09-08) by the adapter's aspect descriptor — see "Aspect
-  descriptors": labelled, grouped readings, mode as a family control,
-  the owner knobs badged.
+  descriptors": labelled, grouped readings, the owner knobs (mode
+  included) badged.
 - **MQTT boilerplate graduates to the SDK** (`homeostat.mqtt`): this is
   the third paho adapter, the agreed rule-of-three trigger. A helper
   function, not a transport layer — adapters still own their
@@ -1350,9 +1350,12 @@ adapters never do. The gap is metadata, so the fix is metadata.
   bus; the adapter's own bounds remain the enforcement, and the grant
   table (the capability, from the dashboard's own manifest) is checked
   first, unchanged. Owner-tier commands read in the overlay and are
-  written only through the bus. For the heat pump: indoor target and
-  the GT3_2 emulation's mode (BOOST is "more hot water now") are family
-  intent; feed target and curve offset are owner tuning.
+  written only through the bus. For the heat pump: the indoor target is
+  family intent; feed target, curve offset and the GT3_2 emulation's
+  mode are owner tuning — the mode is driven by an automation at the
+  reporting house, and a knob an automation owns is not a family lever.
+  Labels keep the firmware's sensor code, "outdoor (GT2)", so the page
+  and the pump's manual name the same thing.
 - **`notable` is a deviation source.** A described boolean marked
   notable that reads true (the pump's alarm flag) lands on `Now` as an
   entity deviation — the adapter declaring vocabulary, still never house

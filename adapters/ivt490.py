@@ -231,12 +231,14 @@ COMMANDS = {
 # publishes in each bound entity's discovery record: labels, kinds and
 # groups for the aspects worth a family-facing name, and the command
 # vocabulary the dashboard may render — bounds straight from COMMANDS so
-# there is one source. The family tier gets the two levers that are
-# family intent (the indoor target and the GT3_2 emulation's mode — BOOST
-# is "more hot water now"); feed target and curve offset are owner tuning,
-# visible with a badge, written only through the bus. Every aspect not
-# named here still publishes and renders, in the page's diagnostics group
-# under its firmware name.
+# there is one source. The family tier gets the one lever that is family
+# intent, the indoor target; the GT3_2 emulation's mode is driven by an
+# automation at the reporting house, so it is owner tuning like the feed
+# target and curve offset — visible with a badge, written only through
+# the bus. Labels keep the firmware's sensor code in parentheses so the
+# page and the manual agree on what a reading is. Every aspect not named
+# here still publishes and renders, in the page's diagnostics group under
+# its firmware name.
 ASPECT_GROUPS = ["control", "readings", "limits"]
 ASPECT_FIELDS = {
     "setpoint": {"label": "indoor target", "kind": "temperature", "group": "control"},
@@ -262,25 +264,25 @@ ASPECT_FIELDS = {
         "group": "readings",
         "valid": "indoor_temperature_valid",
     },
-    "feed_temperature": {"label": "feed line", "kind": "temperature", "group": "readings"},
-    "GT1_target": {"label": "feed line target (curve)", "kind": "temperature", "group": "readings"},
-    "GT2": {"label": "outdoor", "kind": "temperature", "group": "readings"},
-    "GT3_1": {"label": "hot water", "kind": "temperature", "group": "readings"},
-    "GT3_2": {"label": "hot water tank", "kind": "temperature", "group": "readings"},
-    "GT5": {"label": "room sensor", "kind": "temperature", "group": "readings"},
-    "GT6": {"label": "compressor", "kind": "temperature", "group": "readings"},
+    "feed_temperature": {"label": "feed line (GT1)", "kind": "temperature", "group": "readings"},
+    "GT1_target": {"label": "feed line target, curve (GT1_target)", "kind": "temperature", "group": "readings"},
+    "GT2": {"label": "outdoor (GT2)", "kind": "temperature", "group": "readings"},
+    "GT3_1": {"label": "hot water (GT3_1)", "kind": "temperature", "group": "readings"},
+    "GT3_2": {"label": "hot water tank (GT3_2)", "kind": "temperature", "group": "readings"},
+    "GT5": {"label": "room sensor (GT5)", "kind": "temperature", "group": "readings"},
+    "GT6": {"label": "compressor (GT6)", "kind": "temperature", "group": "readings"},
     "compressor": {"label": "compressor running", "kind": "boolean", "group": "readings"},
     "electricity_supplement": {"label": "electric backup", "kind": "boolean", "group": "readings"},
     "vacation": {"label": "vacation", "kind": "boolean", "group": "readings"},
     "alarm": {"label": "alarm", "kind": "boolean", "group": "readings", "notable": True},
-    "GT1_LL": {"label": "feed lower limit", "kind": "temperature", "group": "limits"},
-    "GT1_UL": {"label": "feed upper limit", "kind": "temperature", "group": "limits"},
-    "GT3_2_LL": {"label": "tank lower limit", "kind": "temperature", "group": "limits"},
-    "GT3_2_UL": {"label": "tank upper limit", "kind": "temperature", "group": "limits"},
+    "GT1_LL": {"label": "feed lower limit (GT1_LL)", "kind": "temperature", "group": "limits"},
+    "GT1_UL": {"label": "feed upper limit (GT1_UL)", "kind": "temperature", "group": "limits"},
+    "GT3_2_LL": {"label": "tank lower limit (GT3_2_LL)", "kind": "temperature", "group": "limits"},
+    "GT3_2_UL": {"label": "tank upper limit (GT3_2_UL)", "kind": "temperature", "group": "limits"},
 }
 COMMAND_TIER = {
     "setpoint": "family",
-    "operating_mode": "family",
+    "operating_mode": "owner",
     "feed_temperature_target": "owner",
     "outdoor_temperature_offset": "owner",
 }
