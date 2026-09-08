@@ -295,6 +295,11 @@
    * section — exactly today's flat list). A described field's `valid`
    * pointer names the boolean aspect that marks the value stale; that
    * aspect is consumed into the row's `stale` flag rather than listed.
+   * Two aspects are schema vocabulary and need no descriptor: `available`
+   * (device liveness, docs/design.md, Availability) renders as a boolean
+   * in the descriptor's `status` group when it has one, and any
+   * `{aspect}_valid` beside an undescribed `{aspect}` is consumed the
+   * same way a declared pointer is.
    * Rows: { aspect, label, value, display, stale, numeric, control }. */
   function aspectPlan(entity, state, descriptor, commandable) {
     var prefix = 'home/state/' + entity.room + '/' + entity.name + '/';
@@ -302,13 +307,24 @@
     Object.keys(state).forEach(function (k) {
       if (k.indexOf(prefix) === 0) present[k.slice(prefix.length)] = state[k];
     });
-    var fields = (descriptor && descriptor.fields) || {};
+    var fields = {};
+    Object.keys((descriptor && descriptor.fields) || {}).forEach(function (a) { fields[a] = descriptor.fields[a]; });
     var described = Object.keys(fields).length > 0;
+    var groups = (descriptor && descriptor.groups) || [];
+    if (!fields.available && 'available' in present) {
+      fields.available = { label: 'available', kind: 'boolean', group: groups.indexOf('status') !== -1 ? 'status' : null };
+    }
+    Object.keys(present).forEach(function (a) {
+      var base = a.replace(/_valid$/, '');
+      if (base !== a && base in present && !fields[a] && !fields[base]) {
+        fields[base] = { label: base, valid: a };
+      }
+    });
     var validOf = {};
     Object.keys(fields).forEach(function (a) {
       if (fields[a].valid) validOf[fields[a].valid] = a;
     });
-    var order = ((descriptor && descriptor.groups) || []).slice();
+    var order = groups.slice();
     var rest = described ? DIAGNOSTICS : 'state';
     if (order.indexOf(rest) === -1) order.push(rest);
     var byGroup = {};

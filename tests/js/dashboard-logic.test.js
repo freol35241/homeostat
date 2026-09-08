@@ -264,7 +264,7 @@ test('a described entity plans sections in descriptor order, diagnostics last an
   assert.deepEqual(plan.map((s) => s.collapsed), [false, false, true]);
   assert.deepEqual(plan[0].rows.map((r) => r.aspect), ['setpoint', 'operating_mode', 'feed_temperature_target']);
   // undescribed aspects fall to diagnostics, sorted; a foreign entity's keys never appear
-  assert.deepEqual(plan[2].rows.map((r) => r.aspect), ['GT3_2_raw', 'available']);
+  assert.deepEqual(plan[2].rows.map((r) => r.aspect), ['available', 'GT3_2_raw']);
   // a described field with no state is not a row
   assert.ok(!plan[1].rows.some((r) => r.aspect === 'never_published'));
 });
@@ -302,12 +302,31 @@ test('an undescribed entity plans one flat state section, as before', () => {
   assert.equal(plan[0].group, 'state');
   assert.equal(plan[0].collapsed, false);
   assert.deepEqual(plan[0].rows.map((r) => r.aspect), [
-    'GT3_2_raw', 'available', 'compressor', 'feed_temperature_target', 'indoor_temperature',
-    'indoor_temperature_valid', 'operating_mode', 'setpoint',
+    'available', 'indoor_temperature', 'GT3_2_raw', 'compressor', 'feed_temperature_target',
+    'operating_mode', 'setpoint',
   ]);
   assert.equal(plan[0].rows.find((r) => r.aspect === 'compressor').display, 'true');
   assert.equal(plan[0].rows.find((r) => r.aspect === 'indoor_temperature').display, '20.3°');
   assert.equal(plan[0].rows[0].control, null);
+});
+
+test('available and _valid flags are schema vocabulary: rendered without a descriptor', () => {
+  // undescribed: available is a boolean row, the _valid flag folds into its reading
+  const flat = logic.aspectPlan(HEAT_PUMP, heatPumpState(), undefined, true)[0].rows;
+  assert.equal(flat.find((r) => r.aspect === 'available').display, 'on');
+  const indoor = flat.find((r) => r.aspect === 'indoor_temperature');
+  assert.equal(indoor.stale, true);
+  assert.ok(!flat.some((r) => r.aspect === 'indoor_temperature_valid'), 'consumed, not listed');
+  // described with a status group: available lands there; without one, in diagnostics
+  const withStatus = Object.assign(descriptor(), { groups: ['control', 'readings', 'status'] });
+  const plan = logic.aspectPlan(HEAT_PUMP, heatPumpState(), withStatus, true);
+  assert.deepEqual(plan.find((s) => s.group === 'status').rows.map((r) => r.aspect), ['available']);
+  const noStatus = logic.aspectPlan(HEAT_PUMP, heatPumpState(), descriptor(), true);
+  assert.ok(noStatus.find((s) => s.group === 'diagnostics').rows.some((r) => r.aspect === 'available'));
+  // an adapter that describes available itself wins
+  const own = descriptor(); own.fields.available = { label: 'reachable', kind: 'boolean', group: 'readings' };
+  const ownPlan = logic.aspectPlan(HEAT_PUMP, heatPumpState(), own, true);
+  assert.equal(ownPlan.find((s) => s.group === 'readings').rows.find((r) => r.aspect === 'available').label, 'reachable');
 });
 
 test('formatAspect handles the kinds and the empty value', () => {
