@@ -1,0 +1,34 @@
+schema = 1
+
+[unit]
+name = "aduro"
+kind = "adapter"
+description = "Aduro pellet-burner adapter under test"
+
+[runtime]
+command = "uv run ../../adapters/aduro.py"
+restart = "always"
+shutdown_grace_s = 5
+
+[discovery]
+mode = "static"
+endpoint = "mqtt://127.0.0.1:${HOMEOSTAT_TEST_MQTT_PORT}"
+
+[bus.publishes]
+state = { key = "home/state/{room}/{entity}/**" }
+discovery = { key = "home/discovery/aduro" }
+
+[bus.subscribes]
+commands = "home/cmd/{room}/{entity}/**"
+arbiter_commands = "home/arbiter/{room}/{entity}/**"
+
+# Short receive-timer so the silence transition happens inside a test run
+# — but longer than any test's "no health event" listening window; the
+# adapter-side default (300 s) covers a manifest without it.
+[params.availability_timeout_s]
+type = "float"
+default = 5.0
+editable_by = "owner"
+
+[entities]
+dir = "entities/aduro/"

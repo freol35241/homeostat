@@ -2114,6 +2114,37 @@ in the arbiter. Both settled here.
   rate for values that never move — #3 one layer out), and treat the
   `settings/*` topics as configuration, not samples.
 
+### Aduro adapter (built 2026-09-09)
+
+`adapters/aduro.py`, against the reporter's `aduro2mqtt` bridge (NBE UDP
+to MQTT). The entity `id` is the bridge's base topic; one entity per
+burner; arbitrated, so `on` and `power_level` lease independently.
+
+- **Publish on change, from two topics.** Only `{base}/status` and
+  `{base}/operating` are subscribed; a field publishes when its value
+  differs from the last one put on the bus (and once after start). The
+  identical republish a poll later yields nothing. Settings, consumption,
+  advanced and logs are not subscribed at all. Status fields keep their
+  firmware names, dots included; operating fields carry an `operating_`
+  prefix so the two NBE namespaces stay apart without a table.
+- **`on` is derived**, from `state` not being in a set of off codes. The
+  set holds the one code observed (14, idle and unlit); it grows from the
+  heating season, which is why `state` and `substate` pass through raw
+  beside it. `power_level` is `regulation.fixed_power` as an int;
+  `flue_temperature` is `smoke_temp`; `boiler_temperature` is
+  `boiler_temp`. `shaft_temp`, the device's own fire-safety reading, passes
+  through labelled.
+- **Commands** are the bridge's own `{path, value}` shape on `{base}/set`:
+  a bool `on` becomes a momentary `misc.start` or `misc.stop`; an integer
+  `power_level` in {10, 50, 100} becomes `regulation.fixed_power`. Anything
+  else drops with `invalid-command`. Both are family-tier in the
+  descriptor, `on` described as a two-valued enum so the described card
+  gets a segmented control without a bespoke widget.
+- **Availability** is the receive timer (`availability_timeout_s`,
+  default 300 s, about nine polls): the bridge skips a topic when the
+  burner does not answer, so an unreachable burner and a dead bridge both
+  go silent.
+
 ### Interlocks stay the device's job (settled 2026-09-09, #38)
 
 The house runs two flue-temperature cutouts (stop above 200 °C at 10%
