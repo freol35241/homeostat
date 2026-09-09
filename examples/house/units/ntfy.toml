@@ -1,0 +1,40 @@
+schema = 1
+
+[unit]
+name = "ntfy"
+kind = "adapter"
+description = "Delivers notifier messages to the family's phones through the ntfy server"
+
+[runtime]
+command = "uv run units/ntfy.py"
+restart = "always"
+shutdown_grace_s = 5
+
+[discovery]
+mode = "static"
+# The compose-internal address of the ntfy sidecar (ntfy/server.yml).
+# The publisher token comes from HOMEOSTAT_NTFY_TOKEN, never from here.
+endpoint = "http://ntfy:2586"
+
+[bus.subscribes]
+commands = "home/cmd/{room}/{entity}/**"
+
+[bus.publishes]
+state = { key = "home/state/{room}/{entity}/**" }
+discovery = { key = "home/discovery/ntfy" }
+
+# The per-channel floor between sends: defense in depth behind the
+# automations' own cooldowns, never the policy itself.
+[params.min_interval_s]
+type = "float"
+default = 5
+constraint = { min = 0 }
+editable_by = "owner"
+
+[entities]
+dir = "entities/ntfy/"
+
+[naming]
+sv = "notiser"
+en = "notifications"
+aliases = []

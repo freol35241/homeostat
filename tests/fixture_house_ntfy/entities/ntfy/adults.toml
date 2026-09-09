@@ -1,0 +1,14 @@
+schema = 1
+
+[entity]
+id = "adults"
+capability = "notifier"
+features = ["alert"]
+room = "global"
+
+[naming]
+en = "the adults"
+
+[write_policy]
+mode = "shared"
+owner = "ntfy"

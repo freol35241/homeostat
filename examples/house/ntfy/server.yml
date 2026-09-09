@@ -1,0 +1,42 @@
+# The ntfy sidecar's config (docs/design.md, "The ntfy adapter"). Mounted
+# read-only at /etc/ntfy/server.yml by the compose file:
+#
+#   ntfy:
+#     image: binwiederhier/ntfy:2.14
+#     command: serve
+#     env_file: .env
+#     volumes:
+#       - ./ntfy/server.yml:/etc/ntfy/server.yml:ro
+#       - ntfy-cache:/var/cache/ntfy
+#       - ntfy-auth:/var/lib/ntfy
+#     ports:
+#       - "2586:2586"      # LAN and WireGuard only, like the dashboard
+#
+# Structure lives here; secrets live in the env file beside the compose
+# file (bcrypt hashes from `ntfy user hash`, the token shared with
+# HOMEOSTAT_NTFY_TOKEN):
+#
+#   NTFY_AUTH_USERS=homeostat:$2a$10$...:user,alice:$2a$10$...:user,bob:$2a$10$...:user
+#   NTFY_AUTH_TOKENS=homeostat:tk_...:homeostat publisher
+#   HOMEOSTAT_NTFY_TOKEN=tk_...
+#
+# Provisioned users, access and tokens (ntfy >= 2.12) are re-applied on
+# every start and removed when they leave the config, so this file and
+# the env file are the source of truth — nothing is added by hand.
+
+base-url: http://10.8.0.1:2586      # the address the phones use (WireGuard side)
+listen-http: ":2586"
+cache-file: /var/cache/ntfy/cache.db
+cache-duration: 24h                 # a phone offline this long still gets it on reconnect
+auth-file: /var/lib/ntfy/user.db
+auth-default-access: deny-all       # no anonymous topics
+
+# Topics are the notifier entity ids in entities/ntfy/. The publisher
+# writes; each person reads their own topic and the group's. Adding a
+# family member is an entity file, two lines here, one user in the env
+# file.
+auth-access:
+  - "homeostat:alice:write-only"
+  - "homeostat:adults:write-only"
+  - "alice:alice:read-only"
+  - "alice:adults:read-only"
