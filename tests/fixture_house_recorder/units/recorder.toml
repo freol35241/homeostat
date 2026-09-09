@@ -14,6 +14,21 @@ shutdown_grace_s = 5
 mode = "static"
 endpoint = "sqlite:${RECORDER_DB}"
 
+# Retention: rows older than the window are purged hourly; 0 keeps them
+# forever. Events are the audit trail — the smaller table and the one
+# worth keeping longest — so the two windows are separate.
+[params.retain_samples_days]
+type = "float"
+default = 0
+constraint = { min = 0 }
+editable_by = "owner"
+
+[params.retain_events_days]
+type = "float"
+default = 0
+constraint = { min = 0 }
+editable_by = "owner"
+
 [bus.subscribes]
 state = "home/state/**"
 cmd = "home/cmd/**"

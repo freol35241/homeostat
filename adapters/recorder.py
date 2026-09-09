@@ -41,6 +41,14 @@ counts and time bounds (keyed by history key, RFC3339 like the samples
 path), the events table's count and bounds (integer µs, like the events
 path) and the layout version — what an owner needs to see before
 choosing a retention window.
+
+Retention is two parameters, retain_samples_days and retain_events_days,
+0 meaning forever (the default, so an upgrade never deletes history).
+The writer thread purges rows older than the window hourly and whenever
+a window changes, then returns the freed pages to the filesystem
+(PRAGMA incremental_vacuum, what the file's auto_vacuum mode is for),
+and leaves one `purge` health event per purge that deleted anything.
+Retention is the only destructive operation in the store.
 """
 
 import datetime
@@ -56,9 +64,12 @@ from pathlib import Path
 import zenoh
 
 from homeostat import house, keys, session
+from homeostat.params import LiveParams
 
 BUFFER_LIMIT = 10_000
 RETRY_S = 1.0
+PURGE_INTERVAL_S = 3600.0
+PARAM_DEFAULTS = {"retain_samples_days": 0.0, "retain_events_days": 0.0}
 DEFAULT_QUERY_LIMIT = 1000
 DEFAULT_EVENTS_LIMIT = 500
 EVENTS_KEY = zenoh.KeyExpr("home/history/events")
@@ -121,9 +132,31 @@ def iso_utc(us: int) -> str:
     )
 
 
+class Params(LiveParams):
+    """The retention windows from home/config/{unit}/*, live; a change
+    wakes the writer so the new window applies at once."""
+
+    def __init__(self, sess: session.UnitSession, on_change):
+        self._on_change = on_change
+        super().__init__(sess, PARAM_DEFAULTS)
+
+    def _on_config(self, sample) -> None:
+        super()._on_config(sample)
+        self._on_change()
+
+    @property
+    def retain_samples_days(self) -> float:
+        return self.get("retain_samples_days")
+
+    @property
+    def retain_events_days(self) -> float:
+        return self.get("retain_events_days")
+
+
 class Writer:
     """Single writer thread draining a bounded queue, one transaction per
-    flush. Failed batches stay pending and retry on new samples or a timer."""
+    flush. Failed batches stay pending and retry on new samples or a timer.
+    Retention purges run here too, so they serialise with flushes."""
 
     def __init__(self, db_path: Path, sess: session.UnitSession):
         self.db_path = db_path
@@ -131,11 +164,18 @@ class Writer:
         self.cond = threading.Condition()
         self.queue: deque = deque()
         self.stopping = False
+        self.purge_due = False
+        self.params = Params(sess, self.request_purge)
         self.thread = threading.Thread(target=self._run, name="writer")
 
     def enqueue(self, table: str, row: tuple) -> None:
         with self.cond:
             self.queue.append((table, row))
+            self.cond.notify()
+
+    def request_purge(self) -> None:
+        with self.cond:
+            self.purge_due = True
             self.cond.notify()
 
     def stop(self) -> None:
@@ -149,15 +189,27 @@ class Writer:
         pending: list = []
         outage = False
         dropped = 0
+        next_purge = time.monotonic() + PURGE_INTERVAL_S
         while True:
             with self.cond:
                 while not self.queue and not pending and not self.stopping:
-                    self.cond.wait()
+                    if self.purge_due or time.monotonic() >= next_purge:
+                        break
+                    self.cond.wait(timeout=max(0.0, next_purge - time.monotonic()))
                 if not self.queue and not pending and self.stopping:
                     return
+                if not self.queue and not pending:
+                    self.purge_due = False
+                    next_purge = time.monotonic() + PURGE_INTERVAL_S
+                    purge = True
+                else:
+                    purge = False
                 pending.extend(self.queue)
                 self.queue.clear()
                 stopping = self.stopping
+            if purge:
+                self._purge()
+                continue
             overflow = len(pending) - BUFFER_LIMIT
             if overflow > 0:
                 del pending[:overflow]
@@ -203,6 +255,60 @@ class Writer:
                 )
         finally:
             conn.close()
+
+    def _purge(self) -> None:
+        """Deletes rows older than each table's window and returns the
+        pages to the filesystem. One event per purge that deleted
+        anything; a purge that finds nothing to delete is silent, so
+        retention never fills the events table with its own bookkeeping."""
+        windows = {
+            "samples": self.params.retain_samples_days,
+            "events": self.params.retain_events_days,
+        }
+        if all(days <= 0 for days in windows.values()):
+            return
+        now = now_us()
+        cutoffs = {
+            table: now - int(days * 86_400 * 1_000_000)
+            for table, days in windows.items()
+            if days > 0
+        }
+        deleted = {"samples": 0, "events": 0}
+        try:
+            conn = sqlite3.connect(self.db_path, timeout=2.0)
+            try:
+                if "samples" in cutoffs:
+                    # Per series, so the delete is a range on the primary
+                    # key (series_id, ts) rather than a scan of the whole
+                    # table, and one transaction per series keeps the
+                    # writer's lock short even on a first purge of years.
+                    for (series_id,) in conn.execute("SELECT id FROM series").fetchall():
+                        with conn:
+                            deleted["samples"] += conn.execute(
+                                "DELETE FROM samples WHERE series_id = ? AND ts < ?",
+                                (series_id, cutoffs["samples"]),
+                            ).rowcount
+                if "events" in cutoffs:
+                    with conn:
+                        deleted["events"] = conn.execute(
+                            "DELETE FROM events WHERE ts < ?", (cutoffs["events"],)
+                        ).rowcount
+                if not any(deleted.values()):
+                    return
+                before = conn.execute("PRAGMA freelist_count").fetchone()[0]
+                conn.execute("PRAGMA incremental_vacuum")
+                after = conn.execute("PRAGMA freelist_count").fetchone()[0]
+            finally:
+                conn.close()
+        except sqlite3.Error as err:
+            self.sess.health_event("purge-failed", error=str(err))
+            return
+        self.sess.health_event(
+            "purge",
+            samples=deleted["samples"],
+            events=deleted["events"],
+            pages_freed=before - after,
+        )
 
     def _intern(self, conn: sqlite3.Connection, rows: list) -> None:
         """Ensures every series and room the batch names has an id, so the
