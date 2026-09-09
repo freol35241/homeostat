@@ -159,26 +159,14 @@ home/state/{room}/{entity}/{aspect}
   underscores (`GT2/raw` → `GT2_raw`).
 - **Normalize what the vocabulary names, pass the rest through.** The
   base aspect per capability is what the dashboard, the arbiter and the
-  grant table act on:
-
-  | capability | base aspect | features / other named aspects |
-  |---|---|---|
-  | `light` | `on` (bool) | `brightness` (0–254), `color_temp` (mired) |
-  | `switch` | `on` (bool) | |
-  | `lock` | `locked` (bool) | |
-  | `climate` | `setpoint` (°C) | `indoor_temperature`, `feed_temperature` |
-  | `presence` | `occupancy` or `presence` (bool) | |
-  | `binary_sensor` | a bool under its native name | |
-  | `sensor` | numeric aspects under descriptive names (`temperature`, `humidity`) | |
-  | `camera` | `motion` (bool) | |
-  | `person` | `lat`, `lon`, `accuracy`, `battery`, `fixed_at` | |
-  | `router` | `wan` (bool) | |
-  | `vpn` | `up` (bool) | |
-
-  Everything else publishes under its native field name. Adapter-native
-  *values* never leak: `"ON"` becomes `true`, `LOCKED` becomes
-  `locked = true`. A new device class that needs a new base aspect is a
-  schema change in this repo, not an adapter convention.
+  grant table act on; the other named aspects are what `features` may
+  declare. The table is generated from the schema and lives in
+  [manifest.md, Capability vocabulary](manifest.md#capability-vocabulary)
+  — one source, so it cannot drift from the core. Everything else
+  publishes under its native field name. Adapter-native *values* never
+  leak: `"ON"` becomes `true`, `LOCKED` becomes `locked = true`. A new
+  device class that needs a new base aspect is a change to that table in
+  `src/manifest.rs`, not an adapter convention.
 - **The bus value is the device's readback**, never an echo of a command
   the adapter just forwarded.
 - **Never invent.** On loss the last values stand; the adapter publishes

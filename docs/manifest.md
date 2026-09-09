@@ -243,3 +243,26 @@ room slot of key expressions.
 | `schema` | integer | yes | Contract version. Must be 1. |
 | `zones` | table of name → list of string | no | `[zones]`: zone name → member rooms. A zone name is a key segment, not reserved (`reserved-zone-name`), not also a room (`zone-room-collision`); members must be rooms some entity binds (`zone-unknown-room`) and never pseudo-rooms (`zone-pseudo-room`). |
 
+## Capability vocabulary
+
+What an entity of each capability publishes under which names (docs/adapters.md, State). The base aspect is what commands target and the dashboard widget renders; the other named aspects are what `features` may declare or the vocabulary reserves; notable is the reading that counts as a deviation on `Now`. Anything else an adapter publishes passes through under its native name.
+
+| Capability | Base aspect | Other named aspects | Notable | Notes |
+|---|---|---|---|---|
+| `binary_sensor` | — | — | — | A boolean under its native name. |
+| `camera` | — | `motion` | — | `motion` (bool). Media rides the go2rtc plane, never the bus. |
+| `climate` | `setpoint` | `indoor_temperature`, `feed_temperature` | — | `setpoint` in °C is the family lever; the two readings are normalized when the device has them. |
+| `cover` | — | — | — | Reserved; no adapter binds it yet. |
+| `light` | `on` | `brightness`, `color_temp` | `on = true` | `brightness` 0–254 (the Zigbee2MQTT scale the dashboard assumes), `color_temp` in mired. |
+| `lock` | `locked` | — | `locked = false` |  |
+| `person` | — | `lat`, `lon`, `accuracy`, `battery`, `fixed_at` | — | Scalar position aspects; `fixed_at` is the fix's epoch timestamp. Room is always `person`. |
+| `presence` | — | `occupancy`, `presence` | — | Either spelling is accepted; adapters pass their native one through. |
+| `router` | — | `wan` | `wan = false` |  |
+| `sensor` | — | — | — | Numeric aspects under descriptive names (`temperature`, `humidity`); widgets come from what is published. |
+| `switch` | `on` | — | — |  |
+| `vpn` | — | `up` | `up = false` |  |
+
+Every capability may also publish:
+
+- `available` — bool, published on transition by the owning adapter when the protocol has a real loss signal; `false` is notable (docs/design.md, Availability).
+- `{aspect}_valid` — bool beside a reading the device itself may stop trusting; the value stands, the flag says stale.
