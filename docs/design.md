@@ -559,6 +559,16 @@ ascending; `limit` (default 1000) keeps the most recent rows in range.
 Wildcards in the entity/aspect slots fan out to one reply per matching
 series. A malformed selector gets an error reply.
 
+`home/history/stats` describes the store itself in one reply:
+`store_version`, `file_bytes` and `freelist_bytes` from the pager, one
+`{rows, oldest, newest}` per series keyed by its history key (RFC3339,
+as the samples path), and `events: {rows, oldest, newest}` (integer µs,
+as the events path). It exists because choosing a retention window means
+knowing what is in the file, the recorder is the only process that reads
+it, and a host may have no `sqlite3` binary (2026-09-09, #25). A wildcard
+over `home/history/**` fans out over series only; `stats` and `events`
+answer their own keys.
+
 The history key is entity-first — no room slot — because entity is the
 series identity and room is a tag carried per row: a moved entity is ONE
 key whose rows show the tag transition. Reads over the bus keep the

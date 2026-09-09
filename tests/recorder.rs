@@ -415,6 +415,60 @@ async fn backend_outage_buffers_and_flushes() {
     sup.shutdown();
 }
 
+/// The store is legible over the bus: home/history/stats replies one
+/// message with the file's size, one aggregate per series keyed by its
+/// history key, and the events table's count and bounds — what choosing a
+/// retention window needs, on a host that may have no sqlite3 binary.
+#[tokio::test(flavor = "multi_thread")]
+async fn stats_describe_the_store() {
+    let db = store_path("stats");
+    let (mut sup, observer) = setup(&db).await;
+
+    let before = now_us();
+    let power = matched_publisher(&observer, "home/state/attic/meter/power").await;
+    for value in [1.5, 2.5, 3.5] {
+        put(&power, json!(value)).await;
+    }
+    let level = matched_publisher(&observer, "home/state/attic/gauge/level").await;
+    put(&level, json!(7)).await;
+    rows_eventually(&db, "SELECT value FROM samples", 4, Duration::from_secs(20)).await;
+    let after = now_us();
+
+    let replies = history_get(&observer, "home/history/stats").await;
+    assert_eq!(replies.len(), 1);
+    assert_eq!(replies[0].0, "home/history/stats");
+    let stats = &replies[0].1;
+    assert_eq!(stats["store_version"], json!(1));
+    let file_bytes = stats["file_bytes"].as_i64().expect("file size");
+    assert!(file_bytes >= 4096, "page_count * page_size: {stats}");
+    assert!(stats["freelist_bytes"].as_i64().expect("freelist") >= 0);
+
+    let series = stats["series"].as_object().expect("series map");
+    assert_eq!(series.len(), 2, "one entry per series: {stats}");
+    let power = &series["home/history/state/meter/power"];
+    assert_eq!(power["rows"], json!(3));
+    assert_eq!(series["home/history/state/gauge/level"]["rows"], json!(1));
+    let oldest = power["oldest"].as_str().expect("RFC3339 oldest");
+    let newest = power["newest"].as_str().expect("RFC3339 newest");
+    assert!(oldest.ends_with("+00:00") && oldest <= newest, "{power}");
+
+    // Events: the fixture's own health transitions are already there,
+    // stamped in the recorder's µs convention.
+    let events = &stats["events"];
+    assert!(events["rows"].as_i64().expect("events count") >= 1, "{events}");
+    let newest = events["newest"].as_i64().expect("µs newest");
+    assert!(newest <= after && events["oldest"].as_i64().expect("µs oldest") <= newest);
+    assert!(newest >= before - 120_000_000, "events bounds are recent: {events}");
+
+    // A wildcard over history fans out over series and never includes the
+    // stats reply, so a samples reader never sees a foreign payload.
+    let replies = history_get(&observer, "home/history/**").await;
+    assert_eq!(replies.len(), 2, "series only: {replies:?}");
+    assert!(replies.iter().all(|(key, _)| key.starts_with("home/history/state/")));
+
+    sup.shutdown();
+}
+
 /// (d) The read path returns what was written: a get on
 /// home/history/state/{entity}/{aspect} replies the typed rows with
 /// timestamps, honoring from/to/limit (zenoh's `;`-separated selector

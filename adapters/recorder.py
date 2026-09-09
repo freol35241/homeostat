@@ -35,7 +35,12 @@ zenoh-style key expression (wildcards included) filtering which recorded
 event keys come back, missing key means all of them; from/to here are
 integer microseconds UTC, the recorder's own timestamp convention, unlike
 the RFC3339 samples path. Both paths cap rows at limit, newest kept,
-replied oldest-to-newest.
+replied oldest-to-newest. GET home/history/stats replies one message
+describing the store itself: file and freelist size, per-series row
+counts and time bounds (keyed by history key, RFC3339 like the samples
+path), the events table's count and bounds (integer µs, like the events
+path) and the layout version — what an owner needs to see before
+choosing a retention window.
 """
 
 import datetime
@@ -57,6 +62,7 @@ RETRY_S = 1.0
 DEFAULT_QUERY_LIMIT = 1000
 DEFAULT_EVENTS_LIMIT = 500
 EVENTS_KEY = zenoh.KeyExpr("home/history/events")
+STATS_KEY = zenoh.KeyExpr("home/history/stats")
 
 # Store layout, stamped in PRAGMA user_version. Version 0 was one wide
 # samples table repeating class/room/entity/aspect/kind as TEXT on every
@@ -281,6 +287,8 @@ class Recorder:
         # must fan out over the sample series, not silently drop them.
         if EVENTS_KEY.includes(asked):
             self._answer_events(query)
+        elif STATS_KEY.includes(asked):
+            self._answer_stats(query)
         else:
             self._answer_samples(query, asked)
 
@@ -366,6 +374,47 @@ class Recorder:
             query.reply_err(json.dumps(f"store unavailable: {err}"))
         finally:
             conn.close()
+
+
+    def _answer_stats(self, query: zenoh.Query) -> None:
+        try:
+            conn = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True, timeout=2.0)
+        except sqlite3.Error as err:
+            query.reply_err(json.dumps(f"store unavailable: {err}"))
+            return
+        try:
+            query.reply(str(STATS_KEY), json.dumps(store_stats(conn)))
+        except sqlite3.Error as err:
+            query.reply_err(json.dumps(f"store unavailable: {err}"))
+        finally:
+            conn.close()
+
+
+def store_stats(conn: sqlite3.Connection) -> dict:
+    """What is in the store: sizes from the pager, one aggregate per
+    series and one for the events table."""
+    page_size = conn.execute("PRAGMA page_size").fetchone()[0]
+    page_count = conn.execute("PRAGMA page_count").fetchone()[0]
+    freelist = conn.execute("PRAGMA freelist_count").fetchone()[0]
+    series = {}
+    for space, entity, aspect, rows, oldest, newest in conn.execute(
+        "SELECT class, entity, aspect, COUNT(*), MIN(ts), MAX(ts) FROM samples"
+        " JOIN series ON series.id = samples.series_id"
+        " GROUP BY series_id ORDER BY class, entity, aspect"
+    ):
+        series[f"home/history/{space}/{entity}/{aspect}"] = {
+            "rows": rows,
+            "oldest": iso_utc(oldest),
+            "newest": iso_utc(newest),
+        }
+    rows, oldest, newest = conn.execute("SELECT COUNT(*), MIN(ts), MAX(ts) FROM events").fetchone()
+    return {
+        "store_version": conn.execute("PRAGMA user_version").fetchone()[0],
+        "file_bytes": page_count * page_size,
+        "freelist_bytes": freelist * page_size,
+        "series": series,
+        "events": {"rows": rows, "oldest": oldest, "newest": newest},
+    }
 
 
 def event_payload(text: str):
