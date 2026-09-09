@@ -646,6 +646,23 @@ pushes the fix back to the adapter.
   them could not be additive. No pluggable backend either: the moment
   `endpoint` accepts `postgresql://` the no-dual-path property dies and
   the tests hollow out.
+
+### Integrity check (settled 2026-09-09, #27)
+
+SQLite has no page checksums by default (`cksumvfs` is an opt-in shim),
+where Postgres has `data_checksums`: a disk silently returning corrupt
+data is invisible until a read happens to hit the page, and the store is
+the only file in the system that would fail that way — VP52 spent three
+weeks with a disk doing exactly this while every layer reported health.
+So the recorder runs `PRAGMA integrity_check` every
+`integrity_check_hours` (default daily, 0 disables) on its own read-only
+connection — in WAL mode it never blocks the writer — the first one an
+interval after start so a restart loop never hammers a large file. The
+result is a health event at `home/health/recorder/event`: `integrity-ok`
+with the duration, or `integrity-failed` with the first lines SQLite
+reports. The event is the signal; repair or restore is the owner's call,
+and proportionate as a recorder feature rather than a reason for a
+different engine.
  
 ## Plan/apply proper (settled in step 5b)
 

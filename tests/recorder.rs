@@ -516,6 +516,69 @@ async fn retention_purges_old_rows() {
     sup.shutdown();
 }
 
+/// The scheduled integrity check: a healthy store reports `integrity-ok`
+/// with its duration; a store whose pages are corrupted on disk — the
+/// failure SQLite itself never notices — reports `integrity-failed` with
+/// what the check found. The schedule is a parameter and applies live.
+#[tokio::test(flavor = "multi_thread")]
+async fn integrity_check_reports_corruption() {
+    let db = store_path("integrity");
+    let (mut sup, observer) = setup(&db).await;
+    let events = observer
+        .declare_subscriber("home/health/recorder/event")
+        .await
+        .expect("event subscriber");
+
+    let power = matched_publisher(&observer, "home/state/attic/meter/power").await;
+    for value in [1.5, 2.5, 3.5] {
+        put(&power, json!(value)).await;
+    }
+    rows_eventually(&db, "SELECT value FROM samples", 3, Duration::from_secs(20)).await;
+
+    // ~0.36 s schedule: the first check runs an interval after the change.
+    config_write(&observer, "home/config/recorder/integrity_check_hours", json!(1e-4))
+        .await
+        .expect("in-constraint write accepted");
+    let ok = await_event(&events, Duration::from_secs(30), |e| e["kind"] == "integrity-ok").await;
+    assert!(ok["duration_s"].as_f64().expect("duration") >= 0.0, "{ok}");
+
+    // Corrupt the samples table's root page in the main file: nothing
+    // rewrites it from here on (the recorder keeps writing its own health
+    // events, so any page it touches would be shadowed by a fresh copy in
+    // the WAL). Checkpoint first so the page lives in the main file.
+    let rootpage = {
+        let conn = Connection::open(&db).expect("open store");
+        conn.busy_timeout(Duration::from_secs(5)).expect("busy timeout");
+        let (busy, _log, _done): (i64, i64, i64) = conn
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })
+            .expect("checkpoint");
+        assert_eq!(busy, 0, "checkpoint completed");
+        let page_size: u64 = conn
+            .query_row("PRAGMA page_size", [], |r| r.get(0))
+            .expect("page size");
+        let root: u64 = conn
+            .query_row("SELECT rootpage FROM sqlite_master WHERE name = 'samples'", [], |r| {
+                r.get(0)
+            })
+            .expect("samples root page");
+        (root - 1) * page_size
+    };
+    {
+        use std::io::{Seek, SeekFrom, Write};
+        let mut file = std::fs::OpenOptions::new().write(true).open(&db).expect("open file");
+        file.seek(SeekFrom::Start(rootpage + 8)).expect("seek into the root page");
+        file.write_all(&[0xFF; 64]).expect("scribble");
+    }
+    let failed =
+        await_event(&events, Duration::from_secs(30), |e| e["kind"] == "integrity-failed").await;
+    let errors = failed["errors"].as_array().expect("errors listed");
+    assert!(!errors.is_empty() && errors[0] != json!("ok"), "{failed}");
+
+    sup.shutdown();
+}
+
 /// (d) The read path returns what was written: a get on
 /// home/history/state/{entity}/{aspect} replies the typed rows with
 /// timestamps, honoring from/to/limit (zenoh's `;`-separated selector
