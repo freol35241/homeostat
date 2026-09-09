@@ -37,6 +37,16 @@ class FreshnessTest(unittest.TestCase):
         self.inputs.seen("a", 21.0)
         self.assertEqual(self.inputs.fresh(3600), {"a": 21.0, "b": 22.0})
 
+    def test_catch_up_carries_its_age(self):
+        # A restart delivers mirrored values with their age: one within
+        # the policy counts, one beyond it does not, and neither is
+        # passed off as seen just now.
+        self.inputs.seen("a", 20.0, age_s=100)
+        self.inputs.seen("b", 22.0, age_s=4000)
+        self.assertEqual(self.inputs.fresh(3600), {"a": 20.0})
+        self.clock.now += 3501  # a is now 3601 s old
+        self.assertEqual(self.inputs.fresh(3600), {})
+
     def test_latest_value_wins(self):
         self.inputs.seen("a", 20.0)
         self.inputs.seen("a", 20.5)

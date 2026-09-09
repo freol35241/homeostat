@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tokio::sync::watch;
 use zenoh::Session;
@@ -478,8 +478,16 @@ async fn serve_health(session: &Session, health: HealthMap) -> Result<(), String
 /// waiting out the next boundary. State: a late joiner (or a bus read, e.g.
 /// the MCP surface's read_state) sees every entity's current value without
 /// waiting for the next publish.
+///
+/// Every reply carries the value's age — seconds since the mirror received
+/// it, as a decimal string in the attachment — because a mirrored value
+/// can be arbitrarily old and a late joiner cannot otherwise tell a
+/// catch-up from a fresh publish (the SDK's `subscribe` feeds it to
+/// `Freshness`). Age rather than a wall-clock stamp: the mirror's monotonic
+/// clock is the only one involved, and the reply is read the moment it is
+/// made.
 async fn mirror(session: &Session, keyexpr: &'static str) -> Result<(), String> {
-    let cache: Arc<Mutex<BTreeMap<String, Vec<u8>>>> = Arc::default();
+    let cache: Arc<Mutex<BTreeMap<String, (Vec<u8>, Instant)>>> = Arc::default();
     let sub = session
         .declare_subscriber(keyexpr)
         .await
@@ -497,7 +505,7 @@ async fn mirror(session: &Session, keyexpr: &'static str) -> Result<(), String> 
                     zenoh::sample::SampleKind::Put => {
                         cache.insert(
                             sample.key_expr().as_str().to_string(),
-                            sample.payload().to_bytes().to_vec(),
+                            (sample.payload().to_bytes().to_vec(), Instant::now()),
                         );
                     }
                     zenoh::sample::SampleKind::Delete => {
@@ -509,15 +517,20 @@ async fn mirror(session: &Session, keyexpr: &'static str) -> Result<(), String> 
     }
     tokio::spawn(async move {
         while let Ok(query) = queryable.recv_async().await {
-            let entries: Vec<(String, Vec<u8>)> = cache
+            let entries: Vec<(String, Vec<u8>, f64)> = cache
                 .lock()
                 .expect("mirror cache lock")
                 .iter()
                 .filter(|(key, _)| intersects(&query, key))
-                .map(|(key, payload)| (key.clone(), payload.clone()))
+                .map(|(key, (payload, received))| {
+                    (key.clone(), payload.clone(), received.elapsed().as_secs_f64())
+                })
                 .collect();
-            for (key, payload) in entries {
-                let _ = query.reply(key, payload).await;
+            for (key, payload, age_s) in entries {
+                let _ = query
+                    .reply(key, payload)
+                    .attachment(age_s.to_string())
+                    .await;
             }
         }
     });

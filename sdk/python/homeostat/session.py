@@ -55,14 +55,25 @@ class UnitSession:
 
     def get_json(self, selector: str) -> list[tuple[str, Any]]:
         """Queries the bus, returning (key, decoded JSON) per ok reply."""
+        return [(key, value) for key, value, _ in self.get_json_aged(selector)]
+
+    def get_json_aged(self, selector: str) -> list[tuple[str, Any, float]]:
+        """Queries the bus, returning (key, decoded JSON, age in seconds)
+        per ok reply. The age is the reply's attachment as the core's
+        last-value mirrors write it; a reply without one is age zero.
+        Non-JSON payloads are ignored, as a subscriber ignores them."""
         values = []
         for reply in self._session.get(selector):
             sample = reply.ok
             if sample is None:
                 continue
-            values.append(
-                (str(sample.key_expr), json.loads(sample.payload.to_bytes()))
-            )
+            try:
+                value = json.loads(sample.payload.to_bytes())
+            except ValueError:
+                continue
+            attachment = sample.attachment
+            age_s = float(attachment.to_bytes()) if attachment is not None else 0.0
+            values.append((str(sample.key_expr), value, age_s))
         return values
 
     def write_config(self, unit: str, param: str, value: Any) -> Any:

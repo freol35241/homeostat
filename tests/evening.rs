@@ -274,14 +274,19 @@ async fn off_time_edit_applies_live_and_survives_restart() {
     .await;
     assert!(restarted.pid.is_some());
 
-    // Wait for the fresh incarnation's subscriptions to reach this
-    // session, then re-stage. The discriminator is 22:30 — silent under
-    // the surviving 23:30, would fire had the value reverted to 22:00.
+    // The fresh incarnation caught up from the core mirror (#36): it
+    // already knows it is 23:30, nobody is present and the lamp is off
+    // (the reflector applied the command), so it has nothing to do — and
+    // staging the lamp on now would rightly be answered with lights-off.
+    // Move the clock first, let it settle, then re-stage. The
+    // discriminator is 22:30 — silent under the surviving 23:30, would
+    // fire had the value reverted to 22:00.
+    tick(&observer, "22:30").await;
+    expect_no_command(&cmd_sub, Duration::from_millis(1500)).await;
     await_matching(&lamp).await;
     await_matching(&presence).await;
     put_state(&lamp, json!(true)).await;
     put_state(&presence, json!(false)).await;
-    tick(&observer, "22:30").await;
     expect_no_command(&cmd_sub, Duration::from_millis(1500)).await;
     tick(&observer, "23:35").await;
     expect_lamp_off(&cmd_sub, Duration::from_secs(10)).await;
