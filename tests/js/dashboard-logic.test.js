@@ -357,3 +357,30 @@ test('aspect descriptors ride the snapshot and arrive as deltas', () => {
   logic.applyMessage(store, { type: 'snapshot', state: {} });
   assert.deepEqual(store.aspects, {}, 'a snapshot without descriptors clears them');
 });
+
+test('the card plan takes the first two control-less readings and the family controls', () => {
+  const d = descriptor();
+  // field order is the adapter's ordering: feed line right after indoor
+  const fields = {};
+  Object.keys(d.fields).forEach((a) => {
+    fields[a] = d.fields[a];
+    if (a === 'indoor_temperature') fields.feed_temperature = { label: 'feed line (GT1)', kind: 'temperature', group: 'readings' };
+  });
+  d.fields = fields;
+  const state = heatPumpState({ 'home/state/utility/heat_pump/feed_temperature': 38.4 });
+  const plan = logic.cardPlan(HEAT_PUMP, state, d, true);
+  assert.deepEqual(plan.readings.map((r) => [r.label, r.display]), [['indoor', '20.3°'], ['feed line', '38.4°']]);
+  assert.equal(plan.readings[0].stale, true, 'rows keep their flags');
+  assert.deepEqual(plan.controls.map((r) => [r.aspect, r.control.kind]), [['setpoint', 'stepper'], ['operating_mode', 'segment']]);
+  // the overlay label is untouched
+  assert.equal(logic.aspectPlan(HEAT_PUMP, state, d, true)[1].rows.find((r) => r.aspect === 'feed_temperature').label, 'feed line (GT1)');
+});
+
+test('the card plan never reaches into diagnostics and skips owner-tier commands', () => {
+  const d = descriptor();
+  d.groups = ['control'];
+  Object.keys(d.fields).forEach((a) => { if (d.fields[a].group !== 'control') delete d.fields[a]; });
+  const plan = logic.cardPlan(HEAT_PUMP, heatPumpState(), d, true);
+  assert.deepEqual(plan.readings, [], 'undescribed aspects are not headline material');
+  assert.deepEqual(plan.controls.map((r) => r.aspect), ['setpoint', 'operating_mode'], 'feed target is owner-tier');
+});

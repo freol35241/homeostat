@@ -1360,6 +1360,14 @@ adapters never do. The gap is metadata, so the fix is metadata.
   notable that reads true (the pump's alarm flag) lands on `Now` as an
   entity deviation — the adapter declaring vocabulary, still never house
   configuration.
+- **The room card follows the descriptor too (2026-09-08, #32).** A
+  described entity's card row is name plus the first family control on
+  one line, up to two headline readings under it, the arbitrated badge
+  on the readings line. Headline is a convention, not vocabulary: the
+  first two control-less rows of the first group that has any, so the
+  adapter's own field order decides. A `headline` flag was considered
+  and deferred until an adapter needs to say otherwise. Card labels
+  drop the trailing firmware code the overlay keeps.
 - **Reach.** Nothing here is heat-pump specific: any adapter can label
   `battery` a percent and `linkquality` diagnostics. Grown by need, not
   ahead of it. Locale (`{en, sv}` labels, the `[naming]` shape) is the
