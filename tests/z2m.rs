@@ -240,6 +240,9 @@ async fn adapter_honors_unit_contract() {
 /// (e) Discovery: a bridge/devices inventory lands on the bus as one JSON
 /// document at home/discovery/zigbee — binding ids, configured flags,
 /// best-effort suggestions, raw definitions; the coordinator is omitted.
+/// A bound device's record also carries the aspect descriptor generated
+/// from its exposes (docs/design.md, Aspect descriptors); an unbound one
+/// does not.
 #[tokio::test(flavor = "multi_thread")]
 async fn bridge_inventory_published_as_discovery() {
     let (mosquitto, mut sup, observer) = setup().await;
@@ -255,8 +258,16 @@ async fn bridge_inventory_published_as_discovery() {
             {"type": "Coordinator", "friendly_name": "Coordinator", "ieee_address": "0x00"},
             {"type": "Router", "friendly_name": "lamp_kitchen_1", "ieee_address": "0x01",
              "definition": {"vendor": "IKEA", "model": "LED1836G9", "description": "bulb",
-                "exposes": [{"type": "light",
-                    "features": [{"property": "state"}, {"property": "brightness"}]}]}},
+                "exposes": [
+                    {"type": "light", "features": [
+                        {"type": "binary", "property": "state", "access": 7, "label": "State"},
+                        {"type": "numeric", "property": "brightness", "value_min": 0, "value_max": 254, "access": 7}]},
+                    {"type": "numeric", "property": "battery", "unit": "%", "category": "diagnostic", "access": 1},
+                    {"type": "numeric", "property": "linkquality", "unit": "lqi", "category": "diagnostic", "access": 1, "label": "Linkquality"},
+                    {"type": "enum", "property": "power_on_behavior", "values": ["off", "on", "previous"],
+                     "access": 7, "category": "config", "label": "Power-on behavior"},
+                    {"type": "binary", "property": "water_leak", "access": 1},
+                    {"type": "composite", "property": "color", "features": []}]}},
             {"type": "EndDevice", "friendly_name": "motion_new", "ieee_address": "0x02",
              "definition": {"vendor": "Aqara", "model": "RTCGQ11LM", "description": "motion",
                 "exposes": [{"type": "binary", "property": "occupancy"}]}}
@@ -282,6 +293,21 @@ async fn bridge_inventory_published_as_discovery() {
     assert_eq!(lamp["entity"], json!("kitchen_lamp"));
     assert_eq!(lamp["suggested"]["capability"], json!("light"));
     assert_eq!(lamp["suggested"]["features"], json!(["brightness"]));
+    let fields = &lamp["aspects"]["fields"];
+    assert_eq!(lamp["aspects"]["groups"], json!(["readings", "config", "diagnostics"]));
+    // the capability's own vocabulary is described as readings, never commanded here
+    assert_eq!(fields["on"], json!({"label": "state", "kind": "boolean", "group": "readings"}));
+    assert_eq!(fields["brightness"], json!({"label": "brightness", "kind": "number", "group": "readings"}));
+    // z2m's unit picks the kind; a plain number keeps its unit; battery is a reading
+    assert_eq!(fields["battery"], json!({"label": "battery", "kind": "percent", "group": "readings"}));
+    assert_eq!(fields["linkquality"], json!({"label": "linkquality", "kind": "number", "unit": "lqi", "group": "diagnostics"}));
+    // a settable config expose is an owner-tier command with z2m's values
+    assert_eq!(fields["power_on_behavior"]["group"], json!("config"));
+    assert_eq!(fields["power_on_behavior"]["label"], json!("power-on behavior (power_on_behavior)"));
+    assert_eq!(fields["power_on_behavior"]["command"], json!({"type": "enum", "editable_by": "owner"}));
+    assert_eq!(fields["power_on_behavior"]["values"][2], json!({"value": "previous", "label": "previous"}));
+    assert_eq!(fields["water_leak"]["notable"], json!(true));
+    assert!(fields.get("color").is_none(), "composites are deferred, in state and descriptor alike");
 
     let motion = records
         .iter()
@@ -291,6 +317,7 @@ async fn bridge_inventory_published_as_discovery() {
     assert_eq!(motion["entity"], json!(null));
     assert_eq!(motion["suggested"]["capability"], json!("presence"));
     assert_eq!(motion["description"]["model"], json!("RTCGQ11LM"));
+    assert!(motion.get("aspects").is_none(), "an unbound device has no entity to describe");
 
     // The mirror serves it to late joiners: the read path the MCP
     // surface's read_state uses.

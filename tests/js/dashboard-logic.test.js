@@ -334,6 +334,8 @@ test('formatAspect handles the kinds and the empty value', () => {
   assert.equal(logic.formatAspect('x', { kind: 'temperature_delta' }, -2), '-2.0°');
   assert.equal(logic.formatAspect('x', { kind: 'percent' }, 87.6), '88%');
   assert.equal(logic.formatAspect('x', { kind: 'number' }, 3.14159), '3.14');
+  assert.equal(logic.formatAspect('x', { kind: 'number', unit: 'lqi' }, 87), '87 lqi', 'a unit rides a plain number');
+  assert.equal(logic.formatAspect('x', { kind: 'percent', unit: '%' }, 87), '87%', 'and only a plain number');
   assert.equal(logic.formatAspect('x', null, undefined), '—');
 });
 

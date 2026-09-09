@@ -61,7 +61,17 @@ home/discovery/{unit}: every paired device (coordinator excluded) as a
 record carrying the entity-file binding `id`, whether an entity file
 already binds it, a best-effort suggested capability/features stanza
 mapped from the z2m `exposes` descriptor, and the raw definition for
-anything the mapping does not cover (docs/design.md, Discovery).
+anything the mapping does not cover (docs/design.md, Discovery). A bound
+device's record also carries the entity's aspect descriptor (docs/
+design.md, Aspect descriptors), generated from the same `exposes`: every
+scalar expose becomes a labelled field — z2m's unit picks the kind
+(°C → temperature, % → percent, anything else a number carrying the unit),
+its category picks the group (diagnostic → diagnostics, config → config,
+else readings), a settable config expose becomes an owner-tier command
+with z2m's own value bounds, and the alarm-shaped binaries (water leak,
+smoke, ...) are notable. The capability's own vocabulary (on, locked,
+brightness, color_temp) is described as readings only: its controls are
+the dashboard's bespoke widget, not a descriptor command.
 """
 
 import json
@@ -134,6 +144,89 @@ def suggest(exposes):
     return None
 
 
+# Binary exposes whose `true` is out of the ordinary — z2m property names,
+# so dialect knowledge (docs/design.md, Aspect descriptors: notable).
+NOTABLE_BINARY = frozenset(
+    {"battery_low", "water_leak", "smoke", "gas", "carbon_monoxide", "tamper", "vibration"}
+)
+KIND_BY_UNIT = {"°C": "temperature", "%": "percent"}
+# The capability vocabulary the dashboard's own widgets command: described
+# as readings, never as descriptor commands.
+VOCABULARY_ASPECTS = frozenset({"on", "locked", "brightness", "color_temp"})
+ACCESS_SET = 2  # z2m access bitmask: 1 published, 2 settable, 4 gettable
+SPECIFIC_TYPES = ("light", "switch", "lock", "cover", "climate", "fan")
+
+
+def describe(capability: str, exposes) -> dict | None:
+    """The entity's aspect descriptor from its z2m exposes, or None when
+    nothing scalar is exposed (docs/design.md, Aspect descriptors)."""
+    fields: dict[str, dict] = {}
+
+    def add(exp) -> None:
+        if not isinstance(exp, dict):
+            return
+        etype = exp.get("type")
+        if etype in SPECIFIC_TYPES:
+            for feature in exp.get("features") or []:
+                add(feature)
+            return
+        prop = exp.get("property")
+        if not isinstance(prop, str) or etype not in ("numeric", "binary", "enum", "text"):
+            return  # composite/list are deferred, like their state
+        aspect, _ = state_aspect(capability, prop, None)
+        if aspect == "available" or aspect in fields:
+            return
+        category = exp.get("category")
+        group = {"diagnostic": "diagnostics", "config": "config"}.get(category, "readings")
+        if prop == "battery":
+            group = "readings"  # z2m files it under diagnostic; a family watches it
+        label = exp.get("label") if isinstance(exp.get("label"), str) else prop.replace("_", " ")
+        label = label[:1].lower() + label[1:]
+        if label.replace(" ", "_") != prop:
+            label = f"{label} ({prop})"
+        field: dict = {"label": label, "group": group}
+        unit = exp.get("unit") if isinstance(exp.get("unit"), str) else None
+        if etype == "numeric":
+            field["kind"] = KIND_BY_UNIT.get(unit, "number")
+            if field["kind"] == "number" and unit:
+                field["unit"] = unit
+        elif etype == "binary":
+            field["kind"] = "boolean"
+            if prop in NOTABLE_BINARY:
+                field["notable"] = True
+        elif etype == "enum":
+            field["kind"] = "enum"
+            field["values"] = [
+                {"value": v, "label": str(v)}
+                for v in exp.get("values") or []
+                if isinstance(v, (str, int, float)) and not isinstance(v, bool)
+            ]
+        else:
+            field["kind"] = "text"
+        access = exp.get("access")
+        settable = isinstance(access, int) and bool(access & ACCESS_SET)
+        if settable and aspect not in VOCABULARY_ASPECTS and etype in ("numeric", "enum"):
+            command: dict = {"type": "enum" if etype == "enum" else "float", "editable_by": "owner"}
+            if etype == "numeric":
+                constraint = {
+                    k: exp[src]
+                    for k, src in (("min", "value_min"), ("max", "value_max"))
+                    if isinstance(exp.get(src), (int, float)) and not isinstance(exp.get(src), bool)
+                }
+                if constraint:
+                    command["constraint"] = constraint
+                if isinstance(exp.get("value_step"), (int, float)):
+                    command["step"] = exp["value_step"]
+            field["command"] = command
+        fields[aspect] = field
+
+    for exp in exposes:
+        add(exp)
+    if not fields:
+        return None
+    return {"schema": 1, "groups": ["readings", "config", "diagnostics"], "fields": fields}
+
+
 def inventory(devices, by_id):
     """The complete discovery document from one bridge/devices payload."""
     records = []
@@ -151,20 +244,24 @@ def inventory(devices, by_id):
         if not isinstance(definition, dict):
             definition = {}
         entity = by_id.get(dev_id)
-        records.append(
-            {
-                "id": dev_id,
-                "configured": entity is not None,
-                "entity": entity.name if entity else None,
-                "suggested": suggest(definition.get("exposes") or []),
-                "description": {
-                    "vendor": definition.get("vendor"),
-                    "model": definition.get("model"),
-                    "description": definition.get("description"),
-                    "exposes": definition.get("exposes"),
-                },
-            }
-        )
+        exposes = definition.get("exposes") or []
+        record = {
+            "id": dev_id,
+            "configured": entity is not None,
+            "entity": entity.name if entity else None,
+            "suggested": suggest(exposes),
+            "description": {
+                "vendor": definition.get("vendor"),
+                "model": definition.get("model"),
+                "description": definition.get("description"),
+                "exposes": definition.get("exposes"),
+            },
+        }
+        if entity is not None:
+            descriptor = describe(entity.capability, exposes)
+            if descriptor is not None:
+                record["aspects"] = descriptor
+        records.append(record)
     return records
 
 

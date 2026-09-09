@@ -1370,7 +1370,17 @@ adapters never do. The gap is metadata, so the fix is metadata.
   drop the trailing firmware code the overlay keeps.
 - **Reach.** Nothing here is heat-pump specific: any adapter can label
   `battery` a percent and `linkquality` diagnostics. Grown by need, not
-  ahead of it. Locale (`{en, sv}` labels, the `[naming]` shape) is the
+  ahead of it. First growth (2026-09-09): the Zigbee2MQTT adapter
+  generates a descriptor per bound device from z2m's `exposes` — unit
+  picks the kind, category picks the group, a settable config expose
+  becomes an owner-tier command with z2m's own bounds, the alarm-shaped
+  binaries are notable — so no per-device label is ever hand-written.
+  It forced one vocabulary addition: a `number` may carry a `unit`
+  string (lqi, lux, hPa, W) the page shows after the value, because
+  kinds name formatting, not physics, and the long tail of units is the
+  protocol's to declare. The capability's own vocabulary (on, locked,
+  brightness, color_temp) is described as readings only; its controls
+  stay the dashboard's bespoke widget, never a descriptor command. Locale (`{en, sv}` labels, the `[naming]` shape) is the
   obvious next step and is deferred with the dashboard's English-first
   settlement.
 
