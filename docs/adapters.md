@@ -283,6 +283,7 @@ trace: one JSON object at `home/health/{unit}/event` via
 | `drop` | `reason = "reserved-aspect"`, `topic` | a native field that would mint `available` |
 | `drop` | `reason = "device-unavailable"`, `key` | a command dropped because the device is down |
 | `drop` | `reason = "invalid-feed"`, `input`, `key`, `value` | a fed value outside its bounds |
+| `drop` | `reason = "feed-source-unavailable"`, `input`, `key` | a fed value arriving while its source is unavailable (once per outage) |
 | `device-silent` / `bridge-silent` | `topic` or `base_topic`, `timeout_s` | a loss transition (once per transition) |
 | `feed-source-lost` | `input`, `key` | a fed input's source went unavailable |
 
@@ -324,7 +325,11 @@ entity file wires each to a source `{entity, aspect}`; the SDK resolves
 it into `entity.inputs`. Rules:
 
 - Forward each source sample within bounds (else `invalid-feed`); nothing
-  between samples.
+  between samples. Subscribe the value and `available` keys through ONE
+  subscriber (the source entity's `home/state/{room}/{entity}/*`): zenoh
+  orders samples within a subscriber, not across two, and a value must
+  never be dropped because the `available = true` just before it was
+  delivered second.
 - A wired input stops being a command aspect for that entity.
 - Forward while the source is `available`; on loss, clear any retained
   slot once and report `feed-source-lost`. Never retain a fed value.

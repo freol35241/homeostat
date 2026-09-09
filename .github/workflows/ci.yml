@@ -29,9 +29,7 @@ jobs:
       # First-run dependency resolution must not eat into test timeouts.
       - name: Pre-warm the Python units' uv environments
         run: |
-          uv sync --script adapters/zigbee2mqtt.py
-          uv sync --script adapters/clock.py
-          uv sync --script adapters/recorder.py
+          for script in adapters/*.py tests/fake_*.py; do uv sync --script "$script"; done
           uv sync --script tests/fixture_house_evening/units/evening_lights.py
           uv sync --script tests/fixture_house_apply/units/probe.py
           uv sync --script tests/fixture_house_virtual/units/fused_temperature.py

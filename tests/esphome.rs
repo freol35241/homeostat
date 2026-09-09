@@ -10,11 +10,11 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use serde_json::{json, Value};
+use serde_json::json;
 use zenoh::sample::SampleKind;
 
 use common::{
-    assert_unit_contract, await_mirror, expect_drop_event, expect_states, free_port, Supervisor,
+    assert_unit_contract, await_discovery, await_mirror, await_states, expect_drop_event, expect_states, free_port, Supervisor,
 };
 
 const FIXTURE: &str = "tests/fixture_house_esphome";
@@ -126,7 +126,10 @@ async fn device_state_translates_to_bus_state() {
     let (_device, _devices_path, mut sup, observer) = setup().await;
     let state_sub = observer.declare_subscriber("home/state/**").await.expect("state subscriber");
 
-    expect_states(
+    // The device connects as soon as the adapter is up, so its initial
+    // states may already be on the bus: read as a late joiner.
+    await_states(
+        &observer,
         &state_sub,
         &[
             (RELAY_STATE_KEY, json!(false)),
@@ -190,7 +193,7 @@ async fn reserved_aspect_field_drops_with_health_event() {
     let (_device, _devices_path, mut sup, observer) = setup_with(&["--reserved-sensor"]).await;
     let event_sub = observer.declare_subscriber(EVENT_KEY).await.expect("event subscriber");
     let state_sub = observer.declare_subscriber(RELAY_STATE_KEY).await.expect("state subscriber");
-    expect_states(&state_sub, &[(RELAY_STATE_KEY, json!(false))]).await;
+    await_states(&observer, &state_sub, &[(RELAY_STATE_KEY, json!(false))]).await;
 
     // The relay command makes the device rebroadcast both the switch and
     // the reserved-aspect sensor: the switch translates, the reserved one
@@ -215,7 +218,7 @@ async fn reserved_aspect_field_drops_with_health_event() {
 async fn cmd_envelope_reaches_fake_device_and_echoes_back() {
     let (_device, _devices_path, mut sup, observer) = setup().await;
     let state_sub = observer.declare_subscriber(RELAY_STATE_KEY).await.expect("state subscriber");
-    expect_states(&state_sub, &[(RELAY_STATE_KEY, json!(false))]).await;
+    await_states(&observer, &state_sub, &[(RELAY_STATE_KEY, json!(false))]).await;
 
     observer
         .put(
@@ -237,7 +240,7 @@ async fn envelope_less_command_drops_with_health_event() {
     let (_device, _devices_path, mut sup, observer) = setup().await;
     let event_sub = observer.declare_subscriber(EVENT_KEY).await.expect("event subscriber");
     let state_sub = observer.declare_subscriber(RELAY_STATE_KEY).await.expect("state subscriber");
-    expect_states(&state_sub, &[(RELAY_STATE_KEY, json!(false))]).await;
+    await_states(&observer, &state_sub, &[(RELAY_STATE_KEY, json!(false))]).await;
 
     observer.put(RELAY_CMD_KEY, "true").await.expect("cmd put");
     expect_drop_event(&event_sub, "invalid-command").await;
@@ -260,19 +263,13 @@ async fn envelope_less_command_drops_with_health_event() {
 #[tokio::test(flavor = "multi_thread")]
 async fn bound_device_entities_published_as_discovery() {
     let (_device, _devices_path, mut sup, observer) = setup().await;
-    let sub = observer
-        .declare_subscriber("home/discovery/esphome")
-        .await
-        .expect("discovery subscriber");
-
-    let sample = tokio::time::timeout(Duration::from_secs(30), sub.recv_async())
-        .await
-        .expect("discovery document within 30s")
-        .expect("discovery sample");
-    let doc: Value =
-        serde_json::from_slice(&sample.payload().to_bytes()).expect("discovery is JSON");
+    // Published on connect, which races the liveliness token setup waited
+    // for: read it the way every late joiner does, from the core mirror.
+    let doc = await_discovery(&observer, "esphome", |doc| {
+        doc.as_array().map(|r| r.len() == 3).unwrap_or(false)
+    })
+    .await;
     let records = doc.as_array().expect("discovery is an array");
-    assert_eq!(records.len(), 3, "{doc}");
 
     let relay = records
         .iter()
@@ -312,15 +309,6 @@ async fn bound_device_entities_published_as_discovery() {
     assert_eq!(motion["description"]["device_class"], json!("motion"));
     assert_eq!(motion["aspects"]["fields"]["occupancy"]["label"], json!("motion (occupancy)"));
     assert_eq!(motion["aspects"]["fields"]["occupancy"]["values"][0], json!({"value": true, "label": "occupied"}));
-
-    // The mirror serves it to late joiners, like any discovery document.
-    let replies = observer.get("home/discovery/esphome").await.expect("get discovery");
-    let reply = replies.recv_async().await.expect("mirrored discovery reply");
-    let mirrored: Value = serde_json::from_slice(
-        &reply.result().expect("mirrored sample").payload().to_bytes(),
-    )
-    .expect("mirrored discovery is JSON");
-    assert_eq!(mirrored, doc, "mirror serves the same document");
 
     sup.shutdown();
 }

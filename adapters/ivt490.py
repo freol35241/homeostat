@@ -536,15 +536,20 @@ def main():
 
     def feed_handler(entity, input_name, source):
         """Forwards the source aspect while the source is available; on
-        loss, clears the set topic's retained slot once."""
+        loss, clears the set topic's retained slot once. One subscriber
+        covers both the value and `available` keys: zenoh orders samples
+        within a subscriber, not across two, and a value arriving before
+        the `available = true` that precedes it must not be dropped."""
         lo, hi = FEEDABLE[input_name]
         topic = f"{entity.id}/controller/set/{input_name}"
-        state = {"available": True}
+        state = {"available": True, "dropped": False}
         value_key = keys.state_key(source.room, source.entity, source.aspect)
         available_key = keys.state_key(source.room, source.entity, "available")
 
         def handler(sample):
             key = str(sample.key_expr)
+            if key not in (value_key, available_key):
+                return  # another aspect of the source entity
             try:
                 payload = json.loads(sample.payload.to_bytes())
             except ValueError:
@@ -557,8 +562,16 @@ def main():
                     session.health_event("feed-source-lost", input=input_name, key=value_key)
                 elif payload is True:
                     state["available"] = True
+                    state["dropped"] = False
                 return
             if not state["available"]:
+                # Once per outage, not per sample: a trace that the source
+                # kept talking while marked unavailable.
+                if not state["dropped"]:
+                    state["dropped"] = True
+                    session.health_event(
+                        "drop", reason="feed-source-unavailable", input=input_name, key=key
+                    )
                 return
             if isinstance(payload, bool) or not isinstance(payload, (int, float)) or not (
                 lo <= payload <= hi
@@ -575,10 +588,7 @@ def main():
         for input_name, source in e.inputs.items():
             handler = feed_handler(e, input_name, source)
             subscribers.append(
-                session.subscribe(keys.state_key(source.room, source.entity, source.aspect), handler)
-            )
-            subscribers.append(
-                session.subscribe(keys.state_key(source.room, source.entity, "available"), handler)
+                session.subscribe(keys.state_key(source.room, source.entity, "*"), handler)
             )
 
     session.put_json(keys.discovery_key(unit), inventory())
