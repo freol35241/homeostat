@@ -53,6 +53,13 @@ entity file or not — a device's other entities are exactly the kind of
 "not yet claimed" record discovery exists for), each with a best-effort
 suggested capability/features stanza and the raw ESPHome type/device_class
 verbatim so an unmapped device_class stays visible rather than disappearing.
+A bound entity's record also carries its aspect descriptor (docs/design.md,
+Aspect descriptors), generated from the same EntityInfo: the sensor's
+unit_of_measurement picks the kind (°C → temperature, % → percent, else a
+number carrying the unit), its ESPHome name is the label (with the aspect
+in parentheses when they differ), and the alarm-shaped binary device
+classes (smoke, gas, moisture, ...) are notable. One ESPHome entity is one
+bus aspect, so a descriptor here is one field — or the light's three.
 A best-effort mDNS browse of `_esphomelib._tcp` additionally surfaces
 *unbound* device names (nothing to connect to yet, so no entity list) —
 its record's `id` is the bare device name; failure or total absence of
@@ -161,6 +168,61 @@ def suggest(info) -> dict | None:
     return None
 
 
+# Binary-sensor device classes whose `true` is out of the ordinary
+# (Home Assistant's device-class vocabulary, which ESPHome reuses).
+NOTABLE_DEVICE_CLASSES = {
+    "smoke", "gas", "carbon_monoxide", "moisture", "problem", "safety", "tamper", "battery",
+}
+KIND_BY_UNIT = {"°C": "temperature", "%": "percent"}
+
+
+def aspect_label(info, aspect: str) -> str:
+    """The device's own entity name, lowercased, with the aspect in
+    parentheses when the two differ."""
+    name = (getattr(info, "name", "") or aspect).strip()
+    label = name[:1].lower() + name[1:]
+    return label if label.replace(" ", "_") == aspect else f"{label} ({aspect})"
+
+
+def aspect_descriptor(entity, info) -> dict | None:
+    """The bound entity's aspect descriptor from its EntityInfo, on the
+    capability the entity FILE declares (the translation rule), or None
+    for a kind this adapter publishes nothing for."""
+    fields: dict[str, dict] = {}
+    if entity.capability == "switch" and isinstance(info, SwitchInfo):
+        fields["on"] = {"label": "on", "kind": "boolean", "group": "readings"}
+    elif entity.capability == "light" and isinstance(info, LightInfo):
+        fields["on"] = {"label": "on", "kind": "boolean", "group": "readings"}
+        if "brightness" in entity.features:
+            fields["brightness"] = {"label": "brightness", "kind": "number", "group": "readings"}
+        if "color_temp" in entity.features:
+            fields["color_temp"] = {
+                "label": "color temperature (color_temp)", "kind": "number", "unit": "mired",
+                "group": "readings",
+            }
+    elif entity.capability == "sensor" and isinstance(info, SensorInfo):
+        aspect = native_aspect(info)
+        unit = info.unit_of_measurement or None
+        field = {"label": aspect_label(info, aspect), "kind": KIND_BY_UNIT.get(unit, "number"), "group": "readings"}
+        if field["kind"] == "number" and unit:
+            field["unit"] = unit
+        fields[aspect] = field
+    elif entity.capability == "presence" and isinstance(info, BinarySensorInfo):
+        fields["occupancy"] = {
+            "label": aspect_label(info, "occupancy"), "kind": "boolean", "group": "readings",
+            "values": [{"value": True, "label": "occupied"}, {"value": False, "label": "clear"}],
+        }
+    elif entity.capability == "binary_sensor" and isinstance(info, BinarySensorInfo):
+        aspect = native_aspect(info)
+        field = {"label": aspect_label(info, aspect), "kind": "boolean", "group": "readings"}
+        if info.device_class in NOTABLE_DEVICE_CLASSES:
+            field["notable"] = True
+        fields[aspect] = field
+    if not fields:
+        return None
+    return {"schema": 1, "groups": ["readings"], "fields": fields}
+
+
 def describe(info) -> dict:
     """The raw ESPHome descriptor, verbatim, so an unmapped device_class
     or entity kind stays visible instead of disappearing."""
@@ -224,15 +286,16 @@ async def run_device(device, bound, devices_conf, session, entity_runtime, entit
         new_key_map = {}
         for info in infos:
             entity = bound.get(info.object_id)
-            records.append(
-                {
-                    "id": f"{device}/{info.object_id}",
-                    "configured": entity is not None,
-                    "entity": entity.name if entity else None,
-                    "suggested": suggest(info),
-                    "description": describe(info),
-                }
-            )
+            record = {
+                "id": f"{device}/{info.object_id}",
+                "configured": entity is not None,
+                "entity": entity.name if entity else None,
+                "suggested": suggest(info),
+                "description": describe(info),
+            }
+            if entity is not None and (descriptor := aspect_descriptor(entity, info)):
+                record["aspects"] = descriptor
+            records.append(record)
             if entity is not None:
                 new_key_map[info.key] = (entity, info)
         key_map.clear()

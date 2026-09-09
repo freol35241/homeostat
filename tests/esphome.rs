@@ -291,6 +291,16 @@ async fn bound_device_entities_published_as_discovery() {
     assert_eq!(temp["entity"], json!("shed_temp"));
     assert_eq!(temp["suggested"]["capability"], json!("sensor"));
     assert_eq!(temp["description"]["device_class"], json!("temperature"));
+    // The aspect descriptor (docs/design.md, Aspect descriptors) from the
+    // same EntityInfo: the unit picks the kind, the ESPHome name the label.
+    assert_eq!(
+        temp["aspects"]["fields"]["temperature"],
+        json!({"label": "temperature", "kind": "temperature", "group": "readings"})
+    );
+    assert_eq!(
+        relay["aspects"]["fields"]["on"],
+        json!({"label": "on", "kind": "boolean", "group": "readings"})
+    );
 
     let motion = records
         .iter()
@@ -300,6 +310,8 @@ async fn bound_device_entities_published_as_discovery() {
     assert_eq!(motion["entity"], json!("shed_motion"));
     assert_eq!(motion["suggested"]["capability"], json!("presence"));
     assert_eq!(motion["description"]["device_class"], json!("motion"));
+    assert_eq!(motion["aspects"]["fields"]["occupancy"]["label"], json!("motion (occupancy)"));
+    assert_eq!(motion["aspects"]["fields"]["occupancy"]["values"][0], json!({"value": true, "label": "occupied"}));
 
     // The mirror serves it to late joiners, like any discovery document.
     let replies = observer.get("home/discovery/esphome").await.expect("get discovery");

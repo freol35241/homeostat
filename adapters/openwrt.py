@@ -37,6 +37,10 @@ its first successful poll; a poll is a read, not an event. An unreachable
 router drops with one "router-unreachable" health event per down
 transition and its aspects go stale rather than false. Read-only by
 design: no cmd surface until a command is actually wanted.
+A bound entity's discovery record carries its aspect descriptor (docs/
+design.md, Aspect descriptors): one boolean per capability, with value
+labels ("up"/"down", "present"/"away") — the whole of what this adapter
+speaks, so a static table, not a generated one.
 """
 
 import asyncio
@@ -336,6 +340,39 @@ class Adapter:
 
         self.publish_discovery(interfaces, sightings)
 
+    ASPECT_DESCRIPTORS = {
+        "router": {
+            "schema": 1,
+            "groups": ["readings"],
+            "fields": {
+                "wan": {
+                    "label": "WAN link (wan)", "kind": "boolean", "group": "readings",
+                    "values": [{"value": True, "label": "up"}, {"value": False, "label": "down"}],
+                }
+            },
+        },
+        "vpn": {
+            "schema": 1,
+            "groups": ["readings"],
+            "fields": {
+                "up": {
+                    "label": "tunnel (up)", "kind": "boolean", "group": "readings",
+                    "values": [{"value": True, "label": "up"}, {"value": False, "label": "down"}],
+                }
+            },
+        },
+        "presence": {
+            "schema": 1,
+            "groups": ["readings"],
+            "fields": {
+                "presence": {
+                    "label": "on the WiFi (presence)", "kind": "boolean", "group": "readings",
+                    "values": [{"value": True, "label": "present"}, {"value": False, "label": "away"}],
+                }
+            },
+        },
+    }
+
     def publish_discovery(self, interfaces, sightings) -> None:
         """The complete current view of the periphery (docs/design.md,
         Discovery), from data the cycle already fetched; republished only
@@ -343,13 +380,16 @@ class Adapter:
         bound = {e.id: e.name for e in self.router_entities + self.vpn_entities + self.trackers}
 
         def record(rid: str, capability: str, description: dict) -> dict:
-            return {
+            rec = {
                 "id": rid,
                 "configured": rid in bound,
                 "entity": bound.get(rid),
                 "suggested": {"capability": capability, "features": []},
                 "description": description,
             }
+            if rid in bound:
+                rec["aspects"] = self.ASPECT_DESCRIPTORS[capability]
+            return rec
 
         records = [
             record(name, "router", {"reachable": self.reachable.get(name, False)})

@@ -160,6 +160,9 @@ async fn wifi_association_drives_presence() {
         if let Some(record) = phone {
             assert_eq!(record["configured"], json!(true), "phone record: {record}");
             assert_eq!(record["entity"], json!("dads_phone"), "phone record: {record}");
+            // and its aspect descriptor: the one boolean this capability speaks
+            assert_eq!(record["aspects"]["fields"]["presence"]["kind"], json!("boolean"), "{record}");
+            assert_eq!(record["aspects"]["fields"]["presence"]["values"][1]["label"], json!("away"));
             break;
         }
     }
