@@ -49,6 +49,12 @@ a window changes, then returns the freed pages to the filesystem
 (PRAGMA incremental_vacuum, what the file's auto_vacuum mode is for),
 and leaves one `purge` health event per purge that deleted anything.
 Retention is the only destructive operation in the store.
+
+SQLite has no page checksums, so a disk returning corrupt data is silent
+until a read happens to hit it. Every integrity_check_hours (default
+daily, 0 disables) a checker thread runs PRAGMA integrity_check on a
+read-only connection and leaves `integrity-ok` with the duration or
+`integrity-failed` with what SQLite reported at home/health/{unit}/event.
 """
 
 import datetime
@@ -69,7 +75,11 @@ from homeostat.params import LiveParams
 BUFFER_LIMIT = 10_000
 RETRY_S = 1.0
 PURGE_INTERVAL_S = 3600.0
-PARAM_DEFAULTS = {"retain_samples_days": 0.0, "retain_events_days": 0.0}
+PARAM_DEFAULTS = {
+    "retain_samples_days": 0.0,
+    "retain_events_days": 0.0,
+    "integrity_check_hours": 24.0,
+}
 DEFAULT_QUERY_LIMIT = 1000
 DEFAULT_EVENTS_LIMIT = 500
 EVENTS_KEY = zenoh.KeyExpr("home/history/events")
@@ -133,8 +143,9 @@ def iso_utc(us: int) -> str:
 
 
 class Params(LiveParams):
-    """The retention windows from home/config/{unit}/*, live; a change
-    wakes the writer so the new window applies at once."""
+    """The retention windows and the integrity-check interval from
+    home/config/{unit}/*, live; a change wakes the threads that use them
+    so it applies at once."""
 
     def __init__(self, sess: session.UnitSession, on_change):
         self._on_change = on_change
@@ -152,6 +163,65 @@ class Params(LiveParams):
     def retain_events_days(self) -> float:
         return self.get("retain_events_days")
 
+    @property
+    def integrity_check_hours(self) -> float:
+        return self.get("integrity_check_hours")
+
+
+class IntegrityChecker:
+    """Runs PRAGMA integrity_check on its own read-only connection every
+    integrity_check_hours, the first one an interval after start so a
+    restart loop never hammers a large file. Read-only, so in WAL mode it
+    never blocks the writer."""
+
+    def __init__(self, db_path: Path, sess: session.UnitSession):
+        self.db_path = db_path
+        self.sess = sess
+        self.params: Params | None = None  # set once the params exist
+        self.wake = threading.Event()
+        self.stopping = False
+        # A daemon: a check mid-run on a large file must not hold up the
+        # unit's exit past its grace, and a read-only check abandoned at
+        # exit harms nothing.
+        self.thread = threading.Thread(target=self._run, name="integrity", daemon=True)
+
+    def stop(self) -> None:
+        self.stopping = True
+        self.wake.set()
+
+    def _run(self) -> None:
+        last = time.monotonic()
+        while not self.stopping:
+            interval = self.params.integrity_check_hours * 3600 if self.params else 0
+            if interval <= 0:
+                self.wake.wait()
+                self.wake.clear()
+                continue
+            remaining = last + interval - time.monotonic()
+            if remaining > 0:
+                self.wake.wait(timeout=remaining)
+                self.wake.clear()
+                continue
+            self.check()
+            last = time.monotonic()
+
+    def check(self) -> None:
+        started = time.monotonic()
+        try:
+            conn = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True, timeout=2.0)
+            try:
+                lines = [row[0] for row in conn.execute("PRAGMA integrity_check")]
+            finally:
+                conn.close()
+        except sqlite3.Error as err:
+            self.sess.health_event("integrity-failed", errors=[str(err)])
+            return
+        duration_s = round(time.monotonic() - started, 3)
+        if lines == ["ok"]:
+            self.sess.health_event("integrity-ok", duration_s=duration_s)
+        else:
+            self.sess.health_event("integrity-failed", errors=lines[:5], duration_s=duration_s)
+
 
 class Writer:
     """Single writer thread draining a bounded queue, one transaction per
@@ -165,8 +235,17 @@ class Writer:
         self.queue: deque = deque()
         self.stopping = False
         self.purge_due = False
-        self.params = Params(sess, self.request_purge)
+        # The checker before the params: a config sample can arrive the
+        # moment the params subscription exists, and the change handler
+        # wakes both.
+        self.checker = IntegrityChecker(db_path, sess)
+        self.params = Params(sess, self._on_param_change)
+        self.checker.params = self.params
         self.thread = threading.Thread(target=self._run, name="writer")
+
+    def _on_param_change(self) -> None:
+        self.request_purge()
+        self.checker.wake.set()
 
     def enqueue(self, table: str, row: tuple) -> None:
         with self.cond:
@@ -686,6 +765,7 @@ def main():
         manifest["bus"]["publishes"]["history"]["key"], recorder.answer
     )
     recorder.writer.thread.start()
+    recorder.writer.checker.thread.start()
     sess.ready()
 
     stop = threading.Event()
@@ -696,6 +776,7 @@ def main():
     for sub in subs:
         sub.undeclare()
     queryable.undeclare()
+    recorder.writer.checker.stop()
     recorder.writer.stop()
     sess.close()
 

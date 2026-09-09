@@ -29,6 +29,15 @@ default = 0
 constraint = { min = 0 }
 editable_by = "owner"
 
+# A disk returning corrupt data is silent in SQLite until a read hits it:
+# PRAGMA integrity_check on this schedule, reported as a health event.
+# 0 disables.
+[params.integrity_check_hours]
+type = "float"
+default = 24
+constraint = { min = 0 }
+editable_by = "owner"
+
 [bus.subscribes]
 state = "home/state/**"
 cmd = "home/cmd/**"
