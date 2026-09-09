@@ -67,7 +67,10 @@ design.md, Aspect descriptors), generated from the same `exposes`: every
 scalar expose becomes a labelled field — z2m's unit picks the kind
 (°C → temperature, % → percent, anything else a number carrying the unit),
 its category picks the group (diagnostic → diagnostics, config → config,
-else readings), a settable config expose becomes an owner-tier command
+else readings; z2m before 1.34 has no category at all, so the diagnostics
+it would categorise — linkquality, a battery voltage in mV — are known
+by property), battery is a reading but ordered last so it never
+headlines the room card (#53), a settable config expose becomes an owner-tier command
 with z2m's own value bounds, and the alarm-shaped binaries (water leak,
 smoke, ...) are notable. The capability's own vocabulary (on, locked,
 brightness, color_temp) is described as readings only: its controls are
@@ -150,6 +153,11 @@ NOTABLE_BINARY = frozenset(
     {"battery_low", "water_leak", "smoke", "gas", "carbon_monoxide", "tamper", "vibration"}
 )
 KIND_BY_UNIT = {"°C": "temperature", "%": "percent"}
+# Exposes older z2m (< 1.34, no `category` field) leaves uncategorised that
+# newer z2m files under diagnostic — by property, the way battery is
+# promoted by property (#53). Voltage is only diagnostic as a battery
+# voltage (mV); a plug's mains voltage (V) is a reading.
+DIAGNOSTIC_PROPERTIES = frozenset({"linkquality"})
 # The capability vocabulary the dashboard's own widgets command: described
 # as readings, never as descriptor commands.
 VOCABULARY_ASPECTS = frozenset({"on", "locked", "brightness", "color_temp"})
@@ -176,8 +184,11 @@ def describe(capability: str, exposes) -> dict | None:
         aspect, _ = state_aspect(capability, prop, None)
         if aspect == "available" or aspect in fields:
             return
+        unit = exp.get("unit") if isinstance(exp.get("unit"), str) else None
         category = exp.get("category")
         group = {"diagnostic": "diagnostics", "config": "config"}.get(category, "readings")
+        if category is None and (prop in DIAGNOSTIC_PROPERTIES or (prop == "voltage" and unit == "mV")):
+            group = "diagnostics"
         if prop == "battery":
             group = "readings"  # z2m files it under diagnostic; a family watches it
         label = exp.get("label") if isinstance(exp.get("label"), str) else prop.replace("_", " ")
@@ -185,7 +196,6 @@ def describe(capability: str, exposes) -> dict | None:
         if label.replace(" ", "_") != prop:
             label = f"{label} ({prop})"
         field: dict = {"label": label, "group": group}
-        unit = exp.get("unit") if isinstance(exp.get("unit"), str) else None
         if etype == "numeric":
             field["kind"] = KIND_BY_UNIT.get(unit, "number")
             if field["kind"] == "number" and unit:
@@ -229,6 +239,10 @@ def describe(capability: str, exposes) -> dict | None:
         add(exp)
     if not fields:
         return None
+    if "battery" in fields:
+        # Watched, never the headline: z2m lists battery first, and field
+        # order is what the room card reads as priority (#53).
+        fields["battery"] = fields.pop("battery")
     return {"schema": 1, "groups": ["readings", "config", "diagnostics"], "fields": fields}
 
 

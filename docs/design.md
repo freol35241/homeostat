@@ -1451,7 +1451,20 @@ adapters never do. The gap is metadata, so the fix is metadata.
   first two control-less rows of the first group that has any, so the
   adapter's own field order decides. A `headline` flag was considered
   and deferred until an adapter needs to say otherwise. Card labels
-  drop the trailing firmware code the overlay keeps.
+  drop the trailing firmware code the overlay keeps. Strike one
+  (2026-09-09, #53): on a live house every z2m thermometer headlined
+  `battery`, because z2m lists it first and the generator promoted it
+  into readings without saying where — and on z2m before 1.34 no expose
+  carries a `category`, so `voltage` and `linkquality` were readings
+  too and diagnostics was always empty. Answered inside the convention,
+  not with the flag: a generator that bends the group by property name
+  (battery) bends the order by the same rule (battery last), and the
+  diagnostics newer z2m categorises are known by property when the
+  field is absent (linkquality; voltage in mV, since a plug's mains
+  voltage in V is a reading). The flag stays deferred: the strike was
+  a generator with one deliberate exception that forgot half of it, not
+  a case the adapter's order cannot express. A second generator needing
+  ordering logic beyond one demoted field is strike two.
 - **Reach.** Nothing here is heat-pump specific: any adapter can label
   `battery` a percent and `linkquality` diagnostics. Grown by need, not
   ahead of it. First growth (2026-09-09): the Zigbee2MQTT adapter
