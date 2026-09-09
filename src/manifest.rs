@@ -8,6 +8,7 @@ use std::fmt;
 /// below; a test keeps the two in step.
 pub const CAPABILITIES: &[&str] = &[
     "binary_sensor",
+    "burner",
     "camera",
     "climate",
     "cover",
@@ -48,6 +49,13 @@ pub const VOCABULARY: &[Capability] = &[
         aspects: &[],
         notable: None,
         note: "A boolean under its native name.",
+    },
+    Capability {
+        name: "burner",
+        base: Some("on"),
+        aspects: &["power_level", "flue_temperature", "boiler_temperature"],
+        notable: None,
+        note: "`on` is the family lever, read back from the device's run state, never echoed from the command. `power_level` is the output setting as the device enumerates it (a constraint the adapter describes); the two temperatures in °C are what an interlock reads. Run-phase codes pass through raw until a second burner adapter exists to generalise against (#37).",
     },
     Capability {
         name: "camera",

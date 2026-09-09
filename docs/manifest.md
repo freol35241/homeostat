@@ -250,6 +250,7 @@ What an entity of each capability publishes under which names (docs/adapters.md,
 | Capability | Base aspect | Other named aspects | Notable | Notes |
 |---|---|---|---|---|
 | `binary_sensor` | — | — | — | A boolean under its native name. |
+| `burner` | `on` | `power_level`, `flue_temperature`, `boiler_temperature` | — | `on` is the family lever, read back from the device's run state, never echoed from the command. `power_level` is the output setting as the device enumerates it (a constraint the adapter describes); the two temperatures in °C are what an interlock reads. Run-phase codes pass through raw until a second burner adapter exists to generalise against (#37). |
 | `camera` | — | `motion` | — | `motion` (bool). Media rides the go2rtc plane, never the bus. |
 | `climate` | `setpoint` | `indoor_temperature`, `feed_temperature` | — | `setpoint` in °C is the family lever; the two readings are normalized when the device has them. |
 | `cover` | — | — | — | Reserved; no adapter binds it yet. |

@@ -106,8 +106,15 @@ COMMANDABLE = {
     "lock": {"locked"},
     "switch": {"on"},
     "climate": {"setpoint"},
+    "burner": {"on", "power_level"},
 }
-BASE_ASPECT = {"light": "on", "lock": "locked", "switch": "on", "climate": "setpoint"}
+BASE_ASPECT = {
+    "light": "on",
+    "lock": "locked",
+    "switch": "on",
+    "climate": "setpoint",
+    "burner": "on",
+}
 
 
 def granted_capabilities(publishes: dict) -> set[str]:
