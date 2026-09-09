@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "homeostat==0.10.0",
+#     "homeostat==0.11.0",
 # ]
 # ///
 """Recorder service: history end to end (see docs/design.md, step 5a).
@@ -32,7 +32,26 @@ zenoh-style key expression (wildcards included) filtering which recorded
 event keys come back, missing key means all of them; from/to here are
 integer microseconds UTC, the recorder's own timestamp convention, unlike
 the RFC3339 samples path. Both paths cap rows at limit, newest kept,
-replied oldest-to-newest.
+replied oldest-to-newest. GET home/history/stats replies one message
+describing the store itself: file and freelist size, per-series row
+counts and time bounds (keyed by history key, RFC3339 like the samples
+path), the events table's count and bounds (integer µs, like the events
+path) and the layout version — what an owner needs to see before
+choosing a retention window.
+
+Retention is two parameters, retain_samples_days and retain_events_days,
+0 meaning forever (the default, so an upgrade never deletes history).
+The writer thread purges rows older than the window hourly and whenever
+a window changes, then returns the freed pages to the filesystem
+(PRAGMA incremental_vacuum, what the file's auto_vacuum mode is for),
+and leaves one `purge` health event per purge that deleted anything.
+Retention is the only destructive operation in the store.
+
+SQLite has no page checksums, so a disk returning corrupt data is silent
+until a read happens to hit it. Every integrity_check_hours (default
+daily, 0 disables) a checker thread runs PRAGMA integrity_check on a
+read-only connection and leaves `integrity-ok` with the duration or
+`integrity-failed` with what SQLite reported at home/health/{unit}/event.
 """
 
 import datetime
@@ -48,12 +67,20 @@ from pathlib import Path
 import zenoh
 
 from homeostat import house, keys, session
+from homeostat.params import LiveParams
 
 BUFFER_LIMIT = 10_000
 RETRY_S = 1.0
+PURGE_INTERVAL_S = 3600.0
+PARAM_DEFAULTS = {
+    "retain_samples_days": 0.0,
+    "retain_events_days": 0.0,
+    "integrity_check_hours": 24.0,
+}
 DEFAULT_QUERY_LIMIT = 1000
 DEFAULT_EVENTS_LIMIT = 500
 EVENTS_KEY = zenoh.KeyExpr("home/history/events")
+STATS_KEY = zenoh.KeyExpr("home/history/stats")
 
 # Store layout, stamped in PRAGMA user_version. Version 0 was one wide
 # samples table repeating class/room/entity/aspect/kind as TEXT on every
@@ -112,9 +139,91 @@ def iso_utc(us: int) -> str:
     )
 
 
+class Params(LiveParams):
+    """The retention windows and the integrity-check interval from
+    home/config/{unit}/*, live; a change wakes the threads that use them
+    so it applies at once."""
+
+    def __init__(self, sess: session.UnitSession, on_change):
+        self._on_change = on_change
+        super().__init__(sess, PARAM_DEFAULTS)
+
+    def _on_config(self, sample) -> None:
+        super()._on_config(sample)
+        self._on_change()
+
+    @property
+    def retain_samples_days(self) -> float:
+        return self.get("retain_samples_days")
+
+    @property
+    def retain_events_days(self) -> float:
+        return self.get("retain_events_days")
+
+    @property
+    def integrity_check_hours(self) -> float:
+        return self.get("integrity_check_hours")
+
+
+class IntegrityChecker:
+    """Runs PRAGMA integrity_check on its own read-only connection every
+    integrity_check_hours, the first one an interval after start so a
+    restart loop never hammers a large file. Read-only, so in WAL mode it
+    never blocks the writer."""
+
+    def __init__(self, db_path: Path, sess: session.UnitSession):
+        self.db_path = db_path
+        self.sess = sess
+        self.params: Params | None = None  # set once the params exist
+        self.wake = threading.Event()
+        self.stopping = False
+        # A daemon: a check mid-run on a large file must not hold up the
+        # unit's exit past its grace, and a read-only check abandoned at
+        # exit harms nothing.
+        self.thread = threading.Thread(target=self._run, name="integrity", daemon=True)
+
+    def stop(self) -> None:
+        self.stopping = True
+        self.wake.set()
+
+    def _run(self) -> None:
+        last = time.monotonic()
+        while not self.stopping:
+            interval = self.params.integrity_check_hours * 3600 if self.params else 0
+            if interval <= 0:
+                self.wake.wait()
+                self.wake.clear()
+                continue
+            remaining = last + interval - time.monotonic()
+            if remaining > 0:
+                self.wake.wait(timeout=remaining)
+                self.wake.clear()
+                continue
+            self.check()
+            last = time.monotonic()
+
+    def check(self) -> None:
+        started = time.monotonic()
+        try:
+            conn = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True, timeout=2.0)
+            try:
+                lines = [row[0] for row in conn.execute("PRAGMA integrity_check")]
+            finally:
+                conn.close()
+        except sqlite3.Error as err:
+            self.sess.health_event("integrity-failed", errors=[str(err)])
+            return
+        duration_s = round(time.monotonic() - started, 3)
+        if lines == ["ok"]:
+            self.sess.health_event("integrity-ok", duration_s=duration_s)
+        else:
+            self.sess.health_event("integrity-failed", errors=lines[:5], duration_s=duration_s)
+
+
 class Writer:
     """Single writer thread draining a bounded queue, one transaction per
-    flush. Failed batches stay pending and retry on new samples or a timer."""
+    flush. Failed batches stay pending and retry on new samples or a timer.
+    Retention purges run here too, so they serialise with flushes."""
 
     def __init__(self, db_path: Path, sess: session.UnitSession):
         self.db_path = db_path
@@ -122,11 +231,27 @@ class Writer:
         self.cond = threading.Condition()
         self.queue: deque = deque()
         self.stopping = False
+        self.purge_due = False
+        # The checker before the params: a config sample can arrive the
+        # moment the params subscription exists, and the change handler
+        # wakes both.
+        self.checker = IntegrityChecker(db_path, sess)
+        self.params = Params(sess, self._on_param_change)
+        self.checker.params = self.params
         self.thread = threading.Thread(target=self._run, name="writer")
+
+    def _on_param_change(self) -> None:
+        self.request_purge()
+        self.checker.wake.set()
 
     def enqueue(self, table: str, row: tuple) -> None:
         with self.cond:
             self.queue.append((table, row))
+            self.cond.notify()
+
+    def request_purge(self) -> None:
+        with self.cond:
+            self.purge_due = True
             self.cond.notify()
 
     def stop(self) -> None:
@@ -140,15 +265,27 @@ class Writer:
         pending: list = []
         outage = False
         dropped = 0
+        next_purge = time.monotonic() + PURGE_INTERVAL_S
         while True:
             with self.cond:
                 while not self.queue and not pending and not self.stopping:
-                    self.cond.wait()
+                    if self.purge_due or time.monotonic() >= next_purge:
+                        break
+                    self.cond.wait(timeout=max(0.0, next_purge - time.monotonic()))
                 if not self.queue and not pending and self.stopping:
                     return
+                if not self.queue and not pending:
+                    self.purge_due = False
+                    next_purge = time.monotonic() + PURGE_INTERVAL_S
+                    purge = True
+                else:
+                    purge = False
                 pending.extend(self.queue)
                 self.queue.clear()
                 stopping = self.stopping
+            if purge:
+                self._purge()
+                continue
             overflow = len(pending) - BUFFER_LIMIT
             if overflow > 0:
                 del pending[:overflow]
@@ -194,6 +331,60 @@ class Writer:
                 )
         finally:
             conn.close()
+
+    def _purge(self) -> None:
+        """Deletes rows older than each table's window and returns the
+        pages to the filesystem. One event per purge that deleted
+        anything; a purge that finds nothing to delete is silent, so
+        retention never fills the events table with its own bookkeeping."""
+        windows = {
+            "samples": self.params.retain_samples_days,
+            "events": self.params.retain_events_days,
+        }
+        if all(days <= 0 for days in windows.values()):
+            return
+        now = now_us()
+        cutoffs = {
+            table: now - int(days * 86_400 * 1_000_000)
+            for table, days in windows.items()
+            if days > 0
+        }
+        deleted = {"samples": 0, "events": 0}
+        try:
+            conn = sqlite3.connect(self.db_path, timeout=2.0)
+            try:
+                if "samples" in cutoffs:
+                    # Per series, so the delete is a range on the primary
+                    # key (series_id, ts) rather than a scan of the whole
+                    # table, and one transaction per series keeps the
+                    # writer's lock short even on a first purge of years.
+                    for (series_id,) in conn.execute("SELECT id FROM series").fetchall():
+                        with conn:
+                            deleted["samples"] += conn.execute(
+                                "DELETE FROM samples WHERE series_id = ? AND ts < ?",
+                                (series_id, cutoffs["samples"]),
+                            ).rowcount
+                if "events" in cutoffs:
+                    with conn:
+                        deleted["events"] = conn.execute(
+                            "DELETE FROM events WHERE ts < ?", (cutoffs["events"],)
+                        ).rowcount
+                if not any(deleted.values()):
+                    return
+                before = conn.execute("PRAGMA freelist_count").fetchone()[0]
+                conn.execute("PRAGMA incremental_vacuum")
+                after = conn.execute("PRAGMA freelist_count").fetchone()[0]
+            finally:
+                conn.close()
+        except sqlite3.Error as err:
+            self.sess.health_event("purge-failed", error=str(err))
+            return
+        self.sess.health_event(
+            "purge",
+            samples=deleted["samples"],
+            events=deleted["events"],
+            pages_freed=before - after,
+        )
 
     def _intern(self, conn: sqlite3.Connection, rows: list) -> None:
         """Ensures every series and room the batch names has an id, so the
@@ -278,6 +469,8 @@ class Recorder:
         # must fan out over the sample series, not silently drop them.
         if EVENTS_KEY.includes(asked):
             self._answer_events(query)
+        elif STATS_KEY.includes(asked):
+            self._answer_stats(query)
         else:
             self._answer_samples(query, asked)
 
@@ -363,6 +556,47 @@ class Recorder:
             query.reply_err(json.dumps(f"store unavailable: {err}"))
         finally:
             conn.close()
+
+
+    def _answer_stats(self, query: zenoh.Query) -> None:
+        try:
+            conn = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True, timeout=2.0)
+        except sqlite3.Error as err:
+            query.reply_err(json.dumps(f"store unavailable: {err}"))
+            return
+        try:
+            query.reply(str(STATS_KEY), json.dumps(store_stats(conn)))
+        except sqlite3.Error as err:
+            query.reply_err(json.dumps(f"store unavailable: {err}"))
+        finally:
+            conn.close()
+
+
+def store_stats(conn: sqlite3.Connection) -> dict:
+    """What is in the store: sizes from the pager, one aggregate per
+    series and one for the events table."""
+    page_size = conn.execute("PRAGMA page_size").fetchone()[0]
+    page_count = conn.execute("PRAGMA page_count").fetchone()[0]
+    freelist = conn.execute("PRAGMA freelist_count").fetchone()[0]
+    series = {}
+    for space, entity, aspect, rows, oldest, newest in conn.execute(
+        "SELECT class, entity, aspect, COUNT(*), MIN(ts), MAX(ts) FROM samples"
+        " JOIN series ON series.id = samples.series_id"
+        " GROUP BY series_id ORDER BY class, entity, aspect"
+    ):
+        series[f"home/history/{space}/{entity}/{aspect}"] = {
+            "rows": rows,
+            "oldest": iso_utc(oldest),
+            "newest": iso_utc(newest),
+        }
+    rows, oldest, newest = conn.execute("SELECT COUNT(*), MIN(ts), MAX(ts) FROM events").fetchone()
+    return {
+        "store_version": conn.execute("PRAGMA user_version").fetchone()[0],
+        "file_bytes": page_count * page_size,
+        "freelist_bytes": freelist * page_size,
+        "series": series,
+        "events": {"rows": rows, "oldest": oldest, "newest": newest},
+    }
 
 
 def event_payload(text: str):
@@ -528,6 +762,7 @@ def main():
         manifest["bus"]["publishes"]["history"]["key"], recorder.answer
     )
     recorder.writer.thread.start()
+    recorder.writer.checker.thread.start()
     sess.ready()
 
     stop = threading.Event()
@@ -538,6 +773,7 @@ def main():
     for sub in subs:
         sub.undeclare()
     queryable.undeclare()
+    recorder.writer.checker.stop()
     recorder.writer.stop()
     sess.close()
 
