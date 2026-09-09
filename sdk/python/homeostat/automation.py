@@ -16,6 +16,7 @@ the same expansion the core performs at plan time.
 """
 
 import datetime
+import inspect
 import json
 import os
 import signal
@@ -116,19 +117,54 @@ class Context:
             return [expr]
         return ["/".join([*segments[:2], room, *segments[3:]]) for room in rooms]
 
-    def subscribe(self, binding: str, handler: Callable[[str, Any], None]) -> None:
+    def subscribe(self, binding: str, handler: Callable[..., None]) -> None:
         """Subscribes a `[bus.subscribes]` binding; the handler receives
-        (key, decoded JSON value). Non-JSON payloads are ignored."""
+        (key, decoded JSON value). Non-JSON payloads are ignored.
+
+        Subscribe, then get, merge — as for config: the current value of
+        every matching key is read from the core's state mirror and
+        delivered before this returns, so a restarted unit is not blind
+        until its sources happen to publish again. A mirrored value can be
+        arbitrarily old, and a handler cannot otherwise tell a catch-up
+        from a fresh publish, so a handler declared as
+        `(key, value, age_s)` receives the age in seconds — zero for a live
+        sample — to hand to `Freshness.seen`. A two-argument handler gets
+        the catch-up without it, i.e. as though it had just arrived.
+        """
+        wants_age = len(inspect.signature(handler).parameters) >= 3
+        delivered: set[str] = set()
+        # Orders catch-up against live samples. Its own lock, not
+        # `self._lock`: the handler runs under it and may read `params`.
+        order = threading.Lock()
+
+        def deliver(key: str, value: Any, age_s: float) -> None:
+            if wants_age:
+                handler(key, value, age_s)
+            else:
+                handler(key, value)
 
         def callback(sample: zenoh.Sample) -> None:
             try:
                 value = json.loads(sample.payload.to_bytes())
             except ValueError:
                 return
-            handler(str(sample.key_expr), value)
+            key = str(sample.key_expr)
+            with order:
+                delivered.add(key)
+            deliver(key, value, 0.0)
 
-        for expr in self._room_variants(self._subscribes[binding]):
+        exprs = self._room_variants(self._subscribes[binding])
+        for expr in exprs:
             self._subs.append(self._session.subscribe(expr, callback))
+        for expr in exprs:
+            for key, value, age_s in self._session.get_json_aged(expr):
+                # Under the lock so a live sample for the same key, which
+                # is fresher, is delivered after the catch-up, never before.
+                with order:
+                    if key in delivered:
+                        continue
+                    delivered.add(key)
+                    deliver(key, value, age_s)
 
     def publish(
         self,

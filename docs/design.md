@@ -322,6 +322,9 @@ served over the bus by queryables. It backs three key spaces:
 - `home/clock/*` — the core mirrors clock publications so a late joiner
   (or a test) can `get` the current minute/date instead of waiting out a
   wall-clock minute.
+- `home/state/**` — the same mirror generalized (the agent surface and
+  the SDK's `subscribe` catch-up read it). Each reply's attachment is the
+  value's age in seconds since the mirror received it.
 
 Why not the Zenoh storage plugin: it is a heavy, version-coupled dependency,
 and a passive mirror cannot reject an out-of-constraint write — validation
@@ -362,7 +365,14 @@ v1 is plan-time + trust, as everywhere else.
 the core validated) and gives an automation exactly its declared surface:
 
 - `ctx.subscribe(binding, handler)` — binding names from `[bus.subscribes]`;
-  the handler gets `(key, value)` with the JSON payload decoded.
+  the handler gets `(key, value)` with the JSON payload decoded. Subscribe,
+  then get, merge, as for config: the current value of every matching key
+  is read from the core's state mirror and delivered before the call
+  returns, so a restarted unit is not blind until its sources publish
+  again. A handler declared `(key, value, age_s)` also gets the value's
+  age in seconds — zero for a live sample, the mirror's age for a
+  catch-up — to pass to `Freshness.seen`; a two-argument handler gets the
+  catch-up as though it had just arrived.
 - `ctx.params.name` — typed current values (`time` → `datetime.time`),
   seeded via get and updated live by a config subscription.
 - `ctx.publish(binding, value, room=..., entity=..., aspect=...)` — publish
@@ -1912,10 +1922,31 @@ adapter — the membrane rule.
   graduated from a real fusion's private copy rather than waiting for
   the rule of three, because the shape was already settled by use):
   latest value and monotonic seen-time per source, `fresh(max_age_s)`
-  at recompute. The triggering sample is age zero by construction, so
+  at recompute. A live triggering sample is age zero by construction, so
   the fresh set is never empty — the trap is closed once, in the
   helper. It owns no timer: reacting to outright silence is a
   `home/clock/minute` subscription calling the same `fresh()`.
+- **A restarted automation catches up from the mirror, with age**
+  (2026-09-09, #36). `ctx.subscribe` did not do the subscribe-then-get-
+  merge that `Context.__init__` already did for config, so a unit that
+  needs every source before it can compute was silent after a restart for
+  up to the slowest source's interval — measured at 4 min on a real
+  house, 30 min worst case — while every value it needed sat in the
+  mirror. With device feeds that silence can outlast the fed device's
+  validity window and change how the house is heated. Now `subscribe`
+  reads the mirror after declaring its subscribers and delivers what the
+  subscription has not already delivered. The mirror's replies carry the
+  value's age (seconds since the mirror received it, in the attachment),
+  because a catch-up cannot otherwise be told from a fresh publish and a
+  six-hour-old reading fed into a moving average as new would trade one
+  silent failure for another: a handler that takes `age_s` hands it to
+  `Freshness.seen`, and a catch-up older than the policy drops out of the
+  first recompute. The one consequence for such a handler: a catch-up can
+  leave the fresh set empty, so it checks. Age rather than a wall-clock
+  stamp because only the mirror's clock is involved and the reply is read
+  the moment it is made; a two-argument handler keeps working and treats
+  the catch-up as just-arrived, which is still strictly better than
+  blindness.
 - **Availability must be able to say "no information".** A backend
   configured without availability at all (z2m with no `availability:`
   block publishes no such topics) yields an empty map that reads as
