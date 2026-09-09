@@ -248,13 +248,21 @@ declares that key in `[bus.publishes]`. One record per device:
   ```
 
   `kind` is one of `temperature`, `temperature_delta`, `percent`,
-  `number`, `boolean`, `enum`. `command` uses the manifest's ParamSpec
+  `number` (with an optional `unit` string the page shows after the
+  value), `boolean` (optionally with `values` naming true and false,
+  "locked"/"unlocked"), `enum`, `text`. `command` uses the manifest's ParamSpec
   fields: `type` (`float`, `int`, `enum`), `constraint` (`min`/`max`),
   optional `step`, and `editable_by` — only `family` commands are
   writable from the dashboard, and their constraint must match the
   adapter's own bounds. Undescribed aspects still render, in a
   diagnostics group. A fed input (§9) is described but carries no
   command.
+
+Generate the descriptor when the protocol already describes its devices:
+the Zigbee2MQTT adapter derives one from each device's `exposes` (unit →
+kind, category → group, settable config → owner-tier command), so no
+per-device labels are hand-written. Hand-write it only for a dialect with
+a fixed field list (the heat pump).
 
 An adapter with nothing to enumerate publishes no discovery document.
 An unbound device is a discovery fact, not a dropped message: report it

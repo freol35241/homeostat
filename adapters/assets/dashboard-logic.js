@@ -230,7 +230,7 @@
   /* ---- aspect descriptors (docs/design.md, Aspect descriptors) ----
    * An adapter may describe an entity's aspects in its discovery record:
    * { schema, groups: [name...], fields: { aspect: { label, kind, group,
-   * values?, valid?, notable?, command? } } }. The page renders the
+   * unit?, values?, valid?, notable?, command? } } }. The page renders the
    * description through the widgets it already has; this is the pure
    * mapping from descriptor + state to a render plan. */
   var DIAGNOSTICS = 'diagnostics';
@@ -241,17 +241,18 @@
   function formatAspect(aspect, field, value) {
     if (value === undefined || value === null) return '—';
     var kind = field && field.kind;
-    if (kind === 'enum' && field.values) {
+    if (field && field.values) {
+      // an enum's labels; a boolean may carry them too ("locked"/"unlocked")
       for (var i = 0; i < field.values.length; i++) {
         if (field.values[i].value === value) return field.values[i].label;
       }
-      return String(value);
+      if (kind === 'enum') return String(value);
     }
     if (typeof value === 'number') {
       if (kind === 'temperature') return value.toFixed(1) + '°';
       if (kind === 'temperature_delta') return (value > 0 ? '+' : '') + value.toFixed(1) + '°';
       if (kind === 'percent') return Math.round(value) + '%';
-      if (kind === 'number') return String(Math.round(value * 100) / 100);
+      if (kind === 'number') return String(Math.round(value * 100) / 100) + (field.unit ? ' ' + field.unit : '');
       if (aspect.indexOf('temperature') !== -1) return value.toFixed(1) + '°';
       return value.toFixed(1);
     }
