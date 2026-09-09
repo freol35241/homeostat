@@ -249,7 +249,8 @@ declares that key in `[bus.publishes]`. One record per device:
 
   `kind` is one of `temperature`, `temperature_delta`, `percent`,
   `number` (with an optional `unit` string the page shows after the
-  value), `boolean`, `enum`, `text`. `command` uses the manifest's ParamSpec
+  value), `boolean` (optionally with `values` naming true and false,
+  "locked"/"unlocked"), `enum`, `text`. `command` uses the manifest's ParamSpec
   fields: `type` (`float`, `int`, `enum`), `constraint` (`min`/`max`),
   optional `step`, and `editable_by` — only `family` commands are
   writable from the dashboard, and their constraint must match the

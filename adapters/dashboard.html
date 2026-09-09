@@ -1710,8 +1710,8 @@ function renderEntityDetailBody() {
 
   // Sections come from the adapter's aspect descriptor when it published
   // one (dashboard-logic.js, aspectPlan); an undescribed entity gets the
-  // one flat State list. A described entity's declared commands render in
-  // their own group, so the capability's Controls row is not repeated.
+  // one flat State list. A described climate's declared commands render
+  // in their own group, so its Controls row is not repeated.
   var descriptor = store.aspects[entity.name];
   var plan = logic.aspectPlan(entity, store.state, descriptor, !controlDisabled(entity));
   var sections = plan.map(function (section) {
@@ -1731,7 +1731,10 @@ function renderEntityDetailBody() {
   if (entity.capability === 'camera') {
     middle = '<div class="card-label" style="margin-top:20px;">Live</div>' +
       '<div data-camera-live="' + esc(entity.name) + '"></div>';
-  } else if (!descriptor) {
+  } else if (!descriptor || BESPOKE_WIDGET[entity.capability]) {
+    // A capability with its own widget (a toggle, a slider) keeps it here
+    // whether or not the adapter described the rest of its aspects: the
+    // descriptor never declares commands for the capability's vocabulary.
     middle = '<div class="card-label" style="margin-top:20px;">Controls</div>' + widgetForEntity(entity);
   }
   var body = '<div class="muted" style="margin-top:2px;">' + esc(meta) + '</div>' +

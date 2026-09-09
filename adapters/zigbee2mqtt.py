@@ -194,6 +194,11 @@ def describe(capability: str, exposes) -> dict | None:
             field["kind"] = "boolean"
             if prop in NOTABLE_BINARY:
                 field["notable"] = True
+            if aspect == "locked":
+                field["values"] = [
+                    {"value": True, "label": "locked"},
+                    {"value": False, "label": "unlocked"},
+                ]
         elif etype == "enum":
             field["kind"] = "enum"
             field["values"] = [

@@ -241,11 +241,12 @@
   function formatAspect(aspect, field, value) {
     if (value === undefined || value === null) return '—';
     var kind = field && field.kind;
-    if (kind === 'enum' && field.values) {
+    if (field && field.values) {
+      // an enum's labels; a boolean may carry them too ("locked"/"unlocked")
       for (var i = 0; i < field.values.length; i++) {
         if (field.values[i].value === value) return field.values[i].label;
       }
-      return String(value);
+      if (kind === 'enum') return String(value);
     }
     if (typeof value === 'number') {
       if (kind === 'temperature') return value.toFixed(1) + '°';

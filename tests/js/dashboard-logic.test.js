@@ -337,6 +337,9 @@ test('formatAspect handles the kinds and the empty value', () => {
   assert.equal(logic.formatAspect('x', { kind: 'number', unit: 'lqi' }, 87), '87 lqi', 'a unit rides a plain number');
   assert.equal(logic.formatAspect('x', { kind: 'percent', unit: '%' }, 87), '87%', 'and only a plain number');
   assert.equal(logic.formatAspect('x', null, undefined), '—');
+  const locked = { kind: 'boolean', values: [{ value: true, label: 'locked' }, { value: false, label: 'unlocked' }] };
+  assert.equal(logic.formatAspect('locked', locked, true), 'locked', 'a boolean may carry value labels');
+  assert.equal(logic.formatAspect('locked', locked, false), 'unlocked');
 });
 
 test('a notable described aspect deviates when true', () => {
