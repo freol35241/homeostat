@@ -2059,6 +2059,127 @@ statement of what was always legal.
   rebuilt in Python. That is the Home Assistant model the project set out
   to leave.
 
+## Burners and interlocks (settled 2026-09-09, #37, #38)
+
+A house with a heat pump and a pellet burner has two heat sources, and an
+automation that chooses between them needs both describable in the same
+terms. #37 proposed a `burner` capability rather than `switch` plus loose
+sensors; #38 asked where the burner's flue-temperature cutout should stand
+in the arbiter. Both settled here.
+
+- **Vocabulary: `burner`**, deliberately small. Base aspect `on` (bool, the
+  family lever, the burner analogue of `setpoint` and `locked`); feature
+  `power_level` (the output setting as the device enumerates it — the
+  reporting device offers 10/50/100 — described as a constraint so the
+  existing enum → segmented-control path renders it); normalised readings
+  `flue_temperature` and `boiler_temperature` in °C. Everything else passes
+  through under its firmware name, as `ivt490` does.
+- **Why a capability and not switch + sensors.** Modelled as a `switch` a
+  burner is a boolean with no meaning attached: "is it making heat" would
+  have to be read from dialect fields, which is what the vocabulary exists
+  to prevent. And per-aspect leases need `on` and `power_level` to be
+  aspects of one entity, so a family member holding the burner off does not
+  freeze an automation's power-level choice — the same reason the heat pump
+  moved to per-aspect leases.
+- **`power_level` is vocabulary for a safety reason** as well as a UI one:
+  a flue-temperature cutout's threshold is a function of the power level,
+  so an interlock needs both as first-class inputs. The test that fell out,
+  worth keeping: *the inputs an interlock needs are vocabulary; the
+  thresholds are configuration.*
+- **`on` reads back from the device.** In the reporting dialect start and
+  stop are momentary writes and the true on/off is derived from the run
+  state, so `on` must never be an echo of the command — the discipline
+  `ivt490` already states for `setpoint`.
+- **No run-phase vocabulary yet.** A `state` of `off / igniting / running /
+  cleaning / fault` is what would make an automation portable across
+  burners, but no code table exists anywhere in the reporting chain and
+  after ten idle days exactly one code has ever been observed. A phase
+  vocabulary now would be invented rather than generalised. `state` and
+  `substate` pass through raw; revisit after a heating season, ideally
+  against a second burner adapter.
+- **Not `heat_source`.** The arbitration argument is really about heat
+  sources, not combustion, but an abstraction spanning a burner and a heat
+  pump that is already `climate` would be built against one example — the
+  same objection. Grow it when a second case demands it.
+- **No dashboard widget in the same change.** The described-card fallback
+  already renders any capability without a bespoke widget from its
+  descriptors (`climate` uses it); `burner` gets a card the day someone
+  wants one.
+- **Cost note, for whoever writes the adapter.** The reporting bridge
+  republishes all 30 topics every ~32 s whether or not anything changed,
+  and its `status` topic alone is 116 fields — naively that one topic is
+  ~310k recorder rows/day, two and a half times the entire `ivt490`
+  adapter, which is already 94% of that house's store. Publish on change
+  (the source is republish-on-poll, so forwarding inherits the full poll
+  rate for values that never move — #3 one layer out), and treat the
+  `settings/*` topics as configuration, not samples.
+
+### Aduro adapter (built 2026-09-09)
+
+`adapters/aduro.py`, against the reporter's `aduro2mqtt` bridge (NBE UDP
+to MQTT). The entity `id` is the bridge's base topic; one entity per
+burner; arbitrated, so `on` and `power_level` lease independently.
+
+- **Publish on change, from two topics.** Only `{base}/status` and
+  `{base}/operating` are subscribed; a field publishes when its value
+  differs from the last one put on the bus (and once after start). The
+  identical republish a poll later yields nothing. Settings, consumption,
+  advanced and logs are not subscribed at all. Status fields keep their
+  firmware names, dots included; operating fields carry an `operating_`
+  prefix so the two NBE namespaces stay apart without a table.
+- **`on` is derived**, from `state` not being in a set of off codes. The
+  set holds the one code observed (14, idle and unlit); it grows from the
+  heating season, which is why `state` and `substate` pass through raw
+  beside it. `power_level` is `regulation.fixed_power` as an int;
+  `flue_temperature` is `smoke_temp`; `boiler_temperature` is
+  `boiler_temp`. `shaft_temp`, the device's own fire-safety reading, passes
+  through labelled.
+- **Commands** are the bridge's own `{path, value}` shape on `{base}/set`:
+  a bool `on` becomes a momentary `misc.start` or `misc.stop`; an integer
+  `power_level` in {10, 50, 100} becomes `regulation.fixed_power`. Anything
+  else drops with `invalid-command`. Both are family-tier in the
+  descriptor, `on` described as a two-valued enum so the described card
+  gets a segmented control without a bespoke widget.
+- **Availability** is the receive timer (`availability_timeout_s`,
+  default 300 s, about nine polls): the bridge skips a topic when the
+  burner does not answer, so an unreachable burner and a dead bridge both
+  go silent.
+
+### Interlocks stay the device's job (settled 2026-09-09, #38)
+
+The house runs two flue-temperature cutouts (stop above 200 °C at 10%
+power, above 225 °C at 50%) and wanted to port them as a house-local unit.
+No band fits: at `automation` the interlock and the 60 s heating loop it
+guards against sit at the same band, and equal-or-higher passes and takes
+the hold, so it is defeated within a minute; at `manual` it works and lies,
+attributing a thermal cutout to the family in every audit surface. Deeper,
+the arbiter's hold is *timed* and an interlock is *conditional*: the burner
+should stay stopped while the flue is hot, not for `hold_minutes`. Refreshing
+the hold on every sample turns the interlock into a continuous writer whose
+death silently releases the burner to the automation.
+
+- **Decision: homeostat is not in the safety path.** The device carries its
+  own alarm layer (the Aduro's `max_shaft_temp`, `min_boiler_temp`), and
+  that is where combustion safety lives. A house-local cutout that
+  additionally publishes `on = false` at the automation band is welcome as
+  belt-and-braces, but it is an automation like any other — contestable,
+  timed, honest about its band — and the house must not rely on it. This
+  is written down so "no band for interlocks" reads as a decision rather
+  than as "not yet".
+- **Rejected: a fifth band above `manual`.** It contradicts THE FAMILY
+  ALWAYS WINS OVER AUTOMATIONS by adding a constant, when whether safety
+  outranks the family is a values decision that deserves to be made in the
+  open, and it inherits the timed hold that is the wrong shape anyway.
+- **Deferred, not rejected: an inhibit class.** A unit asserting a lockout
+  on `(entity, aspect)` while a condition holds, the arbiter refusing every
+  band for as long as it is asserted, assertion and release published as
+  events — condition-based, honest about the actor, visible. It is the
+  right shape (an interlock removes an option; it does not want to win an
+  argument — the same distinction #9 drew between a feed and a command),
+  and it generalises to alarm-armed locks, dry-run pumps, valves held for
+  maintenance. It is also machinery, and it is being deferred against one
+  case. If interlocks recur, this is the design to pick up.
+
 ## Voice (later phase)
  
 - Two-tier command path: a fast-path intent matcher (high precision,
