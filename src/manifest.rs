@@ -103,9 +103,9 @@ pub const VOCABULARY: &[Capability] = &[
     Capability {
         name: "person",
         base: None,
-        aspects: &["lat", "lon", "accuracy", "battery", "fixed_at"],
+        aspects: &["presence", "lat", "lon", "accuracy", "battery", "fixed_at"],
         notable: None,
-        note: "Scalar position aspects; `fixed_at` is the fix's epoch timestamp. Room is always `person`.",
+        note: "`presence` is whether the person is home (bool), published by whichever adapter knows — a geofence transition, a fused sighting; the dashboard's People tile reads it. Scalar position aspects; `fixed_at` is the fix's epoch timestamp. Room is always `person`.",
     },
     Capability {
         name: "presence",
@@ -459,6 +459,22 @@ pub struct EntityFile {
     /// device entity can be fed (`virtual-entity-fed`); the adapter is the
     /// authority on which input names exist.
     pub inputs: Option<BTreeMap<String, InputSource>>,
+    /// `[dashboard]`: presentation hints for the family surface. Text in
+    /// the house repo, never browser-side state (docs/design.md,
+    /// Dashboard).
+    pub dashboard: Option<EntityDashboard>,
+}
+
+/// `[dashboard]` on an entity.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EntityDashboard {
+    /// Pin this entity's numeric readings as signal tiles at the top of
+    /// `Now`, each with today's range. Nothing is pinned by default: `Now`
+    /// is the error signal, and a reading earns a place there by being
+    /// named here.
+    #[serde(default)]
+    pub pin: bool,
 }
 
 /// The source of a fed input: an entity and one of its aspects, i.e. the

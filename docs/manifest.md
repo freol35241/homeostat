@@ -175,11 +175,20 @@ a key segment (`invalid-name`).
 
 | Field | Type | Required | Description |
 |---|---|---|---|
+| `dashboard` | [EntityDashboard](#entitydashboard) | no | `[dashboard]`: presentation hints for the family surface. Text in the house repo, never browser-side state (docs/design.md, Dashboard). |
 | `entity` | [EntitySection](#entitysection) | yes |  |
 | `inputs` | table of name → [InputSource](#inputsource) | no | `[inputs]`: device inputs fed from one source each, keyed by the adapter's own input name (e.g. `indoor_temperature_actual`). A fed input is a continuous signal with one master, not a command: it stops being a command aspect for this entity, never rides the arbiter, and staleness is the device's own validity window. Only a device entity can be fed (`virtual-entity-fed`); the adapter is the authority on which input names exist. |
 | `naming` | [EntityNaming](#entitynaming) | no |  |
 | `schema` | integer | yes | Contract version. Must be 1. |
 | `write_policy` | [WritePolicy](#writepolicy) | yes |  |
+
+### EntityDashboard
+
+`[dashboard]` on an entity.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `pin` | boolean | no | Pin this entity's numeric readings as signal tiles at the top of `Now`, each with today's range. Nothing is pinned by default: `Now` is the error signal, and a reading earns a place there by being named here. |
 
 ### EntitySection
 
@@ -257,7 +266,7 @@ What an entity of each capability publishes under which names (docs/adapters.md,
 | `light` | `on` | `brightness`, `color_temp` | `on = true` | `brightness` 0–254 (the Zigbee2MQTT scale the dashboard assumes), `color_temp` in mired. |
 | `lock` | `locked` | — | `locked = false` |  |
 | `notifier` | `message` | `alert`, `delivered` | — | A channel that reaches a person: a phone, a group chat. `message` and `alert` are commandable strings — the text itself — and two structurally separate delivery paths, granted and policed apart (an alert overrides quiet hours; a message never will). `delivered` is the epoch time the delivery service acknowledged the last message, never a human's receipt. Room `person` for one person's channel, `global` for a group (docs/design.md, Notifications). |
-| `person` | — | `lat`, `lon`, `accuracy`, `battery`, `fixed_at` | — | Scalar position aspects; `fixed_at` is the fix's epoch timestamp. Room is always `person`. |
+| `person` | — | `presence`, `lat`, `lon`, `accuracy`, `battery`, `fixed_at` | — | `presence` is whether the person is home (bool), published by whichever adapter knows — a geofence transition, a fused sighting; the dashboard's People tile reads it. Scalar position aspects; `fixed_at` is the fix's epoch timestamp. Room is always `person`. |
 | `presence` | — | `occupancy`, `presence` | — | Either spelling is accepted; adapters pass their native one through. |
 | `router` | — | `wan` | `wan = false` |  |
 | `sensor` | — | — | — | Numeric aspects under descriptive names (`temperature`, `humidity`); widgets come from what is published. |

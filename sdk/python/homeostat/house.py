@@ -39,6 +39,8 @@ class Entity:
     naming: dict = field(default_factory=dict)
     # [inputs]: adapter input name -> resolved source. Empty for most.
     inputs: dict[str, InputSource] = field(default_factory=dict)
+    # [dashboard].pin: the entity's numeric readings are signal tiles on Now.
+    pin: bool = False
 
 
 @dataclass
@@ -73,6 +75,7 @@ def _entity_from(path: Path, data: dict, default_owner: str) -> Entity:
         write_mode=data["write_policy"]["mode"],
         owner=data["write_policy"].get("owner", default_owner),
         naming=dict(data.get("naming", {})),
+        pin=bool(data.get("dashboard", {}).get("pin", False)),
     )
 
 

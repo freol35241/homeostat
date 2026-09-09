@@ -201,6 +201,24 @@ test('presence keys parse for both aspect spellings, off-schema keys do not', ()
   assert.equal(logic.presenceEntityFromKey('home/state/short'), null);
 });
 
+test('personStatus reads presence and the last fix, and nothing else', () => {
+  const alice = { room: 'person', name: 'alice', capability: 'person' };
+  assert.deepEqual(
+    logic.personStatus({ 'home/state/person/alice/presence': true, 'home/state/person/alice/fixed_at': 1700000000 }, alice),
+    { home: true, seenAt: 1700000000000 }
+  );
+  assert.deepEqual(
+    logic.personStatus({ 'home/state/person/alice/presence': false }, alice),
+    { home: false, seenAt: undefined }
+  );
+  // A fix without a presence aspect is not "away": home stays unknown.
+  assert.deepEqual(
+    logic.personStatus({ 'home/state/person/alice/fixed_at': 1700000000, 'home/state/person/alice/lat': 59.3 }, alice),
+    { home: undefined, seenAt: 1700000000000 }
+  );
+  assert.deepEqual(logic.personStatus({}, alice), { home: undefined, seenAt: undefined });
+});
+
 test('presenceValue prefers occupancy, falls back to presence', () => {
   const entity = { room: 'hall', name: 'sensor1' };
   assert.equal(
