@@ -591,6 +591,28 @@ pub async fn config_write(
     }
 }
 
+/// The unit contract every supervised unit owes (docs/adapters.md, §2 and
+/// §10; docs/design.md, The unit contract): once ready it is `running`
+/// with a pid, and when the supervisor gets SIGTERM it exits cleanly
+/// inside `shutdown_grace_s` and leaves no orphan. One call per adapter
+/// suite — the conformance check a new adapter gets for free.
+pub async fn assert_unit_contract(sup: &mut Supervisor, observer: &zenoh::Session, unit: &str) {
+    let mut watch = health_watch(observer, unit).await;
+    let health = await_health(&mut watch, Duration::from_secs(10), |h| {
+        h.status == HealthStatus::Running
+    })
+    .await;
+    let pid = health.pid.expect("running unit has a pid");
+    assert!(process_alive(pid), "{unit} alive before shutdown");
+
+    sup.signal(libc::SIGTERM);
+    // shutdown_grace_s = 5 in the fixtures; a graceful exit must fit inside
+    // it with margin only for reaping and bus teardown.
+    let code = sup.wait_exit(Duration::from_secs(7));
+    assert_eq!(code, Some(0), "supervisor exit code");
+    assert!(!process_alive(pid), "{unit} must not outlive the supervisor");
+}
+
 /// Reads a concrete key from a core queryable, decoding JSON.
 #[allow(dead_code)] // each test binary uses its own subset of the harness
 pub async fn cache_read(session: &zenoh::Session, key: &str) -> Option<Value> {

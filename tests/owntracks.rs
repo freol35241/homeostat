@@ -6,13 +6,11 @@ mod common;
 
 use std::time::Duration;
 
-use homeostat::bus::HealthStatus;
 use serde_json::{json, Value};
 use zenoh::sample::SampleKind;
 
 use common::{
-    await_health, expect_drop_event, expect_states, health_watch, next_event, process_alive,
-    Mosquitto, Mqtt, Supervisor,
+    assert_unit_contract, expect_drop_event, expect_states, Mosquitto, Mqtt, next_event, Supervisor,
 };
 
 const FIXTURE: &str = "tests/fixture_house_owntracks";
@@ -167,20 +165,7 @@ async fn bad_input_drops_with_health_event() {
 #[tokio::test(flavor = "multi_thread")]
 async fn adapter_honors_unit_contract() {
     let (_mosquitto, mut sup, observer) = setup().await;
-    let mut watch = health_watch(&observer, "owntracks").await;
-    let health = await_health(&mut watch, Duration::from_secs(10), |h| {
-        h.status == HealthStatus::Running
-    })
-    .await;
-    let adapter_pid = health.pid.expect("running unit has a pid");
-    assert!(process_alive(adapter_pid), "adapter alive before shutdown");
-
-    sup.signal(libc::SIGTERM);
-    // shutdown_grace_s = 5 in the fixture; a graceful exit must fit inside
-    // it with margin only for reaping and bus teardown.
-    let code = sup.wait_exit(Duration::from_secs(7));
-    assert_eq!(code, Some(0), "supervisor exit code");
-    assert!(!process_alive(adapter_pid), "adapter must not outlive the supervisor");
+    assert_unit_contract(&mut sup, &observer, "owntracks").await;
 }
 
 /// (e) Discovery: every user/device pair seen on the broker — bound or

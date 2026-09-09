@@ -11,8 +11,7 @@ use serde_json::{json, Value};
 use zenoh::sample::SampleKind;
 
 use common::{
-    await_health, expect_drop_event, expect_event_kind, expect_states, health_watch, next_event,
-    process_alive, temp_house, Mosquitto, Mqtt, Supervisor,
+    assert_unit_contract, await_health, expect_drop_event, expect_event_kind, expect_states, health_watch, Mosquitto, Mqtt, next_event, Supervisor, temp_house,
 };
 
 const FIXTURE: &str = "tests/fixture_house_z2m";
@@ -235,20 +234,7 @@ async fn availability_maps_to_reserved_aspect() {
 #[tokio::test(flavor = "multi_thread")]
 async fn adapter_honors_unit_contract() {
     let (_mosquitto, mut sup, observer) = setup().await;
-    let mut watch = health_watch(&observer, "zigbee").await;
-    let health = await_health(&mut watch, Duration::from_secs(10), |h| {
-        h.status == HealthStatus::Running
-    })
-    .await;
-    let adapter_pid = health.pid.expect("running unit has a pid");
-    assert!(process_alive(adapter_pid), "adapter alive before shutdown");
-
-    sup.signal(libc::SIGTERM);
-    // shutdown_grace_s = 5 in the fixture; a graceful exit must fit inside
-    // it with margin only for reaping and bus teardown.
-    let code = sup.wait_exit(Duration::from_secs(7));
-    assert_eq!(code, Some(0), "supervisor exit code");
-    assert!(!process_alive(adapter_pid), "adapter must not outlive the supervisor");
+    assert_unit_contract(&mut sup, &observer, "zigbee").await;
 }
 
 /// (e) Discovery: a bridge/devices inventory lands on the bus as one JSON

@@ -10,13 +10,11 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use homeostat::bus::HealthStatus;
 use serde_json::{json, Value};
 use zenoh::sample::SampleKind;
 
 use common::{
-    await_health, await_mirror, expect_drop_event, expect_states, free_port, health_watch,
-    process_alive, Supervisor,
+    assert_unit_contract, await_mirror, expect_drop_event, expect_states, free_port, Supervisor,
 };
 
 const FIXTURE: &str = "tests/fixture_house_esphome";
@@ -320,18 +318,5 @@ async fn bound_device_entities_published_as_discovery() {
 #[tokio::test(flavor = "multi_thread")]
 async fn adapter_honors_unit_contract() {
     let (_device, _devices_path, mut sup, observer) = setup().await;
-    let mut watch = health_watch(&observer, "esphome").await;
-    let health = await_health(&mut watch, Duration::from_secs(10), |h| {
-        h.status == HealthStatus::Running
-    })
-    .await;
-    let adapter_pid = health.pid.expect("running unit has a pid");
-    assert!(process_alive(adapter_pid), "adapter alive before shutdown");
-
-    sup.signal(libc::SIGTERM);
-    // shutdown_grace_s = 5 in the fixture; a graceful exit must fit inside
-    // it with margin only for reaping and bus teardown.
-    let code = sup.wait_exit(Duration::from_secs(7));
-    assert_eq!(code, Some(0), "supervisor exit code");
-    assert!(!process_alive(adapter_pid), "adapter must not outlive the supervisor");
+    assert_unit_contract(&mut sup, &observer, "esphome").await;
 }
