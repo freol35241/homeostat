@@ -151,6 +151,7 @@ def build_model(model: house.HouseModel, granted: set[str]) -> dict:
                 "write_mode": e.write_mode,
                 "owner": e.owner,
                 "commandable": e.capability in granted,
+                "pin": e.pin,
             }
             for e in model.entities
         ],

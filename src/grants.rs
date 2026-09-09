@@ -391,6 +391,7 @@ mod tests {
                 naming: None,
                 write_policy: WritePolicy { mode, owner: adapter.to_string() },
                 inputs: None,
+                dashboard: None,
             },
             path: format!("entities/{adapter}/{name}.toml"),
             owner: adapter.to_string(),

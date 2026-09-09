@@ -1261,6 +1261,19 @@ the exploration that produced it):
   default. A house in equilibrium renders a nearly empty page,
   deliberately. What counts as "notable state" is per-capability
   vocabulary in the public schema, never house configuration.
+  Revised 2026-09-09, from living with it: the MVP's "key signals"
+  were the first six numeric sensor aspects in model order, and its
+  "People" tile listed motion sensors — an inventory by another name,
+  and it read as random because nothing said what was key. Now `Now`
+  pins nothing by default: a reading is a signal tile only when its
+  entity file says `[dashboard] pin = true` — the ordering/pinning
+  escape hatch below, used for the first time — and the People tile is
+  the `person` entities, home or away from a `presence` aspect on the
+  person (new vocabulary; published by whichever adapter knows, a
+  geofence transition or a fused sighting), falling back to the age of
+  the last fix. Motion sensors are rooms' business. The page's body is
+  the deviations feed; a house in equilibrium with no one pinned is
+  people plus "In equilibrium", which is what this bullet promised.
 - **English first.** `[naming]` already carries `en` and `sv`; the
   dashboard renders `en` now, and locale becomes a per-browser choice
   later. No architecture in it.
