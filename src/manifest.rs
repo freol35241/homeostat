@@ -14,6 +14,7 @@ pub const CAPABILITIES: &[&str] = &[
     "cover",
     "light",
     "lock",
+    "notifier",
     "person",
     "presence",
     "router",
@@ -91,6 +92,13 @@ pub const VOCABULARY: &[Capability] = &[
         aspects: &[],
         notable: Some("locked = false"),
         note: "",
+    },
+    Capability {
+        name: "notifier",
+        base: Some("message"),
+        aspects: &["alert", "delivered"],
+        notable: None,
+        note: "A channel that reaches a person: a phone, a group chat. `message` and `alert` are commandable strings — the text itself — and two structurally separate delivery paths, granted and policed apart (an alert overrides quiet hours; a message never will). `delivered` is the epoch time the delivery service acknowledged the last message, never a human's receipt. Room `person` for one person's channel, `global` for a group (docs/design.md, Notifications).",
     },
     Capability {
         name: "person",
@@ -477,8 +485,9 @@ pub struct EntitySection {
     /// node, a camera's go2rtc stream). Unique per adapter
     /// (`duplicate-entity-id`).
     pub id: String,
-    /// One of: binary_sensor, camera, climate, cover, light, lock, person,
-    /// presence, router, sensor, switch, vpn (`unknown-capability`). Decides
+    /// One of: binary_sensor, burner, camera, climate, cover, light, lock,
+    /// notifier, person, presence, router, sensor, switch, vpn
+    /// (`unknown-capability`). Decides
     /// the base aspect, the dashboard widget and which cmd grants apply.
     pub capability: String,
     /// Optional aspects beyond the capability's base, as the adapter

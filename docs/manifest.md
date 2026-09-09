@@ -187,7 +187,7 @@ a key segment (`invalid-name`).
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `capability` | string | yes | One of: binary_sensor, camera, climate, cover, light, lock, person, presence, router, sensor, switch, vpn (`unknown-capability`). Decides the base aspect, the dashboard widget and which cmd grants apply. |
+| `capability` | string | yes | One of: binary_sensor, burner, camera, climate, cover, light, lock, notifier, person, presence, router, sensor, switch, vpn (`unknown-capability`). Decides the base aspect, the dashboard widget and which cmd grants apply. |
 | `features` | list of string | no | Optional aspects beyond the capability's base, as the adapter names them (`brightness`, `color_temp` on a light). For a sensor it is descriptive only; its widgets come from the numeric aspects it publishes. |
 | `id` | string | yes | The adapter-native address (a zigbee2mqtt friendly name, an ESPHome node, a camera's go2rtc stream). Unique per adapter (`duplicate-entity-id`). |
 | `room` | string | yes | The single source of spatial truth for this entity. A key segment; not `home` or a key class (`reserved-room-name`). The pseudo-rooms `global` and `person` are for entities with no place. |
@@ -256,6 +256,7 @@ What an entity of each capability publishes under which names (docs/adapters.md,
 | `cover` | — | — | — | Reserved; no adapter binds it yet. |
 | `light` | `on` | `brightness`, `color_temp` | `on = true` | `brightness` 0–254 (the Zigbee2MQTT scale the dashboard assumes), `color_temp` in mired. |
 | `lock` | `locked` | — | `locked = false` |  |
+| `notifier` | `message` | `alert`, `delivered` | — | A channel that reaches a person: a phone, a group chat. `message` and `alert` are commandable strings — the text itself — and two structurally separate delivery paths, granted and policed apart (an alert overrides quiet hours; a message never will). `delivered` is the epoch time the delivery service acknowledged the last message, never a human's receipt. Room `person` for one person's channel, `global` for a group (docs/design.md, Notifications). |
 | `person` | — | `lat`, `lon`, `accuracy`, `battery`, `fixed_at` | — | Scalar position aspects; `fixed_at` is the fix's epoch timestamp. Room is always `person`. |
 | `presence` | — | `occupancy`, `presence` | — | Either spelling is accepted; adapters pass their native one through. |
 | `router` | — | `wan` | `wan = false` |  |
