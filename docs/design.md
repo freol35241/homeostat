@@ -1462,6 +1462,14 @@ in the same change:
   clear, not a zero) and reports `feed-source-lost`. Cutover note: clear
   the topic when switching masters, or the old writer's retained value
   outlives it.
+- **One subscriber per source (2026-09-09).** The adapter first subscribed
+  the value key and the `available` key separately; zenoh orders samples
+  within a subscriber, not across two, so `available = true` followed by
+  a value could be delivered value-first and the value silently dropped —
+  a CI-only failure until the ordering was understood. One subscriber on
+  the source entity's `home/state/{room}/{entity}/*` keeps both in
+  publish order, and a value dropped while the source is unavailable now
+  leaves one `feed-source-unavailable` drop per outage.
 - **No adapter-side refresh cadence, for now.** The adapter forwards each
   source sample and nothing between samples; a transition-only source
   plus a device validity window shorter than its quiet periods is a

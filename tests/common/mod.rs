@@ -613,6 +613,78 @@ pub async fn assert_unit_contract(sup: &mut Supervisor, observer: &zenoh::Sessio
     assert!(!process_alive(pid), "{unit} must not outlive the supervisor");
 }
 
+/// The late-joiner read for a test: subscribe, then get, merge (docs/
+/// design.md, "Last-value lives in the core"). A unit that reached
+/// `running` may already have published its initial states before the
+/// test's subscriber existed — an adapter's device connection races the
+/// liveliness token — and a zenoh subscriber never sees past samples, so a
+/// test that only waits on `sub` loses that race on a slow runner. This
+/// drains the subscription AND reads the core mirror until every expected
+/// key carries its value. `sub` must already be declared (declaring it
+/// after the mirror read would open the opposite gap).
+#[allow(dead_code)]
+pub async fn await_states(observer: &zenoh::Session, sub: &StateSub, expected: &[(&str, Value)]) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    let mut seen: HashMap<String, Value> = HashMap::new();
+    let mut note = |sample: Sample, seen: &mut HashMap<String, Value>| {
+        if let Ok(value) = serde_json::from_slice::<Value>(&sample.payload().to_bytes()) {
+            seen.insert(sample.key_expr().as_str().to_string(), value);
+        }
+    };
+    loop {
+        while let Ok(Some(sample)) = sub.try_recv() {
+            note(sample, &mut seen);
+        }
+        for (key, _) in expected {
+            if !seen.contains_key(*key) {
+                if let Some(value) = cache_read(observer, key).await {
+                    seen.insert((*key).to_string(), value);
+                }
+            }
+        }
+        if expected.iter().all(|(key, value)| seen.get(*key) == Some(value)) {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "expected {expected:?} on the bus or in the mirror; saw {seen:?}"
+        );
+        // A subscription sample, or a re-read of the mirror after a beat.
+        if let Ok(Ok(sample)) =
+            tokio::time::timeout(Duration::from_millis(200), sub.recv_async()).await
+        {
+            note(sample, &mut seen);
+        }
+    }
+}
+
+/// A unit's discovery document as a late joiner reads it: polled from the
+/// core mirror of `home/discovery/*` until `ready` accepts it (the record
+/// count, say) — the read path the MCP surface uses, and the only one a
+/// test can rely on when the publish may predate its subscriber.
+#[allow(dead_code)]
+pub async fn await_discovery<F>(observer: &zenoh::Session, unit: &str, ready: F) -> Value
+where
+    F: Fn(&Value) -> bool,
+{
+    let key = format!("home/discovery/{unit}");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let mut last = None;
+    loop {
+        if let Some(doc) = cache_read(observer, &key).await {
+            if ready(&doc) {
+                return doc;
+            }
+            last = Some(doc);
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "no acceptable discovery document at {key} within 30s; last {last:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
 /// Reads a concrete key from a core queryable, decoding JSON.
 #[allow(dead_code)] // each test binary uses its own subset of the harness
 pub async fn cache_read(session: &zenoh::Session, key: &str) -> Option<Value> {
