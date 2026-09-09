@@ -1380,7 +1380,15 @@ adapters never do. The gap is metadata, so the fix is metadata.
   kinds name formatting, not physics, and the long tail of units is the
   protocol's to declare. The capability's own vocabulary (on, locked,
   brightness, color_temp) is described as readings only; its controls
-  stay the dashboard's bespoke widget, never a descriptor command. Locale (`{en, sv}` labels, the `[naming]` shape) is the
+  stay the dashboard's bespoke widget, never a descriptor command.
+  The same day, ESPHome (generated per entity from its EntityInfo:
+  unit → kind, the device's entity name → label, the alarm-shaped
+  device classes notable) and OpenWrt (a static one boolean per
+  capability with value labels, "up"/"down", "present"/"away" — the
+  whole of what it speaks). A boolean may carry `values` naming true
+  and false, the second and last vocabulary addition this round.
+  ONVIF and OwnTracks publish schema vocabulary only and describe
+  nothing. Locale (`{en, sv}` labels, the `[naming]` shape) is the
   obvious next step and is deferred with the dashboard's English-first
   settlement.
 
