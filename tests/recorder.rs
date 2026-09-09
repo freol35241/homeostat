@@ -469,6 +469,53 @@ async fn stats_describe_the_store() {
     sup.shutdown();
 }
 
+/// Retention: rows older than a table's window are purged and the pages
+/// returned to the file, one `purge` health event per purge that deleted
+/// anything. The two windows are separate: samples go, the audit trail
+/// stays at its own (unset) window. A window change applies at once.
+#[tokio::test(flavor = "multi_thread")]
+async fn retention_purges_old_rows() {
+    let db = store_path("retention");
+    let (mut sup, observer) = setup(&db).await;
+    let events = observer
+        .declare_subscriber("home/health/recorder/event")
+        .await
+        .expect("event subscriber");
+
+    let power = matched_publisher(&observer, "home/state/attic/meter/power").await;
+    for value in [1.5, 2.5, 3.5] {
+        put(&power, json!(value)).await;
+    }
+    let level = matched_publisher(&observer, "home/state/attic/gauge/level").await;
+    put(&level, json!(7)).await;
+    rows_eventually(&db, "SELECT value FROM samples", 4, Duration::from_secs(20)).await;
+    let audit_before = read_rows(&db, "SELECT ts FROM events").len();
+    assert!(audit_before >= 1, "health transitions are in the audit trail");
+
+    // Everything recorded so far ages past a window of ~0.86 s; setting
+    // the window is what triggers the purge.
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    config_write(&observer, "home/config/recorder/retain_samples_days", json!(1e-5))
+        .await
+        .expect("in-constraint write accepted");
+    let purge = await_event(&events, Duration::from_secs(30), |e| e["kind"] == "purge").await;
+    assert_eq!(purge["samples"], json!(4), "both series purged: {purge}");
+    assert_eq!(purge["events"], json!(0), "events keep their own window: {purge}");
+    assert!(purge["pages_freed"].as_i64().expect("pages freed") >= 0, "{purge}");
+
+    assert_eq!(read_rows(&db, "SELECT value FROM samples").len(), 0);
+    assert!(
+        read_rows(&db, "SELECT ts FROM events").len() >= audit_before,
+        "the audit trail is untouched"
+    );
+
+    // New samples land as before: retention deletes, it never stops writing.
+    put(&power, json!(4.5)).await;
+    rows_eventually(&db, "SELECT value FROM samples", 1, Duration::from_secs(20)).await;
+
+    sup.shutdown();
+}
+
 /// (d) The read path returns what was written: a get on
 /// home/history/state/{entity}/{aspect} replies the typed rows with
 /// timestamps, honoring from/to/limit (zenoh's `;`-separated selector

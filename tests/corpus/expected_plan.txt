@@ -31,6 +31,9 @@ Units to create (7):
     command: uv run units/dashboard.py --port 8600
 + service recorder (units/recorder.toml)
     command: uv run units/recorder.py
+    params:
+      retain_events_days  type=float  default=0  constraint={min=0}  editable_by=owner
+      retain_samples_days  type=float  default=0  constraint={min=0}  editable_by=owner
 
 Expanded keys:
 

@@ -612,6 +612,40 @@ unwritable — disk full, permissions, dying SD card. That is what the
 integration test induces (chmod the store read-only, publish, restore) and
 what the policy above is written against; no production code path knows
 tests exist.
+
+### Retention (settled 2026-09-09, #19, #26)
+
+Keep-forever was undecided rather than decided against: the log-sink
+rejection reasons that retention is deployment configuration, which is
+right for logs (they have a platform to be pushed to) and does not
+transfer to a recorder-private SQLite file. Keep-forever also dissolves
+the pressure the design relies on elsewhere — an adapter that publishes on
+poll rather than on change costs nothing anyone can see (the onvif motion
+flood, the 107-events-per-hour device, both caught only because someone
+happened to measure). Retention makes noise cost something visible, which
+pushes the fix back to the adapter.
+
+- **Two windows, not one**: `retain_samples_days` and `retain_events_days`
+  in the recorder's manifest. `events` is the audit trail — the "who" —
+  the smaller table and the one worth keeping longest; `samples` is the
+  bulk.
+- **Default 0, meaning forever**, so no upgrade silently deletes history.
+  The point is that the policy is expressible and visible, not that it
+  changes.
+- **Mechanism**: on the writer thread, so it serialises with flushes, a
+  `DELETE ... WHERE ts < cutoff` per table every hour and whenever a
+  window changes, then `PRAGMA incremental_vacuum` — what the file's
+  `auto_vacuum = INCREMENTAL` (#24) was reserved for. One `purge` health
+  event per purge that deleted anything, with rows per table and pages
+  freed; a purge that finds nothing is silent, so retention never fills
+  the events table with its own bookkeeping. A failed purge is a
+  `purge-failed` event and the next attempt is an hour later.
+- **The only destructive operation in the store.** Downsampling stays
+  out of the recorder: the additive analytics layer (DuckDB over ATTACH)
+  can roll up without deleting source rows, and a roll-up that deleted
+  them could not be additive. No pluggable backend either: the moment
+  `endpoint` accepts `postgresql://` the no-dual-path property dies and
+  the tests hollow out.
  
 ## Plan/apply proper (settled in step 5b)
 
