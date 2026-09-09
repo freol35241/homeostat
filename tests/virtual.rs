@@ -137,9 +137,11 @@ async fn restarted_automation_catches_up_from_the_mirror() {
         .expect("fused subscriber");
     let livingroom = matched_publisher(&observer, LIVINGROOM_STATE).await;
     let office = matched_publisher(&observer, OFFICE_STATE).await;
+    // One put at a time: the unit reads the two sources through two
+    // subscribers, and zenoh orders samples within one, not across them.
     livingroom.put(json!(20.0).to_string()).await.expect("put");
-    office.put(json!(22.0).to_string()).await.expect("put");
     assert_eq!(next_sample(&fused_sub, Duration::from_secs(10)).await, json!(20.0));
+    office.put(json!(22.0).to_string()).await.expect("put");
     assert_eq!(next_sample(&fused_sub, Duration::from_secs(10)).await, json!(21.0));
     mirror_read_eventually(&observer, LIVINGROOM_STATE, &json!(20.0)).await;
     mirror_read_eventually(&observer, OFFICE_STATE, &json!(22.0)).await;
