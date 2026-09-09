@@ -2180,6 +2180,151 @@ death silently releases the burner to the automation.
   maintenance. It is also machinery, and it is being deferred against one
   case. If interlocks recur, this is the design to pick up.
 
+## Notifications (settled 2026-09-09, #31)
+
+A unit could publish state, commands, health and config, and none of it
+reached a person. #31 surveyed the reporting house's Node-RED estate and
+found three of five automation groups (intrusion, irrigation, heating)
+unportable without a way to tell someone, and asked whether that is in
+scope at all, what shape it takes, and how it is gated.
+
+**In scope, and it is a capability delivered by an adapter.** Reaching
+a person is reaching a device the house binds: a phone's notification
+channel has a dialect exactly as a lamp does, and the adapter that speaks
+it embodies the channel as an entity. `notifier` is a capability; an
+entity file per addressee binds it to a delivery adapter; an automation
+that wants to reach one declares an ordinary cmd-class publish, granted
+at plan time onto that entity. Nothing new in the core beyond the
+vocabulary row.
+
+- **Vocabulary.** Base aspect `message` (string, commandable); feature
+  `alert` (string, commandable). Severity is an ASPECT, not a field in
+  the payload, so the two classes are structurally separate delivery
+  paths: separately grantable (`home/cmd/person/*/alert` grants alerts
+  and nothing else), separately policed by the adapter later (quiet
+  hours withhold `message`, never `alert`), and separately rendered in
+  history. The payload is the message itself, a bare string, the scalar
+  the recorder stores natively. Nothing dialect-shaped enters the
+  vocabulary: chat ids, topics, priorities, parse modes and receipt
+  semantics are the adapter's, in its credentials and its code.
+- **Addressing is the entity.** One entity per channel, pseudo-room
+  `person` for a person's phone, `global` for a group. A group is either
+  a fan-out loop in the automation (the group-actions settlement:
+  fan-out at the edge, never a relay) or a group channel bound as its
+  own entity, whichever the dialect makes honest. A person with two
+  channels is two entities; switching providers is a plan/apply
+  migration, and the automations do not change. Nothing "person has
+  channels" exists in the model, deliberately.
+- **Gating is the grant table, unchanged.** Adding a `notifier` publish
+  to a manifest is a grant delta, so the plan is structural and lands as
+  a pending plan for the owner; the smuggling criterion of the agent
+  surface already covers an agent trying it. The plan renders who may
+  reach whom; a mistyped entity is the existing "matches no entities"
+  warning; the SDK refuses a key outside the declared expression. The
+  issue's worry that "the grant table would describe who may speak" is
+  the point: the table already says which unit may do what to which
+  entity, and a phone is one more entity a compromised automation can
+  do harm through.
+- **The envelope's band is inert.** Channels are `shared`, so no lease,
+  no preemption, no arbiter. Every cmd payload still carries
+  `{value, priority, actor}`; `actor` is exactly what the audit wants
+  (the recorder stores every message with who sent it and when, and
+  `home/history/events` answers "what was sent to Alice yesterday"),
+  and `priority` carries no meaning here. Written down rather than
+  reinterpreted.
+- **Rate limiting splits in two.** The cooldown itself is house policy
+  (the reporting estate's one-per-ten-minutes intrusion limiter is
+  load-bearing against the 417-samples-in-56-seconds motion episode of
+  #3) and lives in the automation as a family-editable parameter; the
+  bookkeeping is the SDK's `Cooldown` (graduated on the Freshness
+  argument: the shape was settled by a live limiter, not invented). The
+  adapter carries a per-entity floor, `min_interval_s` (owner-editable),
+  as defense in depth — the ivt490 bounds argument — dropping with a
+  `rate-limited` event. A runaway automation still writes every attempt
+  as a cmd row, so the noise costs something visible, which is the
+  retention settlement's pressure back toward the producer.
+- **Failure is loud by existing machinery.** The adapter verifies its
+  server before `ready()`, so a bad token or an unreachable server is a
+  startup error the supervisor's backoff shows. Every undelivered
+  message is a `drop` with reason `delivery-failed`. The channel's
+  `available` flips false on a failed delivery and true on the next
+  success — notable-state vocabulary, so a dead channel is a deviation
+  on `Now`, recorded, and subscribable. The adapter publishes
+  `delivered`, the epoch time the server acknowledged the last message
+  (the `fixed_at` shape), so history holds the sent row and the acked
+  row side by side. The honest limit: `delivered` means the delivery
+  service accepted the message, not that a human saw it. A true far-end
+  acknowledgment arrives with a homeostat app (below).
+- **Rejected, deliberately.** An external subscriber (cannot carry
+  intent: "irrigation skipped because it rained" is not derivable from
+  state, and if it is a unit it is in scope anyway). Health events as
+  the channel (no addressee; every event becomes a candidate). A new
+  class `home/notify/**` with a notifier service (the addressee becomes
+  hidden structure — a name in an out-of-repo file the plan cannot
+  check, so a typo goes nowhere silently; gating needs a new grant
+  kind, which the feeds settlement already refused as machinery;
+  nothing downstream is free; a new class fragments the vocabulary
+  consumers key on, the `derived`-class objection). An SDK facility
+  (authority by import). Notification as state plus a routing service
+  (the routing table is a rules DSL in a manifest, the generic-fusion
+  rejection; an alarm condition may ALSO deserve a virtual entity so
+  `Now` shows it, which is orthogonal to delivery). Dashboard web push
+  (no secure context, and "looking at the dashboard" is what the issue
+  excludes).
+
+### The ntfy adapter (built 2026-09-09)
+
+The first delivery dialect. Signal and WhatsApp were ruled out for the
+reporting house because both need a phone number for the house's
+identity (Signal through signal-cli, a foreign binary on the go2rtc
+shim pattern; WhatsApp through the Business Platform, or through your
+own account, which makes every message come from you). Telegram needs
+none and was the runner-up. ntfy won on fit: a small self-hostable push
+server with an Android app, no account, no number, no third party when
+self-hosted, local-only over WireGuard exactly like the dashboard, and
+it speaks UnifiedPush, which is the push transport a homeostat app would
+use — so this adapter is not thrown away when the app arrives.
+
+- **ntfy is a compose sidecar, not a unit.** The phones connect to it
+  directly, so it is the peer of the MQTT broker, not of go2rtc, and its
+  lifetime must not follow a unit restart. Homeostat only publishes to
+  it. `adapters/ntfy.py` is a plain Python unit; no foreign binary in
+  the image.
+- **Configuration is text, all of it.** ntfy provisions users, access
+  rules and tokens from its config file (`auth-users`, `auth-access`,
+  `auth-tokens`, ntfy ≥ 2.12; re-applied on every start, removed when
+  they leave the file). The house repo carries `ntfy/server.yml` with
+  the base URL, cache window and the access rules — topics are the
+  notifier entity ids, the publisher writes only, each person reads
+  only their own topic and the group's — and the env file beside the
+  compose file carries the bcrypt user hashes and the token. Adding a
+  family member is an entity file, two access lines and a user entry.
+  The access list duplicates what the entity files say (the z2m
+  base-topic shape); rendering it from the entity files would make
+  ntfy a shim unit, and the sidecar's independent lifetime is worth
+  more than three lines.
+- **Binding.** The entity `id` is the ntfy topic. `[discovery].endpoint`
+  is the server URL (compose-internal, not a secret); the publisher
+  token is `HOMEOSTAT_NTFY_TOKEN` in the environment, never in the
+  repo. Startup GETs `/v1/health` before `ready()`.
+- **Mapping.** `message` → POST `{endpoint}/{topic}` with the string as
+  the body at ntfy priority 3, the actor's unit name as the title;
+  `alert` → the same at priority 5, which the Android app treats as
+  urgent: it overrides Do Not Disturb and plays a continuous alarm
+  tone. The severity split therefore maps onto something the phone
+  enforces. The server's reply carries the message id and time;
+  `delivered` is that time. A non-2xx or a connection error drops with
+  `delivery-failed` and flips `available`.
+- **What the cache window means.** The phone's app fetches what it
+  missed on reconnect, back to `cache-duration`; a message older than
+  that when the phone returns is lost. A phone must reach the server
+  from wherever it is — for the intrusion flow, which fires while the
+  house is empty, that means WireGuard always-on on the family phones
+  — or the alert waits in the cache until it does.
+- **The homeostat app is the designated growth path** (the Frigate
+  pattern): one more adapter binding its own `notifier` entities,
+  acknowledging for itself, changing zero automations.
+
 ## Voice (later phase)
  
 - Two-tier command path: a fast-path intent matcher (high precision,

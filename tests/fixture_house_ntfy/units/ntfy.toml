@@ -1,0 +1,33 @@
+schema = 1
+
+[unit]
+name = "ntfy"
+kind = "adapter"
+description = "ntfy notifier adapter under test"
+
+[runtime]
+command = "uv run ../../adapters/ntfy.py"
+restart = "always"
+shutdown_grace_s = 5
+
+[discovery]
+mode = "static"
+endpoint = "http://127.0.0.1:${HOMEOSTAT_TEST_NTFY_PORT}"
+
+[bus.publishes]
+state = { key = "home/state/{room}/{entity}/**" }
+discovery = { key = "home/discovery/ntfy" }
+
+[bus.subscribes]
+commands = "home/cmd/{room}/{entity}/**"
+
+# Short floor so the rate-limited drop is provable inside a test without
+# a wait; the adapter-side default (5 s) covers a manifest without it.
+[params.min_interval_s]
+type = "float"
+default = 0.5
+constraint = { min = 0 }
+editable_by = "owner"
+
+[entities]
+dir = "entities/ntfy/"

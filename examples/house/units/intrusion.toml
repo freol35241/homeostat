@@ -1,0 +1,35 @@
+schema = 1
+
+[unit]
+name = "intrusion"
+kind = "automation"
+description = "Alerts a phone when something moves while the house is empty"
+
+[runtime]
+command = "uv run units/intrusion.py"
+restart = "on-failure"
+shutdown_grace_s = 5
+
+[bus.subscribes]
+motion = "home/state/hallway/*/occupancy"
+presence = "home/state/global/*/presence"
+
+# The notifier grant: who this unit may reach, and with which severity.
+# Adding or widening it is a grant delta — a structural plan the owner
+# applies (docs/design.md, Notifications).
+[bus.publishes]
+alert = { key = "home/cmd/person/alice_phone/alert", capability = "notifier", priority = "automation" }
+
+# One alert per window, however many motion samples arrive: the SDK's
+# Cooldown in the script, the window a family setpoint here.
+[params.cooldown_minutes]
+type = "float"
+default = 10
+constraint = { min = 0 }
+editable_by = "family"
+
+[naming]
+sv = "inbrottslarm"
+en = "intrusion alarm"
+aliases = []
+room = "hallway"

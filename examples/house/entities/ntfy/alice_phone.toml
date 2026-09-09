@@ -1,0 +1,16 @@
+schema = 1
+
+[entity]
+id = "alice"                 # the ntfy topic Alice's phone subscribes to
+capability = "notifier"
+features = ["alert"]
+room = "person"
+
+[naming]
+sv = "Alices telefon"
+en = "Alice's phone"
+aliases = []
+
+[write_policy]
+mode = "shared"
+owner = "ntfy"
