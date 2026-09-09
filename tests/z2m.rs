@@ -270,7 +270,16 @@ async fn bridge_inventory_published_as_discovery() {
                     {"type": "composite", "property": "color", "features": []}]}},
             {"type": "EndDevice", "friendly_name": "motion_new", "ieee_address": "0x02",
              "definition": {"vendor": "Aqara", "model": "RTCGQ11LM", "description": "motion",
-                "exposes": [{"type": "binary", "property": "occupancy"}]}}
+                "exposes": [{"type": "binary", "property": "occupancy"}]}},
+            // z2m before 1.34: no `category` on any expose, battery first (#53)
+            {"type": "EndDevice", "friendly_name": "shed_thermometer", "ieee_address": "0x03",
+             "definition": {"vendor": "SONOFF", "model": "SNZB-02", "description": "thermometer",
+                "exposes": [
+                    {"type": "numeric", "property": "battery", "unit": "%", "access": 1},
+                    {"type": "numeric", "property": "temperature", "unit": "°C", "access": 1},
+                    {"type": "numeric", "property": "humidity", "unit": "%", "access": 1},
+                    {"type": "numeric", "property": "voltage", "unit": "mV", "access": 1},
+                    {"type": "numeric", "property": "linkquality", "unit": "lqi", "access": 1}]}}
         ])
         .to_string(),
     )
@@ -283,7 +292,7 @@ async fn bridge_inventory_published_as_discovery() {
     let doc: Value =
         serde_json::from_slice(&sample.payload().to_bytes()).expect("discovery is JSON");
     let records = doc.as_array().expect("discovery is an array");
-    assert_eq!(records.len(), 2, "coordinator omitted: {doc}");
+    assert_eq!(records.len(), 3, "coordinator omitted: {doc}");
 
     let lamp = records
         .iter()
@@ -318,6 +327,25 @@ async fn bridge_inventory_published_as_discovery() {
     assert_eq!(motion["suggested"]["capability"], json!("presence"));
     assert_eq!(motion["description"]["model"], json!("RTCGQ11LM"));
     assert!(motion.get("aspects").is_none(), "an unbound device has no entity to describe");
+
+    // Without categories the generator still sorts what newer z2m would
+    // (linkquality, a battery voltage in mV → diagnostics), and battery,
+    // a reading, goes last: the card headlines temperature and humidity.
+    let thermo = records
+        .iter()
+        .find(|r| r["id"] == json!("shed_thermometer"))
+        .expect("thermometer record");
+    let fields = &thermo["aspects"]["fields"];
+    assert_eq!(fields["temperature"]["group"], json!("readings"));
+    assert_eq!(fields["humidity"]["group"], json!("readings"));
+    assert_eq!(fields["battery"]["group"], json!("readings"));
+    assert_eq!(fields["voltage"]["group"], json!("diagnostics"));
+    assert_eq!(fields["linkquality"]["group"], json!("diagnostics"));
+    let raw = String::from_utf8(sample.payload().to_bytes().to_vec()).expect("utf-8 payload");
+    let thermo_raw = &raw[raw.find("\"id\": \"shed_thermometer\"").expect("thermometer in payload")..];
+    let pos = |aspect: &str| thermo_raw.find(&format!("\"{aspect}\": {{")).expect(aspect);
+    assert!(pos("temperature") < pos("humidity") && pos("humidity") < pos("battery"),
+        "battery is ordered last among the readings: {thermo_raw}");
 
     // The mirror serves it to late joiners: the read path the MCP
     // surface's read_state uses.
