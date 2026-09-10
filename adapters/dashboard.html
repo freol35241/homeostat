@@ -160,6 +160,10 @@ h1.view-title { font-size: 20px; margin: 0 0 16px; }
 .entity-row:first-of-type { border-top: none; }
 .entity-name { font-size: 13px; flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .entity-sub { margin-top: 2px; }
+/* a multi-aspect sensor's readings, under its head row */
+.entity-row.sensor-reading { min-height: 34px; }
+.sensor-reading .entity-name { padding-left: 12px; font-size: 12px; color: var(--secondary); }
+.entity-row .muted.stale { color: var(--muted); text-decoration: line-through dotted; }
 .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; flex: 0 0 auto; }
 .dot-on { background: var(--ink); }
 .dot-off { background: transparent; border: 1.4px solid var(--muted); }
@@ -423,7 +427,7 @@ function stateValue(room, entity, aspect) {
   return logic.stateValue(store.state, room, entity, aspect);
 }
 
-// numeric aspects present in state for an entity (sensor widgets)
+// numeric aspects present in state for an entity (Now tiles, history title)
 function numericAspectsFor(entity) {
   var prefix = 'home/state/' + entity.room + '/' + entity.name + '/';
   var out = [];
@@ -972,22 +976,35 @@ function widgetForClimate(entity) {
     '</span></span></div>';
 }
 
-function widgetForSensor(entity) {
-  var aspects = numericAspectsFor(entity);
-  if (aspects.length === 0) {
+// A sensor's card: one sparkline row per reading, each tapping through to
+// that aspect's history. Which readings, in what order, is the descriptor's
+// say (dashboard-logic.js, sensorCardPlan, #56): a thermometer lists
+// temperature and humidity, not its link quality. A multi-aspect sensor
+// gets a head row with the entity name that opens the entity detail — the
+// aspect rows are the only other affordance, and they lead to a chart. The
+// overlay, which is that detail, renders the rows without the head.
+function widgetForSensor(entity, withHead) {
+  var rows = logic.sensorCardPlan(entity, store.state, store.aspects[entity.name]);
+  if (rows.length === 0) {
     return '<div class="entity-row"><span class="entity-name">' + esc(entity.label) + '</span><span class="faint">no data</span></div>';
   }
-  return aspects.map(function (aspect) {
-    var v = stateValue(entity.room, entity.name, aspect);
-    var sk = entity.name + '|' + aspect;
-    ensureHistory(entity.name, aspect); // fetched once (guarded), on first render while visible
+  var multi = rows.length > 1;
+  var attrs = ' data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '"';
+  var head = multi && withHead !== false
+    ? '<div class="entity-row row-clickable" data-action="entity-detail"' + attrs + '>' +
+      '<span class="entity-name" title="' + esc(entity.label) + '">' + esc(entity.label) + '</span></div>'
+    : '';
+  return head + rows.map(function (r) {
+    var sk = entity.name + '|' + r.aspect;
+    ensureHistory(entity.name, r.aspect); // fetched once (guarded), on first render while visible
     var s = localState.sparklines[sk];
-    var sparkHtml = s && s.loaded ? buildChart('room-' + sk, s.points, { height: 28, sizeClass: 'chart-row', aspect: aspect, area: true }) : '';
-    return '<div class="entity-row row-clickable" data-action="history-detail" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '" data-aspect="' + esc(aspect) + '">' +
-      '<span class="entity-name" title="' + esc(entity.label) + '">' + esc(entity.label) + (aspects.length > 1 ? ' &middot; ' + esc(aspect) : '') + '</span>' +
+    var sparkHtml = s && s.loaded ? buildChart('room-' + sk, s.points, { height: 28, sizeClass: 'chart-row', aspect: r.aspect, area: true }) : '';
+    var name = multi ? r.label : entity.label;
+    return '<div class="entity-row row-clickable' + (multi ? ' sensor-reading' : '') + '" data-action="history-detail"' + attrs + ' data-aspect="' + esc(r.aspect) + '">' +
+      '<span class="entity-name" title="' + esc(name) + '">' + esc(name) + '</span>' +
       '<span style="display:flex;align-items:center;gap:8px;">' +
       (sparkHtml ? '<span style="width:80px;">' + sparkHtml + '</span>' : '') +
-      '<span class="muted">' + esc(displayAspectValue(entity, aspect, v)) + '</span></span>' +
+      '<span class="muted' + (r.stale ? ' stale' : '') + '">' + esc(r.display) + '</span></span>' +
       '</div>';
   }).join('');
 }
@@ -1731,6 +1748,10 @@ function renderEntityDetailBody() {
   if (entity.capability === 'camera') {
     middle = '<div class="card-label" style="margin-top:20px;">Live</div>' +
       '<div data-camera-live="' + esc(entity.name) + '"></div>';
+  } else if (entity.capability === 'sensor') {
+    // A described sensor's readings are its sections, each tapping through
+    // to its history; an undescribed one keeps the sparkline rows here.
+    if (!descriptor) middle = '<div class="card-label" style="margin-top:20px;">Controls</div>' + widgetForSensor(entity, false);
   } else if (!descriptor || BESPOKE_WIDGET[entity.capability]) {
     // A capability with its own widget (a toggle, a slider) keeps it here
     // whether or not the adapter described the rest of its aspects: the
