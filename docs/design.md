@@ -1271,7 +1271,11 @@ the exploration that produced it):
   the `person` entities, home or away from a `presence` aspect on the
   person (new vocabulary; published by whichever adapter knows, a
   geofence transition or a fused sighting), falling back to the age of
-  the last fix. Motion sensors are rooms' business. The page's body is
+  the last fix. Motion sensors are rooms' business. A pinned entity's
+  tiles are its sensor-card rows (2026-09-10, after #56): the
+  descriptor's readings in field order, never its diagnostics or a
+  control — a pinned thermometer is a temperature and a humidity tile,
+  not a link-quality one. The page's body is
   the deviations feed; a house in equilibrium with no one pinned is
   people plus "In equilibrium", which is what this bullet promised.
 - **English first.** `[naming]` already carries `en` and `sv`; the
