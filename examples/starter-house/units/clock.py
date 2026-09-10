@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "homeostat==0.11.0",
+#     "homeostat==0.11.1",
 # ]
 # ///
 """Clock service: civil time on the bus (see docs/design.md).

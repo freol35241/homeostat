@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "homeostat==0.11.0",
+#     "homeostat==0.11.1",
 #     "aiohttp>=3.9",
 # ]
 # ///
@@ -148,6 +148,7 @@ def build_model(model: house.HouseModel, granted: set[str]) -> dict:
                 "write_mode": e.write_mode,
                 "owner": e.owner,
                 "commandable": e.capability in granted,
+                "pin": e.pin,
             }
             for e in model.entities
         ],
