@@ -41,6 +41,19 @@
     return undefined;
   }
 
+  /* A person on Now: { home, seenAt }. home is the person's `presence`
+   * aspect (true, false, or undefined when nothing publishes it); seenAt is
+   * the last fix as epoch ms, when a location adapter reports one. The
+   * page words it; this only reads the vocabulary. */
+  function personStatus(state, entity) {
+    var presence = stateValue(state, entity.room, entity.name, 'presence');
+    var fixedAt = stateValue(state, entity.room, entity.name, 'fixed_at');
+    return {
+      home: typeof presence === 'boolean' ? presence : undefined,
+      seenAt: typeof fixedAt === 'number' ? fixedAt * 1000 : undefined
+    };
+  }
+
   // "room/entity" when the key is a presence-aspect state key, else null.
   function presenceEntityFromKey(key) {
     var parts = key.split('/');
@@ -395,6 +408,7 @@
     entityKey: entityKey,
     stateValue: stateValue,
     presenceValue: presenceValue,
+    personStatus: personStatus,
     presenceEntityFromKey: presenceEntityFromKey,
     unitNameFromHealthKey: unitNameFromHealthKey,
     applyMessage: applyMessage,
