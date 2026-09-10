@@ -402,6 +402,24 @@
     return { readings: readings, controls: controls };
   }
 
+  /* The sparkline rows of a sensor's room card (#56): every numeric,
+   * control-less row outside diagnostics, in the descriptor's order — so
+   * a thermometer's card lists temperature and humidity and not its link
+   * quality, and the sensor widget keeps its sparklines instead of being
+   * routed to the described card. An undescribed sensor is its flat
+   * state list, sorted. Same rows as the overlay, minus the collapsed
+   * group. */
+  function sensorCardPlan(entity, state, descriptor) {
+    var rows = [];
+    aspectPlan(entity, state, descriptor, false).forEach(function (s) {
+      if (s.group === DIAGNOSTICS) return;
+      s.rows.forEach(function (r) {
+        if (r.numeric && !r.control) rows.push(r);
+      });
+    });
+    return rows;
+  }
+
   return {
     PRESENCE_ASPECTS: PRESENCE_ASPECTS,
     titleCase: titleCase,
@@ -416,6 +434,7 @@
     formatAspect: formatAspect,
     controlFor: controlFor,
     aspectPlan: aspectPlan,
-    cardPlan: cardPlan
+    cardPlan: cardPlan,
+    sensorCardPlan: sensorCardPlan
   };
 });

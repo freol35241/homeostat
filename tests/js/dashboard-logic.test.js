@@ -407,3 +407,56 @@ test('the card plan never reaches into diagnostics and skips owner-tier commands
   assert.deepEqual(plan.readings, [], 'undescribed aspects are not headline material');
   assert.deepEqual(plan.controls.map((r) => r.aspect), ['setpoint', 'operating_mode'], 'feed target is owner-tier');
 });
+
+// ---- sensor card rows (#56) ----
+
+const THERMOMETER = { name: 'snzb_02', room: 'bedroom', capability: 'sensor', label: 'Bedroom thermometer' };
+
+function thermometerDescriptor() {
+  return {
+    schema: 1,
+    groups: ['readings', 'diagnostics'],
+    fields: {
+      temperature: { label: 'temperature', kind: 'temperature', group: 'readings' },
+      humidity: { label: 'humidity', kind: 'percent', group: 'readings' },
+      battery: { label: 'battery', kind: 'percent', group: 'readings' },
+      voltage: { label: 'voltage', kind: 'number', unit: 'mV', group: 'diagnostics' },
+      linkquality: { label: 'link quality', kind: 'number', unit: 'lqi', group: 'diagnostics' },
+    },
+  };
+}
+
+function thermometerState() {
+  return {
+    // state-key order is arrival order: linkquality first, as z2m publishes it
+    'home/state/bedroom/snzb_02/linkquality': 120,
+    'home/state/bedroom/snzb_02/battery': 87,
+    'home/state/bedroom/snzb_02/humidity': 41.2,
+    'home/state/bedroom/snzb_02/temperature': 20.55,
+    'home/state/bedroom/snzb_02/voltage': 2900,
+    'home/state/bedroom/snzb_02/available': true,
+    'home/state/utility/heat_pump/indoor_temperature': 20.3,
+  };
+}
+
+test('a described sensor card lists the readings in descriptor order and skips diagnostics', () => {
+  const rows = logic.sensorCardPlan(THERMOMETER, thermometerState(), thermometerDescriptor());
+  assert.deepEqual(rows.map((r) => r.aspect), ['temperature', 'humidity', 'battery']);
+  assert.deepEqual(rows.map((r) => r.display), ['20.6°', '41%', '87%'], 'rows carry the descriptor formatting');
+  assert.ok(rows.every((r) => r.numeric && !r.control));
+});
+
+test('an undescribed sensor card is its numeric state, sorted', () => {
+  const rows = logic.sensorCardPlan(THERMOMETER, thermometerState(), undefined);
+  assert.deepEqual(rows.map((r) => r.aspect), ['battery', 'humidity', 'linkquality', 'temperature', 'voltage']);
+  assert.ok(!rows.some((r) => r.aspect === 'available'), 'booleans have no sparkline');
+});
+
+test('a sensor card keeps a stale reading, flagged, and never a foreign entity', () => {
+  const d = thermometerDescriptor();
+  d.fields.temperature.valid = 'temperature_valid';
+  const state = Object.assign(thermometerState(), { 'home/state/bedroom/snzb_02/temperature_valid': false });
+  const rows = logic.sensorCardPlan(THERMOMETER, state, d);
+  assert.equal(rows.find((r) => r.aspect === 'temperature').stale, true);
+  assert.ok(!rows.some((r) => r.aspect === 'indoor_temperature'));
+});

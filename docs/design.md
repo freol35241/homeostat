@@ -1464,7 +1464,22 @@ adapters never do. The gap is metadata, so the fix is metadata.
   voltage in V is a reading). The flag stays deferred: the strike was
   a generator with one deliberate exception that forgot half of it, not
   a case the adapter's order cannot express. A second generator needing
-  ordering logic beyond one demoted field is strike two.
+  ordering logic beyond one demoted field is strike two. Strike one's
+  fix never reached the room card (2026-09-10, #56): `sensor` keeps its
+  bespoke sparkline widget, and that widget listed every numeric state
+  key in arrival order, descriptor unread — so the thermometers still
+  showed link quality beside temperature on Rooms, and had no tap that
+  opened the entity detail at all (each row leads to its aspect's
+  chart; only a deviation on `Now` reached the overlay). Settled the
+  same way as the climate card: a bespoke widget keeps its shape and
+  takes its row list from the descriptor — the numeric, control-less
+  rows outside diagnostics, in field order (`sensorCardPlan`), and a
+  multi-aspect sensor gets a head row naming the entity that opens the
+  detail. Routing sensors to the described card was the cheaper fix
+  and was rejected: two headline readings and no sparkline is a worse
+  thermometer than the widget already is. A single-aspect sensor is
+  unchanged, its overlay still one tap short; a head row on every fused
+  virtual sensor is a cost the gap does not yet justify.
 - **Reach.** Nothing here is heat-pump specific: any adapter can label
   `battery` a percent and `linkquality` diagnostics. Grown by need, not
   ahead of it. First growth (2026-09-09): the Zigbee2MQTT adapter
