@@ -163,16 +163,29 @@ pub const CODES: &[(&str, &str)] = &[
     ),
     (
         "virtual-entity-arbitrated",
-        "An entity bound by an automation is a virtual sensor: the automation \
-         publishes its state and nothing commands it, so `write_policy.mode = \
-         \"arbitrated\"` (which exists to order competing commands) is \
-         meaningless there. Use `shared`.",
+        "An entity bound by an automation is virtual. If it takes commands it \
+         is a latch: a command sets its state and last write wins, with no \
+         device to contend for and no hold to expire, so arbitration has \
+         nothing to order. A physical button's press travels at the \
+         automation band yet is family intent, and arbitration would rank \
+         it below the dashboard. Use `shared` or `exclusive`.",
     ),
     (
         "virtual-entity-commanded",
         "A cmd-class publish grant resolves onto an entity bound by an \
-         automation. Virtual entities take no commands: there is no device \
-         behind them to obey. Narrow the publish key or its capability.",
+         automation that does not subscribe to that entity's cmd keys \
+         (`home/cmd/{room}/{entity}/**`), so the command would reach nobody. \
+         Either the owner is a read-only virtual sensor — narrow the publish \
+         key or its capability — or it is meant to be a latch and needs the \
+         subscription in its `[bus.subscribes]`.",
+    ),
+    (
+        "grant-cycle",
+        "Automations that bind commandable virtual entities are walk-order \
+         edge sources like adapters: an owner starts before the units \
+         commanding its entities. These units each command an entity another \
+         of them binds, so no order exists. A latch must not command its own \
+         commanders; break the loop by making one side a state subscription.",
     ),
     (
         "invalid-default",

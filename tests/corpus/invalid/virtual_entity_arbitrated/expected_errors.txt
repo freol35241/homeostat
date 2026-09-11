@@ -1,2 +1,2 @@
 error[arbitrated-uncovered] house_mode: arbitrated entity "house_mode" has no arbiter-class publish covering it (entities/fusion/house_mode.toml)
-error[virtual-entity-arbitrated] house_mode: automation-owned entities are read-only and cannot be arbitrated (entities/fusion/house_mode.toml)
+error[virtual-entity-arbitrated] house_mode: automation-owned entities are latches and cannot be arbitrated; use shared or exclusive (entities/fusion/house_mode.toml)

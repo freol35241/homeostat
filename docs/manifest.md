@@ -229,14 +229,14 @@ and prints the edge, as it does a grant.
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `mode` | [WriteMode](#writemode) | yes |  |
-| `owner` | string | yes | Exactly one unit binds each entity: an adapter, or an automation for virtual sensors. Must exist (`missing-owner-unit`) and be the unit whose entities dir holds this file (`owner-mismatch`). |
+| `owner` | string | yes | Exactly one unit binds each entity: an adapter, or an automation for virtual entities. Must exist (`missing-owner-unit`) and be the unit whose entities dir holds this file (`owner-mismatch`). |
 
 ### WriteMode
 
 How commands toward the entity are governed. An automation-owned
-(virtual) entity is read-only: `arbitrated` is refused
-(`virtual-entity-arbitrated`) and no cmd grant may cover it
-(`virtual-entity-commanded`).
+(virtual) entity is a latch when commanded: `arbitrated` is refused
+(`virtual-entity-arbitrated`), and a cmd grant may cover it only when
+the owner subscribes to its cmd keys (`virtual-entity-commanded`).
 
 - `shared` — Any granted writer may command it; last write wins.
 - `exclusive` — At most one automation-band writer may be granted (`exclusive-write-conflict`); manual-band surfaces sit above.

@@ -365,11 +365,11 @@ pub fn walk_steps(diff: &Diff, check: &CheckResult, world: &World) -> Vec<Step> 
     steps
 }
 
-/// Edges (adapter, dependent) from a grant table: the granted entities'
-/// owner adapters must be up before the granting unit. The owner rides in
+/// Edges (owner, dependent) from a grant table: the granted entities'
+/// owner units must be up before the granting unit. The owner rides in
 /// the grant itself, so edges hold even for entities the repo no longer
-/// declares. (Grants never resolve onto automation-owned entities —
-/// virtual entities are read-only — so edge sources are always adapters.)
+/// declares. Owners are adapters, or automations for commandable virtual
+/// entities (docs/design.md, Commandable virtual entities).
 fn grant_edges(grants: &[Grant]) -> Vec<(String, String)> {
     let mut edges = Vec::new();
     for grant in grants {
@@ -382,10 +382,10 @@ fn grant_edges(grants: &[Grant]) -> Vec<(String, String)> {
     edges
 }
 
-/// Topological order over `set` under `edges` (adapter before dependent),
-/// each layer sorted by (kind, name). Cycles cannot arise from grants
-/// (edges only run adapter -> non-adapter); a malformed table degrades to
-/// sorted order rather than looping.
+/// Topological order over `set` under `edges` (owner before dependent),
+/// each layer sorted by (kind, name). A cyclic grant table is refused at
+/// check time (`grant-cycle`), so one cannot reach a plan; a malformed
+/// table still degrades to sorted order rather than looping.
 fn ordered<F>(set: &BTreeSet<String>, edges: &[(String, String)], kind_of: F) -> Vec<String>
 where
     F: Fn(&str) -> u8,
@@ -743,6 +743,19 @@ mod tests {
         assert_eq!(
             ordered(&set, &edges, kind_of),
             vec!["beacon".to_string(), "zed".to_string(), "watcher".to_string()]
+        );
+    }
+
+    /// An automation that binds a commandable virtual entity is an edge
+    /// source like an adapter: it starts before the automation commanding
+    /// it, even where kind and name order would put it second.
+    #[test]
+    fn ordered_puts_a_latch_owner_before_its_commander() {
+        let set: BTreeSet<String> = ["buttons", "modes"].iter().map(|s| s.to_string()).collect();
+        let edges = vec![edge("modes", "buttons")];
+        assert_eq!(
+            ordered(&set, &edges, |_| 1),
+            vec!["modes".to_string(), "buttons".to_string()]
         );
     }
 

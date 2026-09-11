@@ -291,13 +291,13 @@ fn check_entities(house: &House, errors: &mut Vec<ValidationError>) {
                 if unit.manifest.unit.kind == UnitKind::Automation
                     && entity.file.write_policy.mode == WriteMode::Arbitrated =>
             {
-                // Automation-owned entities are read-only (docs/design.md,
-                // Virtual sensors): write modes govern command writers, and
-                // virtual entities take no commands.
+                // A commandable virtual entity is a latch (docs/design.md,
+                // Commandable virtual entities): no device to contend for,
+                // no hold to expire, so arbitration has nothing to order.
                 errors.push(ValidationError::new(
                     "virtual-entity-arbitrated",
                     &entity.name,
-                    "automation-owned entities are read-only and cannot be arbitrated",
+                    "automation-owned entities are latches and cannot be arbitrated; use shared or exclusive",
                     file.clone(),
                 ));
             }

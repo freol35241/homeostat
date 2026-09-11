@@ -538,15 +538,15 @@ pub struct EntityNaming {
 pub struct WritePolicy {
     pub mode: WriteMode,
     /// Exactly one unit binds each entity: an adapter, or an automation
-    /// for virtual sensors. Must exist (`missing-owner-unit`) and be the
+    /// for virtual entities. Must exist (`missing-owner-unit`) and be the
     /// unit whose entities dir holds this file (`owner-mismatch`).
     pub owner: String,
 }
 
 /// How commands toward the entity are governed. An automation-owned
-/// (virtual) entity is read-only: `arbitrated` is refused
-/// (`virtual-entity-arbitrated`) and no cmd grant may cover it
-/// (`virtual-entity-commanded`).
+/// (virtual) entity is a latch when commanded: `arbitrated` is refused
+/// (`virtual-entity-arbitrated`), and a cmd grant may cover it only when
+/// the owner subscribes to its cmd keys (`virtual-entity-commanded`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum WriteMode {
