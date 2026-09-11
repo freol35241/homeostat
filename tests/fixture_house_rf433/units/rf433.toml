@@ -1,0 +1,45 @@
+schema = 1
+
+[unit]
+name = "rf433"
+kind = "adapter"
+description = "RF433 one-way sender adapter under test"
+
+[runtime]
+command = "uv run ../../adapters/rf433.py"
+restart = "always"
+shutdown_grace_s = 5
+
+[discovery]
+mode = "static"
+# The path is the gateway's base topic, as for zigbee2mqtt: the bridge owns
+# {base}/SRFBtoMQTT and {base}/LWT.
+endpoint = "mqtt://127.0.0.1:${HOMEOSTAT_TEST_MQTT_PORT}/rf"
+
+[bus.publishes]
+state = { key = "home/state/{room}/{entity}/**" }
+discovery = { key = "home/discovery/rf433" }
+
+# Short holds so expiry happens inside a test run; the adapter's own
+# defaults (15/60/600 s) cover a manifest without them.
+[params.occupancy_hold_s]
+type = "float"
+default = 1.0
+editable_by = "owner"
+
+# Deliberately long: one test asserts the contact is STILL held after the
+# PIR's hold has expired, and a hold close to the PIR's races the test's own
+# round trips rather than testing the adapter. Nothing waits for this to
+# expire.
+[params.contact_hold_s]
+type = "float"
+default = 30.0
+editable_by = "owner"
+
+[params.smoke_hold_s]
+type = "float"
+default = 5.0
+editable_by = "owner"
+
+[entities]
+dir = "entities/rf433/"

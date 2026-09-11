@@ -307,6 +307,18 @@ device liveness signal, published on transition by the owning adapter.
   owner-editable) with an adapter-side default, never a constant a house
   cannot tune.
 
+### One-way senders
+
+A device that asserts and never retracts (433 MHz PIRs, door contacts,
+doorbells) needs its off synthesized, and that is the adapter's job —
+see docs/design.md, One-way senders. Publish `true` on the first
+assertion and `false` when the hold expires, extend the deadline on a
+repeat burst without publishing, and publish `false` for every bound
+entity at startup: the held value is yours, not the device's, so after a
+restart the honest state is "nothing has asserted". The hold is a
+per-aspect live parameter, chosen by the entity's capability and
+features. `adapters/rf433.py` is the worked example.
+
 ## 8. Live parameters
 
 An adapter may declare `[params]` in its manifest — timeouts, poll

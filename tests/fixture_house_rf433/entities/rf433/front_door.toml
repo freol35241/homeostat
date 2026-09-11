@@ -1,0 +1,11 @@
+schema = 1
+
+[entity]
+id = "13951014"
+capability = "binary_sensor"
+features = ["contact"]
+room = "hallway"
+
+[write_policy]
+mode = "shared"
+owner = "rf433"

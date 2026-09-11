@@ -1,0 +1,11 @@
+schema = 1
+
+[entity]
+id = "10600462"
+capability = "binary_sensor"
+features = ["smoke"]
+room = "landing"
+
+[write_policy]
+mode = "shared"
+owner = "rf433"
