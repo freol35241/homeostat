@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "homeostat==0.11.2",
+#     "homeostat==0.11.3",
 # ]
 # ///
 """Recorder service: history end to end (see docs/design.md, step 5a).
@@ -414,21 +414,79 @@ def decode(kind: int, value):
     return bool(value) if KINDS[kind] == "bool" else value
 
 
+# A seeded row is skipped when the store already holds the series at or
+# after the value's time, give or take this: the live row's stamp is the
+# recorder's receipt, the mirror's age counts from the core's, and the two
+# sit milliseconds apart on the same host.
+SEED_TOLERANCE_US = 500_000
+
+
 class Recorder:
     def __init__(self, db_path: Path, sess: session.UnitSession):
         self.db_path = db_path
         self.sess = sess
         self.writer = Writer(db_path, sess)
+        # State keys a live sample has reached since subscribing; the seed
+        # skips them (a live sample is newer than any mirrored value).
+        # Tracked only until the seed has run.
+        self._live: set[str] | None = set()
+        self._live_lock = threading.Lock()
 
     def record(self, sample: zenoh.Sample) -> None:
         ts = now_us()
         key = str(sample.key_expr)
         parts = key.split("/")
         if len(parts) > 1 and parts[1] in ("state", "cmd"):
+            if parts[1] == "state":
+                with self._live_lock:
+                    if self._live is not None:
+                        self._live.add(key)
             self._record_sample(ts, key, parts, sample)
         else:
             payload = sample.payload.to_bytes().decode("utf-8", errors="replace")
             self.writer.enqueue("events", (ts, key, payload))
+
+    def seed(self, exprs: list[str]) -> None:
+        """Catch-up from the core's state mirror (#60): whatever was
+        published before this incarnation subscribed — a unit's start
+        publish, a transition during a restart — is otherwise never
+        recorded, and a rarely-changing aspect can have no history at all.
+        Subscribe, then get, merge, as the SDK does for automations.
+
+        A mirrored value can be arbitrarily old, so the row is stamped at
+        the value's own time (now less the mirror's age), never at recorder
+        start: a sample asserts an observation at its stamp. A series the
+        store already holds at or after that time (a recorder-only restart,
+        the live row written before it went down) is left alone. State
+        only: commands, health and config land in the events audit, and a
+        mirrored current value is not an event."""
+        replies = [r for expr in exprs for r in self.sess.get_json_aged(expr)]
+        with self._live_lock:
+            live, self._live = self._live, None
+        conn = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True, timeout=2.0)
+        try:
+            for key, value, age_s in replies:
+                parts = key.split("/")
+                if len(parts) < 5 or parts[1] != "state" or key in live:
+                    continue
+                kind_value = typed(value)
+                if kind_value is None:
+                    continue  # the live path reports these; a seed stays quiet
+                ts = now_us() - int(age_s * 1_000_000)
+                entity, aspect = parts[3], "/".join(parts[4:])
+                latest = conn.execute(
+                    "SELECT MAX(ts) FROM samples WHERE series_id ="
+                    " (SELECT id FROM series WHERE class = 'state' AND entity = ? AND aspect = ?)",
+                    (entity, aspect),
+                ).fetchone()[0]
+                if latest is not None and latest >= ts - SEED_TOLERANCE_US:
+                    continue
+                kind, stored = kind_value
+                self.writer.enqueue(
+                    "samples", (ts, "state", parts[2], entity, aspect, KINDS.index(kind), stored)
+                )
+        finally:
+            conn.close()
 
     def _record_sample(self, ts, key, parts, sample) -> None:
         if len(parts) < 5:
@@ -763,6 +821,9 @@ def main():
     )
     recorder.writer.thread.start()
     recorder.writer.checker.thread.start()
+    recorder.seed(
+        [e for e in manifest["bus"]["subscribes"].values() if e.startswith("home/state/")]
+    )
     sess.ready()
 
     stop = threading.Event()
