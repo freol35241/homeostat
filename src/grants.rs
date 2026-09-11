@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -10,7 +10,7 @@ use crate::repo::House;
 
 /// One resolved write grant: a non-adapter publish expression resolved
 /// against the concrete entity set. The table doubles as the dependency
-/// graph (unit -> entities -> owner adapters).
+/// graph (unit -> entities -> owner units).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Grant {
     pub unit: String,
@@ -31,7 +31,8 @@ pub struct GrantEntity {
     pub name: String,
     pub room: String,
     pub write: WriteMode,
-    /// The binding adapter — the walk-order edge source.
+    /// The binding unit — the walk-order edge source. An adapter, or an
+    /// automation for a commandable virtual entity.
     pub owner: String,
 }
 
@@ -265,10 +266,11 @@ pub fn resolve(
         }
     }
 
-    // Automation-owned entities are read-only (docs/design.md, Virtual
-    // sensors): a cmd-class grant resolving onto one would hand commands to
-    // a producer that never takes them, and would put automation -> automation
-    // edges into the walk order.
+    // A commandable virtual entity is a latch (docs/design.md, Commandable
+    // virtual entities): its owning automation subscribes to the entity's
+    // cmd keys and sets its own state. A cmd-class grant onto an
+    // automation-owned entity nobody subscribes for would hand commands to
+    // a producer that never receives them, so it stays refused.
     for grant in &grants {
         for granted in &grant.entities {
             let name = &granted.name;
@@ -278,18 +280,61 @@ pub fn resolve(
             let automation_owned = house
                 .unit(&entity.owner)
                 .is_some_and(|u| u.manifest.unit.kind == UnitKind::Automation);
-            if automation_owned {
+            if !automation_owned {
+                continue;
+            }
+            let room = entity.file.entity.room.as_str();
+            let prefix = ["home", "cmd", room, name.as_str()];
+            let listens = expanded.iter().any(|k| {
+                k.unit == entity.owner
+                    && k.direction == Direction::Subscribes
+                    && k.exprs.iter().any(|e| e.class() == Some("cmd") && e.matches_prefix(&prefix))
+            });
+            if !listens {
                 errors.push(ValidationError::new(
                     "virtual-entity-commanded",
                     name,
                     format!(
-                        "\"{name}\" is bound by automation \"{}\" and takes no commands (cmd publish {}.{})",
+                        "\"{name}\" is bound by automation \"{}\", which subscribes to no home/cmd/{room}/{name} keys (cmd publish {}.{})",
                         entity.owner, grant.unit, grant.publish
                     ),
                     Some(entity.path.clone()),
                 ));
             }
         }
+    }
+
+    // Grant edges run owner -> granting unit, and with automations as owners
+    // a cycle is possible: A commands an entity B binds while B commands one
+    // A binds. The apply walk needs an order, so refuse the house at plan
+    // time rather than start units in a silently arbitrary one.
+    let edges: BTreeSet<(&str, &str)> = grants
+        .iter()
+        .flat_map(|g| g.entities.iter().map(move |e| (e.owner.as_str(), g.unit.as_str())))
+        .filter(|(owner, unit)| owner != unit)
+        .collect();
+    let mut remaining: BTreeSet<&str> = edges.iter().flat_map(|(a, d)| [*a, *d]).collect();
+    loop {
+        let free: Vec<&str> = remaining
+            .iter()
+            .filter(|u| !edges.iter().any(|(a, d)| d == *u && remaining.contains(a)))
+            .copied()
+            .collect();
+        if free.is_empty() {
+            break;
+        }
+        for unit in free {
+            remaining.remove(unit);
+        }
+    }
+    if !remaining.is_empty() {
+        let members: Vec<&str> = remaining.into_iter().collect();
+        errors.push(ValidationError::new(
+            "grant-cycle",
+            members.join(", "),
+            "each of these units commands an entity another of them binds, so no apply order exists",
+            None,
+        ));
     }
 
     // State keys belong to bound entities: templated state publishes are
@@ -508,6 +553,75 @@ mod tests {
         let (expanded, _, _) = expand(&flipped);
         let (flipped_grants, _, _) = resolve(&flipped, &expanded);
         assert_ne!(grants, flipped_grants, "a write-mode flip must change the grant table");
+    }
+
+    /// A latch: automation "modes" binds a switch, subscribes to its cmd
+    /// keys and publishes its state; automation "buttons" commands it.
+    /// `listens` decides whether modes declares the cmd subscription.
+    fn house_with_latch(listens: bool) -> House {
+        let mut modes_subscribes = BTreeMap::new();
+        if listens {
+            modes_subscribes.insert("commands".to_string(), "home/cmd/{room}/{entity}/**".to_string());
+        }
+        let mut modes_publishes = BTreeMap::new();
+        modes_publishes.insert(
+            "state".to_string(),
+            PublishSpec { key: "home/state/{room}/{entity}/**".to_string(), capability: None, priority: None },
+        );
+        let modes_bus = BusSection { subscribes: modes_subscribes, publishes: modes_publishes };
+
+        let mut buttons_publishes = BTreeMap::new();
+        buttons_publishes.insert(
+            "mode".to_string(),
+            PublishSpec {
+                key: "home/cmd/global/house_mode/on".to_string(),
+                capability: Some("switch".to_string()),
+                priority: Some(Priority::Automation),
+            },
+        );
+        let buttons_bus = BusSection { subscribes: BTreeMap::new(), publishes: buttons_publishes };
+
+        House {
+            units: vec![
+                unit("modes", UnitKind::Automation, modes_bus),
+                unit("buttons", UnitKind::Automation, buttons_bus),
+            ],
+            entities: vec![entity("house_mode", "global", "switch", WriteMode::Shared, "modes")],
+            zones: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn a_commanded_virtual_entity_whose_owner_listens_is_a_latch() {
+        let house = house_with_latch(true);
+        let (expanded, _warnings, expand_errors) = expand(&house);
+        assert!(expand_errors.is_empty(), "{expand_errors:?}");
+
+        let (grants, warnings, errors) = resolve(&house, &expanded);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let buttons = grants.iter().find(|g| g.unit == "buttons").unwrap();
+        // The owner is the automation: it becomes the walk-order edge source.
+        assert_eq!(
+            buttons.entities,
+            vec![GrantEntity {
+                name: "house_mode".to_string(),
+                room: "global".to_string(),
+                write: WriteMode::Shared,
+                owner: "modes".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn a_commanded_virtual_entity_nobody_listens_for_is_a_plan_error() {
+        let house = house_with_latch(false);
+        let (expanded, _warnings, expand_errors) = expand(&house);
+        assert!(expand_errors.is_empty(), "{expand_errors:?}");
+
+        let (_grants, _warnings, errors) = resolve(&house, &expanded);
+        let codes: Vec<&str> = errors.iter().map(|e| e.code).collect();
+        assert_eq!(codes, vec!["virtual-entity-commanded"], "{errors:?}");
     }
 
     #[test]

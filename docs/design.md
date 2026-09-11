@@ -756,12 +756,14 @@ replaced mid-cycle.
 
 ### The walk
 
-Derived from the grant table (automation → granted entities → owner
-adapter ⇒ adapter before dependent automation), never declared:
+Derived from the grant table (granting unit → granted entities → owner
+unit ⇒ owner before dependent), never declared. Owners are adapters, or
+automations for commandable virtual entities (a cyclic table is refused
+at check time, `grant-cycle`):
 
 1. Parameter writes (no restarts; a unit about to restart just reads the
    new value on start).
-2. Removals, in reverse grant order — dependents stop before the adapters
+2. Removals, in reverse grant order — dependents stop before the owners
    they write through.
 3. Creates and restarts, in grant order; after each unit: await health
    `running`, halt on breaker `open`, `stopped`, or a readiness deadline.
@@ -1919,23 +1921,15 @@ plan renders the automation's bound entities like an adapter's.
   otherwise). This closes a pre-existing hole: nothing previously
   stopped a unit from publishing state under an entity it never bound,
   or under no entity at all.
-- **Read-only, v1**: automation-owned entities take no commands. A
-  cmd-class grant resolving onto one is a plan error
-  (`virtual-entity-commanded`), and arbitrated write policy on one is
-  likewise refused — write modes govern command writers, and there are
-  none. Structural consequence: grant edges still only run adapter →
-  dependent, the grant graph stays bipartite, the apply walk cannot
-  cycle. State-subscription chains between automations need no
-  ordering, as ever — a late-joining consumer reads the mirror. A
-  commandable virtual entity (a house-mode switch is the tempting
-  case) is the pytapo rule: designed the day one is actually wanted,
-  because it brings automation → automation grant edges and cycle
-  handling with it. When that day comes, the safe shape is a **latch**
-  — commands set the entity's own state, consumers react by
-  subscription at their own bands — never a **relay** that re-publishes
-  commands onward at the owner's band, laundering the writer's band and
-  actor (the group-action settlement under Dashboard is the standing
-  example of why).
+- **Read-only by default**: an automation-owned entity nobody
+  subscribes commands for takes none; a cmd-class grant resolving onto
+  it is a plan error (`virtual-entity-commanded`). v1 refused every
+  such grant and kept the grant graph bipartite; a commandable virtual
+  entity was deferred under the pytapo rule until a house-mode switch
+  was actually wanted. That day came (#64) — see Commandable virtual
+  entities below for the latch it settled on. State-subscription
+  chains between automations need no ordering, as ever — a
+  late-joining consumer reads the mirror.
 - **Room**: a cross-room fusion lives in the pseudo-room `global` —
   "downstairs" is a zone, zones never appear in keys, and the existing
   zone-room-collision check already forbids smuggling a zone name in as
@@ -2123,6 +2117,57 @@ machinery is designed the day a second case wants it).
 availability settlement already refused); consumer-side debouncing
 (every consumer reimplements it, they disagree, and the recorder cannot
 reconstruct what was true when).
+
+## Commandable virtual entities: the latch (settled 2026-09-11, #64)
+
+The case the virtual-sensors settlement named arrived exactly as named:
+four house modes (`night_day`, `light_mode_manual`, two asleep flags)
+with no device behind them, flipped by the dashboard, by Zigbee buttons
+and by the clock, and read by twenty lights. Home Assistant calls these
+helpers; here they are ordinary entities bound by an automation.
+
+**The shape is the latch.** The owning automation subscribes to
+`home/cmd/{room}/{entity}/**` over its own entities, sets its own state
+on a command, and never republishes onward. Consumers subscribe to the
+state at their own bands. The button unit commands the mode; the lights
+unit reads it. No relay, no band laundering (the group-action
+settlement under Dashboard is why).
+
+- **Capability `switch`.** Exactly one commandable boolean, already a
+  toggle on the dashboard, already granted to it at the manual band. A
+  `mode` capability would be vocabulary for one case. Room is a
+  grouping segment: `global` for a house-wide mode, or a non-spatial
+  group name if a house wants its modes together.
+- **Commandable means the owner listens.** A cmd grant onto an
+  automation-owned entity is legal only when the owning automation
+  declares a cmd subscription covering it; otherwise
+  `virtual-entity-commanded` stays, because the command would reach
+  nobody. Structural, like arbitration coverage — not a flag.
+- **The grant graph is no longer bipartite.** Owners are edge sources
+  whether adapter or automation, so the apply walk starts a latch
+  before the units commanding it. A cycle (A commands what B binds
+  while B commands what A binds) is refused at check time
+  (`grant-cycle`) rather than silently ordered; the walk's sorted-order
+  fallback stays as defence, never as policy.
+- **Write policy is `shared` or `exclusive`; `arbitrated` stays
+  refused.** A button press travels at the automation band yet is
+  family intent, and arbitration would rank it below the dashboard —
+  band laundering in another guise. A latch has no device to contend
+  for and no hold to expire, so last write wins is the semantics
+  wanted. `exclusive` works unchanged: one automation-band writer,
+  manual above it.
+- **The latch survives its own restart.** On start the owner reads its
+  entities from the mirror and adopts the value, defaulting only when
+  the mirror is empty. This is the inverse of the one-way-sender rule
+  above: that held value was the adapter's own construct, this one is
+  the family's decision.
+
+**Rejected**: an adapter with a static endpoint pointing at nothing,
+holding the modes in memory (an automation wearing an adapter's
+clothes; the membrane does not compute house behaviour, and such a unit
+never gets removed); a `mode` capability; a relay. The SDK gains
+nothing yet: a latch helper graduates once a house's modes unit shows
+what repeats.
 
 ## Unit granularity: the atom is the unit, not the automation (settled 2026-09-08)
 

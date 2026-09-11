@@ -1,0 +1,19 @@
+schema = 1
+
+[unit]
+name = "scenes"
+kind = "automation"
+
+[runtime]
+command = "uv run units/scenes.py"
+restart = "on-failure"
+
+[bus.subscribes]
+commands = "home/cmd/{room}/{entity}/**"
+
+[bus.publishes]
+state = { key = "home/state/{room}/{entity}/**" }
+mode = { key = "home/cmd/global/night_mode/on", capability = "switch", priority = "automation" }
+
+[entities]
+dir = "entities/scenes/"
