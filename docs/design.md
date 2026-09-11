@@ -588,6 +588,29 @@ domain is "can I open and commit right now", with no long-lived handle to
 hold stale permissions or a deleted inode. Reads open their own read-only
 connections (readers and the writer never share a handle).
 
+- **The recorder catches up from the state mirror (2026-09-11, #60).**
+  A unit like any other, it subscribes when it starts, and anything
+  published in the seconds before — every unit's start publish on a
+  boot, a transition during a recorder restart — was never recorded. A
+  publish-on-change aspect that rarely changes (an availability flag)
+  could have no history at all, and "no rows" read as "never
+  published". Subscribe, then get, merge, as the SDK does for
+  automations since #36: after subscribing, the recorder reads
+  `home/state/**` from the core's mirror and enqueues what it did not
+  see live. Two rules make the seed honest rather than a new kind of
+  lie. The row is stamped at the value's own time — now less the
+  mirror's age — never at recorder start, because a sample asserts an
+  observation at its stamp and a mirrored value can be arbitrarily old.
+  A series the store already holds at or after that time (a
+  recorder-only restart; the live row was written before it went down)
+  is left alone, give or take the milliseconds between the core's
+  receipt and the recorder's. State only: commands, health and config
+  are the events audit, and a mirrored current value is not an event.
+  Considered and rejected: a start order that brings the recorder up
+  before the rest. It closes the boot case, not a recorder restart, and
+  it is the first dependency edge between units the manifest rules
+  refuse — the mirror is the settled answer to late joiners.
+
 ### Failure policy: bounded buffer + flush
 
 - Startup: the store must open and its schema initialize before `ready()`
