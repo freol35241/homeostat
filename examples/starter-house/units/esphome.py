@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "homeostat==0.11.3",
+#     "homeostat==0.11.4",
 #     "aioesphomeapi>=45,<46",
 #     "zeroconf>=0.130,<1",
 # ]
