@@ -104,16 +104,17 @@ class Params(LiveParams):
         return max(0.1, float(self.get(HOLD_PARAM.get(aspect, "hold_s"))))
 
 
-def aspect_for(entity) -> str:
-    """The aspect a bound entity publishes.
+def aspect_for(entity) -> str | None:
+    """The aspect a bound entity publishes, or None when the file cannot say.
 
     `presence` has one in the vocabulary; `binary_sensor` is "a boolean
     under its native name" and the radio cannot say which name, so the
-    entity's first feature is it.
+    entity file's single feature is it. Two features would be two aspects
+    for a sender that transmits one thing, so that is misconfigured too.
     """
     if entity.capability == "presence":
         return entity.features[0] if entity.features else "occupancy"
-    return entity.features[0] if entity.features else None
+    return entity.features[0] if len(entity.features) == 1 else None
 
 
 def code_from(payload: bytes):
@@ -155,6 +156,11 @@ def main():
     aspects = {e.name: aspect_for(e) for e in config.entities}
     sighted: set[str] = set()
 
+    # Guards `deadline` AND the publishes that follow from it. A burst and an
+    # expiry for the same entity may land on different threads within the
+    # same tick; if the sweeper's `false` were published after the lock is
+    # dropped it could overtake the burst's `true`, leaving the entity
+    # reading `false` for a whole hold while its deadline stands.
     lock = threading.Lock()
     deadline: dict[str, float] = {}  # entity name -> monotonic expiry
 
@@ -174,7 +180,7 @@ def main():
         Bound entities are listed whether or not they have ever
         transmitted, because their descriptors are what the dashboard
         renders from and a door that nobody opened today still has a card.
-        `bound` says whether this adapter has actually heard the code.
+        `heard` says whether this adapter has actually heard the code.
 
         Unbound codes are the other half, and they are the normal state of
         a 433 MHz estate -- neighbours' remotes, a car key, the doorbell.
@@ -189,7 +195,7 @@ def main():
                 "id": entity.id,
                 "configured": True,
                 "entity": entity.name,
-                "bound": entity.id in sighted,
+                "heard": entity.id in sighted,
                 "suggested": {
                     "capability": entity.capability,
                     "features": list(entity.features),
@@ -203,7 +209,7 @@ def main():
                 "id": code,
                 "configured": False,
                 "entity": None,
-                "bound": True,
+                "heard": True,
                 "suggested": {"capability": "binary_sensor", "features": []},
             })
         return records
@@ -232,17 +238,13 @@ def main():
         if entity is None:
             return  # an unbound code; discovery carries it, the log does not
         if aspects[entity.name] is None:
-            session.health_event(
-                "drop", reason="no-aspect", entity=entity.name,
-                hint="a binary_sensor needs one feature naming its aspect",
-            )
-            return
+            return  # misconfigured; reported once at startup, not per burst
 
         with lock:
             fresh = entity.name not in deadline
             deadline[entity.name] = time.monotonic() + params.hold_for(aspects[entity.name])
-        if fresh:
-            publish(entity, True)   # transitions only: a repeat burst just extends
+            if fresh:
+                publish(entity, True)   # transitions only: a repeat burst just extends
 
     def sweeper():
         while not stop.wait(TICK_S):
@@ -251,8 +253,7 @@ def main():
                 expired = [name for name, when in deadline.items() if when <= now]
                 for name in expired:
                     del deadline[name]
-            for name in expired:
-                publish(by_name[name], False)
+                    publish(by_name[name], False)
 
     by_name = {e.name: e for e in config.entities}
     stop = threading.Event()
@@ -263,8 +264,13 @@ def main():
     )
 
     for entity in config.entities:
-        if aspects[entity.name] is not None:
-            publish(entity, False)      # rule 2: the honest state at startup
+        if aspects[entity.name] is None:
+            session.health_event(
+                "misconfigured", reason="no-aspect", entity=entity.name,
+                hint="a binary_sensor needs exactly one feature naming its aspect",
+            )
+            continue
+        publish(entity, False)          # rule 2: the honest state at startup
     session.put_json(keys.discovery_key(unit), inventory())
 
     threading.Thread(target=sweeper, daemon=True, name="rf433-sweeper").start()
