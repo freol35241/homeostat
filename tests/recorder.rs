@@ -25,7 +25,8 @@ use zenoh::pubsub::Subscriber;
 use zenoh::sample::Sample;
 
 use common::{
-    await_health, config_write, health_watch, matched_publisher, Publisher, Supervisor,
+    await_health, await_mirror, config_write, health_watch, matched_publisher, Publisher,
+    Supervisor,
 };
 
 const FIXTURE: &str = "tests/fixture_house_recorder";
@@ -840,6 +841,81 @@ async fn v0_store_migrates_in_place() {
     let replies = history_get(&observer, "home/history/state/rover/on").await;
     assert_eq!(replies.len(), 1);
     assert_eq!(replies[0].1.as_array().expect("array").len(), 3);
+
+    sup.shutdown();
+}
+
+/// (h) The recorder catches up from the core's state mirror (#60): a
+/// value published while it is down is in the store once it is back,
+/// stamped at the value's own time rather than at recorder start, and a
+/// series the previous incarnation recorded live is not duplicated. The
+/// publish races the restart; when the fresh incarnation subscribes
+/// first the row is recorded live with the same stamp and the assertions
+/// hold either way — the seed path is the one that runs in practice, a
+/// Python unit taking longer to come up than the put takes to land.
+#[tokio::test(flavor = "multi_thread")]
+async fn restart_seeds_missed_state_from_the_mirror() {
+    let db = store_path("seed");
+    let (mut sup, observer) = setup(&db).await;
+    let mut recorder = health_watch(&observer, "recorder").await;
+    let running = await_health(&mut recorder, Duration::from_secs(10), |h| {
+        h.status == HealthStatus::Running
+    })
+    .await;
+
+    // A series the first incarnation records live.
+    let level = matched_publisher(&observer, "home/state/cellar/tank/level").await;
+    put(&level, json!(1)).await;
+    rows_eventually(
+        &db,
+        "SELECT ts FROM history WHERE entity = 'tank' AND aspect = 'level'",
+        1,
+        Duration::from_secs(20),
+    )
+    .await;
+
+    // Kill the recorder; the supervisor restarts it after its backoff.
+    let pid = running.pid.expect("a running recorder has a pid");
+    assert_eq!(unsafe { libc::kill(pid as i32, libc::SIGKILL) }, 0, "kill recorder");
+    await_health(&mut recorder, Duration::from_secs(10), |h| {
+        h.status == HealthStatus::Backoff
+    })
+    .await;
+
+    // Published while it is down: a start-time flag that never changes.
+    let before_put = now_us();
+    let flag = matched_publisher(&observer, "home/state/cellar/tank/available").await;
+    put(&flag, json!(true)).await;
+    await_mirror(&observer, "home/state/cellar/tank/available", &json!(true)).await;
+    let after_put = now_us();
+    await_health(&mut recorder, Duration::from_secs(60), |h| {
+        h.status == HealthStatus::Running
+    })
+    .await;
+
+    let rows = rows_eventually(
+        &db,
+        "SELECT ts, value FROM history WHERE entity = 'tank' AND aspect = 'available'",
+        1,
+        Duration::from_secs(20),
+    )
+    .await;
+    assert_eq!(rows[0][1], SqlValue::Integer(1));
+    let SqlValue::Integer(ts) = rows[0][0] else {
+        panic!("ts is an integer");
+    };
+    assert!(
+        ts >= before_put - 1_000_000 && ts <= after_put + 1_000_000,
+        "seeded row is stamped at the value's time: {ts} not in [{before_put}, {after_put}]"
+    );
+
+    // The seed's rows flush in the same batch as the row above, so the
+    // live-recorded series would already show its duplicate.
+    let level_rows = read_rows(
+        &db,
+        "SELECT ts FROM history WHERE entity = 'tank' AND aspect = 'level'",
+    );
+    assert_eq!(level_rows.len(), 1, "a series the store already holds is not seeded again");
 
     sup.shutdown();
 }
