@@ -2084,6 +2084,46 @@ adapter — the membrane rule.
   answer for an entity whose adapter never published `available`
   (recorded 2026-09-07 from #7, ahead of the helper).
 
+## One-way senders: who synthesizes the off (settled 2026-09-11, #63)
+
+A sub-GHz PIR, door contact or smoke detector transmits when something
+happens and never transmits again — there is no "clear". The same is
+true of doorbells, RF remotes and most cheap 433 MHz kit. Something has
+to decide when the assertion stops being true.
+
+**The adapter owns the hold.** Three existing settlements decide it: the
+membrane rule (deriving on its own bound entities is what an adapter
+may do, and the radio's lack of an off is a protocol fact), the
+availability settlement's "never a core TTL" (a core-decayed momentary
+aspect is that timer under another name), and the pytapo rule (core
+machinery is designed the day a second case wants it).
+
+- **Transitions only.** `true` on the first assertion, `false` when the
+  hold expires; a repeat burst inside the hold extends the deadline and
+  publishes nothing. One-way senders repeat each burst by design, so
+  publishing per burst is a per-event flood.
+- **`false` for every bound momentary entity at startup.** The held
+  value is the adapter's own construct, not a device reading, so
+  "nothing has asserted within the hold" is the honest state after a
+  restart rather than an invented one — and it is what stops a
+  crash-looping adapter from leaving a motion sensor stuck on. Only a
+  permanently dead adapter (breaker open) leaves `true` standing, the
+  same accepted limitation as a dead Zigbee bridge, and the unit's
+  health shows it.
+- **The hold is a per-aspect parameter, not per entity.** A contact, a
+  PIR and a detector want different holds; every contact wants the same
+  one. The entity's capability and features pick the parameter, so a
+  house tunes three numbers rather than one per device — and entity
+  files keep denying unknown fields.
+- **Revisit trigger: the rule of three.** A second one-way adapter
+  carrying the same timer graduates it into the SDK, the way
+  `Freshness` and `Cooldown` did. Still not into the core.
+
+**Rejected**: a momentary aspect class decayed by the core (the TTL the
+availability settlement already refused); consumer-side debouncing
+(every consumer reimplements it, they disagree, and the recorder cannot
+reconstruct what was true when).
+
 ## Unit granularity: the atom is the unit, not the automation (settled 2026-09-08)
 
 The question was whether every automation, however small, should be its

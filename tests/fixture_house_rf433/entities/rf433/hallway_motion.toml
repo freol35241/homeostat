@@ -1,0 +1,13 @@
+schema = 1
+
+[entity]
+# id is the decimal code the sender transmits; deliberately not the entity
+# name, so the tests prove binding goes through the code.
+id = "11970086"
+capability = "presence"
+features = ["occupancy"]
+room = "hallway"
+
+[write_policy]
+mode = "shared"
+owner = "rf433"
