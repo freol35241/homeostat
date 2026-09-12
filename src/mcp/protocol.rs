@@ -79,25 +79,56 @@ fn tool_call(server: &Server, params: &Value) -> Result<Value, Value> {
     }))
 }
 
+/// The longest stdio message accepted: generous for any tool call, and a
+/// bound rather than an allocation failure for a runaway client.
+const MAX_LINE: u64 = 16 * 1024 * 1024;
+
 /// The stdio transport: newline-delimited JSON-RPC on stdin/stdout, one
 /// response line per request. Returns on EOF — the MCP client hanging up
 /// is the shutdown signal.
 pub fn serve_stdio(server: &Server) -> Result<(), String> {
-    use std::io::{BufRead, Write};
-    let stdin = std::io::stdin();
+    use std::io::{BufRead, Read, Write};
+    let mut stdin = std::io::stdin().lock();
     let mut stdout = std::io::stdout();
-    for line in stdin.lock().lines() {
-        let line = line.map_err(|e| format!("stdin: {e}"))?;
-        if line.trim().is_empty() {
-            continue;
+    loop {
+        let mut line = String::new();
+        let n = (&mut stdin)
+            .take(MAX_LINE + 1)
+            .read_line(&mut line)
+            .map_err(|e| format!("stdin: {e}"))?;
+        if n == 0 {
+            break;
         }
-        let reply = match serde_json::from_str::<Value>(&line) {
-            Ok(message) => handle(server, &message),
-            Err(err) => Some(json!({
+        let reply = if line.len() as u64 > MAX_LINE {
+            // Skip the rest of the oversize message so the next line
+            // starts clean, then answer with an error instead of aborting.
+            let mut rest = Vec::new();
+            while !line.ends_with('\n') && !rest.ends_with(b"\n") {
+                rest.clear();
+                let n = (&mut stdin)
+                    .take(64 * 1024)
+                    .read_until(b'\n', &mut rest)
+                    .map_err(|e| format!("stdin: {e}"))?;
+                if n == 0 {
+                    break;
+                }
+            }
+            Some(json!({
                 "jsonrpc": "2.0",
                 "id": null,
-                "error": {"code": -32700, "message": format!("parse error: {err}")}
-            })),
+                "error": {"code": -32600, "message": format!("message exceeds {MAX_LINE} bytes")}
+            }))
+        } else if line.trim().is_empty() {
+            continue;
+        } else {
+            match serde_json::from_str::<Value>(&line) {
+                Ok(message) => handle(server, &message),
+                Err(err) => Some(json!({
+                    "jsonrpc": "2.0",
+                    "id": null,
+                    "error": {"code": -32700, "message": format!("parse error: {err}")}
+                })),
+            }
         };
         if let Some(reply) = reply {
             let text = serde_json::to_string(&reply).expect("reply serializes");
