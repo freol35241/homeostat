@@ -2506,6 +2506,160 @@ use — so this adapter is not thrown away when the app arrives.
   pattern): one more adapter binding its own `notifier` entities,
   acknowledging for itself, changing zero automations.
 
+## The companion app (settled 2026-09-12, #51)
+
+Living with the two halves for a few weeks — ntfy since #31, OwnTracks
+over the broker for location — said the second half is not good enough,
+and that the reason to build a phone app is not the one the notifications
+settlement assumed. OwnTracks runs its own location loop and drains the
+battery; tuning its modes did not close the gap against the Home
+Assistant companion app, which leans on Android's own geofencing API at
+near-zero cost. So the app arrives on the growth path the ntfy adapter
+named, but for presence rather than for receipts, and it retires ntfy on
+the way past.
+
+- **Presence is the reason, not notifications.** Background geofencing is
+  the one thing on the list that no web page and no existing tool does
+  well against this house. The router's WiFi sightings stay the
+  zero-battery "at home" signal (Network presence); the phone answers
+  what the router cannot — **away**, and **approaching**. The app
+  registers ONE geofence, `home`, and publishes enter/leave as
+  `presence`. That is the whole location feature. Continuous position is
+  opt-in per phone, off by default, and is what the map renders when it
+  exists: trails are a novelty and in-family surveillance is why people
+  stop running these things.
+- **Android only, Kotlin, its own repo (`homeostat-app`).** iOS is
+  excluded deliberately: push on iOS goes through Apple's service, a
+  cloud dependency in the alerting path that this design rejects. An
+  iPhone in the family needs its own issue, not a compromise here.
+- **The broker replaces ntfy, rather than carrying it.** ntfy provided
+  four things: a persistent connection on the phone, a buffer for an
+  offline phone, auth and topics as text, and a finished Android app. The
+  broker the house already runs does the first three — a QoS 1 persistent
+  session queues per client, which is strictly better than a global cache
+  window, and mosquitto's password and ACL files are one line per phone.
+  The app must hold a socket for push in any case and is an MQTT client
+  for location in any case: same socket, both directions. Keeping ntfy
+  would mean a second server and a second app on every family phone to
+  borrow a connection the app has to own anyway. ntfy stays exactly as
+  long as the app does not exist, and retires by plan/apply the way the
+  notifications settlement promised: switching providers is a migration,
+  and the automations do not change.
+- **The phone is a device, and devices never touch the bus.** It speaks a
+  dialect to an adapter, like every other device. The reasons the
+  dashboard settlement gave for browsers apply with more force to a
+  phone: the bus trusts everything on it (a cmd envelope's `priority` and
+  `actor` are self-declared, so a session is authority over every
+  entity); nothing on the bus may be invisible to `plan` (a phone
+  publishing `home/state/person/alice/presence` itself would be the first
+  entity that owns itself); and the bus has no story for an absent client
+  (pub/sub is live, and the equivalent of a persistent session would be a
+  per-phone undelivered-message queryable plus a catch-up query — the
+  store mosquitto already is). Practically, zenoh-kotlin is a Rust
+  library through JNI where a pure-JVM MQTT client is smaller, and the
+  app's hard part is keeping one socket alive under Doze. What the phone
+  gives up is nothing it should have: it says two things and hears one.
+- **Two entities per phone, one topic subtree.** A phone has two faces,
+  and the model has no "person has channels": a `person` (room `person`)
+  carrying `presence` and the opt-in position aspects, and a `notifier`
+  (room `person`) carrying `message`/`alert` out and `delivered` back.
+  The entity `id` is the two segments naming the subtree and the face —
+  `alice/person`, `alice/notifier` — which is what each entity binds, and
+  is also forced: the core refuses two entities sharing an `id` under one
+  owner (`duplicate-entity-id`).
+- **`acknowledged` joins the notifier vocabulary.** Epoch seconds, the
+  `delivered` shape, written when the person dismissed the notification
+  in the app. This is the far-end receipt the notifications settlement
+  said only an app could give, and it does not displace `delivered`,
+  which stays the delivery path's own ack (here the broker's QoS 1
+  PUBACK). Whether an unacknowledged `alert` escalates is the
+  automation's policy over that aspect, never the adapter's.
+- **`available` is the app's birth message and its last will.** Beyond
+  what #51 proposed, and the honest answer to "can this phone be reached
+  at all": `delivered` only means the broker took it. MQTT allows exactly
+  one last will per connection, so the topic addresses the phone rather
+  than one of its faces and the adapter fans it out to both entities. An
+  automation deciding whether to escalate needs to distinguish an
+  unreachable phone from a silent person.
+- **Notifications are QoS 1 and never retained.** A retained alert would
+  fire again on every reconnect. The queueing is the app's persistent
+  session, which is the whole reason this rides the broker.
+- **Identity is the device, not an account.** The dashboard has no
+  accounts and the app adds none. The app is configured with a small text
+  blob — person entity name, broker address, MQTT credentials — that the
+  house repo can render as a QR code, and the broker's password and ACL
+  files carry the same names. Config as text, like everything else. The
+  WireGuard peer is the network identity; the MQTT credential is the
+  broker's, because the broker cannot see peers. The app is not a
+  WireGuard client: the tunnel is the WireGuard app's job.
+- **The dashboard is not in the app.** The app never renders house state;
+  the dashboard owns rendering, and a native second UI would need
+  arbitrary state reads and family commands — exactly the bus surface
+  this settlement refuses the phone. What the bookmark actually lacks is
+  a home-screen icon and a standalone window, which a WebView of the
+  dashboard unit provides without a service worker and therefore without
+  the private CA the PWA waits on (Dashboard). Same page, same unit, no
+  new bus surface. Whichever of the two lands first wins; nothing
+  architectural depends on the choice.
+- **The costs, accepted.** Android shows a permanent "Homeostat is
+  running" notification — the HA app in websocket mode and ntfy in
+  instant mode show the same one, and there is no way around it without
+  Google's cloud. Reconnect under Doze (battery-optimization exemption,
+  backoff, resubscribe) is the battle-tested part of ntfy being
+  reimplemented and is the real engineering cost. `alert` overriding Do
+  Not Disturb is a notification channel with bypass-DND plus
+  notification-policy access granted once. One persistent socket, not
+  zero: over a tunnel that already keeps alive, an MQTT keepalive of a
+  few minutes is negligible, but it is not the free ride Google's shared
+  connection gives. Presence alone would need none of this — a geofence
+  transition wakes the app, it connects, publishes, drops. The socket
+  exists for push.
+- **Rejected, deliberately.** Keep OwnTracks and tune it (tried for
+  weeks; the finding above). Keep ntfy as a UnifiedPush distributor with
+  the app on top (a second server and a second app to borrow a socket the
+  app must hold anyway). Point the HA companion app at homeostat (a unit
+  impersonating HA's `mobile_app` API — registration, webhook sensors,
+  the auth flow, a websocket — a large surface owned by another project's
+  release cadence, for one feature). PWA only (Android has no background
+  geofencing for web pages; the Geolocation API stops when the page
+  does). A WebSocket to a homeostat unit instead of the broker (would
+  reinvent persistent sessions, queueing and per-device auth that
+  mosquitto already has, and the location path uses the broker
+  regardless). The phone on the bus (above).
+
+### The companion adapter (built 2026-09-12)
+
+`adapters/companion.py`, the second `notifier` dialect and the first
+adapter whose device speaks homeostat vocabulary natively — the app is
+ours, so there is no `acc`/`batt`/`tst` to rename. What the adapter
+provides is not translation but membrane: ownership, a grant the plan
+renders, health, backoff, a breaker.
+
+- **Binding.** `[discovery].endpoint` is the broker
+  (`mqtt://host:1883[/base/topic]`, base topic `companion` by default);
+  credentials follow the usual MQTT path (inline, or
+  `HOMEOSTAT_MQTT_CREDENTIALS`). The wire contract — every topic, every
+  payload, and what the app must do about sessions, retention and wills —
+  is [docs/companion-protocol.md](companion-protocol.md), which is what
+  `homeostat-app` implements against.
+- **No rate floor, unlike ntfy.** There is no third-party server to
+  protect here, and the cooldown that is house policy already lives in
+  the automation as a family-editable parameter on the SDK's `Cooldown`.
+  The ivt490 defense-in-depth argument bought a floor in the ntfy adapter
+  because a shared server was on the other side; the phone is not that.
+- **The adapter's own MQTT session is clean, not persistent.** Presence
+  and position are live signals and the state mirror holds the last
+  value, so a restart loses nothing that matters; an `ack` published
+  while the adapter was down is lost rather than invented, which is the
+  rule (State: never invent). The phone's session is the persistent one,
+  because the queue that matters is the one holding an alert for a phone
+  in a tunnel.
+- **Health vocabulary.** `drop`/`malformed-payload` (undecodable or
+  wrongly typed input from the phone), `drop`/`invalid-command`,
+  `drop`/`unknown-device` for a subtree no entity file binds, first sight
+  only — an unbound phone keeps publishing forever, and discovery already
+  carries the binding.
+
 ## Voice (later phase)
  
 - Two-tier command path: a fast-path intent matcher (high precision,
@@ -2524,6 +2678,14 @@ use — so this adapter is not thrown away when the app arrives.
   Python SDK (typed commands, config helpers, automation Context), generic
   adapters (Zigbee2MQTT, ESPHome, clock, arbiter, recorder), generic agent
   skills, an example house as documentation.
+- **Public (`homeostat-app`):** the Android companion app (settled
+  2026-09-12, #51). A separate repo because the toolchain shares nothing
+  with this one and its release cadence is the Play/APK cadence, not the
+  core's. It holds no house data — a phone is provisioned with a config
+  blob — and it couples to this repo through one document,
+  [docs/companion-protocol.md](companion-protocol.md), which is normative
+  and lives HERE: the house side of the contract is the adapter, and a
+  contract owned by the consumer drifts.
 - **Private (house repo):** all manifests, entity files, zones, automations,
   house-specific agent skills, pending plans, applied-commit metadata. Pins
   a core version; CI runs `homeostat plan --check` on push.
