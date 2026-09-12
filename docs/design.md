@@ -2418,7 +2418,8 @@ beyond the vocabulary row.
   by the adapter (quiet hours may withhold `message` but never
   `alert`), and recorded separately. `delivered` is the epoch time at
   which the delivery service acknowledged the last message. It does not
-  mean a person has read it. Chat ids, topics and priorities are the
+  mean a person has read it. `acknowledged`, from a channel with an app
+  at the far end, is the time the person dismissed it. Chat ids, topics and priorities are the
   adapter's dialect.
 - The entity is the address. One person's phone is in the pseudo-room
   `person`, and a group channel is in `global`. A person with two
@@ -2448,6 +2449,87 @@ Rejected alternatives:
 - An SDK facility would grant authority by import.
 - Dashboard web push has no secure context, and looking at the
   dashboard is not the same as being told.
+
+### The companion app
+
+The house's own Android app (`homeostat-app`) gives each family phone
+two faces: a `person` that reports presence and a `notifier` that
+receives messages. It reaches the house through the MQTT broker and
+`adapters/companion.py`. The wire contract is
+[docs/companion-protocol.md](companion-protocol.md). It is normative
+and lives in this repo, because the adapter is the house side of the
+contract.
+
+Presence is the reason the app exists. The router's WiFi sightings
+already say who is home at no battery cost. The phone answers what the
+router cannot: away, and approaching. The app registers one platform
+geofence, `home`, and publishes its enter and leave transitions as
+`presence`. Android's geofencing API costs almost no battery, where
+OwnTracks runs its own location loop. Continuous position is opt-in per
+phone and off by default, because tracking within a family is what
+makes people stop running these apps.
+
+- The phone is a device and does not touch the bus. The bus trusts
+  everything on it, since priority and actor are self-declared
+  ([Local-only access](#local-only-access)). A phone publishing its own
+  `presence` would be an entity no plan shows. The bus has no queue for
+  an absent client, and the broker's persistent sessions are one. A
+  pure-JVM MQTT client is also smaller than zenoh-kotlin's JNI library.
+- One phone is two entities under one topic subtree. The entity `id`
+  names the subtree and the face (`alice/person`, `alice/notifier`).
+  The core refuses two entities with one `id` under one owner
+  (`duplicate-entity-id`), so the face is part of it.
+- `delivered` is the broker's QoS 1 acknowledgement. `acknowledged` is
+  the time the person dismissed the notification in the app. Whether an
+  unacknowledged `alert` escalates is the automation's policy.
+- `available` comes from the app's retained birth message and its last
+  will. MQTT allows one will per connection, so the topic names the
+  phone and the adapter fans it out to both entities. An automation can
+  then tell an unreachable phone from a silent person.
+- Notifications are QoS 1 and never retained, because a retained alert
+  would fire again on every reconnect. The phone's persistent session
+  holds what it missed. The adapter's own session is clean. Presence and
+  position are live signals the mirror already holds, and an `ack`
+  published while the adapter is down is lost rather than invented.
+- The adapter has no rate floor. There is no third-party server to
+  protect, and the cooldown already lives in the automation.
+- Identity is the device. The app is provisioned from a text blob that
+  the house repo renders as a QR code, and the broker's password and ACL
+  files carry the same names. WireGuard is the network identity, and the
+  WireGuard app carries the tunnel. The MQTT credential exists because
+  the broker cannot see peers.
+- The app does not render house state. A native UI would need arbitrary
+  state reads and family commands, which is the bus surface the phone
+  is refused. It shows the dashboard in a WebView instead. That gives
+  the bookmark a home-screen icon and a standalone window without a
+  service worker.
+
+Holding a socket for push has costs. Android shows a permanent
+"running" notification, as ntfy does in instant mode, and avoiding it
+needs Google's cloud. Keeping the socket alive under Doze is the app's
+main engineering cost. `alert` overrides Do Not Disturb through a
+notification channel with bypass-DND and notification-policy access,
+granted once.
+
+Where a phone runs the app, it replaces ntfy. ntfy provides a
+persistent connection, an offline buffer, text-file auth and a finished
+Android app. The broker already provides the first three, and the app
+needs its own socket for location anyway. Moving a person over changes
+their entity files and no automation.
+
+Rejected alternatives:
+
+- iOS. Push on iOS goes through Apple's service, a cloud dependency in
+  the alerting path.
+- Tuning OwnTracks. Its modes did not close the battery gap.
+- ntfy as a UnifiedPush distributor under the app. That is a second
+  server and a second app to borrow a socket the app holds anyway.
+- The Home Assistant companion app pointed at homeostat. A unit would
+  impersonate HA's `mobile_app` API, a large surface on another
+  project's release cadence.
+- A PWA. Android has no background geofencing for web pages.
+- A WebSocket to a homeostat unit. It would reimplement the persistent
+  sessions, queueing and per-device auth that mosquitto already has.
 
 ### Agent surface (MCP)
 
@@ -2629,6 +2711,12 @@ on the same terms.
   Anything that would be identical in a stranger's house is public.
   Generic automations graduate into SDK helpers or adapters. The public
   tool sees a private repo only locally.
+- The public repo `homeostat-app` holds the Android companion app
+  ([The companion app](#the-companion-app)). Its toolchain shares
+  nothing with this repo, and it releases on its own cadence. It holds
+  no house data, since a phone is provisioned with a blob. It depends on
+  this repo only through
+  [docs/companion-protocol.md](companion-protocol.md).
 
 ### Release artifacts
 

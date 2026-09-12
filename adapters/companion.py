@@ -8,8 +8,13 @@
 # [tool.uv.sources]
 # homeostat = { path = "../sdk/python", editable = true }
 # ///
-"""Companion adapter: the house's own Android app, over the MQTT broker
-(docs/design.md, Notifications; issue #51).
+"""Companion adapter: the house's own Android app, over the MQTT broker.
+
+The wire contract this implements — every topic, every payload, and what
+the app owes about sessions, retention and wills — is
+docs/companion-protocol.md, which is normative and is what homeostat-app
+implements against; docs/design.md, "The companion app", holds the
+reasoning.
 
 The membrane that makes a family phone a described part of the house. The
 phone never touches the bus — it is a device, and devices speak a dialect
