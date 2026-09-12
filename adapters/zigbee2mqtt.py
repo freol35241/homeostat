@@ -38,7 +38,14 @@ home/cmd/{room}/{entity}/{aspect} translate to {base}/{id}/set. The
 entity file's `id` is the z2m topic segment; the file stem is the entity
 name. The z2m `state` field is normalized (`on` for lights/switches,
 `locked` for locks); other scalar fields pass through under their z2m
-names; nested objects (e.g. color) are deferred. Arbitrated entities (e.g.
+names — a field name that is not a legal key segment (empty, a wildcard,
+"#") drops with a "malformed-payload" event and the rest of the payload
+still publishes; nested objects (e.g. color) are deferred. A command is
+taken for the capability's base aspect (`on`/`locked`, a bool), a
+declared feature (`brightness`/`color_temp`, a number) or a command the
+device's own exposes describe (see below: a float or one of the enum's
+values); any other aspect, or a value of the wrong type, drops with
+"invalid-command" and never reaches the device. Arbitrated entities (e.g.
 locks) get no home/cmd subscription at all — plan-time expansion gives the
 adapter's templated cmd subscription only its non-arbitrated bound
 entities — and instead receive the arbiter's forwarded envelope on
@@ -161,6 +168,9 @@ DIAGNOSTIC_PROPERTIES = frozenset({"linkquality"})
 # The capability vocabulary the dashboard's own widgets command: described
 # as readings, never as descriptor commands.
 VOCABULARY_ASPECTS = frozenset({"on", "locked", "brightness", "color_temp"})
+# The capability's base aspect (docs/manifest.md, Capability vocabulary):
+# the one command every entity of that capability takes.
+BASE_ASPECT = {"light": "on", "switch": "on", "lock": "locked"}
 ACCESS_SET = 2  # z2m access bitmask: 1 published, 2 settable, 4 gettable
 SPECIFIC_TYPES = ("light", "switch", "lock", "cover", "climate", "fan")
 
@@ -284,6 +294,35 @@ def inventory(devices, by_id):
     return records
 
 
+def command_body(entity, aspect: str, value, fields: dict) -> dict | None:
+    """The {base}/{id}/set payload for a command this entity takes — its
+    capability's base aspect (a bool), a declared vocabulary feature (a
+    number) or a command its exposes-derived descriptor `fields` carry (a
+    float, or one of the enum's values) — or None for anything else: an
+    unknown aspect or a value of the wrong type never reaches the device."""
+    if aspect == BASE_ASPECT.get(entity.capability):
+        if not isinstance(value, bool):
+            return None
+        if aspect == "locked":
+            # z2m's lock vocabulary is asymmetric: state REPORTS are
+            # LOCKED/UNLOCKED, but SET commands are LOCK/UNLOCK.
+            return {"state": "LOCK" if value else "UNLOCK"}
+        return {"state": "ON" if value else "OFF"}
+    number = isinstance(value, (int, float)) and not isinstance(value, bool)
+    if aspect in VOCABULARY_ASPECTS and aspect in entity.features:
+        return {aspect: value} if number else None
+    command = fields.get(aspect, {}).get("command")
+    if command is None:
+        return None
+    if command["type"] == "enum":
+        allowed = [v["value"] for v in fields[aspect]["values"]]
+        if isinstance(value, bool) or not isinstance(value, (str, int, float)) or value not in allowed:
+            return None
+    elif not number:
+        return None
+    return {aspect: value}
+
+
 def main():
     unit = os.environ[keys.ENV_UNIT]
     config = house.load_adapter(unit)
@@ -301,6 +340,9 @@ def main():
     # boot reports on its first state message.
     known: set[str] = set()
     bridge = {"online": None}
+    # Per bound entity, the descriptor fields its exposes yielded: the
+    # commands beyond the base vocabulary an entity takes (command_body).
+    descriptor_fields: dict[str, dict] = {}
 
     def unbound(topic: str, dev_id: str) -> None:
         """A device the BRIDGE knows but no entity file binds is a steady
@@ -328,6 +370,9 @@ def main():
             records = inventory(devices, by_id)
             known.clear()
             known.update(record["id"] for record in records)
+            for record in records:
+                if record["configured"]:
+                    descriptor_fields[record["entity"]] = record.get("aspects", {}).get("fields", {})
             session.put_json(keys.discovery_key(unit), records)
             return
         if rest == "bridge/state":
@@ -380,39 +425,27 @@ def main():
                 # field must not impersonate it.
                 session.health_event("drop", reason="reserved-aspect", topic=msg.topic)
                 continue
-            session.put_json(keys.state_key(entity.room, entity.name, aspect), value)
+            try:
+                key = keys.state_key(entity.room, entity.name, aspect)
+            except ValueError:
+                # A field name the key schema refuses; the rest of the
+                # payload is still good.
+                session.health_event(
+                    "drop", reason="malformed-payload", topic=msg.topic, field=z2m_field
+                )
+                continue
+            session.put_json(key, value)
 
     def cmd_handler(entity):
         def handler(sample):
-            key = str(sample.key_expr)
-            aspect = key.split("/", 4)[4]
-            try:
-                payload = json.loads(sample.payload.to_bytes())
-            except ValueError:
-                session.health_event("drop", reason="malformed-payload", key=key)
+            parsed = session.parse_command(sample)
+            if parsed is None:
                 return
-            try:
-                value = keys.parse_cmd_envelope(payload)
-            except ValueError:
-                session.health_event("drop", reason="invalid-command", key=key)
+            aspect, value = parsed
+            body = command_body(entity, aspect, value, descriptor_fields.get(entity.name, {}))
+            if body is None:
+                session.health_event("drop", reason="invalid-command", key=str(sample.key_expr))
                 return
-            if aspect == "on":
-                if not isinstance(value, bool):
-                    session.health_event("drop", reason="invalid-command", key=key)
-                    return
-                body = {"state": "ON" if value else "OFF"}
-            elif aspect == "locked":
-                if not isinstance(value, bool):
-                    session.health_event("drop", reason="invalid-command", key=key)
-                    return
-                # z2m's lock vocabulary is asymmetric: state REPORTS are
-                # LOCKED/UNLOCKED, but SET commands are LOCK/UNLOCK.
-                body = {"state": "LOCK" if value else "UNLOCK"}
-            elif "/" in aspect:
-                session.health_event("drop", reason="invalid-command", key=key)
-                return
-            else:
-                body = {aspect: value}
             client.publish(f"{base}/{entity.id}/set", json.dumps(body))
 
         return handler

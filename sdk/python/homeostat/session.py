@@ -44,8 +44,38 @@ class UnitSession:
         )
 
     def put_json(self, key: str, value: Any) -> None:
-        """Publishes a JSON-encoded value."""
-        self._session.put(key, json.dumps(value))
+        """Publishes a JSON-encoded value.
+
+        A value carrying a non-finite float (NaN, Infinity — which Python's
+        json accepts and re-emits, but JSON has no spelling for) is dropped
+        with a "non-finite" health event instead: every consumer would
+        otherwise have to guard against it, and the recorder cannot store
+        it (docs/design.md, Bus payload conventions)."""
+        try:
+            encoded = json.dumps(value, allow_nan=False)
+        except ValueError:
+            self.health_event("drop", reason="non-finite", key=key)
+            return
+        self._session.put(key, encoded)
+
+    def parse_command(self, sample: zenoh.Sample):
+        """The command prologue every adapter shares (docs/adapters.md, §4):
+        the aspect from the key and the envelope's value from the payload,
+        or None after a drop event — "malformed-payload" for a payload that
+        is not JSON, "invalid-command" for one that is not an envelope."""
+        key = str(sample.key_expr)
+        aspect = key.split("/", 4)[4]
+        try:
+            payload = json.loads(sample.payload.to_bytes())
+        except ValueError:
+            self.health_event("drop", reason="malformed-payload", key=key)
+            return None
+        try:
+            value = keys.parse_cmd_envelope(payload)
+        except ValueError:
+            self.health_event("drop", reason="invalid-command", key=key)
+            return None
+        return aspect, value
 
     def subscribe(self, keyexpr: str, callback: Callable[[zenoh.Sample], None]):
         return self._session.declare_subscriber(keyexpr, callback)

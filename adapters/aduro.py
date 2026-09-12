@@ -56,7 +56,12 @@ Four normalizations carry the `burner` vocabulary:
 - `boiler_temperature` is status `boiler_temp`.
 
 Everything else passes through, including `shaft_temp` (the feed shaft,
-the device's own fire-safety reading) and `power_pct` (actual output).
+the device's own fire-safety reading) and `power_pct` (actual output) —
+except a raw field that would mint a reserved name (`available`, or one
+of the normalized names above arriving under its bus name rather than
+its firmware name), which drops with a "reserved-aspect" event, and a
+field name that is not a legal key segment, which drops with
+"malformed-payload"; the rest of the document still publishes.
 
 Commands (COMMANDS) — the burner is an arbitrated entity (the family's
 `on` and an automation's `power_level` lease independently, per aspect),
@@ -123,6 +128,12 @@ ASPECT_OVERRIDES = {
 # code observed to date (idle, unlit); extend from the heating season.
 OFF_STATES = frozenset({14})
 
+# Names a status field may not mint raw: the adapter's own liveness
+# signal, and the vocabulary the overrides derive (a wire field literally
+# named `on` would otherwise overwrite the derived one and poison the
+# publish-on-change cache).
+RESERVED_STATUS_FIELDS = frozenset({"available", "on", *ASPECT_OVERRIDES.values()})
+
 POWER_LEVELS = (10, 50, 100)
 
 # Commandable aspect -> the NBE set path (None for `on`, whose path
@@ -160,19 +171,25 @@ ASPECT_FIELDS = {
 ASPECT_DESCRIPTOR = {"schema": 1, "groups": ASPECT_GROUPS, "fields": ASPECT_FIELDS}
 
 
-def status_aspects(status: dict) -> dict:
+def status_aspects(status: dict) -> tuple[dict, list[str]]:
     """One status document to the bus aspects it yields: the normalized
     names, the derived `on`, and every other field under its firmware
-    name. `power_level` is an int when the wire float is integral."""
+    name — plus the raw fields dropped for naming a reserved aspect.
+    `power_level` is an int when the wire float is integral."""
     aspects = {}
+    reserved = []
     for field, value in status.items():
+        if field in RESERVED_STATUS_FIELDS:
+            reserved.append(field)
+            continue
         aspect = ASPECT_OVERRIDES.get(field, field)
         if aspect == "power_level" and isinstance(value, float) and value.is_integer():
             value = int(value)
         aspects[aspect] = value
-    if "state" in status:
-        aspects["on"] = status["state"] not in OFF_STATES
-    return aspects
+    state = status.get("state")
+    if isinstance(state, (int, float)):  # a run-state code is a number
+        aspects["on"] = state not in OFF_STATES
+    return aspects, reserved
 
 
 def command_body(aspect: str, value):
@@ -257,33 +274,34 @@ def main():
             return
 
         if rest[0] == "status":
-            aspects = status_aspects(document)
+            aspects, reserved = status_aspects(document)
+            for field in reserved:
+                session.health_event("drop", reason="reserved-aspect", topic=msg.topic, field=field)
         else:
             aspects = {f"operating_{field}": value for field, value in document.items()}
         for aspect, value in aspects.items():
+            try:
+                key = keys.state_key(entity.room, entity.name, aspect)
+            except ValueError:
+                session.health_event(
+                    "drop", reason="malformed-payload", topic=msg.topic, field=aspect
+                )
+                continue
             if last.get((entity.name, aspect), _UNSET) == value:
                 continue  # unchanged since the last poll: not a sample
             last[(entity.name, aspect)] = value
-            session.put_json(keys.state_key(entity.room, entity.name, aspect), value)
+            session.put_json(key, value)
 
     def cmd_handler(entity):
         def handler(sample):
-            key = str(sample.key_expr)
-            aspect = key.split("/", 4)[4]
-            try:
-                payload = json.loads(sample.payload.to_bytes())
-            except ValueError:
-                session.health_event("drop", reason="malformed-payload", key=key)
+            parsed = session.parse_command(sample)
+            if parsed is None:
                 return
-            try:
-                value = keys.parse_cmd_envelope(payload)
-            except ValueError:
-                session.health_event("drop", reason="invalid-command", key=key)
-                return
+            aspect, value = parsed
             body = command_body(aspect, value) if aspect in COMMANDS else None
             if body is None:
                 session.health_event(
-                    "drop", reason="invalid-command", key=key, aspect=aspect, value=value
+                    "drop", reason="invalid-command", key=str(sample.key_expr), aspect=aspect, value=value
                 )
                 return
             client.publish(f"{entity.id}/set", json.dumps(body))
@@ -326,11 +344,13 @@ def main():
 
     stop.set()
     watchdog_thread.join(timeout=5)
+    # The MQTT loop stops first: an in-flight on_message during teardown
+    # would otherwise put on a closed zenoh session.
+    client.loop_stop()
+    client.disconnect()
     for sub in subscribers:
         sub.undeclare()
     session.close()
-    client.loop_stop()
-    client.disconnect()
 
 
 if __name__ == "__main__":
