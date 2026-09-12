@@ -167,26 +167,32 @@ carries everything a deployed house needs — the `homeostat` binary, git,
 uv, and a pre-installed Python:
 
 ```
-docker run -d \
+docker run -d --name homeostat \
   -v /path/to/house:/house \
   -v homeostat-uv:/var/cache/uv \
-  -p 7447:7447 \
   ghcr.io/freol35241/homeostat
 ```
 
-The default command is `up /house --listen tcp/0.0.0.0:7447`, so the bus
-is reachable through the published port. The uv cache volume is optional
-but keeps unit environments across container replacements.
+The default command is `up /house --listen tcp/0.0.0.0:7447`. The bus is
+deliberately not published: anything that can reach 7447 has full
+authority over the house, and `127.0.0.1:7447:7447` is no boundary
+either — a `network_mode: host` container shares the host's loopback.
+The other subcommands run inside the container instead, where the image
+already points `HOMEOSTAT_BUS` at the supervisor's loopback:
+
+```
+docker exec homeostat homeostat plan /house
+```
+
+The container runs as uid 1000; if your house checkout is owned by
+another user, add `--user "$(id -u):$(id -g)"` so units can write to it.
+The uv cache volume is optional but keeps unit environments across
+container replacements.
 [`examples/starter-house`](examples/starter-house/) is a runnable
 template for that mounted house — clock, recorder, Zigbee2MQTT adapter,
 and the evening-lights automation, with a compose file for the full
 mosquitto + zigbee2mqtt + homeostat stack; copy it out and make it your
-own repo. The other subcommands work through the same image:
-
-```
-docker run --rm -v /path/to/house:/house ghcr.io/freol35241/homeostat \
-  plan /house --bus tcp/<supervisor-host>:7447
-```
+own repo.
 
 ## The pieces
 
