@@ -9,6 +9,7 @@ description = "Aduro pellet-burner adapter under test"
 command = "uv run ../../adapters/aduro.py"
 restart = "always"
 shutdown_grace_s = 5
+env = ["HOMEOSTAT_TEST_MQTT_PORT", "HOMEOSTAT_MQTT_CREDENTIALS"]
 
 [discovery]
 mode = "static"

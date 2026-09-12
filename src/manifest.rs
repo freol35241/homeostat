@@ -253,6 +253,14 @@ pub struct RuntimeSection {
     pub restart: RestartPolicy,
     /// Seconds between SIGTERM and SIGKILL at shutdown. Default 5.
     pub shutdown_grace_s: Option<u32>,
+    /// Names of the environment variables this unit reads, passed through
+    /// from the supervisor's environment by exact name (e.g.
+    /// `["HOMEOSTAT_NTFY_TOKEN"]`). A unit sees nothing else of the
+    /// supervisor's environment beyond a fixed base set (`PATH`, `HOME`,
+    /// locale, `TZ`, `UV_*`, `PYTHON*`, CA bundles) and the
+    /// `HOMEOSTAT_UNIT`/`HOMEOSTAT_BUS` it is given — a secret meant for
+    /// one unit is never visible to another.
+    pub env: Option<Vec<String>>,
 }
 
 /// When the supervisor restarts an exited unit. Every restart carries

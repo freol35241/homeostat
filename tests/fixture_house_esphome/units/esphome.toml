@@ -9,6 +9,7 @@ description = "ESPHome adapter under test"
 command = "uv run ../../adapters/esphome.py"
 restart = "always"
 shutdown_grace_s = 5
+env = ["HOMEOSTAT_ESPHOME_DEVICES"]
 
 [discovery]
 mode = "mdns"

@@ -8,6 +8,7 @@ description = "ESPHome native-API adapter"
 [runtime]
 command = "uv run units/esphome.py"
 restart = "always"
+env = ["HOMEOSTAT_ESPHOME_DEVICES"]
 
 [discovery]
 mode = "mdns"

@@ -26,6 +26,9 @@ pub struct UnitSpec {
     pub cwd: PathBuf,
     /// Bus endpoint handed to the unit via HOMEOSTAT_BUS.
     pub endpoint: String,
+    /// Environment variable names the manifest declares (`runtime.env`);
+    /// passed through from the supervisor's environment, nothing else is.
+    pub env: Vec<String>,
 }
 
 impl UnitSpec {
@@ -41,6 +44,7 @@ impl UnitSpec {
             grace: UnitSpec::grace_from_manifest(unit.manifest.runtime.shutdown_grace_s),
             cwd: root.to_path_buf(),
             endpoint: endpoint.to_string(),
+            env: unit.manifest.runtime.env.clone().unwrap_or_default(),
         }
     }
 }
@@ -140,7 +144,7 @@ pub async fn supervise(
         // up the new environment. See process::resolve.
         let command = process::resolve(&spec.command, &spec.cwd).await;
         let started = Instant::now();
-        let mut child = match process::spawn(&command, &spec.cwd, &env) {
+        let mut child = match process::spawn(&command, &spec.cwd, &spec.env, &env) {
             Ok(child) => child,
             Err(err) => {
                 eprintln!("[homeostat] {}: spawn failed: {err}", spec.name);

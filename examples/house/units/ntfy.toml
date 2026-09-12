@@ -9,6 +9,7 @@ description = "Delivers notifier messages to the family's phones through the ntf
 command = "uv run units/ntfy.py"
 restart = "always"
 shutdown_grace_s = 5
+env = ["HOMEOSTAT_NTFY_TOKEN"]
 
 [discovery]
 mode = "static"
