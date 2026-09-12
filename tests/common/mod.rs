@@ -154,6 +154,7 @@ impl Supervisor {
 
     /// Graceful teardown used by tests that already asserted what they
     /// needed: SIGTERM, then require a clean exit.
+    #[allow(dead_code)] // each test binary uses its own subset of the harness
     pub fn shutdown(&mut self) {
         self.signal(libc::SIGTERM);
         let code = self.wait_exit(Duration::from_secs(10));
@@ -489,8 +490,6 @@ pub async fn await_mirror(observer: &zenoh::Session, key: &str, expected: &serde
     }
 }
 
-/// Reads health events until one matches the expected drop reason.
-#[allow(dead_code)] // each test binary uses its own subset of the harness
 /// The NEXT health event, whatever it is. Unlike `expect_drop_event` this
 /// does not scan past events that do not match — which is the point when
 /// the assertion is that some event must NOT have been emitted.
@@ -503,6 +502,8 @@ pub async fn next_event(sub: &StateSub) -> Value {
     serde_json::from_slice(&sample.payload().to_bytes()).expect("health event is JSON")
 }
 
+/// Reads health events until one matches the expected drop reason.
+#[allow(dead_code)] // each test binary uses its own subset of the harness
 pub async fn expect_drop_event(sub: &StateSub, reason: &str) -> Value {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
     loop {
@@ -596,6 +597,7 @@ pub async fn config_write(
 /// with a pid, and when the supervisor gets SIGTERM it exits cleanly
 /// inside `shutdown_grace_s` and leaves no orphan. One call per adapter
 /// suite — the conformance check a new adapter gets for free.
+#[allow(dead_code)] // each test binary uses its own subset of the harness
 pub async fn assert_unit_contract(sup: &mut Supervisor, observer: &zenoh::Session, unit: &str) {
     let mut watch = health_watch(observer, unit).await;
     let health = await_health(&mut watch, Duration::from_secs(10), |h| {
@@ -626,7 +628,7 @@ pub async fn assert_unit_contract(sup: &mut Supervisor, observer: &zenoh::Sessio
 pub async fn await_states(observer: &zenoh::Session, sub: &StateSub, expected: &[(&str, Value)]) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
     let mut seen: HashMap<String, Value> = HashMap::new();
-    let mut note = |sample: Sample, seen: &mut HashMap<String, Value>| {
+    let note = |sample: Sample, seen: &mut HashMap<String, Value>| {
         if let Ok(value) = serde_json::from_slice::<Value>(&sample.payload().to_bytes()) {
             seen.insert(sample.key_expr().as_str().to_string(), value);
         }

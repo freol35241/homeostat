@@ -1,0 +1,27 @@
+# cargo-audit policy (CI runs `cargo audit`; run it locally the same way).
+# Every entry here is a transitive dependency of zenoh (or a test-only
+# client) with no fixed release to move to. Each names the condition under
+# which it comes off the list; re-check them when Cargo.toml bumps zenoh
+# or rumqttc.
+[advisories]
+ignore = [
+    # rsa 0.9 Marvin timing side channel, via zenoh-transport (TLS/QUIC
+    # link auth). No fixed rsa release exists. Drop when the advisory gains
+    # a fix or zenoh-transport stops depending on rsa.
+    "RUSTSEC-2023-0071",
+    # lz4_flex 0.10 decompression of invalid data can leak buffer memory,
+    # via zenoh-transport's compression. The fix is in 0.11.6, and every
+    # zenoh release so far (1.10.1 included) still requires ^0.10. Drop
+    # when zenoh-transport requires lz4_flex >= 0.11.6.
+    "RUSTSEC-2026-0041",
+    # rustls-webpki 0.102 CRL / name-constraint bugs, via rumqttc — a
+    # dev-dependency (the MQTT test client), not in the shipped binary.
+    # Drop when rumqttc depends on rustls-webpki 0.103.
+    "RUSTSEC-2026-0049",
+    "RUSTSEC-2026-0098",
+    "RUSTSEC-2026-0099",
+    "RUSTSEC-2026-0104",
+    # paste is unmaintained (warning, not a vulnerability), via
+    # zenoh-keyexpr's token-cell. Drop when token-cell replaces it.
+    "RUSTSEC-2024-0436",
+]
