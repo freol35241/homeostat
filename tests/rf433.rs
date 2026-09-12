@@ -182,6 +182,69 @@ async fn unbound_codes_reach_discovery_not_the_health_feed() {
     sup.shutdown();
 }
 
+/// (e2) M26: an estate hears neighbours' remotes and RF noise all day —
+/// unbound is unbounded traffic, not a fixed handful. Only the most
+/// recently first-heard MAX_UNBOUND=200 stay in discovery; the oldest is
+/// evicted, and the flood coalesces into the one publish this test reads
+/// (the adapter debounces republish for DISCOVERY_COALESCE_S=5s).
+#[tokio::test(flavor = "multi_thread")]
+async fn unbound_discovery_stays_capped_at_two_hundred() {
+    let (mosquitto, mut sup, observer) = setup().await;
+    let discovery_sub = observer
+        .declare_subscriber("home/discovery/rf433")
+        .await
+        .expect("discovery subscriber");
+    let mut mqtt = Mqtt::connect(mosquitto.port, "test-cap").await;
+
+    // 201 distinct unbound codes, first-heard in order 90000000..90000200.
+    // One over the cap, so exactly the oldest (90000000) must be evicted.
+    for code in 90_000_000..=90_000_200i64 {
+        mqtt.publish(EVENTS, &code.to_string()).await;
+    }
+
+    // The debounce means only the FINAL state after the flood settles is
+    // worth reading; poll until a record for the last code appears, which
+    // can only happen once every code has been processed.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    let records = loop {
+        let sample = tokio::time::timeout_at(deadline, discovery_sub.recv_async())
+            .await
+            .expect("a discovery record within 20s")
+            .expect("discovery stream open");
+        let records: serde_json::Value =
+            serde_json::from_slice(&sample.payload().to_bytes()).expect("discovery is JSON");
+        let has_last = records
+            .as_array()
+            .is_some_and(|rs| rs.iter().any(|r| r["id"] == "90000200"));
+        if has_last {
+            break records;
+        }
+    };
+
+    let unbound_ids: Vec<&str> = records
+        .as_array()
+        .expect("discovery is an array")
+        .iter()
+        .filter(|r| r["configured"] == json!(false))
+        .filter_map(|r| r["id"].as_str())
+        .collect();
+    assert!(
+        unbound_ids.len() <= 200,
+        "unbound discovery grew past the cap: {} entries",
+        unbound_ids.len()
+    );
+    assert!(
+        !unbound_ids.contains(&"90000000"),
+        "the oldest unbound code must be evicted once the cap is exceeded: {unbound_ids:?}"
+    );
+    assert!(
+        unbound_ids.contains(&"90000200"),
+        "the newest unbound code must be present: {unbound_ids:?}"
+    );
+
+    sup.shutdown();
+}
+
 /// (f) A bound entity's descriptor reaches discovery, and a detector's
 /// field is notable — a smoke alarm firing has to land on Now as a
 /// deviation, which is a descriptor fact rather than a state one.

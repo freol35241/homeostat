@@ -283,6 +283,30 @@ async fn state_lands_typed_in_store() {
         "non-scalar payload became a row"
     );
 
+    // H4, defense in depth: a raw NaN on the bus (serde_json::Value can't
+    // hold it, so this publishes the literal bytes directly — the shape a
+    // publisher that skips the SDK's put_json guard, or a future one,
+    // could still produce) is dropped as "non-finite", never a row — and
+    // the writer keeps working afterward rather than mistaking a refused
+    // row for a dead backend and stalling on it.
+    let gauge = matched_publisher(&observer, "home/state/attic/probe/gauge").await;
+    gauge.put("NaN").await.expect("raw NaN put");
+    let event = await_event(&events, Duration::from_secs(10), |e| e["kind"] == "drop").await;
+    assert_eq!(event["reason"], json!("non-finite"));
+    assert_eq!(event["key"], json!("home/state/attic/probe/gauge"));
+    assert!(
+        read_rows(&db, "SELECT * FROM history WHERE aspect = 'gauge'").is_empty(),
+        "a non-finite payload became a row"
+    );
+    put(&gauge, json!(3.0)).await;
+    rows_eventually(
+        &db,
+        "SELECT value FROM history WHERE aspect = 'gauge'",
+        1,
+        Duration::from_secs(10),
+    )
+    .await;
+
     sup.shutdown();
 }
 

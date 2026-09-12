@@ -154,6 +154,81 @@ async fn bad_input_drops_with_health_event() {
     sup.shutdown();
 }
 
+/// (c2) H4: a non-finite field (NaN — which Python's json.loads accepts,
+/// though JSON has no literal for it) drops with a "non-finite" event
+/// instead of publishing; a finite field in the SAME payload still
+/// publishes normally, proving the adapter processes fields independently
+/// rather than dropping the whole message.
+#[tokio::test(flavor = "multi_thread")]
+async fn non_finite_field_drops_without_publishing_or_killing_the_message() {
+    let (mosquitto, mut sup, observer) = setup().await;
+    let event_sub = observer
+        .declare_subscriber(EVENT_KEY)
+        .await
+        .expect("event subscriber");
+    let state_sub = observer
+        .declare_subscriber("home/state/**")
+        .await
+        .expect("state subscriber");
+    let mut mqtt = Mqtt::connect(mosquitto.port, "test-nonfinite").await;
+
+    mqtt.publish(
+        "zigbee2mqtt/lamp_kitchen_1",
+        r#"{"brightness": NaN, "state": "ON"}"#,
+    )
+    .await;
+    expect_drop_event(&event_sub, "non-finite").await;
+    expect_states(
+        &state_sub,
+        &[("home/state/kitchen/kitchen_lamp/on", json!(true))],
+    )
+    .await;
+    assert!(
+        matches!(state_sub.try_recv(), Ok(None)),
+        "brightness must never reach the bus as NaN"
+    );
+
+    sup.shutdown();
+}
+
+/// (c3) H5: a device-chosen field name that is not a legal key segment
+/// (here "**", which would put on a wildcard and fan out to every aspect
+/// subscriber if it reached keys.state_key unvalidated) drops with
+/// "malformed-payload" and names the offending field; a legal field in
+/// the same payload still publishes.
+#[tokio::test(flavor = "multi_thread")]
+async fn malformed_field_name_drops_without_killing_the_message() {
+    let (mosquitto, mut sup, observer) = setup().await;
+    let event_sub = observer
+        .declare_subscriber(EVENT_KEY)
+        .await
+        .expect("event subscriber");
+    let state_sub = observer
+        .declare_subscriber("home/state/**")
+        .await
+        .expect("state subscriber");
+    let mut mqtt = Mqtt::connect(mosquitto.port, "test-wildcard-field").await;
+
+    mqtt.publish(
+        "zigbee2mqtt/lamp_kitchen_1",
+        r#"{"**": false, "state": "ON"}"#,
+    )
+    .await;
+    let event = expect_drop_event(&event_sub, "malformed-payload").await;
+    assert_eq!(event["field"], "**", "{event}");
+    expect_states(
+        &state_sub,
+        &[("home/state/kitchen/kitchen_lamp/on", json!(true))],
+    )
+    .await;
+    assert!(
+        matches!(state_sub.try_recv(), Ok(None)),
+        "the malformed field name must never reach the bus"
+    );
+
+    sup.shutdown();
+}
+
 /// (c1b) Structurally malformed bridge/devices entries — non-dict rows, a
 /// non-string id, a string definition, a non-list features — skip like
 /// id-less ones instead of raising out of paho's network thread (which

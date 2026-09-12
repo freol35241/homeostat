@@ -24,7 +24,7 @@ visible by the supervisor's backoff).
 import datetime
 import signal
 import threading
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from homeostat import automation
 
@@ -77,7 +77,9 @@ def main():
             continue
         try:
             zone = ZoneInfo(ctx.params.timezone)
-        except Exception:
+        except (ZoneInfoNotFoundError, TypeError, ValueError):
+            # A live, family/owner-editable string: an unknown key, a
+            # malformed one, or a non-string value from a raw bus write.
             ctx.health_event("drop", reason="invalid-timezone", value=ctx.params.timezone)
         publish(datetime.datetime.now(zone))
 
