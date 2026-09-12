@@ -121,6 +121,11 @@ inventory pattern — discovering devices never bound by any entity file —
 is overkill for a dialect with exactly one address per entity file, known
 up front.
 
+A raw subtopic that would mint a reserved name — `available`, or one of
+the normalized names above arriving under its bus name instead of its
+firmware name — drops with a "reserved-aspect" health event; a subtopic
+that is not a legal key segment drops with "malformed-payload".
+
 Device availability (docs/design.md, "Sensor dropout and availability"):
 this firmware publishes continuously — every serial telegram fans out —
 so silence IS the loss signal. A receive timer flips
@@ -337,14 +342,22 @@ def state_field(segments: list[str]) -> str:
     return "_".join(segments)
 
 
-def state_aspect(source: str, field: str) -> str:
+# Names a raw firmware field may not mint: the adapter's own liveness
+# signal and the normalized names, which only their overrides may yield.
+RESERVED_ASPECTS = frozenset({"available", *ASPECT_OVERRIDES.values()})
+
+
+def state_aspect(source: str, field: str) -> str | None:
     """Maps one firmware field (`source` "state" or "controller") to a bus
     aspect name — the three settled normalizations, or the firmware name
     passed through, prefixed `controller_` on a name collision between the
-    two namespaces (see module docstring)."""
+    two namespaces (see module docstring) — or None for a raw field that
+    would mint a reserved name (callers drop it with "reserved-aspect")."""
     override = ASPECT_OVERRIDES.get((source, field))
     if override is not None:
         return override
+    if field in RESERVED_ASPECTS:
+        return None
     if source == "controller" and field in STATE_ASPECTS:
         return f"controller_{field}"
     return field
@@ -449,6 +462,7 @@ def main():
                 return
             if isinstance(value, (dict, list)):
                 return  # a nested blob; its leaves arrive on deeper subtopics
+            valid = None
             aspect = state_aspect("state", state_field(rest[2:]))
         elif len(rest) == 3 and rest[0] == "controller" and rest[1] == "state":
             try:
@@ -457,33 +471,34 @@ def main():
                 session.health_event("drop", reason="malformed-payload", topic=msg.topic)
                 return
             aspect = state_aspect("controller", rest[2])
-            if valid is not None:
-                # Ahead of the value, so a consumer reacting to the new
-                # value reads this snapshot's validity from the mirror and
-                # never the previous one's.
-                session.put_json(
-                    keys.state_key(entity.room, entity.name, f"{aspect}_valid"),
-                    bool(valid),
-                )
         else:
             return  # a whole-document blob topic
 
-        session.put_json(keys.state_key(entity.room, entity.name, aspect), value)
+        if aspect is None:
+            # A raw field naming the liveness signal or a normalized aspect
+            # must not impersonate it.
+            session.health_event("drop", reason="reserved-aspect", topic=msg.topic)
+            return
+        try:
+            key = keys.state_key(entity.room, entity.name, aspect)
+        except ValueError:
+            # A topic segment the key schema refuses (empty, a wildcard).
+            session.health_event("drop", reason="malformed-payload", topic=msg.topic)
+            return
+        if valid is not None:
+            # Ahead of the value, so a consumer reacting to the new value
+            # reads this snapshot's validity from the mirror and never the
+            # previous one's.
+            session.put_json(keys.state_key(entity.room, entity.name, f"{aspect}_valid"), bool(valid))
+        session.put_json(key, value)
 
     def cmd_handler(entity):
         def handler(sample):
+            parsed = session.parse_command(sample)
+            if parsed is None:
+                return
+            aspect, value = parsed
             key = str(sample.key_expr)
-            aspect = key.split("/", 4)[4]
-            try:
-                payload = json.loads(sample.payload.to_bytes())
-            except ValueError:
-                session.health_event("drop", reason="malformed-payload", key=key)
-                return
-            try:
-                value = keys.parse_cmd_envelope(payload)
-            except ValueError:
-                session.health_event("drop", reason="invalid-command", key=key)
-                return
 
             command = commands_for(entity).get(aspect)
             if command is None:
@@ -588,7 +603,7 @@ def main():
         for input_name, source in e.inputs.items():
             handler = feed_handler(e, input_name, source)
             subscribers.append(
-                session.subscribe(keys.state_key(source.room, source.entity, "*"), handler)
+                session.subscribe(keys.state_keyexpr(source.room, source.entity), handler)
             )
 
     session.put_json(keys.discovery_key(unit), inventory())
@@ -617,11 +632,13 @@ def main():
 
     stop.set()
     watchdog_thread.join(timeout=5)
+    # The MQTT loop stops first: an in-flight on_message during teardown
+    # would otherwise put on a closed zenoh session.
+    client.loop_stop()
+    client.disconnect()
     for sub in subscribers:
         sub.undeclare()
     session.close()
-    client.loop_stop()
-    client.disconnect()
 
 
 if __name__ == "__main__":
