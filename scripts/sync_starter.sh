@@ -9,8 +9,10 @@
 #
 # The one edit a copy needs is the SDK source: adapters/ pins the
 # working-tree SDK so the tests exercise it, a shipped house pins the
-# release (docs/design.md, SDK distribution). Adapter and SDK must come
-# from the SAME commit — an adapter from main against the previous tag's
+# release (docs/design.md, SDK distribution). The lockfile beside each
+# adapter travels with it and takes the same edit (pin_lock below), so a
+# shipped unit resolves exactly what the release's adapter was locked
+# against. Adapter and SDK must come from the SAME commit — an adapter from main against the previous tag's
 # SDK raises AttributeError on whatever the SDK grew since.
 #
 # The starter is therefore a snapshot of SDK_TAG, not of main: --check
@@ -70,6 +72,39 @@ pin_sdk() {
     '
 }
 
+# The lock's SDK entry, rewritten from the path source the dev tree locks
+# against to the wheel the image bundles — byte for byte what `uv lock
+# --script` writes when it finds the wheel through UV_FIND_LINKS, so uv at
+# first boot sees a fresh lock and leaves it alone (smoke_starter.sh
+# asserts that). Everything else in the lock is untouched: the shipped
+# unit runs the release's resolution. WHEELS is the image's UV_FIND_LINKS
+# (Dockerfile); a path wheel carries no hash, the image is the trust root.
+WHEELS=/opt/homeostat-wheels
+pin_lock() {
+  awk -v v="${SDK_TAG#v}" -v w="$WHEELS" '
+    { sub(/name = "homeostat", editable = "[^"]*"/, "name = \"homeostat\", specifier = \"==" v "\"") }
+    /^\[\[package\]\]$/ { sdk = 0 }
+    /^name = "homeostat"$/ { sdk = 1 }
+    sdk && index($0, "source = { editable = ") == 1 {
+      print "source = { registry = \"" w "\" }"; next
+    }
+    # The dependencies list closes; the wheel follows it, and the path
+    # source'"'"'s [package.metadata] block (requires-dist) goes away.
+    sdk && /^\]$/ {
+      print
+      print "wheels = ["
+      print "    { path = \"" w "/homeostat-" v "-py3-none-any.whl\" },"
+      print "]"
+      sdk = 0; meta = 1; next
+    }
+    meta && /^$/ && !seen { next }
+    meta && /^\[package\.metadata\]$/ { seen = 1; next }
+    meta && /^requires-dist = / { next }
+    meta { meta = 0; seen = 0 }
+    { print }
+  '
+}
+
 check=0
 [ "${1:-}" = "--check" ] && check=1
 stale=""
@@ -77,9 +112,39 @@ tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT
 
 # The release's adapters/, or the working tree while that release is being
-# prepared.
+# prepared — only then. Any other failure to read the tag is an error: a
+# silently substituted working tree is the drift this check exists for.
+if git -C "$REPO" rev-parse -q --verify "$SDK_TAG^{commit}" >/dev/null; then
+  at_tag=1
+else
+  at_tag=0
+fi
 source_at_tag() {
-  git -C "$REPO" show "$SDK_TAG:adapters/$1" 2>/dev/null || cat "$REPO/adapters/$1"
+  if [ "$at_tag" = 1 ]; then
+    git -C "$REPO" show "$SDK_TAG:adapters/$1"
+  else
+    cat "$REPO/adapters/$1"
+  fi
+}
+# Whether the release has the file at all: a tag cut before lockfiles
+# existed ships without them.
+have_at_tag() {
+  if [ "$at_tag" = 1 ]; then
+    git -C "$REPO" cat-file -e "$SDK_TAG:adapters/$1" 2>/dev/null
+  else
+    [ -f "$REPO/adapters/$1" ]
+  fi
+}
+
+# Generated content -> its place in the starter, or, under --check, a
+# note that the starter's copy differs.
+place() {
+  if [ "$check" = 1 ]; then
+    cmp -s "$1" "$2" || stale="$stale $3"
+  else
+    mkdir -p "$(dirname "$2")"
+    cp "$1" "$2"
+  fi
 }
 
 for pair in $FILES; do
@@ -91,11 +156,10 @@ for pair in $FILES; do
     *.py) source_at_tag "$src" | pin_sdk > "$tmp" ;;
     *) source_at_tag "$src" > "$tmp" ;;
   esac
-  if [ "$check" = 1 ]; then
-    cmp -s "$tmp" "$dst" || stale="$stale ${pair##*:}"
-  else
-    mkdir -p "$(dirname "$dst")"
-    cp "$tmp" "$dst"
+  place "$tmp" "$dst" "${pair##*:}"
+  if [ "${src##*.}" = py ] && have_at_tag "$src.lock"; then
+    source_at_tag "$src.lock" | pin_lock > "$tmp"
+    place "$tmp" "$dst.lock" "${pair##*:}.lock"
   fi
 done
 
@@ -129,7 +193,7 @@ check_version Cargo.toml "version = \"$version\""
 check_version sdk/python/pyproject.toml "version = \"$version\""
 check_version examples/starter-house/docker-compose.yml "homeostat:$version}"
 if [ -n "$bad" ]; then
-  echo "version drift against SDK_TAG=$SDK_TAG:$(printf "$bad")" >&2
+  echo "version drift against SDK_TAG=$SDK_TAG:$(printf '%b' "$bad")" >&2
   echo "cutting a release bumps all four together" >&2
   exit 1
 fi

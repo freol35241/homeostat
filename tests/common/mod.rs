@@ -35,7 +35,10 @@ impl Supervisor {
     /// racily (the probe listener closes before the supervisor binds), so
     /// a supervisor that dies before listening is retried on a new port.
     pub fn spawn_with_env(fixture: &str, envs: &[(&str, &str)]) -> Self {
-        Self::spawn_at(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(fixture), envs)
+        Self::spawn_at(
+            &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(fixture),
+            envs,
+        )
     }
 
     /// Like `spawn_with_env`, on an absolute house path (temp-dir copies
@@ -63,12 +66,16 @@ impl Supervisor {
             fake_adapter_dir.display(),
             std::env::var("PATH").unwrap_or_default()
         );
-        let stderr_path =
-            std::env::temp_dir().join(format!("homeostat-test-sup-{port}.stderr"));
+        let stderr_path = std::env::temp_dir().join(format!("homeostat-test-sup-{port}.stderr"));
         let stderr = std::fs::File::create(&stderr_path).expect("create stderr capture");
         let mut command = Command::new(env!("CARGO_BIN_EXE_homeostat"));
         command
-            .args(["up", house.to_str().expect("utf-8 path"), "--listen", &endpoint])
+            .args([
+                "up",
+                house.to_str().expect("utf-8 path"),
+                "--listen",
+                &endpoint,
+            ])
             .env("PATH", path)
             .stdout(Stdio::null())
             .stderr(stderr);
@@ -76,7 +83,11 @@ impl Supervisor {
             command.env(key, value);
         }
         let child = command.spawn().expect("spawn supervisor");
-        let mut sup = Self { child, endpoint, stderr_path };
+        let mut sup = Self {
+            child,
+            endpoint,
+            stderr_path,
+        };
         if sup.await_listening() {
             Some(sup)
         } else {
@@ -154,6 +165,7 @@ impl Supervisor {
 
     /// Graceful teardown used by tests that already asserted what they
     /// needed: SIGTERM, then require a clean exit.
+    #[allow(dead_code)] // each test binary uses its own subset of the harness
     pub fn shutdown(&mut self) {
         self.signal(libc::SIGTERM);
         let code = self.wait_exit(Duration::from_secs(10));
@@ -317,7 +329,10 @@ impl Mosquitto {
             .expect("spawn mosquitto (is it installed?)");
         let deadline = Instant::now() + Duration::from_secs(10);
         while std::net::TcpStream::connect(("127.0.0.1", port)).is_err() {
-            assert!(Instant::now() < deadline, "mosquitto never listened on {port}");
+            assert!(
+                Instant::now() < deadline,
+                "mosquitto never listened on {port}"
+            );
             std::thread::sleep(Duration::from_millis(50));
         }
         Self { child, port, conf }
@@ -367,8 +382,13 @@ impl Mqtt {
                 }
             }
         });
-        let mut mqtt = Self { client, events, inbox: VecDeque::new() };
-        mqtt.await_event(|i| matches!(i, Incoming::ConnAck(_))).await;
+        let mut mqtt = Self {
+            client,
+            events,
+            inbox: VecDeque::new(),
+        };
+        mqtt.await_event(|i| matches!(i, Incoming::ConnAck(_)))
+            .await;
         mqtt
     }
 
@@ -439,8 +459,8 @@ pub async fn expect_states(sub: &StateSub, expected: &[(&str, Value)]) {
             .await
             .unwrap_or_else(|_| panic!("missing state keys; saw {seen:?}"))
             .expect("state stream open");
-        let value: Value = serde_json::from_slice(&sample.payload().to_bytes())
-            .expect("state payload is JSON");
+        let value: Value =
+            serde_json::from_slice(&sample.payload().to_bytes()).expect("state payload is JSON");
         seen.insert(sample.key_expr().as_str().to_string(), value);
     }
 }
@@ -454,8 +474,8 @@ pub async fn expect_state(sub: &StateSub, expected: Value) {
             .await
             .unwrap_or_else(|_| panic!("no value {expected} within 20s"))
             .expect("state stream open");
-        let value: Value = serde_json::from_slice(&sample.payload().to_bytes())
-            .expect("state payload is JSON");
+        let value: Value =
+            serde_json::from_slice(&sample.payload().to_bytes()).expect("state payload is JSON");
         if value == expected {
             return;
         }
@@ -489,8 +509,6 @@ pub async fn await_mirror(observer: &zenoh::Session, key: &str, expected: &serde
     }
 }
 
-/// Reads health events until one matches the expected drop reason.
-#[allow(dead_code)] // each test binary uses its own subset of the harness
 /// The NEXT health event, whatever it is. Unlike `expect_drop_event` this
 /// does not scan past events that do not match — which is the point when
 /// the assertion is that some event must NOT have been emitted.
@@ -503,6 +521,8 @@ pub async fn next_event(sub: &StateSub) -> Value {
     serde_json::from_slice(&sample.payload().to_bytes()).expect("health event is JSON")
 }
 
+/// Reads health events until one matches the expected drop reason.
+#[allow(dead_code)] // each test binary uses its own subset of the harness
 pub async fn expect_drop_event(sub: &StateSub, reason: &str) -> Value {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
     loop {
@@ -510,8 +530,8 @@ pub async fn expect_drop_event(sub: &StateSub, reason: &str) -> Value {
             .await
             .unwrap_or_else(|_| panic!("no \"{reason}\" health event within 20s"))
             .expect("event stream open");
-        let event: Value = serde_json::from_slice(&sample.payload().to_bytes())
-            .expect("health event is JSON");
+        let event: Value =
+            serde_json::from_slice(&sample.payload().to_bytes()).expect("health event is JSON");
         assert_eq!(event["kind"], "drop", "unexpected event kind: {event}");
         if event["reason"] == reason {
             return event;
@@ -530,8 +550,8 @@ pub async fn expect_event_kind(sub: &StateSub, kind: &str) {
             .await
             .unwrap_or_else(|_| panic!("no \"{kind}\" health event within 20s"))
             .expect("event stream open");
-        let event: Value = serde_json::from_slice(&sample.payload().to_bytes())
-            .expect("health event is JSON");
+        let event: Value =
+            serde_json::from_slice(&sample.payload().to_bytes()).expect("health event is JSON");
         if event["kind"] == kind {
             return;
         }
@@ -596,6 +616,7 @@ pub async fn config_write(
 /// with a pid, and when the supervisor gets SIGTERM it exits cleanly
 /// inside `shutdown_grace_s` and leaves no orphan. One call per adapter
 /// suite — the conformance check a new adapter gets for free.
+#[allow(dead_code)] // each test binary uses its own subset of the harness
 pub async fn assert_unit_contract(sup: &mut Supervisor, observer: &zenoh::Session, unit: &str) {
     let mut watch = health_watch(observer, unit).await;
     let health = await_health(&mut watch, Duration::from_secs(10), |h| {
@@ -610,7 +631,10 @@ pub async fn assert_unit_contract(sup: &mut Supervisor, observer: &zenoh::Sessio
     // it with margin only for reaping and bus teardown.
     let code = sup.wait_exit(Duration::from_secs(7));
     assert_eq!(code, Some(0), "supervisor exit code");
-    assert!(!process_alive(pid), "{unit} must not outlive the supervisor");
+    assert!(
+        !process_alive(pid),
+        "{unit} must not outlive the supervisor"
+    );
 }
 
 /// The late-joiner read for a test: subscribe, then get, merge (docs/
@@ -626,7 +650,7 @@ pub async fn assert_unit_contract(sup: &mut Supervisor, observer: &zenoh::Sessio
 pub async fn await_states(observer: &zenoh::Session, sub: &StateSub, expected: &[(&str, Value)]) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
     let mut seen: HashMap<String, Value> = HashMap::new();
-    let mut note = |sample: Sample, seen: &mut HashMap<String, Value>| {
+    let note = |sample: Sample, seen: &mut HashMap<String, Value>| {
         if let Ok(value) = serde_json::from_slice::<Value>(&sample.payload().to_bytes()) {
             seen.insert(sample.key_expr().as_str().to_string(), value);
         }
@@ -642,7 +666,10 @@ pub async fn await_states(observer: &zenoh::Session, sub: &StateSub, expected: &
                 }
             }
         }
-        if expected.iter().all(|(key, value)| seen.get(*key) == Some(value)) {
+        if expected
+            .iter()
+            .all(|(key, value)| seen.get(*key) == Some(value))
+        {
             return;
         }
         assert!(
@@ -718,7 +745,11 @@ pub async fn running_pid(session: &zenoh::Session, unit: &str) -> u64 {
     let health = cache_read(session, &bus::health_key(unit))
         .await
         .unwrap_or_else(|| panic!("no health served for {unit}"));
-    assert_eq!(health["status"], json!("running"), "{unit} health: {health}");
+    assert_eq!(
+        health["status"],
+        json!("running"),
+        "{unit} health: {health}"
+    );
     health["pid"].as_u64().expect("running unit has a pid")
 }
 
@@ -748,7 +779,10 @@ pub async fn await_base_units(session: &zenoh::Session) -> (u64, u64) {
 pub fn temp_house(fixture: &str, tag: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("homeostat-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
-    copy_dir(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(fixture), &dir);
+    copy_dir(
+        &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(fixture),
+        &dir,
+    );
     dir
 }
 

@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use zenoh::sample::SampleKind;
 
 use common::{
-    assert_unit_contract, expect_drop_event, expect_states, Mosquitto, Mqtt, next_event, Supervisor,
+    assert_unit_contract, expect_drop_event, expect_states, next_event, Mosquitto, Mqtt, Supervisor,
 };
 
 const FIXTURE: &str = "tests/fixture_house_owntracks";
@@ -92,9 +92,15 @@ async fn non_location_type_is_ignored() {
 
     // No event, no state within a generous window — just quiet.
     let no_event = tokio::time::timeout(Duration::from_millis(1500), event_sub.recv_async()).await;
-    assert!(no_event.is_err(), "transition payload must not raise a health event");
+    assert!(
+        no_event.is_err(),
+        "transition payload must not raise a health event"
+    );
     let no_state = tokio::time::timeout(Duration::from_millis(500), state_sub.recv_async()).await;
-    assert!(no_state.is_err(), "transition payload must not publish state");
+    assert!(
+        no_state.is_err(),
+        "transition payload must not publish state"
+    );
 
     // Still translating afterwards.
     mqtt.publish(
@@ -129,10 +135,12 @@ async fn bad_input_drops_with_health_event() {
         .expect("state subscriber");
     let mut mqtt = Mqtt::connect(mosquitto.port, "test-bad").await;
 
-    mqtt.publish("owntracks/alice/phone", "certainly not json").await;
+    mqtt.publish("owntracks/alice/phone", "certainly not json")
+        .await;
     expect_drop_event(&event_sub, "malformed-payload").await;
 
-    mqtt.publish("owntracks/alice/phone", r#"{"_type":"location","lat":1.0}"#).await;
+    mqtt.publish("owntracks/alice/phone", r#"{"_type":"location","lat":1.0}"#)
+        .await;
     expect_drop_event(&event_sub, "malformed-payload").await;
 
     mqtt.publish(
@@ -191,7 +199,11 @@ async fn seen_devices_published_as_discovery() {
         .expect("discovery sample");
     let mut doc: Value =
         serde_json::from_slice(&sample.payload().to_bytes()).expect("discovery is JSON");
-    assert_eq!(doc.as_array().expect("discovery is an array").len(), 1, "{doc}");
+    assert_eq!(
+        doc.as_array().expect("discovery is an array").len(),
+        1,
+        "{doc}"
+    );
 
     // An unconfigured device shows up on its own traffic — the record set
     // grows and is republished, without disturbing the first record.
@@ -218,7 +230,10 @@ async fn seen_devices_published_as_discovery() {
         .expect("alice record");
     assert_eq!(alice["configured"], json!(true));
     assert_eq!(alice["entity"], json!("alice_phone"));
-    assert_eq!(alice["suggested"], json!({"capability": "person", "features": []}));
+    assert_eq!(
+        alice["suggested"],
+        json!({"capability": "person", "features": []})
+    );
 
     let bob = records
         .iter()
@@ -226,13 +241,26 @@ async fn seen_devices_published_as_discovery() {
         .expect("bob record");
     assert_eq!(bob["configured"], json!(false));
     assert_eq!(bob["entity"], json!(null));
-    assert_eq!(bob["suggested"], json!({"capability": "person", "features": []}));
+    assert_eq!(
+        bob["suggested"],
+        json!({"capability": "person", "features": []})
+    );
 
     // The mirror serves it to late joiners.
-    let replies = observer.get("home/discovery/owntracks").await.expect("get discovery");
-    let reply = replies.recv_async().await.expect("mirrored discovery reply");
+    let replies = observer
+        .get("home/discovery/owntracks")
+        .await
+        .expect("get discovery");
+    let reply = replies
+        .recv_async()
+        .await
+        .expect("mirrored discovery reply");
     let mirrored: Value = serde_json::from_slice(
-        &reply.result().expect("mirrored sample").payload().to_bytes(),
+        &reply
+            .result()
+            .expect("mirrored sample")
+            .payload()
+            .to_bytes(),
     )
     .expect("mirrored discovery is JSON");
     assert_eq!(mirrored, doc, "mirror serves the same document");
@@ -267,7 +295,8 @@ async fn an_unbound_phone_reports_once_not_per_fix() {
 
     // A sentinel published last, asserted strictly: any further
     // unknown-device from carol's remaining two fixes would precede it.
-    mqtt.publish("owntracks/alice/phone", "certainly not json").await;
+    mqtt.publish("owntracks/alice/phone", "certainly not json")
+        .await;
     assert_eq!(
         next_event(&event_sub).await["reason"],
         json!("malformed-payload"),

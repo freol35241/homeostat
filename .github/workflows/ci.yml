@@ -5,37 +5,52 @@ on:
     branches: [main]
   pull_request:
 
+# Third-party actions are pinned to a commit; the comment is the tag that
+# commit carried when pinned, for dependabot and for humans.
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           # sync_starter.sh --check reads adapters/ at the tag the starter
           # pins; a shallow checkout has no tags to read.
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - uses: astral-sh/setup-uv@v6
+      # `stable` is a moving branch of this action; pinning the commit means
+      # naming the toolchain explicitly instead (its README).
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # master
+        with:
+          toolchain: stable
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
         with:
           enable-cache: true
           cache-dependency-glob: |
             sdk/python/pyproject.toml
             adapters/*.py
+            adapters/*.py.lock
+            tests/*.py.lock
             tests/fixture_house_evening/units/*.py
             tests/fixture_house_apply/units/*.py
       - name: Install mosquitto
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends mosquitto
       # First-run dependency resolution must not eat into test timeouts.
+      # --locked: the committed lockfile next to each script is the
+      # resolution the tests run against; a script edited past its lock
+      # fails here instead of silently re-resolving.
       - name: Pre-warm the Python units' uv environments
         run: |
-          for script in adapters/*.py tests/fake_*.py; do uv sync --script "$script"; done
-          uv sync --script tests/fixture_house_evening/units/evening_lights.py
-          uv sync --script tests/fixture_house_apply/units/probe.py
-          uv sync --script tests/fixture_house_virtual/units/fused_temperature.py
+          for script in adapters/*.py tests/fake_*.py; do uv sync --locked --script "$script"; done
+          uv sync --locked --script tests/fixture_house_evening/units/evening_lights.py
+          uv sync --locked --script tests/fixture_house_apply/units/probe.py
+          uv sync --locked --script tests/fixture_house_virtual/units/fused_temperature.py
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
       # The SDK's bus-free helpers (sdk/python/tests): stdlib unittest.
       - run: uv run --no-project --with-editable sdk/python python -m unittest discover sdk/python/tests
+      - run: uvx ruff@0.16.7 check adapters sdk
       # The dashboard's extracted decision logic (adapters/assets/
       # dashboard-logic.js): Node's built-in runner, no packages. The
       # shell expands the glob — newer Node treats a bare directory
@@ -46,15 +61,30 @@ jobs:
       # forgets to regenerate them.
       - run: scripts/sync_starter.sh --check
 
+  # Known vulnerabilities in Cargo.lock, against the RustSec database.
+  # Accepted transitive ones are listed, with reasons, in .cargo/audit.toml.
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # master
+        with:
+          toolchain: stable
+      - run: cargo install cargo-audit --locked
+      - run: cargo audit
+
   # The container image is packaging, not logic: build it and smoke-test
   # that the supervisor boots a real house inside it. See
   # scripts/smoke_image.sh for what the smoke test asserts.
   image:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/build-push-action@v6
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+      # The runner's own architecture, loaded into the daemon for the smoke
+      # tests (`load:` cannot take a multi-platform build).
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           load: true
@@ -63,3 +93,12 @@ jobs:
           cache-to: type=gha,mode=max
       - run: scripts/smoke_image.sh homeostat:smoke
       - run: scripts/smoke_starter.sh homeostat:smoke
+      # Both release architectures, so a cross-compile or an arm64-only
+      # runtime-stage breakage fails here rather than on the release tag.
+      # Nothing is pushed; the amd64 half comes from the cache above.
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

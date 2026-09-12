@@ -2,7 +2,7 @@
 # requires-python = ">=3.11"
 # dependencies = [
 #     "homeostat",
-#     "aiohttp>=3.9",
+#     "aiohttp>=3.12.14,<4",
 # ]
 #
 # [tool.uv.sources]
@@ -68,7 +68,9 @@ import contextlib
 import datetime
 import ipaddress
 import json
+import math
 import os
+import re
 import threading
 import time
 import traceback
@@ -76,8 +78,8 @@ from pathlib import Path
 
 import aiohttp
 from aiohttp import WSMsgType, web
-
 from homeostat import ConfigWriteError, connect, house, keys
+from homeostat.session import QueryError
 
 ENV_HOSTS = "HOMEOSTAT_DASHBOARD_HOSTS"
 ENV_TILES = "HOMEOSTAT_DASHBOARD_TILES"
@@ -85,6 +87,8 @@ ENV_GO2RTC = "HOMEOSTAT_GO2RTC"
 DEFAULT_GO2RTC = "http://127.0.0.1:1984"
 ALLOWED_NAMES = {"localhost", "homeostat", "homeostat.lan", "homeostat.local"}
 WRITE_HEADER = "X-Homeostat"
+CLIENT_QUEUE = 256  # pending deltas per WebSocket client before it is dropped
+MODEL_TTL_S = 2.0  # a burst of page loads parses the house once
 
 # Vendored assets served at /assets/{name} — allowlisted by filename so
 # the route can't become a path-traversal surface.
@@ -115,6 +119,28 @@ BASE_ASPECT = {
     "climate": "setpoint",
     "burner": "on",
 }
+# The vocabulary's value types, in the descriptor-command shape so one
+# check serves both: `on`/`locked` are bools (z2m, esphome, the lock
+# adapters), `brightness`/`color_temp` numbers (z2m, esphome), `setpoint`
+# a float (ivt490), `power_level` a number (aduro's 10/50/100). Bounds
+# stay the adapter's (docs/adapters.md, Commands); the type is checked
+# here so a JSON object never rides a manual-band envelope onto the bus.
+VOCABULARY_COMMANDS = {
+    "on": {"type": "bool"},
+    "locked": {"type": "bool"},
+    "brightness": {"type": "float"},
+    "color_temp": {"type": "float"},
+    "setpoint": {"type": "float"},
+    "power_level": {"type": "float"},
+}
+# Command bodies are four short fields; aiohttp's 1 MiB default is a
+# free memory sink for anything on the LAN.
+MAX_BODY_BYTES = 64 * 1024
+# The core's rule for one key segment (src/validate.rs): anything else is
+# a wildcard, a separator, or a zenoh operator — none of which a browser
+# may smuggle into a selector.
+SEGMENT = re.compile(r"[A-Za-z0-9_.-]+")
+HISTORY_LIMIT_MAX = 5000
 
 
 def granted_capabilities(publishes: dict) -> set[str]:
@@ -199,6 +225,12 @@ def descriptor_command(descriptor: dict | None, aspect: str) -> dict | None:
     command = field.get("command")
     if not isinstance(command, dict) or command.get("editable_by") != "family":
         return None
+    constraint = command.get("constraint") if isinstance(command.get("constraint"), dict) else {}
+    for bound in (command.get("step"), constraint.get("min"), constraint.get("max")):
+        # A string step would make command_value_ok raise (a 500) and the
+        # page would insert it into an attribute: not a command at all.
+        if bound is not None and (isinstance(bound, bool) or not isinstance(bound, (int, float))):
+            return None
     return dict(command, values=field.get("values") or [])
 
 
@@ -209,15 +241,23 @@ def command_value_ok(command: dict, value) -> bool:
     enforcement (docs/design.md, IVT490: bounds live in the adapter)."""
     if command.get("type") == "enum":
         return any(isinstance(v, dict) and v.get("value") == value for v in command["values"])
+    if command.get("type") == "bool":
+        return isinstance(value, bool)
     if command.get("type") in ("float", "int"):
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             return False
+        if not math.isfinite(value):
+            return False  # json.loads admits NaN and Infinity
         if command["type"] == "int" and not float(value).is_integer():
             return False
         c = command.get("constraint") or {}
         lo, hi = c.get("min"), c.get("max")
         return (lo is None or value >= lo) and (hi is None or value <= hi)
     return False
+
+
+def valid_segment(name: str) -> bool:
+    return SEGMENT.fullmatch(name) is not None and name not in (".", "..")
 
 
 def host_allowed(host_header: str) -> bool:
@@ -235,6 +275,16 @@ def host_allowed(host_header: str) -> bool:
         return not ipaddress.ip_address(host).is_global
     except ValueError:
         return False
+
+
+def mse_request(text: str) -> bool:
+    """Whether a browser frame is the player's MSE request — the one
+    go2rtc message type the relay forwards."""
+    try:
+        message = json.loads(text)
+    except ValueError:
+        return False
+    return isinstance(message, dict) and message.get("type") == "mse"
 
 
 def tiles_path() -> Path | None:
@@ -262,8 +312,14 @@ class Hub:
         # aspects through the param-control shapes, and /api/cmd admits
         # the family-editable commands a descriptor declares.
         self.aspects: dict[str, dict] = {}
+        # unit -> the entities its last discovery record described, so a
+        # record that stops describing one retires the descriptor.
+        self.described_by: dict[str, set[str]] = {}
         self.loop: asyncio.AbstractEventLoop | None = None
-        self.clients: set[web.WebSocketResponse] = set()
+        # One bounded outbox per client, drained by its own writer task:
+        # a browser that stops reading fills its queue and is dropped,
+        # never a task per message per client.
+        self.clients: dict[web.WebSocketResponse, asyncio.Queue] = {}
         self._subs = []
 
     def start(self, loop: asyncio.AbstractEventLoop) -> None:
@@ -285,10 +341,12 @@ class Hub:
         for key, value in self.session.get_json("home/config/*/*"):
             with self.lock:
                 self.config.setdefault(key, value)
-        for _key, value in self.session.get_json("home/discovery/*"):
-            for entity, descriptor in descriptors_in(value).items():
-                with self.lock:
-                    self.aspects.setdefault(entity, descriptor)
+        for key, value in self.session.get_json("home/discovery/*"):
+            unit = key.split("/")[2]
+            with self.lock:
+                if unit in self.described_by:
+                    continue  # the subscription already delivered fresher
+            self._apply_discovery(unit, value)
 
     def snapshot(self) -> dict:
         with self.lock:
@@ -318,16 +376,29 @@ class Hub:
             self.state[key] = value
         self._emit({"type": "state", "key": key, "value": value})
 
+    def _apply_discovery(self, unit: str, value) -> None:
+        """Diffs a unit's discovery record against what it described
+        before: a descriptor it no longer carries is retired (value null
+        on the wire), a new or changed one replaces the old."""
+        found = descriptors_in(value)
+        changes: list[tuple[str, dict | None]] = []
+        with self.lock:
+            for entity in self.described_by.get(unit, set()) - found.keys():
+                self.aspects.pop(entity, None)
+                changes.append((entity, None))
+            for entity, descriptor in found.items():
+                if self.aspects.get(entity) != descriptor:
+                    self.aspects[entity] = descriptor
+                    changes.append((entity, descriptor))
+            self.described_by[unit] = set(found)
+        for entity, descriptor in changes:
+            self._emit({"type": "aspects", "entity": entity, "value": descriptor})
+
     def _on_discovery(self, sample) -> None:
         if (decoded := self._decode(sample)) is None:
             return
-        _key, value = decoded
-        for entity, descriptor in descriptors_in(value).items():
-            with self.lock:
-                if self.aspects.get(entity) == descriptor:
-                    continue
-                self.aspects[entity] = descriptor
-            self._emit({"type": "aspects", "entity": entity, "value": descriptor})
+        key, value = decoded
+        self._apply_discovery(key.split("/")[2], value)
 
     def _on_config(self, sample) -> None:
         if (decoded := self._decode(sample)) is None:
@@ -354,14 +425,21 @@ class Hub:
             self.loop.call_soon_threadsafe(self._broadcast, json.dumps(message))
 
     def _broadcast(self, text: str) -> None:
-        for ws in set(self.clients):
-            asyncio.ensure_future(self._send(ws, text))
+        for ws, outbox in list(self.clients.items()):
+            try:
+                outbox.put_nowait(text)
+            except asyncio.QueueFull:
+                # A client that cannot keep up gets closed; on reconnect
+                # it takes a fresh snapshot, which is what it missed.
+                self.clients.pop(ws, None)
+                asyncio.ensure_future(ws.close(code=aiohttp.WSCloseCode.TRY_AGAIN_LATER))
 
-    async def _send(self, ws: web.WebSocketResponse, text: str) -> None:
+    async def writer(self, ws: web.WebSocketResponse, outbox: asyncio.Queue) -> None:
         try:
-            await ws.send_str(text)
+            while True:
+                await ws.send_str(await outbox.get())
         except (ConnectionError, RuntimeError):
-            self.clients.discard(ws)
+            self.clients.pop(ws, None)
 
 
 def json_error(message: str, status: int = 400) -> web.Response:
@@ -374,6 +452,14 @@ async def guard(request: web.Request, handler):
         return json_error("host not allowed", status=403)
     if request.method == "POST" and WRITE_HEADER not in request.headers:
         return json_error(f"missing {WRITE_HEADER} header", status=403)
+    if request.headers.get("Upgrade", "").lower() == "websocket":
+        # Browsers always send Origin on a WebSocket handshake; a foreign
+        # page's (or an opaque `null`) is refused by the same host rule.
+        origin = request.headers.get("Origin")
+        if origin is not None:
+            host = origin.split("://", 1)[-1].split("/", 1)[0]
+            if not host_allowed(host):
+                return json_error("origin not allowed", status=403)
     return await handler(request)
 
 
@@ -391,6 +477,8 @@ class Model:
     def __init__(self, unit: str) -> None:
         self.unit = unit
         self._rebuild(house.load_house("."))
+        self._loaded_at = time.monotonic()
+        self._refresh_lock = asyncio.Lock()
 
     def _rebuild(self, loaded: house.HouseModel) -> None:
         own = next(u for u in loaded.units if u.name == self.unit)
@@ -406,15 +494,30 @@ class Model:
             e.name: e.id for e in loaded.entities if e.capability == "camera"
         }
 
-    def reload(self) -> None:
+    @staticmethod
+    def _load() -> house.HouseModel | None:
         try:
-            loaded = house.load_house(".")
+            return house.load_house(".")
         except Exception:
             # A half-written edit must not blank the page: keep the last
             # good model and leave a trace (captured at home/meta/{unit}/log).
             traceback.print_exc()
+            return None
+
+    async def refresh(self) -> None:
+        """Re-parses the house off the event loop, at most once per
+        MODEL_TTL_S: a burst of page loads costs one parse, and the loop
+        keeps serving deltas meanwhile. The swap happens back on the loop,
+        so a request never sees half a rebuild."""
+        if time.monotonic() - self._loaded_at < MODEL_TTL_S:
             return
-        self._rebuild(loaded)
+        async with self._refresh_lock:
+            if time.monotonic() - self._loaded_at < MODEL_TTL_S:
+                return
+            loaded = await asyncio.get_running_loop().run_in_executor(None, self._load)
+            if loaded is not None:
+                self._rebuild(loaded)
+            self._loaded_at = time.monotonic()
 
 
 def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Application:
@@ -423,7 +526,7 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         return web.FileResponse(page)
 
     async def api_model(request: web.Request) -> web.Response:
-        model.reload()
+        await model.refresh()
         return web.json_response(dict(model.model, tiles=tiles_path() is not None))
 
     async def api_asset(request: web.Request) -> web.StreamResponse:
@@ -440,25 +543,25 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         return web.FileResponse(path)
 
     async def ws_handler(request: web.Request) -> web.WebSocketResponse:
-        origin = request.headers.get("Origin")
-        if origin is not None:
-            host = origin.split("://", 1)[-1].split("/", 1)[0]
-            if not host_allowed(host):
-                raise web.HTTPForbidden(text="origin not allowed")
         ws = web.WebSocketResponse(heartbeat=30)
         await ws.prepare(request)
-        # Registered before the snapshot: a delta landing between the
-        # snapshot build and registration would otherwise miss this client
-        # for good. The other order is harmless — a delta broadcast racing
-        # the snapshot is included in or superseded by it.
-        hub.clients.add(ws)
-        await ws.send_str(json.dumps(hub.snapshot()))
+        # The snapshot is queued first, then the client registered: a
+        # delta landing between the snapshot build and registration would
+        # otherwise miss this client for good, and one landing after it
+        # queues behind the snapshot it is already included in.
+        outbox: asyncio.Queue = asyncio.Queue(maxsize=CLIENT_QUEUE)
+        outbox.put_nowait(json.dumps(hub.snapshot()))
+        hub.clients[ws] = outbox
+        writer = asyncio.create_task(hub.writer(ws, outbox))
         try:
             async for message in ws:  # client sends nothing; drain until close
                 if message.type == WSMsgType.ERROR:
                     break
         finally:
-            hub.clients.discard(ws)
+            hub.clients.pop(ws, None)
+            writer.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await writer
         return ws
 
     async def api_cmd(request: web.Request) -> web.Response:
@@ -466,7 +569,7 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
             body = await request.json()
             room, entity = str(body["room"]), str(body["entity"])
             aspect, value = str(body["aspect"]), body["value"]
-        except (ValueError, KeyError):
+        except (ValueError, KeyError, TypeError):  # TypeError: a non-object body
             return json_error("body must be {room, entity, aspect, value}")
         spec = model.entities.get(entity)
         if spec is None or spec["room"] != room:
@@ -476,7 +579,10 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         allowed = COMMANDABLE.get(spec["capability"], set())
         base = BASE_ASPECT.get(spec["capability"])
         vocabulary = aspect in allowed and (aspect == base or aspect in spec["features"])
-        if not vocabulary:
+        if vocabulary:
+            if not command_value_ok(VOCABULARY_COMMANDS[aspect], value):
+                return json_error(f"{entity} {aspect}: {value!r} is not a {VOCABULARY_COMMANDS[aspect]['type']}")
+        else:
             with hub.lock:
                 command = descriptor_command(hub.aspects.get(entity), aspect)
             if command is None:
@@ -507,7 +613,7 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         try:
             body = await request.json()
             unit, param, value = str(body["unit"]), str(body["param"]), body["value"]
-        except (ValueError, KeyError):
+        except (ValueError, KeyError, TypeError):
             return json_error("body must be {unit, param, value}")
         spec = model.units.get(unit)
         if spec is None or param not in spec["params"]:
@@ -527,10 +633,17 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         aspect = request.query.get("aspect", "")
         if not entity or not aspect:
             return json_error("entity and aspect are required")
+        # Verbatim into a selector, a wildcard entity would fan the
+        # per-series limit out over the whole store, and `/`, `#` or `$`
+        # would raise inside the executor.
+        if entity not in model.entities:
+            return json_error(f"unknown entity {entity}")
+        if not valid_segment(aspect):
+            return json_error("aspect must be a single key segment")
         now = datetime.datetime.now(datetime.timezone.utc)
         try:
             hours = min(float(request.query.get("hours", "24")), 24 * 31)
-            limit = min(int(request.query.get("limit", "500")), 5000)
+            limit = max(1, min(int(request.query.get("limit", "500")), HISTORY_LIMIT_MAX))
             start = now - datetime.timedelta(hours=hours)
         except (ValueError, OverflowError):
             # timedelta raises on NaN/inf hours; same 400 as bad `lines`.
@@ -540,9 +653,12 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
             f"?from={start.isoformat(timespec='seconds')}"
             f";to={now.isoformat(timespec='seconds')};limit={limit}"
         )
-        replies = await asyncio.get_running_loop().run_in_executor(
-            None, hub.session.get_json, selector
-        )
+        try:
+            replies = await asyncio.get_running_loop().run_in_executor(
+                None, hub.session.get_json, selector
+            )
+        except QueryError as error:
+            return json_error(f"recorder: {error}", status=502)
         return web.json_response(
             {"series": [{"key": key, "points": points} for key, points in replies]}
         )
@@ -598,30 +714,33 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         stream = camera_stream(request)
         if stream is None:
             raise web.HTTPNotFound()
-        origin = request.headers.get("Origin")
-        if origin is not None:
-            host = origin.split("://", 1)[-1].split("/", 1)[0]
-            if not host_allowed(host):
-                raise web.HTTPForbidden(text="origin not allowed")
         ws = web.WebSocketResponse(heartbeat=30)
         await ws.prepare(request)
-        # An opaque byte-for-byte relay to localhost go2rtc — the browser
-        # edge of the media plane. Either side closing closes both.
+        # Downstream is an opaque byte-for-byte relay from localhost go2rtc
+        # — the browser edge of the media plane. Upstream carries only the
+        # MSE request: go2rtc's socket also takes WebRTC offers (ICE to a
+        # public STUN server) and the design is MSE-only (docs/design.md,
+        # Cameras). Either side closing closes both.
         try:
             async with client["http"].ws_connect(
                 f"{go2rtc_base()}/api/ws", params={"src": stream}
             ) as upstream:
 
-                async def pump(source, sink) -> None:
-                    async for message in source:
+                async def downstream() -> None:
+                    async for message in upstream:
                         if message.type == WSMsgType.TEXT:
-                            await sink.send_str(message.data)
+                            await ws.send_str(message.data)
                         elif message.type == WSMsgType.BINARY:
-                            await sink.send_bytes(message.data)
+                            await ws.send_bytes(message.data)
+
+                async def mse_requests() -> None:
+                    async for message in ws:
+                        if message.type == WSMsgType.TEXT and mse_request(message.data):
+                            await upstream.send_str(message.data)
 
                 directions = [
-                    asyncio.create_task(pump(ws, upstream)),
-                    asyncio.create_task(pump(upstream, ws)),
+                    asyncio.create_task(mse_requests()),
+                    asyncio.create_task(downstream()),
                 ]
                 _done, pending = await asyncio.wait(
                     directions, return_when=asyncio.FIRST_COMPLETED
@@ -642,7 +761,7 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         yield
         await client["http"].close()
 
-    app = web.Application(middlewares=[guard])
+    app = web.Application(middlewares=[guard], client_max_size=MAX_BODY_BYTES)
     app.cleanup_ctx.append(outbound_client)
     app.router.add_get("/", index)
     app.router.add_get("/api/model", api_model)

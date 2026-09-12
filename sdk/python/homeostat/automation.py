@@ -21,10 +21,11 @@ import json
 import os
 import signal
 import threading
-import tomllib
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
+import tomllib
 import zenoh
 
 from . import keys

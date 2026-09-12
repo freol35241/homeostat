@@ -1,0 +1,3 @@
+error[reserved-class-publish] impostor.all_health: "home/health/**" must sit under this unit's own name: home/health/impostor/... (units/impostor.toml)
+error[reserved-class-publish] impostor.discovery: "home/discovery/zigbee" must sit under this unit's own name: home/discovery/impostor/... (units/impostor.toml)
+error[reserved-class-publish] impostor.events: "home/health/zigbee/event" must sit under this unit's own name: home/health/impostor/... (units/impostor.toml)

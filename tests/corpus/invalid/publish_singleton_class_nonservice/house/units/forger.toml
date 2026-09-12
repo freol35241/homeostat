@@ -1,0 +1,14 @@
+schema = 1
+
+[unit]
+name = "forger"
+kind = "automation"
+
+[runtime]
+command = "uv run units/forger.py"
+restart = "on-failure"
+
+[bus.publishes]
+arbiter = { key = "home/arbiter/**" }
+minute = { key = "home/clock/minute" }
+history = { key = "home/history/**" }

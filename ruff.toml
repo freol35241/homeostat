@@ -1,0 +1,15 @@
+[lint]
+ignore = [
+    # A unit's callbacks run on a foreign library's thread (paho-mqtt,
+    # aioesphomeapi, zenoh) or off untrusted device/network input; the
+    # deliberate pattern throughout is to catch broadly, log, and keep the
+    # unit's liveliness token valid rather than let one bad input or one
+    # library's quirk kill it. Each site names why in its own comment.
+    "BLE001",
+    # ValueError is this codebase's uniform "malformed input" sentinel —
+    # parse_cmd_envelope and its callers raise/catch it regardless of
+    # which specific check failed (missing key, wrong type). Following
+    # this rule's suggestion (TypeError) would go uncaught at every one
+    # of those call sites.
+    "TRY004",
+]

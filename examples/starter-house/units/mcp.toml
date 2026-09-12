@@ -9,3 +9,4 @@ description = "Agent surface: MCP over HTTP"
 command = "homeostat mcp --http 0.0.0.0:8642"
 restart = "on-failure"
 shutdown_grace_s = 5
+env = ["HOMEOSTAT_MCP_HOSTS"]

@@ -142,7 +142,10 @@ fn http_request_bytes(
         .and_then(|s| s.parse().ok())
         .unwrap_or_else(|| panic!("no status line in {status_line:?}"));
     let headers = lines
-        .filter_map(|l| l.split_once(": ").map(|(k, v)| (k.to_string(), v.to_string())))
+        .filter_map(|l| {
+            l.split_once(": ")
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+        })
         .collect();
 
     (status, headers, body)
@@ -311,7 +314,12 @@ async fn dashboard_serves_the_family_surface() {
 
     // Vendored map assets and the extracted page logic are served,
     // allowlisted by filename.
-    for name in ["leaflet.js", "leaflet.css", "protomaps-leaflet.js", "dashboard-logic.js"] {
+    for name in [
+        "leaflet.js",
+        "leaflet.css",
+        "protomaps-leaflet.js",
+        "dashboard-logic.js",
+    ] {
         let (status, _) = http_request(&addr, "GET", &format!("/assets/{name}"), &[], None);
         assert_eq!(status, 200, "asset {name}");
     }
@@ -320,7 +328,10 @@ async fn dashboard_serves_the_family_surface() {
 
     // No tiles configured: the endpoint 404s rather than pretending.
     let (status, _) = http_request(&addr, "GET", "/tiles.pmtiles", &[], None);
-    assert_eq!(status, 404, "tiles.pmtiles without HOMEOSTAT_DASHBOARD_TILES");
+    assert_eq!(
+        status, 404,
+        "tiles.pmtiles without HOMEOSTAT_DASHBOARD_TILES"
+    );
 
     // 2. Command path: POST -> a manual-band envelope on home/cmd (priority
     // and actor stamped server-side) -> reflector echoes the value as state.
@@ -408,6 +419,58 @@ async fn dashboard_serves_the_family_surface() {
     );
     assert_eq!(status, 400, "person entity must refuse commands: {reply}");
 
+    // A vocabulary aspect is type-checked before the bus: a lock takes a
+    // bool, not a string, an object, or NaN — and a body past the 64 KiB
+    // cap never reaches the handler at all (aiohttp answers 413).
+    let (status, reply) = http_request(
+        &addr,
+        "POST",
+        "/api/cmd",
+        &[("X-Homeostat", "family")],
+        Some(
+            &json!({"room": "livingroom", "entity": "front_door", "aspect": "locked", "value": "yes"}),
+        ),
+    );
+    assert_eq!(status, 400, "a string is not a lock value: {reply}");
+    let (status, reply) = http_request(
+        &addr,
+        "POST",
+        "/api/cmd",
+        &[("X-Homeostat", "family")],
+        Some(
+            &json!({"room": "livingroom", "entity": "lamp", "aspect": "brightness", "value": true}),
+        ),
+    );
+    assert_eq!(status, 400, "a bool is not a brightness: {reply}");
+    let (status, _) = http_request(
+        &addr,
+        "POST",
+        "/api/cmd",
+        &[("X-Homeostat", "family")],
+        Some(
+            &json!({"room": "livingroom", "entity": "front_door", "aspect": "locked", "value": {"blob": "x".repeat(96 * 1024)}}),
+        ),
+    );
+    assert_eq!(
+        status, 413,
+        "a body past the cap is refused before the handler"
+    );
+    // A body that is valid JSON but not an object is a 400, not a 500.
+    let (status, reply) = http_request(
+        &addr,
+        "POST",
+        "/api/cmd",
+        &[("X-Homeostat", "family")],
+        Some(&json!([1])),
+    );
+    assert_eq!(status, 400, "a JSON array body: {reply}");
+    assert!(
+        tokio::time::timeout(Duration::from_secs(2), lock_cmd_sub.recv_async())
+            .await
+            .is_err(),
+        "a mistyped or oversized command must never reach the bus"
+    );
+
     // A lock command is accepted: COMMANDABLE now maps lock -> {"locked"}.
     // The wish still just goes to home/cmd at manual band, stamped the same
     // way as any other command — for a real arbitrated entity, the arbiter
@@ -418,7 +481,9 @@ async fn dashboard_serves_the_family_surface() {
         "POST",
         "/api/cmd",
         &[("X-Homeostat", "family")],
-        Some(&json!({"room": "livingroom", "entity": "front_door", "aspect": "locked", "value": true})),
+        Some(
+            &json!({"room": "livingroom", "entity": "front_door", "aspect": "locked", "value": true}),
+        ),
     );
     assert_eq!(status, 200, "{reply}");
     let cmd_sample = tokio::time::timeout(Duration::from_secs(30), lock_cmd_sub.recv_async())
@@ -451,7 +516,11 @@ async fn dashboard_serves_the_family_surface() {
     assert_eq!(commandable("lamp"), json!(true), "granted light");
     assert_eq!(commandable("heat_pump"), json!(true), "granted climate");
     assert_eq!(commandable("relay"), json!(false), "ungranted switch");
-    assert_eq!(commandable("family_member"), json!(false), "person is never commandable");
+    assert_eq!(
+        commandable("family_member"),
+        json!(false),
+        "person is never commandable"
+    );
     let (status, reply) = http_request(
         &addr,
         "POST",
@@ -476,7 +545,9 @@ async fn dashboard_serves_the_family_surface() {
         "POST",
         "/api/cmd",
         &[("X-Homeostat", "family")],
-        Some(&json!({"room": "livingroom", "entity": "heat_pump", "aspect": "setpoint", "value": 21.5})),
+        Some(
+            &json!({"room": "livingroom", "entity": "heat_pump", "aspect": "setpoint", "value": 21.5}),
+        ),
     );
     assert_eq!(status, 200, "{reply}");
     let cmd_sample = tokio::time::timeout(Duration::from_secs(30), climate_cmd_sub.recv_async())
@@ -496,9 +567,14 @@ async fn dashboard_serves_the_family_surface() {
         "POST",
         "/api/cmd",
         &[("X-Homeostat", "family")],
-        Some(&json!({"room": "livingroom", "entity": "heat_pump", "aspect": "feed_temperature_target", "value": 45.0})),
+        Some(
+            &json!({"room": "livingroom", "entity": "heat_pump", "aspect": "feed_temperature_target", "value": 45.0}),
+        ),
     );
-    assert_eq!(status, 400, "non-commandable climate aspect must be refused: {reply}");
+    assert_eq!(
+        status, 400,
+        "non-commandable climate aspect must be refused: {reply}"
+    );
 
     // 2b. Aspect descriptors (docs/design.md, Aspect descriptors): the
     // owning adapter's discovery record may describe an entity's aspects
@@ -539,16 +615,24 @@ async fn dashboard_serves_the_family_surface() {
         if snapshot["aspects"]["heat_pump"]["fields"]["operating_mode"]["label"] == json!("mode") {
             break snapshot;
         }
-        assert!(Instant::now() < deadline, "snapshot never carried the descriptor: {snapshot}");
+        assert!(
+            Instant::now() < deadline,
+            "snapshot never carried the descriptor: {snapshot}"
+        );
         std::thread::sleep(Duration::from_millis(200));
     };
-    assert_eq!(snapshot["aspects"]["heat_pump"]["groups"], json!(["control"]));
+    assert_eq!(
+        snapshot["aspects"]["heat_pump"]["groups"],
+        json!(["control"])
+    );
     let (status, reply) = http_request(
         &addr,
         "POST",
         "/api/cmd",
         &[("X-Homeostat", "family")],
-        Some(&json!({"room": "livingroom", "entity": "heat_pump", "aspect": "operating_mode", "value": 2})),
+        Some(
+            &json!({"room": "livingroom", "entity": "heat_pump", "aspect": "operating_mode", "value": 2}),
+        ),
     );
     assert_eq!(status, 200, "descriptor-declared family command: {reply}");
     // The wildcard subscriber also saw the earlier setpoint command; the
@@ -563,23 +647,36 @@ async fn dashboard_serves_the_family_surface() {
         }
     };
     let envelope: Value = serde_json::from_slice(&cmd_sample.payload().to_bytes()).expect("json");
-    assert_eq!(envelope, json!({"value": 2, "priority": "manual", "actor": "dashboard"}));
+    assert_eq!(
+        envelope,
+        json!({"value": 2, "priority": "manual", "actor": "dashboard"})
+    );
     let (status, reply) = http_request(
         &addr,
         "POST",
         "/api/cmd",
         &[("X-Homeostat", "family")],
-        Some(&json!({"room": "livingroom", "entity": "heat_pump", "aspect": "operating_mode", "value": 4})),
+        Some(
+            &json!({"room": "livingroom", "entity": "heat_pump", "aspect": "operating_mode", "value": 4}),
+        ),
     );
-    assert_eq!(status, 400, "a value outside the declared enum is refused: {reply}");
+    assert_eq!(
+        status, 400,
+        "a value outside the declared enum is refused: {reply}"
+    );
     let (status, reply) = http_request(
         &addr,
         "POST",
         "/api/cmd",
         &[("X-Homeostat", "family")],
-        Some(&json!({"room": "livingroom", "entity": "heat_pump", "aspect": "feed_temperature_target", "value": 45.0})),
+        Some(
+            &json!({"room": "livingroom", "entity": "heat_pump", "aspect": "feed_temperature_target", "value": 45.0}),
+        ),
     );
-    assert_eq!(status, 400, "an owner-tier descriptor command stays refused: {reply}");
+    assert_eq!(
+        status, 400,
+        "an owner-tier descriptor command stays refused: {reply}"
+    );
     assert!(
         tokio::time::timeout(Duration::from_secs(2), mode_cmd_sub.recv_async())
             .await
@@ -650,6 +747,34 @@ async fn dashboard_serves_the_family_surface() {
     );
     assert_eq!(status, 403, "foreign Host must be refused");
 
+    // 9. `/api/history` builds a recorder selector from browser input, so
+    // the entity must be one the model knows and the aspect one key
+    // segment — a wildcard would fan the per-series limit out over the
+    // whole store, and `/`, `#`, `$` would raise inside the executor.
+    // No recorder in this fixture: a valid pair answers an empty series
+    // list, which is the 200 that matters here.
+    let (status, reply) = http_request(
+        &addr,
+        "GET",
+        "/api/history?entity=lamp&aspect=brightness",
+        &[],
+        None,
+    );
+    assert_eq!(status, 200, "{reply}");
+    assert_eq!(reply["series"], json!([]), "{reply}");
+    for query in [
+        "entity=**&aspect=brightness",
+        "entity=lamp&aspect=**",
+        "entity=lamp&aspect=bright/ness",
+        "entity=lamp&aspect=$foo",
+        "entity=lamp&aspect=..",
+        "entity=no_such&aspect=brightness",
+    ] {
+        let (status, reply) =
+            http_request(&addr, "GET", &format!("/api/history?{query}"), &[], None);
+        assert_eq!(status, 400, "{query}: {reply}");
+    }
+
     sup.shutdown();
 }
 
@@ -660,8 +785,7 @@ async fn dashboard_serves_the_family_surface() {
 async fn dashboard_serves_configured_tiles() {
     let port = common::free_port();
     let addr = format!("127.0.0.1:{port}");
-    let tiles_path =
-        std::env::temp_dir().join(format!("homeostat-dashboard-tiles-{port}.pmtiles"));
+    let tiles_path = std::env::temp_dir().join(format!("homeostat-dashboard-tiles-{port}.pmtiles"));
     let contents = b"fake-pmtiles-bytes-0123456789";
     std::fs::write(&tiles_path, contents).expect("write fixture tiles file");
 
@@ -696,11 +820,14 @@ async fn dashboard_serves_configured_tiles() {
         "{headers:?}"
     );
 
-    let (status, headers, body) = http_request_bytes(&addr, "/tiles.pmtiles", &[("Range", "bytes=0-4")]);
+    let (status, headers, body) =
+        http_request_bytes(&addr, "/tiles.pmtiles", &[("Range", "bytes=0-4")]);
     assert_eq!(status, 206, "{headers:?}");
     assert_eq!(body, &contents[..5]);
     assert!(
-        headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("content-range")),
+        headers
+            .iter()
+            .any(|(k, _)| k.eq_ignore_ascii_case("content-range")),
         "{headers:?}"
     );
 
@@ -741,7 +868,10 @@ async fn dashboard_serves_unit_logs() {
         if n >= 8 {
             break;
         }
-        assert!(Instant::now() < deadline, "logger never captured its startup lines");
+        assert!(
+            Instant::now() < deadline,
+            "logger never captured its startup lines"
+        );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 
@@ -802,7 +932,10 @@ impl FakeGo2rtc {
             .expect("spawn fake go2rtc (is uv installed?)");
         let deadline = Instant::now() + Duration::from_secs(60);
         while TcpStream::connect(("127.0.0.1", port)).is_err() {
-            assert!(Instant::now() < deadline, "fake go2rtc never listened on {port}");
+            assert!(
+                Instant::now() < deadline,
+                "fake go2rtc never listened on {port}"
+            );
             std::thread::sleep(Duration::from_millis(50));
         }
         Self { child, port }
@@ -891,7 +1024,11 @@ async fn dashboard_proxies_camera_media() {
             .any(|(k, v)| k.eq_ignore_ascii_case("content-type") && v.starts_with("image/jpeg")),
         "{headers:?}"
     );
-    assert!(body.starts_with(b"\xff\xd8"), "JPEG magic, got {:?}", &body[..4.min(body.len())]);
+    assert!(
+        body.starts_with(b"\xff\xd8"),
+        "JPEG magic, got {:?}",
+        &body[..4.min(body.len())]
+    );
 
     // Unknown and non-camera entities 404 — the proxy is model-gated.
     let (status, _) = http_request(&addr, "GET", "/api/camera/no_such_cam/snapshot", &[], None);

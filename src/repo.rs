@@ -38,7 +38,11 @@ impl House {
 
     /// All rooms that house at least one entity.
     pub fn rooms(&self) -> Vec<&str> {
-        let mut rooms: Vec<&str> = self.entities.iter().map(|e| e.file.entity.room.as_str()).collect();
+        let mut rooms: Vec<&str> = self
+            .entities
+            .iter()
+            .map(|e| e.file.entity.room.as_str())
+            .collect();
         rooms.sort();
         rooms.dedup();
         rooms
@@ -76,12 +80,18 @@ pub fn load(root: &Path) -> (House, Vec<ValidationError>) {
             continue;
         };
         check_schema_version(manifest.schema, &manifest.unit.name, &rel, &mut errors);
-        house.units.push(LoadedUnit { manifest, path: rel });
+        house.units.push(LoadedUnit {
+            manifest,
+            path: rel,
+        });
     }
 
     let mut entity_dirs: Vec<(String, String)> = Vec::new(); // (owner, dir)
     for unit in &house.units {
-        if !matches!(unit.manifest.unit.kind, UnitKind::Adapter | UnitKind::Automation) {
+        if !matches!(
+            unit.manifest.unit.kind,
+            UnitKind::Adapter | UnitKind::Automation
+        ) {
             continue;
         }
         if let Some(entities) = &unit.manifest.entities {
@@ -143,7 +153,12 @@ fn read_toml<T: serde::de::DeserializeOwned>(
     let text = match fs::read_to_string(path) {
         Ok(text) => text,
         Err(err) => {
-            errors.push(ValidationError::new("parse-error", rel, err.to_string(), None));
+            errors.push(ValidationError::new(
+                "parse-error",
+                rel,
+                err.to_string(),
+                None,
+            ));
             return None;
         }
     };

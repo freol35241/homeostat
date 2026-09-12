@@ -91,12 +91,44 @@ fn uv_script(command: &str) -> Option<(&str, Vec<&str>)> {
     Some((script, parts.collect()))
 }
 
+/// The supervisor environment every unit inherits regardless of its
+/// manifest: what a process needs to run at all, and what `uv` and Python
+/// need to find their caches, locale and CA bundles. Everything else is
+/// withheld unless the manifest's `runtime.env` names it.
+const BASE_ENV: [&str; 11] = [
+    "PATH",
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "SHELL",
+    "LANG",
+    "LANGUAGE",
+    "TZ",
+    "TMPDIR",
+    "TERM",
+    "REQUESTS_CA_BUNDLE",
+];
+const BASE_ENV_PREFIXES: [&str; 5] = ["LC_", "XDG_", "UV_", "PYTHON", "SSL_CERT_"];
+
+fn inherited(name: &str, declared: &[String]) -> bool {
+    BASE_ENV.contains(&name)
+        || BASE_ENV_PREFIXES.iter().any(|p| name.starts_with(p))
+        || declared.iter().any(|d| d == name)
+}
+
 /// Spawns a unit command. The command string is whitespace-tokenized and
 /// exec'd directly — no shell, so no quoting in v1 manifests. Lookup uses
 /// PATH; relative paths resolve against the house repo root (the cwd).
 /// Stdout/stderr are piped, not inherited: `capture` re-emits and buffers
-/// them once the child is spawned.
-pub fn spawn(command: &str, cwd: &Path, env: &[(&str, &str)]) -> io::Result<Child> {
+/// them once the child is spawned. The environment is the base set plus
+/// the variables `declared` by the manifest, then `env` set on top: a
+/// secret handed to the supervisor for one unit must not reach the rest.
+pub fn spawn(
+    command: &str,
+    cwd: &Path,
+    declared: &[String],
+    env: &[(&str, &str)],
+) -> io::Result<Child> {
     let mut parts = command.split_whitespace();
     let argv0 = parts
         .next()
@@ -107,7 +139,13 @@ pub fn spawn(command: &str, cwd: &Path, env: &[(&str, &str)]) -> io::Result<Chil
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .kill_on_drop(true);
+        .kill_on_drop(true)
+        .env_clear();
+    for (key, value) in std::env::vars_os() {
+        if key.to_str().is_some_and(|name| inherited(name, declared)) {
+            cmd.env(key, value);
+        }
+    }
     for (key, value) in env {
         cmd.env(key, value);
     }
@@ -203,7 +241,10 @@ pub async fn terminate(child: &mut Child, grace: Duration) {
     };
     signal_group(pid, libc::SIGTERM);
     let deadline = tokio::time::Instant::now() + grace;
-    if tokio::time::timeout_at(deadline, child.wait()).await.is_err() {
+    if tokio::time::timeout_at(deadline, child.wait())
+        .await
+        .is_err()
+    {
         signal_group(pid, libc::SIGKILL);
         let _ = child.wait().await;
         return;
@@ -237,7 +278,19 @@ fn signal_group(pid: u32, signal: i32) {
 
 #[cfg(test)]
 mod tests {
-    use super::uv_script;
+    use super::{inherited, uv_script};
+
+    #[test]
+    fn only_the_base_set_and_declared_names_are_inherited() {
+        let declared = vec!["HOMEOSTAT_NTFY_TOKEN".to_string()];
+        assert!(inherited("PATH", &declared));
+        assert!(inherited("LC_ALL", &declared));
+        assert!(inherited("UV_CACHE_DIR", &declared));
+        assert!(inherited("HOMEOSTAT_NTFY_TOKEN", &declared));
+        assert!(!inherited("HOMEOSTAT_NTFY_TOKEN", &[]));
+        assert!(!inherited("HOMEOSTAT_MQTT_CREDENTIALS", &declared));
+        assert!(!inherited("AWS_SECRET_ACCESS_KEY", &declared));
+    }
 
     #[test]
     fn uv_run_commands_yield_their_script_and_args() {

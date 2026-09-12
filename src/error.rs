@@ -223,8 +223,9 @@ pub const CODES: &[(&str, &str)] = &[
     ),
     (
         "exclusive-write-conflict",
-        "An entity with `write_policy.mode = \"exclusive\"` is covered by more \
-         than one automation-band cmd grant. Exclusivity constrains the \
+        "An entity with `write_policy.mode = \"exclusive\"` is covered by the \
+         automation-band cmd grants of more than one unit (a writer is a unit; \
+         two bindings of one unit are one writer). Exclusivity constrains the \
          automation band only: manual-band units (the dashboard, voice) sit \
          above it by construction and do not count.",
     ),
@@ -254,6 +255,19 @@ pub const CODES: &[(&str, &str)] = &[
          sensors name their aspects literally in the publish key, so a feed \
          from one is checked at plan time; nothing would ever arrive on the \
          key otherwise.",
+    ),
+    (
+        "reserved-class-publish",
+        "A `[bus.publishes]` key sits in a class the unit may not write. \
+         `home/config/` and `home/meta/` are the core's alone. `home/health/` \
+         and `home/discovery/` are per unit: a publish there must sit under \
+         the publishing unit's own name (`home/health/{unit}/...`, \
+         `home/discovery/{unit}`). `home/arbiter/`, `home/clock/` and \
+         `home/history/` are each one service's output: only a `kind = \
+         \"service\"` unit may publish them, and at most one per class. The \
+         SDK only checks a published key against the declared expression, so \
+         this is where a forged post-arbitration command, a forged discovery \
+         record or a second clock is refused.",
     ),
     (
         "state-publish-unbound",

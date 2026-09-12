@@ -4,34 +4,64 @@ Schema: home/{class}/{room}/{entity}/{aspect} for state, cmd, and arbiter;
 home/health/{unit}[...] and home/meta/{unit}/... for supervision.
 """
 
+import re
 from typing import Any
 
 ENV_UNIT = "HOMEOSTAT_UNIT"
 ENV_BUS = "HOMEOSTAT_BUS"
 
+# The core's rule for a name that becomes one key segment (src/validate.rs,
+# valid_segment): anything else breaks the fixed key schema ("/"), is
+# meaningful to the bus ("*", "$", "?", "#") or invites encoding surprises.
+_SEGMENT = re.compile(r"[A-Za-z0-9_.-]+")
+
+
+def valid_segment(name: str) -> bool:
+    """Whether `name` is usable as exactly one bus key segment."""
+    return isinstance(name, str) and _SEGMENT.fullmatch(name) is not None and name not in (".", "..")
+
+
+def _segments(*names: str) -> str:
+    """Joins validated segments with "/". Raises ValueError on a segment
+    the core would refuse — a device-chosen field name is the usual
+    offender (a "**" would put on a wildcard and fan out to every aspect
+    subscriber; a "#" or "" raises inside the zenoh put); callers drop the
+    field with a "malformed-payload" health event."""
+    for name in names:
+        if not valid_segment(name):
+            raise ValueError(f"{name!r} is not a valid key segment")
+    return "/".join(names)
+
 
 def state_key(room: str, entity: str, aspect: str) -> str:
-    return f"home/state/{room}/{entity}/{aspect}"
+    return "home/state/" + _segments(room, entity, aspect)
+
+
+def state_keyexpr(room: str, entity: str) -> str:
+    """Key expression matching every direct state aspect of one entity —
+    for subscribing to a fed input's whole state, room/entity coming from
+    the house's own manifests, not a device (see `_segments`)."""
+    return "home/state/" + _segments(room, entity) + "/*"
 
 
 def cmd_key(room: str, entity: str, aspect: str) -> str:
-    return f"home/cmd/{room}/{entity}/{aspect}"
+    return "home/cmd/" + _segments(room, entity, aspect)
 
 
 def cmd_keyexpr(room: str, entity: str) -> str:
     """Key expression matching every command aspect of one entity."""
-    return f"home/cmd/{room}/{entity}/**"
+    return "home/cmd/" + _segments(room, entity) + "/**"
 
 
 def arbiter_key(room: str, entity: str, aspect: str) -> str:
     """The arbiter's grant output for an arbitrated entity (docs/design.md,
     Arbitrated mode): the cmd shape, its own reserved class."""
-    return f"home/arbiter/{room}/{entity}/{aspect}"
+    return "home/arbiter/" + _segments(room, entity, aspect)
 
 
 def arbiter_keyexpr(room: str, entity: str) -> str:
     """Key expression matching every arbiter aspect of one entity."""
-    return f"home/arbiter/{room}/{entity}/**"
+    return "home/arbiter/" + _segments(room, entity) + "/**"
 
 
 def command_keyexprs(entity) -> list[str]:
@@ -70,31 +100,31 @@ def parse_cmd_envelope(payload: Any) -> Any:
 
 def config_key(unit: str, param: str) -> str:
     """Core-owned live parameter value (see docs/design.md, step 4)."""
-    return f"home/config/{unit}/{param}"
+    return "home/config/" + _segments(unit, param)
 
 
 def config_keyexpr(unit: str) -> str:
     """Key expression matching every parameter of one unit."""
-    return f"home/config/{unit}/*"
+    return "home/config/" + _segments(unit) + "/*"
 
 
 def history_key(space: str, entity: str, aspect: str) -> str:
     """History series key: entity-first (entity is the series identity,
     room is a tag carried per row). `space` is 'state' or 'cmd'."""
-    return f"home/history/{space}/{entity}/{aspect}"
+    return "home/history/" + _segments(space, entity, aspect)
 
 
 def discovery_key(unit: str) -> str:
     """An adapter's complete current view of its periphery: one JSON array
     of device records (see docs/design.md, Discovery)."""
-    return f"home/discovery/{unit}"
+    return "home/discovery/" + _segments(unit)
 
 
 def liveliness_key(unit: str) -> str:
-    return f"home/health/{unit}/alive"
+    return "home/health/" + _segments(unit) + "/alive"
 
 
 def health_event_key(unit: str) -> str:
     """Unit-published JSON events (e.g. dropped payloads); the parent key
     home/health/{unit} itself belongs to the supervisor."""
-    return f"home/health/{unit}/event"
+    return "home/health/" + _segments(unit) + "/event"

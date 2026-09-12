@@ -11,7 +11,8 @@ use serde_json::{json, Value};
 use zenoh::sample::SampleKind;
 
 use common::{
-    assert_unit_contract, await_health, expect_drop_event, expect_event_kind, expect_states, health_watch, Mosquitto, Mqtt, next_event, Supervisor, temp_house,
+    assert_unit_contract, await_health, expect_drop_event, expect_event_kind, expect_states,
+    health_watch, next_event, temp_house, Mosquitto, Mqtt, Supervisor,
 };
 
 const FIXTURE: &str = "tests/fixture_house_z2m";
@@ -50,8 +51,11 @@ async fn z2m_state_translates_to_bus_state() {
         .expect("state subscriber");
     let mut mqtt = Mqtt::connect(mosquitto.port, "test-state").await;
 
-    mqtt.publish("zigbee2mqtt/lamp_kitchen_1", r#"{"state":"ON","brightness":128}"#)
-        .await;
+    mqtt.publish(
+        "zigbee2mqtt/lamp_kitchen_1",
+        r#"{"state":"ON","brightness":128}"#,
+    )
+    .await;
     expect_states(
         &state_sub,
         &[
@@ -62,8 +66,13 @@ async fn z2m_state_translates_to_bus_state() {
     .await;
 
     // Locks are state-only: state still translates (normalized to `locked`).
-    mqtt.publish("zigbee2mqtt/lock_front_1", r#"{"state":"LOCKED"}"#).await;
-    expect_states(&state_sub, &[("home/state/hallway/front_door/locked", json!(true))]).await;
+    mqtt.publish("zigbee2mqtt/lock_front_1", r#"{"state":"LOCKED"}"#)
+        .await;
+    expect_states(
+        &state_sub,
+        &[("home/state/hallway/front_door/locked", json!(true))],
+    )
+    .await;
 
     sup.shutdown();
 }
@@ -125,15 +134,97 @@ async fn bad_input_drops_with_health_event() {
         .expect("state subscriber");
     let mut mqtt = Mqtt::connect(mosquitto.port, "test-bad").await;
 
-    mqtt.publish("zigbee2mqtt/ghost_device", r#"{"state":"ON"}"#).await;
+    mqtt.publish("zigbee2mqtt/ghost_device", r#"{"state":"ON"}"#)
+        .await;
     expect_drop_event(&event_sub, "unknown-device").await;
 
-    mqtt.publish("zigbee2mqtt/lamp_kitchen_1", "certainly not json").await;
+    mqtt.publish("zigbee2mqtt/lamp_kitchen_1", "certainly not json")
+        .await;
     expect_drop_event(&event_sub, "malformed-payload").await;
 
     // Still alive and translating.
-    mqtt.publish("zigbee2mqtt/lamp_kitchen_1", r#"{"state":"OFF"}"#).await;
-    expect_states(&state_sub, &[("home/state/kitchen/kitchen_lamp/on", json!(false))]).await;
+    mqtt.publish("zigbee2mqtt/lamp_kitchen_1", r#"{"state":"OFF"}"#)
+        .await;
+    expect_states(
+        &state_sub,
+        &[("home/state/kitchen/kitchen_lamp/on", json!(false))],
+    )
+    .await;
+
+    sup.shutdown();
+}
+
+/// (c2) H4: a non-finite field (NaN — which Python's json.loads accepts,
+/// though JSON has no literal for it) drops with a "non-finite" event
+/// instead of publishing; a finite field in the SAME payload still
+/// publishes normally, proving the adapter processes fields independently
+/// rather than dropping the whole message.
+#[tokio::test(flavor = "multi_thread")]
+async fn non_finite_field_drops_without_publishing_or_killing_the_message() {
+    let (mosquitto, mut sup, observer) = setup().await;
+    let event_sub = observer
+        .declare_subscriber(EVENT_KEY)
+        .await
+        .expect("event subscriber");
+    let state_sub = observer
+        .declare_subscriber("home/state/**")
+        .await
+        .expect("state subscriber");
+    let mut mqtt = Mqtt::connect(mosquitto.port, "test-nonfinite").await;
+
+    mqtt.publish(
+        "zigbee2mqtt/lamp_kitchen_1",
+        r#"{"brightness": NaN, "state": "ON"}"#,
+    )
+    .await;
+    expect_drop_event(&event_sub, "non-finite").await;
+    expect_states(
+        &state_sub,
+        &[("home/state/kitchen/kitchen_lamp/on", json!(true))],
+    )
+    .await;
+    assert!(
+        matches!(state_sub.try_recv(), Ok(None)),
+        "brightness must never reach the bus as NaN"
+    );
+
+    sup.shutdown();
+}
+
+/// (c3) H5: a device-chosen field name that is not a legal key segment
+/// (here "**", which would put on a wildcard and fan out to every aspect
+/// subscriber if it reached keys.state_key unvalidated) drops with
+/// "malformed-payload" and names the offending field; a legal field in
+/// the same payload still publishes.
+#[tokio::test(flavor = "multi_thread")]
+async fn malformed_field_name_drops_without_killing_the_message() {
+    let (mosquitto, mut sup, observer) = setup().await;
+    let event_sub = observer
+        .declare_subscriber(EVENT_KEY)
+        .await
+        .expect("event subscriber");
+    let state_sub = observer
+        .declare_subscriber("home/state/**")
+        .await
+        .expect("state subscriber");
+    let mut mqtt = Mqtt::connect(mosquitto.port, "test-wildcard-field").await;
+
+    mqtt.publish(
+        "zigbee2mqtt/lamp_kitchen_1",
+        r#"{"**": false, "state": "ON"}"#,
+    )
+    .await;
+    let event = expect_drop_event(&event_sub, "malformed-payload").await;
+    assert_eq!(event["field"], "**", "{event}");
+    expect_states(
+        &state_sub,
+        &[("home/state/kitchen/kitchen_lamp/on", json!(true))],
+    )
+    .await;
+    assert!(
+        matches!(state_sub.try_recv(), Ok(None)),
+        "the malformed field name must never reach the bus"
+    );
 
     sup.shutdown();
 }
@@ -174,13 +265,24 @@ async fn malformed_inventory_entries_do_not_kill_the_translator() {
         serde_json::from_slice(&sample.payload().to_bytes()).expect("discovery is JSON");
     let records = doc.as_array().expect("discovery is an array");
     let ids: Vec<&str> = records.iter().filter_map(|r| r["id"].as_str()).collect();
-    assert!(ids.contains(&"lamp_kitchen_1"), "well-formed row survives: {doc}");
-    assert!(ids.contains(&"weird_def_1"), "string definition tolerated: {doc}");
+    assert!(
+        ids.contains(&"lamp_kitchen_1"),
+        "well-formed row survives: {doc}"
+    );
+    assert!(
+        ids.contains(&"weird_def_1"),
+        "string definition tolerated: {doc}"
+    );
     assert_eq!(records.len(), 2, "garbage rows skipped: {doc}");
 
     // The network thread survived the poison payload: still translating.
-    mqtt.publish("zigbee2mqtt/lamp_kitchen_1", r#"{"state":"ON"}"#).await;
-    expect_states(&state_sub, &[("home/state/kitchen/kitchen_lamp/on", json!(true))]).await;
+    mqtt.publish("zigbee2mqtt/lamp_kitchen_1", r#"{"state":"ON"}"#)
+        .await;
+    expect_states(
+        &state_sub,
+        &[("home/state/kitchen/kitchen_lamp/on", json!(true))],
+    )
+    .await;
 
     sup.shutdown();
 }
@@ -202,23 +304,30 @@ async fn availability_maps_to_reserved_aspect() {
         .expect("state subscriber");
     let mut mqtt = Mqtt::connect(mosquitto.port, "test-availability").await;
 
-    mqtt.publish("zigbee2mqtt/lamp_kitchen_1/availability", r#"{"state":"offline"}"#)
-        .await;
+    mqtt.publish(
+        "zigbee2mqtt/lamp_kitchen_1/availability",
+        r#"{"state":"offline"}"#,
+    )
+    .await;
     expect_states(
         &state_sub,
         &[("home/state/kitchen/kitchen_lamp/available", json!(false))],
     )
     .await;
 
-    mqtt.publish("zigbee2mqtt/lamp_kitchen_1/availability", "online").await;
+    mqtt.publish("zigbee2mqtt/lamp_kitchen_1/availability", "online")
+        .await;
     expect_states(
         &state_sub,
         &[("home/state/kitchen/kitchen_lamp/available", json!(true))],
     )
     .await;
 
-    mqtt.publish("zigbee2mqtt/lamp_kitchen_1", r#"{"available":true,"brightness":42}"#)
-        .await;
+    mqtt.publish(
+        "zigbee2mqtt/lamp_kitchen_1",
+        r#"{"available":true,"brightness":42}"#,
+    )
+    .await;
     expect_drop_event(&event_sub, "reserved-aspect").await;
     expect_states(
         &state_sub,
@@ -303,20 +412,47 @@ async fn bridge_inventory_published_as_discovery() {
     assert_eq!(lamp["suggested"]["capability"], json!("light"));
     assert_eq!(lamp["suggested"]["features"], json!(["brightness"]));
     let fields = &lamp["aspects"]["fields"];
-    assert_eq!(lamp["aspects"]["groups"], json!(["readings", "config", "diagnostics"]));
+    assert_eq!(
+        lamp["aspects"]["groups"],
+        json!(["readings", "config", "diagnostics"])
+    );
     // the capability's own vocabulary is described as readings, never commanded here
-    assert_eq!(fields["on"], json!({"label": "state", "kind": "boolean", "group": "readings"}));
-    assert_eq!(fields["brightness"], json!({"label": "brightness", "kind": "number", "group": "readings"}));
+    assert_eq!(
+        fields["on"],
+        json!({"label": "state", "kind": "boolean", "group": "readings"})
+    );
+    assert_eq!(
+        fields["brightness"],
+        json!({"label": "brightness", "kind": "number", "group": "readings"})
+    );
     // z2m's unit picks the kind; a plain number keeps its unit; battery is a reading
-    assert_eq!(fields["battery"], json!({"label": "battery", "kind": "percent", "group": "readings"}));
-    assert_eq!(fields["linkquality"], json!({"label": "linkquality", "kind": "number", "unit": "lqi", "group": "diagnostics"}));
+    assert_eq!(
+        fields["battery"],
+        json!({"label": "battery", "kind": "percent", "group": "readings"})
+    );
+    assert_eq!(
+        fields["linkquality"],
+        json!({"label": "linkquality", "kind": "number", "unit": "lqi", "group": "diagnostics"})
+    );
     // a settable config expose is an owner-tier command with z2m's values
     assert_eq!(fields["power_on_behavior"]["group"], json!("config"));
-    assert_eq!(fields["power_on_behavior"]["label"], json!("power-on behavior (power_on_behavior)"));
-    assert_eq!(fields["power_on_behavior"]["command"], json!({"type": "enum", "editable_by": "owner"}));
-    assert_eq!(fields["power_on_behavior"]["values"][2], json!({"value": "previous", "label": "previous"}));
+    assert_eq!(
+        fields["power_on_behavior"]["label"],
+        json!("power-on behavior (power_on_behavior)")
+    );
+    assert_eq!(
+        fields["power_on_behavior"]["command"],
+        json!({"type": "enum", "editable_by": "owner"})
+    );
+    assert_eq!(
+        fields["power_on_behavior"]["values"][2],
+        json!({"value": "previous", "label": "previous"})
+    );
     assert_eq!(fields["water_leak"]["notable"], json!(true));
-    assert!(fields.get("color").is_none(), "composites are deferred, in state and descriptor alike");
+    assert!(
+        fields.get("color").is_none(),
+        "composites are deferred, in state and descriptor alike"
+    );
 
     let motion = records
         .iter()
@@ -326,7 +462,10 @@ async fn bridge_inventory_published_as_discovery() {
     assert_eq!(motion["entity"], json!(null));
     assert_eq!(motion["suggested"]["capability"], json!("presence"));
     assert_eq!(motion["description"]["model"], json!("RTCGQ11LM"));
-    assert!(motion.get("aspects").is_none(), "an unbound device has no entity to describe");
+    assert!(
+        motion.get("aspects").is_none(),
+        "an unbound device has no entity to describe"
+    );
 
     // Without categories the generator still sorts what newer z2m would
     // (linkquality, a battery voltage in mV → diagnostics), and battery,
@@ -342,17 +481,31 @@ async fn bridge_inventory_published_as_discovery() {
     assert_eq!(fields["voltage"]["group"], json!("diagnostics"));
     assert_eq!(fields["linkquality"]["group"], json!("diagnostics"));
     let raw = String::from_utf8(sample.payload().to_bytes().to_vec()).expect("utf-8 payload");
-    let thermo_raw = &raw[raw.find("\"id\": \"shed_thermometer\"").expect("thermometer in payload")..];
+    let thermo_raw = &raw[raw
+        .find("\"id\": \"shed_thermometer\"")
+        .expect("thermometer in payload")..];
     let pos = |aspect: &str| thermo_raw.find(&format!("\"{aspect}\": {{")).expect(aspect);
-    assert!(pos("temperature") < pos("humidity") && pos("humidity") < pos("battery"),
-        "battery is ordered last among the readings: {thermo_raw}");
+    assert!(
+        pos("temperature") < pos("humidity") && pos("humidity") < pos("battery"),
+        "battery is ordered last among the readings: {thermo_raw}"
+    );
 
     // The mirror serves it to late joiners: the read path the MCP
     // surface's read_state uses.
-    let replies = observer.get("home/discovery/zigbee").await.expect("get discovery");
-    let reply = replies.recv_async().await.expect("mirrored discovery reply");
+    let replies = observer
+        .get("home/discovery/zigbee")
+        .await
+        .expect("get discovery");
+    let reply = replies
+        .recv_async()
+        .await
+        .expect("mirrored discovery reply");
     let mirrored: Value = serde_json::from_slice(
-        &reply.result().expect("mirrored sample").payload().to_bytes(),
+        &reply
+            .result()
+            .expect("mirrored sample")
+            .payload()
+            .to_bytes(),
     )
     .expect("mirrored discovery is JSON");
     assert_eq!(mirrored, doc, "mirror serves the same document");
@@ -381,7 +534,10 @@ async fn envelope_less_command_drops_with_health_event() {
         .expect("cmd put");
     expect_drop_event(&event_sub, "invalid-command").await;
     let silence = mqtt.next_message(Duration::from_millis(1500)).await;
-    assert!(silence.is_none(), "envelope-less command reached MQTT: {silence:?}");
+    assert!(
+        silence.is_none(),
+        "envelope-less command reached MQTT: {silence:?}"
+    );
 
     // A properly enveloped command still works.
     observer
@@ -445,7 +601,10 @@ async fn manual_lock_command_reaches_mqtt_via_arbiter() {
         .await
         .expect("cmd put");
     let silence = mqtt.next_message(Duration::from_millis(1500)).await;
-    assert!(silence.is_none(), "refused automation wish reached MQTT: {silence:?}");
+    assert!(
+        silence.is_none(),
+        "refused automation wish reached MQTT: {silence:?}"
+    );
 
     sup.shutdown();
 }
@@ -624,7 +783,8 @@ async fn broker_credentials_come_from_a_file_outside_the_repo() {
     const PASSWORD: &str = "p@ss/w0rd#1";
 
     let mosquitto = Mosquitto::spawn_with_auth(USER, PASSWORD);
-    let creds = std::env::temp_dir().join(format!("homeostat-mqtt-creds-{}.toml", std::process::id()));
+    let creds =
+        std::env::temp_dir().join(format!("homeostat-mqtt-creds-{}.toml", std::process::id()));
     std::fs::write(
         &creds,
         format!("[\"127.0.0.1\"]\nusername = \"{USER}\"\npassword = \"{PASSWORD}\"\n"),
@@ -657,11 +817,18 @@ async fn broker_credentials_come_from_a_file_outside_the_repo() {
         .await
         .expect("state subscriber");
     let mut mqtt = Mqtt::connect_auth(mosquitto.port, "test-auth", USER, PASSWORD).await;
-    mqtt.publish("zigbee2mqtt/lamp_kitchen_1", r#"{"state":"ON"}"#).await;
-    expect_states(&state_sub, &[("home/state/kitchen/kitchen_lamp/on", json!(true))]).await;
+    mqtt.publish("zigbee2mqtt/lamp_kitchen_1", r#"{"state":"ON"}"#)
+        .await;
+    expect_states(
+        &state_sub,
+        &[("home/state/kitchen/kitchen_lamp/on", json!(true))],
+    )
+    .await;
 
     let manifest = std::fs::read_to_string(
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(FIXTURE).join("units/zigbee.toml"),
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join(FIXTURE)
+            .join("units/zigbee.toml"),
     )
     .expect("read manifest");
     assert!(
@@ -703,12 +870,14 @@ async fn a_known_but_unbound_device_does_not_report_every_message() {
         .expect("discovery sample");
 
     for _ in 0..3 {
-        mqtt.publish("zigbee2mqtt/snzb_03_01", r#"{"occupancy":true}"#).await;
+        mqtt.publish("zigbee2mqtt/snzb_03_01", r#"{"occupancy":true}"#)
+            .await;
     }
     // A sentinel the adapter definitely reports, published last. The
     // assertion is strict on the NEXT event: any unknown-device emitted
     // for snzb_03_01 would arrive ahead of it.
-    mqtt.publish("zigbee2mqtt/lamp_kitchen_1", "certainly not json").await;
+    mqtt.publish("zigbee2mqtt/lamp_kitchen_1", "certainly not json")
+        .await;
     assert_eq!(
         next_event(&event_sub).await["reason"],
         json!("malformed-payload"),
@@ -716,8 +885,12 @@ async fn a_known_but_unbound_device_does_not_report_every_message() {
     );
 
     // ...whereas a device the bridge has never mentioned still reports.
-    mqtt.publish("zigbee2mqtt/ghost_device", r#"{"state":"ON"}"#).await;
-    assert_eq!(next_event(&event_sub).await["reason"], json!("unknown-device"));
+    mqtt.publish("zigbee2mqtt/ghost_device", r#"{"state":"ON"}"#)
+        .await;
+    assert_eq!(
+        next_event(&event_sub).await["reason"],
+        json!("unknown-device")
+    );
 
     sup.shutdown();
     drop(mosquitto);
@@ -738,9 +911,11 @@ async fn a_bridge_going_offline_mid_run_reports_once_per_transition() {
 
     // A healthy bridge says so, repeatedly, and that is not an event.
     for _ in 0..2 {
-        mqtt.publish("zigbee2mqtt/bridge/state", r#"{"state":"online"}"#).await;
+        mqtt.publish("zigbee2mqtt/bridge/state", r#"{"state":"online"}"#)
+            .await;
     }
-    mqtt.publish("zigbee2mqtt/bridge/state", r#"{"state":"offline"}"#).await;
+    mqtt.publish("zigbee2mqtt/bridge/state", r#"{"state":"offline"}"#)
+        .await;
     let event = next_event(&event_sub).await;
     assert_eq!(event["kind"], json!("bridge-silent"), "{event}");
     assert_eq!(event["state"], json!("offline"), "{event}");
@@ -748,7 +923,8 @@ async fn a_bridge_going_offline_mid_run_reports_once_per_transition() {
     // Still offline is not a new transition; the legacy bare-string form
     // is understood the same way device availability understands it.
     mqtt.publish("zigbee2mqtt/bridge/state", "offline").await;
-    mqtt.publish("zigbee2mqtt/bridge/state", "certainly not a state").await;
+    mqtt.publish("zigbee2mqtt/bridge/state", "certainly not a state")
+        .await;
     let event = next_event(&event_sub).await;
     assert_eq!(
         event["reason"],

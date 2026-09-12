@@ -48,8 +48,14 @@ async fn behavioral_change_restarts_exactly_that_unit() {
     let plan = cli(&["plan", house_arg, "--bus", &sup.endpoint]);
     assert_cli_ok(&plan);
     let text = stdout(&plan);
-    assert!(text.contains("Plan tier: behavioral (1 unit restarted)"), "{text}");
-    assert!(text.contains("~ automation probe (units/probe.toml)"), "{text}");
+    assert!(
+        text.contains("Plan tier: behavioral (1 unit restarted)"),
+        "{text}"
+    );
+    assert!(
+        text.contains("~ automation probe (units/probe.toml)"),
+        "{text}"
+    );
     assert!(text.contains("reason: unit files changed"), "{text}");
 
     let apply = cli(&["apply", house_arg, "--bus", &sup.endpoint]);
@@ -69,6 +75,43 @@ async fn behavioral_change_restarts_exactly_that_unit() {
         meta_read(&observer, homeostat::bus::APPLIED_COMMIT_KEY).await,
         Some(head),
         "applied_commit readable from the bus"
+    );
+
+    sup.shutdown();
+    let _ = std::fs::remove_dir_all(&house);
+}
+
+/// (a2) A manifest edit that adds a publish is behavioral (the grant set is
+/// unchanged), and the plan renders the restarting unit's expanded keys so
+/// the new key surface is visible before approval, as it is for a create.
+#[tokio::test(flavor = "multi_thread")]
+async fn manifest_edit_adding_a_publish_renders_the_new_key() {
+    let house = temp_house(FIXTURE, "apply-new-key");
+    let mut sup = Supervisor::spawn_at(&house, &[]);
+    let observer = sup.observer().await;
+    await_base_units(&observer).await;
+
+    edit(
+        &house,
+        "units/probe.toml",
+        "echo = { key = \"home/state/den/probe_echo/level\" }",
+        "echo = { key = \"home/state/den/probe_echo/level\" }\n\
+         events = { key = \"home/health/probe/event\" }",
+    );
+
+    let house_arg = house.to_str().expect("utf-8 path");
+    let plan = cli(&["plan", house_arg, "--bus", &sup.endpoint]);
+    assert_cli_ok(&plan);
+    let text = stdout(&plan);
+    assert!(
+        text.contains("Plan tier: behavioral (1 unit restarted)"),
+        "{text}"
+    );
+    assert!(text.contains("reason: manifest changed"), "{text}");
+    assert!(text.contains("Expanded keys:"), "{text}");
+    assert!(
+        text.contains("probe publishes events: home/health/probe/event"),
+        "{text}"
     );
 
     sup.shutdown();
@@ -115,14 +158,18 @@ async fn parameter_default_change_applies_with_zero_restarts() {
             .await
             .expect("echo of the new value within 10s")
             .expect("echo stream open");
-        let value: Value = serde_json::from_slice(&sample.payload().to_bytes())
-            .expect("echo payload is JSON");
+        let value: Value =
+            serde_json::from_slice(&sample.payload().to_bytes()).expect("echo payload is JSON");
         if value == json!(5) {
             break;
         }
     }
 
-    assert_eq!(running_pid(&observer, "probe").await, probe_pid, "zero restarts");
+    assert_eq!(
+        running_pid(&observer, "probe").await,
+        probe_pid,
+        "zero restarts"
+    );
     assert_eq!(running_pid(&observer, "reflector").await, reflector_pid);
     assert_eq!(
         cache_read(&observer, "home/config/probe/level").await,
@@ -183,13 +230,21 @@ async fn constraint_only_change_refreshes_without_restart() {
         .await
         .expect("meta manifest served");
     assert!(manifest.contains("max = 5"), "{manifest}");
-    assert_eq!(running_pid(&observer, "probe").await, probe_pid, "zero restarts");
+    assert_eq!(
+        running_pid(&observer, "probe").await,
+        probe_pid,
+        "zero restarts"
+    );
     assert_eq!(running_pid(&observer, "reflector").await, reflector_pid);
 
     // The world now matches the repo: the refresh landed durably.
     let replan = cli(&["plan", house_arg, "--bus", &sup.endpoint]);
     assert_cli_ok(&replan);
-    assert!(stdout(&replan).contains("No changes."), "{}", stdout(&replan));
+    assert!(
+        stdout(&replan).contains("No changes."),
+        "{}",
+        stdout(&replan)
+    );
 
     config_write(&observer, "home/config/probe/level", json!(4))
         .await
@@ -243,7 +298,12 @@ async fn structural_change_starts_units_in_grant_order() {
 
     add_watcher_pair(&house, "beacon", "den", "beacon_lamp", "watcher");
     // The beacon must actually come up for the walk to proceed.
-    edit(&house, "units/beacon.toml", "fake_adapter --crash-after-ms 0", "fake_adapter");
+    edit(
+        &house,
+        "units/beacon.toml",
+        "fake_adapter --crash-after-ms 0",
+        "fake_adapter",
+    );
 
     let house_arg = house.to_str().expect("utf-8 path");
     let plan = cli(&["plan", house_arg, "--bus", &sup.endpoint]);
@@ -272,8 +332,16 @@ async fn structural_change_starts_units_in_grant_order() {
 
     assert!(running_pid(&observer, "beacon").await > 0);
     assert!(running_pid(&observer, "watcher").await > 0);
-    assert_eq!(running_pid(&observer, "probe").await, probe_pid, "untouched");
-    assert_eq!(running_pid(&observer, "reflector").await, reflector_pid, "untouched");
+    assert_eq!(
+        running_pid(&observer, "probe").await,
+        probe_pid,
+        "untouched"
+    );
+    assert_eq!(
+        running_pid(&observer, "reflector").await,
+        reflector_pid,
+        "untouched"
+    );
 
     sup.shutdown();
     let _ = std::fs::remove_dir_all(&house);
@@ -290,7 +358,12 @@ async fn entity_move_plans_as_structural() {
     await_base_units(&observer).await;
 
     add_watcher_pair(&house, "beacon", "den", "beacon_lamp", "watcher");
-    edit(&house, "units/beacon.toml", "fake_adapter --crash-after-ms 0", "fake_adapter");
+    edit(
+        &house,
+        "units/beacon.toml",
+        "fake_adapter --crash-after-ms 0",
+        "fake_adapter",
+    );
     let house_arg = house.to_str().expect("utf-8 path");
     let apply = cli(&["apply", house_arg, "--bus", &sup.endpoint]);
     assert_cli_ok(&apply);
@@ -306,7 +379,52 @@ async fn entity_move_plans_as_structural() {
     assert_cli_ok(&plan);
     let text = stdout(&plan);
     assert!(text.contains("Plan tier: structural"), "{text}");
-    assert!(text.contains("Grant changes:"), "the move renders as a grant delta: {text}");
+    assert!(
+        text.contains("Grant changes:"),
+        "the move renders as a grant delta: {text}"
+    );
+
+    sup.shutdown();
+    let _ = std::fs::remove_dir_all(&house);
+}
+
+/// (c3) Moving an entity nobody is granted onto is structural too: the
+/// owner's state row records every bound entity, so the move is a grant
+/// delta rendered with the entity's old and new facts — not a bare
+/// adapter restart on a files_hash change (docs/design.md, Plan/apply
+/// mechanics: entity moves are structural).
+#[tokio::test(flavor = "multi_thread")]
+async fn ungranted_entity_move_plans_as_structural() {
+    let house = temp_house(FIXTURE, "apply-move-ungranted");
+    let mut sup = Supervisor::spawn_at(&house, &[]);
+    let observer = sup.observer().await;
+    await_base_units(&observer).await;
+
+    edit(
+        &house,
+        "entities/reflector/lamp.toml",
+        "room = \"livingroom\"",
+        "room = \"attic\"",
+    );
+
+    let house_arg = house.to_str().expect("utf-8 path");
+    let plan = cli(&["plan", house_arg, "--bus", &sup.endpoint]);
+    assert_cli_ok(&plan);
+    let text = stdout(&plan);
+    assert!(text.contains("Plan tier: structural"), "{text}");
+    assert!(text.contains("Grant changes:"), "{text}");
+    assert!(text.contains("+ reflector.state  binds"), "{text}");
+    assert!(
+        text.contains("-> lamp  (room=attic, capability=light, write=shared, owner=reflector)"),
+        "{text}"
+    );
+    assert!(text.contains("- reflector.state  binds"), "{text}");
+    assert!(
+        text.contains(
+            "-> lamp  (room=livingroom, capability=light, write=shared, owner=reflector)"
+        ),
+        "{text}"
+    );
 
     sup.shutdown();
     let _ = std::fs::remove_dir_all(&house);
@@ -331,7 +449,10 @@ async fn failing_unit_halts_walk_in_place() {
     assert!(!apply.status.success(), "apply reports failure");
     let out = stdout(&apply);
     let err = stderr(&apply);
-    assert!(out.contains("start broken: FAILED (circuit breaker open)"), "{out}");
+    assert!(
+        out.contains("start broken: FAILED (circuit breaker open)"),
+        "{out}"
+    );
     assert!(err.contains("apply halted at broken"), "{err}");
     assert!(err.contains("not reached: waiter"), "{err}");
 
@@ -394,7 +515,14 @@ async fn stale_pending_plan_refuses_to_apply() {
     std::fs::write(house.join("NOTES.md"), "repo moved on\n").expect("write file");
     git_commit_all(&house, "unrelated change");
 
-    let apply = cli(&["apply", house_arg, "--bus", &sup.endpoint, "--plan", &plan_path]);
+    let apply = cli(&[
+        "apply",
+        house_arg,
+        "--bus",
+        &sup.endpoint,
+        "--plan",
+        &plan_path,
+    ]);
     assert!(!apply.status.success(), "stale plan must refuse");
     let err = stderr(&apply);
     assert!(err.contains("stale"), "{err}");

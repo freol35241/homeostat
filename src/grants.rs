@@ -4,32 +4,53 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::ValidationError;
 use crate::expand::{Direction, ExpandedKey};
-use crate::keyspace::{KeyExpr, Segment};
+use crate::keyspace::Segment;
 use crate::manifest::{Priority, UnitKind, WriteMode, CAPABILITIES};
 use crate::repo::House;
 
-/// One resolved write grant: a non-adapter publish expression resolved
-/// against the concrete entity set. The table doubles as the dependency
-/// graph (unit -> entities -> owner units).
+/// One resolved grant: a publish expression resolved against the concrete
+/// entity set. A cmd-class row is a writer (a non-adapter's cmd publish,
+/// with its capability and band); a state-class row is a binding (a
+/// binding unit's state publish over the entities it embodies). The table
+/// doubles as the dependency graph (unit -> entities -> owner units).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Grant {
     pub unit: String,
     pub publish: String,
-    pub capability: String,
-    pub priority: Priority,
+    /// The capability a cmd publish resolves over; none on a state row.
+    #[serde(default)]
+    pub capability: Option<String>,
+    /// The band a cmd publish leaves at; none on a state row.
+    #[serde(default)]
+    pub priority: Option<Priority>,
+    /// The resolved key expressions, sorted. Part of the grant's identity:
+    /// widening `.../on` to `.../**` is a grant delta even when the same
+    /// entities match.
+    #[serde(default)]
+    pub keys: Vec<String>,
     /// Granted entities (key match + capability match), sorted by name.
     pub entities: Vec<GrantEntity>,
 }
 
+impl Grant {
+    /// A cmd-class row: a writer. State rows record bindings only.
+    pub fn is_cmd(&self) -> bool {
+        self.capability.is_some()
+    }
+}
+
 /// A granted entity with the policy facts the grant table is the record
-/// of. Because these live in the table, an entity move, a write-mode
-/// flip, or a re-binding IS a grant-table delta — and any grant delta
-/// escalates the plan to structural (docs/design.md, Plan/apply
+/// of. Because these live in the table — and every bound entity sits in
+/// its owner's state row — an entity move, a write-mode flip, a
+/// capability change or a re-binding IS a grant-table delta, and any grant
+/// delta escalates the plan to structural (docs/design.md, Plan/apply
 /// mechanics), with the owner shown exactly what changed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GrantEntity {
     pub name: String,
     pub room: String,
+    #[serde(default)]
+    pub capability: String,
     pub write: WriteMode,
     /// The binding unit — the walk-order edge source. An adapter, or an
     /// automation for a commandable virtual entity.
@@ -58,7 +79,9 @@ pub fn resolve_feeds(house: &House, expanded: &[ExpandedKey]) -> (Vec<Feed>, Vec
     let mut feeds = Vec::new();
     let mut errors = Vec::new();
     for entity in &house.entities {
-        let Some(inputs) = &entity.file.inputs else { continue };
+        let Some(inputs) = &entity.file.inputs else {
+            continue;
+        };
         let file = Some(entity.path.clone());
         let owner_is_automation = house
             .unit(&entity.owner)
@@ -96,9 +119,9 @@ pub fn resolve_feeds(house: &House, expanded: &[ExpandedKey]) -> (Vec<Feed>, Vec
                 let published = expanded.iter().any(|k| {
                     k.unit == src.owner
                         && k.direction == Direction::Publishes
-                        && k.exprs.iter().any(|e| {
-                            e.matches_prefix(&key.split('/').collect::<Vec<_>>())
-                        })
+                        && k.exprs
+                            .iter()
+                            .any(|e| e.matches_prefix(&key.split('/').collect::<Vec<_>>()))
                 });
                 if !published {
                     errors.push(ValidationError::new(
@@ -136,21 +159,59 @@ pub fn resolve(
     let mut errors = Vec::new();
 
     for key in expanded {
-        if key.kind == UnitKind::Adapter || key.direction != Direction::Publishes {
+        if key.direction != Direction::Publishes {
             continue;
         }
-        // A templated publish that expanded to nothing has no exprs to
-        // betray its class — classify by the source, so it still gets the
+        // Classify by the source: a templated publish that expanded to
+        // nothing has no exprs to betray its class, and it still gets the
         // capability checks and the "matches no entities" warning.
-        let cmd_class = key.exprs.iter().any(|e| e.class() == Some("cmd"))
-            || (key.exprs.is_empty()
-                && KeyExpr::parse(&key.source).is_ok_and(|e| e.class() == Some("cmd")));
-        if !cmd_class {
-            continue;
-        }
-        let unit = house.unit(&key.unit).expect("expanded key from loaded unit");
+        let class = key.source.split('/').nth(1).unwrap_or_default();
+        let unit = house
+            .unit(&key.unit)
+            .expect("expanded key from loaded unit");
         let spec = &unit.manifest.bus.as_ref().expect("unit has bus").publishes[&key.entry];
         let subject = format!("{}.{}", key.unit, key.entry);
+        let mut keys: Vec<String> = key.exprs.iter().map(ToString::to_string).collect();
+        keys.sort();
+
+        // A binding unit's state publish: the record of what it embodies,
+        // so a change to any bound entity is a grant delta.
+        if class == "state" {
+            let mut bound: Vec<GrantEntity> = house
+                .entities
+                .iter()
+                .filter(|e| e.owner == key.unit)
+                .filter(|e| {
+                    let prefix = [
+                        "home",
+                        "state",
+                        e.file.entity.room.as_str(),
+                        e.name.as_str(),
+                    ];
+                    key.exprs.iter().any(|expr| expr.matches_prefix(&prefix))
+                })
+                .map(|e| GrantEntity {
+                    name: e.name.clone(),
+                    room: e.file.entity.room.clone(),
+                    capability: e.file.entity.capability.clone(),
+                    write: e.file.write_policy.mode,
+                    owner: e.owner.clone(),
+                })
+                .collect();
+            bound.sort_by(|a, b| a.name.cmp(&b.name));
+            grants.push(Grant {
+                unit: key.unit.clone(),
+                publish: key.entry.clone(),
+                capability: None,
+                priority: None,
+                keys,
+                entities: bound,
+            });
+            continue;
+        }
+        if class != "cmd" || key.kind == UnitKind::Adapter {
+            continue;
+        }
 
         let Some(capability) = spec.capability.clone() else {
             errors.push(ValidationError::new(
@@ -182,6 +243,7 @@ pub fn resolve(
             .map(|e| GrantEntity {
                 name: e.name.clone(),
                 room: e.file.entity.room.clone(),
+                capability: capability.clone(),
                 write: e.file.write_policy.mode,
                 owner: e.owner.clone(),
             })
@@ -192,11 +254,22 @@ pub fn resolve(
         if granted.is_empty() {
             warnings.push(format!("publish {subject} matches no entities"));
         }
+        // The manual band is the family's (dashboard, voice) and is exempt
+        // from exclusive-write checks; an automation claiming it is worth a
+        // look in the plan, though nothing forbids it.
+        let priority = spec.priority.unwrap_or(Priority::Automation);
+        if priority == Priority::Manual && unit.manifest.unit.kind != UnitKind::Service {
+            warnings.push(format!(
+                "publish {subject} declares priority \"manual\" on {} \"{}\"; the manual band is the family's and is exempt from exclusive-write checks",
+                unit.manifest.unit.kind, key.unit
+            ));
+        }
         grants.push(Grant {
             unit: key.unit.clone(),
             publish: key.entry.clone(),
-            capability,
-            priority: spec.priority.unwrap_or(Priority::Automation),
+            capability: Some(capability),
+            priority: Some(priority),
+            keys,
             entities: granted,
         });
     }
@@ -205,15 +278,18 @@ pub fn resolve(
 
     // Write-policy enforcement: two writers on an exclusive entity is an error.
     // Exclusivity constrains the automation band only; manual-band units
-    // (dashboard, voice) sit above it by construction and never count.
-    let mut writers: BTreeMap<&str, Vec<String>> = BTreeMap::new();
+    // (dashboard, voice) sit above it by construction and never count. A
+    // writer is a unit, not a binding: authority is per process.
+    let mut writers: BTreeMap<&str, BTreeMap<&str, Vec<String>>> = BTreeMap::new();
     for grant in &grants {
-        if grant.priority == Priority::Manual {
+        if matches!(grant.priority, None | Some(Priority::Manual)) {
             continue;
         }
         for entity in &grant.entities {
             writers
                 .entry(entity.name.as_str())
+                .or_default()
+                .entry(grant.unit.as_str())
                 .or_default()
                 .push(format!("{}.{}", grant.unit, grant.publish));
         }
@@ -224,13 +300,14 @@ pub fn resolve(
         }
         if let Some(writers) = writers.get(entity.name.as_str()) {
             if writers.len() > 1 {
+                let bindings: Vec<&str> = writers.values().flatten().map(String::as_str).collect();
                 errors.push(ValidationError::new(
                     "exclusive-write-conflict",
                     &entity.name,
                     format!(
                         "exclusive entity has {} writers: {}",
                         writers.len(),
-                        writers.join(", ")
+                        bindings.join(", ")
                     ),
                     Some(entity.path.clone()),
                 ));
@@ -247,11 +324,17 @@ pub fn resolve(
         if entity.file.write_policy.mode != WriteMode::Arbitrated {
             continue;
         }
-        let prefix =
-            ["home", "arbiter", entity.file.entity.room.as_str(), entity.name.as_str()];
+        let prefix = [
+            "home",
+            "arbiter",
+            entity.file.entity.room.as_str(),
+            entity.name.as_str(),
+        ];
         let covered = expanded.iter().any(|k| {
             k.direction == Direction::Publishes
-                && k.exprs.iter().any(|e| e.class() == Some("arbiter") && e.matches_prefix(&prefix))
+                && k.exprs
+                    .iter()
+                    .any(|e| e.class() == Some("arbiter") && e.matches_prefix(&prefix))
         });
         if !covered {
             errors.push(ValidationError::new(
@@ -271,7 +354,7 @@ pub fn resolve(
     // cmd keys and sets its own state. A cmd-class grant onto an
     // automation-owned entity nobody subscribes for would hand commands to
     // a producer that never receives them, so it stays refused.
-    for grant in &grants {
+    for grant in grants.iter().filter(|g| g.is_cmd()) {
         for granted in &grant.entities {
             let name = &granted.name;
             let Some(entity) = house.entities.iter().find(|e| &e.name == name) else {
@@ -288,7 +371,9 @@ pub fn resolve(
             let listens = expanded.iter().any(|k| {
                 k.unit == entity.owner
                     && k.direction == Direction::Subscribes
-                    && k.exprs.iter().any(|e| e.class() == Some("cmd") && e.matches_prefix(&prefix))
+                    && k.exprs
+                        .iter()
+                        .any(|e| e.class() == Some("cmd") && e.matches_prefix(&prefix))
             });
             if !listens {
                 errors.push(ValidationError::new(
@@ -310,7 +395,11 @@ pub fn resolve(
     // time rather than start units in a silently arbitrary one.
     let edges: BTreeSet<(&str, &str)> = grants
         .iter()
-        .flat_map(|g| g.entities.iter().map(move |e| (e.owner.as_str(), g.unit.as_str())))
+        .flat_map(|g| {
+            g.entities
+                .iter()
+                .map(move |e| (e.owner.as_str(), g.unit.as_str()))
+        })
         .filter(|(owner, unit)| owner != unit)
         .collect();
     let mut remaining: BTreeSet<&str> = edges.iter().flat_map(|(a, d)| [*a, *d]).collect();
@@ -349,7 +438,9 @@ pub fn resolve(
             if expr.class() != Some("state") {
                 continue;
             }
-            let unit = house.unit(&key.unit).expect("expanded key from loaded unit");
+            let unit = house
+                .unit(&key.unit)
+                .expect("expanded key from loaded unit");
             let subject = format!("{}.{}", key.unit, key.entry);
             let (room, entity) = (expr.0.get(2), expr.0.get(3));
             let (Some(Segment::Literal(room)), Some(Segment::Literal(entity))) = (room, entity)
@@ -365,9 +456,10 @@ pub fn resolve(
                 ));
                 continue;
             };
-            let bound = house.entities.iter().any(|e| {
-                &e.name == entity && e.owner == key.unit && &e.file.entity.room == room
-            });
+            let bound = house
+                .entities
+                .iter()
+                .any(|e| &e.name == entity && e.owner == key.unit && &e.file.entity.room == room);
             if !bound {
                 errors.push(ValidationError::new(
                     "state-publish-unbound",
@@ -379,6 +471,84 @@ pub fn resolve(
                     Some(unit.path.clone()),
                 ));
             }
+        }
+    }
+
+    // Reserved classes (docs/design.md, Key space): `config` and `meta` are
+    // the core's alone; `health` and `discovery` are per unit, under the
+    // publishing unit's own name; `arbiter`, `clock` and `history` are one
+    // service's output each. The SDK only checks that a published key is
+    // within a declared expression, so without this an automation could
+    // declare `home/arbiter/**` and forge post-arbitration commands, or
+    // another unit's discovery record, with an empty grant table.
+    let publish_class = |key: &ExpandedKey| -> Option<(String, Option<String>)> {
+        let mut segments = key.source.split('/').skip(1).map(str::to_string);
+        Some((segments.next()?, segments.next()))
+    };
+    let mut singleton_publishers: BTreeMap<String, BTreeSet<&str>> = BTreeMap::new();
+    for key in expanded
+        .iter()
+        .filter(|k| k.direction == Direction::Publishes)
+    {
+        if let Some((class, _)) = publish_class(key) {
+            if matches!(class.as_str(), "arbiter" | "clock" | "history") {
+                singleton_publishers
+                    .entry(class)
+                    .or_default()
+                    .insert(key.unit.as_str());
+            }
+        }
+    }
+    for key in expanded
+        .iter()
+        .filter(|k| k.direction == Direction::Publishes)
+    {
+        let Some((class, next)) = publish_class(key) else {
+            continue;
+        };
+        let unit = house
+            .unit(&key.unit)
+            .expect("expanded key from loaded unit");
+        let message = match class.as_str() {
+            "config" | "meta" => Some(format!(
+                "\"{}\" publishes under home/{class}/, which only the core writes",
+                key.source
+            )),
+            "health" | "discovery" if next.as_deref() != Some(key.unit.as_str()) => Some(format!(
+                "\"{}\" must sit under this unit's own name: home/{class}/{}/...",
+                key.source, key.unit
+            )),
+            "arbiter" | "clock" | "history" => {
+                let publishers = &singleton_publishers[&class];
+                if unit.manifest.unit.kind != UnitKind::Service {
+                    Some(format!(
+                        "\"{}\": only a service may publish under home/{class}/",
+                        key.source
+                    ))
+                } else if publishers.len() > 1 {
+                    let others: Vec<&str> = publishers
+                        .iter()
+                        .copied()
+                        .filter(|u| *u != key.unit)
+                        .collect();
+                    Some(format!(
+                        "\"{}\": home/{class}/ is also published by {}; exactly one service owns it",
+                        key.source,
+                        others.join(", ")
+                    ))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+        if let Some(message) = message {
+            errors.push(ValidationError::new(
+                "reserved-class-publish",
+                format!("{}.{}", key.unit, key.entry),
+                message,
+                Some(unit.path.clone()),
+            ));
         }
     }
 
@@ -400,11 +570,17 @@ mod tests {
         LoadedUnit {
             manifest: UnitManifest {
                 schema: 1,
-                unit: UnitSection { name: name.to_string(), kind, description: None, inputs: None },
+                unit: UnitSection {
+                    name: name.to_string(),
+                    kind,
+                    description: None,
+                    inputs: None,
+                },
                 runtime: RuntimeSection {
                     command: "true".to_string(),
                     restart: RestartPolicy::Always,
                     shutdown_grace_s: None,
+                    env: None,
                 },
                 discovery: None,
                 bus: Some(bus),
@@ -434,7 +610,10 @@ mod tests {
                     room: room.to_string(),
                 },
                 naming: None,
-                write_policy: WritePolicy { mode, owner: adapter.to_string() },
+                write_policy: WritePolicy {
+                    mode,
+                    owner: adapter.to_string(),
+                },
                 inputs: None,
                 dashboard: None,
             },
@@ -449,10 +628,18 @@ mod tests {
     /// covers the lock.
     fn house_with_lock(arbiter_bus: Option<BusSection>) -> House {
         let mut zigbee_subscribes = BTreeMap::new();
-        zigbee_subscribes.insert("commands".to_string(), "home/cmd/{room}/{entity}/**".to_string());
-        zigbee_subscribes
-            .insert("arbiter_commands".to_string(), "home/arbiter/{room}/{entity}/**".to_string());
-        let zigbee_bus = BusSection { subscribes: zigbee_subscribes, publishes: BTreeMap::new() };
+        zigbee_subscribes.insert(
+            "commands".to_string(),
+            "home/cmd/{room}/{entity}/**".to_string(),
+        );
+        zigbee_subscribes.insert(
+            "arbiter_commands".to_string(),
+            "home/arbiter/{room}/{entity}/**".to_string(),
+        );
+        let zigbee_bus = BusSection {
+            subscribes: zigbee_subscribes,
+            publishes: BTreeMap::new(),
+        };
 
         let mut night_mode_publishes = BTreeMap::new();
         night_mode_publishes.insert(
@@ -463,7 +650,10 @@ mod tests {
                 priority: Some(Priority::Automation),
             },
         );
-        let night_mode_bus = BusSection { subscribes: BTreeMap::new(), publishes: night_mode_publishes };
+        let night_mode_bus = BusSection {
+            subscribes: BTreeMap::new(),
+            publishes: night_mode_publishes,
+        };
 
         let mut units = vec![
             unit("zigbee", UnitKind::Adapter, zigbee_bus),
@@ -490,9 +680,16 @@ mod tests {
         // it covers arbitrated entities with a plain wildcard instead.
         publishes.insert(
             "forwarded".to_string(),
-            PublishSpec { key: "home/arbiter/**".to_string(), capability: None, priority: None },
+            PublishSpec {
+                key: "home/arbiter/**".to_string(),
+                capability: None,
+                priority: None,
+            },
         );
-        let arbiter_bus = BusSection { subscribes: BTreeMap::new(), publishes };
+        let arbiter_bus = BusSection {
+            subscribes: BTreeMap::new(),
+            publishes,
+        };
         let house = house_with_lock(Some(arbiter_bus));
 
         let (expanded, _warnings, expand_errors) = expand(&house);
@@ -501,9 +698,18 @@ mod tests {
         // Correct expansion split: the adapter's cmd template excludes the
         // arbitrated lock, its arbiter template includes only the lock.
         let cmd = expanded.iter().find(|k| k.entry == "commands").unwrap();
-        assert_eq!(cmd.exprs, vec![KeyExpr::parse("home/cmd/kitchen/lamp/**").unwrap()]);
-        let arbiter_cmd = expanded.iter().find(|k| k.entry == "arbiter_commands").unwrap();
-        assert_eq!(arbiter_cmd.exprs, vec![KeyExpr::parse("home/arbiter/hallway/lock/**").unwrap()]);
+        assert_eq!(
+            cmd.exprs,
+            vec![KeyExpr::parse("home/cmd/kitchen/lamp/**").unwrap()]
+        );
+        let arbiter_cmd = expanded
+            .iter()
+            .find(|k| k.entry == "arbiter_commands")
+            .unwrap();
+        assert_eq!(
+            arbiter_cmd.exprs,
+            vec![KeyExpr::parse("home/arbiter/hallway/lock/**").unwrap()]
+        );
 
         let (grants, warnings, errors) = resolve(&house, &expanded);
         assert!(errors.is_empty(), "{errors:?}");
@@ -514,6 +720,7 @@ mod tests {
             vec![GrantEntity {
                 name: "lock".to_string(),
                 room: "hallway".to_string(),
+                capability: "lock".to_string(),
                 write: WriteMode::Arbitrated,
                 owner: "zigbee".to_string(),
             }]
@@ -529,9 +736,16 @@ mod tests {
             let mut publishes = BTreeMap::new();
             publishes.insert(
                 "forwarded".to_string(),
-                PublishSpec { key: "home/arbiter/**".to_string(), capability: None, priority: None },
+                PublishSpec {
+                    key: "home/arbiter/**".to_string(),
+                    capability: None,
+                    priority: None,
+                },
             );
-            Some(BusSection { subscribes: BTreeMap::new(), publishes })
+            Some(BusSection {
+                subscribes: BTreeMap::new(),
+                publishes,
+            })
         };
         let baseline = house_with_lock(arbiter_bus());
         let (expanded, _, _) = expand(&baseline);
@@ -543,7 +757,10 @@ mod tests {
         // the granted set — either way the tables differ.
         let (expanded, _, _) = expand(&moved);
         let (moved_grants, _, _) = resolve(&moved, &expanded);
-        assert_ne!(grants, moved_grants, "a room move must change the grant table");
+        assert_ne!(
+            grants, moved_grants,
+            "a room move must change the grant table"
+        );
 
         let mut flipped = house_with_lock(arbiter_bus());
         flipped.entities[0].file.write_policy.mode = WriteMode::Exclusive;
@@ -552,7 +769,10 @@ mod tests {
         flipped.entities[1].file.write_policy.mode = WriteMode::Shared;
         let (expanded, _, _) = expand(&flipped);
         let (flipped_grants, _, _) = resolve(&flipped, &expanded);
-        assert_ne!(grants, flipped_grants, "a write-mode flip must change the grant table");
+        assert_ne!(
+            grants, flipped_grants,
+            "a write-mode flip must change the grant table"
+        );
     }
 
     /// A latch: automation "modes" binds a switch, subscribes to its cmd
@@ -561,14 +781,24 @@ mod tests {
     fn house_with_latch(listens: bool) -> House {
         let mut modes_subscribes = BTreeMap::new();
         if listens {
-            modes_subscribes.insert("commands".to_string(), "home/cmd/{room}/{entity}/**".to_string());
+            modes_subscribes.insert(
+                "commands".to_string(),
+                "home/cmd/{room}/{entity}/**".to_string(),
+            );
         }
         let mut modes_publishes = BTreeMap::new();
         modes_publishes.insert(
             "state".to_string(),
-            PublishSpec { key: "home/state/{room}/{entity}/**".to_string(), capability: None, priority: None },
+            PublishSpec {
+                key: "home/state/{room}/{entity}/**".to_string(),
+                capability: None,
+                priority: None,
+            },
         );
-        let modes_bus = BusSection { subscribes: modes_subscribes, publishes: modes_publishes };
+        let modes_bus = BusSection {
+            subscribes: modes_subscribes,
+            publishes: modes_publishes,
+        };
 
         let mut buttons_publishes = BTreeMap::new();
         buttons_publishes.insert(
@@ -579,14 +809,23 @@ mod tests {
                 priority: Some(Priority::Automation),
             },
         );
-        let buttons_bus = BusSection { subscribes: BTreeMap::new(), publishes: buttons_publishes };
+        let buttons_bus = BusSection {
+            subscribes: BTreeMap::new(),
+            publishes: buttons_publishes,
+        };
 
         House {
             units: vec![
                 unit("modes", UnitKind::Automation, modes_bus),
                 unit("buttons", UnitKind::Automation, buttons_bus),
             ],
-            entities: vec![entity("house_mode", "global", "switch", WriteMode::Shared, "modes")],
+            entities: vec![entity(
+                "house_mode",
+                "global",
+                "switch",
+                WriteMode::Shared,
+                "modes",
+            )],
             zones: BTreeMap::new(),
         }
     }
@@ -607,6 +846,7 @@ mod tests {
             vec![GrantEntity {
                 name: "house_mode".to_string(),
                 room: "global".to_string(),
+                capability: "switch".to_string(),
                 write: WriteMode::Shared,
                 owner: "modes".to_string(),
             }]
@@ -624,6 +864,133 @@ mod tests {
         assert_eq!(codes, vec!["virtual-entity-commanded"], "{errors:?}");
     }
 
+    /// The key expression is part of a grant's identity: widening `/lock`
+    /// to `/**` matches the same entity yet is a different authority, so it
+    /// must diff as a grant delta and render in the plan.
+    #[test]
+    fn widening_a_key_expression_changes_the_grant_table() {
+        let house = house_with_lock(None);
+        let (expanded, _, _) = expand(&house);
+        let (grants, _, _) = resolve(&house, &expanded);
+        let night_mode = grants.iter().find(|g| g.unit == "night_mode").unwrap();
+        assert_eq!(
+            night_mode.keys,
+            vec!["home/cmd/hallway/lock/lock".to_string()]
+        );
+
+        let mut widened = house_with_lock(None);
+        let bus = widened.units[1].manifest.bus.as_mut().unwrap();
+        bus.publishes.get_mut("lock").unwrap().key = "home/cmd/hallway/lock/**".to_string();
+        let (expanded, _, _) = expand(&widened);
+        let (widened_grants, _, _) = resolve(&widened, &expanded);
+        let widened_night_mode = widened_grants
+            .iter()
+            .find(|g| g.unit == "night_mode")
+            .unwrap();
+        assert_eq!(
+            widened_night_mode.entities, night_mode.entities,
+            "same entity either way"
+        );
+        assert_ne!(
+            grants, widened_grants,
+            "a wider key expression must change the grant table"
+        );
+    }
+
+    /// Every bound entity sits in its owner's state row, so a change to an
+    /// entity nobody is granted onto — the lamp here — is still a grant
+    /// delta (docs/design.md: entity moves and write-policy changes are
+    /// structural).
+    #[test]
+    fn a_change_to_an_ungranted_entity_changes_the_grant_table() {
+        let with_state = || {
+            let mut house = house_with_lock(None);
+            let bus = house.units[0].manifest.bus.as_mut().unwrap();
+            bus.publishes.insert(
+                "state".to_string(),
+                PublishSpec {
+                    key: "home/state/{room}/{entity}/**".to_string(),
+                    capability: None,
+                    priority: None,
+                },
+            );
+            house
+        };
+        let baseline = with_state();
+        let (expanded, _, _) = expand(&baseline);
+        let (grants, _, _) = resolve(&baseline, &expanded);
+        let zigbee = grants.iter().find(|g| g.unit == "zigbee").unwrap();
+        assert!(!zigbee.is_cmd());
+        assert_eq!(
+            zigbee
+                .entities
+                .iter()
+                .map(|e| e.name.as_str())
+                .collect::<Vec<_>>(),
+            ["lamp", "lock"]
+        );
+
+        let mut moved = with_state();
+        moved.entities[0].file.entity.room = "porch".to_string();
+        let (expanded, _, _) = expand(&moved);
+        let (moved_grants, _, _) = resolve(&moved, &expanded);
+        assert_ne!(
+            grants, moved_grants,
+            "moving the ungranted lamp must change the table"
+        );
+
+        let mut retyped = with_state();
+        retyped.entities[0].file.entity.capability = "switch".to_string();
+        let (expanded, _, _) = expand(&retyped);
+        let (retyped_grants, _, _) = resolve(&retyped, &expanded);
+        assert_ne!(
+            grants, retyped_grants,
+            "a capability change must change the table"
+        );
+    }
+
+    /// Exclusivity counts writers per unit: two bindings of one unit onto
+    /// one exclusive entity are one writer.
+    #[test]
+    fn two_bindings_in_one_unit_are_one_writer() {
+        let mut house = house_with_lock(None);
+        house.entities[0].file.write_policy.mode = WriteMode::Exclusive;
+        let bus = house.units[1].manifest.bus.as_mut().unwrap();
+        for (name, aspect) in [("lamp_on", "on"), ("lamp_brightness", "brightness")] {
+            bus.publishes.insert(
+                name.to_string(),
+                PublishSpec {
+                    key: format!("home/cmd/kitchen/lamp/{aspect}"),
+                    capability: Some("light".to_string()),
+                    priority: Some(Priority::Automation),
+                },
+            );
+        }
+        let (expanded, _, _) = expand(&house);
+        let (_, _, errors) = resolve(&house, &expanded);
+        assert!(
+            !errors.iter().any(|e| e.code == "exclusive-write-conflict"),
+            "{errors:?}"
+        );
+    }
+
+    /// The manual band is the family's; an automation claiming it plans,
+    /// but the plan says so.
+    #[test]
+    fn manual_band_on_an_automation_is_a_plan_warning() {
+        let mut house = house_with_lock(None);
+        let bus = house.units[1].manifest.bus.as_mut().unwrap();
+        bus.publishes.get_mut("lock").unwrap().priority = Some(Priority::Manual);
+        let (expanded, _, _) = expand(&house);
+        let (_, warnings, _) = resolve(&house, &expanded);
+        assert!(
+            warnings.iter().any(|w| w.starts_with(
+                "publish night_mode.lock declares priority \"manual\" on automation \"night_mode\""
+            )),
+            "{warnings:?}"
+        );
+    }
+
     #[test]
     fn arbitrated_entity_with_no_arbiter_publish_is_a_plan_error() {
         let house = house_with_lock(None);
@@ -632,7 +999,9 @@ mod tests {
 
         let (_grants, _warnings, errors) = resolve(&house, &expanded);
         assert!(
-            errors.iter().any(|e| e.code == "arbitrated-uncovered" && e.subject == "lock"),
+            errors
+                .iter()
+                .any(|e| e.code == "arbitrated-uncovered" && e.subject == "lock"),
             "{errors:?}"
         );
     }

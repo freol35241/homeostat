@@ -9,6 +9,7 @@ description = "Writes the bus to the history store"
 command = "uv run ../../adapters/recorder.py"
 restart = "always"
 shutdown_grace_s = 5
+env = ["RECORDER_DB"]
 
 [discovery]
 mode = "static"

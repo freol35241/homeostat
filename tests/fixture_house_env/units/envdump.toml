@@ -1,0 +1,11 @@
+schema = 1
+
+[unit]
+name = "envdump"
+kind = "service"
+description = "Prints its environment and exits, for the env allowlist test"
+
+[runtime]
+command = "env"
+restart = "never"
+env = ["HOMEOSTAT_TEST_DECLARED"]

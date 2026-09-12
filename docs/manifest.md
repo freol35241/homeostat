@@ -82,6 +82,7 @@ outside the constraint is refused with the old value still in force.
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `command` | string | yes | Shell command, run from the house root with `HOMEOSTAT_UNIT` and `HOMEOSTAT_BUS` set. Typically `uv run units/<name>.py`. |
+| `env` | list of string | no | Names of the environment variables this unit reads, passed through from the supervisor's environment by exact name (e.g. `["HOMEOSTAT_NTFY_TOKEN"]`). A unit sees nothing else of the supervisor's environment beyond a fixed base set (`PATH`, `HOME`, locale, `TZ`, `UV_*`, `PYTHON*`, CA bundles) and the `HOMEOSTAT_UNIT`/`HOMEOSTAT_BUS` it is given — a secret meant for one unit is never visible to another. |
 | `restart` | [RestartPolicy](#restartpolicy) | yes |  |
 | `shutdown_grace_s` | integer | no | Seconds between SIGTERM and SIGKILL at shutdown. Default 5. |
 

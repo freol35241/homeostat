@@ -9,6 +9,7 @@ description = "OpenWrt network adapter under test"
 command = "uv run ../../adapters/openwrt.py"
 restart = "always"
 shutdown_grace_s = 5
+env = ["HOMEOSTAT_OPENWRT"]
 
 [discovery]
 mode = "static"

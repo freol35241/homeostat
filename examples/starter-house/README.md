@@ -10,6 +10,21 @@ cp -r examples/starter-house ~/house && cd ~/house
 git init && git add -A && git commit -m "day one"
 ```
 
+Before the first start, create the two files the compose stack reads
+but the repo must never contain:
+
+```
+cp mosquitto.passwd.example mosquitto.passwd   # broker credentials, empty to begin with
+echo "Z2M_FRONTEND_TOKEN=$(openssl rand -hex 16)" > .env   # Zigbee2MQTT frontend login
+```
+
+Both are gitignored. The homeostat container runs as uid 1000; if your
+checkout is owned by another user, add `HOMEOSTAT_UID=$(id -u)` and
+`HOMEOSTAT_GID=$(id -g)` to `.env` so units can write `data/` and
+`plans/`. (Upgrading a house that ran an older, root image: the
+`uv-cache` volume is root-owned — `docker volume rm <project>_uv-cache`
+once, it is only a cache.)
+
 ## Try it without hardware
 
 Runs everything except the Zigbee coordinator; the adapter connects to
@@ -26,8 +41,12 @@ You need a Zigbee coordinator stick (e.g. SLZB-06 or Sonoff ZBDongle-E).
 
 1. Point `devices:` and `ZIGBEE2MQTT_CONFIG_SERIAL_PORT` in
    `docker-compose.yml` at your stick, then `docker compose up -d`.
-2. Pair devices through the Zigbee2MQTT frontend at `:8080` and give
-   them friendly names.
+2. Pair devices through the Zigbee2MQTT frontend and give them friendly
+   names. It listens on the host's loopback only (`127.0.0.1:8080`) and
+   asks for the `Z2M_FRONTEND_TOKEN` from `.env`: open it on the host,
+   or from your laptop through `ssh -L 8080:127.0.0.1:8080 <host>`. It
+   can pair, rename and reconfigure every device, which is why it is
+   not on the LAN.
 3. For each device, write an entity file under `entities/zigbee/` —
    `id` is the friendly name; the file stem is the entity name on the
    bus. Add its room to `zones.toml` if new. The two entity files here
@@ -67,10 +86,13 @@ confines each one to its own topic tree, so a leaked device password
 can touch that device's dialect and nothing else — never
 `zigbee2mqtt/#`.
 
-The template ships `mosquitto.passwd` empty (nobody can connect) and
-gitignored — password hashes are credentials and never belong in the
-house repo. Add a user (a throwaway container, because the running
-broker mounts the file read-only), then restart the broker:
+The template ships `mosquitto.passwd.example` empty; your copy,
+`mosquitto.passwd` (see the top of this file), starts the same way —
+nobody can connect — and is gitignored: password hashes are credentials
+and never belong in the house repo, and the same goes for the `.env`
+that holds the Zigbee2MQTT frontend token. Add a user (a throwaway
+container, because the running broker mounts the file read-only), then
+restart the broker:
 
 ```
 docker run --rm -it -v ./mosquitto.passwd:/passwd eclipse-mosquitto:2 \

@@ -2,9 +2,7 @@ use std::collections::BTreeMap;
 
 use crate::error::ValidationError;
 use crate::keyspace::{is_reserved_word, PSEUDO_ROOMS};
-use crate::manifest::{
-    DiscoveryMode, ParamSpec, ParamType, UnitKind, WriteMode, CAPABILITIES,
-};
+use crate::manifest::{DiscoveryMode, ParamSpec, ParamType, UnitKind, WriteMode, CAPABILITIES};
 use crate::repo::House;
 
 /// Structural validation that does not involve key expansion or grants:
@@ -129,7 +127,10 @@ fn check_duplicates(house: &House, errors: &mut Vec<ValidationError>) {
 
     let mut entity_paths: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
     for entity in &house.entities {
-        entity_paths.entry(&entity.name).or_default().push(&entity.path);
+        entity_paths
+            .entry(&entity.name)
+            .or_default()
+            .push(&entity.path);
     }
     for (name, mut paths) in entity_paths {
         if paths.len() > 1 {
@@ -209,8 +210,7 @@ fn check_manifest_shape(house: &House, errors: &mut Vec<ValidationError>) {
         } else {
             // Automations may bind entities (virtual sensors); services
             // have never needed to and stay refused until one does.
-            if unit.manifest.entities.is_some() && unit.manifest.unit.kind != UnitKind::Automation
-            {
+            if unit.manifest.entities.is_some() && unit.manifest.unit.kind != UnitKind::Automation {
                 errors.push(ValidationError::new(
                     "invalid-manifest",
                     name,
@@ -280,10 +280,7 @@ fn check_entities(house: &House, errors: &mut Vec<ValidationError>) {
                 errors.push(ValidationError::new(
                     "owner-mismatch",
                     &entity.name,
-                    format!(
-                        "owner \"{owner}\" but bound by unit \"{}\"",
-                        entity.owner
-                    ),
+                    format!("owner \"{owner}\" but bound by unit \"{}\"", entity.owner),
                     file.clone(),
                 ));
             }
@@ -349,7 +346,9 @@ fn check_zones(house: &House, errors: &mut Vec<ValidationError>) {
 
 fn check_params(house: &House, errors: &mut Vec<ValidationError>) {
     for unit in &house.units {
-        let Some(params) = &unit.manifest.params else { continue };
+        let Some(params) = &unit.manifest.params else {
+            continue;
+        };
         for (name, spec) in params {
             let subject = format!("{}.{name}", unit.manifest.unit.name);
             check_param(&subject, spec, &unit.path, errors);
@@ -380,11 +379,16 @@ fn check_param(subject: &str, spec: &ParamSpec, path: &str, errors: &mut Vec<Val
     if !default_ok {
         err(
             "invalid-default",
-            format!("default {} does not match type \"{t}\"", display_value(&spec.default)),
+            format!(
+                "default {} does not match type \"{t}\"",
+                display_value(&spec.default)
+            ),
         );
     }
 
-    let Some(constraint) = &spec.constraint else { return };
+    let Some(constraint) = &spec.constraint else {
+        return;
+    };
     for (key, value) in constraint {
         let valid_for_type = match key.as_str() {
             "min" | "max" => matches!(t, ParamType::Int | ParamType::Float),

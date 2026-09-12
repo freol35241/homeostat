@@ -45,7 +45,8 @@ entities, via keys.arbiter_keyexpr instead of keys.cmd_keyexpr — exactly
 the zigbee2mqtt.py plan-time-expansion pattern); keys.parse_cmd_envelope
 validates, and anything malformed, off-vocabulary, or aimed at a device
 that isn't currently connected drops with a home/health/{unit}/event
-("invalid-command" or "device-unavailable") instead of reaching the wire.
+("malformed-payload" for a payload that is not JSON, "invalid-command" or
+"device-unavailable") instead of reaching the wire.
 
 Discovery (home/discovery/{unit}) carries every entity of every connected
 BOUND device (whether that particular entity is itself claimed by an
@@ -73,19 +74,19 @@ device gets home/state/{room}/{entity}/available = true once its entities
 are (re)enumerated, false on disconnect. The device's other aspects stand
 on loss — stale, never false — and a sensor whose device_class/object_id
 would mint the reserved aspect drops with a "reserved-aspect" health
-event.
+event (one that is not a legal key segment, with "malformed-payload").
 """
 
 import asyncio
 import contextlib
-import json
 import os
 import signal
 import threading
-import tomllib
 from functools import partial
 from pathlib import Path
 
+import homeostat
+import tomllib
 from aioesphomeapi import (
     APIClient,
     BinarySensorInfo,
@@ -99,11 +100,9 @@ from aioesphomeapi import (
     SwitchInfo,
     SwitchState,
 )
+from homeostat import house, keys
 from zeroconf import ServiceStateChange
 from zeroconf.asyncio import AsyncServiceBrowser, AsyncServiceInfo, AsyncZeroconf
-
-import homeostat
-from homeostat import house, keys
 
 ENV_DEVICES = "HOMEOSTAT_ESPHOME_DEVICES"
 MDNS_SERVICE = "_esphomelib._tcp.local."
@@ -301,11 +300,11 @@ async def run_device(device, bound, devices_conf, session, entity_runtime, entit
         key_map.clear()
         key_map.update(new_key_map)
         with entity_lock:
-            for _key, (entity, info) in new_key_map.items():
+            for entity, info in new_key_map.values():
                 entity_runtime[entity.name] = {"client": client, "key": info.key}
         bound_discovery[device] = records
         publish_discovery()
-        for _key, (entity, _info) in new_key_map.items():
+        for entity, _info in new_key_map.values():
             session.put_json(keys.state_key(entity.room, entity.name, "available"), True)
 
         def on_state(state) -> None:
@@ -321,7 +320,15 @@ async def run_device(device, bound, devices_conf, session, entity_runtime, entit
                         "drop", reason="reserved-aspect", device=device, object_id=info.object_id
                     )
                     continue
-                session.put_json(keys.state_key(entity.room, entity.name, aspect), value)
+                try:
+                    key = keys.state_key(entity.room, entity.name, aspect)
+                except ValueError:
+                    # A device_class/object_id the key schema refuses.
+                    session.health_event(
+                        "drop", reason="malformed-payload", device=device, object_id=info.object_id
+                    )
+                    continue
+                session.put_json(key, value)
 
         client.subscribe_states(on_state)
 
@@ -397,14 +404,11 @@ async def mdns_browse(unit, session, by_device, unbound_discovery, publish_disco
 
 def cmd_handler(entity, entity_runtime, entity_lock, loop, session):
     def handler(sample) -> None:
-        key = str(sample.key_expr)
-        aspect = key.split("/", 4)[4]
-        try:
-            payload = json.loads(sample.payload.to_bytes())
-            value = keys.parse_cmd_envelope(payload)
-        except ValueError:
-            session.health_event("drop", reason="invalid-command", key=key)
+        parsed = session.parse_command(sample)
+        if parsed is None:
             return
+        aspect, value = parsed
+        key = str(sample.key_expr)
 
         with entity_lock:
             target = entity_runtime.get(entity.name)

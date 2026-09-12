@@ -42,8 +42,13 @@ DROPS with "invalid-command" (or "malformed-payload") and never reaches
 the server.
 
 Rate floor: `min_interval_s` (parameter, owner-editable, default 5 s) per
-entity; a message inside the window since the last SEND ATTEMPT drops
-with reason "rate-limited". This is defense in depth (the ivt490 bounds
+(entity, aspect) — `message` and `alert` on the same entity never share a
+window, since one channel's traffic must never delay the other's; a
+`message` inside the window since the last SEND ATTEMPT drops with reason
+"rate-limited". `alert` is exempt from the floor entirely (docs/design.md,
+Notifications: quiet hours and rate limits withhold `message`, never
+`alert` — the severity split is a delivery-path property, not a courtesy
+this adapter may override). This is defense in depth (the ivt490 bounds
 argument): the cooldown that is house policy lives in the automation as
 a family-editable parameter on the SDK's Cooldown.
 
@@ -57,8 +62,10 @@ home/state/{room}/{entity}/available to false; the next successful send
 flips it back. Stale, never false: `delivered` stands across an outage.
 
 Health events: drop/malformed-payload, drop/invalid-command,
-drop/rate-limited, drop/delivery-failed. Discovery is the static
-one-record-per-entity document with the aspect descriptor.
+drop/rate-limited, drop/delivery-failed, drop/queue-full (the outbox is
+bounded — a dead server sheds load rather than queueing forever),
+drop/stale (an item that waited past the queue's age limit). Discovery is
+the static one-record-per-entity document with the aspect descriptor.
 """
 
 import json
@@ -77,6 +84,12 @@ from homeostat.params import LiveParams
 ENV_TOKEN = "HOMEOSTAT_NTFY_TOKEN"
 PARAM_DEFAULTS = {"min_interval_s": 5.0}
 HTTP_TIMEOUT_S = 10.0
+# A dead server sheds load past this many queued sends...
+MAX_QUEUE_SIZE = 1000
+# ...and a send that waited longer than this is stale by the time the
+# server recovers: 15 minutes, long enough to survive a restart, short
+# enough that a notification is still timely.
+MAX_QUEUE_AGE_S = 15 * 60
 
 # Commandable aspect -> ntfy priority (1 min .. 5 max).
 PRIORITIES = {"message": 3, "alert": 5}
@@ -96,9 +109,21 @@ class Params(LiveParams):
         return max(0.0, self.get("min_interval_s"))
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuses every redirect: urllib's default handler replays the
+    request (Authorization header included) at whatever host the reply
+    names, which would hand the publisher token to it."""
+
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+_opener = urllib.request.build_opener(_NoRedirect)
+
+
 def check_health(endpoint: str) -> None:
     """Raises unless the server answers `/v1/health` healthy."""
-    with urllib.request.urlopen(f"{endpoint}/v1/health", timeout=HTTP_TIMEOUT_S) as reply:
+    with _opener.open(f"{endpoint}/v1/health", timeout=HTTP_TIMEOUT_S) as reply:
         body = json.loads(reply.read())
     if not (isinstance(body, dict) and body.get("healthy") is True):
         raise RuntimeError(f"ntfy at {endpoint} is not healthy: {body!r}")
@@ -106,7 +131,8 @@ def check_health(endpoint: str) -> None:
 
 def publish(endpoint: str, token: str, topic: str, text: str, priority: int, title: str) -> dict:
     """One POST to the topic; returns the server's reply document. Raises
-    urllib.error.URLError (HTTPError included) on failure."""
+    urllib.error.URLError (HTTPError included) on failure — a redirect
+    included, since the token must reach only the configured endpoint."""
     request = urllib.request.Request(
         f"{endpoint}/{topic}",
         data=text.encode(),
@@ -118,7 +144,7 @@ def publish(endpoint: str, token: str, topic: str, text: str, priority: int, tit
             "Content-Type": "text/plain; charset=utf-8",
         },
     )
-    with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT_S) as reply:
+    with _opener.open(request, timeout=HTTP_TIMEOUT_S) as reply:
         return json.loads(reply.read())
 
 
@@ -144,16 +170,22 @@ def main():
             available[entity.name] = value
             session.put_json(keys.state_key(entity.room, entity.name, "available"), value)
 
-    # Sends serialised on one thread: (entity, aspect, key, text, title).
-    outbox: queue.Queue = queue.Queue()
-    last_attempt: dict[str, float] = {}
+    # Sends serialised on one thread: (entity, aspect, key, text, title,
+    # enqueued at). Bounded so a dead server sheds load instead of
+    # queueing forever; an item that waited past MAX_QUEUE_AGE_S is stale
+    # by the time the server recovers and is dropped rather than sent.
+    outbox: queue.Queue = queue.Queue(maxsize=MAX_QUEUE_SIZE)
+    last_attempt: dict[tuple[str, str], float] = {}
 
     def sender():
         while True:
             item = outbox.get()
             if item is None:
                 return
-            entity, aspect, key, text, title = item
+            entity, aspect, key, text, title, enqueued_at = item
+            if time.monotonic() - enqueued_at > MAX_QUEUE_AGE_S:
+                session.health_event("drop", reason="stale", key=key)
+                continue
             try:
                 reply = publish(endpoint, token, entity.id, text, PRIORITIES[aspect], title)
             except (urllib.error.URLError, OSError, ValueError) as err:
@@ -184,17 +216,31 @@ def main():
                     "drop", reason="invalid-command", key=key, aspect=aspect, value=value
                 )
                 return
-            now = time.monotonic()
-            last = last_attempt.get(entity.name)
-            if last is not None and now - last < params.min_interval_s:
-                session.health_event(
-                    "drop", reason="rate-limited", key=key, min_interval_s=params.min_interval_s
-                )
-                return
-            last_attempt[entity.name] = now
+            if aspect != "alert":
+                # The floor never applies to alert: quiet hours and rate
+                # limits withhold message, never alert (docs/design.md).
+                now = time.monotonic()
+                last = last_attempt.get((entity.name, aspect))
+                if last is not None and now - last < params.min_interval_s:
+                    session.health_event(
+                        "drop", reason="rate-limited", key=key, min_interval_s=params.min_interval_s
+                    )
+                    return
+                last_attempt[(entity.name, aspect)] = now
             actor = payload.get("actor")
-            title = actor if isinstance(actor, str) and actor else unit
-            outbox.put((entity, aspect, key, value, title))
+            # A control character (CR/LF especially — header injection) or
+            # a non-Latin-1 actor would make the HTTP client raise inside
+            # publish(), misreporting a bad actor string as a dead server;
+            # fall back to the unit name instead of ever reaching that.
+            title = (
+                actor
+                if isinstance(actor, str) and actor and actor.isprintable() and actor.isascii()
+                else unit
+            )
+            try:
+                outbox.put_nowait((entity, aspect, key, value, title, time.monotonic()))
+            except queue.Full:
+                session.health_event("drop", reason="queue-full", key=key)
 
         return handler
 

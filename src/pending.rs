@@ -60,8 +60,8 @@ pub fn save(
 }
 
 pub fn load(path: &Path) -> Result<PendingPlan, String> {
-    let text = fs::read_to_string(path)
-        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    let text =
+        fs::read_to_string(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
     toml::from_str(&text).map_err(|e| format!("{} is not a pending plan: {e}", path.display()))
 }
 
@@ -112,8 +112,14 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("homeostat-pending-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
-        let path = save(&dir, "Homeostat plan\n  repo: x\n", "behavioral", "owner", "abc123")
-            .unwrap();
+        let path = save(
+            &dir,
+            "Homeostat plan\n  repo: x\n",
+            "behavioral",
+            "owner",
+            "abc123",
+        )
+        .unwrap();
         let plan = load(&path).unwrap();
         assert_eq!(plan.schema, 1);
         assert_eq!(plan.actor, "owner");

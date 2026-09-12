@@ -47,7 +47,10 @@ async fn put_cmd(session: &zenoh::Session, payload: &Value) {
 
 /// Next sample within the timeout, decoded as JSON.
 async fn next_json(sub: &Sub, timeout: Duration) -> Option<Value> {
-    let sample = tokio::time::timeout(timeout, sub.recv_async()).await.ok()?.expect("stream open");
+    let sample = tokio::time::timeout(timeout, sub.recv_async())
+        .await
+        .ok()?
+        .expect("stream open");
     Some(serde_json::from_slice(&sample.payload().to_bytes()).expect("payload is JSON"))
 }
 
@@ -86,7 +89,12 @@ async fn forward_preempt_refuse_and_expiry() {
         .await
         .expect("automation wish forwarded");
     assert_eq!(forwarded, auto_wish, "envelope forwarded unchanged");
-    expect_silence(&event_sub, Duration::from_millis(500), "event on a clean take").await;
+    expect_silence(
+        &event_sub,
+        Duration::from_millis(500),
+        "event on a clean take",
+    )
+    .await;
 
     // Shrink hold_minutes now, before the manual takeover below: the next
     // lease taken (by the manual wish) is computed from the new value, so
@@ -141,7 +149,12 @@ async fn forward_preempt_refuse_and_expiry() {
             "holder_actor": "owner",
         })
     );
-    expect_silence(&arbiter_sub, Duration::from_millis(500), "forward of a refused wish").await;
+    expect_silence(
+        &arbiter_sub,
+        Duration::from_millis(500),
+        "forward of a refused wish",
+    )
+    .await;
 
     // (d) Once the shrunk lease's deadline passes, the entity reopens: the
     // same automation wish now forwards again, taking a fresh lease.
@@ -151,7 +164,12 @@ async fn forward_preempt_refuse_and_expiry() {
         .await
         .expect("automation wish forwards again after expiry");
     assert_eq!(forwarded, auto_wish);
-    expect_silence(&event_sub, Duration::from_millis(500), "event on an expiry re-take").await;
+    expect_silence(
+        &event_sub,
+        Duration::from_millis(500),
+        "event on an expiry re-take",
+    )
+    .await;
 
     sup.shutdown();
 }
@@ -199,17 +217,31 @@ async fn aspects_lease_independently() {
         .await
         .expect("sibling-aspect automation wish forwarded despite manual hold on locked");
     assert_eq!(forwarded, sibling_wish);
-    expect_silence(&event_sub, Duration::from_millis(500), "event on an independent aspect").await;
+    expect_silence(
+        &event_sub,
+        Duration::from_millis(500),
+        "event on an independent aspect",
+    )
+    .await;
 
     // Same-aspect contention still arbitrates: automation on "locked" is
     // refused under the manual hold.
-    put_cmd(&observer, &envelope(json!(false), "automation", "scheduler")).await;
+    put_cmd(
+        &observer,
+        &envelope(json!(false), "automation", "scheduler"),
+    )
+    .await;
     let event = next_json(&event_sub, Duration::from_secs(10))
         .await
         .expect("refuse event");
     assert_eq!(event["kind"], json!("refuse"));
     assert_eq!(event["aspect"], json!("locked"));
-    expect_silence(&locked_sub, Duration::from_millis(500), "forward of a refused wish").await;
+    expect_silence(
+        &locked_sub,
+        Duration::from_millis(500),
+        "forward of a refused wish",
+    )
+    .await;
 
     sup.shutdown();
 }
@@ -235,12 +267,19 @@ async fn malformed_envelope_drops_with_health_event() {
         .expect("invalid-command event");
     assert_eq!(event["kind"], json!("drop"));
     assert_eq!(event["reason"], json!("invalid-command"));
-    expect_silence(&arbiter_sub, Duration::from_millis(1500), "forward of a malformed command")
-        .await;
+    expect_silence(
+        &arbiter_sub,
+        Duration::from_millis(1500),
+        "forward of a malformed command",
+    )
+    .await;
 
     // An envelope with an unknown priority is just as malformed.
     observer
-        .put(CMD_KEY, json!({"value": true, "priority": "urgent", "actor": "x"}).to_string())
+        .put(
+            CMD_KEY,
+            json!({"value": true, "priority": "urgent", "actor": "x"}).to_string(),
+        )
         .await
         .expect("cmd put");
     let event = next_json(&event_sub, Duration::from_secs(10))

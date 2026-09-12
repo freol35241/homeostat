@@ -82,6 +82,14 @@ PARAM_DEFAULTS = {
 # seconds.
 TICK_S = 0.25
 
+# Unbound codes are wire-controlled: anything transmitting nearby lands in
+# discovery. Keep the most recent MAX_UNBOUND (evicting the oldest by
+# first sighting) and republish at most once per DISCOVERY_COALESCE_S, so
+# a chatty neighbourhood can neither grow the document without bound nor
+# republish it per burst.
+MAX_UNBOUND = 200
+DISCOVERY_COALESCE_S = 5.0
+
 # Aspect -> the parameter that holds it. Anything else falls back to
 # `hold_s`, so a sensor class nobody anticipated still decays.
 HOLD_PARAM = {
@@ -154,7 +162,8 @@ def main():
 
     by_code = {e.id: e for e in config.entities}
     aspects = {e.name: aspect_for(e) for e in config.entities}
-    sighted: set[str] = set()
+    sighted: set[str] = set()  # bound codes heard
+    unbound: dict[str, None] = {}  # codes bound to nothing, oldest first
 
     # Guards `deadline` AND the publishes that follow from it. A burst and an
     # expiry for the same entity may land on different threads within the
@@ -163,6 +172,7 @@ def main():
     # reading `false` for a whole hold while its deadline stands.
     lock = threading.Lock()
     deadline: dict[str, float] = {}  # entity name -> monotonic expiry
+    discovery_timer: list[threading.Timer | None] = [None]
 
     def publish(entity, value: bool) -> None:
         session.put_json(keys.state_key(entity.room, entity.name, aspects[entity.name]), value)
@@ -187,7 +197,8 @@ def main():
         Discovery is how a device gets identified at all: press it, watch
         the code appear, write the entity file. Their suggestion is
         deliberately weak, because the radio says nothing about what
-        transmitted.
+        transmitted. Only the MAX_UNBOUND most recently first-heard are
+        kept (see note()).
         """
         records = []
         for entity in config.entities:
@@ -204,7 +215,7 @@ def main():
             if aspects[entity.name] is not None:
                 record["aspects"] = descriptor(entity)
             records.append(record)
-        for code in sorted(sighted - set(by_code)):
+        for code in sorted(unbound):
             records.append({
                 "id": code,
                 "configured": False,
@@ -214,12 +225,30 @@ def main():
             })
         return records
 
+    def publish_discovery() -> None:
+        with lock:
+            discovery_timer[0] = None
+            records = inventory()
+        session.put_json(keys.discovery_key(unit), records)
+
     def note(code: str) -> None:
-        """Republish discovery when a code is heard for the first time."""
-        if code in sighted:
-            return
-        sighted.add(code)
-        session.put_json(keys.discovery_key(unit), inventory())
+        """Schedule a discovery republish when a code is heard for the
+        first time — coalesced, so a burst of new codes is one publish."""
+        with lock:
+            if code in by_code:
+                if code in sighted:
+                    return
+                sighted.add(code)
+            else:
+                if code in unbound:
+                    return
+                unbound[code] = None
+                if len(unbound) > MAX_UNBOUND:
+                    del unbound[next(iter(unbound))]
+            if discovery_timer[0] is None:
+                discovery_timer[0] = threading.Timer(DISCOVERY_COALESCE_S, publish_discovery)
+                discovery_timer[0].daemon = True
+                discovery_timer[0].start()
 
     def on_message(client, userdata, msg):
         if msg.topic == f"{base}/{LWT_SUFFIX}":
@@ -284,6 +313,9 @@ def main():
     # would otherwise put on a closed zenoh session.
     client.loop_stop()
     client.disconnect()
+    with lock:
+        if discovery_timer[0] is not None:
+            discovery_timer[0].cancel()
     session.close()
 
 

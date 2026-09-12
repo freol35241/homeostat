@@ -12,8 +12,13 @@
 Subscribes the key spaces its manifest declares and writes a SQLite store
 named by [discovery].endpoint ("sqlite:<path>", relative to the house
 root). NOT a naive bus mirror: state/cmd payloads are decoded and typed on
-the way in — series identity is (class, entity, aspect), room is a tag, so
-an entity move is a tag transition on a continuous series. Health and
+the way in (a non-finite number — NaN, Infinity, which Python's json
+accepts — is dropped with a "non-finite" event like a non-scalar: SQLite
+would bind it as NULL) — series identity is (class, entity, aspect), room
+is a tag, so an entity move is a tag transition on a continuous series. A
+row the schema still refuses at flush time (sqlite3.IntegrityError) is bad
+data, not an outage: the batch lands without it and one "drop" event
+names it, so a poison row can never stall the writer. Health and
 config keys land raw in an events audit table; so does every cmd envelope
 (alongside its unwrapped value in samples) — the "who" audit, askable via
 home/history/events.
@@ -35,7 +40,9 @@ zenoh-style key expression (wildcards included) filtering which recorded
 event keys come back, missing key means all of them; from/to here are
 integer microseconds UTC, the recorder's own timestamp convention, unlike
 the RFC3339 samples path. Both paths cap rows at limit, newest kept,
-replied oldest-to-newest. GET home/history/stats replies one message
+replied oldest-to-newest; a limit above MAX_QUERY_LIMIT is clamped to it,
+and a from/to outside SQLite's signed 64-bit range is an error reply.
+GET home/history/stats replies one message
 describing the store itself: file and freelist size, per-series row
 counts and time bounds (keyed by history key, RFC3339 like the samples
 path), the events table's count and bounds (integer µs, like the events
@@ -59,16 +66,16 @@ read-only connection and leaves `integrity-ok` with the duration or
 
 import datetime
 import json
+import math
 import signal
 import sqlite3
 import threading
 import time
-import tomllib
 from collections import deque
 from pathlib import Path
 
+import tomllib
 import zenoh
-
 from homeostat import house, keys, session
 from homeostat.params import LiveParams
 
@@ -82,6 +89,11 @@ PARAM_DEFAULTS = {
 }
 DEFAULT_QUERY_LIMIT = 1000
 DEFAULT_EVENTS_LIMIT = 500
+# The most rows one reply carries; a larger limit is clamped, never refused.
+MAX_QUERY_LIMIT = 10_000
+# SQLite binds Python ints as signed 64-bit; anything else raises at bind
+# time, outside sqlite3.Error, so the parse helpers refuse it first.
+INT64_MIN, INT64_MAX = -(2**63), 2**63 - 1
 EVENTS_KEY = zenoh.KeyExpr("home/history/events")
 STATS_KEY = zenoh.KeyExpr("home/history/stats")
 
@@ -294,7 +306,16 @@ class Writer:
                 del pending[:overflow]
                 dropped += overflow
             try:
-                self._flush(pending)
+                try:
+                    self._flush(pending)
+                except sqlite3.IntegrityError:
+                    # A row the schema refuses is bad data, not a dead
+                    # backend: land the batch without it, one row at a
+                    # time, and leave a trace per refused row.
+                    for table, row, err in self._flush_each(pending):
+                        self.sess.health_event(
+                            "drop", reason="integrity-error", table=table, row=list(row), error=str(err)
+                        )
             except sqlite3.Error as err:
                 if not outage:
                     outage = True
@@ -312,28 +333,54 @@ class Writer:
                 dropped = 0
             pending.clear()
 
+    SAMPLES_INSERT = (
+        "INSERT OR IGNORE INTO samples VALUES ("
+        "  (SELECT id FROM series WHERE class = ? AND entity = ? AND aspect = ?),"
+        "  ?, (SELECT id FROM rooms WHERE name = ?), ?, ?)"
+    )
+    EVENTS_INSERT = "INSERT INTO events VALUES (?, ?, ?)"
+
+    @staticmethod
+    def _bind(table: str, row: tuple) -> tuple:
+        if table == "samples":
+            ts, space, room, entity, aspect, kind, value = row
+            return (space, entity, aspect, ts, room, kind, value)
+        return row
+
     def _flush(self, rows: list) -> None:
         conn = sqlite3.connect(self.db_path, timeout=2.0)
         try:
             with conn:
                 self._intern(conn, rows)
                 conn.executemany(
-                    "INSERT OR IGNORE INTO samples VALUES ("
-                    "  (SELECT id FROM series WHERE class = ? AND entity = ? AND aspect = ?),"
-                    "  ?, (SELECT id FROM rooms WHERE name = ?), ?, ?)",
-                    [
-                        (space, entity, aspect, ts, room, kind, value)
-                        for ts, space, room, entity, aspect, kind, value in (
-                            row for table, row in rows if table == "samples"
-                        )
-                    ],
+                    self.SAMPLES_INSERT,
+                    [self._bind(table, row) for table, row in rows if table == "samples"],
                 )
                 conn.executemany(
-                    "INSERT INTO events VALUES (?, ?, ?)",
+                    self.EVENTS_INSERT,
                     [row for table, row in rows if table == "events"],
                 )
         finally:
             conn.close()
+
+    def _flush_each(self, rows: list) -> list:
+        """One transaction, one statement per row: the rows SQLite's
+        constraints refuse are returned as (table, row, error) and the
+        rest commit. Any other sqlite3.Error propagates as an outage."""
+        refused = []
+        conn = sqlite3.connect(self.db_path, timeout=2.0)
+        try:
+            with conn:
+                self._intern(conn, rows)
+                for table, row in rows:
+                    sql = self.SAMPLES_INSERT if table == "samples" else self.EVENTS_INSERT
+                    try:
+                        conn.execute(sql, self._bind(table, row))
+                    except sqlite3.IntegrityError as err:
+                        refused.append((table, row, err))
+        finally:
+            conn.close()
+        return refused
 
     def _purge(self) -> None:
         """Deletes rows older than each table's window and returns the
@@ -403,11 +450,12 @@ class Writer:
 
 
 def typed(value):
-    """(kind, stored value) for a scalar JSON value, None for non-scalars."""
+    """(kind, stored value) for a scalar JSON value, None for non-scalars
+    and non-finite numbers (SQLite would bind NaN as NULL)."""
     if isinstance(value, bool):
         return "bool", int(value)
     if isinstance(value, (int, float)):
-        return "number", value
+        return ("number", value) if math.isfinite(value) else None
     if isinstance(value, str):
         return "string", value
     return None
@@ -510,7 +558,8 @@ class Recorder:
             value = payload
         kind_value = typed(value)
         if kind_value is None:
-            self.sess.health_event("drop", reason="non-scalar", key=key)
+            reason = "non-finite" if isinstance(value, float) else "non-scalar"
+            self.sess.health_event("drop", reason=reason, key=key)
             return
         kind, stored = kind_value
         row = (ts, parts[1], parts[2], parts[3], "/".join(parts[4:]), KINDS.index(kind), stored)
@@ -601,16 +650,23 @@ class Recorder:
                 like = (
                     prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
                 )
-                rows = conn.execute(
+                # Newest first off the cursor, stopping at limit matches:
+                # the prefix bounds the scan, never what is held in memory.
+                cursor = conn.execute(
                     "SELECT ts, key, payload FROM events WHERE ts >= ? AND ts <= ?"
                     " AND key LIKE ? ESCAPE '\\' ORDER BY ts DESC",
                     (from_us, to_us, like),
-                ).fetchall()
+                )
                 pattern = zenoh.KeyExpr(key_pattern)
-                rows = [row for row in rows if pattern.intersects(zenoh.KeyExpr(row[1]))]
+                rows = []
+                for row in cursor:
+                    if pattern.intersects(zenoh.KeyExpr(row[1])):
+                        rows.append(row)
+                        if len(rows) >= limit:
+                            break
             payload = [
                 {"ts": ts, "key": key, "payload": event_payload(text)}
-                for ts, key, text in reversed(rows[:limit])
+                for ts, key, text in reversed(rows)
             ]
             query.reply("home/history/events", json.dumps(payload))
         except sqlite3.Error as err:
@@ -702,13 +758,19 @@ def parse_params(raw: str) -> tuple[int, int, int]:
         else:
             to_us = us
     if "limit" in params:
-        try:
-            limit = int(params["limit"])
-        except ValueError:
-            raise ValueError(f"limit: {params['limit']!r} is not an integer")
-        if limit < 1:
-            raise ValueError(f"limit: {limit} is not positive")
+        limit = parse_limit(params["limit"])
     return from_us, to_us, limit
+
+
+def parse_limit(raw: str) -> int:
+    """A positive row count, clamped to MAX_QUERY_LIMIT."""
+    try:
+        limit = int(raw)
+    except ValueError:
+        raise ValueError(f"limit: {raw!r} is not an integer")
+    if limit < 1:
+        raise ValueError(f"limit: {limit} is not positive")
+    return min(limit, MAX_QUERY_LIMIT)
 
 
 def parse_event_params(raw: str) -> tuple[str | None, int, int, int]:
@@ -731,17 +793,14 @@ def parse_event_params(raw: str) -> tuple[str | None, int, int, int]:
             us = int(params[bound])
         except ValueError:
             raise ValueError(f"{bound}: {params[bound]!r} is not an integer")
+        if not INT64_MIN <= us <= INT64_MAX:
+            raise ValueError(f"{bound}: {us} is outside the 64-bit timestamp range")
         if bound == "from":
             from_us = us
         else:
             to_us = us
     if "limit" in params:
-        try:
-            limit = int(params["limit"])
-        except ValueError:
-            raise ValueError(f"limit: {params['limit']!r} is not an integer")
-        if limit < 1:
-            raise ValueError(f"limit: {limit} is not positive")
+        limit = parse_limit(params["limit"])
     return key, from_us, to_us, limit
 
 

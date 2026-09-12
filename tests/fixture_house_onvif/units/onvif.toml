@@ -9,6 +9,7 @@ description = "ONVIF camera adapter under test"
 command = "uv run ../../adapters/onvif.py"
 restart = "always"
 shutdown_grace_s = 5
+env = ["HOMEOSTAT_CAMERAS"]
 
 [discovery]
 mode = "mdns"

@@ -55,7 +55,8 @@ fn api_get(port: u16, path: &str) -> Option<(u16, Value)> {
     let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).ok()?;
     stream
         .write_all(
-            format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n").as_bytes(),
+            format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+                .as_bytes(),
         )
         .ok()?;
     let mut response = String::new();
@@ -146,7 +147,10 @@ async fn shim_owns_the_token_for_the_foreign_binary() {
     sup.shutdown();
     let deadline = Instant::now() + Duration::from_secs(10);
     while std::net::TcpStream::connect(("127.0.0.1", api_port)).is_ok() {
-        assert!(Instant::now() < deadline, "fake go2rtc survived supervisor shutdown");
+        assert!(
+            Instant::now() < deadline,
+            "fake go2rtc survived supervisor shutdown"
+        );
         std::thread::sleep(Duration::from_millis(100));
     }
 }

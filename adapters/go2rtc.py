@@ -42,12 +42,13 @@ import sys
 import tempfile
 import threading
 import time
-import tomllib
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
 import homeostat
+import tomllib
 
 ENV_CAMERAS = "HOMEOSTAT_CAMERAS"
 ENV_LISTEN = "HOMEOSTAT_GO2RTC_LISTEN"
@@ -69,7 +70,12 @@ def stream_url(conf: dict) -> str:
     host = conf["host"]
     if ":" in host:
         host = host.rpartition(":")[0]
-    return f"rtsp://{conf['username']}:{conf['password']}@{host}:{RTSP_PORT}/stream1"
+    # A camera-account password with "/", "?", "#", "@" or a space is
+    # ordinary (it is the camera vendor's account, not this house's own
+    # naming), but unescaped it truncates or breaks the URL go2rtc parses.
+    user = urllib.parse.quote(conf["username"], safe="")
+    password = urllib.parse.quote(conf["password"], safe="")
+    return f"rtsp://{user}:{password}@{host}:{RTSP_PORT}/stream1"
 
 
 def render_config(cameras: dict, listen: str) -> dict:
@@ -106,7 +112,10 @@ def main() -> None:
     cameras = load_cameras(os.environ.get(ENV_CAMERAS))
     listen = os.environ.get(ENV_LISTEN, DEFAULT_LISTEN)
 
-    config_file = tempfile.NamedTemporaryFile(
+    # Outlives this function's own scope (go2rtc reads the path for as
+    # long as it runs) and is unlinked explicitly in the finally block
+    # below — a `with` here would delete it the moment this block ends.
+    config_file = tempfile.NamedTemporaryFile(  # noqa: SIM115
         mode="w", suffix=".json", prefix="go2rtc-", delete=False
     )
     stopping = threading.Event()

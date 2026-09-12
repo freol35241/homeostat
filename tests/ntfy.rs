@@ -14,8 +14,8 @@ use serde_json::{json, Value};
 
 use common::{
     assert_cli_ok, assert_unit_contract, await_health, await_mirror, await_states, cli,
-    expect_drop_event, free_port, health_watch, matched_publisher, stdout, temp_house,
-    StateSub, Supervisor,
+    expect_drop_event, free_port, health_watch, matched_publisher, stdout, temp_house, StateSub,
+    Supervisor,
 };
 
 const FIXTURE: &str = "tests/fixture_house_ntfy";
@@ -39,7 +39,14 @@ impl FakeNtfy {
     fn spawn() -> Self {
         let port = free_port();
         let child = Command::new("uv")
-            .args(["run", "tests/fake_ntfy.py", "--port", &port.to_string(), "--token", TOKEN])
+            .args([
+                "run",
+                "tests/fake_ntfy.py",
+                "--port",
+                &port.to_string(),
+                "--token",
+                TOKEN,
+            ])
             .current_dir(env!("CARGO_MANIFEST_DIR"))
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -47,15 +54,18 @@ impl FakeNtfy {
             .expect("spawn fake ntfy (is uv installed?)");
         let deadline = Instant::now() + Duration::from_secs(60);
         while std::net::TcpStream::connect(("127.0.0.1", port)).is_err() {
-            assert!(Instant::now() < deadline, "fake ntfy never listened on {port}");
+            assert!(
+                Instant::now() < deadline,
+                "fake ntfy never listened on {port}"
+            );
             std::thread::sleep(Duration::from_millis(50));
         }
         Self { child, port }
     }
 
     fn http(&self, method: &str, path: &str) -> String {
-        let mut stream = std::net::TcpStream::connect(("127.0.0.1", self.port))
-            .expect("connect to fake ntfy");
+        let mut stream =
+            std::net::TcpStream::connect(("127.0.0.1", self.port)).expect("connect to fake ntfy");
         stream
             .write_all(
                 format!(
@@ -66,8 +76,15 @@ impl FakeNtfy {
             .expect("write request");
         let mut response = String::new();
         stream.read_to_string(&mut response).expect("read response");
-        assert!(response.starts_with("HTTP/1.0 200") || response.starts_with("HTTP/1.1 200"), "{method} {path}: {response}");
-        response.rsplit("\r\n\r\n").next().expect("body").to_string()
+        assert!(
+            response.starts_with("HTTP/1.0 200") || response.starts_with("HTTP/1.1 200"),
+            "{method} {path}: {response}"
+        );
+        response
+            .rsplit("\r\n\r\n")
+            .next()
+            .expect("body")
+            .to_string()
     }
 
     fn control(&self, path: &str) {
@@ -87,7 +104,11 @@ impl FakeNtfy {
             if received.len() >= n {
                 return received;
             }
-            assert!(Instant::now() < deadline, "only {} publishes reached the server", received.len());
+            assert!(
+                Instant::now() < deadline,
+                "only {} publishes reached the server",
+                received.len()
+            );
             std::thread::sleep(Duration::from_millis(100));
         }
     }
@@ -110,13 +131,18 @@ async fn setup() -> (FakeNtfy, Supervisor, zenoh::Session) {
     let sup = Supervisor::spawn_with_env(FIXTURE, &[(PORT_ENV, &port), (TOKEN_ENV, TOKEN)]);
     let observer = sup.observer().await;
     let mut watch = health_watch(&observer, "ntfy").await;
-    await_health(&mut watch, Duration::from_secs(120), |h| h.status == HealthStatus::Running)
-        .await;
+    await_health(&mut watch, Duration::from_secs(120), |h| {
+        h.status == HealthStatus::Running
+    })
+    .await;
     (server, sup, observer)
 }
 
 async fn event_sub(observer: &zenoh::Session) -> StateSub {
-    observer.declare_subscriber(EVENT_KEY).await.expect("event subscriber")
+    observer
+        .declare_subscriber(EVENT_KEY)
+        .await
+        .expect("event subscriber")
 }
 
 /// (a) An alert on a person's channel reaches the server on the topic the
@@ -133,7 +159,10 @@ async fn delivers_by_topic_with_severity_as_priority() {
         .expect("state subscriber");
 
     let alert = matched_publisher(&observer, ALICE_ALERT).await;
-    alert.put(wish(json!("Motion in the hall and nobody home"), "intrusion").to_string()).await.expect("put");
+    alert
+        .put(wish(json!("Motion in the hall and nobody home"), "intrusion").to_string())
+        .await
+        .expect("put");
     let received = server.await_received(1);
     assert_eq!(received[0]["topic"], "alice");
     assert_eq!(received[0]["message"], "Motion in the hall and nobody home");
@@ -142,7 +171,16 @@ async fn delivers_by_topic_with_severity_as_priority() {
     let delivered_at = received[0]["time"].clone();
 
     let message = matched_publisher(&observer, ADULTS_MESSAGE).await;
-    message.put(wish(json!("Irrigation skipped: it rained yesterday"), "irrigation").to_string()).await.expect("put");
+    message
+        .put(
+            wish(
+                json!("Irrigation skipped: it rained yesterday"),
+                "irrigation",
+            )
+            .to_string(),
+        )
+        .await
+        .expect("put");
     let received = server.await_received(2);
     assert_eq!(received[1]["topic"], "adults");
     assert_eq!(received[1]["priority"], 3);
@@ -171,25 +209,46 @@ async fn invalid_and_flooding_commands_drop() {
     let events = event_sub(&observer).await;
 
     let alert = matched_publisher(&observer, ALICE_ALERT).await;
-    alert.put(wish(json!(42), "x").to_string()).await.expect("put");
+    alert
+        .put(wish(json!(42), "x").to_string())
+        .await
+        .expect("put");
     expect_drop_event(&events, "invalid-command").await;
-    alert.put(wish(json!("   "), "x").to_string()).await.expect("put");
+    alert
+        .put(wish(json!("   "), "x").to_string())
+        .await
+        .expect("put");
     expect_drop_event(&events, "invalid-command").await;
-    alert.put(json!("bare string, no envelope").to_string()).await.expect("put");
+    alert
+        .put(json!("bare string, no envelope").to_string())
+        .await
+        .expect("put");
     expect_drop_event(&events, "invalid-command").await;
 
     let odd = matched_publisher(&observer, "home/cmd/person/alice_phone/ring").await;
-    odd.put(wish(json!("hello"), "x").to_string()).await.expect("put");
+    odd.put(wish(json!("hello"), "x").to_string())
+        .await
+        .expect("put");
     let event = expect_drop_event(&events, "invalid-command").await;
     assert_eq!(event["aspect"], "ring");
 
     let message = matched_publisher(&observer, ALICE_MESSAGE).await;
-    message.put(wish(json!("first"), "x").to_string()).await.expect("put");
-    message.put(wish(json!("second, inside the floor"), "x").to_string()).await.expect("put");
+    message
+        .put(wish(json!("first"), "x").to_string())
+        .await
+        .expect("put");
+    message
+        .put(wish(json!("second, inside the floor"), "x").to_string())
+        .await
+        .expect("put");
     let event = expect_drop_event(&events, "rate-limited").await;
     assert_eq!(event["key"], ALICE_MESSAGE);
     let received = server.await_received(1);
-    assert_eq!(received.len(), 1, "only the first message was sent: {received:?}");
+    assert_eq!(
+        received.len(),
+        1,
+        "only the first message was sent: {received:?}"
+    );
     assert_eq!(received[0]["message"], "first");
 }
 
@@ -206,27 +265,42 @@ async fn failed_delivery_is_loud_and_recovers() {
         .expect("state subscriber");
     let alert = matched_publisher(&observer, ALICE_ALERT).await;
 
-    alert.put(wish(json!("before the outage"), "x").to_string()).await.expect("put");
+    alert
+        .put(wish(json!("before the outage"), "x").to_string())
+        .await
+        .expect("put");
     server.await_received(1);
     await_mirror(&observer, ALICE_AVAILABLE, &json!(true)).await;
 
     server.control("/control/break");
     tokio::time::sleep(Duration::from_millis(600)).await; // past the floor
-    alert.put(wish(json!("lost"), "x").to_string()).await.expect("put");
+    alert
+        .put(wish(json!("lost"), "x").to_string())
+        .await
+        .expect("put");
     let event = expect_drop_event(&events, "delivery-failed").await;
     assert_eq!(event["key"], ALICE_ALERT);
-    assert!(event["error"].as_str().unwrap_or("").contains("500"), "{event}");
+    assert!(
+        event["error"].as_str().unwrap_or("").contains("500"),
+        "{event}"
+    );
     await_mirror(&observer, ALICE_AVAILABLE, &json!(false)).await;
 
     server.control("/control/restore");
     tokio::time::sleep(Duration::from_millis(600)).await;
-    alert.put(wish(json!("after"), "x").to_string()).await.expect("put");
+    alert
+        .put(wish(json!("after"), "x").to_string())
+        .await
+        .expect("put");
     let received = server.await_received(2);
     assert_eq!(received[1]["message"], "after");
     await_states(
         &observer,
         &state_sub,
-        &[(ALICE_AVAILABLE, json!(true)), (ALICE_DELIVERED, received[1]["time"].clone())],
+        &[
+            (ALICE_AVAILABLE, json!(true)),
+            (ALICE_DELIVERED, received[1]["time"].clone()),
+        ],
     )
     .await;
 }
@@ -242,13 +316,21 @@ async fn bad_credentials_and_dead_server_are_visible() {
     let sup = Supervisor::spawn_with_env(FIXTURE, &[(PORT_ENV, &port), (TOKEN_ENV, "tk_wrong")]);
     let observer = sup.observer().await;
     let mut watch = health_watch(&observer, "ntfy").await;
-    await_health(&mut watch, Duration::from_secs(120), |h| h.status == HealthStatus::Running)
-        .await;
+    await_health(&mut watch, Duration::from_secs(120), |h| {
+        h.status == HealthStatus::Running
+    })
+    .await;
     let events = event_sub(&observer).await;
     let alert = matched_publisher(&observer, ALICE_ALERT).await;
-    alert.put(wish(json!("hello"), "x").to_string()).await.expect("put");
+    alert
+        .put(wish(json!("hello"), "x").to_string())
+        .await
+        .expect("put");
     let event = expect_drop_event(&events, "delivery-failed").await;
-    assert!(event["error"].as_str().unwrap_or("").contains("401"), "{event}");
+    assert!(
+        event["error"].as_str().unwrap_or("").contains("401"),
+        "{event}"
+    );
     await_mirror(&observer, ALICE_AVAILABLE, &json!(false)).await;
     drop(sup);
 
@@ -256,8 +338,10 @@ async fn bad_credentials_and_dead_server_are_visible() {
     let sup = Supervisor::spawn_with_env(FIXTURE, &[(PORT_ENV, &port)]);
     let observer = sup.observer().await;
     let mut watch = health_watch(&observer, "ntfy").await;
-    await_health(&mut watch, Duration::from_secs(120), |h| h.status == HealthStatus::Backoff)
-        .await;
+    await_health(&mut watch, Duration::from_secs(120), |h| {
+        h.status == HealthStatus::Backoff
+    })
+    .await;
     drop(sup);
 
     // No server at all: the health check fails before ready().
@@ -265,8 +349,10 @@ async fn bad_credentials_and_dead_server_are_visible() {
     let sup = Supervisor::spawn_with_env(FIXTURE, &[(PORT_ENV, &dead), (TOKEN_ENV, TOKEN)]);
     let observer = sup.observer().await;
     let mut watch = health_watch(&observer, "ntfy").await;
-    await_health(&mut watch, Duration::from_secs(120), |h| h.status == HealthStatus::Backoff)
-        .await;
+    await_health(&mut watch, Duration::from_secs(120), |h| {
+        h.status == HealthStatus::Backoff
+    })
+    .await;
 }
 
 /// (e) The gate: granting an automation a notifier publish is a grant
@@ -305,5 +391,20 @@ alert = { key = "home/cmd/person/*/alert", capability = "notifier", priority = "
         "the grant is rendered: {text}"
     );
     assert!(text.contains("-> alice_phone"), "{text}");
-    assert!(!text.contains("-> adults"), "the alert grant covers the person channel only: {text}");
+    // The alert grant's own entry (not the plan as a whole — ntfy's own
+    // adapter-binding entry legitimately lists every entity it owns,
+    // "adults" included): every grant entry starts at 2-space indent, its
+    // detail lines are indented further, so the next 2-space-indent line
+    // ends it.
+    let alert_grant: String = text
+        .lines()
+        .skip_while(|l| !l.starts_with("  intrusion.alert"))
+        .skip(1)
+        .take_while(|l| l.starts_with("    "))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        !alert_grant.contains("-> adults"),
+        "the alert grant covers the person channel only: {alert_grant}"
+    );
 }

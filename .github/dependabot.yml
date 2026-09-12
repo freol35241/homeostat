@@ -10,3 +10,21 @@ updates:
    directory: "/"
    schedule:
      interval: weekly
+ - package-ecosystem: "cargo"
+   directory: "/"
+   schedule:
+     interval: weekly
+ - package-ecosystem: "pip"
+   directory: "/sdk/python"
+   schedule:
+     interval: weekly
+ - package-ecosystem: "docker"
+   directories:
+     - "/"
+     - "/examples/starter-house"
+   schedule:
+     interval: weekly
+ - package-ecosystem: "github-actions"
+   directory: "/"
+   schedule:
+     interval: weekly

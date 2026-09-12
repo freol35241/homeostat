@@ -20,7 +20,7 @@ use serde_json::{json, Value};
 
 use common::{
     await_base_units, await_health, cache_read, free_port, health_watch, matched_publisher,
-    temp_house, Supervisor,
+    running_pid, temp_house, Supervisor,
 };
 
 const FIXTURE: &str = "tests/fixture_house_apply";
@@ -48,7 +48,12 @@ impl Mcp {
             .expect("spawn mcp server");
         let stdin = child.stdin.take().expect("mcp stdin");
         let reader = BufReader::new(child.stdout.take().expect("mcp stdout"));
-        let mut mcp = Mcp { child, stdin, reader, next_id: 0 };
+        let mut mcp = Mcp {
+            child,
+            stdin,
+            reader,
+            next_id: 0,
+        };
         let init = mcp.request(
             "initialize",
             json!({
@@ -122,8 +127,10 @@ async fn reads_serve_live_state_and_history() {
     // Live state via the core's last-value mirror.
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        let (text, is_error) =
-            mcp.call("read_state", json!({"key": "home/state/attic/mcp_probe/level"}));
+        let (text, is_error) = mcp.call(
+            "read_state",
+            json!({"key": "home/state/attic/mcp_probe/level"}),
+        );
         assert!(!is_error, "{text}");
         let values: Value = serde_json::from_str(&text).expect("read_state returns JSON");
         if values["home/state/attic/mcp_probe/level"] == json!(7) {
@@ -136,8 +143,7 @@ async fn reads_serve_live_state_and_history() {
     // The same value lands in history and reads back over the bus.
     let deadline = Instant::now() + Duration::from_secs(30);
     let rows = loop {
-        let (text, is_error) =
-            mcp.call("read_history", json!({"series": "state/mcp_probe/level"}));
+        let (text, is_error) = mcp.call("read_history", json!({"series": "state/mcp_probe/level"}));
         assert!(!is_error, "{text}");
         let values: Value = serde_json::from_str(&text).expect("read_history returns JSON");
         let rows = values["home/history/state/mcp_probe/level"].clone();
@@ -176,7 +182,10 @@ async fn read_logs_and_events_over_mcp() {
     let sup = Supervisor::spawn("tests/fixture_house_logs");
     let observer = sup.observer().await;
     let mut watch = health_watch(&observer, "logger").await;
-    await_health(&mut watch, Duration::from_secs(10), |h| h.status == HealthStatus::Running).await;
+    await_health(&mut watch, Duration::from_secs(10), |h| {
+        h.status == HealthStatus::Running
+    })
+    .await;
 
     // Wait for the logger's known startup lines to land in its ring buffer.
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -188,7 +197,10 @@ async fn read_logs_and_events_over_mcp() {
         if n >= 8 {
             break;
         }
-        assert!(Instant::now() < deadline, "logger never captured its startup lines");
+        assert!(
+            Instant::now() < deadline,
+            "logger never captured its startup lines"
+        );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 
@@ -201,11 +213,18 @@ async fn read_logs_and_events_over_mcp() {
         text.lines().any(|l| l.ends_with(" stdout stdout-line-0")),
         "\"ts_us stream line\" rows: {text}"
     );
-    assert!(text.lines().any(|l| l.ends_with(" stderr stderr-line-2")), "{text}");
+    assert!(
+        text.lines().any(|l| l.ends_with(" stderr stderr-line-2")),
+        "{text}"
+    );
 
     let (text, is_error) = mcp.call("read_logs", json!({"unit": "logger", "lines": 2}));
     assert!(!is_error, "{text}");
-    assert_eq!(text.lines().count(), 2, "lines=2 truncates to the tail: {text}");
+    assert_eq!(
+        text.lines().count(),
+        2,
+        "lines=2 truncates to the tail: {text}"
+    );
 
     // Unknown unit: no reply over the bus, empty text, not an error.
     let (text, is_error) = mcp.call("read_logs", json!({"unit": "no-such-unit"}));
@@ -247,14 +266,20 @@ async fn read_logs_and_events_over_mcp() {
     let (text, is_error) = mcp.call("schema", json!({}));
     assert!(!is_error, "{text}");
     let all: Value = serde_json::from_str(&text).expect("schemas are JSON");
-    assert!(all["entity"]["properties"]["write_policy"].is_object(), "{text}");
+    assert!(
+        all["entity"]["properties"]["write_policy"].is_object(),
+        "{text}"
+    );
     let (text, is_error) = mcp.call("schema", json!({"file": "house"}));
     assert!(is_error, "{text}");
 
     // Nothing answers home/history/events in this fixture: graceful empty.
     let (text, is_error) = mcp.call("read_events", json!({}));
     assert!(!is_error, "{text}");
-    assert_eq!(text, "[]", "no recorder queryable: graceful empty, not an error");
+    assert_eq!(
+        text, "[]",
+        "no recorder queryable: graceful empty, not an error"
+    );
 
     // A stand-in queryable proves the selector contract:
     // ?key=..;from=..;to=..;limit=.. against home/history/events, replying
@@ -294,17 +319,46 @@ async fn read_logs_and_events_over_mcp() {
         if text != "[]" {
             break text;
         }
-        assert!(Instant::now() < deadline, "the stand-in events queryable never answered");
+        assert!(
+            Instant::now() < deadline,
+            "the stand-in events queryable never answered"
+        );
         std::thread::sleep(Duration::from_millis(100));
     };
     let rows: Value = serde_json::from_str(&text).expect("read_events returns JSON");
     assert_eq!(rows[0]["key"], json!("home/health/logger/event"), "{rows}");
 
-    let params = seen_params.lock().expect("params lock").clone().expect("selector observed");
+    let params = seen_params
+        .lock()
+        .expect("params lock")
+        .clone()
+        .expect("selector observed");
     assert!(params.contains("key=home/health/**"), "{params}");
     assert!(params.contains("from=1767225600000000"), "{params}");
     assert!(params.contains("to=1798675200000000"), "{params}");
     assert!(params.contains("limit=10"), "{params}");
+
+    // A message past the stdio cap (16 MiB) is answered with a JSON-RPC
+    // error, not an abort, and the next message is served normally.
+    let mut oversize =
+        String::from("{\"jsonrpc\":\"2.0\",\"id\":99,\"method\":\"ping\",\"params\":{\"pad\":\"");
+    oversize.push_str(&"x".repeat(17 * 1024 * 1024));
+    oversize.push_str("\"}}\n");
+    mcp.stdin
+        .write_all(oversize.as_bytes())
+        .expect("write to mcp");
+    mcp.stdin.flush().expect("flush to mcp");
+    let mut line = String::new();
+    mcp.reader.read_line(&mut line).expect("read from mcp");
+    let reply: Value = serde_json::from_str(&line).expect("mcp reply is JSON");
+    assert_eq!(reply["id"], Value::Null, "{reply}");
+    assert_eq!(reply["error"]["code"], json!(-32600), "{reply}");
+    let pong = mcp.request("ping", json!({}));
+    assert_eq!(
+        pong,
+        json!({}),
+        "the server is still serving after the oversize line"
+    );
 
     drop(mcp);
     let mut sup = sup;
@@ -346,7 +400,11 @@ async fn http_transport_runs_as_supervised_unit() {
         Duration::from_secs(10),
     );
     assert_eq!(status, 200);
-    assert_eq!(init["result"]["serverInfo"]["name"], json!("homeostat"), "{init}");
+    assert_eq!(
+        init["result"]["serverInfo"]["name"],
+        json!("homeostat"),
+        "{init}"
+    );
 
     // A notification is accepted with no body.
     let (status, _) = http_post_retry(
@@ -412,7 +470,11 @@ async fn the_http_surface_refuses_what_a_browser_can_send() {
     // The CSRF shape: a simple cross-origin POST carries no X-Homeostat.
     let (status, body) = http_post_with(&addr, &call, &[]).expect("request sent");
     assert_eq!(status, 403, "a request with no X-Homeostat is refused");
-    assert_eq!(body, Value::Null, "a refusal echoes nothing about the house");
+    assert_eq!(
+        body,
+        Value::Null,
+        "a refusal echoes nothing about the house"
+    );
 
     // A browser on a page the house does not serve.
     let (status, body) = http_post_with(
@@ -422,16 +484,92 @@ async fn the_http_surface_refuses_what_a_browser_can_send() {
     )
     .expect("request sent");
     assert_eq!(status, 403, "a foreign Origin is refused");
-    assert_eq!(body, Value::Null, "a refusal echoes nothing about the house");
+    assert_eq!(
+        body,
+        Value::Null,
+        "a refusal echoes nothing about the house"
+    );
 
     // The house's own page is fine, as is a non-browser client.
     let (status, _) = http_post_with(
         &addr,
         &ping,
-        &[("X-Homeostat", "1"), ("Origin", "http://homeostat.lan:8642")],
+        &[
+            ("X-Homeostat", "1"),
+            ("Origin", "http://homeostat.lan:8642"),
+        ],
     )
     .expect("request sent");
     assert_eq!(status, 200, "the house's own origin is allowed");
+
+    sup.shutdown();
+    let _ = std::fs::remove_dir_all(&house);
+}
+
+/// A LAN peer cannot make the server allocate or wait on its say-so: a
+/// declared body past the cap is refused before allocation, and a
+/// request that fails the gate is answered without the body being read
+/// at all — a huge declared length with nothing behind it gets its 403
+/// promptly instead of holding a thread until the read times out. The
+/// unit stays `running` throughout.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_http_surface_bounds_what_a_peer_can_make_it_read() {
+    let house = temp_house(FIXTURE, "mcp-limits");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
+    std::fs::write(
+        house.join("units/mcp.toml"),
+        format!(
+            "schema = 1\n\n[unit]\nname = \"mcp\"\nkind = \"service\"\n\n\
+             [runtime]\ncommand = \"homeostat mcp --http {addr}\"\n\
+             restart = \"always\"\nshutdown_grace_s = 5\n"
+        ),
+    )
+    .expect("write mcp manifest");
+    let mut sup = Supervisor::spawn_at(&house, &[]);
+    let observer = sup.observer().await;
+    await_base_units(&observer).await;
+
+    let ping = json!({"jsonrpc": "2.0", "id": 0, "method": "tools/list"});
+    let (status, _) = http_post_retry(&addr, &ping, Duration::from_secs(60));
+    assert_eq!(status, 200, "the surface is up");
+    let mcp_pid = running_pid(&observer, "mcp").await;
+
+    // Oversize Content-Length, gate passed: 413 before any allocation.
+    let started = Instant::now();
+    let (status, _) = http_post_declaring(
+        &addr,
+        &ping,
+        &[("X-Homeostat", "1")],
+        Some(1_000_000_000_000_000),
+    )
+    .expect("request sent");
+    assert_eq!(status, 413, "a body past the cap is refused");
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "refused promptly"
+    );
+
+    // No X-Homeostat and a huge declared length: the 403 arrives without
+    // the body ever being awaited.
+    let started = Instant::now();
+    let (status, body) =
+        http_post_declaring(&addr, &ping, &[], Some(1_000_000_000_000_000)).expect("request sent");
+    assert_eq!(status, 403, "the gate runs before the body is read");
+    assert_eq!(body, Value::Null);
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "refused promptly"
+    );
+
+    // The unit is untouched and still serving.
+    assert_eq!(
+        running_pid(&observer, "mcp").await,
+        mcp_pid,
+        "mcp did not restart"
+    );
+    let (status, _) = http_post(&addr, &ping).expect("request sent");
+    assert_eq!(status, 200);
 
     sup.shutdown();
     let _ = std::fs::remove_dir_all(&house);
@@ -460,6 +598,17 @@ fn http_post_with(
     message: &Value,
     extra: &[(&str, &str)],
 ) -> Result<(u16, Value), String> {
+    http_post_declaring(addr, message, extra, None)
+}
+
+/// Like `http_post_with`, declaring `content_length` instead of the
+/// body's real length when given — the body sent is still the message.
+fn http_post_declaring(
+    addr: &str,
+    message: &Value,
+    extra: &[(&str, &str)],
+    content_length: Option<usize>,
+) -> Result<(u16, Value), String> {
     let body = message.to_string();
     let mut stream = TcpStream::connect(addr).map_err(|e| e.to_string())?;
     stream
@@ -470,11 +619,15 @@ fn http_post_with(
         "POST /mcp HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\n\
          Accept: application/json, text/event-stream\r\nConnection: close\r\n\
          {extra}Content-Length: {}\r\n\r\n{body}",
-        body.len()
+        content_length.unwrap_or(body.len())
     );
-    stream.write_all(request.as_bytes()).map_err(|e| e.to_string())?;
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|e| e.to_string())?;
     let mut response = Vec::new();
-    stream.read_to_end(&mut response).map_err(|e| e.to_string())?;
+    stream
+        .read_to_end(&mut response)
+        .map_err(|e| e.to_string())?;
     let response = String::from_utf8_lossy(&response).to_string();
     let status: u16 = response
         .split_whitespace()
@@ -487,7 +640,7 @@ fn http_post_with(
         .unwrap_or("");
     // A refusal answers in plain text on purpose — nothing about the
     // house is echoed to a caller that failed the gate.
-    let value = if body.is_empty() || status == 403 {
+    let value = if body.is_empty() || status == 403 || status == 413 {
         Value::Null
     } else {
         serde_json::from_str(body).map_err(|e| format!("body is not JSON: {e}: {body:?}"))?

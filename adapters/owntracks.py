@@ -28,18 +28,24 @@ home/health/{unit}/event instead of crashing.
 Unlike z2m there is no retained bridge inventory to mirror: every
 user/device pair seen on the broker, bound or not, is tracked incrementally
 as traffic arrives and the complete inventory is republished at
-home/discovery/{unit} on each new device, each record carrying the
-entity-file binding `id`, whether an entity file already binds it, and a
-suggested capability/features stanza (capability "person", features []).
+home/discovery/{unit} when a new device appears — coalesced to at most one
+publish per DISCOVERY_COALESCE_S, and holding only the MAX_UNBOUND most
+recently first-seen unbound pairs (the oldest evicted), since the pairs
+are whatever the broker carries — each record carrying the entity-file
+binding `id`, whether an entity file already binds it, and a suggested
+capability/features stanza (capability "person", features []).
 """
 
 import json
 import os
+import threading
 
 import homeostat
 from homeostat import house, keys, mqtt
 
 BASE_TOPIC = "owntracks"
+MAX_UNBOUND = 200
+DISCOVERY_COALESCE_S = 5.0
 
 
 def main():
@@ -50,21 +56,36 @@ def main():
     endpoint = mqtt.parse_endpoint(config.endpoint)
 
     session = homeostat.connect()
-    inventory = {}
+    inventory = {}  # dev_id -> record, in first-seen order
+    lock = threading.Lock()  # inventory and the pending timer, across threads
+    timer: list[threading.Timer | None] = [None]
+
+    def publish_discovery() -> None:
+        with lock:
+            timer[0] = None
+            records = list(inventory.values())
+        session.put_json(keys.discovery_key(unit), records)
 
     def on_owntracks_message(client, userdata, msg):
         _, user, device = msg.topic.split("/")
         dev_id = f"{user}/{device}"
-        first_sight = dev_id not in inventory
-        if first_sight:
-            entity = by_id.get(dev_id)
-            inventory[dev_id] = {
-                "id": dev_id,
-                "configured": entity is not None,
-                "entity": entity.name if entity else None,
-                "suggested": {"capability": "person", "features": []},
-            }
-            session.put_json(keys.discovery_key(unit), list(inventory.values()))
+        with lock:
+            first_sight = dev_id not in inventory
+            if first_sight:
+                entity = by_id.get(dev_id)
+                inventory[dev_id] = {
+                    "id": dev_id,
+                    "configured": entity is not None,
+                    "entity": entity.name if entity else None,
+                    "suggested": {"capability": "person", "features": []},
+                }
+                unbound = [k for k, r in inventory.items() if not r["configured"]]
+                if len(unbound) > MAX_UNBOUND:
+                    del inventory[unbound[0]]
+                if timer[0] is None:
+                    timer[0] = threading.Timer(DISCOVERY_COALESCE_S, publish_discovery)
+                    timer[0].daemon = True
+                    timer[0].start()
 
         try:
             payload = json.loads(msg.payload)
@@ -110,6 +131,9 @@ def main():
     # would otherwise put on a closed zenoh session.
     client.loop_stop()
     client.disconnect()
+    with lock:
+        if timer[0] is not None:
+            timer[0].cancel()
     session.close()
 
 

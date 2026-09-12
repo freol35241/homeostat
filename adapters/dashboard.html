@@ -769,7 +769,7 @@ function chartPathData(coords) {
 
 function formatChartValue(aspect, v) {
   if (typeof v !== 'number') return String(v);
-  return displayAspectValue(null, aspect || '', v);
+  return logic.formatAspect(aspect || '', null, v);
 }
 
 function formatChartTime(ts) {
@@ -889,15 +889,6 @@ function hideChartTooltip() {
 
 // ---- widget: entity capability rows (shared by Rooms and generic use) ----
 
-function displayAspectValue(entity, aspect, value) {
-  if (typeof value === 'number') {
-    if (aspect.indexOf('temperature') !== -1) return value.toFixed(1) + '°';
-    return value.toFixed(1);
-  }
-  if (typeof value === 'boolean') return value ? 'true' : 'false';
-  return String(value);
-}
-
 // Controls render inert when this dashboard's manifest does not grant the
 // entity's capability (model.commandable): the server refuses such a
 // command anyway, and a live-looking control for it would misreport the
@@ -1016,7 +1007,7 @@ function widgetGeneric(entity) {
   Object.keys(store.state).forEach(function (k) {
     if (k.indexOf(prefix) === 0) {
       var aspect = k.slice(prefix.length);
-      rows.push('<div class="aspect-row">' + esc(aspect) + ': ' + esc(displayAspectValue(entity, aspect, store.state[k])) + '</div>');
+      rows.push('<div class="aspect-row">' + esc(aspect) + ': ' + esc(logic.formatAspect(aspect, null, store.state[k])) + '</div>');
     }
   });
   if (rows.length === 0) rows.push('<div class="aspect-row faint">no data</div>');
@@ -1352,8 +1343,8 @@ function renderParamControl(unitName, pname, p) {
     var slideKey = unitName + '|' + pname;
     var shown = localState.sliderDrag[slideKey] !== undefined ? localState.sliderDrag[slideKey] : value;
     return '<div class="slider-row" style="padding-left:0;">' +
-      '<input type="range" min="' + min + '" max="' + max + '" step="' + step + '" value="' + shown + '" data-action="param-slider" data-unit="' + esc(unitName) + '" data-param="' + esc(pname) + '">' +
-      '<span class="sval">' + shown + '</span></div>';
+      '<input type="range" min="' + esc(min) + '" max="' + esc(max) + '" step="' + step + '" value="' + esc(shown) + '" data-action="param-slider" data-unit="' + esc(unitName) + '" data-param="' + esc(pname) + '">' +
+      '<span class="sval">' + esc(shown) + '</span></div>';
   }
   // string fallback
   return '<input type="text" id="' + id + '" value="' + esc(value === undefined ? '' : value) + '" data-action="param-text" data-unit="' + esc(unitName) + '" data-param="' + esc(pname) + '">';
@@ -1702,9 +1693,9 @@ function renderAspectControl(entity, r) {
   } else if (c.kind === 'stepper') {
     var canStep = r.numeric && !c.disabled;
     control = '<span class="stepper">' +
-      '<button class="step-btn" data-action="aspect-step"' + attrs + ' data-delta="' + (-c.step) + '"' + (canStep ? '' : ' disabled') + '>&minus;</button>' +
+      '<button class="step-btn" data-action="aspect-step"' + attrs + ' data-delta="' + esc(-c.step) + '"' + (canStep ? '' : ' disabled') + '>&minus;</button>' +
       '<span class="stepper-value">' + esc(r.display) + '</span>' +
-      '<button class="step-btn" data-action="aspect-step"' + attrs + ' data-delta="' + c.step + '"' + (canStep ? '' : ' disabled') + '>+</button></span>';
+      '<button class="step-btn" data-action="aspect-step"' + attrs + ' data-delta="' + esc(c.step) + '"' + (canStep ? '' : ' disabled') + '>+</button></span>';
   } else if (c.kind === 'segment') {
     control = '<div class="seg">' + c.values.map(function (v) {
       return '<button data-action="aspect-enum"' + attrs + ' data-value="' + esc(JSON.stringify(v.value)) + '" class="' + (v.value === r.value ? 'active' : '') + '"' + disabledAttr + '>' + esc(v.label) + '</button>';
@@ -1713,7 +1704,7 @@ function renderAspectControl(entity, r) {
     var slideKey = entity.name + '|' + r.aspect;
     var shown = localState.sliderDrag[slideKey] !== undefined ? localState.sliderDrag[slideKey] : r.value;
     control = '<div class="slider-row" style="padding-left:0;">' +
-      '<input type="range" min="' + c.min + '" max="' + c.max + '" step="' + c.step + '" value="' + esc(shown) + '" data-action="aspect-slider"' + attrs + disabledAttr + '>' +
+      '<input type="range" min="' + esc(c.min) + '" max="' + esc(c.max) + '" step="' + esc(c.step) + '" value="' + esc(shown) + '" data-action="aspect-slider"' + attrs + disabledAttr + '>' +
       '<span class="sval">' + esc(shown) + '</span></div>';
   } else {
     control = value;

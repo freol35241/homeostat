@@ -12,7 +12,7 @@
 # cross-compiles toward $TARGETARCH, so a multi-arch `docker buildx build`
 # never runs rustc under QEMU emulation.
 
-FROM --platform=$BUILDPLATFORM rust:1-bookworm AS build
+FROM --platform=$BUILDPLATFORM rust:1-bookworm@sha256:9a73a5088750b4c95158ab26629c854c3d6fc4b173cb7bc8079ad252d8ed7bfa AS build
 ARG TARGETARCH
 WORKDIR /src
 
@@ -48,7 +48,15 @@ RUN case "$TARGETARCH" in \
     && echo "$sha  /go2rtc" | sha256sum -c - \
     && chmod +x /go2rtc
 
-FROM debian:bookworm-slim
+FROM debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171
+
+# Nothing in here needs root: the supervisor and every unit run as this
+# user. 1000 is the first login user on most single-user hosts, so a
+# house checkout is usually writable as-is; for any other owner run the
+# container as that uid (`--user`, or `user:` in compose) — the runtime
+# directories below are laid out so an arbitrary uid works.
+ARG UID=1000
+ARG GID=1000
 
 # git: plan --save, apply and the MCP repo tools shell out to it.
 # tini: PID 1 — forwards signals and reaps any orphan a unit leaves behind.
@@ -56,13 +64,24 @@ FROM debian:bookworm-slim
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git tini tzdata ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
-    # The mounted house repo is usually owned by a host uid, not root.
-    && git config --system --add safe.directory '*'
+    && groupadd -g "$GID" homeostat \
+    && useradd -m -u "$UID" -g "$GID" homeostat \
+    # The mounted house repo may be owned by a host uid other than ours;
+    # trust that one path, not every path git ever meets.
+    && git config --system --add safe.directory /house
 
-COPY --from=ghcr.io/astral-sh/uv:0.9 /uv /uvx /usr/local/bin/
+COPY --from=ghcr.io/astral-sh/uv:0.9@sha256:538e0b39736e7feae937a65983e49d2ab75e1559d35041f9878b7b7e51de91e4 /uv /uvx /usr/local/bin/
 ENV UV_PYTHON_INSTALL_DIR=/opt/uv/python \
     UV_CACHE_DIR=/var/cache/uv \
     UV_FIND_LINKS=/opt/homeostat-wheels
+# The interpreter and the wheel are read at runtime; the cache is written,
+# by whichever uid the container runs as (see above), hence 1777. The
+# wheel directory exists before anything runs uv: uv reads UV_FIND_LINKS
+# on every invocation, `uv build` included, and fails if it is missing.
+RUN mkdir -p /opt/uv /var/cache/uv /opt/homeostat-wheels \
+    && chown homeostat:homeostat /opt/uv /var/cache/uv /opt/homeostat-wheels \
+    && chmod 1777 /var/cache/uv
+USER homeostat
 # Pre-install the interpreter so first boot doesn't download one. Unit
 # dependencies still resolve on first run; mount /var/cache/uv to keep
 # them across container replacements.
@@ -72,12 +91,22 @@ RUN uv python install 3.12
 # `homeostat==X.Y.Z` and no [tool.uv.sources]; UV_FIND_LINKS above points
 # uv here, so there is no clone on first boot and no network needed for
 # the SDK (docs/design.md, SDK distribution).
-COPY sdk/python /tmp/sdk
-# mkdir first: uv reads UV_FIND_LINKS on every invocation, `uv build`
-# included, and fails outright if the directory is not there yet.
-RUN mkdir -p /opt/homeostat-wheels \
-    && uv build --wheel /tmp/sdk -o /opt/homeostat-wheels \
-    && rm -rf /tmp/sdk
+COPY --chown=homeostat:homeostat sdk/python /tmp/sdk
+RUN uv build --wheel /tmp/sdk -o /opt/homeostat-wheels \
+    && rm -rf /tmp/sdk \
+    # `uv python install` and the build above already populated
+    # /var/cache/uv (sdists, wheels, the interpreter archive) as this
+    # build's uid, each entry with uv's own default mode — read/execute
+    # for "other", but not write. A container run with a DIFFERENT
+    # runtime uid (--user, or compose's HOMEOSTAT_UID/GID) mounts a
+    # named volume over this path; Docker populates a fresh volume from
+    # the image, permissions included, so that uid can create new
+    # top-level entries (the 1777 above) but not write inside ones this
+    # build already created — uv then fails opening a file under one of
+    # them. Opening every existing entry to "other" once, here, fixes
+    # that for any runtime uid; new entries a running container creates
+    # need no such fix, since a container's units all share its one uid.
+    && chmod -R o+rwX /var/cache/uv
 
 COPY --from=build /homeostat /usr/local/bin/homeostat
 COPY --from=build /go2rtc /usr/local/bin/go2rtc

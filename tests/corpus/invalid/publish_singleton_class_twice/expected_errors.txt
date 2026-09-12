@@ -1,0 +1,2 @@
+error[reserved-class-publish] recorder.history: "home/history/**": home/history/ is also published by shadow_recorder; exactly one service owns it (units/recorder.toml)
+error[reserved-class-publish] shadow_recorder.history: "home/history/**": home/history/ is also published by recorder; exactly one service owns it (units/shadow_recorder.toml)

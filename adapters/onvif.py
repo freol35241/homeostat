@@ -2,7 +2,7 @@
 # requires-python = ">=3.11"
 # dependencies = [
 #     "homeostat",
-#     "aiohttp>=3.9,<4",
+#     "aiohttp>=3.12.14,<4",
 # ]
 #
 # [tool.uv.sources]
@@ -89,16 +89,15 @@ import contextlib
 import hashlib
 import os
 import signal
-import tomllib
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
-from xml.sax.saxutils import escape
 from xml.etree import ElementTree
+from xml.sax.saxutils import escape
 
 import aiohttp
-
 import homeostat
+import tomllib
 from homeostat import house, keys
 
 ENV_CAMERAS = "HOMEOSTAT_CAMERAS"
@@ -194,6 +193,11 @@ def fault_detail(text: str) -> str:
     return " ".join(text.split())[:FAULT_EXCERPT]
 
 
+# A PullMessages reply is a few KB; a misbehaving camera must not pin
+# the unit's memory on an oversized one.
+MAX_RESPONSE_BYTES = 1024 * 1024
+
+
 async def soap_call(
     http: aiohttp.ClientSession,
     url: str,
@@ -213,7 +217,10 @@ async def soap_call(
             headers={"Content-Type": "application/soap+xml; charset=utf-8"},
             timeout=aiohttp.ClientTimeout(total=HTTP_TIMEOUT_S),
         ) as response:
-            text = await response.text()
+            raw = await response.content.read(MAX_RESPONSE_BYTES + 1)
+            if len(raw) > MAX_RESPONSE_BYTES:
+                raise SoapError(f"{op}: response exceeds {MAX_RESPONSE_BYTES} bytes")
+            text = raw.decode(response.get_encoding(), errors="replace")
             if response.status != 200:
                 raise SoapError(f"{op}: HTTP {response.status}: {fault_detail(text)}")
     except aiohttp.ClientError as err:

@@ -11,6 +11,7 @@ description = "Family web dashboard: generated views over state, setpoints and h
 [runtime]
 command = "uv run units/dashboard.py --port 8600"
 restart = "always"
+env = ["HOMEOSTAT_DASHBOARD_PORT", "HOMEOSTAT_DASHBOARD_TILES", "HOMEOSTAT_DASHBOARD_HOSTS", "HOMEOSTAT_GO2RTC"]
 
 [bus.subscribes]
 state = "home/state/**"

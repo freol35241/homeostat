@@ -11,7 +11,8 @@ use serde_json::json;
 use zenoh::sample::SampleKind;
 
 use common::{
-    assert_unit_contract, await_health, expect_drop_event, expect_event_kind, expect_states, health_watch, Mosquitto, Mqtt, Supervisor,
+    assert_unit_contract, await_health, expect_drop_event, expect_event_kind, expect_states,
+    health_watch, Mosquitto, Mqtt, Supervisor,
 };
 
 const FIXTURE: &str = "tests/fixture_house_ivt490";
@@ -67,11 +68,14 @@ async fn ivt490_state_translates_to_bus_state() {
     let mut mqtt = Mqtt::connect(mosquitto.port, "test-state").await;
 
     // Serial GT1 (Framledningstemperatur) normalizes to feed_temperature.
-    mqtt.publish(&format!("{BASE}/ivt490/state/serial/GT1"), "21.50").await;
+    mqtt.publish(&format!("{BASE}/ivt490/state/serial/GT1"), "21.50")
+        .await;
     // A plain serial field passes through under its firmware name.
-    mqtt.publish(&format!("{BASE}/ivt490/state/serial/GT5"), "19.80").await;
+    mqtt.publish(&format!("{BASE}/ivt490/state/serial/GT5"), "19.80")
+        .await;
     // A thermistor sensor leaf joins its path with underscores.
-    mqtt.publish(&format!("{BASE}/ivt490/state/GT2/filtered"), "5.30").await;
+    mqtt.publish(&format!("{BASE}/ivt490/state/GT2/filtered"), "5.30")
+        .await;
     // The serial sub-blob (an object) is skipped: its leaves arrive on the
     // deeper subtopics above.
     mqtt.publish(
@@ -103,9 +107,11 @@ async fn ivt490_state_translates_to_bus_state() {
     )
     .await;
     // operating_mode is a bare scalar and passes through under its name.
-    mqtt.publish(&format!("{BASE}/controller/state/operating_mode"), "1").await;
+    mqtt.publish(&format!("{BASE}/controller/state/operating_mode"), "1")
+        .await;
     // The unparsed serial line is on an unsubscribed topic: nothing at all.
-    mqtt.publish(&format!("{BASE}/ivt490/raw"), "0;219;not-json-at-all").await;
+    mqtt.publish(&format!("{BASE}/ivt490/raw"), "0;219;not-json-at-all")
+        .await;
 
     expect_states(
         &state_sub,
@@ -113,9 +119,18 @@ async fn ivt490_state_translates_to_bus_state() {
             ("home/state/utility/heatpump/feed_temperature", json!(21.5)),
             ("home/state/utility/heatpump/GT5", json!(19.8)),
             ("home/state/utility/heatpump/GT2_filtered", json!(5.3)),
-            ("home/state/utility/heatpump/indoor_temperature", json!(20.3)),
-            ("home/state/utility/heatpump/indoor_temperature_valid", json!(true)),
-            ("home/state/utility/heatpump/outdoor_temperature_offset", json!(-2.5)),
+            (
+                "home/state/utility/heatpump/indoor_temperature",
+                json!(20.3),
+            ),
+            (
+                "home/state/utility/heatpump/indoor_temperature_valid",
+                json!(true),
+            ),
+            (
+                "home/state/utility/heatpump/outdoor_temperature_offset",
+                json!(-2.5),
+            ),
             (
                 "home/state/utility/heatpump/outdoor_temperature_offset_valid",
                 json!(false),
@@ -127,7 +142,10 @@ async fn ivt490_state_translates_to_bus_state() {
     .await;
 
     let no_event = tokio::time::timeout(Duration::from_millis(1500), event_sub.recv_async()).await;
-    assert!(no_event.is_err(), "unexpected health event for blob/raw topics");
+    assert!(
+        no_event.is_err(),
+        "unexpected health event for blob/raw topics"
+    );
 
     // The discovery record carries the entity's aspect descriptor
     // (docs/design.md, Aspect descriptors): the dashboard's vocabulary for
@@ -138,31 +156,65 @@ async fn ivt490_state_translates_to_bus_state() {
     // input this fixture feeds (indoor_temperature_actual is not a
     // command; outdoor_temperature_offset is not fed here) keeps its
     // command.
-    let replies = observer.get("home/discovery/ivt490").await.expect("discovery query");
+    let replies = observer
+        .get("home/discovery/ivt490")
+        .await
+        .expect("discovery query");
     let mut inventory = None;
     while let Ok(reply) = replies.recv_async().await {
         if let Ok(sample) = reply.result() {
-            inventory = serde_json::from_slice::<serde_json::Value>(&sample.payload().to_bytes()).ok();
+            inventory =
+                serde_json::from_slice::<serde_json::Value>(&sample.payload().to_bytes()).ok();
         }
     }
     let inventory = inventory.expect("discovery inventory served");
     let record = &inventory[0];
     assert_eq!(record["entity"], json!("heatpump"), "{inventory}");
     let fields = &record["aspects"]["fields"];
-    assert_eq!(record["aspects"]["groups"], json!(["control", "readings", "status", "limits"]));
+    assert_eq!(
+        record["aspects"]["groups"],
+        json!(["control", "readings", "status", "limits"])
+    );
     assert_eq!(
         fields["setpoint"]["command"],
         json!({"type": "float", "editable_by": "family", "constraint": {"min": 10.0, "max": 30.0}, "step": 0.5})
     );
-    assert_eq!(fields["operating_mode"]["command"], json!({"type": "enum", "editable_by": "owner"}));
-    assert_eq!(fields["operating_mode"]["values"][2], json!({"value": 3, "label": "boost"}));
-    assert_eq!(fields["feed_temperature_target"]["command"]["editable_by"], json!("owner"));
-    assert_eq!(fields["GT2"]["label"], json!("outdoor (GT2)"), "labels keep the firmware code");
-    assert_eq!(fields["indoor_temperature"]["valid"], json!("indoor_temperature_valid"));
+    assert_eq!(
+        fields["operating_mode"]["command"],
+        json!({"type": "enum", "editable_by": "owner"})
+    );
+    assert_eq!(
+        fields["operating_mode"]["values"][2],
+        json!({"value": 3, "label": "boost"})
+    );
+    assert_eq!(
+        fields["feed_temperature_target"]["command"]["editable_by"],
+        json!("owner")
+    );
+    assert_eq!(
+        fields["GT2"]["label"],
+        json!("outdoor (GT2)"),
+        "labels keep the firmware code"
+    );
+    assert_eq!(
+        fields["indoor_temperature"]["valid"],
+        json!("indoor_temperature_valid")
+    );
     assert_eq!(fields["alarm"]["notable"], json!(true));
-    assert_eq!(fields["GT6"]["label"], json!("hot gas (GT6)"), "IVT490.h: Hetgastemperatur");
-    assert_eq!(fields["electricity_supplement"]["kind"], json!("percent"), "IVT490.h: procent utnyttjande");
-    assert!(fields.get("GT2_raw").is_none(), "undescribed aspects are simply absent");
+    assert_eq!(
+        fields["GT6"]["label"],
+        json!("hot gas (GT6)"),
+        "IVT490.h: Hetgastemperatur"
+    );
+    assert_eq!(
+        fields["electricity_supplement"]["kind"],
+        json!("percent"),
+        "IVT490.h: procent utnyttjande"
+    );
+    assert!(
+        fields.get("GT2_raw").is_none(),
+        "undescribed aspects are simply absent"
+    );
 
     sup.shutdown();
 }
@@ -184,14 +236,16 @@ async fn silence_flips_available() {
         .expect("event subscriber");
     let mut mqtt = Mqtt::connect(mosquitto.port, "test-availability").await;
 
-    mqtt.publish(&format!("{BASE}/ivt490/state/serial/GT1"), "21.50").await;
+    mqtt.publish(&format!("{BASE}/ivt490/state/serial/GT1"), "21.50")
+        .await;
     expect_states(&state_sub, &[(AVAILABLE_KEY, json!(true))]).await;
 
     // Nothing more from the device: the receive timer runs out.
     expect_states(&state_sub, &[(AVAILABLE_KEY, json!(false))]).await;
     expect_event_kind(&event_sub, "device-silent").await;
 
-    mqtt.publish(&format!("{BASE}/ivt490/state/serial/GT1"), "21.60").await;
+    mqtt.publish(&format!("{BASE}/ivt490/state/serial/GT1"), "21.60")
+        .await;
     expect_states(&state_sub, &[(AVAILABLE_KEY, json!(true))]).await;
 
     sup.shutdown();
@@ -234,7 +288,10 @@ async fn manual_setpoint_reaches_mqtt_via_arbiter_then_automation_refused() {
         .await
         .expect("cmd put");
     let silence = mqtt.next_message(Duration::from_millis(1500)).await;
-    assert!(silence.is_none(), "refused automation wish reached MQTT: {silence:?}");
+    assert!(
+        silence.is_none(),
+        "refused automation wish reached MQTT: {silence:?}"
+    );
 
     sup.shutdown();
 }
@@ -256,7 +313,10 @@ async fn fed_input_follows_its_source_and_stops_on_loss() {
         .expect("event subscriber");
 
     // A source sample forwards, as a float.
-    observer.put(FEED_SOURCE_KEY, "21.3").await.expect("state put");
+    observer
+        .put(FEED_SOURCE_KEY, "21.3")
+        .await
+        .expect("state put");
     let (topic, payload) = mqtt
         .next_message(Duration::from_secs(10))
         .await
@@ -268,7 +328,10 @@ async fn fed_input_follows_its_source_and_stops_on_loss() {
     let mut late = Mqtt::connect(mosquitto.port, "test-feed-late").await;
     late.subscribe(FEED_SET_TOPIC).await;
     let retained = late.next_message(Duration::from_millis(1000)).await;
-    assert!(retained.is_none(), "a fed value must not be retained: {retained:?}");
+    assert!(
+        retained.is_none(),
+        "a fed value must not be retained: {retained:?}"
+    );
 
     // Source goes unavailable: the retained slot is cleared once (an empty
     // retained publish) and a following sample is not forwarded.
@@ -280,23 +343,38 @@ async fn fed_input_follows_its_source_and_stops_on_loss() {
         .next_message(Duration::from_secs(10))
         .await
         .expect("retained slot cleared on source loss");
-    assert_eq!((topic.as_str(), payload.as_slice()), (FEED_SET_TOPIC, &b""[..]));
+    assert_eq!(
+        (topic.as_str(), payload.as_slice()),
+        (FEED_SET_TOPIC, &b""[..])
+    );
     expect_event_kind(&event_sub, "feed-source-lost").await;
-    observer.put(FEED_SOURCE_KEY, "22.0").await.expect("state put");
+    observer
+        .put(FEED_SOURCE_KEY, "22.0")
+        .await
+        .expect("state put");
     let silence = mqtt.next_message(Duration::from_millis(1500)).await;
-    assert!(silence.is_none(), "sample forwarded while source unavailable: {silence:?}");
+    assert!(
+        silence.is_none(),
+        "sample forwarded while source unavailable: {silence:?}"
+    );
 
     // Source returns: forwarding resumes.
     observer
         .put(FEED_SOURCE_AVAILABLE_KEY, "true")
         .await
         .expect("available put");
-    observer.put(FEED_SOURCE_KEY, "22.5").await.expect("state put");
+    observer
+        .put(FEED_SOURCE_KEY, "22.5")
+        .await
+        .expect("state put");
     let (topic, payload) = mqtt
         .next_message(Duration::from_secs(10))
         .await
         .expect("feed resumes with the source");
-    assert_eq!((topic.as_str(), payload.as_slice()), (FEED_SET_TOPIC, &b"22.5"[..]));
+    assert_eq!(
+        (topic.as_str(), payload.as_slice()),
+        (FEED_SET_TOPIC, &b"22.5"[..])
+    );
 
     // One master: a command naming the fed input drops with invalid-command
     // and nothing reaches MQTT. (indoor_temperature_actual was never a
@@ -312,7 +390,10 @@ async fn fed_input_follows_its_source_and_stops_on_loss() {
         .expect("arbiter put");
     expect_drop_event(&event_sub, "invalid-command").await;
     let silence = mqtt.next_message(Duration::from_millis(1000)).await;
-    assert!(silence.is_none(), "command on a fed input reached MQTT: {silence:?}");
+    assert!(
+        silence.is_none(),
+        "command on a fed input reached MQTT: {silence:?}"
+    );
 
     sup.shutdown();
 }
@@ -337,14 +418,20 @@ async fn out_of_range_setpoint_drops_with_invalid_command_event() {
 
     // Bounds are 10-30 degC; 35.0 is out of range.
     let wish = json!({"value": 35.0, "priority": "manual", "actor": "test"});
-    observer.put(SETPOINT_CMD_KEY, wish.to_string()).await.expect("cmd put");
+    observer
+        .put(SETPOINT_CMD_KEY, wish.to_string())
+        .await
+        .expect("cmd put");
 
     let event = expect_drop_event(&event_sub, "invalid-command").await;
     assert_eq!(event["aspect"], json!("setpoint"));
     assert_eq!(event["value"], json!(35.0));
 
     let silence = mqtt.next_message(Duration::from_millis(1500)).await;
-    assert!(silence.is_none(), "out-of-range setpoint reached MQTT: {silence:?}");
+    assert!(
+        silence.is_none(),
+        "out-of-range setpoint reached MQTT: {silence:?}"
+    );
 
     sup.shutdown();
 }
@@ -374,7 +461,10 @@ async fn operating_mode_enum_enforced() {
 
     // Mode 2 (BLOCK) forwards and lands as the integer string "2".
     let wish = json!({"value": 2, "priority": "manual", "actor": "test"});
-    observer.put(cmd_key, wish.to_string()).await.expect("cmd put");
+    observer
+        .put(cmd_key, wish.to_string())
+        .await
+        .expect("cmd put");
     let (topic, payload) = mqtt
         .next_message(Duration::from_secs(10))
         .await
@@ -384,21 +474,33 @@ async fn operating_mode_enum_enforced() {
 
     // 4 is outside the 1/2/3 enum: drop with event, nothing on MQTT.
     let wish = json!({"value": 4, "priority": "manual", "actor": "test"});
-    observer.put(cmd_key, wish.to_string()).await.expect("cmd put");
+    observer
+        .put(cmd_key, wish.to_string())
+        .await
+        .expect("cmd put");
     let event = expect_drop_event(&event_sub, "invalid-command").await;
     assert_eq!(event["aspect"], json!("operating_mode"));
     assert_eq!(event["value"], json!(4));
     let silence = mqtt.next_message(Duration::from_millis(1500)).await;
-    assert!(silence.is_none(), "out-of-enum operating_mode reached MQTT: {silence:?}");
+    assert!(
+        silence.is_none(),
+        "out-of-enum operating_mode reached MQTT: {silence:?}"
+    );
 
     // A non-integer drops the same way.
     let wish = json!({"value": 2.5, "priority": "manual", "actor": "test"});
-    observer.put(cmd_key, wish.to_string()).await.expect("cmd put");
+    observer
+        .put(cmd_key, wish.to_string())
+        .await
+        .expect("cmd put");
     let event = expect_drop_event(&event_sub, "invalid-command").await;
     assert_eq!(event["aspect"], json!("operating_mode"));
     assert_eq!(event["value"], json!(2.5));
     let silence = mqtt.next_message(Duration::from_millis(1500)).await;
-    assert!(silence.is_none(), "non-integer operating_mode reached MQTT: {silence:?}");
+    assert!(
+        silence.is_none(),
+        "non-integer operating_mode reached MQTT: {silence:?}"
+    );
 
     sup.shutdown();
 }
@@ -419,10 +521,16 @@ async fn envelope_less_command_drops_with_health_event() {
     let mut mqtt = Mqtt::connect(mosquitto.port, "test-no-envelope").await;
     mqtt.subscribe(&format!("{BASE}/controller/set/+")).await;
 
-    observer.put(SETPOINT_ARBITER_KEY, "21.0").await.expect("cmd put");
+    observer
+        .put(SETPOINT_ARBITER_KEY, "21.0")
+        .await
+        .expect("cmd put");
     expect_drop_event(&event_sub, "invalid-command").await;
     let silence = mqtt.next_message(Duration::from_millis(1500)).await;
-    assert!(silence.is_none(), "envelope-less command reached MQTT: {silence:?}");
+    assert!(
+        silence.is_none(),
+        "envelope-less command reached MQTT: {silence:?}"
+    );
 
     let envelope = json!({"value": 21.0, "priority": "manual", "actor": "test"});
     observer

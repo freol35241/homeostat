@@ -39,17 +39,19 @@ pub async fn read(session: &Session, endpoint: &str) -> Result<World, String> {
                     .map_err(|e| format!("world grant table does not parse: {e}"))?;
             }
             ["home", "meta", "system", "applied_commit"] => {
-                world.applied_commit =
-                    Some(String::from_utf8_lossy(&payload).to_string());
+                world.applied_commit = Some(String::from_utf8_lossy(&payload).to_string());
             }
             // Only the unit-identity fields define a world unit; a stray
             // `log` reply must not conjure one up.
             ["home", "meta", unit, field @ ("manifest" | "manifest_hash" | "files_hash")] => {
-                let entry = world.units.entry(unit.to_string()).or_insert_with(|| WorldUnit {
-                    manifest: Vec::new(),
-                    manifest_hash: String::new(),
-                    files_hash: String::new(),
-                });
+                let entry = world
+                    .units
+                    .entry(unit.to_string())
+                    .or_insert_with(|| WorldUnit {
+                        manifest: Vec::new(),
+                        manifest_hash: String::new(),
+                        files_hash: String::new(),
+                    });
                 match field {
                     "manifest" => entry.manifest = payload,
                     "manifest_hash" => {

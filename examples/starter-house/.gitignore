@@ -1,4 +1,6 @@
 data/
-# Password hashes are credentials: the file ships empty from the
-# template and your real one must never land in the house repo.
+# Password hashes are credentials: the template ships an empty
+# mosquitto.passwd.example, and your real one must never land in the
+# house repo. Likewise .env, which holds the Zigbee2MQTT frontend token.
 mosquitto.passwd
+.env

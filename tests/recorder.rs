@@ -64,8 +64,7 @@ async fn put(publisher: &Publisher, value: Value) {
 
 /// Rows for `sql` against the store, empty while the store isn't there yet.
 fn read_rows(db: &Path, sql: &str) -> Vec<Vec<SqlValue>> {
-    let Ok(conn) = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_ONLY)
-    else {
+    let Ok(conn) = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_ONLY) else {
         return Vec::new();
     };
     let _ = conn.busy_timeout(Duration::from_secs(2));
@@ -198,7 +197,11 @@ async fn state_lands_typed_in_store() {
     // events: the "who" audit design.md anticipated, priority and actor
     // now travel with every command.
     let cmd = matched_publisher(&observer, "home/cmd/attic/probe/on").await;
-    put(&cmd, json!({"value": false, "priority": "automation", "actor": "test"})).await;
+    put(
+        &cmd,
+        json!({"value": false, "priority": "automation", "actor": "test"}),
+    )
+    .await;
     let rows = rows_eventually(
         &db,
         "SELECT kind, value FROM history WHERE class = 'cmd' AND entity = 'probe'",
@@ -206,10 +209,10 @@ async fn state_lands_typed_in_store() {
         Duration::from_secs(10),
     )
     .await;
-    assert_eq!(rows, vec![vec![
-        SqlValue::Text("bool".into()),
-        SqlValue::Integer(0),
-    ]]);
+    assert_eq!(
+        rows,
+        vec![vec![SqlValue::Text("bool".into()), SqlValue::Integer(0),]]
+    );
     let event_rows = rows_eventually(
         &db,
         "SELECT payload FROM events WHERE key = 'home/cmd/attic/probe/on'",
@@ -243,9 +246,13 @@ async fn state_lands_typed_in_store() {
 
     // An accepted config edit lands in the events audit table (rejects
     // never reach the bus, so they can't land — pinned in step 4).
-    config_write(&observer, "home/config/evening_lights/off_time", json!("21:30"))
-        .await
-        .expect("config write accepted");
+    config_write(
+        &observer,
+        "home/config/evening_lights/off_time",
+        json!("21:30"),
+    )
+    .await
+    .expect("config write accepted");
     let rows = rows_eventually(
         &db,
         "SELECT payload FROM events \
@@ -275,6 +282,30 @@ async fn state_lands_typed_in_store() {
         read_rows(&db, "SELECT * FROM history WHERE aspect = 'color'").is_empty(),
         "non-scalar payload became a row"
     );
+
+    // H4, defense in depth: a raw NaN on the bus (serde_json::Value can't
+    // hold it, so this publishes the literal bytes directly — the shape a
+    // publisher that skips the SDK's put_json guard, or a future one,
+    // could still produce) is dropped as "non-finite", never a row — and
+    // the writer keeps working afterward rather than mistaking a refused
+    // row for a dead backend and stalling on it.
+    let gauge = matched_publisher(&observer, "home/state/attic/probe/gauge").await;
+    gauge.put("NaN").await.expect("raw NaN put");
+    let event = await_event(&events, Duration::from_secs(10), |e| e["kind"] == "drop").await;
+    assert_eq!(event["reason"], json!("non-finite"));
+    assert_eq!(event["key"], json!("home/state/attic/probe/gauge"));
+    assert!(
+        read_rows(&db, "SELECT * FROM history WHERE aspect = 'gauge'").is_empty(),
+        "a non-finite payload became a row"
+    );
+    put(&gauge, json!(3.0)).await;
+    rows_eventually(
+        &db,
+        "SELECT value FROM history WHERE aspect = 'gauge'",
+        1,
+        Duration::from_secs(10),
+    )
+    .await;
 
     sup.shutdown();
 }
@@ -360,13 +391,16 @@ async fn backend_outage_buffers_and_flushes() {
     .await;
 
     // Kill the backend: the store file becomes unwritable.
-    let mut perms = std::fs::metadata(&db).expect("store exists").permissions();
-    perms.set_readonly(true);
-    std::fs::set_permissions(&db, perms.clone()).expect("chmod store read-only");
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o444))
+        .expect("chmod store read-only");
 
     let before_put = now_us();
     put(&gauge, json!(2)).await;
-    await_event(&events, Duration::from_secs(30), |e| e["kind"] == "backend-outage").await;
+    await_event(&events, Duration::from_secs(30), |e| {
+        e["kind"] == "backend-outage"
+    })
+    .await;
     let after_outage = now_us();
 
     // Nothing landed while down (the store is still readable).
@@ -381,15 +415,21 @@ async fn backend_outage_buffers_and_flushes() {
     put(&gauge, json!(3)).await;
 
     // Restore the backend.
-    perms.set_readonly(false);
-    std::fs::set_permissions(&db, perms).expect("chmod store writable");
-    let restored =
-        await_event(&events, Duration::from_secs(30), |e| e["kind"] == "backend-restored").await;
+    std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o644))
+        .expect("chmod store writable");
+    let restored = await_event(&events, Duration::from_secs(30), |e| {
+        e["kind"] == "backend-restored"
+    })
+    .await;
     assert!(
         restored["flushed"].as_i64().expect("flushed count") >= 2,
         "restored event reports the flush: {restored}"
     );
-    assert_eq!(restored["dropped"], json!(0), "nothing overflowed: {restored}");
+    assert_eq!(
+        restored["dropped"],
+        json!(0),
+        "nothing overflowed: {restored}"
+    );
 
     // The buffer flushed in order, and the buffered samples carry their
     // receive-time timestamps — the outage is invisible in the data.
@@ -403,7 +443,11 @@ async fn backend_outage_buffers_and_flushes() {
     let values: Vec<&SqlValue> = rows.iter().map(|r| &r[0]).collect();
     assert_eq!(
         values,
-        vec![&SqlValue::Integer(1), &SqlValue::Integer(2), &SqlValue::Integer(3)]
+        vec![
+            &SqlValue::Integer(1),
+            &SqlValue::Integer(2),
+            &SqlValue::Integer(3)
+        ]
     );
     let SqlValue::Integer(ts2) = rows[1][1] else {
         panic!("ts is an integer");
@@ -456,16 +500,24 @@ async fn stats_describe_the_store() {
     // Events: the fixture's own health transitions are already there,
     // stamped in the recorder's µs convention.
     let events = &stats["events"];
-    assert!(events["rows"].as_i64().expect("events count") >= 1, "{events}");
+    assert!(
+        events["rows"].as_i64().expect("events count") >= 1,
+        "{events}"
+    );
     let newest = events["newest"].as_i64().expect("µs newest");
     assert!(newest <= after && events["oldest"].as_i64().expect("µs oldest") <= newest);
-    assert!(newest >= before - 120_000_000, "events bounds are recent: {events}");
+    assert!(
+        newest >= before - 120_000_000,
+        "events bounds are recent: {events}"
+    );
 
     // A wildcard over history fans out over series and never includes the
     // stats reply, so a samples reader never sees a foreign payload.
     let replies = history_get(&observer, "home/history/**").await;
     assert_eq!(replies.len(), 2, "series only: {replies:?}");
-    assert!(replies.iter().all(|(key, _)| key.starts_with("home/history/state/")));
+    assert!(replies
+        .iter()
+        .all(|(key, _)| key.starts_with("home/history/state/")));
 
     sup.shutdown();
 }
@@ -491,18 +543,32 @@ async fn retention_purges_old_rows() {
     put(&level, json!(7)).await;
     rows_eventually(&db, "SELECT value FROM samples", 4, Duration::from_secs(20)).await;
     let audit_before = read_rows(&db, "SELECT ts FROM events").len();
-    assert!(audit_before >= 1, "health transitions are in the audit trail");
+    assert!(
+        audit_before >= 1,
+        "health transitions are in the audit trail"
+    );
 
     // Everything recorded so far ages past a window of ~0.86 s; setting
     // the window is what triggers the purge.
     tokio::time::sleep(Duration::from_millis(1500)).await;
-    config_write(&observer, "home/config/recorder/retain_samples_days", json!(1e-5))
-        .await
-        .expect("in-constraint write accepted");
+    config_write(
+        &observer,
+        "home/config/recorder/retain_samples_days",
+        json!(1e-5),
+    )
+    .await
+    .expect("in-constraint write accepted");
     let purge = await_event(&events, Duration::from_secs(30), |e| e["kind"] == "purge").await;
     assert_eq!(purge["samples"], json!(4), "both series purged: {purge}");
-    assert_eq!(purge["events"], json!(0), "events keep their own window: {purge}");
-    assert!(purge["pages_freed"].as_i64().expect("pages freed") >= 0, "{purge}");
+    assert_eq!(
+        purge["events"],
+        json!(0),
+        "events keep their own window: {purge}"
+    );
+    assert!(
+        purge["pages_freed"].as_i64().expect("pages freed") >= 0,
+        "{purge}"
+    );
 
     assert_eq!(read_rows(&db, "SELECT value FROM samples").len(), 0);
     assert!(
@@ -537,10 +603,17 @@ async fn integrity_check_reports_corruption() {
     rows_eventually(&db, "SELECT value FROM samples", 3, Duration::from_secs(20)).await;
 
     // ~0.36 s schedule: the first check runs an interval after the change.
-    config_write(&observer, "home/config/recorder/integrity_check_hours", json!(1e-4))
-        .await
-        .expect("in-constraint write accepted");
-    let ok = await_event(&events, Duration::from_secs(30), |e| e["kind"] == "integrity-ok").await;
+    config_write(
+        &observer,
+        "home/config/recorder/integrity_check_hours",
+        json!(1e-4),
+    )
+    .await
+    .expect("in-constraint write accepted");
+    let ok = await_event(&events, Duration::from_secs(30), |e| {
+        e["kind"] == "integrity-ok"
+    })
+    .await;
     assert!(ok["duration_s"].as_f64().expect("duration") >= 0.0, "{ok}");
 
     // Corrupt the samples table's root page in the main file: nothing
@@ -549,7 +622,8 @@ async fn integrity_check_reports_corruption() {
     // the WAL). Checkpoint first so the page lives in the main file.
     let rootpage = {
         let conn = Connection::open(&db).expect("open store");
-        conn.busy_timeout(Duration::from_secs(5)).expect("busy timeout");
+        conn.busy_timeout(Duration::from_secs(5))
+            .expect("busy timeout");
         let (busy, _log, _done): (i64, i64, i64) = conn
             .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| {
                 Ok((r.get(0)?, r.get(1)?, r.get(2)?))
@@ -560,20 +634,28 @@ async fn integrity_check_reports_corruption() {
             .query_row("PRAGMA page_size", [], |r| r.get(0))
             .expect("page size");
         let root: u64 = conn
-            .query_row("SELECT rootpage FROM sqlite_master WHERE name = 'samples'", [], |r| {
-                r.get(0)
-            })
+            .query_row(
+                "SELECT rootpage FROM sqlite_master WHERE name = 'samples'",
+                [],
+                |r| r.get(0),
+            )
             .expect("samples root page");
         (root - 1) * page_size
     };
     {
         use std::io::{Seek, SeekFrom, Write};
-        let mut file = std::fs::OpenOptions::new().write(true).open(&db).expect("open file");
-        file.seek(SeekFrom::Start(rootpage + 8)).expect("seek into the root page");
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&db)
+            .expect("open file");
+        file.seek(SeekFrom::Start(rootpage + 8))
+            .expect("seek into the root page");
         file.write_all(&[0xFF; 64]).expect("scribble");
     }
-    let failed =
-        await_event(&events, Duration::from_secs(30), |e| e["kind"] == "integrity-failed").await;
+    let failed = await_event(&events, Duration::from_secs(30), |e| {
+        e["kind"] == "integrity-failed"
+    })
+    .await;
     let errors = failed["errors"].as_array().expect("errors listed");
     assert!(!errors.is_empty() && errors[0] != json!("ok"), "{failed}");
 
@@ -633,7 +715,11 @@ async fn read_path_returns_history() {
 
     // limit keeps the most recent rows in range.
     let replies = history_get(&observer, "home/history/state/meter/power?limit=2").await;
-    let values: Vec<&Value> = replies[0].1.as_array().expect("array").iter()
+    let values: Vec<&Value> = replies[0]
+        .1
+        .as_array()
+        .expect("array")
+        .iter()
         .map(|r| &r["value"])
         .collect();
     assert_eq!(values, vec![&json!(2.5), &json!(3.5)]);
@@ -647,15 +733,27 @@ async fn read_path_returns_history() {
         timestamps[0], timestamps[2]
     );
     let replies = history_get(&observer, &selector).await;
-    let values: Vec<&Value> = replies[0].1.as_array().expect("array").iter()
+    let values: Vec<&Value> = replies[0]
+        .1
+        .as_array()
+        .expect("array")
+        .iter()
         .map(|r| &r["value"])
         .collect();
-    assert_eq!(values, vec![&json!(2.5), &json!(3.5)], "newest in the window");
+    assert_eq!(
+        values,
+        vec![&json!(2.5), &json!(3.5)],
+        "newest in the window"
+    );
 
     // from narrows the range (reusing a reply timestamp verbatim).
     let selector = format!("home/history/state/meter/power?from={}", timestamps[1]);
     let replies = history_get(&observer, &selector).await;
-    let values: Vec<&Value> = replies[0].1.as_array().expect("array").iter()
+    let values: Vec<&Value> = replies[0]
+        .1
+        .as_array()
+        .expect("array")
+        .iter()
         .map(|r| &r["value"])
         .collect();
     assert_eq!(values, vec![&json!(2.5), &json!(3.5)]);
@@ -686,12 +784,17 @@ async fn read_path_returns_history() {
     assert_eq!(replies[0].0, "home/history/events");
     let rows = replies[0].1.as_array().expect("reply is an array").clone();
     assert!(
-        rows.iter()
-            .any(|r| r["key"].as_str().expect("key is a string").starts_with("home/health/")),
+        rows.iter().any(|r| r["key"]
+            .as_str()
+            .expect("key is a string")
+            .starts_with("home/health/")),
         "health events present: {rows:?}"
     );
     for row in &rows {
-        assert!(row["ts"].is_i64(), "events ts is raw microseconds, not RFC3339: {row}");
+        assert!(
+            row["ts"].is_i64(),
+            "events ts is raw microseconds, not RFC3339: {row}"
+        );
     }
 
     // Three cmd envelopes under one key prefix, spaced so from/to can
@@ -702,7 +805,11 @@ async fn read_path_returns_history() {
     let pub_a = matched_publisher(&observer, key_a).await;
     let pub_b = matched_publisher(&observer, key_b).await;
     let pub_c = matched_publisher(&observer, key_c).await;
-    put(&pub_a, json!({"value": true, "priority": "automation", "actor": "seq-a"})).await;
+    put(
+        &pub_a,
+        json!({"value": true, "priority": "automation", "actor": "seq-a"}),
+    )
+    .await;
     rows_eventually(
         &db,
         "SELECT key FROM events WHERE key = 'home/cmd/attic/limitprobe/a'",
@@ -712,7 +819,11 @@ async fn read_path_returns_history() {
     .await;
 
     let before_b = now_us();
-    put(&pub_b, json!({"value": true, "priority": "automation", "actor": "seq-b"})).await;
+    put(
+        &pub_b,
+        json!({"value": true, "priority": "automation", "actor": "seq-b"}),
+    )
+    .await;
     rows_eventually(
         &db,
         "SELECT key FROM events WHERE key = 'home/cmd/attic/limitprobe/b'",
@@ -722,7 +833,11 @@ async fn read_path_returns_history() {
     .await;
     let after_b = now_us();
 
-    put(&pub_c, json!({"value": true, "priority": "automation", "actor": "seq-c"})).await;
+    put(
+        &pub_c,
+        json!({"value": true, "priority": "automation", "actor": "seq-c"}),
+    )
+    .await;
     rows_eventually(
         &db,
         "SELECT key FROM events WHERE key = 'home/cmd/attic/limitprobe/c'",
@@ -733,13 +848,27 @@ async fn read_path_returns_history() {
 
     // A key wildcard narrows to just this prefix, cmd envelopes carrying
     // their actor into the payload, ordered oldest to newest.
-    let replies =
-        history_get(&observer, "home/history/events?key=home/cmd/attic/limitprobe/**").await;
+    let replies = history_get(
+        &observer,
+        "home/history/events?key=home/cmd/attic/limitprobe/**",
+    )
+    .await;
     let rows = replies[0].1.as_array().expect("reply is an array").clone();
-    assert_eq!(rows.len(), 3, "wildcard filter narrows to the three envelopes: {rows:?}");
-    let keys: Vec<&str> = rows.iter().map(|r| r["key"].as_str().expect("key")).collect();
+    assert_eq!(
+        rows.len(),
+        3,
+        "wildcard filter narrows to the three envelopes: {rows:?}"
+    );
+    let keys: Vec<&str> = rows
+        .iter()
+        .map(|r| r["key"].as_str().expect("key"))
+        .collect();
     assert_eq!(keys, vec![key_a, key_b, key_c], "oldest to newest");
-    assert_eq!(rows[1]["payload"]["actor"], json!("seq-b"), "actor visible in payload");
+    assert_eq!(
+        rows[1]["payload"]["actor"],
+        json!("seq-b"),
+        "actor visible in payload"
+    );
     assert_eq!(rows[1]["payload"]["value"], json!(true));
     assert_eq!(rows[1]["payload"]["priority"], json!("automation"));
 
@@ -750,16 +879,29 @@ async fn read_path_returns_history() {
     );
     let replies = history_get(&observer, &selector).await;
     let rows = replies[0].1.as_array().expect("reply is an array").clone();
-    assert_eq!(rows.len(), 1, "from/to bounds to the bracketed envelope: {rows:?}");
+    assert_eq!(
+        rows.len(),
+        1,
+        "from/to bounds to the bracketed envelope: {rows:?}"
+    );
     assert_eq!(rows[0]["key"], json!(key_b));
 
     // limit truncates keeping the newest rows, still oldest-to-newest.
-    let replies =
-        history_get(&observer, "home/history/events?key=home/cmd/attic/limitprobe/**;limit=2")
-            .await;
+    let replies = history_get(
+        &observer,
+        "home/history/events?key=home/cmd/attic/limitprobe/**;limit=2",
+    )
+    .await;
     let rows = replies[0].1.as_array().expect("reply is an array").clone();
-    let keys: Vec<&str> = rows.iter().map(|r| r["key"].as_str().expect("key")).collect();
-    assert_eq!(keys, vec![key_b, key_c], "limit keeps the newest, oldest-to-newest");
+    let keys: Vec<&str> = rows
+        .iter()
+        .map(|r| r["key"].as_str().expect("key"))
+        .collect();
+    assert_eq!(
+        keys,
+        vec![key_b, key_c],
+        "limit keeps the newest, oldest-to-newest"
+    );
 
     sup.shutdown();
 }
@@ -809,15 +951,28 @@ async fn v0_store_migrates_in_place() {
         vec![
             row(1, "attic", "rover", "on", "bool", SqlValue::Integer(1)),
             row(2, "cellar", "rover", "on", "bool", SqlValue::Integer(0)),
-            row(3, "attic", "probe", "temperature", "number", SqlValue::Real(21.5)),
+            row(
+                3,
+                "attic",
+                "probe",
+                "temperature",
+                "number",
+                SqlValue::Real(21.5)
+            ),
         ]
     );
     assert_eq!(
-        read_rows(&db, "SELECT payload FROM events WHERE key = 'home/config/x/y'"),
+        read_rows(
+            &db,
+            "SELECT payload FROM events WHERE key = 'home/config/x/y'"
+        ),
         vec![vec![SqlValue::Text("1".into())]],
         "events survive untouched"
     );
-    assert_eq!(read_rows(&db, "PRAGMA user_version"), vec![vec![SqlValue::Integer(1)]]);
+    assert_eq!(
+        read_rows(&db, "PRAGMA user_version"),
+        vec![vec![SqlValue::Integer(1)]]
+    );
     assert_eq!(
         read_rows(&db, "PRAGMA auto_vacuum"),
         vec![vec![SqlValue::Integer(2)]],
@@ -876,7 +1031,11 @@ async fn restart_seeds_missed_state_from_the_mirror() {
 
     // Kill the recorder; the supervisor restarts it after its backoff.
     let pid = running.pid.expect("a running recorder has a pid");
-    assert_eq!(unsafe { libc::kill(pid as i32, libc::SIGKILL) }, 0, "kill recorder");
+    assert_eq!(
+        unsafe { libc::kill(pid as i32, libc::SIGKILL) },
+        0,
+        "kill recorder"
+    );
     await_health(&mut recorder, Duration::from_secs(10), |h| {
         h.status == HealthStatus::Backoff
     })
@@ -915,7 +1074,11 @@ async fn restart_seeds_missed_state_from_the_mirror() {
         &db,
         "SELECT ts FROM history WHERE entity = 'tank' AND aspect = 'level'",
     );
-    assert_eq!(level_rows.len(), 1, "a series the store already holds is not seeded again");
+    assert_eq!(
+        level_rows.len(),
+        1,
+        "a series the store already holds is not seeded again"
+    );
 
     sup.shutdown();
 }

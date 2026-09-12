@@ -40,7 +40,9 @@ impl Breaker {
             return Decision::Open;
         }
         let exp = self.consecutive - 1;
-        let delay = BASE_MS.saturating_mul(FACTOR.saturating_pow(exp)).min(MAX_MS);
+        let delay = BASE_MS
+            .saturating_mul(FACTOR.saturating_pow(exp))
+            .min(MAX_MS);
         Decision::Restart {
             delay: Duration::from_millis(delay),
         }
@@ -58,10 +60,30 @@ mod tests {
     #[test]
     fn backoff_doubles_then_opens() {
         let mut b = Breaker::new();
-        assert_eq!(b.on_exit(quick()), Decision::Restart { delay: Duration::from_millis(100) });
-        assert_eq!(b.on_exit(quick()), Decision::Restart { delay: Duration::from_millis(200) });
-        assert_eq!(b.on_exit(quick()), Decision::Restart { delay: Duration::from_millis(400) });
-        assert_eq!(b.on_exit(quick()), Decision::Restart { delay: Duration::from_millis(800) });
+        assert_eq!(
+            b.on_exit(quick()),
+            Decision::Restart {
+                delay: Duration::from_millis(100)
+            }
+        );
+        assert_eq!(
+            b.on_exit(quick()),
+            Decision::Restart {
+                delay: Duration::from_millis(200)
+            }
+        );
+        assert_eq!(
+            b.on_exit(quick()),
+            Decision::Restart {
+                delay: Duration::from_millis(400)
+            }
+        );
+        assert_eq!(
+            b.on_exit(quick()),
+            Decision::Restart {
+                delay: Duration::from_millis(800)
+            }
+        );
         assert_eq!(b.on_exit(quick()), Decision::Open);
     }
 
@@ -72,7 +94,9 @@ mod tests {
         b.on_exit(quick());
         assert_eq!(
             b.on_exit(Duration::from_millis(STABLE_MS)),
-            Decision::Restart { delay: Duration::from_millis(100) }
+            Decision::Restart {
+                delay: Duration::from_millis(100)
+            }
         );
     }
 

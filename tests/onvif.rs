@@ -55,7 +55,10 @@ impl FakeOnvif {
         // First run resolves the fake camera's own uv env: generous.
         let deadline = Instant::now() + Duration::from_secs(60);
         while std::net::TcpStream::connect(("127.0.0.1", port)).is_err() {
-            assert!(Instant::now() < deadline, "fake onvif camera never listened on {port}");
+            assert!(
+                Instant::now() < deadline,
+                "fake onvif camera never listened on {port}"
+            );
             std::thread::sleep(Duration::from_millis(50));
         }
         Self { child, port }
@@ -74,8 +77,13 @@ impl FakeOnvif {
             )
             .expect("write control request");
         let mut response = String::new();
-        stream.read_to_string(&mut response).expect("read control response");
-        assert!(response.starts_with("HTTP/1.1 200"), "control {path}: {response}");
+        stream
+            .read_to_string(&mut response)
+            .expect("read control response");
+        assert!(
+            response.starts_with("HTTP/1.1 200"),
+            "control {path}: {response}"
+        );
     }
 
     /// How many subscriptions the camera has handed out, from its own
@@ -91,7 +99,9 @@ impl FakeOnvif {
             )
             .expect("write stats request");
         let mut response = String::new();
-        stream.read_to_string(&mut response).expect("read stats response");
+        stream
+            .read_to_string(&mut response)
+            .expect("read stats response");
         let body = response.rsplit("\r\n\r\n").next().expect("stats body");
         let value: Value = serde_json::from_str(body).expect("stats is JSON");
         value["created"].as_u64().expect("created is a number")
@@ -201,8 +211,8 @@ async fn trigger_until_event(camera: &FakeOnvif, sub: &StateSub, value: &str, re
         camera.control(&format!("/control/trigger?value={value}"));
         let recv = tokio::time::timeout(Duration::from_secs(1), sub.recv_async()).await;
         if let Ok(Ok(sample)) = recv {
-            let event: Value = serde_json::from_slice(&sample.payload().to_bytes())
-                .expect("health event is JSON");
+            let event: Value =
+                serde_json::from_slice(&sample.payload().to_bytes()).expect("health event is JSON");
             if event["reason"] == reason {
                 return;
             }
@@ -220,7 +230,10 @@ async fn trigger_until_event(camera: &FakeOnvif, sub: &StateSub, value: &str, re
 #[tokio::test(flavor = "multi_thread")]
 async fn motion_events_translate_to_bus_state() {
     let (camera, _cameras_path, mut sup, observer) = setup().await;
-    let state_sub = observer.declare_subscriber(MOTION_KEY).await.expect("state subscriber");
+    let state_sub = observer
+        .declare_subscriber(MOTION_KEY)
+        .await
+        .expect("state subscriber");
 
     trigger_until_motion(&camera, &state_sub, &observer, true).await;
     trigger_until_motion(&camera, &state_sub, &observer, false).await;
@@ -234,8 +247,14 @@ async fn motion_events_translate_to_bus_state() {
 #[tokio::test(flavor = "multi_thread")]
 async fn broken_subscription_resubscribes() {
     let (camera, _cameras_path, mut sup, observer) = setup().await;
-    let state_sub = observer.declare_subscriber(MOTION_KEY).await.expect("state subscriber");
-    let event_sub = observer.declare_subscriber(EVENT_KEY).await.expect("event subscriber");
+    let state_sub = observer
+        .declare_subscriber(MOTION_KEY)
+        .await
+        .expect("state subscriber");
+    let event_sub = observer
+        .declare_subscriber(EVENT_KEY)
+        .await
+        .expect("event subscriber");
 
     trigger_until_motion(&camera, &state_sub, &observer, true).await;
 
@@ -253,8 +272,14 @@ async fn broken_subscription_resubscribes() {
 #[tokio::test(flavor = "multi_thread")]
 async fn subscription_loss_flips_available() {
     let (camera, _cameras_path, mut sup, observer) = setup().await;
-    let avail_sub = observer.declare_subscriber(AVAILABLE_KEY).await.expect("available subscriber");
-    let state_sub = observer.declare_subscriber(MOTION_KEY).await.expect("state subscriber");
+    let avail_sub = observer
+        .declare_subscriber(AVAILABLE_KEY)
+        .await
+        .expect("available subscriber");
+    let state_sub = observer
+        .declare_subscriber(MOTION_KEY)
+        .await
+        .expect("state subscriber");
 
     trigger_until_motion(&camera, &state_sub, &observer, true).await;
 
@@ -270,8 +295,14 @@ async fn subscription_loss_flips_available() {
 #[tokio::test(flavor = "multi_thread")]
 async fn malformed_motion_value_drops_with_health_event() {
     let (camera, _cameras_path, mut sup, observer) = setup().await;
-    let state_sub = observer.declare_subscriber(MOTION_KEY).await.expect("state subscriber");
-    let event_sub = observer.declare_subscriber(EVENT_KEY).await.expect("event subscriber");
+    let state_sub = observer
+        .declare_subscriber(MOTION_KEY)
+        .await
+        .expect("state subscriber");
+    let event_sub = observer
+        .declare_subscriber(EVENT_KEY)
+        .await
+        .expect("event subscriber");
 
     trigger_until_event(&camera, &event_sub, "banana", "malformed-payload").await;
 
@@ -289,9 +320,18 @@ async fn malformed_motion_value_drops_with_health_event() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_camera_without_a_subscription_manager_keeps_streaming() {
     let (camera, _cameras_path, mut sup, observer) = setup().await;
-    let state_sub = observer.declare_subscriber(MOTION_KEY).await.expect("state subscriber");
-    let avail_sub = observer.declare_subscriber(AVAILABLE_KEY).await.expect("available subscriber");
-    let event_sub = observer.declare_subscriber(EVENT_KEY).await.expect("event subscriber");
+    let state_sub = observer
+        .declare_subscriber(MOTION_KEY)
+        .await
+        .expect("state subscriber");
+    let avail_sub = observer
+        .declare_subscriber(AVAILABLE_KEY)
+        .await
+        .expect("available subscriber");
+    let event_sub = observer
+        .declare_subscriber(EVENT_KEY)
+        .await
+        .expect("event subscriber");
 
     // available = true is published once, at the first subscription, which
     // is before this subscriber exists — so the assertion below is that
@@ -304,7 +344,10 @@ async fn a_camera_without_a_subscription_manager_keeps_streaming() {
     let event = next_event(&event_sub).await;
     assert_eq!(event["kind"], json!("renew-unsupported"), "{event}");
     let error = event["error"].as_str().expect("error is a string");
-    assert!(error.starts_with("Renew: HTTP 400"), "the call is named: {error}");
+    assert!(
+        error.starts_with("Renew: HTTP 400"),
+        "the call is named: {error}"
+    );
 
     // And the stream carries on: motion still flows, with no availability
     // transition at all. If the Renew fault were treated as a loss, an
@@ -314,7 +357,10 @@ async fn a_camera_without_a_subscription_manager_keeps_streaming() {
 
     sup.shutdown();
     assert!(
-        avail_sub.try_recv().expect("available channel open").is_none(),
+        avail_sub
+            .try_recv()
+            .expect("available channel open")
+            .is_none(),
         "availability must not flap: the pull stream was never lost"
     );
 }
@@ -326,8 +372,14 @@ async fn a_camera_without_a_subscription_manager_keeps_streaming() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_camera_without_a_subscription_manager_rotates_its_subscription() {
     let (camera, _cameras_path, mut sup, observer) = setup().await;
-    let state_sub = observer.declare_subscriber(MOTION_KEY).await.expect("state subscriber");
-    let avail_sub = observer.declare_subscriber(AVAILABLE_KEY).await.expect("available subscriber");
+    let state_sub = observer
+        .declare_subscriber(MOTION_KEY)
+        .await
+        .expect("state subscriber");
+    let avail_sub = observer
+        .declare_subscriber(AVAILABLE_KEY)
+        .await
+        .expect("available subscriber");
 
     trigger_until_motion(&camera, &state_sub, &observer, true).await;
     camera.control("/control/reject-renew");
@@ -350,7 +402,10 @@ async fn a_camera_without_a_subscription_manager_rotates_its_subscription() {
     // availability never moves, because nothing was ever lost.
     trigger_until_motion(&camera, &state_sub, &observer, false).await;
     assert!(
-        avail_sub.try_recv().expect("available channel open").is_none(),
+        avail_sub
+            .try_recv()
+            .expect("available channel open")
+            .is_none(),
         "a rotation must not surface as an availability transition"
     );
 
@@ -365,15 +420,22 @@ async fn a_camera_without_a_subscription_manager_rotates_its_subscription() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_renew_fault_from_a_lost_subscription_is_still_a_loss() {
     let (camera, _cameras_path, mut sup, observer) = setup().await;
-    let state_sub = observer.declare_subscriber(MOTION_KEY).await.expect("state subscriber");
-    let event_sub = observer.declare_subscriber(EVENT_KEY).await.expect("event subscriber");
+    let state_sub = observer
+        .declare_subscriber(MOTION_KEY)
+        .await
+        .expect("state subscriber");
+    let event_sub = observer
+        .declare_subscriber(EVENT_KEY)
+        .await
+        .expect("event subscriber");
 
     trigger_until_motion(&camera, &state_sub, &observer, true).await;
     camera.control("/control/break-on-renew");
 
     let event = next_event(&event_sub).await;
     assert_eq!(
-        event["kind"], json!("drop"),
+        event["kind"],
+        json!("drop"),
         "a vanished subscription is a loss, not a firmware quirk: {event}"
     );
     assert_eq!(event["reason"], json!("event-stream-lost"), "{event}");
@@ -392,7 +454,10 @@ async fn a_renew_fault_from_a_lost_subscription_is_still_a_loss() {
 #[tokio::test(flavor = "multi_thread")]
 async fn repeated_notifications_publish_one_transition() {
     let (camera, _cameras_path, mut sup, observer) = setup().await;
-    let state_sub = observer.declare_subscriber(MOTION_KEY).await.expect("state subscriber");
+    let state_sub = observer
+        .declare_subscriber(MOTION_KEY)
+        .await
+        .expect("state subscriber");
 
     trigger_until_motion(&camera, &state_sub, &observer, true).await;
 
@@ -419,10 +484,17 @@ async fn repeated_notifications_publish_one_transition() {
         if let Ok(Ok(sample)) = recv {
             let value: Value = serde_json::from_slice(&sample.payload().to_bytes())
                 .expect("state payload is JSON");
-            assert_eq!(value, json!(false), "the next sample after a rise must be the fall");
+            assert_eq!(
+                value,
+                json!(false),
+                "the next sample after a rise must be the fall"
+            );
             break;
         }
-        assert!(tokio::time::Instant::now() < deadline, "no falling edge within 30s");
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "no falling edge within 30s"
+        );
     }
 
     sup.shutdown();

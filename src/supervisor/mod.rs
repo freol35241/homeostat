@@ -91,7 +91,10 @@ pub async fn run(check: &CheckResult, root: &Path, listen: &str) -> Result<(), S
     mirror(&session, "home/state/**").await?;
     mirror(&session, "home/discovery/*").await?;
 
-    let mut world = WorldMeta { grants: check.grants.clone(), ..WorldMeta::default() };
+    let mut world = WorldMeta {
+        grants: check.grants.clone(),
+        ..WorldMeta::default()
+    };
     for unit in &check.house.units {
         world.units.insert(
             unit.manifest.unit.name.clone(),
@@ -180,7 +183,11 @@ impl Core {
         // The log entry exists for the unit's whole lifetime (capture only
         // appends to an existing entry), so a destroyed unit's final lines
         // cannot resurrect it in the served meta space.
-        self.log.lock().expect("log map lock").entry(name.clone()).or_default();
+        self.log
+            .lock()
+            .expect("log map lock")
+            .entry(name.clone())
+            .or_default();
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let task = tokio::spawn(unit::supervise(
             spec,
@@ -189,7 +196,13 @@ impl Core {
             self.log.clone(),
             shutdown_rx,
         ));
-        units.insert(name, UnitHandle { shutdown: shutdown_tx, task });
+        units.insert(
+            name,
+            UnitHandle {
+                shutdown: shutdown_tx,
+                task,
+            },
+        );
     }
 
     /// Stops a unit's supervision task (graceful per the unit contract) and
@@ -208,7 +221,11 @@ impl Core {
         self.stop(name).await;
         self.health.lock().expect("health map lock").remove(name);
         self.log.lock().expect("log map lock").remove(name);
-        self.world.lock().expect("world meta lock").units.remove(name);
+        self.world
+            .lock()
+            .expect("world meta lock")
+            .units
+            .remove(name);
         for key in [
             bus::manifest_hash_key(name),
             bus::files_hash_key(name),
@@ -256,8 +273,14 @@ impl Core {
             .expect("world meta lock")
             .units
             .insert(name.to_string(), unit);
-        let _ = self.session.put(bus::manifest_hash_key(name), manifest_hash).await;
-        let _ = self.session.put(bus::files_hash_key(name), files_hash).await;
+        let _ = self
+            .session
+            .put(bus::manifest_hash_key(name), manifest_hash)
+            .await;
+        let _ = self
+            .session
+            .put(bus::files_hash_key(name), files_hash)
+            .await;
         let _ = self.session.put(bus::manifest_key(name), manifest).await;
     }
 
@@ -277,14 +300,27 @@ impl Core {
         let (units, grants): (Vec<(String, WorldUnit)>, Vec<Grant>) = {
             let world = self.world.lock().expect("world meta lock");
             (
-                world.units.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+                world
+                    .units
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
                 world.grants.clone(),
             )
         };
         for (name, unit) in units {
-            let _ = self.session.put(bus::manifest_hash_key(&name), unit.manifest_hash).await;
-            let _ = self.session.put(bus::files_hash_key(&name), unit.files_hash).await;
-            let _ = self.session.put(bus::manifest_key(&name), unit.manifest).await;
+            let _ = self
+                .session
+                .put(bus::manifest_hash_key(&name), unit.manifest_hash)
+                .await;
+            let _ = self
+                .session
+                .put(bus::files_hash_key(&name), unit.files_hash)
+                .await;
+            let _ = self
+                .session
+                .put(bus::manifest_key(&name), unit.manifest)
+                .await;
         }
         let payload = serde_json::to_string(&grants).expect("grants serialize");
         let _ = self.session.put(bus::GRANTS_KEY, payload).await;
@@ -356,7 +392,9 @@ async fn serve_meta(core: Arc<Core>) -> Result<(), String> {
                 let log = core.log.lock().expect("log map lock");
                 for (name, buffer) in log.iter() {
                     let tail: Vec<&LogEntry> = match lines_cap {
-                        Some(n) if n < buffer.len() => buffer.iter().skip(buffer.len() - n).collect(),
+                        Some(n) if n < buffer.len() => {
+                            buffer.iter().skip(buffer.len() - n).collect()
+                        }
                         _ => buffer.iter().collect(),
                     };
                     entries.push((
@@ -408,9 +446,7 @@ async fn handle_config_query(store: &ConfigStore, session: &Session, query: zeno
     let key = query.key_expr().as_str().to_string();
     let segments: Vec<&str> = key.split('/').collect();
     let (unit, param) = match segments[..] {
-        ["home", "config", unit, param]
-            if !unit.contains('*') && !param.contains('*') =>
-        {
+        ["home", "config", unit, param] if !unit.contains('*') && !param.contains('*') => {
             (unit, param)
         }
         _ => {
@@ -486,8 +522,11 @@ async fn serve_health(session: &Session, health: HealthMap) -> Result<(), String
 /// `Freshness`). Age rather than a wall-clock stamp: the mirror's monotonic
 /// clock is the only one involved, and the reply is read the moment it is
 /// made.
+/// A mirrored value's last-put payload and receipt time, by key.
+type MirrorCache = BTreeMap<String, (Vec<u8>, Instant)>;
+
 async fn mirror(session: &Session, keyexpr: &'static str) -> Result<(), String> {
-    let cache: Arc<Mutex<BTreeMap<String, (Vec<u8>, Instant)>>> = Arc::default();
+    let cache: Arc<Mutex<MirrorCache>> = Arc::default();
     let sub = session
         .declare_subscriber(keyexpr)
         .await
@@ -523,7 +562,11 @@ async fn mirror(session: &Session, keyexpr: &'static str) -> Result<(), String> 
                 .iter()
                 .filter(|(key, _)| intersects(&query, key))
                 .map(|(key, (payload, received))| {
-                    (key.clone(), payload.clone(), received.elapsed().as_secs_f64())
+                    (
+                        key.clone(),
+                        payload.clone(),
+                        received.elapsed().as_secs_f64(),
+                    )
                 })
                 .collect();
             for (key, payload, age_s) in entries {

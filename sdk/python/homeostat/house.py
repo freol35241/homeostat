@@ -10,9 +10,10 @@ the adapter side, because endpoints are opaque to the core.
 """
 
 import os
-import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
+
+import tomllib
 
 
 @dataclass
@@ -144,13 +145,17 @@ def load_adapter(unit: str, root: str | Path = ".") -> AdapterConfig:
 
     entities = []
     entities_dir = root / manifest["entities"]["dir"]
+    # Source rooms come from the whole house's entity files, parsed once,
+    # the first time an entity file wires an input.
+    rooms = None
     for path in sorted(entities_dir.glob("*.toml")):
         data = tomllib.loads(path.read_text())
         entity = _entity_from(path, data, unit)
         if data.get("inputs"):
             # Resolve each source's room from the house's entity files; the
             # plan has already validated that the entity exists.
-            rooms = {e.name: e.room for e in load_house(root).entities}
+            if rooms is None:
+                rooms = {e.name: e.room for e in load_house(root).entities}
             entity.inputs = {
                 name: InputSource(room=rooms[src["entity"]], entity=src["entity"], aspect=src["aspect"])
                 for name, src in data["inputs"].items()

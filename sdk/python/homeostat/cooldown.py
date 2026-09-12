@@ -16,7 +16,7 @@ helper is the norm, that floor is the backstop.
 """
 
 import time
-from typing import Callable
+from collections.abc import Callable
 
 
 class Cooldown:

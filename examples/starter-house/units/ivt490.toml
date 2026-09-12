@@ -9,6 +9,7 @@ description = "IVT490 heat-pump adapter (github.com/freol35241/IVT490-interface-
 command = "uv run units/ivt490.py"
 restart = "always"
 shutdown_grace_s = 5
+env = ["HOMEOSTAT_MQTT_CREDENTIALS"]
 
 [discovery]
 mode = "static"

@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
@@ -85,7 +85,12 @@ enum Command {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
-        Command::Plan { path, bus, save, actor } => plan_command(path, bus, save, actor),
+        Command::Plan {
+            path,
+            bus,
+            save,
+            actor,
+        } => plan_command(path, bus, save, actor),
         Command::Apply { path, bus, plan } => apply_command(path, bus, plan),
         Command::Mcp { bus, http } => mcp_command(bus, http),
         Command::Explain { code } => explain_command(code),
@@ -107,7 +112,7 @@ fn main() -> ExitCode {
 }
 
 /// Validates the repo; on errors prints them and returns None.
-fn checked(path: &PathBuf, verb: &str) -> Option<CheckResult> {
+fn checked(path: &Path, verb: &str) -> Option<CheckResult> {
     let result = homeostat::check(path);
     if !result.errors.is_empty() {
         let lines = homeostat::error::render_sorted(&result.errors);
@@ -141,7 +146,10 @@ fn schema_command(file: Option<String>, markdown: bool) -> ExitCode {
             }
         },
     };
-    println!("{}", serde_json::to_string_pretty(&value).expect("schema serializes"));
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&value).expect("schema serializes")
+    );
     ExitCode::SUCCESS
 }
 
