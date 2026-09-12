@@ -78,7 +78,6 @@ from pathlib import Path
 
 import aiohttp
 from aiohttp import WSMsgType, web
-
 from homeostat import ConfigWriteError, connect, house, keys
 from homeostat.session import QueryError
 

@@ -49,12 +49,12 @@ import json
 import os
 import signal
 import time
-import tomllib
 from pathlib import Path
+from typing import ClassVar
 
 import aiohttp
-
 import homeostat
+import tomllib
 from homeostat import house, keys
 from homeostat.params import LiveParams
 
@@ -351,7 +351,9 @@ class Adapter:
 
         self.publish_discovery(interfaces, sightings)
 
-    ASPECT_DESCRIPTORS = {
+    # A class-level constant, shared read-only across instances — never
+    # mutated per router.
+    ASPECT_DESCRIPTORS: ClassVar[dict] = {
         "router": {
             "schema": 1,
             "groups": ["readings"],

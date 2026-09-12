@@ -16,7 +16,10 @@ use crate::expand::ExpandedKey;
 use crate::repo::{House, LoadedUnit};
 
 pub fn sha256_hex(bytes: &[u8]) -> String {
-    Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 pub fn manifest_hash(manifest_bytes: &[u8]) -> String {
@@ -65,7 +68,11 @@ pub fn files_hash(root: &Path, unit: &LoadedUnit, house: &House, unit_uses_zone:
             feed(path);
         }
         feed("zones.toml");
-        return hasher.finalize().iter().map(|b| format!("{b:02x}")).collect();
+        return hasher
+            .finalize()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
     }
     for entity in house.entities.iter().filter(|e| &e.owner == name) {
         feed(&entity.path);
@@ -74,7 +81,11 @@ pub fn files_hash(root: &Path, unit: &LoadedUnit, house: &House, unit_uses_zone:
         feed("zones.toml");
     }
 
-    hasher.finalize().iter().map(|b| format!("{b:02x}")).collect()
+    hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 #[cfg(test)]
@@ -84,7 +95,8 @@ mod tests {
 
     /// A minimal house: one adapter owning entities, one house-wide unit.
     fn house_dir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("homeostat-content-{tag}-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("homeostat-content-{tag}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(dir.join("entities/probe")).unwrap();
         fs::create_dir_all(dir.join("units")).unwrap();
@@ -144,8 +156,16 @@ mod tests {
         let before = hash_of(&dir, "dash");
         let probe = dir.join("units/probe.toml");
         let manifest = fs::read_to_string(&probe).unwrap();
-        fs::write(&probe, manifest.replace("restart = \"always\"", "restart = \"on-failure\"")).unwrap();
-        assert_ne!(hash_of(&dir, "dash"), before, "a manifest edit must reach it");
+        fs::write(
+            &probe,
+            manifest.replace("restart = \"always\"", "restart = \"on-failure\""),
+        )
+        .unwrap();
+        assert_ne!(
+            hash_of(&dir, "dash"),
+            before,
+            "a manifest edit must reach it"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -157,10 +177,18 @@ mod tests {
         let before = hash_of(&dir, "probe");
         let dash = dir.join("units/dash.toml");
         let manifest = fs::read_to_string(&dash).unwrap();
-        fs::write(&dash, manifest.replace("restart = \"always\"", "restart = \"on-failure\"")).unwrap();
+        fs::write(
+            &dash,
+            manifest.replace("restart = \"always\"", "restart = \"on-failure\""),
+        )
+        .unwrap();
         assert_eq!(hash_of(&dir, "probe"), before);
         entity(&dir, "third_lamp");
-        assert_ne!(hash_of(&dir, "probe"), before, "its own entities still count");
+        assert_ne!(
+            hash_of(&dir, "probe"),
+            before,
+            "its own entities still count"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 }

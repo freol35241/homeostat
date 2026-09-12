@@ -102,9 +102,7 @@ impl ConfigStore {
         let fresh = build(house);
         let changed = fresh
             .iter()
-            .filter(|(key, new)| {
-                params.get(*key).is_some_and(|old| old.value != new.value)
-            })
+            .filter(|(key, new)| params.get(*key).is_some_and(|old| old.value != new.value))
             .map(|((unit, param), p)| (unit.clone(), param.clone(), p.value.clone()))
             .collect();
         *params = fresh;
@@ -149,7 +147,9 @@ impl ConfigStore {
 fn build(house: &House) -> BTreeMap<(String, String), StoredParam> {
     let mut params = BTreeMap::new();
     for unit in &house.units {
-        let Some(specs) = &unit.manifest.params else { continue };
+        let Some(specs) = &unit.manifest.params else {
+            continue;
+        };
         for (name, spec) in specs {
             params.insert(
                 (unit.manifest.unit.name.clone(), name.clone()),
@@ -184,9 +184,7 @@ pub fn default_value(spec: &ParamSpec) -> Value {
         // it means: serde_json's Number(5) != Number(5.0), so leaving it
         // integral makes every decimal write of the same value plan as
         // perpetual drift.
-        toml::Value::Integer(i) if spec.param_type == ParamType::Float => {
-            Value::from(*i as f64)
-        }
+        toml::Value::Integer(i) if spec.param_type == ParamType::Float => Value::from(*i as f64),
         toml::Value::Integer(i) => Value::from(*i),
         toml::Value::Float(f) => Value::from(*f),
         toml::Value::String(s) => Value::from(s.clone()),
@@ -197,18 +195,26 @@ pub fn default_value(spec: &ParamSpec) -> Value {
 fn check(param_type: ParamType, constraint: &Constraint, value: &Value) -> Result<(), String> {
     match param_type {
         ParamType::Bool => {
-            value.as_bool().ok_or_else(|| type_error(param_type, value))?;
+            value
+                .as_bool()
+                .ok_or_else(|| type_error(param_type, value))?;
         }
         ParamType::Int => {
-            let n = value.as_i64().ok_or_else(|| type_error(param_type, value))?;
+            let n = value
+                .as_i64()
+                .ok_or_else(|| type_error(param_type, value))?;
             check_range(n as f64, constraint)?;
         }
         ParamType::Float => {
-            let n = value.as_f64().ok_or_else(|| type_error(param_type, value))?;
+            let n = value
+                .as_f64()
+                .ok_or_else(|| type_error(param_type, value))?;
             check_range(n, constraint)?;
         }
         ParamType::String => {
-            let s = value.as_str().ok_or_else(|| type_error(param_type, value))?;
+            let s = value
+                .as_str()
+                .ok_or_else(|| type_error(param_type, value))?;
             if let Some(allowed) = &constraint.allowed {
                 if !allowed.iter().any(|a| a == s) {
                     return Err(format!(
@@ -223,7 +229,9 @@ fn check(param_type: ParamType, constraint: &Constraint, value: &Value) -> Resul
             }
         }
         ParamType::Time => {
-            let s = value.as_str().ok_or_else(|| type_error(param_type, value))?;
+            let s = value
+                .as_str()
+                .ok_or_else(|| type_error(param_type, value))?;
             let t = parse_time(s).ok_or_else(|| format!("\"{s}\" is not a time (HH:MM)"))?;
             check_window(t, constraint)?;
         }
@@ -331,7 +339,11 @@ mod tests {
 
     #[test]
     fn int_range() {
-        let c = Constraint { min: Some(0.0), max: Some(100.0), ..Constraint::default() };
+        let c = Constraint {
+            min: Some(0.0),
+            max: Some(100.0),
+            ..Constraint::default()
+        };
         check(ParamType::Int, &c, &json!(50)).unwrap();
         assert!(check(ParamType::Int, &c, &json!(-1)).is_err());
         assert!(check(ParamType::Int, &c, &json!(101)).is_err());
@@ -362,8 +374,13 @@ mod tests {
             )])),
             write_order: tokio::sync::Mutex::new(()),
         };
-        let stored = store.write("heating", "setpoint", json!(21)).expect("in-range write");
-        assert!(stored.is_f64(), "stored as a float, not an integer: {stored}");
+        let stored = store
+            .write("heating", "setpoint", json!(21))
+            .expect("in-range write");
+        assert!(
+            stored.is_f64(),
+            "stored as a float, not an integer: {stored}"
+        );
         assert_eq!(store.read(|_, _| true)[0].2, json!(21.0));
     }
 
@@ -386,10 +403,13 @@ mod tests {
             .write("evening_lights", "nope", json!("23:00"))
             .expect_err("unknown parameter rejected");
         let read = store.read(|_, _| true);
-        assert_eq!(read, vec![(
-            "evening_lights".to_string(),
-            "off_time".to_string(),
-            json!("23:30"),
-        )]);
+        assert_eq!(
+            read,
+            vec![(
+                "evening_lights".to_string(),
+                "off_time".to_string(),
+                json!("23:30"),
+            )]
+        );
     }
 }

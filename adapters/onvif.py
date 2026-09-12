@@ -89,16 +89,15 @@ import contextlib
 import hashlib
 import os
 import signal
-import tomllib
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
-from xml.sax.saxutils import escape
 from xml.etree import ElementTree
+from xml.sax.saxutils import escape
 
 import aiohttp
-
 import homeostat
+import tomllib
 from homeostat import house, keys
 
 ENV_CAMERAS = "HOMEOSTAT_CAMERAS"

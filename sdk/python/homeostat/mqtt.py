@@ -13,12 +13,12 @@ teardown.
 import os
 import signal
 import threading
-import tomllib
 import traceback
 from pathlib import Path
 from urllib.parse import ParseResult, unquote, urlparse
 
 import paho.mqtt.client as mqtt
+import tomllib
 
 ENV_CREDENTIALS = "HOMEOSTAT_MQTT_CREDENTIALS"
 

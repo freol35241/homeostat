@@ -14,7 +14,8 @@ use serde_json::json;
 use zenoh::sample::SampleKind;
 
 use common::{
-    assert_unit_contract, await_discovery, await_mirror, await_states, expect_drop_event, expect_states, free_port, Supervisor,
+    assert_unit_contract, await_discovery, await_mirror, await_states, expect_drop_event,
+    expect_states, free_port, Supervisor,
 };
 
 const FIXTURE: &str = "tests/fixture_house_esphome";
@@ -60,7 +61,10 @@ impl FakeEsphome {
         // First run resolves the fake device's own uv env: generous.
         let deadline = Instant::now() + Duration::from_secs(60);
         while std::net::TcpStream::connect(("127.0.0.1", port)).is_err() {
-            assert!(Instant::now() < deadline, "fake esphome device never listened on {port}");
+            assert!(
+                Instant::now() < deadline,
+                "fake esphome device never listened on {port}"
+            );
             std::thread::sleep(Duration::from_millis(50));
         }
         Self { child, port }
@@ -125,7 +129,10 @@ async fn setup_with(device_args: &[&str]) -> (FakeEsphome, PathBuf, Supervisor, 
 #[tokio::test(flavor = "multi_thread")]
 async fn device_state_translates_to_bus_state() {
     let (_device, _devices_path, mut sup, observer) = setup().await;
-    let state_sub = observer.declare_subscriber("home/state/**").await.expect("state subscriber");
+    let state_sub = observer
+        .declare_subscriber("home/state/**")
+        .await
+        .expect("state subscriber");
 
     // The device connects as soon as the adapter is up, so its initial
     // states may already be on the bus: read as a late joiner.
@@ -156,8 +163,18 @@ async fn device_dropout_flips_available() {
         .expect("state subscriber");
 
     await_mirror(&observer, "home/state/shed/relay/available", &json!(true)).await;
-    await_mirror(&observer, "home/state/shed/shed_temp/available", &json!(true)).await;
-    await_mirror(&observer, "home/state/shed/shed_motion/available", &json!(true)).await;
+    await_mirror(
+        &observer,
+        "home/state/shed/shed_temp/available",
+        &json!(true),
+    )
+    .await;
+    await_mirror(
+        &observer,
+        "home/state/shed/shed_motion/available",
+        &json!(true),
+    )
+    .await;
 
     device.kill();
 
@@ -173,7 +190,10 @@ async fn device_dropout_flips_available() {
 
     // A command at the dead device drops with device-unavailable
     // (docs/design.md, Sensor dropout) instead of silently vanishing.
-    let event_sub = observer.declare_subscriber(EVENT_KEY).await.expect("event subscriber");
+    let event_sub = observer
+        .declare_subscriber(EVENT_KEY)
+        .await
+        .expect("event subscriber");
     observer
         .put(
             RELAY_CMD_KEY,
@@ -192,8 +212,14 @@ async fn device_dropout_flips_available() {
 #[tokio::test(flavor = "multi_thread")]
 async fn reserved_aspect_field_drops_with_health_event() {
     let (_device, _devices_path, mut sup, observer) = setup_with(&["--reserved-sensor"]).await;
-    let event_sub = observer.declare_subscriber(EVENT_KEY).await.expect("event subscriber");
-    let state_sub = observer.declare_subscriber(RELAY_STATE_KEY).await.expect("state subscriber");
+    let event_sub = observer
+        .declare_subscriber(EVENT_KEY)
+        .await
+        .expect("event subscriber");
+    let state_sub = observer
+        .declare_subscriber(RELAY_STATE_KEY)
+        .await
+        .expect("state subscriber");
     await_states(&observer, &state_sub, &[(RELAY_STATE_KEY, json!(false))]).await;
 
     // The relay command makes the device rebroadcast both the switch and
@@ -218,7 +244,10 @@ async fn reserved_aspect_field_drops_with_health_event() {
 #[tokio::test(flavor = "multi_thread")]
 async fn cmd_envelope_reaches_fake_device_and_echoes_back() {
     let (_device, _devices_path, mut sup, observer) = setup().await;
-    let state_sub = observer.declare_subscriber(RELAY_STATE_KEY).await.expect("state subscriber");
+    let state_sub = observer
+        .declare_subscriber(RELAY_STATE_KEY)
+        .await
+        .expect("state subscriber");
     await_states(&observer, &state_sub, &[(RELAY_STATE_KEY, json!(false))]).await;
 
     observer
@@ -239,8 +268,14 @@ async fn cmd_envelope_reaches_fake_device_and_echoes_back() {
 #[tokio::test(flavor = "multi_thread")]
 async fn envelope_less_command_drops_with_health_event() {
     let (_device, _devices_path, mut sup, observer) = setup().await;
-    let event_sub = observer.declare_subscriber(EVENT_KEY).await.expect("event subscriber");
-    let state_sub = observer.declare_subscriber(RELAY_STATE_KEY).await.expect("state subscriber");
+    let event_sub = observer
+        .declare_subscriber(EVENT_KEY)
+        .await
+        .expect("event subscriber");
+    let state_sub = observer
+        .declare_subscriber(RELAY_STATE_KEY)
+        .await
+        .expect("state subscriber");
     await_states(&observer, &state_sub, &[(RELAY_STATE_KEY, json!(false))]).await;
 
     observer.put(RELAY_CMD_KEY, "true").await.expect("cmd put");
@@ -308,8 +343,14 @@ async fn bound_device_entities_published_as_discovery() {
     assert_eq!(motion["entity"], json!("shed_motion"));
     assert_eq!(motion["suggested"]["capability"], json!("presence"));
     assert_eq!(motion["description"]["device_class"], json!("motion"));
-    assert_eq!(motion["aspects"]["fields"]["occupancy"]["label"], json!("motion (occupancy)"));
-    assert_eq!(motion["aspects"]["fields"]["occupancy"]["values"][0], json!({"value": true, "label": "occupied"}));
+    assert_eq!(
+        motion["aspects"]["fields"]["occupancy"]["label"],
+        json!("motion (occupancy)")
+    );
+    assert_eq!(
+        motion["aspects"]["fields"]["occupancy"]["values"][0],
+        json!({"value": true, "label": "occupied"})
+    );
 
     sup.shutdown();
 }

@@ -96,7 +96,16 @@ fn uv_script(command: &str) -> Option<(&str, Vec<&str>)> {
 /// need to find their caches, locale and CA bundles. Everything else is
 /// withheld unless the manifest's `runtime.env` names it.
 const BASE_ENV: [&str; 11] = [
-    "PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LANGUAGE", "TZ", "TMPDIR", "TERM",
+    "PATH",
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "SHELL",
+    "LANG",
+    "LANGUAGE",
+    "TZ",
+    "TMPDIR",
+    "TERM",
     "REQUESTS_CA_BUNDLE",
 ];
 const BASE_ENV_PREFIXES: [&str; 5] = ["LC_", "XDG_", "UV_", "PYTHON", "SSL_CERT_"];
@@ -232,7 +241,10 @@ pub async fn terminate(child: &mut Child, grace: Duration) {
     };
     signal_group(pid, libc::SIGTERM);
     let deadline = tokio::time::Instant::now() + grace;
-    if tokio::time::timeout_at(deadline, child.wait()).await.is_err() {
+    if tokio::time::timeout_at(deadline, child.wait())
+        .await
+        .is_err()
+    {
         signal_group(pid, libc::SIGKILL);
         let _ = child.wait().await;
         return;

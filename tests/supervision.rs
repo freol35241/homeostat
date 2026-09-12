@@ -25,8 +25,8 @@ async fn get_log(session: &zenoh::Session, unit: &str, lines: Option<u32>) -> Ve
     let mut entries = Vec::new();
     while let Ok(reply) = replies.recv_async().await {
         if let Ok(sample) = reply.result() {
-            entries = serde_json::from_slice(&sample.payload().to_bytes())
-                .expect("log entries parse");
+            entries =
+                serde_json::from_slice(&sample.payload().to_bytes()).expect("log entries parse");
         }
     }
     entries
@@ -34,7 +34,12 @@ async fn get_log(session: &zenoh::Session, unit: &str, lines: Option<u32>) -> Ve
 
 /// Polls the log queryable until `pred` is satisfied or the deadline
 /// passes; panics on timeout with the last-seen buffer for debugging.
-async fn await_log<F>(session: &zenoh::Session, unit: &str, timeout: Duration, pred: F) -> Vec<LogEntry>
+async fn await_log<F>(
+    session: &zenoh::Session,
+    unit: &str,
+    timeout: Duration,
+    pred: F,
+) -> Vec<LogEntry>
 where
     F: Fn(&[LogEntry]) -> bool,
 {
@@ -44,7 +49,10 @@ where
         if pred(&entries) {
             return entries;
         }
-        assert!(Instant::now() < deadline, "log condition not met in time: {entries:?}");
+        assert!(
+            Instant::now() < deadline,
+            "log condition not met in time: {entries:?}"
+        );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
@@ -102,7 +110,10 @@ async fn crash_restarts_with_exponential_backoff() {
     let mut crashes = 0;
     while backoffs.len() < 3 {
         crashes += 1;
-        assert!(crashes <= 10, "no clean doubling run within 10 crashes: {backoffs:?}");
+        assert!(
+            crashes <= 10,
+            "no clean doubling run within 10 crashes: {backoffs:?}"
+        );
         await_health(&mut watch, Duration::from_secs(10), running).await;
         // The crash command has no last-value storage behind it yet, so a
         // put can land before the fresh incarnation subscribes; resend
@@ -178,7 +189,10 @@ async fn sigterm_shuts_down_gracefully_without_orphans() {
     // it with margin only for reaping and bus teardown.
     let code = sup.wait_exit(Duration::from_secs(7));
     assert_eq!(code, Some(0), "supervisor exit code");
-    assert!(!process_alive(adapter_pid), "adapter must not outlive the supervisor");
+    assert!(
+        !process_alive(adapter_pid),
+        "adapter must not outlive the supervisor"
+    );
 }
 
 /// SIGKILL on the supervisor must still not leak the unit (pdeathsig).
@@ -211,7 +225,10 @@ async fn log_capture_tags_and_orders_by_stream() {
     let mut watch = health_watch(&observer, "logger").await;
     await_health(&mut watch, Duration::from_secs(10), running).await;
 
-    let entries = await_log(&observer, "logger", Duration::from_secs(10), |e| e.len() >= 8).await;
+    let entries = await_log(&observer, "logger", Duration::from_secs(10), |e| {
+        e.len() >= 8
+    })
+    .await;
     assert_eq!(entries.len(), 8, "5 stdout + 3 stderr lines: {entries:?}");
 
     let stdout: Vec<&str> = entries
@@ -221,7 +238,13 @@ async fn log_capture_tags_and_orders_by_stream() {
         .collect();
     assert_eq!(
         stdout,
-        vec!["stdout-line-0", "stdout-line-1", "stdout-line-2", "stdout-line-3", "stdout-line-4"],
+        vec![
+            "stdout-line-0",
+            "stdout-line-1",
+            "stdout-line-2",
+            "stdout-line-3",
+            "stdout-line-4"
+        ],
         "stdout lines keep source order: {entries:?}"
     );
     let stderr: Vec<&str> = entries
@@ -241,7 +264,10 @@ async fn log_capture_tags_and_orders_by_stream() {
     assert_eq!(tail.len(), 3, "{tail:?}");
     assert_eq!(
         tail.iter().map(|e| &e.line).collect::<Vec<_>>(),
-        entries[entries.len() - 3..].iter().map(|e| &e.line).collect::<Vec<_>>(),
+        entries[entries.len() - 3..]
+            .iter()
+            .map(|e| &e.line)
+            .collect::<Vec<_>>(),
         "lines=3 is the last 3 of the full buffer: {entries:?} vs {tail:?}"
     );
 
@@ -261,15 +287,30 @@ async fn log_capture_evicts_oldest_past_capacity() {
     let mut watch = health_watch(&observer, "flooder").await;
     await_health(&mut watch, Duration::from_secs(10), running).await;
 
-    let entries =
-        await_log(&observer, "flooder", Duration::from_secs(10), |e| e.len() >= 500).await;
-    assert_eq!(entries.len(), 500, "capped at the ring buffer capacity: {} entries", entries.len());
+    let entries = await_log(&observer, "flooder", Duration::from_secs(10), |e| {
+        e.len() >= 500
+    })
+    .await;
+    assert_eq!(
+        entries.len(),
+        500,
+        "capped at the ring buffer capacity: {} entries",
+        entries.len()
+    );
     assert!(
         entries.iter().all(|e| e.stream == "stdout"),
         "flooder only writes stdout: {entries:?}"
     );
-    assert_eq!(entries.first().unwrap().line, "stdout-line-100", "oldest 100 evicted");
-    assert_eq!(entries.last().unwrap().line, "stdout-line-599", "newest line kept");
+    assert_eq!(
+        entries.first().unwrap().line,
+        "stdout-line-100",
+        "oldest 100 evicted"
+    );
+    assert_eq!(
+        entries.last().unwrap().line,
+        "stdout-line-599",
+        "newest line kept"
+    );
 
     sup.shutdown();
 }
@@ -288,7 +329,10 @@ async fn restart_policy_terminal_states_read_stopped() {
     })
     .await;
     assert_eq!(health.last_exit_code, Some(0), "oneshot exited cleanly");
-    assert_eq!(health.restarts, 0, "a clean exit under on-failure never restarts");
+    assert_eq!(
+        health.restarts, 0,
+        "a clean exit under on-failure never restarts"
+    );
 
     let mut fickle = health_watch(&observer, "fickle").await;
     let health = await_health(&mut fickle, Duration::from_secs(30), |h| {
@@ -317,20 +361,31 @@ async fn a_unit_sees_only_the_environment_its_manifest_declares() {
     );
     let observer = sup.observer().await;
     let mut watch = health_watch(&observer, "envdump").await;
-    await_health(&mut watch, Duration::from_secs(10), |h| h.status == HealthStatus::Stopped).await;
+    await_health(&mut watch, Duration::from_secs(10), |h| {
+        h.status == HealthStatus::Stopped
+    })
+    .await;
 
     let entries = await_log(&observer, "envdump", Duration::from_secs(10), |e| {
         e.iter().any(|l| l.line.starts_with("HOMEOSTAT_BUS="))
     })
     .await;
     let lines: Vec<&str> = entries.iter().map(|e| e.line.as_str()).collect();
-    assert!(lines.contains(&"HOMEOSTAT_TEST_DECLARED=visible"), "{lines:?}");
+    assert!(
+        lines.contains(&"HOMEOSTAT_TEST_DECLARED=visible"),
+        "{lines:?}"
+    );
     assert!(lines.contains(&"HOMEOSTAT_UNIT=envdump"), "{lines:?}");
     assert!(
-        !lines.iter().any(|l| l.starts_with("HOMEOSTAT_TEST_UNDECLARED=")),
+        !lines
+            .iter()
+            .any(|l| l.starts_with("HOMEOSTAT_TEST_UNDECLARED=")),
         "an undeclared variable reached the unit: {lines:?}"
     );
-    assert!(lines.iter().any(|l| l.starts_with("PATH=")), "the base set is inherited: {lines:?}");
+    assert!(
+        lines.iter().any(|l| l.starts_with("PATH=")),
+        "the base set is inherited: {lines:?}"
+    );
 
     sup.shutdown();
 }

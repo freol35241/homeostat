@@ -24,8 +24,11 @@ pub fn head_commit(root: &Path) -> Option<String> {
     // core.quotePath would C-quote any non-ASCII path ("plans/hus-\303\245"),
     // which then fails the plans/ test below and lets a saved plan dirty
     // the very commit it was planned against.
-    let dirty = git(root, &["-c", "core.quotePath=false", "status", "--porcelain"])
-        .map(|s| s.lines().any(|line| !under_plans(line)))?;
+    let dirty = git(
+        root,
+        &["-c", "core.quotePath=false", "status", "--porcelain"],
+    )
+    .map(|s| s.lines().any(|line| !under_plans(line)))?;
     Some(if dirty { format!("{head}-dirty") } else { head })
 }
 
@@ -61,7 +64,8 @@ mod tests {
     /// A repo with the house at its root, plus a nested directory that
     /// must not pass for a house of its own.
     fn repo(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("homeostat-gitinfo-{tag}-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("homeostat-gitinfo-{tag}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(dir.join("nested/units")).unwrap();
         fs::write(dir.join("zones.toml"), "schema = 1\n").unwrap();
@@ -121,7 +125,8 @@ mod tests {
 
     #[test]
     fn outside_a_repo_there_is_no_commit() {
-        let dir = std::env::temp_dir().join(format!("homeostat-gitinfo-bare-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("homeostat-gitinfo-bare-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         assert_eq!(head_commit(&dir), None);

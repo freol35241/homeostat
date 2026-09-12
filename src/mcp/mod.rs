@@ -38,8 +38,7 @@ impl Server {
     /// declares the liveliness token when running as a unit, and installs
     /// the SIGTERM/SIGINT handler.
     pub fn start(endpoint: &str) -> Result<Server, String> {
-        let runtime = tokio::runtime::Runtime::new()
-            .map_err(|e| format!("tokio runtime: {e}"))?;
+        let runtime = tokio::runtime::Runtime::new().map_err(|e| format!("tokio runtime: {e}"))?;
         let session = runtime.block_on(world::connect(endpoint))?;
         let liveliness = match std::env::var(bus::ENV_UNIT) {
             Ok(unit) if !unit.is_empty() => Some(
@@ -131,7 +130,9 @@ impl Server {
             }
         }
         if let Some(value) = args.get("limit") {
-            let value = value.as_u64().ok_or("\"limit\" must be a positive integer")?;
+            let value = value
+                .as_u64()
+                .ok_or("\"limit\" must be a positive integer")?;
             params.push(format!("limit={value}"));
         }
         let selector = if params.is_empty() {
@@ -150,14 +151,12 @@ impl Server {
             while let Ok(reply) = replies.recv_async().await {
                 match reply.result() {
                     Ok(sample) => {
-                        let rows: Value =
-                            serde_json::from_slice(&sample.payload().to_bytes())
-                                .unwrap_or(Value::Null);
+                        let rows: Value = serde_json::from_slice(&sample.payload().to_bytes())
+                            .unwrap_or(Value::Null);
                         values.insert(sample.key_expr().to_string(), rows);
                     }
                     Err(err) => {
-                        return Err(String::from_utf8_lossy(&err.payload().to_bytes())
-                            .to_string());
+                        return Err(String::from_utf8_lossy(&err.payload().to_bytes()).to_string());
                     }
                 }
             }
@@ -173,7 +172,9 @@ impl Server {
         let unit = str_arg(args, "unit")?;
         let mut selector = bus::log_key(unit);
         if let Some(value) = args.get("lines") {
-            let value = value.as_u64().ok_or("\"lines\" must be a positive integer")?;
+            let value = value
+                .as_u64()
+                .ok_or("\"lines\" must be a positive integer")?;
             selector.push_str(&format!("?lines={value}"));
         }
         self.runtime.block_on(async {
@@ -223,7 +224,9 @@ impl Server {
             }
         }
         if let Some(value) = args.get("limit") {
-            let value = value.as_u64().ok_or("\"limit\" must be a positive integer")?;
+            let value = value
+                .as_u64()
+                .ok_or("\"limit\" must be a positive integer")?;
             params.push(format!("limit={value}"));
         }
         let selector = if params.is_empty() {
@@ -282,7 +285,11 @@ fn schema(args: &Value) -> Result<String, String> {
         None => crate::schema::all(),
         Some(name) => match crate::schema::File::parse(name) {
             Some(file) => crate::schema::json(file),
-            None => return Err(format!("unknown file kind \"{name}\": expected unit, entity or zones")),
+            None => {
+                return Err(format!(
+                    "unknown file kind \"{name}\": expected unit, entity or zones"
+                ))
+            }
         },
     };
     Ok(serde_json::to_string_pretty(&value).expect("schema serializes"))

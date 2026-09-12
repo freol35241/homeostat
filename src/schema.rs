@@ -209,15 +209,14 @@ fn enum_values(node: &Value) -> Option<Vec<(String, Option<String>)>> {
                 .and_then(Value::as_str)
                 .map(|d| d.replace('\n', " "));
             out.push((value.to_string(), desc));
-        } else if let Some(values) = v.get("enum").and_then(Value::as_array) {
+        } else {
+            let values = v.get("enum").and_then(Value::as_array)?;
             out.extend(
                 values
                     .iter()
                     .filter_map(Value::as_str)
                     .map(|v| (v.to_string(), None)),
             );
-        } else {
-            return None;
         }
     }
     Some(out)

@@ -36,7 +36,11 @@ impl UnitSpec {
         Duration::from_secs(grace_s.unwrap_or(DEFAULT_GRACE_S) as u64)
     }
 
-    pub fn from_loaded(unit: &crate::repo::LoadedUnit, root: &std::path::Path, endpoint: &str) -> UnitSpec {
+    pub fn from_loaded(
+        unit: &crate::repo::LoadedUnit,
+        root: &std::path::Path,
+        endpoint: &str,
+    ) -> UnitSpec {
         UnitSpec {
             name: unit.manifest.unit.name.clone(),
             command: unit.manifest.runtime.command.clone(),

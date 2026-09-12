@@ -198,9 +198,9 @@ async fn descriptors_mark_a_detector_notable() {
         let mut found = None;
         while let Ok(reply) = replies.recv_async().await {
             if let Ok(sample) = reply.result() {
-                if let Ok(value) = serde_json::from_slice::<serde_json::Value>(
-                    &sample.payload().to_bytes(),
-                ) {
+                if let Ok(value) =
+                    serde_json::from_slice::<serde_json::Value>(&sample.payload().to_bytes())
+                {
                     found = Some(value);
                 }
             }
@@ -217,7 +217,10 @@ async fn descriptors_mark_a_detector_notable() {
         .find(|r| r["id"] == SMOKE)
         .expect("the bound detector is listed before it has ever transmitted");
     assert_eq!(smoke["aspects"]["fields"]["smoke"]["notable"], json!(true));
-    assert_eq!(smoke["aspects"]["fields"]["smoke"]["kind"], json!("boolean"));
+    assert_eq!(
+        smoke["aspects"]["fields"]["smoke"]["kind"],
+        json!("boolean")
+    );
 
     let door = records
         .iter()

@@ -82,10 +82,11 @@ import contextlib
 import os
 import signal
 import threading
-import tomllib
 from functools import partial
 from pathlib import Path
 
+import homeostat
+import tomllib
 from aioesphomeapi import (
     APIClient,
     BinarySensorInfo,
@@ -99,11 +100,9 @@ from aioesphomeapi import (
     SwitchInfo,
     SwitchState,
 )
+from homeostat import house, keys
 from zeroconf import ServiceStateChange
 from zeroconf.asyncio import AsyncServiceBrowser, AsyncServiceInfo, AsyncZeroconf
-
-import homeostat
-from homeostat import house, keys
 
 ENV_DEVICES = "HOMEOSTAT_ESPHOME_DEVICES"
 MDNS_SERVICE = "_esphomelib._tcp.local."
@@ -301,11 +300,11 @@ async def run_device(device, bound, devices_conf, session, entity_runtime, entit
         key_map.clear()
         key_map.update(new_key_map)
         with entity_lock:
-            for _key, (entity, info) in new_key_map.items():
+            for entity, info in new_key_map.values():
                 entity_runtime[entity.name] = {"client": client, "key": info.key}
         bound_discovery[device] = records
         publish_discovery()
-        for _key, (entity, _info) in new_key_map.items():
+        for entity, _info in new_key_map.values():
             session.put_json(keys.state_key(entity.room, entity.name, "available"), True)
 
         def on_state(state) -> None:

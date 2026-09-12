@@ -85,7 +85,10 @@ async fn virtual_sensor_publishes_fused_state() {
 
     // One source: the fusion is that reading.
     livingroom.put(json!(20.0).to_string()).await.expect("put");
-    assert_eq!(next_sample(&fused_sub, Duration::from_secs(10)).await, json!(20.0));
+    assert_eq!(
+        next_sample(&fused_sub, Duration::from_secs(10)).await,
+        json!(20.0)
+    );
     mirror_read_eventually(&observer, FUSED_STATE, &json!(20.0)).await;
 
     // A second source at the same value does not move the mean: publish on
@@ -94,7 +97,10 @@ async fn virtual_sensor_publishes_fused_state() {
     // was ever published in between.
     office.put(json!(20.0).to_string()).await.expect("put");
     office.put(json!(22.0).to_string()).await.expect("put");
-    assert_eq!(next_sample(&fused_sub, Duration::from_secs(10)).await, json!(21.0));
+    assert_eq!(
+        next_sample(&fused_sub, Duration::from_secs(10)).await,
+        json!(21.0)
+    );
     mirror_read_eventually(&observer, FUSED_STATE, &json!(21.0)).await;
 
     sup.shutdown();
@@ -140,9 +146,15 @@ async fn restarted_automation_catches_up_from_the_mirror() {
     // One put at a time: the unit reads the two sources through two
     // subscribers, and zenoh orders samples within one, not across them.
     livingroom.put(json!(20.0).to_string()).await.expect("put");
-    assert_eq!(next_sample(&fused_sub, Duration::from_secs(10)).await, json!(20.0));
+    assert_eq!(
+        next_sample(&fused_sub, Duration::from_secs(10)).await,
+        json!(20.0)
+    );
     office.put(json!(22.0).to_string()).await.expect("put");
-    assert_eq!(next_sample(&fused_sub, Duration::from_secs(10)).await, json!(21.0));
+    assert_eq!(
+        next_sample(&fused_sub, Duration::from_secs(10)).await,
+        json!(21.0)
+    );
     mirror_read_eventually(&observer, LIVINGROOM_STATE, &json!(20.0)).await;
     mirror_read_eventually(&observer, OFFICE_STATE, &json!(22.0)).await;
 
@@ -167,8 +179,14 @@ async fn restarted_automation_catches_up_from_the_mirror() {
     // from the catch-up alone — no source publishes. Catch-up arrives one
     // key at a time and the unit recomputes on each, as on first start.
     let restarted = restart_automation(&observer, running.pid.expect("pid")).await;
-    assert_eq!(next_sample(&fused_sub, Duration::from_secs(10)).await, json!(20.0));
-    assert_eq!(next_sample(&fused_sub, Duration::from_secs(10)).await, json!(21.0));
+    assert_eq!(
+        next_sample(&fused_sub, Duration::from_secs(10)).await,
+        json!(20.0)
+    );
+    assert_eq!(
+        next_sample(&fused_sub, Duration::from_secs(10)).await,
+        json!(21.0)
+    );
 
     // Tighten the policy so both mirrored values are stale by the next
     // restart. The catch-up then publishes nothing, and the first live
@@ -181,7 +199,10 @@ async fn restarted_automation_catches_up_from_the_mirror() {
     restart_automation(&observer, restarted.pid.expect("pid")).await;
     await_matching(&office).await;
     office.put(json!(30.0).to_string()).await.expect("put");
-    assert_eq!(next_sample(&fused_sub, Duration::from_secs(10)).await, json!(30.0));
+    assert_eq!(
+        next_sample(&fused_sub, Duration::from_secs(10)).await,
+        json!(30.0)
+    );
 
     sup.shutdown();
 }

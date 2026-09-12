@@ -129,8 +129,8 @@ async fn await_echo_off(state_sub: &Sub) {
             .await
             .expect("lamp state echo within 10s")
             .expect("state stream open");
-        let value: Value = serde_json::from_slice(&sample.payload().to_bytes())
-            .expect("state payload is JSON");
+        let value: Value =
+            serde_json::from_slice(&sample.payload().to_bytes()).expect("state payload is JSON");
         if value == json!(false) {
             return;
         }
@@ -145,8 +145,8 @@ async fn clock_payloads_match_schema() {
     let mut sup = Supervisor::spawn("tests/fixture_house_evening");
     let observer = sup.observer().await;
 
-    let minute = cache_read_eventually(&observer, "home/clock/minute", Duration::from_secs(60))
-        .await;
+    let minute =
+        cache_read_eventually(&observer, "home/clock/minute", Duration::from_secs(60)).await;
     let Value::String(minute) = minute else {
         panic!("minute payload is not a JSON string: {minute}");
     };
@@ -231,7 +231,9 @@ async fn off_time_edit_applies_live_and_survives_restart() {
     let health = cache_read(&observer, "home/health/evening_lights")
         .await
         .expect("current health served");
-    let pid_before = health["pid"].as_u64().expect("running automation has a pid");
+    let pid_before = health["pid"]
+        .as_u64()
+        .expect("running automation has a pid");
 
     let written = config_write(&observer, OFF_TIME_KEY, json!("23:30"))
         .await
@@ -259,7 +261,11 @@ async fn off_time_edit_applies_live_and_survives_restart() {
         .await
         .expect("current health served");
     assert_eq!(health["status"], json!("running"));
-    assert_eq!(health["pid"], json!(pid_before), "no unit restart on a parameter edit");
+    assert_eq!(
+        health["pid"],
+        json!(pid_before),
+        "no unit restart on a parameter edit"
+    );
 
     // Kill the automation; the supervisor sweeps its process group,
     // restarts it, and the edited value still governs — last-value, not

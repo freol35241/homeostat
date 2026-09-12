@@ -57,7 +57,10 @@ impl FakeOpenwrt {
         // First run resolves the fake router's own uv env: generous.
         let deadline = Instant::now() + Duration::from_secs(60);
         while std::net::TcpStream::connect(("127.0.0.1", port)).is_err() {
-            assert!(Instant::now() < deadline, "fake openwrt router never listened on {port}");
+            assert!(
+                Instant::now() < deadline,
+                "fake openwrt router never listened on {port}"
+            );
             std::thread::sleep(Duration::from_millis(50));
         }
         Self { child, port }
@@ -76,8 +79,13 @@ impl FakeOpenwrt {
             )
             .expect("write control request");
         let mut response = String::new();
-        stream.read_to_string(&mut response).expect("read control response");
-        assert!(response.starts_with("HTTP/1.1 200"), "control {path}: {response}");
+        stream
+            .read_to_string(&mut response)
+            .expect("read control response");
+        assert!(
+            response.starts_with("HTTP/1.1 200"),
+            "control {path}: {response}"
+        );
     }
 }
 
@@ -134,10 +142,14 @@ async fn setup() -> (FakeOpenwrt, PathBuf, Supervisor, zenoh::Session) {
 #[tokio::test(flavor = "multi_thread")]
 async fn wifi_association_drives_presence() {
     let (router, _routers_path, mut sup, observer) = setup().await;
-    let presence_sub =
-        observer.declare_subscriber(PRESENCE_KEY).await.expect("presence subscriber");
-    let discovery_sub =
-        observer.declare_subscriber(DISCOVERY_KEY).await.expect("discovery subscriber");
+    let presence_sub = observer
+        .declare_subscriber(PRESENCE_KEY)
+        .await
+        .expect("presence subscriber");
+    let discovery_sub = observer
+        .declare_subscriber(DISCOVERY_KEY)
+        .await
+        .expect("discovery subscriber");
 
     router.control(&format!("/control/station?mac={PHONE_MAC}&present=true"));
     expect_state(&presence_sub, json!(true)).await;
@@ -159,10 +171,21 @@ async fn wifi_association_drives_presence() {
             .find(|r| r["id"] == PHONE_MAC);
         if let Some(record) = phone {
             assert_eq!(record["configured"], json!(true), "phone record: {record}");
-            assert_eq!(record["entity"], json!("dads_phone"), "phone record: {record}");
+            assert_eq!(
+                record["entity"],
+                json!("dads_phone"),
+                "phone record: {record}"
+            );
             // and its aspect descriptor: the one boolean this capability speaks
-            assert_eq!(record["aspects"]["fields"]["presence"]["kind"], json!("boolean"), "{record}");
-            assert_eq!(record["aspects"]["fields"]["presence"]["values"][1]["label"], json!("away"));
+            assert_eq!(
+                record["aspects"]["fields"]["presence"]["kind"],
+                json!("boolean"),
+                "{record}"
+            );
+            assert_eq!(
+                record["aspects"]["fields"]["presence"]["values"][1]["label"],
+                json!("away")
+            );
             break;
         }
     }
@@ -180,11 +203,18 @@ async fn wifi_association_drives_presence() {
 #[tokio::test(flavor = "multi_thread")]
 async fn connectivity_state_translates_to_bus() {
     let (router, _routers_path, mut sup, observer) = setup().await;
-    let wan_sub = observer.declare_subscriber(WAN_KEY).await.expect("wan subscriber");
-    let site_sub =
-        observer.declare_subscriber(SITE_TUNNEL_KEY).await.expect("site tunnel subscriber");
-    let office_sub =
-        observer.declare_subscriber(OFFICE_TUNNEL_KEY).await.expect("office tunnel subscriber");
+    let wan_sub = observer
+        .declare_subscriber(WAN_KEY)
+        .await
+        .expect("wan subscriber");
+    let site_sub = observer
+        .declare_subscriber(SITE_TUNNEL_KEY)
+        .await
+        .expect("site tunnel subscriber");
+    let office_sub = observer
+        .declare_subscriber(OFFICE_TUNNEL_KEY)
+        .await
+        .expect("office tunnel subscriber");
 
     router.control("/control/wan?up=false");
     expect_state(&wan_sub, json!(false)).await;
@@ -207,8 +237,14 @@ async fn connectivity_state_translates_to_bus() {
 #[tokio::test(flavor = "multi_thread")]
 async fn unreachable_router_drops_once_and_recovers() {
     let (router, _routers_path, mut sup, observer) = setup().await;
-    let wan_sub = observer.declare_subscriber(WAN_KEY).await.expect("wan subscriber");
-    let event_sub = observer.declare_subscriber(EVENT_KEY).await.expect("event subscriber");
+    let wan_sub = observer
+        .declare_subscriber(WAN_KEY)
+        .await
+        .expect("wan subscriber");
+    let event_sub = observer
+        .declare_subscriber(EVENT_KEY)
+        .await
+        .expect("event subscriber");
 
     router.control("/control/break");
     expect_event_kind(&event_sub, "router-unreachable").await;

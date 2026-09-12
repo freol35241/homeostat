@@ -71,12 +71,11 @@ import signal
 import sqlite3
 import threading
 import time
-import tomllib
 from collections import deque
 from pathlib import Path
 
+import tomllib
 import zenoh
-
 from homeostat import house, keys, session
 from homeostat.params import LiveParams
 

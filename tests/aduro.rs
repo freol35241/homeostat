@@ -65,7 +65,10 @@ async fn setup() -> (Mosquitto, Supervisor, zenoh::Session) {
 /// only reach the adapter through it.
 async fn await_arbiter(observer: &zenoh::Session) {
     let mut watch = health_watch(observer, "arbiter").await;
-    await_health(&mut watch, Duration::from_secs(60), |h| h.status == HealthStatus::Running).await;
+    await_health(&mut watch, Duration::from_secs(60), |h| {
+        h.status == HealthStatus::Running
+    })
+    .await;
 }
 
 /// (a) One status document fans out to the burner vocabulary (`on` derived
@@ -89,10 +92,16 @@ async fn status_translates_on_change_only() {
     let mut mqtt = Mqtt::connect(mosquitto.port, "test-state").await;
 
     mqtt.publish(&format!("{BASE}/status"), &status(25.5)).await;
-    mqtt.publish(&format!("{BASE}/operating"), r#"{"boiler_temp": 21.4}"#).await;
+    mqtt.publish(&format!("{BASE}/operating"), r#"{"boiler_temp": 21.4}"#)
+        .await;
     // Unsubscribed topics: nothing, not even an event.
-    mqtt.publish(&format!("{BASE}/settings/regulation"), r#"{"fixed_power": 10.0}"#).await;
-    mqtt.publish(&format!("{BASE}/consumption/counter"), "[1.0, 2.0]").await;
+    mqtt.publish(
+        &format!("{BASE}/settings/regulation"),
+        r#"{"fixed_power": 10.0}"#,
+    )
+    .await;
+    mqtt.publish(&format!("{BASE}/consumption/counter"), "[1.0, 2.0]")
+        .await;
 
     expect_states(
         &state_sub,
@@ -101,11 +110,17 @@ async fn status_translates_on_change_only() {
             ("home/state/livingroom/burner/on", json!(false)),
             ("home/state/livingroom/burner/power_level", json!(10)),
             ("home/state/livingroom/burner/flue_temperature", json!(25.5)),
-            ("home/state/livingroom/burner/boiler_temperature", json!(21.4)),
+            (
+                "home/state/livingroom/burner/boiler_temperature",
+                json!(21.4),
+            ),
             ("home/state/livingroom/burner/shaft_temp", json!(23.1)),
             ("home/state/livingroom/burner/state", json!(14.0)),
             ("home/state/livingroom/burner/city", json!("Somewhere")),
-            ("home/state/livingroom/burner/operating_boiler_temp", json!(21.4)),
+            (
+                "home/state/livingroom/burner/operating_boiler_temp",
+                json!(21.4),
+            ),
         ],
     )
     .await;
@@ -118,7 +133,10 @@ async fn status_translates_on_change_only() {
     {}
     mqtt.publish(&format!("{BASE}/status"), &status(25.5)).await;
     let silence = tokio::time::timeout(Duration::from_millis(1500), state_sub.recv_async()).await;
-    assert!(silence.is_err(), "unchanged status republished to the bus: {silence:?}");
+    assert!(
+        silence.is_err(),
+        "unchanged status republished to the bus: {silence:?}"
+    );
 
     // One field moves: exactly one sample.
     mqtt.publish(&format!("{BASE}/status"), &status(26.0)).await;
@@ -126,9 +144,15 @@ async fn status_translates_on_change_only() {
         .await
         .expect("changed field within 10s")
         .expect("state stream open");
-    assert_eq!(sample.key_expr().as_str(), "home/state/livingroom/burner/flue_temperature");
+    assert_eq!(
+        sample.key_expr().as_str(),
+        "home/state/livingroom/burner/flue_temperature"
+    );
     let silence = tokio::time::timeout(Duration::from_millis(1500), state_sub.recv_async()).await;
-    assert!(silence.is_err(), "unchanged fields republished: {silence:?}");
+    assert!(
+        silence.is_err(),
+        "unchanged fields republished: {silence:?}"
+    );
 
     let no_event = tokio::time::timeout(Duration::from_millis(500), event_sub.recv_async()).await;
     assert!(no_event.is_err(), "unexpected health event: {no_event:?}");
@@ -137,11 +161,15 @@ async fn status_translates_on_change_only() {
     mqtt.publish(&format!("{BASE}/status"), "[1, 2, 3]").await;
     expect_drop_event(&event_sub, "malformed-payload").await;
 
-    let replies = observer.get("home/discovery/aduro").await.expect("discovery query");
+    let replies = observer
+        .get("home/discovery/aduro")
+        .await
+        .expect("discovery query");
     let mut inventory = None;
     while let Ok(reply) = replies.recv_async().await {
         if let Ok(sample) = reply.result() {
-            inventory = serde_json::from_slice::<serde_json::Value>(&sample.payload().to_bytes()).ok();
+            inventory =
+                serde_json::from_slice::<serde_json::Value>(&sample.payload().to_bytes()).ok();
         }
     }
     let inventory = inventory.expect("discovery inventory served");
@@ -149,14 +177,35 @@ async fn status_translates_on_change_only() {
     assert_eq!(record["entity"], json!("burner"), "{inventory}");
     assert_eq!(record["id"], json!(BASE));
     assert_eq!(record["bound"], json!(true));
-    assert_eq!(record["suggested"], json!({"capability": "burner", "features": ["power_level"]}));
+    assert_eq!(
+        record["suggested"],
+        json!({"capability": "burner", "features": ["power_level"]})
+    );
     let fields = &record["aspects"]["fields"];
-    assert_eq!(record["aspects"]["groups"], json!(["control", "readings", "status"]));
-    assert_eq!(fields["on"]["command"], json!({"type": "enum", "editable_by": "family"}));
-    assert_eq!(fields["on"]["values"][1], json!({"value": true, "label": "on"}));
-    assert_eq!(fields["power_level"]["values"][1], json!({"value": 50, "label": "50%"}));
-    assert_eq!(fields["flue_temperature"]["label"], json!("flue (smoke_temp)"));
-    assert!(fields.get("city").is_none(), "undescribed aspects are simply absent");
+    assert_eq!(
+        record["aspects"]["groups"],
+        json!(["control", "readings", "status"])
+    );
+    assert_eq!(
+        fields["on"]["command"],
+        json!({"type": "enum", "editable_by": "family"})
+    );
+    assert_eq!(
+        fields["on"]["values"][1],
+        json!({"value": true, "label": "on"})
+    );
+    assert_eq!(
+        fields["power_level"]["values"][1],
+        json!({"value": 50, "label": "50%"})
+    );
+    assert_eq!(
+        fields["flue_temperature"]["label"],
+        json!("flue (smoke_temp)")
+    );
+    assert!(
+        fields.get("city").is_none(),
+        "undescribed aspects are simply absent"
+    );
 
     sup.shutdown();
 }
@@ -202,8 +251,14 @@ async fn commands_reach_set_topic_via_arbiter_per_aspect() {
     mqtt.subscribe(SET_TOPIC).await;
 
     let wish = json!({"value": true, "priority": "manual", "actor": "test"});
-    observer.put(ON_CMD_KEY, wish.to_string()).await.expect("cmd put");
-    let (topic, payload) = mqtt.next_message(Duration::from_secs(10)).await.expect("start publish");
+    observer
+        .put(ON_CMD_KEY, wish.to_string())
+        .await
+        .expect("cmd put");
+    let (topic, payload) = mqtt
+        .next_message(Duration::from_secs(10))
+        .await
+        .expect("start publish");
     assert_eq!(topic, SET_TOPIC);
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&payload).unwrap(),
@@ -211,8 +266,14 @@ async fn commands_reach_set_topic_via_arbiter_per_aspect() {
     );
 
     let wish = json!({"value": false, "priority": "manual", "actor": "test"});
-    observer.put(ON_CMD_KEY, wish.to_string()).await.expect("cmd put");
-    let (_, payload) = mqtt.next_message(Duration::from_secs(10)).await.expect("stop publish");
+    observer
+        .put(ON_CMD_KEY, wish.to_string())
+        .await
+        .expect("cmd put");
+    let (_, payload) = mqtt
+        .next_message(Duration::from_secs(10))
+        .await
+        .expect("stop publish");
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&payload).unwrap(),
         json!({"path": "misc.stop", "value": "1"})
@@ -221,14 +282,26 @@ async fn commands_reach_set_topic_via_arbiter_per_aspect() {
     // The manual `on` lease holds (hold_minutes = 30): an automation `on`
     // is refused upstream and never reaches MQTT.
     let wish = json!({"value": true, "priority": "automation", "actor": "heat_plan"});
-    observer.put(ON_CMD_KEY, wish.to_string()).await.expect("cmd put");
+    observer
+        .put(ON_CMD_KEY, wish.to_string())
+        .await
+        .expect("cmd put");
     let silence = mqtt.next_message(Duration::from_millis(1500)).await;
-    assert!(silence.is_none(), "refused automation wish reached MQTT: {silence:?}");
+    assert!(
+        silence.is_none(),
+        "refused automation wish reached MQTT: {silence:?}"
+    );
 
     // Per-aspect leases: the same automation's power_level passes.
     let wish = json!({"value": 50, "priority": "automation", "actor": "heat_plan"});
-    observer.put(POWER_CMD_KEY, wish.to_string()).await.expect("cmd put");
-    let (_, payload) = mqtt.next_message(Duration::from_secs(10)).await.expect("power publish");
+    observer
+        .put(POWER_CMD_KEY, wish.to_string())
+        .await
+        .expect("cmd put");
+    let (_, payload) = mqtt
+        .next_message(Duration::from_secs(10))
+        .await
+        .expect("power publish");
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&payload).unwrap(),
         json!({"path": "regulation.fixed_power", "value": 50})
@@ -252,14 +325,20 @@ async fn invalid_commands_drop_with_events() {
     mqtt.subscribe(SET_TOPIC).await;
 
     let wish = json!({"value": 1, "priority": "manual", "actor": "test"});
-    observer.put(ON_CMD_KEY, wish.to_string()).await.expect("cmd put");
+    observer
+        .put(ON_CMD_KEY, wish.to_string())
+        .await
+        .expect("cmd put");
     let event = expect_drop_event(&event_sub, "invalid-command").await;
     assert_eq!(event["aspect"], json!("on"));
     assert_eq!(event["value"], json!(1));
 
     for value in [json!(30), json!(50.5), json!("50"), json!(true)] {
         let wish = json!({"value": value, "priority": "manual", "actor": "test"});
-        observer.put(POWER_CMD_KEY, wish.to_string()).await.expect("cmd put");
+        observer
+            .put(POWER_CMD_KEY, wish.to_string())
+            .await
+            .expect("cmd put");
         let event = expect_drop_event(&event_sub, "invalid-command").await;
         assert_eq!(event["aspect"], json!("power_level"));
         assert_eq!(event["value"], value);
@@ -277,7 +356,10 @@ async fn invalid_commands_drop_with_events() {
     expect_drop_event(&event_sub, "invalid-command").await;
 
     let silence = mqtt.next_message(Duration::from_millis(1500)).await;
-    assert!(silence.is_none(), "an invalid command reached MQTT: {silence:?}");
+    assert!(
+        silence.is_none(),
+        "an invalid command reached MQTT: {silence:?}"
+    );
 
     sup.shutdown();
 }

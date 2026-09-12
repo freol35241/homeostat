@@ -1,8 +1,17 @@
 use std::fmt;
 
 /// `home/{class}/...` — the classes the core owns.
-pub const CLASSES: &[&str] =
-    &["state", "cmd", "arbiter", "config", "meta", "health", "clock", "history", "discovery"];
+pub const CLASSES: &[&str] = &[
+    "state",
+    "cmd",
+    "arbiter",
+    "config",
+    "meta",
+    "health",
+    "clock",
+    "history",
+    "discovery",
+];
 
 /// Reserved pseudo-rooms for non-spatial entities.
 pub const PSEUDO_ROOMS: &[&str] = &["global", "person"];
@@ -89,9 +98,17 @@ impl KeyExpr {
             Some(Segment::Literal(c)) => {
                 return Err(format!("\"{raw}\" has unknown class \"{c}\""));
             }
-            _ => return Err(format!("\"{raw}\" needs a literal class segment after \"home/\"")),
+            _ => {
+                return Err(format!(
+                    "\"{raw}\" needs a literal class segment after \"home/\""
+                ))
+            }
         };
-        let min_len = if matches!(class, "state" | "cmd" | "arbiter") { 5 } else { 3 };
+        let min_len = if matches!(class, "state" | "cmd" | "arbiter") {
+            5
+        } else {
+            3
+        };
         if !self.has_any_rec() && self.0.len() < min_len {
             if min_len == 5 {
                 return Err(format!(
@@ -203,10 +220,18 @@ mod tests {
 
     #[test]
     fn schema_rejects() {
-        assert!(expr("house/state/a/b/c").check_schema("house/state/a/b/c").is_err());
-        assert!(expr("home/telemetry/a/b/c").check_schema("home/telemetry/a/b/c").is_err());
-        assert!(expr("home/state/kitchen").check_schema("home/state/kitchen").is_err());
-        assert!(expr("home/arbiter/hallway").check_schema("home/arbiter/hallway").is_err());
+        assert!(expr("house/state/a/b/c")
+            .check_schema("house/state/a/b/c")
+            .is_err());
+        assert!(expr("home/telemetry/a/b/c")
+            .check_schema("home/telemetry/a/b/c")
+            .is_err());
+        assert!(expr("home/state/kitchen")
+            .check_schema("home/state/kitchen")
+            .is_err());
+        assert!(expr("home/arbiter/hallway")
+            .check_schema("home/arbiter/hallway")
+            .is_err());
     }
 
     #[test]

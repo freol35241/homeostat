@@ -46,7 +46,9 @@ pub fn expand(house: &House) -> (Vec<ExpandedKey>, Vec<String>, Vec<ValidationEr
     let mut errors = Vec::new();
 
     for unit in &house.units {
-        let Some(bus) = &unit.manifest.bus else { continue };
+        let Some(bus) = &unit.manifest.bus else {
+            continue;
+        };
         let entries = bus
             .publishes
             .iter()
@@ -117,8 +119,9 @@ pub fn expand(house: &House) -> (Vec<ExpandedKey>, Vec<String>, Vec<ValidationEr
             if exprs.is_empty() {
                 if let Some(zone) = &zone {
                     warnings.push(format!(
-                        "{} {subject} matches nothing: zone \"{zone}\" has no rooms"
-                    , direction.verb()));
+                        "{} {subject} matches nothing: zone \"{zone}\" has no rooms",
+                        direction.verb()
+                    ));
                 }
             }
             expanded.push(ExpandedKey {
@@ -151,7 +154,12 @@ mod tests {
         LoadedUnit {
             manifest: UnitManifest {
                 schema: 1,
-                unit: UnitSection { name: name.to_string(), kind: UnitKind::Adapter, description: None, inputs: None },
+                unit: UnitSection {
+                    name: name.to_string(),
+                    kind: UnitKind::Adapter,
+                    description: None,
+                    inputs: None,
+                },
                 runtime: RuntimeSection {
                     command: "true".to_string(),
                     restart: RestartPolicy::Always,
@@ -186,7 +194,10 @@ mod tests {
                     room: room.to_string(),
                 },
                 naming: None,
-                write_policy: WritePolicy { mode, owner: adapter.to_string() },
+                write_policy: WritePolicy {
+                    mode,
+                    owner: adapter.to_string(),
+                },
                 inputs: None,
                 dashboard: None,
             },
@@ -198,12 +209,18 @@ mod tests {
     #[test]
     fn adapter_template_splits_cmd_and_arbiter_by_write_mode() {
         let mut subscribes = BTreeMap::new();
-        subscribes.insert("commands".to_string(), "home/cmd/{room}/{entity}/**".to_string());
+        subscribes.insert(
+            "commands".to_string(),
+            "home/cmd/{room}/{entity}/**".to_string(),
+        );
         subscribes.insert(
             "arbiter_commands".to_string(),
             "home/arbiter/{room}/{entity}/**".to_string(),
         );
-        let bus = BusSection { subscribes, publishes: BTreeMap::new() };
+        let bus = BusSection {
+            subscribes,
+            publishes: BTreeMap::new(),
+        };
 
         let house = House {
             units: vec![adapter_unit("zigbee", bus)],
@@ -218,21 +235,42 @@ mod tests {
         assert!(errors.is_empty(), "{errors:?}");
 
         let cmd = expanded.iter().find(|k| k.entry == "commands").unwrap();
-        assert_eq!(cmd.exprs, vec![KeyExpr::parse("home/cmd/kitchen/lamp/**").unwrap()]);
+        assert_eq!(
+            cmd.exprs,
+            vec![KeyExpr::parse("home/cmd/kitchen/lamp/**").unwrap()]
+        );
 
-        let arbiter = expanded.iter().find(|k| k.entry == "arbiter_commands").unwrap();
-        assert_eq!(arbiter.exprs, vec![KeyExpr::parse("home/arbiter/hallway/lock/**").unwrap()]);
+        let arbiter = expanded
+            .iter()
+            .find(|k| k.entry == "arbiter_commands")
+            .unwrap();
+        assert_eq!(
+            arbiter.exprs,
+            vec![KeyExpr::parse("home/arbiter/hallway/lock/**").unwrap()]
+        );
     }
 
     #[test]
     fn cmd_template_expands_to_nothing_without_error_when_all_bound_entities_are_arbitrated() {
         let mut subscribes = BTreeMap::new();
-        subscribes.insert("commands".to_string(), "home/cmd/{room}/{entity}/**".to_string());
-        let bus = BusSection { subscribes, publishes: BTreeMap::new() };
+        subscribes.insert(
+            "commands".to_string(),
+            "home/cmd/{room}/{entity}/**".to_string(),
+        );
+        let bus = BusSection {
+            subscribes,
+            publishes: BTreeMap::new(),
+        };
 
         let house = House {
             units: vec![adapter_unit("zigbee", bus)],
-            entities: vec![entity("lock", "hallway", "lock", WriteMode::Arbitrated, "zigbee")],
+            entities: vec![entity(
+                "lock",
+                "hallway",
+                "lock",
+                WriteMode::Arbitrated,
+                "zigbee",
+            )],
             zones: BTreeMap::new(),
         };
 

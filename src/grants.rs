@@ -79,7 +79,9 @@ pub fn resolve_feeds(house: &House, expanded: &[ExpandedKey]) -> (Vec<Feed>, Vec
     let mut feeds = Vec::new();
     let mut errors = Vec::new();
     for entity in &house.entities {
-        let Some(inputs) = &entity.file.inputs else { continue };
+        let Some(inputs) = &entity.file.inputs else {
+            continue;
+        };
         let file = Some(entity.path.clone());
         let owner_is_automation = house
             .unit(&entity.owner)
@@ -117,9 +119,9 @@ pub fn resolve_feeds(house: &House, expanded: &[ExpandedKey]) -> (Vec<Feed>, Vec
                 let published = expanded.iter().any(|k| {
                     k.unit == src.owner
                         && k.direction == Direction::Publishes
-                        && k.exprs.iter().any(|e| {
-                            e.matches_prefix(&key.split('/').collect::<Vec<_>>())
-                        })
+                        && k.exprs
+                            .iter()
+                            .any(|e| e.matches_prefix(&key.split('/').collect::<Vec<_>>()))
                 });
                 if !published {
                     errors.push(ValidationError::new(
@@ -164,7 +166,9 @@ pub fn resolve(
         // nothing has no exprs to betray its class, and it still gets the
         // capability checks and the "matches no entities" warning.
         let class = key.source.split('/').nth(1).unwrap_or_default();
-        let unit = house.unit(&key.unit).expect("expanded key from loaded unit");
+        let unit = house
+            .unit(&key.unit)
+            .expect("expanded key from loaded unit");
         let spec = &unit.manifest.bus.as_ref().expect("unit has bus").publishes[&key.entry];
         let subject = format!("{}.{}", key.unit, key.entry);
         let mut keys: Vec<String> = key.exprs.iter().map(ToString::to_string).collect();
@@ -178,7 +182,12 @@ pub fn resolve(
                 .iter()
                 .filter(|e| e.owner == key.unit)
                 .filter(|e| {
-                    let prefix = ["home", "state", e.file.entity.room.as_str(), e.name.as_str()];
+                    let prefix = [
+                        "home",
+                        "state",
+                        e.file.entity.room.as_str(),
+                        e.name.as_str(),
+                    ];
                     key.exprs.iter().any(|expr| expr.matches_prefix(&prefix))
                 })
                 .map(|e| GrantEntity {
@@ -291,8 +300,7 @@ pub fn resolve(
         }
         if let Some(writers) = writers.get(entity.name.as_str()) {
             if writers.len() > 1 {
-                let bindings: Vec<&str> =
-                    writers.values().flatten().map(String::as_str).collect();
+                let bindings: Vec<&str> = writers.values().flatten().map(String::as_str).collect();
                 errors.push(ValidationError::new(
                     "exclusive-write-conflict",
                     &entity.name,
@@ -316,11 +324,17 @@ pub fn resolve(
         if entity.file.write_policy.mode != WriteMode::Arbitrated {
             continue;
         }
-        let prefix =
-            ["home", "arbiter", entity.file.entity.room.as_str(), entity.name.as_str()];
+        let prefix = [
+            "home",
+            "arbiter",
+            entity.file.entity.room.as_str(),
+            entity.name.as_str(),
+        ];
         let covered = expanded.iter().any(|k| {
             k.direction == Direction::Publishes
-                && k.exprs.iter().any(|e| e.class() == Some("arbiter") && e.matches_prefix(&prefix))
+                && k.exprs
+                    .iter()
+                    .any(|e| e.class() == Some("arbiter") && e.matches_prefix(&prefix))
         });
         if !covered {
             errors.push(ValidationError::new(
@@ -357,7 +371,9 @@ pub fn resolve(
             let listens = expanded.iter().any(|k| {
                 k.unit == entity.owner
                     && k.direction == Direction::Subscribes
-                    && k.exprs.iter().any(|e| e.class() == Some("cmd") && e.matches_prefix(&prefix))
+                    && k.exprs
+                        .iter()
+                        .any(|e| e.class() == Some("cmd") && e.matches_prefix(&prefix))
             });
             if !listens {
                 errors.push(ValidationError::new(
@@ -379,7 +395,11 @@ pub fn resolve(
     // time rather than start units in a silently arbitrary one.
     let edges: BTreeSet<(&str, &str)> = grants
         .iter()
-        .flat_map(|g| g.entities.iter().map(move |e| (e.owner.as_str(), g.unit.as_str())))
+        .flat_map(|g| {
+            g.entities
+                .iter()
+                .map(move |e| (e.owner.as_str(), g.unit.as_str()))
+        })
         .filter(|(owner, unit)| owner != unit)
         .collect();
     let mut remaining: BTreeSet<&str> = edges.iter().flat_map(|(a, d)| [*a, *d]).collect();
@@ -418,7 +438,9 @@ pub fn resolve(
             if expr.class() != Some("state") {
                 continue;
             }
-            let unit = house.unit(&key.unit).expect("expanded key from loaded unit");
+            let unit = house
+                .unit(&key.unit)
+                .expect("expanded key from loaded unit");
             let subject = format!("{}.{}", key.unit, key.entry);
             let (room, entity) = (expr.0.get(2), expr.0.get(3));
             let (Some(Segment::Literal(room)), Some(Segment::Literal(entity))) = (room, entity)
@@ -434,9 +456,10 @@ pub fn resolve(
                 ));
                 continue;
             };
-            let bound = house.entities.iter().any(|e| {
-                &e.name == entity && e.owner == key.unit && &e.file.entity.room == room
-            });
+            let bound = house
+                .entities
+                .iter()
+                .any(|e| &e.name == entity && e.owner == key.unit && &e.file.entity.room == room);
             if !bound {
                 errors.push(ValidationError::new(
                     "state-publish-unbound",
@@ -463,16 +486,29 @@ pub fn resolve(
         Some((segments.next()?, segments.next()))
     };
     let mut singleton_publishers: BTreeMap<String, BTreeSet<&str>> = BTreeMap::new();
-    for key in expanded.iter().filter(|k| k.direction == Direction::Publishes) {
+    for key in expanded
+        .iter()
+        .filter(|k| k.direction == Direction::Publishes)
+    {
         if let Some((class, _)) = publish_class(key) {
             if matches!(class.as_str(), "arbiter" | "clock" | "history") {
-                singleton_publishers.entry(class).or_default().insert(key.unit.as_str());
+                singleton_publishers
+                    .entry(class)
+                    .or_default()
+                    .insert(key.unit.as_str());
             }
         }
     }
-    for key in expanded.iter().filter(|k| k.direction == Direction::Publishes) {
-        let Some((class, next)) = publish_class(key) else { continue };
-        let unit = house.unit(&key.unit).expect("expanded key from loaded unit");
+    for key in expanded
+        .iter()
+        .filter(|k| k.direction == Direction::Publishes)
+    {
+        let Some((class, next)) = publish_class(key) else {
+            continue;
+        };
+        let unit = house
+            .unit(&key.unit)
+            .expect("expanded key from loaded unit");
         let message = match class.as_str() {
             "config" | "meta" => Some(format!(
                 "\"{}\" publishes under home/{class}/, which only the core writes",
@@ -490,8 +526,11 @@ pub fn resolve(
                         key.source
                     ))
                 } else if publishers.len() > 1 {
-                    let others: Vec<&str> =
-                        publishers.iter().copied().filter(|u| *u != key.unit).collect();
+                    let others: Vec<&str> = publishers
+                        .iter()
+                        .copied()
+                        .filter(|u| *u != key.unit)
+                        .collect();
                     Some(format!(
                         "\"{}\": home/{class}/ is also published by {}; exactly one service owns it",
                         key.source,
@@ -531,7 +570,12 @@ mod tests {
         LoadedUnit {
             manifest: UnitManifest {
                 schema: 1,
-                unit: UnitSection { name: name.to_string(), kind, description: None, inputs: None },
+                unit: UnitSection {
+                    name: name.to_string(),
+                    kind,
+                    description: None,
+                    inputs: None,
+                },
                 runtime: RuntimeSection {
                     command: "true".to_string(),
                     restart: RestartPolicy::Always,
@@ -566,7 +610,10 @@ mod tests {
                     room: room.to_string(),
                 },
                 naming: None,
-                write_policy: WritePolicy { mode, owner: adapter.to_string() },
+                write_policy: WritePolicy {
+                    mode,
+                    owner: adapter.to_string(),
+                },
                 inputs: None,
                 dashboard: None,
             },
@@ -581,10 +628,18 @@ mod tests {
     /// covers the lock.
     fn house_with_lock(arbiter_bus: Option<BusSection>) -> House {
         let mut zigbee_subscribes = BTreeMap::new();
-        zigbee_subscribes.insert("commands".to_string(), "home/cmd/{room}/{entity}/**".to_string());
-        zigbee_subscribes
-            .insert("arbiter_commands".to_string(), "home/arbiter/{room}/{entity}/**".to_string());
-        let zigbee_bus = BusSection { subscribes: zigbee_subscribes, publishes: BTreeMap::new() };
+        zigbee_subscribes.insert(
+            "commands".to_string(),
+            "home/cmd/{room}/{entity}/**".to_string(),
+        );
+        zigbee_subscribes.insert(
+            "arbiter_commands".to_string(),
+            "home/arbiter/{room}/{entity}/**".to_string(),
+        );
+        let zigbee_bus = BusSection {
+            subscribes: zigbee_subscribes,
+            publishes: BTreeMap::new(),
+        };
 
         let mut night_mode_publishes = BTreeMap::new();
         night_mode_publishes.insert(
@@ -595,7 +650,10 @@ mod tests {
                 priority: Some(Priority::Automation),
             },
         );
-        let night_mode_bus = BusSection { subscribes: BTreeMap::new(), publishes: night_mode_publishes };
+        let night_mode_bus = BusSection {
+            subscribes: BTreeMap::new(),
+            publishes: night_mode_publishes,
+        };
 
         let mut units = vec![
             unit("zigbee", UnitKind::Adapter, zigbee_bus),
@@ -622,9 +680,16 @@ mod tests {
         // it covers arbitrated entities with a plain wildcard instead.
         publishes.insert(
             "forwarded".to_string(),
-            PublishSpec { key: "home/arbiter/**".to_string(), capability: None, priority: None },
+            PublishSpec {
+                key: "home/arbiter/**".to_string(),
+                capability: None,
+                priority: None,
+            },
         );
-        let arbiter_bus = BusSection { subscribes: BTreeMap::new(), publishes };
+        let arbiter_bus = BusSection {
+            subscribes: BTreeMap::new(),
+            publishes,
+        };
         let house = house_with_lock(Some(arbiter_bus));
 
         let (expanded, _warnings, expand_errors) = expand(&house);
@@ -633,9 +698,18 @@ mod tests {
         // Correct expansion split: the adapter's cmd template excludes the
         // arbitrated lock, its arbiter template includes only the lock.
         let cmd = expanded.iter().find(|k| k.entry == "commands").unwrap();
-        assert_eq!(cmd.exprs, vec![KeyExpr::parse("home/cmd/kitchen/lamp/**").unwrap()]);
-        let arbiter_cmd = expanded.iter().find(|k| k.entry == "arbiter_commands").unwrap();
-        assert_eq!(arbiter_cmd.exprs, vec![KeyExpr::parse("home/arbiter/hallway/lock/**").unwrap()]);
+        assert_eq!(
+            cmd.exprs,
+            vec![KeyExpr::parse("home/cmd/kitchen/lamp/**").unwrap()]
+        );
+        let arbiter_cmd = expanded
+            .iter()
+            .find(|k| k.entry == "arbiter_commands")
+            .unwrap();
+        assert_eq!(
+            arbiter_cmd.exprs,
+            vec![KeyExpr::parse("home/arbiter/hallway/lock/**").unwrap()]
+        );
 
         let (grants, warnings, errors) = resolve(&house, &expanded);
         assert!(errors.is_empty(), "{errors:?}");
@@ -662,9 +736,16 @@ mod tests {
             let mut publishes = BTreeMap::new();
             publishes.insert(
                 "forwarded".to_string(),
-                PublishSpec { key: "home/arbiter/**".to_string(), capability: None, priority: None },
+                PublishSpec {
+                    key: "home/arbiter/**".to_string(),
+                    capability: None,
+                    priority: None,
+                },
             );
-            Some(BusSection { subscribes: BTreeMap::new(), publishes })
+            Some(BusSection {
+                subscribes: BTreeMap::new(),
+                publishes,
+            })
         };
         let baseline = house_with_lock(arbiter_bus());
         let (expanded, _, _) = expand(&baseline);
@@ -676,7 +757,10 @@ mod tests {
         // the granted set — either way the tables differ.
         let (expanded, _, _) = expand(&moved);
         let (moved_grants, _, _) = resolve(&moved, &expanded);
-        assert_ne!(grants, moved_grants, "a room move must change the grant table");
+        assert_ne!(
+            grants, moved_grants,
+            "a room move must change the grant table"
+        );
 
         let mut flipped = house_with_lock(arbiter_bus());
         flipped.entities[0].file.write_policy.mode = WriteMode::Exclusive;
@@ -685,7 +769,10 @@ mod tests {
         flipped.entities[1].file.write_policy.mode = WriteMode::Shared;
         let (expanded, _, _) = expand(&flipped);
         let (flipped_grants, _, _) = resolve(&flipped, &expanded);
-        assert_ne!(grants, flipped_grants, "a write-mode flip must change the grant table");
+        assert_ne!(
+            grants, flipped_grants,
+            "a write-mode flip must change the grant table"
+        );
     }
 
     /// A latch: automation "modes" binds a switch, subscribes to its cmd
@@ -694,14 +781,24 @@ mod tests {
     fn house_with_latch(listens: bool) -> House {
         let mut modes_subscribes = BTreeMap::new();
         if listens {
-            modes_subscribes.insert("commands".to_string(), "home/cmd/{room}/{entity}/**".to_string());
+            modes_subscribes.insert(
+                "commands".to_string(),
+                "home/cmd/{room}/{entity}/**".to_string(),
+            );
         }
         let mut modes_publishes = BTreeMap::new();
         modes_publishes.insert(
             "state".to_string(),
-            PublishSpec { key: "home/state/{room}/{entity}/**".to_string(), capability: None, priority: None },
+            PublishSpec {
+                key: "home/state/{room}/{entity}/**".to_string(),
+                capability: None,
+                priority: None,
+            },
         );
-        let modes_bus = BusSection { subscribes: modes_subscribes, publishes: modes_publishes };
+        let modes_bus = BusSection {
+            subscribes: modes_subscribes,
+            publishes: modes_publishes,
+        };
 
         let mut buttons_publishes = BTreeMap::new();
         buttons_publishes.insert(
@@ -712,14 +809,23 @@ mod tests {
                 priority: Some(Priority::Automation),
             },
         );
-        let buttons_bus = BusSection { subscribes: BTreeMap::new(), publishes: buttons_publishes };
+        let buttons_bus = BusSection {
+            subscribes: BTreeMap::new(),
+            publishes: buttons_publishes,
+        };
 
         House {
             units: vec![
                 unit("modes", UnitKind::Automation, modes_bus),
                 unit("buttons", UnitKind::Automation, buttons_bus),
             ],
-            entities: vec![entity("house_mode", "global", "switch", WriteMode::Shared, "modes")],
+            entities: vec![entity(
+                "house_mode",
+                "global",
+                "switch",
+                WriteMode::Shared,
+                "modes",
+            )],
             zones: BTreeMap::new(),
         }
     }
@@ -767,16 +873,28 @@ mod tests {
         let (expanded, _, _) = expand(&house);
         let (grants, _, _) = resolve(&house, &expanded);
         let night_mode = grants.iter().find(|g| g.unit == "night_mode").unwrap();
-        assert_eq!(night_mode.keys, vec!["home/cmd/hallway/lock/lock".to_string()]);
+        assert_eq!(
+            night_mode.keys,
+            vec!["home/cmd/hallway/lock/lock".to_string()]
+        );
 
         let mut widened = house_with_lock(None);
         let bus = widened.units[1].manifest.bus.as_mut().unwrap();
         bus.publishes.get_mut("lock").unwrap().key = "home/cmd/hallway/lock/**".to_string();
         let (expanded, _, _) = expand(&widened);
         let (widened_grants, _, _) = resolve(&widened, &expanded);
-        let widened_night_mode = widened_grants.iter().find(|g| g.unit == "night_mode").unwrap();
-        assert_eq!(widened_night_mode.entities, night_mode.entities, "same entity either way");
-        assert_ne!(grants, widened_grants, "a wider key expression must change the grant table");
+        let widened_night_mode = widened_grants
+            .iter()
+            .find(|g| g.unit == "night_mode")
+            .unwrap();
+        assert_eq!(
+            widened_night_mode.entities, night_mode.entities,
+            "same entity either way"
+        );
+        assert_ne!(
+            grants, widened_grants,
+            "a wider key expression must change the grant table"
+        );
     }
 
     /// Every bound entity sits in its owner's state row, so a change to an
@@ -790,7 +908,11 @@ mod tests {
             let bus = house.units[0].manifest.bus.as_mut().unwrap();
             bus.publishes.insert(
                 "state".to_string(),
-                PublishSpec { key: "home/state/{room}/{entity}/**".to_string(), capability: None, priority: None },
+                PublishSpec {
+                    key: "home/state/{room}/{entity}/**".to_string(),
+                    capability: None,
+                    priority: None,
+                },
             );
             house
         };
@@ -799,19 +921,32 @@ mod tests {
         let (grants, _, _) = resolve(&baseline, &expanded);
         let zigbee = grants.iter().find(|g| g.unit == "zigbee").unwrap();
         assert!(!zigbee.is_cmd());
-        assert_eq!(zigbee.entities.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), ["lamp", "lock"]);
+        assert_eq!(
+            zigbee
+                .entities
+                .iter()
+                .map(|e| e.name.as_str())
+                .collect::<Vec<_>>(),
+            ["lamp", "lock"]
+        );
 
         let mut moved = with_state();
         moved.entities[0].file.entity.room = "porch".to_string();
         let (expanded, _, _) = expand(&moved);
         let (moved_grants, _, _) = resolve(&moved, &expanded);
-        assert_ne!(grants, moved_grants, "moving the ungranted lamp must change the table");
+        assert_ne!(
+            grants, moved_grants,
+            "moving the ungranted lamp must change the table"
+        );
 
         let mut retyped = with_state();
         retyped.entities[0].file.entity.capability = "switch".to_string();
         let (expanded, _, _) = expand(&retyped);
         let (retyped_grants, _, _) = resolve(&retyped, &expanded);
-        assert_ne!(grants, retyped_grants, "a capability change must change the table");
+        assert_ne!(
+            grants, retyped_grants,
+            "a capability change must change the table"
+        );
     }
 
     /// Exclusivity counts writers per unit: two bindings of one unit onto
@@ -849,7 +984,9 @@ mod tests {
         let (expanded, _, _) = expand(&house);
         let (_, warnings, _) = resolve(&house, &expanded);
         assert!(
-            warnings.iter().any(|w| w.starts_with("publish night_mode.lock declares priority \"manual\" on automation \"night_mode\"")),
+            warnings.iter().any(|w| w.starts_with(
+                "publish night_mode.lock declares priority \"manual\" on automation \"night_mode\""
+            )),
             "{warnings:?}"
         );
     }
@@ -862,7 +999,9 @@ mod tests {
 
         let (_grants, _warnings, errors) = resolve(&house, &expanded);
         assert!(
-            errors.iter().any(|e| e.code == "arbitrated-uncovered" && e.subject == "lock"),
+            errors
+                .iter()
+                .any(|e| e.code == "arbitrated-uncovered" && e.subject == "lock"),
             "{errors:?}"
         );
     }

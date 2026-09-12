@@ -80,14 +80,16 @@ fn ip_is_global(ip: &std::net::IpAddr) -> bool {
         }
         std::net::IpAddr::V6(v6) => {
             let seg = v6.segments()[0];
-            !(v6.is_loopback() || v6.is_unspecified() || seg & 0xfe00 == 0xfc00 || seg & 0xffc0 == 0xfe80)
+            !(v6.is_loopback()
+                || v6.is_unspecified()
+                || seg & 0xfe00 == 0xfc00
+                || seg & 0xffc0 == 0xfe80)
         }
     }
 }
 
 pub fn serve(server: Arc<Server>, addr: &str) -> Result<(), String> {
-    let listener =
-        TcpListener::bind(addr).map_err(|e| format!("cannot listen on {addr}: {e}"))?;
+    let listener = TcpListener::bind(addr).map_err(|e| format!("cannot listen on {addr}: {e}"))?;
     eprintln!("[homeostat] mcp listening on http://{addr}");
     let active = Arc::new(AtomicUsize::new(0));
     loop {
@@ -97,7 +99,12 @@ pub fn serve(server: Arc<Server>, addr: &str) -> Result<(), String> {
         };
         if active.fetch_add(1, Ordering::SeqCst) >= MAX_CONNECTIONS {
             active.fetch_sub(1, Ordering::SeqCst);
-            let _ = respond(&mut stream, "503 Service Unavailable", &[], b"too many connections\n");
+            let _ = respond(
+                &mut stream,
+                "503 Service Unavailable",
+                &[],
+                b"too many connections\n",
+            );
             continue;
         }
         let server = server.clone();
@@ -137,9 +144,15 @@ fn connection(server: &Server, stream: TcpStream) -> std::io::Result<()> {
         let request_line = match read_line(&mut reader)? {
             Ok(Some(line)) => line,
             Ok(None) => return Ok(()),
-            Err(()) => return respond(&mut stream, "431 Request Header Fields Too Large", &[], b""),
+            Err(()) => {
+                return respond(&mut stream, "431 Request Header Fields Too Large", &[], b"")
+            }
         };
-        let method = request_line.split_whitespace().next().unwrap_or("").to_string();
+        let method = request_line
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .to_string();
 
         let mut content_length = 0usize;
         let mut close = false;
@@ -151,7 +164,9 @@ fn connection(server: &Server, stream: TcpStream) -> std::io::Result<()> {
             let header = match read_line(&mut reader)? {
                 Ok(Some(line)) => line,
                 Ok(None) => return Ok(()),
-                Err(()) => return respond(&mut stream, "431 Request Header Fields Too Large", &[], b""),
+                Err(()) => {
+                    return respond(&mut stream, "431 Request Header Fields Too Large", &[], b"")
+                }
             };
             let header = header.trim_end();
             if header.is_empty() {
@@ -161,12 +176,13 @@ fn connection(server: &Server, stream: TcpStream) -> std::io::Result<()> {
             if count > MAX_HEADERS {
                 return respond(&mut stream, "431 Request Header Fields Too Large", &[], b"");
             }
-            let Some((name, value)) = header.split_once(':') else { continue };
+            let Some((name, value)) = header.split_once(':') else {
+                continue;
+            };
             let value = value.trim();
             if name.eq_ignore_ascii_case("content-length") {
                 content_length = value.parse().unwrap_or(usize::MAX);
-            } else if name.eq_ignore_ascii_case("connection")
-                && value.eq_ignore_ascii_case("close")
+            } else if name.eq_ignore_ascii_case("connection") && value.eq_ignore_ascii_case("close")
             {
                 close = true;
             } else if name.eq_ignore_ascii_case("host") {
@@ -185,7 +201,12 @@ fn connection(server: &Server, stream: TcpStream) -> std::io::Result<()> {
             return respond(&mut stream, "403 Forbidden", &[], refusal.as_bytes());
         }
         if method != "POST" {
-            return respond(&mut stream, "405 Method Not Allowed", &[("Allow", "POST")], b"");
+            return respond(
+                &mut stream,
+                "405 Method Not Allowed",
+                &[("Allow", "POST")],
+                b"",
+            );
         }
         if content_length > MAX_BODY {
             return respond(&mut stream, "413 Payload Too Large", &[], b"");

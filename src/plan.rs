@@ -63,7 +63,10 @@ pub struct World {
 
 impl World {
     pub fn empty() -> World {
-        World { label: "empty".to_string(), ..World::default() }
+        World {
+            label: "empty".to_string(),
+            ..World::default()
+        }
     }
 }
 
@@ -352,21 +355,39 @@ pub fn walk_steps(diff: &Diff, check: &CheckResult, world: &World) -> Vec<Step> 
     let stop_kinds: BTreeMap<String, u8> = stop_set
         .iter()
         .map(|name| {
-            (name.clone(), world.units.get(name).and_then(world_kind_order).unwrap_or(3))
+            (
+                name.clone(),
+                world
+                    .units
+                    .get(name)
+                    .and_then(world_kind_order)
+                    .unwrap_or(3),
+            )
         })
         .collect();
     let mut stops = ordered(&stop_set, &old_edges, |name| stop_kinds[name]);
     stops.reverse();
-    steps.extend(stops.into_iter().map(|unit| Step { unit, action: StepAction::Stop }));
+    steps.extend(stops.into_iter().map(|unit| Step {
+        unit,
+        action: StepAction::Stop,
+    }));
 
     let mut start_set: BTreeSet<String> = diff.creates.iter().cloned().collect();
     start_set.extend(diff.restarts.iter().map(|r| r.name.clone()));
     let new_edges = grant_edges(&check.grants);
     let creates: BTreeSet<&String> = diff.creates.iter().collect();
     for unit in ordered(&start_set, &new_edges, |name| {
-        check.house.unit(name).map(|u| kind_order(u.manifest.unit.kind)).unwrap_or(3)
+        check
+            .house
+            .unit(name)
+            .map(|u| kind_order(u.manifest.unit.kind))
+            .unwrap_or(3)
     }) {
-        let action = if creates.contains(&unit) { StepAction::Start } else { StepAction::Restart };
+        let action = if creates.contains(&unit) {
+            StepAction::Start
+        } else {
+            StepAction::Restart
+        };
         steps.push(Step { unit, action });
     }
     steps
@@ -449,7 +470,12 @@ pub fn render(check: &CheckResult, root: &Path, repo_label: &str, world: &World)
     let diff = diff(check, root, world);
     let mut out = String::new();
     let mut units: Vec<&LoadedUnit> = check.house.units.iter().collect();
-    units.sort_by_key(|u| (kind_order(u.manifest.unit.kind), u.manifest.unit.name.clone()));
+    units.sort_by_key(|u| {
+        (
+            kind_order(u.manifest.unit.kind),
+            u.manifest.unit.name.clone(),
+        )
+    });
 
     out.push_str("Homeostat plan\n");
     out.push_str(&format!("  repo:  {repo_label}\n"));
@@ -481,7 +507,10 @@ pub fn render(check: &CheckResult, root: &Path, repo_label: &str, world: &World)
     }
 
     if !diff.destroys.is_empty() {
-        out.push_str(&format!("\nUnits to destroy ({}):\n\n", diff.destroys.len()));
+        out.push_str(&format!(
+            "\nUnits to destroy ({}):\n\n",
+            diff.destroys.len()
+        ));
         for name in &diff.destroys {
             let kind = world
                 .units
@@ -493,9 +522,15 @@ pub fn render(check: &CheckResult, root: &Path, repo_label: &str, world: &World)
     }
 
     if !diff.restarts.is_empty() {
-        out.push_str(&format!("\nUnits to restart ({}):\n\n", diff.restarts.len()));
+        out.push_str(&format!(
+            "\nUnits to restart ({}):\n\n",
+            diff.restarts.len()
+        ));
         for restart in &diff.restarts {
-            let unit = check.house.unit(&restart.name).expect("restart of a repo unit");
+            let unit = check
+                .house
+                .unit(&restart.name)
+                .expect("restart of a repo unit");
             out.push_str(&format!(
                 "~ {} {} ({})\n    reason: {}\n",
                 unit.manifest.unit.kind, restart.name, unit.path, restart.reason
@@ -514,9 +549,15 @@ pub fn render(check: &CheckResult, root: &Path, repo_label: &str, world: &World)
     }
 
     if !diff.refreshes.is_empty() {
-        out.push_str(&format!("\nManifest refreshes ({}):\n\n", diff.refreshes.len()));
+        out.push_str(&format!(
+            "\nManifest refreshes ({}):\n\n",
+            diff.refreshes.len()
+        ));
         for refresh in &diff.refreshes {
-            let unit = check.house.unit(&refresh.name).expect("refresh of a repo unit");
+            let unit = check
+                .house
+                .unit(&refresh.name)
+                .expect("refresh of a repo unit");
             out.push_str(&format!("  ~ {} ({})\n", refresh.name, unit.path));
             for change in &refresh.changes {
                 out.push_str(&format!("      {change}\n"));
@@ -570,7 +611,12 @@ pub fn render(check: &CheckResult, root: &Path, repo_label: &str, world: &World)
         for feed in &check.feeds {
             out.push_str(&format!(
                 "  {}.{}  <-  {}.{}  ({}, owner={})\n",
-                feed.entity, feed.input, feed.source_entity, feed.source_aspect, feed.key, feed.source_owner
+                feed.entity,
+                feed.input,
+                feed.source_entity,
+                feed.source_aspect,
+                feed.key,
+                feed.source_owner
             ));
         }
     }
@@ -617,30 +663,52 @@ fn summarize(diff: &Diff) -> String {
         ));
     }
     if !diff.refreshes.is_empty() {
-        parts.push(count(diff.refreshes.len(), "manifest", "manifests", "refreshed"));
+        parts.push(count(
+            diff.refreshes.len(),
+            "manifest",
+            "manifests",
+            "refreshed",
+        ));
     }
     if !diff.grant_adds.is_empty() {
         parts.push(count(diff.grant_adds.len(), "grant", "grants", "added"));
     }
     if !diff.grant_removes.is_empty() {
-        parts.push(count(diff.grant_removes.len(), "grant", "grants", "removed"));
+        parts.push(count(
+            diff.grant_removes.len(),
+            "grant",
+            "grants",
+            "removed",
+        ));
     }
     parts.join(", ")
 }
 
 fn render_grant(grant: &Grant, mark: char, out: &mut String) {
-    let prefix = if mark == ' ' { "  ".to_string() } else { format!("  {mark} ") };
+    let prefix = if mark == ' ' {
+        "  ".to_string()
+    } else {
+        format!("  {mark} ")
+    };
     match (&grant.capability, grant.priority) {
         (Some(capability), Some(priority)) => out.push_str(&format!(
             "{prefix}{}.{}  capability={capability}  priority={priority}\n",
             grant.unit, grant.publish
         )),
-        _ => out.push_str(&format!("{prefix}{}.{}  binds\n", grant.unit, grant.publish)),
+        _ => out.push_str(&format!(
+            "{prefix}{}.{}  binds\n",
+            grant.unit, grant.publish
+        )),
     }
     for key in &grant.keys {
         out.push_str(&format!("    key: {key}\n"));
     }
-    let width = grant.entities.iter().map(|e| e.name.len()).max().unwrap_or(0);
+    let width = grant
+        .entities
+        .iter()
+        .map(|e| e.name.len())
+        .max()
+        .unwrap_or(0);
     for entity in &grant.entities {
         out.push_str(&format!(
             "    -> {:width$}  (room={}, capability={}, write={}, owner={})\n",
@@ -651,7 +719,10 @@ fn render_grant(grant: &Grant, mark: char, out: &mut String) {
 
 fn render_unit(check: &CheckResult, unit: &LoadedUnit, out: &mut String) {
     let name = &unit.manifest.unit.name;
-    out.push_str(&format!("+ {} {} ({})\n", unit.manifest.unit.kind, name, unit.path));
+    out.push_str(&format!(
+        "+ {} {} ({})\n",
+        unit.manifest.unit.kind, name, unit.path
+    ));
     out.push_str(&format!("    command: {}\n", unit.manifest.runtime.command));
 
     let entities: Vec<_> = check
@@ -742,8 +813,10 @@ mod tests {
 
     #[test]
     fn ordered_respects_edges_then_kind_then_name() {
-        let set: BTreeSet<String> =
-            ["watcher", "beacon", "zed"].iter().map(|s| s.to_string()).collect();
+        let set: BTreeSet<String> = ["watcher", "beacon", "zed"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         let edges = vec![edge("beacon", "watcher")];
         let kind_of = |name: &str| match name {
             "beacon" => 0,
@@ -752,7 +825,11 @@ mod tests {
         };
         assert_eq!(
             ordered(&set, &edges, kind_of),
-            vec!["beacon".to_string(), "zed".to_string(), "watcher".to_string()]
+            vec![
+                "beacon".to_string(),
+                "zed".to_string(),
+                "watcher".to_string()
+            ]
         );
     }
 
@@ -787,8 +864,7 @@ constraint = { min = 0, max = 10 }
         let new_default = String::from_utf8_lossy(old).replace("default = 1", "default = 5");
         assert!(param_level_only(new_default.as_bytes(), old));
 
-        let new_command =
-            String::from_utf8_lossy(old).replace("units/probe.py", "units/other.py");
+        let new_command = String::from_utf8_lossy(old).replace("units/probe.py", "units/other.py");
         assert!(!param_level_only(new_command.as_bytes(), old));
 
         let new_type = String::from_utf8_lossy(old).replace("type = \"int\"", "type = \"float\"");
@@ -824,8 +900,8 @@ editable_by = "family"
             vec!["level: constraint {max=10, min=0} -> {max=5, min=0}"]
         );
 
-        let owner_only =
-            String::from_utf8_lossy(old).replace("editable_by = \"family\"", "editable_by = \"owner\"");
+        let owner_only = String::from_utf8_lossy(old)
+            .replace("editable_by = \"family\"", "editable_by = \"owner\"");
         assert_eq!(
             refresh_changes(owner_only.as_bytes(), old),
             vec!["level: editable_by family -> owner"]
@@ -839,6 +915,9 @@ editable_by = "family"
 
         let comment_only = format!("{}\n# a comment\n", String::from_utf8_lossy(old));
         assert!(param_level_only(comment_only.as_bytes(), old));
-        assert_eq!(refresh_changes(comment_only.as_bytes(), old), Vec::<String>::new());
+        assert_eq!(
+            refresh_changes(comment_only.as_bytes(), old),
+            Vec::<String>::new()
+        );
     }
 }
