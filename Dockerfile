@@ -93,7 +93,20 @@ RUN uv python install 3.12
 # the SDK (docs/design.md, SDK distribution).
 COPY --chown=homeostat:homeostat sdk/python /tmp/sdk
 RUN uv build --wheel /tmp/sdk -o /opt/homeostat-wheels \
-    && rm -rf /tmp/sdk
+    && rm -rf /tmp/sdk \
+    # `uv python install` and the build above already populated
+    # /var/cache/uv (sdists, wheels, the interpreter archive) as this
+    # build's uid, each entry with uv's own default mode — read/execute
+    # for "other", but not write. A container run with a DIFFERENT
+    # runtime uid (--user, or compose's HOMEOSTAT_UID/GID) mounts a
+    # named volume over this path; Docker populates a fresh volume from
+    # the image, permissions included, so that uid can create new
+    # top-level entries (the 1777 above) but not write inside ones this
+    # build already created — uv then fails opening a file under one of
+    # them. Opening every existing entry to "other" once, here, fixes
+    # that for any runtime uid; new entries a running container creates
+    # need no such fix, since a container's units all share its one uid.
+    && chmod -R o+rwX /var/cache/uv
 
 COPY --from=build /homeostat /usr/local/bin/homeostat
 COPY --from=build /go2rtc /usr/local/bin/go2rtc
