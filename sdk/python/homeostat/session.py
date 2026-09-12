@@ -26,6 +26,11 @@ class ConfigWriteError(Exception):
     """A parameter write the core rejected (constraint, unknown key, ...)."""
 
 
+class QueryError(Exception):
+    """A queryable answered a get with an error reply (the recorder's
+    "limit: 0 is not positive", "store unavailable: ...")."""
+
+
 class UnitSession:
     def __init__(self, unit: str, endpoint: str):
         self.unit = unit
@@ -66,6 +71,17 @@ class UnitSession:
         for reply in self._session.get(selector):
             sample = reply.ok
             if sample is None:
+                # An error reply is the queryable saying no; swallowing it
+                # would read as an empty result.
+                if (err := reply.err) is not None:
+                    text = err.payload.to_bytes().decode(errors="replace")
+                    try:
+                        decoded = json.loads(text)
+                    except ValueError:
+                        decoded = text
+                    if isinstance(decoded, dict) and "error" in decoded:
+                        decoded = decoded["error"]
+                    raise QueryError(str(decoded))
                 continue
             try:
                 value = json.loads(sample.payload.to_bytes())

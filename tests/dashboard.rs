@@ -408,6 +408,49 @@ async fn dashboard_serves_the_family_surface() {
     );
     assert_eq!(status, 400, "person entity must refuse commands: {reply}");
 
+    // A vocabulary aspect is type-checked before the bus: a lock takes a
+    // bool, not a string, an object, or NaN — and a body past the 64 KiB
+    // cap never reaches the handler at all (aiohttp answers 413).
+    let (status, reply) = http_request(
+        &addr,
+        "POST",
+        "/api/cmd",
+        &[("X-Homeostat", "family")],
+        Some(&json!({"room": "livingroom", "entity": "front_door", "aspect": "locked", "value": "yes"})),
+    );
+    assert_eq!(status, 400, "a string is not a lock value: {reply}");
+    let (status, reply) = http_request(
+        &addr,
+        "POST",
+        "/api/cmd",
+        &[("X-Homeostat", "family")],
+        Some(&json!({"room": "livingroom", "entity": "lamp", "aspect": "brightness", "value": true})),
+    );
+    assert_eq!(status, 400, "a bool is not a brightness: {reply}");
+    let (status, _) = http_request(
+        &addr,
+        "POST",
+        "/api/cmd",
+        &[("X-Homeostat", "family")],
+        Some(&json!({"room": "livingroom", "entity": "front_door", "aspect": "locked", "value": {"blob": "x".repeat(96 * 1024)}})),
+    );
+    assert_eq!(status, 413, "a body past the cap is refused before the handler");
+    // A body that is valid JSON but not an object is a 400, not a 500.
+    let (status, reply) = http_request(
+        &addr,
+        "POST",
+        "/api/cmd",
+        &[("X-Homeostat", "family")],
+        Some(&json!([1])),
+    );
+    assert_eq!(status, 400, "a JSON array body: {reply}");
+    assert!(
+        tokio::time::timeout(Duration::from_secs(2), lock_cmd_sub.recv_async())
+            .await
+            .is_err(),
+        "a mistyped or oversized command must never reach the bus"
+    );
+
     // A lock command is accepted: COMMANDABLE now maps lock -> {"locked"}.
     // The wish still just goes to home/cmd at manual band, stamped the same
     // way as any other command — for a real arbitrated entity, the arbiter
@@ -649,6 +692,27 @@ async fn dashboard_serves_the_family_surface() {
         None,
     );
     assert_eq!(status, 403, "foreign Host must be refused");
+
+    // 9. `/api/history` builds a recorder selector from browser input, so
+    // the entity must be one the model knows and the aspect one key
+    // segment — a wildcard would fan the per-series limit out over the
+    // whole store, and `/`, `#`, `$` would raise inside the executor.
+    // No recorder in this fixture: a valid pair answers an empty series
+    // list, which is the 200 that matters here.
+    let (status, reply) = http_request(&addr, "GET", "/api/history?entity=lamp&aspect=brightness", &[], None);
+    assert_eq!(status, 200, "{reply}");
+    assert_eq!(reply["series"], json!([]), "{reply}");
+    for query in [
+        "entity=**&aspect=brightness",
+        "entity=lamp&aspect=**",
+        "entity=lamp&aspect=bright/ness",
+        "entity=lamp&aspect=$foo",
+        "entity=lamp&aspect=..",
+        "entity=no_such&aspect=brightness",
+    ] {
+        let (status, reply) = http_request(&addr, "GET", &format!("/api/history?{query}"), &[], None);
+        assert_eq!(status, 400, "{query}: {reply}");
+    }
 
     sup.shutdown();
 }
