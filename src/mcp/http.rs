@@ -19,7 +19,9 @@
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde_json::{json, Value};
 
@@ -29,6 +31,16 @@ use super::{protocol, Server};
 const ALLOWED_NAMES: [&str; 4] = ["localhost", "homeostat", "homeostat.lan", "homeostat.local"];
 const WRITE_HEADER: &str = "x-homeostat";
 const ENV_HOSTS: &str = "HOMEOSTAT_MCP_HOSTS";
+
+/// Bounds on what a LAN peer can make this process hold or wait for. A
+/// request body is one JSON-RPC message; a tools/call argument list is
+/// never near a megabyte. A declared `Content-Length` is only ever
+/// allocated after the gate passed and only up to this cap.
+const MAX_BODY: usize = 1024 * 1024;
+const MAX_HEADER_LINE: u64 = 8 * 1024;
+const MAX_HEADERS: usize = 64;
+const READ_TIMEOUT: Duration = Duration::from_secs(10);
+const MAX_CONNECTIONS: usize = 32;
 
 /// The host part of a `Host` or `Origin` header value: strips a scheme and
 /// a port, and unwraps a bracketed IPv6 literal.
@@ -77,28 +89,56 @@ pub fn serve(server: Arc<Server>, addr: &str) -> Result<(), String> {
     let listener =
         TcpListener::bind(addr).map_err(|e| format!("cannot listen on {addr}: {e}"))?;
     eprintln!("[homeostat] mcp listening on http://{addr}");
+    let active = Arc::new(AtomicUsize::new(0));
     loop {
-        let (stream, _) = match listener.accept() {
+        let (mut stream, _) = match listener.accept() {
             Ok(accepted) => accepted,
             Err(_) => continue,
         };
+        if active.fetch_add(1, Ordering::SeqCst) >= MAX_CONNECTIONS {
+            active.fetch_sub(1, Ordering::SeqCst);
+            let _ = respond(&mut stream, "503 Service Unavailable", &[], b"too many connections\n");
+            continue;
+        }
         let server = server.clone();
+        let active = active.clone();
         std::thread::spawn(move || {
             let _ = connection(&server, stream);
+            active.fetch_sub(1, Ordering::SeqCst);
         });
     }
 }
 
+/// One header or request line, at most `MAX_HEADER_LINE` bytes: a line
+/// that long with no newline is refused rather than grown. Ok(None) at
+/// EOF.
+fn read_line(reader: &mut BufReader<TcpStream>) -> std::io::Result<Result<Option<String>, ()>> {
+    let mut line = String::new();
+    let n = reader.take(MAX_HEADER_LINE + 1).read_line(&mut line)?;
+    if n == 0 {
+        return Ok(Ok(None));
+    }
+    if line.len() as u64 > MAX_HEADER_LINE || !line.ends_with('\n') {
+        return Ok(Err(()));
+    }
+    Ok(Ok(Some(line)))
+}
+
 /// Serves requests on one connection until the peer hangs up or asks to
 /// close (keep-alive is HTTP/1.1's default and real MCP clients use it).
+/// Every refusal closes the connection without reading the body: the
+/// declared length is never trusted before the gate passed, and never
+/// beyond the cap after it.
 fn connection(server: &Server, stream: TcpStream) -> std::io::Result<()> {
+    stream.set_read_timeout(Some(READ_TIMEOUT))?;
     let mut reader = BufReader::new(stream.try_clone()?);
     let mut stream = stream;
     loop {
-        let mut request_line = String::new();
-        if reader.read_line(&mut request_line)? == 0 {
-            return Ok(());
-        }
+        let request_line = match read_line(&mut reader)? {
+            Ok(Some(line)) => line,
+            Ok(None) => return Ok(()),
+            Err(()) => return respond(&mut stream, "431 Request Header Fields Too Large", &[], b""),
+        };
         let method = request_line.split_whitespace().next().unwrap_or("").to_string();
 
         let mut content_length = 0usize;
@@ -106,19 +146,25 @@ fn connection(server: &Server, stream: TcpStream) -> std::io::Result<()> {
         let mut host: Option<String> = None;
         let mut origin: Option<String> = None;
         let mut write_header = false;
+        let mut count = 0usize;
         loop {
-            let mut header = String::new();
-            if reader.read_line(&mut header)? == 0 {
-                return Ok(());
-            }
+            let header = match read_line(&mut reader)? {
+                Ok(Some(line)) => line,
+                Ok(None) => return Ok(()),
+                Err(()) => return respond(&mut stream, "431 Request Header Fields Too Large", &[], b""),
+            };
             let header = header.trim_end();
             if header.is_empty() {
                 break;
             }
+            count += 1;
+            if count > MAX_HEADERS {
+                return respond(&mut stream, "431 Request Header Fields Too Large", &[], b"");
+            }
             let Some((name, value)) = header.split_once(':') else { continue };
             let value = value.trim();
             if name.eq_ignore_ascii_case("content-length") {
-                content_length = value.parse().unwrap_or(0);
+                content_length = value.parse().unwrap_or(usize::MAX);
             } else if name.eq_ignore_ascii_case("connection")
                 && value.eq_ignore_ascii_case("close")
             {
@@ -131,42 +177,47 @@ fn connection(server: &Server, stream: TcpStream) -> std::io::Result<()> {
                 write_header = true;
             }
         }
+
+        // Refused before the body is read, let alone parsed: a rejected
+        // request must not reach a tool, and the reason is never echoed to
+        // a browser.
+        if let Some(refusal) = gate(host.as_deref(), origin.as_deref(), write_header) {
+            return respond(&mut stream, "403 Forbidden", &[], refusal.as_bytes());
+        }
+        if method != "POST" {
+            return respond(&mut stream, "405 Method Not Allowed", &[("Allow", "POST")], b"");
+        }
+        if content_length > MAX_BODY {
+            return respond(&mut stream, "413 Payload Too Large", &[], b"");
+        }
         let mut body = vec![0u8; content_length];
         reader.read_exact(&mut body)?;
 
-        // Refused before the body is parsed: a rejected request must not
-        // reach a tool, and the reason is never echoed to a browser.
-        if let Some(refusal) = gate(host.as_deref(), origin.as_deref(), write_header) {
-            respond(&mut stream, "403 Forbidden", &[], refusal.as_bytes())?;
-        } else if method != "POST" {
-            respond(&mut stream, "405 Method Not Allowed", &[("Allow", "POST")], b"")?;
-        } else {
-            match serde_json::from_slice::<Value>(&body) {
-                Ok(message) => match protocol::handle(server, &message) {
-                    Some(reply) => {
-                        let body = serde_json::to_vec(&reply).expect("reply serializes");
-                        respond(
-                            &mut stream,
-                            "200 OK",
-                            &[("Content-Type", "application/json")],
-                            &body,
-                        )?;
-                    }
-                    None => respond(&mut stream, "202 Accepted", &[], b"")?,
-                },
-                Err(err) => {
-                    let error = json!({
-                        "jsonrpc": "2.0",
-                        "id": null,
-                        "error": {"code": -32700, "message": format!("parse error: {err}")}
-                    });
+        match serde_json::from_slice::<Value>(&body) {
+            Ok(message) => match protocol::handle(server, &message) {
+                Some(reply) => {
+                    let body = serde_json::to_vec(&reply).expect("reply serializes");
                     respond(
                         &mut stream,
-                        "400 Bad Request",
+                        "200 OK",
                         &[("Content-Type", "application/json")],
-                        &serde_json::to_vec(&error).expect("error serializes"),
+                        &body,
                     )?;
                 }
+                None => respond(&mut stream, "202 Accepted", &[], b"")?,
+            },
+            Err(err) => {
+                let error = json!({
+                    "jsonrpc": "2.0",
+                    "id": null,
+                    "error": {"code": -32700, "message": format!("parse error: {err}")}
+                });
+                respond(
+                    &mut stream,
+                    "400 Bad Request",
+                    &[("Content-Type", "application/json")],
+                    &serde_json::to_vec(&error).expect("error serializes"),
+                )?;
             }
         }
         if close {

@@ -300,3 +300,37 @@ async fn restart_policy_terminal_states_read_stopped() {
 
     sup.shutdown();
 }
+
+/// (h) A unit sees only the environment its manifest declares: a
+/// variable named in `runtime.env` is passed through, an undeclared one
+/// is withheld, and the supervisor's own `HOMEOSTAT_UNIT`/`HOMEOSTAT_BUS`
+/// are always there. The unit is `env` itself, so its log ring is its
+/// environment.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_unit_sees_only_the_environment_its_manifest_declares() {
+    let mut sup = Supervisor::spawn_with_env(
+        "tests/fixture_house_env",
+        &[
+            ("HOMEOSTAT_TEST_DECLARED", "visible"),
+            ("HOMEOSTAT_TEST_UNDECLARED", "withheld"),
+        ],
+    );
+    let observer = sup.observer().await;
+    let mut watch = health_watch(&observer, "envdump").await;
+    await_health(&mut watch, Duration::from_secs(10), |h| h.status == HealthStatus::Stopped).await;
+
+    let entries = await_log(&observer, "envdump", Duration::from_secs(10), |e| {
+        e.iter().any(|l| l.line.starts_with("HOMEOSTAT_BUS="))
+    })
+    .await;
+    let lines: Vec<&str> = entries.iter().map(|e| e.line.as_str()).collect();
+    assert!(lines.contains(&"HOMEOSTAT_TEST_DECLARED=visible"), "{lines:?}");
+    assert!(lines.contains(&"HOMEOSTAT_UNIT=envdump"), "{lines:?}");
+    assert!(
+        !lines.iter().any(|l| l.starts_with("HOMEOSTAT_TEST_UNDECLARED=")),
+        "an undeclared variable reached the unit: {lines:?}"
+    );
+    assert!(lines.iter().any(|l| l.starts_with("PATH=")), "the base set is inherited: {lines:?}");
+
+    sup.shutdown();
+}

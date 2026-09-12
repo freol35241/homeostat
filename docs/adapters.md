@@ -94,8 +94,14 @@ What the supervisor does, and what it expects back:
 - **Spawn.** `runtime.command` is whitespace-tokenized and exec'd with no
   shell. Working directory is the house root. Environment carries
   `HOMEOSTAT_UNIT` (the unit name) and `HOMEOSTAT_BUS` (the Zenoh
-  endpoint, e.g. `tcp/127.0.0.1:7447`). A `uv run <script>` command is
-  resolved to the script's interpreter and exec'd directly.
+  endpoint, e.g. `tcp/127.0.0.1:7447`), a fixed base set (`PATH`, `HOME`,
+  locale, `TZ`, `UV_*`, `PYTHON*`, CA bundles) — and nothing else of the
+  supervisor's environment unless the manifest declares it: a unit lists
+  every variable it reads by exact name in `runtime.env`
+  (`env = ["HOMEOSTAT_NTFY_TOKEN"]`), including the ones its `${VAR}`
+  endpoint expands. A secret handed to the supervisor for one unit is
+  never visible to another. A `uv run <script>` command is resolved to
+  the script's interpreter and exec'd directly.
 - **Dependencies** live in the script's PEP 723 block. Inside this repo an
   adapter uses a path source so tests exercise the working-tree SDK; a
   shipped copy in a house pins the release wheel and carries no sources
@@ -142,7 +148,8 @@ Each entity carries `name`, `id`, `capability`, `features`, `room`,
 config channel. Secrets never enter the repo: an MQTT password goes in
 the endpoint's `${VAR}` or in the TOML that `HOMEOSTAT_MQTT_CREDENTIALS`
 names; per-device keys go in a file an adapter-specific variable names
-(`HOMEOSTAT_ESPHOME_DEVICES` is the precedent).
+(`HOMEOSTAT_ESPHOME_DEVICES` is the precedent). Every such variable is
+declared in the unit's `runtime.env`, or the unit does not see it (§2).
 
 ## 3. State
 

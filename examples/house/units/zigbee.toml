@@ -8,6 +8,7 @@ description = "Zigbee2MQTT bridge"
 [runtime]
 command = "uv run units/zigbee.py"
 restart = "always"
+env = ["HOMEOSTAT_MQTT_CREDENTIALS"]
 
 [discovery]
 mode = "static"

@@ -9,6 +9,7 @@ description = "Zigbee2MQTT adapter under test"
 command = "uv run ../../adapters/zigbee2mqtt.py"
 restart = "always"
 shutdown_grace_s = 5
+env = ["HOMEOSTAT_TEST_MQTT_PORT", "HOMEOSTAT_MQTT_CREDENTIALS"]
 
 [discovery]
 mode = "static"

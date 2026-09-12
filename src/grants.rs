@@ -536,6 +536,7 @@ mod tests {
                     command: "true".to_string(),
                     restart: RestartPolicy::Always,
                     shutdown_grace_s: None,
+                    env: None,
                 },
                 discovery: None,
                 bus: Some(bus),

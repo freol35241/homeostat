@@ -9,3 +9,4 @@ description = "go2rtc restreamer under test"
 command = "uv run ../../adapters/go2rtc.py"
 restart = "always"
 shutdown_grace_s = 5
+env = ["HOMEOSTAT_CAMERAS", "HOMEOSTAT_GO2RTC_LISTEN"]
