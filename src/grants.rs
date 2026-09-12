@@ -382,6 +382,68 @@ pub fn resolve(
         }
     }
 
+    // Reserved classes (docs/design.md, Key space): `config` and `meta` are
+    // the core's alone; `health` and `discovery` are per unit, under the
+    // publishing unit's own name; `arbiter`, `clock` and `history` are one
+    // service's output each. The SDK only checks that a published key is
+    // within a declared expression, so without this an automation could
+    // declare `home/arbiter/**` and forge post-arbitration commands, or
+    // another unit's discovery record, with an empty grant table.
+    let publish_class = |key: &ExpandedKey| -> Option<(String, Option<String>)> {
+        let mut segments = key.source.split('/').skip(1).map(str::to_string);
+        Some((segments.next()?, segments.next()))
+    };
+    let mut singleton_publishers: BTreeMap<String, BTreeSet<&str>> = BTreeMap::new();
+    for key in expanded.iter().filter(|k| k.direction == Direction::Publishes) {
+        if let Some((class, _)) = publish_class(key) {
+            if matches!(class.as_str(), "arbiter" | "clock" | "history") {
+                singleton_publishers.entry(class).or_default().insert(key.unit.as_str());
+            }
+        }
+    }
+    for key in expanded.iter().filter(|k| k.direction == Direction::Publishes) {
+        let Some((class, next)) = publish_class(key) else { continue };
+        let unit = house.unit(&key.unit).expect("expanded key from loaded unit");
+        let message = match class.as_str() {
+            "config" | "meta" => Some(format!(
+                "\"{}\" publishes under home/{class}/, which only the core writes",
+                key.source
+            )),
+            "health" | "discovery" if next.as_deref() != Some(key.unit.as_str()) => Some(format!(
+                "\"{}\" must sit under this unit's own name: home/{class}/{}/...",
+                key.source, key.unit
+            )),
+            "arbiter" | "clock" | "history" => {
+                let publishers = &singleton_publishers[&class];
+                if unit.manifest.unit.kind != UnitKind::Service {
+                    Some(format!(
+                        "\"{}\": only a service may publish under home/{class}/",
+                        key.source
+                    ))
+                } else if publishers.len() > 1 {
+                    let others: Vec<&str> =
+                        publishers.iter().copied().filter(|u| *u != key.unit).collect();
+                    Some(format!(
+                        "\"{}\": home/{class}/ is also published by {}; exactly one service owns it",
+                        key.source,
+                        others.join(", ")
+                    ))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+        if let Some(message) = message {
+            errors.push(ValidationError::new(
+                "reserved-class-publish",
+                format!("{}.{}", key.unit, key.entry),
+                message,
+                Some(unit.path.clone()),
+            ));
+        }
+    }
+
     (grants, warnings, errors)
 }
 

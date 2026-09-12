@@ -1,0 +1,12 @@
+schema = 1
+
+[unit]
+name = "recorder"
+kind = "service"
+
+[runtime]
+command = "uv run units/recorder.py"
+restart = "always"
+
+[bus.publishes]
+history = { key = "home/history/**" }

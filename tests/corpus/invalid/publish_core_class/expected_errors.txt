@@ -1,0 +1,2 @@
+error[reserved-class-publish] writer.config: "home/config/zigbee/poll_s" publishes under home/config/, which only the core writes (units/writer.toml)
+error[reserved-class-publish] writer.meta: "home/meta/zigbee/manifest_hash" publishes under home/meta/, which only the core writes (units/writer.toml)

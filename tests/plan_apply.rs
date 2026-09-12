@@ -75,6 +75,37 @@ async fn behavioral_change_restarts_exactly_that_unit() {
     let _ = std::fs::remove_dir_all(&house);
 }
 
+/// (a2) A manifest edit that adds a publish is behavioral (the grant set is
+/// unchanged), and the plan renders the restarting unit's expanded keys so
+/// the new key surface is visible before approval, as it is for a create.
+#[tokio::test(flavor = "multi_thread")]
+async fn manifest_edit_adding_a_publish_renders_the_new_key() {
+    let house = temp_house(FIXTURE, "apply-new-key");
+    let mut sup = Supervisor::spawn_at(&house, &[]);
+    let observer = sup.observer().await;
+    await_base_units(&observer).await;
+
+    edit(
+        &house,
+        "units/probe.toml",
+        "echo = { key = \"home/state/den/probe_echo/level\" }",
+        "echo = { key = \"home/state/den/probe_echo/level\" }\n\
+         events = { key = \"home/health/probe/event\" }",
+    );
+
+    let house_arg = house.to_str().expect("utf-8 path");
+    let plan = cli(&["plan", house_arg, "--bus", &sup.endpoint]);
+    assert_cli_ok(&plan);
+    let text = stdout(&plan);
+    assert!(text.contains("Plan tier: behavioral (1 unit restarted)"), "{text}");
+    assert!(text.contains("reason: manifest changed"), "{text}");
+    assert!(text.contains("Expanded keys:"), "{text}");
+    assert!(text.contains("probe publishes events: home/health/probe/event"), "{text}");
+
+    sup.shutdown();
+    let _ = std::fs::remove_dir_all(&house);
+}
+
 /// (b) A manifest-default change plans as parameter-only and applies with
 /// zero restarts; the running unit sees the new value live (it echoes the
 /// config update to a state key).

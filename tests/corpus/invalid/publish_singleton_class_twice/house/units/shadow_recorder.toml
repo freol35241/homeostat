@@ -1,0 +1,12 @@
+schema = 1
+
+[unit]
+name = "shadow_recorder"
+kind = "service"
+
+[runtime]
+command = "uv run units/shadow_recorder.py"
+restart = "always"
+
+[bus.publishes]
+history = { key = "home/history/**" }

@@ -1,0 +1,3 @@
+error[reserved-class-publish] forger.arbiter: "home/arbiter/**": only a service may publish under home/arbiter/ (units/forger.toml)
+error[reserved-class-publish] forger.history: "home/history/**": only a service may publish under home/history/ (units/forger.toml)
+error[reserved-class-publish] forger.minute: "home/clock/minute": only a service may publish under home/clock/ (units/forger.toml)

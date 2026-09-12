@@ -88,6 +88,9 @@ pub fn world_unit_from_repo(
 pub struct Restart {
     pub name: String,
     pub reason: String,
+    /// The manifest itself changed (not only unit files): the unit's key
+    /// surface may have changed, so the plan renders its expansion.
+    pub manifest_changed: bool,
 }
 
 #[derive(Debug)]
@@ -181,7 +184,11 @@ pub fn diff(check: &CheckResult, root: &Path, world: &World) -> Diff {
                 (true, false) => "manifest changed",
                 _ => "unit files changed",
             };
-            diff.restarts.push(Restart { name: name.clone(), reason: reason.to_string() });
+            diff.restarts.push(Restart {
+                name: name.clone(),
+                reason: reason.to_string(),
+                manifest_changed,
+            });
         } else if param_level {
             diff.refreshes.push(Refresh {
                 name: name.clone(),
@@ -517,9 +524,18 @@ pub fn render(check: &CheckResult, root: &Path, repo_label: &str, world: &World)
         }
     }
 
-    if !created.is_empty() {
+    // Created units and units restarting on a manifest change: both may
+    // bring new key surface, and an approval prompt must show it.
+    let mut with_keys = created.clone();
+    with_keys.extend(
+        diff.restarts
+            .iter()
+            .filter(|r| r.manifest_changed)
+            .filter_map(|r| check.house.unit(&r.name)),
+    );
+    if !with_keys.is_empty() {
         out.push_str("\nExpanded keys:\n\n");
-        for unit in &created {
+        for unit in &with_keys {
             let name = &unit.manifest.unit.name;
             for key in check.expanded.iter().filter(|k| &k.unit == name) {
                 render_expanded(key, &mut out);

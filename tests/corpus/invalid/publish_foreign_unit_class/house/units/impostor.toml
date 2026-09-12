@@ -1,0 +1,15 @@
+schema = 1
+
+[unit]
+name = "impostor"
+kind = "automation"
+
+[runtime]
+command = "uv run units/impostor.py"
+restart = "on-failure"
+
+[bus.publishes]
+own_events = { key = "home/health/impostor/event" }
+events = { key = "home/health/zigbee/event" }
+all_health = { key = "home/health/**" }
+discovery = { key = "home/discovery/zigbee" }

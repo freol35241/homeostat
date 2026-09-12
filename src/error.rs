@@ -256,6 +256,19 @@ pub const CODES: &[(&str, &str)] = &[
          key otherwise.",
     ),
     (
+        "reserved-class-publish",
+        "A `[bus.publishes]` key sits in a class the unit may not write. \
+         `home/config/` and `home/meta/` are the core's alone. `home/health/` \
+         and `home/discovery/` are per unit: a publish there must sit under \
+         the publishing unit's own name (`home/health/{unit}/...`, \
+         `home/discovery/{unit}`). `home/arbiter/`, `home/clock/` and \
+         `home/history/` are each one service's output: only a `kind = \
+         \"service\"` unit may publish them, and at most one per class. The \
+         SDK only checks a published key against the declared expression, so \
+         this is where a forged post-arbitration command, a forged discovery \
+         record or a second clock is refused.",
+    ),
+    (
         "state-publish-unbound",
         "A publish under `home/state/` must name, literally, the room and entity \
          of an entity this unit binds (or use `{room}`/`{entity}` templates). \
