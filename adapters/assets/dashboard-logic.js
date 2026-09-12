@@ -87,7 +87,9 @@
       return 'snapshot';
     }
     if (msg.type === 'aspects') {
-      store.aspects[msg.entity] = msg.value;
+      // null retires a descriptor the adapter no longer publishes
+      if (msg.value === null || msg.value === undefined) delete store.aspects[msg.entity];
+      else store.aspects[msg.entity] = msg.value;
       return 'aspects';
     }
     if (msg.type === 'state') {
@@ -288,6 +290,13 @@
     var tier = cmd.editable_by || 'owner';
     if (tier !== 'family') return { kind: 'readonly', tier: tier };
     var c = cmd.constraint || {};
+    // step/min/max go into attributes and arithmetic: a non-number there
+    // is a malformed descriptor, not a control (the server refuses the
+    // command too).
+    var bounds = [cmd.step, c.min, c.max];
+    for (var i = 0; i < bounds.length; i++) {
+      if (bounds[i] !== undefined && (typeof bounds[i] !== 'number' || !isFinite(bounds[i]))) return null;
+    }
     if (cmd.type === 'enum') {
       return { kind: 'segment', values: field.values || [], disabled: !commandable };
     }

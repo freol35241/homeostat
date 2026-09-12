@@ -69,15 +69,26 @@ class UbusError(Exception):
     non-zero ubus status code, unparseable body."""
 
 
+# A ubus reply is a small JSON document; a compromised or misbehaving
+# router must not pin the unit's memory on an oversized one.
+MAX_RESPONSE_BYTES = 1024 * 1024
+
+
 async def ubus_rpc(http: aiohttp.ClientSession, url: str, method: str, params: list):
     payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
     try:
         async with http.post(
-            url, json=payload, timeout=aiohttp.ClientTimeout(total=HTTP_TIMEOUT_S)
+            url, json=payload, timeout=aiohttp.ClientTimeout(total=HTTP_TIMEOUT_S),
+            # A redirect would replay the login call (the plaintext rpcd
+            # password included) at whatever host the reply names.
+            allow_redirects=False,
         ) as response:
             if response.status != 200:
                 raise UbusError(f"HTTP {response.status}")
-            data = await response.json(content_type=None)
+            raw = await response.content.read(MAX_RESPONSE_BYTES + 1)
+            if len(raw) > MAX_RESPONSE_BYTES:
+                raise UbusError(f"response exceeds {MAX_RESPONSE_BYTES} bytes")
+            data = json.loads(raw)
     except aiohttp.ClientError as err:
         raise UbusError(str(err)) from err
     except asyncio.TimeoutError as err:
