@@ -45,13 +45,10 @@ enum Command {
         #[arg(long)]
         plan: Option<PathBuf>,
     },
-    /// Serve the agent surface: an MCP server bound to a live house.
-    /// Stdio by default (an MCP client launches it); --http for the
-    /// deployed house, where it runs as a supervised service unit.
+    /// Serve the agent surface: a read-only MCP server bound to a live
+    /// house bus. Stdio by default (an MCP client launches it); --http for
+    /// the deployed house, where it runs as a supervised service unit.
     Mcp {
-        /// Path to the house repo.
-        #[arg(default_value = ".")]
-        path: PathBuf,
         /// Bus endpoint of the running supervisor (or HOMEOSTAT_BUS).
         #[arg(long)]
         bus: Option<String>,
@@ -90,7 +87,7 @@ fn main() -> ExitCode {
     match cli.command {
         Command::Plan { path, bus, save, actor } => plan_command(path, bus, save, actor),
         Command::Apply { path, bus, plan } => apply_command(path, bus, plan),
-        Command::Mcp { path, bus, http } => mcp_command(path, bus, http),
+        Command::Mcp { bus, http } => mcp_command(bus, http),
         Command::Explain { code } => explain_command(code),
         Command::Schema { file, markdown } => schema_command(file, markdown),
         Command::Up { path, listen } => {
@@ -231,12 +228,12 @@ fn plan_command(path: PathBuf, bus: Option<String>, save: bool, actor: String) -
     ExitCode::SUCCESS
 }
 
-fn mcp_command(path: PathBuf, bus: Option<String>, http: Option<String>) -> ExitCode {
+fn mcp_command(bus: Option<String>, http: Option<String>) -> ExitCode {
     let Some(endpoint) = endpoint(bus) else {
         eprintln!("mcp needs a running supervisor: pass --bus or set HOMEOSTAT_BUS");
         return ExitCode::FAILURE;
     };
-    let server = match homeostat::mcp::Server::start(&path, &endpoint) {
+    let server = match homeostat::mcp::Server::start(&endpoint) {
         Ok(server) => server,
         Err(err) => {
             eprintln!("mcp failed: {err}");

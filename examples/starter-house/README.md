@@ -100,21 +100,19 @@ claude mcp add --transport http homeostat http://<host>:8642 \
 ```
 
 The header is required. Reachability is this surface's only credential,
-and it can write and commit to your house repo — without the header a
-web page open in a family browser could drive it at your LAN address
-without ever reading a reply. Set `HOMEOSTAT_MCP_HOSTS` if you reach the
-house by a name other than `homeostat`/`homeostat.lan`/`homeostat.local`.
+and it serves everything the house knows — without the header a web
+page open in a family browser could read it at your LAN address without
+ever seeing a reply. Set `HOMEOSTAT_MCP_HOSTS` if you reach the house by
+a name other than `homeostat`/`homeostat.lan`/`homeostat.local`.
 
-The agent gets five tools — `read_state`, `read_history`, `plan`,
-`propose`, `apply` — with tier-gated authority: it can read everything,
-and `propose` commits repo edits, but only parameter-only changes apply
-immediately. Anything behavioral or structural (new entities, new
-units) is saved as a pending plan under `plans/pending/` for you to
-review and apply:
+The surface is read-only: `read_state`, `read_history`, `read_logs`,
+`read_events`, plus `schema` and `explain` for the authoring contract.
+Changing the house is a repo edit like any other — an agent working in
+your house checkout (Claude Code, say) edits files and runs
+`homeostat plan`; you review and apply:
 
 ```
-docker compose exec homeostat homeostat apply /house \
-  --bus tcp/127.0.0.1:7447 --plan plans/pending/<id>.plan
+docker compose exec homeostat homeostat apply /house --bus tcp/127.0.0.1:7447
 ```
 
 Discovery closes the loop: the zigbee adapter republishes the bridge's
@@ -123,9 +121,10 @@ its binding `id`, whether an entity file claims it (`configured`), a
 suggested capability stanza mapped from the device's z2m `exposes`, and
 the raw definition. So the prompt an agent can act on end to end is:
 
-> Read `home/discovery/zigbee` and propose entity files under
+> Read `home/discovery/zigbee` and write entity files under
 > `entities/zigbee/` for every unconfigured device, using the suggested
-> capabilities. Ask me which room each device is in.
+> capabilities. Ask me which room each device is in, then run
+> `homeostat plan`.
 
 Rooms are the one thing no protocol knows — expect the agent to ask,
-or correct its guesses when you review the pending plan.
+or correct its guesses when you review the plan.

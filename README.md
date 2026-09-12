@@ -31,10 +31,10 @@ opinions:
   declaration. `homeostat apply` walks the difference unit by unit,
   rolling, halting visibly on failure. Rollback is `git checkout` and
   apply again.
-- **Agent-native.** An MCP server lets an agent read state and history,
-  propose edits, and apply them — with authority bounded by the same
-  plan/apply machinery as every other actor. A setpoint change
-  auto-applies; anything structural waits for the owner.
+- **Agent-native.** An MCP server lets an agent read state, history,
+  logs and the audit trail, and serves the authoring contract. Changes
+  go through the repo: an agent edits text and runs `plan`, and the
+  owner applies — the same discipline as every other actor.
 - **Small core, real processes.** Every running thing is a supervised OS
   process with liveliness tokens, exponential restart backoff, and a
   circuit breaker visible on the bus — Erlang lineage, not containers or
@@ -296,15 +296,15 @@ on a phone, that auto-invalidates when the repo moves.
 ### The agent surface: MCP
 
 `homeostat mcp` serves the tools `read_state`, `read_history`, `read_logs`,
-`read_events`, `plan`, `propose`, `apply`, `explain` and `schema` over stdio, or over HTTP as a supervised service unit
-in a deployed house. The agent never touches the bus directly for
-structural work: `propose` takes file contents, commits, and plans. A
-parameter-only plan auto-applies (the commit *is* the edit); anything
-behavioral or structural is saved as a pending plan for the owner to apply
-with `homeostat apply --plan <file>`. The tier derivation is the
-enforcement — a manifest edit that smuggles in a grant delta escalates to
-structural on its own. A refused plan or propose names each failure by
-code and carries the rule behind every code inline; `explain` (and
+`read_events`, `explain` and `schema` over stdio, or over HTTP as a
+supervised service unit in a deployed house. The surface is read-only: a
+pure bus client that needs no house root. An agent changes the house the
+way every other actor does — it edits the repo and runs `homeostat plan`,
+and the owner applies. (Write tools — `propose`, `apply`, `plan` — were
+removed on 2026-09-12 until an agent without a filesystem exists to use
+them; the design record states the conditions of their return.) A
+refused plan names each failure by code and carries the rule behind
+every code inline; `explain` (and
 `homeostat explain <code>` on the CLI) serves the same paragraphs on
 demand, so the authoring contract's rules are readable in-band rather
 than from the validator's source. The manifest contract itself is
@@ -376,7 +376,7 @@ answers a second container, and SIGTERM shuts down cleanly.
 | `tests/evening.rs` | automation behavior, live parameter edits, constraint rejection |
 | `tests/recorder.rs` | typed history, room-tag transitions, outage buffering, bus reads |
 | `tests/plan_apply.rs` | tier derivation, rolling apply, halt-in-place, stale plans |
-| `tests/mcp.rs` | agent reads, propose/auto-apply, tier gating, grant-smuggling escalation |
+| `tests/mcp.rs` | agent reads over stdio and HTTP, the browser gates, the read-only tool list |
 
 ## License
 

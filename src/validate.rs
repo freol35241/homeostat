@@ -447,7 +447,7 @@ fn check_param(subject: &str, spec: &ParamSpec, path: &str, errors: &mut Vec<Val
     }
 
     // The default must satisfy its own constraint: the repo-edit parameter
-    // path (propose) is enforced here, so an out-of-constraint default
+    // path is enforced here, so an out-of-constraint default
     // never plans, let alone reaches a running unit. Skipped when this
     // param already has errors — a default judged against a malformed
     // constraint would only add noise.
