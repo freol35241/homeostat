@@ -368,7 +368,7 @@ pub struct ParamSpec {
     pub constraint: Option<BTreeMap<String, toml::Value>>,
     /// Who may change it live. `family` params appear as editable
     /// setpoints on the dashboard; anything else is visible there but
-    /// written only through the repo (a propose) or the bus.
+    /// written only through the repo or the bus.
     pub editable_by: Option<EditableBy>,
 }
 

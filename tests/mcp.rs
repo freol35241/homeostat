@@ -1,9 +1,8 @@
 //! Step-6 integration tests: the MCP agent surface against the real server
 //! and a live supervised house. The stdio scenarios drive `homeostat mcp`
 //! as a child process speaking newline-delimited JSON-RPC — the shape a
-//! local MCP client launches; the HTTP scenario runs the server as a
-//! supervised service unit, the deployed shape. Repo-editing scenarios run
-//! on git-inited temp-dir copies of tests/fixture_house_apply/.
+//! local MCP client launches; the HTTP scenarios run the server as a
+//! supervised service unit, the deployed shape.
 //!
 //! No fixed ports, no wall-clock sleeps: every wait polls an observable
 //! condition within a deadline.
@@ -12,7 +11,6 @@ mod common;
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
-use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -21,8 +19,8 @@ use homeostat::bus::HealthStatus;
 use serde_json::{json, Value};
 
 use common::{
-    await_base_units, await_health, cache_read, cli, free_port, git, git_init_commit,
-    health_watch, matched_publisher, meta_read, running_pid, temp_house, Supervisor,
+    await_base_units, await_health, cache_read, free_port, health_watch, matched_publisher,
+    temp_house, Supervisor,
 };
 
 const FIXTURE: &str = "tests/fixture_house_apply";
@@ -38,9 +36,9 @@ struct Mcp {
 }
 
 impl Mcp {
-    fn connect(house: &Path, endpoint: &str) -> Mcp {
+    fn connect(endpoint: &str) -> Mcp {
         let mut child = Command::new(env!("CARGO_BIN_EXE_homeostat"))
-            .args(["mcp", house.to_str().expect("utf-8 path"), "--bus", endpoint])
+            .args(["mcp", "--bus", endpoint])
             .env_remove(homeostat::bus::ENV_BUS)
             .env_remove(homeostat::bus::ENV_UNIT)
             .stdin(Stdio::piped())
@@ -119,8 +117,7 @@ async fn reads_serve_live_state_and_history() {
     let publisher = matched_publisher(&observer, "home/state/attic/mcp_probe/level").await;
     publisher.put("7").await.expect("state put");
 
-    let house = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixture_house_recorder");
-    let mut mcp = Mcp::connect(&house, &sup.endpoint);
+    let mut mcp = Mcp::connect(&sup.endpoint);
 
     // Live state via the core's last-value mirror.
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -195,8 +192,7 @@ async fn read_logs_and_events_over_mcp() {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 
-    let house = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixture_house_logs");
-    let mut mcp = Mcp::connect(&house, &sup.endpoint);
+    let mut mcp = Mcp::connect(&sup.endpoint);
 
     let (text, is_error) = mcp.call("read_logs", json!({"unit": "logger"}));
     assert!(!is_error, "{text}");
@@ -225,6 +221,9 @@ async fn read_logs_and_events_over_mcp() {
         .collect();
     assert!(names.contains(&"read_events"), "{tools}");
     assert!(names.contains(&"explain"), "{tools}");
+    for gone in ["plan", "propose", "apply"] {
+        assert!(!names.contains(&gone), "the surface is read-only: {tools}");
+    }
 
     // explain: the registered paragraph for a code; unknown code is an
     // error result; no code lists them all.
@@ -377,12 +376,11 @@ async fn http_transport_runs_as_supervised_unit() {
 
 /// One HTTP POST: connect, send, read the full response. Retries while the
 /// server's listener may still be coming up.
-/// The agent surface writes and commits to the house repo, and
-/// reachability is its only credential (docs/design.md, Local-only
-/// access). A page in a family browser can reach a LAN address, so the
-/// three dashboard gates apply here too — and the header is the one a
-/// cross-origin `fetch` cannot add without a preflight this server
-/// refuses.
+/// The agent surface serves the whole house state, and reachability is
+/// its only credential (docs/design.md, Local-only access). A page in a
+/// family browser can reach a LAN address, so the three dashboard gates
+/// apply here too — and the header is the one a cross-origin `fetch`
+/// cannot add without a preflight this server refuses.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_http_surface_refuses_what_a_browser_can_send() {
     let house = temp_house(FIXTURE, "mcp-gate");
@@ -397,19 +395,14 @@ async fn the_http_surface_refuses_what_a_browser_can_send() {
         ),
     )
     .expect("write mcp manifest");
-    git_init_commit(&house);
     let mut sup = Supervisor::spawn_at(&house, &[]);
     let observer = sup.observer().await;
     await_base_units(&observer).await;
 
     let call = json!({
         "jsonrpc": "2.0", "id": 1, "method": "tools/call",
-        "params": {"name": "propose", "arguments": {
-            "files": [{"path": "units/probe.toml", "content": "schema = 1\n"}],
-            "message": "from a browser"
-        }}
+        "params": {"name": "read_state", "arguments": {"key": "home/**"}}
     });
-    let head = git(&house, &["rev-parse", "HEAD"]);
 
     // Wait for the unit, using a request that IS allowed.
     let ping = json!({"jsonrpc": "2.0", "id": 0, "method": "tools/list"});
@@ -417,21 +410,19 @@ async fn the_http_surface_refuses_what_a_browser_can_send() {
     assert_eq!(status, 200, "the surface is up");
 
     // The CSRF shape: a simple cross-origin POST carries no X-Homeostat.
-    let (status, _) = http_post_with(&addr, &call, &[]).expect("request sent");
+    let (status, body) = http_post_with(&addr, &call, &[]).expect("request sent");
     assert_eq!(status, 403, "a request with no X-Homeostat is refused");
+    assert_eq!(body, Value::Null, "a refusal echoes nothing about the house");
 
     // A browser on a page the house does not serve.
-    let (status, _) = http_post_with(
+    let (status, body) = http_post_with(
         &addr,
         &call,
         &[("X-Homeostat", "1"), ("Origin", "https://evil.example")],
     )
     .expect("request sent");
     assert_eq!(status, 403, "a foreign Origin is refused");
-
-    // ...and none of it reached a tool.
-    assert_eq!(git(&house, &["rev-parse", "HEAD"]), head, "nothing committed");
-    assert_eq!(git(&house, &["status", "--porcelain"]), "", "nothing written");
+    assert_eq!(body, Value::Null, "a refusal echoes nothing about the house");
 
     // The house's own page is fine, as is a non-browser client.
     let (status, _) = http_post_with(
@@ -502,387 +493,4 @@ fn http_post_with(
         serde_json::from_str(body).map_err(|e| format!("body is not JSON: {e}: {body:?}"))?
     };
     Ok((status, value))
-}
-
-/// (a''') The standalone `plan` tool renders the live world — every other
-/// test reaches planning only through propose.
-#[tokio::test(flavor = "multi_thread")]
-async fn plan_tool_renders_the_live_world() {
-    let mut sup = Supervisor::spawn("tests/fixture_house");
-    let observer = sup.observer().await;
-    let mut watch = health_watch(&observer, "fake").await;
-    await_health(&mut watch, Duration::from_secs(30), |h| {
-        h.status == HealthStatus::Running
-    })
-    .await;
-    let house = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixture_house");
-    let mut mcp = Mcp::connect(&house, &sup.endpoint);
-
-    let (text, is_error) = mcp.call("plan", json!({}));
-    assert!(!is_error, "{text}");
-    assert!(text.contains("Homeostat plan"), "{text}");
-    assert!(
-        text.contains("No changes. The world matches the repo."),
-        "the freshly started world matches its repo: {text}"
-    );
-
-    drop(mcp);
-    sup.shutdown();
-}
-
-/// (b) A parameter propose within constraints auto-applies: the commit
-/// lands, the running unit sees the value with no restart.
-#[tokio::test(flavor = "multi_thread")]
-async fn parameter_propose_commits_and_auto_applies() {
-    let house = temp_house(FIXTURE, "mcp-param");
-    git_init_commit(&house);
-    let mut sup = Supervisor::spawn_at(&house, &[]);
-    let observer = sup.observer().await;
-    let (probe_pid, reflector_pid) = await_base_units(&observer).await;
-
-    let manifest = std::fs::read_to_string(house.join("units/probe.toml")).expect("read manifest");
-    let mut mcp = Mcp::connect(&house, &sup.endpoint);
-    let (text, is_error) = mcp.call(
-        "propose",
-        json!({
-            "files": [{"path": "units/probe.toml",
-                       "content": manifest.replace("default = 1", "default = 5")}],
-            "message": "raise level default to 5"
-        }),
-    );
-    assert!(!is_error, "{text}");
-    assert!(text.contains("Plan tier: parameter-only"), "{text}");
-    assert!(text.contains("parameter probe/level = 5"), "{text}");
-    assert!(text.contains("Applied."), "{text}");
-
-    assert_eq!(
-        cache_read(&observer, "home/config/probe/level").await,
-        Some(json!(5)),
-        "the live value follows the repo"
-    );
-    assert_eq!(running_pid(&observer, "probe").await, probe_pid, "zero restarts");
-    assert_eq!(running_pid(&observer, "reflector").await, reflector_pid);
-
-    // The commit landed on the current branch and the tree is clean.
-    let head = git(&house, &["rev-parse", "HEAD"]);
-    assert!(text.contains(&format!("Committed {head}")), "{text}");
-    assert_eq!(git(&house, &["status", "--porcelain"]), "");
-    assert_eq!(
-        git(&house, &["log", "-1", "--format=%s"]),
-        "raise level default to 5"
-    );
-    assert_eq!(
-        meta_read(&observer, homeostat::bus::APPLIED_COMMIT_KEY).await,
-        Some(head),
-        "applied_commit advances to the agent's commit"
-    );
-
-    drop(mcp);
-    sup.shutdown();
-    let _ = std::fs::remove_dir_all(&house);
-}
-
-/// (b2) The propose commit is pathspec-limited: a house may sit in a repo
-/// whose index carries someone else's staged work, and the agent's commit
-/// must contain its own files only.
-#[tokio::test(flavor = "multi_thread")]
-async fn propose_commits_only_its_own_files() {
-    let house = temp_house(FIXTURE, "mcp-pathspec");
-    git_init_commit(&house);
-    let mut sup = Supervisor::spawn_at(&house, &[]);
-    let observer = sup.observer().await;
-    await_base_units(&observer).await;
-
-    // Someone else stages an unrelated change before the agent proposes.
-    std::fs::write(house.join("DEPLOY.md"), "half-finished infra edit\n").expect("write");
-    git(&house, &["add", "DEPLOY.md"]);
-
-    let manifest = std::fs::read_to_string(house.join("units/probe.toml")).expect("read manifest");
-    let mut mcp = Mcp::connect(&house, &sup.endpoint);
-    let (text, is_error) = mcp.call(
-        "propose",
-        json!({
-            "files": [{"path": "units/probe.toml",
-                       "content": manifest.replace("default = 1", "default = 5")}],
-            "message": "raise level default to 5"
-        }),
-    );
-    assert!(!is_error, "{text}");
-
-    assert_eq!(
-        git(&house, &["show", "--name-only", "--format=", "HEAD"]),
-        "units/probe.toml",
-        "the commit carries the agent's file and nothing else"
-    );
-    assert_eq!(
-        git(&house, &["status", "--porcelain"]),
-        "A  DEPLOY.md",
-        "the unrelated change is still staged, still uncommitted"
-    );
-
-    drop(mcp);
-    sup.shutdown();
-    let _ = std::fs::remove_dir_all(&house);
-}
-
-/// (b3) A failure after the writes unwinds completely: nothing written,
-/// nothing staged. A `git add` that refuses (the path is gitignored) used
-/// to leave the file on disk and the house dirty.
-#[tokio::test(flavor = "multi_thread")]
-async fn propose_that_fails_after_writing_leaves_no_trace() {
-    let house = temp_house(FIXTURE, "mcp-unwind");
-    std::fs::write(house.join(".gitignore"), "units/probe.toml\n").expect("write");
-    git_init_commit(&house);
-    let mut sup = Supervisor::spawn_at(&house, &[]);
-    let observer = sup.observer().await;
-    await_base_units(&observer).await;
-
-    let before = std::fs::read_to_string(house.join("units/probe.toml")).expect("read");
-    let head = git(&house, &["rev-parse", "HEAD"]);
-    let mut mcp = Mcp::connect(&house, &sup.endpoint);
-    let (text, is_error) = mcp.call(
-        "propose",
-        json!({
-            "files": [{"path": "units/probe.toml",
-                       "content": before.replace("default = 1", "default = 5")}],
-            "message": "raise level default to 5"
-        }),
-    );
-    assert!(is_error, "an unstageable path must fail: {text}");
-
-    assert_eq!(
-        std::fs::read_to_string(house.join("units/probe.toml")).expect("read"),
-        before,
-        "the file is restored"
-    );
-    assert_eq!(git(&house, &["rev-parse", "HEAD"]), head, "nothing committed");
-    assert_eq!(
-        git(&house, &["status", "--porcelain"]),
-        "",
-        "nothing left written or staged"
-    );
-
-    drop(mcp);
-    sup.shutdown();
-    let _ = std::fs::remove_dir_all(&house);
-}
-
-/// (b4) A committed symlink pointing out of the house does not carry a
-/// proposed write with it.
-#[tokio::test(flavor = "multi_thread")]
-async fn propose_cannot_write_through_a_symlink_out_of_the_house() {
-    let house = temp_house(FIXTURE, "mcp-symlink");
-    let outside = house.parent().expect("parent").join("mcp-symlink-outside");
-    let _ = std::fs::remove_dir_all(&outside);
-    std::fs::create_dir_all(&outside).expect("create outside");
-    std::os::unix::fs::symlink(&outside, house.join("cfg")).expect("symlink");
-    git_init_commit(&house);
-    let mut sup = Supervisor::spawn_at(&house, &[]);
-    let observer = sup.observer().await;
-    await_base_units(&observer).await;
-
-    let mut mcp = Mcp::connect(&house, &sup.endpoint);
-    let (text, is_error) = mcp.call(
-        "propose",
-        json!({
-            "files": [{"path": "cfg/hosts", "content": "escaped\n"}],
-            "message": "write through the symlink"
-        }),
-    );
-    assert!(is_error, "a write resolving outside the house must fail: {text}");
-    assert!(
-        !outside.join("hosts").exists(),
-        "nothing may be written outside the house repo"
-    );
-    assert_eq!(git(&house, &["status", "--porcelain"]), "");
-
-    drop(mcp);
-    sup.shutdown();
-    let _ = std::fs::remove_dir_all(&house);
-    let _ = std::fs::remove_dir_all(&outside);
-}
-
-/// (c) An out-of-constraint parameter propose is rejected with the
-/// constraint named; repo and world unchanged, nothing committed.
-#[tokio::test(flavor = "multi_thread")]
-async fn out_of_constraint_propose_is_rejected_and_reverted() {
-    let house = temp_house(FIXTURE, "mcp-reject");
-    let base = git_init_commit(&house);
-    let mut sup = Supervisor::spawn_at(&house, &[]);
-    let observer = sup.observer().await;
-    await_base_units(&observer).await;
-
-    let manifest = std::fs::read_to_string(house.join("units/probe.toml")).expect("read manifest");
-    let mut mcp = Mcp::connect(&house, &sup.endpoint);
-    let (text, is_error) = mcp.call(
-        "propose",
-        json!({
-            "files": [{"path": "units/probe.toml",
-                       "content": manifest.replace("default = 1", "default = 50")}],
-            "message": "way too high"
-        }),
-    );
-    assert!(is_error, "an out-of-constraint default must be an error: {text}");
-    assert!(text.contains("50 is above max 10"), "the constraint is named: {text}");
-
-    // Repo unchanged: the file is restored, nothing was committed.
-    let on_disk = std::fs::read_to_string(house.join("units/probe.toml")).expect("read manifest");
-    assert!(on_disk.contains("default = 1"), "{on_disk}");
-    assert_eq!(git(&house, &["rev-parse", "HEAD"]), base);
-    assert_eq!(git(&house, &["status", "--porcelain"]), "");
-
-    // World unchanged: the old value still drives behavior.
-    assert_eq!(
-        cache_read(&observer, "home/config/probe/level").await,
-        Some(json!(1))
-    );
-
-    drop(mcp);
-    sup.shutdown();
-    let _ = std::fs::remove_dir_all(&house);
-}
-
-const BEACON_ADAPTER: &str = "schema = 1\n\n[unit]\nname = \"beacon\"\nkind = \"adapter\"\n\n\
-    [runtime]\ncommand = \"fake_adapter\"\nrestart = \"on-failure\"\n\n\
-    [discovery]\nmode = \"static\"\nendpoint = \"fake://local\"\n\n\
-    [entities]\ndir = \"entities/beacon/\"\n";
-
-const BEACON_LAMP: &str = "schema = 1\n\n[entity]\nid = \"beacon-1\"\ncapability = \"light\"\n\
-    room = \"den\"\n\n[write_policy]\nmode = \"shared\"\nowner = \"beacon\"\n";
-
-const WATCHER: &str = "schema = 1\n\n[unit]\nname = \"watcher\"\nkind = \"automation\"\n\n\
-    [runtime]\ncommand = \"reflector\"\nrestart = \"on-failure\"\n\n\
-    [bus.publishes]\nlights = { key = \"home/cmd/den/beacon_lamp/on\", \
-    capability = \"light\", priority = \"agent\" }\n";
-
-/// (d) A structural propose — a new adapter plus an automation granted onto
-/// its entity — lands committed as a pending plan and does not touch the
-/// world; the agent's own apply is refused; the owner applies the pending
-/// plan and the walk runs in grant order.
-#[tokio::test(flavor = "multi_thread")]
-async fn structural_propose_awaits_owner_approval() {
-    let house = temp_house(FIXTURE, "mcp-structural");
-    git_init_commit(&house);
-    let mut sup = Supervisor::spawn_at(&house, &[]);
-    let observer = sup.observer().await;
-    let (probe_pid, _) = await_base_units(&observer).await;
-
-    let mut mcp = Mcp::connect(&house, &sup.endpoint);
-    let (text, is_error) = mcp.call(
-        "propose",
-        json!({
-            "files": [
-                {"path": "units/beacon.toml", "content": BEACON_ADAPTER},
-                {"path": "entities/beacon/beacon_lamp.toml", "content": BEACON_LAMP},
-                {"path": "units/watcher.toml", "content": WATCHER}
-            ],
-            "message": "add beacon adapter and watcher automation"
-        }),
-    );
-    assert!(!is_error, "{text}");
-    assert!(text.contains("Plan tier: structural"), "{text}");
-    assert!(
-        text.contains("+ watcher.lights  capability=light  priority=agent"),
-        "the grant diff is rendered: {text}"
-    );
-    assert!(text.contains("owner approval required"), "{text}");
-    let plan_path = text
-        .lines()
-        .find_map(|l| l.strip_prefix("Pending plan saved: "))
-        .expect("pending plan path in the response")
-        .to_string();
-    assert!(Path::new(&plan_path).is_file(), "{plan_path}");
-
-    // The world is untouched: the proposed units do not exist.
-    assert_eq!(
-        cache_read(&observer, &homeostat::bus::health_key("beacon")).await,
-        None
-    );
-    assert_eq!(
-        cache_read(&observer, &homeostat::bus::health_key("watcher")).await,
-        None
-    );
-
-    // The agent's own apply is refused at tier.
-    let (text, is_error) = mcp.call("apply", json!({}));
-    assert!(is_error, "{text}");
-    assert!(text.contains("apply refused at agent tier"), "{text}");
-    assert!(text.contains("structural"), "{text}");
-
-    // The owner applies the pending plan; the walk runs adapter first.
-    let house_arg = house.to_str().expect("utf-8 path");
-    let apply = cli(&["apply", house_arg, "--bus", &sup.endpoint, "--plan", &plan_path]);
-    let out = String::from_utf8_lossy(&apply.stdout).to_string();
-    assert!(
-        apply.status.success(),
-        "owner apply failed\nstdout:\n{out}\nstderr:\n{}",
-        String::from_utf8_lossy(&apply.stderr)
-    );
-    let beacon_at = out.find("start beacon: ok").expect("beacon started");
-    let watcher_at = out.find("start watcher: ok").expect("watcher started");
-    assert!(beacon_at < watcher_at, "grant order:\n{out}");
-
-    assert!(running_pid(&observer, "beacon").await > 0);
-    assert!(running_pid(&observer, "watcher").await > 0);
-    assert_eq!(running_pid(&observer, "probe").await, probe_pid, "untouched");
-
-    drop(mcp);
-    sup.shutdown();
-    let _ = std::fs::remove_dir_all(&house);
-}
-
-/// (e) The smuggling test: a manifest edit that changes a default AND adds
-/// a publish (a grant delta) escalates to structural through the MCP
-/// surface — the mechanical tier derivation is the enforcement, so nothing
-/// applies and the live value stands.
-#[tokio::test(flavor = "multi_thread")]
-async fn grant_delta_in_manifest_edit_escalates_to_structural() {
-    let house = temp_house(FIXTURE, "mcp-smuggle");
-    git_init_commit(&house);
-    let mut sup = Supervisor::spawn_at(&house, &[]);
-    let observer = sup.observer().await;
-    let (probe_pid, _) = await_base_units(&observer).await;
-
-    let manifest = std::fs::read_to_string(house.join("units/probe.toml")).expect("read manifest");
-    let smuggled = manifest
-        .replace("default = 1", "default = 2")
-        .replace(
-            "echo = { key = \"home/state/den/probe_echo/level\" }",
-            "echo = { key = \"home/state/den/probe_echo/level\" }\n\
-             lights = { key = \"home/cmd/livingroom/lamp/on\", \
-             capability = \"light\", priority = \"agent\" }",
-        );
-    assert_ne!(smuggled, manifest, "the fixture manifest changed shape");
-
-    let mut mcp = Mcp::connect(&house, &sup.endpoint);
-    let (text, is_error) = mcp.call(
-        "propose",
-        json!({
-            "files": [{"path": "units/probe.toml", "content": smuggled}],
-            "message": "just a parameter tweak (and a grant)"
-        }),
-    );
-    assert!(!is_error, "{text}");
-    assert!(
-        text.contains("Plan tier: structural"),
-        "a grant delta escalates the whole plan: {text}"
-    );
-    assert!(!text.contains("Plan tier: parameter-only"), "{text}");
-    assert!(
-        text.contains("+ probe.lights  capability=light  priority=agent"),
-        "{text}"
-    );
-    assert!(text.contains("Pending plan saved: "), "{text}");
-
-    // Nothing applied: the live value stands, the unit was not restarted.
-    assert_eq!(
-        cache_read(&observer, "home/config/probe/level").await,
-        Some(json!(1)),
-        "the smuggled default did not land"
-    );
-    assert_eq!(running_pid(&observer, "probe").await, probe_pid, "no restart");
-
-    drop(mcp);
-    sup.shutdown();
-    let _ = std::fs::remove_dir_all(&house);
 }

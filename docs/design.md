@@ -222,8 +222,7 @@ exists. A unit declares `[unit] inputs = "house"` (default `own`) and
 every manifest, every entity file and `zones.toml` feed its hash. The
 dashboard also rebuilds its model per `/api/model` request, keeping the
 last good one if a rebuild fails, so a browser refresh suffices even
-without a restart. `mcp` needs neither: it re-reads the repo per request
-already.
+without a restart. `mcp` needs neither: it does not read the repo at all.
 
 An unbound device is not a dropped message (revised 2026-08-29, from a
 live 12-device bridge): `unknown-device` fires only when the device is
@@ -813,9 +812,10 @@ A house in a subdirectory of a larger repo was supported briefly
 its own repo, because a server needs the house as a real worktree and
 handing it one means cloning the whole enclosing repo onto the box. A
 subtree house is only useful when the enclosing repo is itself
-deployable, which left the loosened guard with no user. The agent's
-`propose` commits stay pathspec-limited regardless — a bare commit takes
-whatever else is staged, and the agent is not a house's only writer.
+deployable, which left the loosened guard with no user. (The agent's
+`propose` commits were pathspec-limited regardless — a bare commit takes
+whatever else is staged, and the agent is not a house's only writer; a
+returning write side keeps that.)
 
 ### Rollback
 
@@ -1009,26 +1009,56 @@ owner = "zigbee"             # exactly one adapter binds each entity
   exempt. Voice-initiated changes commit with the transcript as the message.
 ## Agent surface (MCP)
  
+**Read-only (settled 2026-09-12).** The write tools — `propose`, `apply`
+and `plan` — are removed. The MCP server is a pure bus client: it takes
+no house root, never reads the repo, never shells out to git. Tools:
+`read_state`, `read_history`, `read_logs`, `read_events`, `explain`,
+`schema`. An agent changes the house the way every other actor does: it
+edits the repo and runs `homeostat plan`, and the owner applies. Two
+reasons, one of them the decisive one:
+
+- **No consumer.** The write path existed for an agent with no
+  filesystem — the voice / family-facing conversational agent of a later
+  phase. Every agent in use today works inside a checkout of the house
+  repo, where the CLI already gives it the full plan/apply discipline
+  with git review in between. Tools without a consumer are surface
+  without a test of their shape.
+- **The write path put unapproved code where units run from.** A
+  `propose` wrote into the supervised working tree and committed before
+  the tier was derived; the pending plan gated the restart, not the file
+  on disk. A behavioral proposal — new unit code, new PEP 723
+  dependencies — ran at the next crash or reboot with no approval, and
+  a sibling module a script imports is not in `files_hash` at all, so it
+  planned "No changes" and ran at the next restart of every importer.
+  Fixing that properly means staging proposals outside the tree units
+  spawn from, which is a design change worth its own consumer.
+
+When the write side returns, two conditions hold: proposals stage into a
+separate worktree or branch, so the tree the supervisor spawns from never
+holds unapproved content (or the supervisor spawns from a checkout of
+`applied_commit`); and the tier ceiling is enforced in the supervisor's
+apply queryable, not in the MCP client — the request carries the tier the
+actor may apply and `execute` refuses a diff above it. The removed
+implementation (v0.11.4, `src/mcp/mod.rs`) is the reference for the
+transactional write → validate → commit → unwind shape, the pathspec
+hygiene, and the symlink containment; the step 6 record below is kept as
+the history of what was built and learned.
+
 The HTTP transport carries the same three gates as the dashboard (added
 2026-08-29, reviewing it against Local-only access): `Host` non-global or
 known, `Origin` absent or allowed, and `X-Homeostat` on every request. It
-had none of them, and the design's own reasoning applies with more force
-here than to the dashboard — this surface writes and commits to the house
-repo. Without the header a cross-origin `text/plain` POST is a CORS
-"simple request": no preflight, so a page in a family browser could drive
-`propose` blind. `HOMEOSTAT_MCP_HOSTS` extends the name allowlist. An
-HTTP MCP client must send the header; stdio is unaffected.
-
-Tools: `read_state`, `read_history`, `read_logs`, `read_events`, `propose`,
-`plan`, `apply`, `explain`, `schema`. The agent never touches the bus directly for
-structural work; it manipulates text and goes through plan/apply like every
-other actor.
+had none of them, and the design's own reasoning applies here too — this
+surface serves everything the house knows. Without the header a
+cross-origin `text/plain` POST is a CORS "simple request": no preflight,
+so a page in a family browser could drive it blind. `HOMEOSTAT_MCP_HOSTS`
+extends the name allowlist. An HTTP MCP client must send the header; stdio
+is unaffected.
 
 **Error codes are the contract's rules, served in-band (2026-09-07, #4).**
 Every validation failure carries a stable code, and `src/error.rs` holds the
 one registry mapping each code to a paragraph: the rule and why it exists. A
 test asserts the registry and the codes the source emits are the same set.
-A refused plan or propose appends the paragraphs for the codes it hit, the
+A refused plan appends the paragraphs for the codes it hit, the
 `explain` tool and `homeostat explain <code>` serve them on demand, and no
 code without one is fitted.
 
@@ -1040,11 +1070,9 @@ which puts the rule next to the field it constrains and nowhere else.
 `docs/manifest.md` is the same schema rendered — generated by
 `homeostat schema --markdown`, pinned by a test that refuses a stale copy.
 Hand-written reference documentation was rejected: it would be a second
-copy of the structs, and the drift it invites is the problem #4 reports. Agent-authored parameter
-edits within constraints auto-apply; structural changes land as pending
-plans for owner approval.
+copy of the structs, and the drift it invites is the problem #4 reports.
  
-### Step 6 goal (settled 2026-07-04, before implementation)
+### Step 6 goal (settled 2026-07-04, before implementation; write side removed 2026-09-12)
  
 An MCP server through which an agent can observe the house and change it,
 with authority bounded by the same plan/apply machinery as every other
@@ -1166,8 +1194,8 @@ Decisions and why:
   read_state covers the agent workflow).
 
 The agent loop this enables: `read_state home/discovery/{unit}` →
-propose entity files for unconfigured records → structural pending
-plan → owner applies. The agent never touches the native bus.
+write entity files for unconfigured records in the house checkout →
+`homeostat plan` → owner applies. The agent never touches the native bus.
 
 ## Dashboard (settled 2026-07-15)
 

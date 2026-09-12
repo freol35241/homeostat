@@ -72,7 +72,7 @@ outside the constraint is refused with the old value still in force.
 |---|---|---|---|
 | `constraint` | table | no | Inline table of constraint keys the type understands (`malformed-constraint` otherwise): `min`/`max` for `int` and `float`; `after`/`before` (`"HH:MM"`, may span midnight) for `time`. |
 | `default` | any | yes | A TOML literal of the declared type (`invalid-default` otherwise): `true`, `30`, `0.5` (an integer literal is accepted for `float`), `"text"`, or `"22:00"` for `time`. Must satisfy the constraint. |
-| `editable_by` | [EditableBy](#editableby) | no | Who may change it live. `family` params appear as editable setpoints on the dashboard; anything else is visible there but written only through the repo (a propose) or the bus. |
+| `editable_by` | [EditableBy](#editableby) | no | Who may change it live. `family` params appear as editable setpoints on the dashboard; anything else is visible there but written only through the repo or the bus. |
 | `type` | [ParamType](#paramtype) | yes |  |
 
 ### RuntimeSection
