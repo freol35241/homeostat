@@ -24,11 +24,12 @@ ENV_CREDENTIALS = "HOMEOSTAT_MQTT_CREDENTIALS"
 
 
 def parse_endpoint(endpoint: str) -> ParseResult:
-    """Validates an `mqtt://host[:port][/base/topic]` endpoint, raising
-    ValueError on any other scheme — the message is load-bearing, adapters
-    surface it as-is on a misconfigured unit."""
+    """Validates an `mqtt://host[:port][/base/topic]` (or `mqtts://` for
+    TLS, default certificate verification) endpoint, raising ValueError on
+    any other scheme — the message is load-bearing, adapters surface it
+    as-is on a misconfigured unit."""
     parsed = urlparse(endpoint)
-    if parsed.scheme != "mqtt":
+    if parsed.scheme not in ("mqtt", "mqtts"):
         raise ValueError(f"unsupported endpoint scheme: {endpoint}")
     return parsed
 
@@ -79,6 +80,7 @@ def connect(endpoint: ParseResult, on_message, topics, *, timeout: float = 30) -
     `client.loop_stop()` / `client.disconnect()` on shutdown.
     """
     subscribed = threading.Event()
+    refused: list = []  # a failed CONNACK's reason code, if one arrives
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
 
     def guarded(client, userdata, msg):
@@ -91,17 +93,32 @@ def connect(endpoint: ParseResult, on_message, topics, *, timeout: float = 30) -
             # the supervisor captures stderr at home/meta/{unit}/log.
             traceback.print_exc()
 
+    def on_connect(client, userdata, flags, reason_code, properties=None):
+        # paho calls on_connect on a failed CONNACK too (bad credentials,
+        # broker refusal); subscribing then would either no-op or raise,
+        # and the SUBACK wait below would time out — misdiagnosing the
+        # refusal as "the broker never answered".
+        if reason_code.is_failure:
+            refused.append(reason_code)
+            return
+        client.subscribe(topics)
+
     client.on_message = guarded
-    client.on_connect = lambda c, *_: c.subscribe(topics)
+    client.on_connect = on_connect
     client.on_subscribe = lambda *_: subscribed.set()
     username, password = credentials(endpoint)
     if username:
         # Silently dropping credentials misdiagnoses an auth-requiring
         # broker as a SUBACK timeout.
         client.username_pw_set(username, password)
-    client.connect(endpoint.hostname, endpoint.port or 1883)
+    if endpoint.scheme == "mqtts":
+        client.tls_set()  # system CA store; the broker's own if trusted there
+    default_port = 8883 if endpoint.scheme == "mqtts" else 1883
+    client.connect(endpoint.hostname, endpoint.port or default_port)
     client.loop_start()
     if not subscribed.wait(timeout=timeout):
+        if refused:
+            raise ConnectionError(f"MQTT broker refused the connection: {refused[-1]}")
         raise TimeoutError(f"no MQTT SUBACK within {int(timeout)}s")
     return client
 

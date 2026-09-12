@@ -44,6 +44,7 @@ import threading
 import time
 import tomllib
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -69,7 +70,12 @@ def stream_url(conf: dict) -> str:
     host = conf["host"]
     if ":" in host:
         host = host.rpartition(":")[0]
-    return f"rtsp://{conf['username']}:{conf['password']}@{host}:{RTSP_PORT}/stream1"
+    # A camera-account password with "/", "?", "#", "@" or a space is
+    # ordinary (it is the camera vendor's account, not this house's own
+    # naming), but unescaped it truncates or breaks the URL go2rtc parses.
+    user = urllib.parse.quote(conf["username"], safe="")
+    password = urllib.parse.quote(conf["password"], safe="")
+    return f"rtsp://{user}:{password}@{host}:{RTSP_PORT}/stream1"
 
 
 def render_config(cameras: dict, listen: str) -> dict:
