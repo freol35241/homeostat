@@ -305,5 +305,20 @@ alert = { key = "home/cmd/person/*/alert", capability = "notifier", priority = "
         "the grant is rendered: {text}"
     );
     assert!(text.contains("-> alice_phone"), "{text}");
-    assert!(!text.contains("-> adults"), "the alert grant covers the person channel only: {text}");
+    // The alert grant's own entry (not the plan as a whole — ntfy's own
+    // adapter-binding entry legitimately lists every entity it owns,
+    // "adults" included): every grant entry starts at 2-space indent, its
+    // detail lines are indented further, so the next 2-space-indent line
+    // ends it.
+    let alert_grant: String = text
+        .lines()
+        .skip_while(|l| !l.starts_with("  intrusion.alert"))
+        .skip(1)
+        .take_while(|l| l.starts_with("    "))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        !alert_grant.contains("-> adults"),
+        "the alert grant covers the person channel only: {alert_grant}"
+    );
 }
