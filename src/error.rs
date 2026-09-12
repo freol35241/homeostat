@@ -223,8 +223,9 @@ pub const CODES: &[(&str, &str)] = &[
     ),
     (
         "exclusive-write-conflict",
-        "An entity with `write_policy.mode = \"exclusive\"` is covered by more \
-         than one automation-band cmd grant. Exclusivity constrains the \
+        "An entity with `write_policy.mode = \"exclusive\"` is covered by the \
+         automation-band cmd grants of more than one unit (a writer is a unit; \
+         two bindings of one unit are one writer). Exclusivity constrains the \
          automation band only: manual-band units (the dashboard, voice) sit \
          above it by construction and do not count.",
     ),

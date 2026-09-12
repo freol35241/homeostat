@@ -550,19 +550,7 @@ pub fn render(check: &CheckResult, root: &Path, repo_label: &str, world: &World)
                 render_grant(grant, '+', &mut out);
             }
             for grant in &diff.grant_removes {
-                out.push_str(&format!(
-                    "  - {}.{}  capability={}  priority={}  -> {}\n",
-                    grant.unit,
-                    grant.publish,
-                    grant.capability,
-                    grant.priority,
-                    grant
-                        .entities
-                        .iter()
-                        .map(|e| e.name.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                ));
+                render_grant(grant, '-', &mut out);
             }
         }
     } else {
@@ -642,15 +630,21 @@ fn summarize(diff: &Diff) -> String {
 
 fn render_grant(grant: &Grant, mark: char, out: &mut String) {
     let prefix = if mark == ' ' { "  ".to_string() } else { format!("  {mark} ") };
-    out.push_str(&format!(
-        "{prefix}{}.{}  capability={}  priority={}\n",
-        grant.unit, grant.publish, grant.capability, grant.priority
-    ));
+    match (&grant.capability, grant.priority) {
+        (Some(capability), Some(priority)) => out.push_str(&format!(
+            "{prefix}{}.{}  capability={capability}  priority={priority}\n",
+            grant.unit, grant.publish
+        )),
+        _ => out.push_str(&format!("{prefix}{}.{}  binds\n", grant.unit, grant.publish)),
+    }
+    for key in &grant.keys {
+        out.push_str(&format!("    key: {key}\n"));
+    }
     let width = grant.entities.iter().map(|e| e.name.len()).max().unwrap_or(0);
     for entity in &grant.entities {
         out.push_str(&format!(
-            "    -> {:width$}  (room={}, write={}, owner={})\n",
-            entity.name, entity.room, entity.write, entity.owner,
+            "    -> {:width$}  (room={}, capability={}, write={}, owner={})\n",
+            entity.name, entity.room, entity.capability, entity.write, entity.owner,
         ));
     }
 }

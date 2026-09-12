@@ -106,14 +106,40 @@ Expanded keys:
 Grant table:
 
   dashboard.lights  capability=light  priority=manual
-    -> kitchen_ceiling  (room=kitchen, write=shared, owner=zigbee)
-    -> livingroom_lamp  (room=livingroom, write=exclusive, owner=zigbee)
+    key: home/cmd/**
+    -> kitchen_ceiling  (room=kitchen, capability=light, write=shared, owner=zigbee)
+    -> livingroom_lamp  (room=livingroom, capability=light, write=exclusive, owner=zigbee)
   dashboard.locks  capability=lock  priority=manual
-    -> front_door_lock  (room=hallway, write=arbitrated, owner=zigbee)
+    key: home/cmd/**
+    -> front_door_lock  (room=hallway, capability=lock, write=arbitrated, owner=zigbee)
+  esphome.state  binds
+    key: home/state/global/outdoor_temp/**
+    -> outdoor_temp  (room=global, capability=sensor, write=shared, owner=esphome)
   evening_lights.lights  capability=light  priority=automation
-    -> kitchen_ceiling  (room=kitchen, write=shared, owner=zigbee)
-    -> livingroom_lamp  (room=livingroom, write=exclusive, owner=zigbee)
+    key: home/cmd/hallway/**/light
+    key: home/cmd/kitchen/**/light
+    key: home/cmd/livingroom/**/light
+    -> kitchen_ceiling  (room=kitchen, capability=light, write=shared, owner=zigbee)
+    -> livingroom_lamp  (room=livingroom, capability=light, write=exclusive, owner=zigbee)
+  fused_temperature.fused  binds
+    key: home/state/global/downstairs_temperature/temperature
+    -> downstairs_temperature  (room=global, capability=sensor, write=exclusive, owner=fused_temperature)
   intrusion.alert  capability=notifier  priority=automation
-    -> alice_phone  (room=person, write=shared, owner=ntfy)
+    key: home/cmd/person/alice_phone/alert
+    -> alice_phone  (room=person, capability=notifier, write=shared, owner=ntfy)
+  ntfy.state  binds
+    key: home/state/global/adults/**
+    key: home/state/person/alice_phone/**
+    -> adults       (room=global, capability=notifier, write=shared, owner=ntfy)
+    -> alice_phone  (room=person, capability=notifier, write=shared, owner=ntfy)
+  zigbee.state  binds
+    key: home/state/hallway/front_door_lock/**
+    key: home/state/hallway/hallway_motion/**
+    key: home/state/kitchen/kitchen_ceiling/**
+    key: home/state/livingroom/livingroom_lamp/**
+    -> front_door_lock  (room=hallway, capability=lock, write=arbitrated, owner=zigbee)
+    -> hallway_motion   (room=hallway, capability=presence, write=shared, owner=zigbee)
+    -> kitchen_ceiling  (room=kitchen, capability=light, write=shared, owner=zigbee)
+    -> livingroom_lamp  (room=livingroom, capability=light, write=exclusive, owner=zigbee)
 
-Plan tier: structural (9 units created, 4 grants added)
+Plan tier: structural (9 units created, 8 grants added)

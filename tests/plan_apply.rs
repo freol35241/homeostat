@@ -343,6 +343,40 @@ async fn entity_move_plans_as_structural() {
     let _ = std::fs::remove_dir_all(&house);
 }
 
+/// (c3) Moving an entity nobody is granted onto is structural too: the
+/// owner's state row records every bound entity, so the move is a grant
+/// delta rendered with the entity's old and new facts — not a bare
+/// adapter restart on a files_hash change (docs/design.md, Plan/apply
+/// mechanics: entity moves are structural).
+#[tokio::test(flavor = "multi_thread")]
+async fn ungranted_entity_move_plans_as_structural() {
+    let house = temp_house(FIXTURE, "apply-move-ungranted");
+    let mut sup = Supervisor::spawn_at(&house, &[]);
+    let observer = sup.observer().await;
+    await_base_units(&observer).await;
+
+    edit(
+        &house,
+        "entities/reflector/lamp.toml",
+        "room = \"livingroom\"",
+        "room = \"attic\"",
+    );
+
+    let house_arg = house.to_str().expect("utf-8 path");
+    let plan = cli(&["plan", house_arg, "--bus", &sup.endpoint]);
+    assert_cli_ok(&plan);
+    let text = stdout(&plan);
+    assert!(text.contains("Plan tier: structural"), "{text}");
+    assert!(text.contains("Grant changes:"), "{text}");
+    assert!(text.contains("+ reflector.state  binds"), "{text}");
+    assert!(text.contains("-> lamp  (room=attic, capability=light, write=shared, owner=reflector)"), "{text}");
+    assert!(text.contains("- reflector.state  binds"), "{text}");
+    assert!(text.contains("-> lamp  (room=livingroom, capability=light, write=shared, owner=reflector)"), "{text}");
+
+    sup.shutdown();
+    let _ = std::fs::remove_dir_all(&house);
+}
+
 /// (d) A unit that fails to become ready mid-walk halts the apply in
 /// place and reports position: earlier units keep running, later units
 /// are never started, and a re-plan shows exactly the remaining work.
