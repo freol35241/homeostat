@@ -1,0 +1,16 @@
+schema = 1
+
+[entity]
+# The same phone's other face: one subtree, two entities (docs/adapters.md
+# and the module docstring).
+id = "alice/notifier"
+capability = "notifier"
+features = ["alert", "acknowledged"]
+room = "person"
+
+[naming]
+en = "Alice's phone"
+
+[write_policy]
+mode = "shared"
+owner = "companion"
