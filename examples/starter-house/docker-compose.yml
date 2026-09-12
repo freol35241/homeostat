@@ -1,6 +1,6 @@
 services:
   mosquitto:
-    image: eclipse-mosquitto:2
+    image: eclipse-mosquitto:2@sha256:6f8d8a947c506f8a2290ec65cd4bd2bc7cb4d43fb5f6271f861cb013e2ef9797
     restart: unless-stopped
     volumes:
       - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
@@ -12,7 +12,7 @@ services:
       - "1884:1884"
 
   zigbee2mqtt:
-    image: koenkk/zigbee2mqtt:2
+    image: koenkk/zigbee2mqtt:2@sha256:fef0de769dcd04c27b3a6d277b61046eb96284bdd4198dcb1687c3a01b3020f3
     restart: unless-stopped
     depends_on:
       - mosquitto
@@ -25,13 +25,25 @@ services:
       ZIGBEE2MQTT_CONFIG_MQTT_SERVER: mqtt://mosquitto:1883
       ZIGBEE2MQTT_CONFIG_SERIAL_PORT: /dev/ttyUSB0
       ZIGBEE2MQTT_CONFIG_FRONTEND_ENABLED: "true"
+      # The frontend pairs and renames devices and edits z2m's own
+      # config: full control of the Zigbee network. The token lives in
+      # .env (gitignored, see README) and is required — a missing one
+      # fails `docker compose` outright rather than starting open.
+      ZIGBEE2MQTT_CONFIG_FRONTEND_AUTH_TOKEN: ${Z2M_FRONTEND_TOKEN:?set Z2M_FRONTEND_TOKEN in .env}
     ports:
-      - "8080:8080" # pairing/management frontend
+      # Pairing/management frontend, loopback only: reach it through an
+      # SSH tunnel (`ssh -L 8080:127.0.0.1:8080 <host>`) or widen the
+      # bind knowingly. The token above is the second lock on that door.
+      - "127.0.0.1:8080:8080"
 
   homeostat:
     # HOMEOSTAT_IMAGE lets CI point this at a locally built image.
     image: ${HOMEOSTAT_IMAGE:-ghcr.io/freol35241/homeostat:0.11.4}
     restart: unless-stopped
+    # The image runs as uid 1000. Units write to the house checkout
+    # (data/, plans/), so this must be the checkout's owner: set
+    # HOMEOSTAT_UID/HOMEOSTAT_GID in .env when that is not 1000.
+    user: "${HOMEOSTAT_UID:-1000}:${HOMEOSTAT_GID:-1000}"
     depends_on:
       - mosquitto
     volumes:
