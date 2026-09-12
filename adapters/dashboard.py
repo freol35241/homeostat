@@ -2,7 +2,7 @@
 # requires-python = ">=3.11"
 # dependencies = [
 #     "homeostat",
-#     "aiohttp>=3.9",
+#     "aiohttp>=3.12.14,<4",
 # ]
 #
 # [tool.uv.sources]

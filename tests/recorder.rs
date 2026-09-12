@@ -360,9 +360,9 @@ async fn backend_outage_buffers_and_flushes() {
     .await;
 
     // Kill the backend: the store file becomes unwritable.
-    let mut perms = std::fs::metadata(&db).expect("store exists").permissions();
-    perms.set_readonly(true);
-    std::fs::set_permissions(&db, perms.clone()).expect("chmod store read-only");
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o444))
+        .expect("chmod store read-only");
 
     let before_put = now_us();
     put(&gauge, json!(2)).await;
@@ -381,8 +381,8 @@ async fn backend_outage_buffers_and_flushes() {
     put(&gauge, json!(3)).await;
 
     // Restore the backend.
-    perms.set_readonly(false);
-    std::fs::set_permissions(&db, perms).expect("chmod store writable");
+    std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o644))
+        .expect("chmod store writable");
     let restored =
         await_event(&events, Duration::from_secs(30), |e| e["kind"] == "backend-restored").await;
     assert!(

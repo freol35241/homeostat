@@ -13,6 +13,11 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 WORK="$(mktemp -d)"
 PROJECT="homeostat-starter-$$"
 export HOMEOSTAT_IMAGE="$IMAGE"
+# What the README has a house set in .env: the container runs as the
+# checkout's owner (so data/ lands host-owned and plain rm cleans up),
+# and the compose file refuses to start without a z2m frontend token.
+export HOMEOSTAT_UID="$(id -u)" HOMEOSTAT_GID="$(id -g)"
+export Z2M_FRONTEND_TOKEN="smoke"
 
 compose() {
   docker compose -p "$PROJECT" --project-directory "$WORK/house" "$@"
@@ -20,10 +25,6 @@ compose() {
 
 cleanup() {
   compose down -v --timeout 5 >/dev/null 2>&1 || true
-  # The recorder wrote data/ as root inside the container; remove it the
-  # same way so the host-side rm succeeds.
-  docker run --rm --entrypoint /bin/rm -v "$WORK/house:/house" "$IMAGE" \
-    -rf /house/data >/dev/null 2>&1 || true
   rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -36,6 +37,8 @@ fail() {
 }
 
 cp -r "$REPO/examples/starter-house" "$WORK/house"
+# The README's first-start step.
+cp "$WORK/house/mosquitto.passwd.example" "$WORK/house/mosquitto.passwd"
 # The example maps the MCP port fixed for the README's UX; the smoke run
 # swaps in a free host port so parallel runs (or a busy 8642) never collide.
 MCP_PORT="$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
@@ -84,6 +87,13 @@ init="$(curl -s -m 10 -X POST "http://127.0.0.1:${MCP_PORT}" \
 echo "$init" | grep -q '"name":"homeostat"' \
   || fail "MCP initialize did not answer over HTTP: $init"
 echo "agent surface answers on :${MCP_PORT}, and refuses an un-headered POST"
+
+# Every unit resolved from its committed lockfile: uv rewrites a lock it
+# finds stale, and a house repo dirtied by its own boot means the lock
+# shipped by sync_starter.sh does not match the script beside it.
+dirty="$(git -C "$WORK/house" status --porcelain -- 'units/*.lock')"
+[ -z "$dirty" ] || fail "a unit rewrote its lockfile at boot:
+$dirty"
 
 CID="$(compose ps -q homeostat)"
 compose stop --timeout 20 homeostat >/dev/null 2>&1

@@ -31,6 +31,7 @@ struct FakeEsphome {
 }
 
 impl FakeEsphome {
+    #[allow(dead_code)]
     fn spawn() -> Self {
         Self::spawn_with_args(&[])
     }

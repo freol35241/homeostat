@@ -28,20 +28,30 @@ fail() {
   exit 1
 }
 
-# The released SDK the smoke house pins, the way a real house does. Bump
-# on release when the working-tree adapters outgrow the released SDK.
-SDK_TAG="v0.4.0"
+# The SDK version the image bundles as a wheel (sdk/python/pyproject.toml
+# and Cargo.toml agree, sync_starter.sh --check holds them there).
+SDK_VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' "$REPO/Cargo.toml" | head -1)"
 
 # A minimal house: the clock adapter as its one unit, its SDK dependency
-# rewritten from the in-repo path source to the released git-tag source —
-# the documented pattern for real houses, so the smoke test walks the
-# same path a user does.
+# rewritten from the in-repo path source to `homeostat==VERSION` with no
+# sources block — the shape a deployed unit has (docs/design.md, SDK
+# distribution), so the smoke test resolves the SDK from the bundled
+# wheel the way a real house does. The rewrite mirrors pin_sdk in
+# scripts/sync_starter.sh.
 HOUSE="$WORK/house"
 mkdir -p "$HOUSE/units"
-sed 's|homeostat = { path = "../sdk/python", editable = true }|homeostat = { git = "https://github.com/freol35241/homeostat", subdirectory = "sdk/python", tag = "'"$SDK_TAG"'" }|' \
-  "$REPO/adapters/clock.py" > "$HOUSE/units/clock.py"
-grep -q 'subdirectory = "sdk/python"' "$HOUSE/units/clock.py" \
-  || { echo "SMOKE FAIL: clock.py SDK source line drifted; sed rewrite missed" >&2; exit 1; }
+sed -e 's|^\(# *\)"homeostat[^"]*",|\1"homeostat=='"$SDK_VERSION"'",|' \
+    -e '/^# \[tool\.uv\.sources\]$/d' \
+    -e '/^# homeostat = /d' \
+    "$REPO/adapters/clock.py" \
+  | awk '
+    /^#$/ { held = 1; next }
+    held && !/^# \/\/\/$/ { print "#" }
+    { held = 0; print }
+  ' > "$HOUSE/units/clock.py"
+grep -q "\"homeostat==$SDK_VERSION\"" "$HOUSE/units/clock.py" \
+  && ! grep -q 'tool.uv.sources' "$HOUSE/units/clock.py" \
+  || { echo "SMOKE FAIL: clock.py SDK dependency line drifted; rewrite missed" >&2; exit 1; }
 cat > "$HOUSE/zones.toml" <<'EOF'
 schema = 1
 
@@ -78,8 +88,8 @@ git -C "$HOUSE" -c user.name=smoke -c user.email=smoke@example.com \
 docker network create "$NET" >/dev/null
 docker run -d --name "$SUP" --network "$NET" -v "$HOUSE:/house" "$IMAGE" >/dev/null
 
-# The unit's first `uv run` resolves eclipse-zenoh and builds the SDK
-# from GitHub, so allow a generous deadline before requiring `running`.
+# The unit's first `uv run` resolves eclipse-zenoh from PyPI, so allow a
+# generous deadline before requiring `running`.
 echo "waiting for the clock unit to reach running..."
 deadline=$((SECONDS + 180))
 until docker logs "$SUP" 2>&1 | grep -q "\[homeostat\] clock: running"; do

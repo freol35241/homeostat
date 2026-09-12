@@ -1,2 +1,9 @@
 target
 .git
+.github
+.devcontainer
+.claude
+docs
+examples
+scripts
+tests
