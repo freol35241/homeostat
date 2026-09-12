@@ -134,6 +134,13 @@ impl ConfigStore {
             return Err(format!("unknown parameter {unit}/{param}"));
         };
         check(stored.param_type, &stored.constraint, &value)?;
+        // An integer written to a float param is stored as the float it
+        // means, as `default_value` canonicalizes the repo default:
+        // serde_json's 5 != 5.0 would otherwise plan as perpetual drift.
+        let value = match stored.param_type {
+            ParamType::Float => Value::from(value.as_f64().expect("checked as float")),
+            _ => value,
+        };
         stored.value = value.clone();
         Ok(value)
     }
@@ -340,6 +347,24 @@ mod tests {
         check(ParamType::String, &c, &json!("low")).unwrap();
         assert!(check(ParamType::String, &c, &json!("medium")).is_err());
         assert!(check(ParamType::String, &c, &json!(3)).is_err());
+    }
+
+    #[test]
+    fn integer_write_to_float_param_stores_the_float() {
+        let store = ConfigStore {
+            params: Mutex::new(BTreeMap::from([(
+                ("heating".to_string(), "setpoint".to_string()),
+                StoredParam {
+                    param_type: ParamType::Float,
+                    constraint: Constraint::default(),
+                    value: json!(20.0),
+                },
+            )])),
+            write_order: tokio::sync::Mutex::new(()),
+        };
+        let stored = store.write("heating", "setpoint", json!(21)).expect("in-range write");
+        assert!(stored.is_f64(), "stored as a float, not an integer: {stored}");
+        assert_eq!(store.read(|_, _| true)[0].2, json!(21.0));
     }
 
     #[test]
