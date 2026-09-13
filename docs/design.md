@@ -2197,6 +2197,78 @@ never gets removed); a `mode` capability; a relay. The SDK gains
 nothing yet: a latch helper graduates once a house's modes unit shows
 what repeats.
 
+## Restoring a unit's own last value (settled 2026-09-13, #83)
+
+The latch above survives its own restart by reading the mirror. It does
+not survive the core's: the state mirror is in-memory, every version
+upgrade is a core restart, and `subscribe`'s catch-up then has nothing to
+replay. Measured on this house: a `modes` unit came back with four
+latches at their code defaults and the lighting rule disagreed with the
+actual lights for 55 minutes, until a person noticed. A
+`temperature_fusion` unit came back blind and took between 450 s and
+1800 s to republish across six deploys, twice exceeding the 1200 s after
+which the pump discards a fed value and falls back to curve control.
+
+**The right behaviour is not the same for all state, and only the unit
+knows which kind it holds.** That is the whole finding, and it is why
+this is an SDK call and not a framework behaviour:
+
+| unit | on start | why |
+|---|---|---|
+| `rf433` | publish `false` | the held value was its own construct (One-way senders) |
+| `temperature_fusion` | recompute, seeded if it likes | derived, and a stale input is dangerous |
+| `modes` | restore what was last published | a person decided it, and age is irrelevant |
+
+A framework guessing between those three would be wrong twice. The
+one-way-sender settlement is the standing proof.
+
+- **`ctx.restore(binding, ...)` returns `(value, age_s)` or `None`.** The
+  recorder is the only record that a decision was ever made, and its
+  queryable has answered `home/history/{space}/{entity}/{aspect}` since
+  step 5a — the dashboard's sparklines already read it. What was missing
+  was not plumbing but a blessed path: without one, the obvious
+  workaround is a unit hand-building a selector into `home/history/**`.
+- **Its own published state keys only**, addressed by the same slots as
+  `publish` and resolved through the same binding, so a templated
+  expression restores per entity exactly as it publishes per entity. A
+  unit restoring somebody else's state is a different and worse thing,
+  and a `cmd` binding has no history to restore — a command is an event,
+  not a value a unit holds.
+- **The age comes with the value**, as in the mirror catch-up: `modes`
+  ignores it, a fusion refuses anything older than its staleness policy.
+  Returning a bare value would make the dangerous case the easy one.
+- **No new bus surface.** A history read is a `get`, and reads are not a
+  declared surface anywhere today — the dashboard queries the recorder
+  with nothing in its manifest. A `[bus.reads]` block would be
+  unenforceable decoration: the SDK cannot stop a unit opening its own
+  session, and what actually constrains `restore` is that it resolves
+  through the unit's own publish bindings. If reads ever become a
+  policed surface (Zenoh ACLs), they become one for every class at once.
+- **`None`, never an exception, when there is nothing to restore** — no
+  recorder in the house, no rows for the series, or a store that answers
+  an error (that one also leaves a `restore-failed` health event). A
+  house without a recorder still starts; a unit that cannot read its
+  past falls back to the default it would have used anyway.
+- **It waits for the recorder, because there is no start order.** A start
+  order was already considered and rejected for the recorder's own
+  catch-up: it is the first dependency edge between units the manifest
+  rules refuse. So `restore` polls `home/history/stats` — the one
+  history selector that answers whatever the store holds — until the
+  recorder answers or a timeout passes, and is called before `ready()`,
+  where a unit not yet able to do its job is exactly what the supervisor
+  should see. Waiting on the series itself would stall every first start
+  for the full timeout, because a series with no rows is not answered at
+  all. A house with no recorder is read from the text (nobody publishes
+  under `home/history/`) and never waits.
+
+**Rejected**: persisting unit state across restarts, in the SDK or the
+supervisor — it is the same framework guess, and it gets `rf433` wrong by
+resurrecting a motion event that expired long ago. Restoring
+automatically for any unit that binds entities, for the same reason. A
+start order that brings the recorder up first. Writing the last value to
+a file beside the unit, which is a second store with its own retention,
+backup and corruption story, next to the one the house already runs.
+
 ## Unit granularity: the atom is the unit, not the automation (settled 2026-09-08)
 
 The question was whether every automation, however small, should be its

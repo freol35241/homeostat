@@ -9,9 +9,12 @@ Run: uv run --no-project --with-editable sdk/python python -m unittest discover 
 """
 
 import unittest
+from pathlib import Path
 
-from homeostat.automation import _expand
+from homeostat.automation import _expand, _house_has_recorder
 from homeostat.house import Entity
+
+FIXTURES = Path(__file__).resolve().parents[3] / "tests"
 
 ZONES = {"downstairs": ["livingroom", "hallway"]}
 
@@ -80,6 +83,17 @@ class ZoneTest(unittest.TestCase):
     def test_a_non_entity_class_never_expands(self):
         expr = "home/discovery/z2m"
         self.assertEqual(_expand(expr, ZONES, LATCHES), [expr])
+
+
+class RecorderPresenceTest(unittest.TestCase):
+    """What `restore` asks before it waits for anything: a recorder-less
+    house must start on its defaults at once, not after the timeout."""
+
+    def test_a_house_running_a_recorder_is_recognised(self):
+        self.assertTrue(_house_has_recorder(FIXTURES / "fixture_house_restore"))
+
+    def test_a_house_without_one_is_too(self):
+        self.assertFalse(_house_has_recorder(FIXTURES / "fixture_house_templates"))
 
 
 if __name__ == "__main__":

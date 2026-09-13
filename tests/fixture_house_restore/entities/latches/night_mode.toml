@@ -1,0 +1,13 @@
+schema = 1
+
+[entity]
+id = "night_mode"
+capability = "switch"
+room = "global"
+
+[naming]
+en = "night mode"
+
+[write_policy]
+mode = "exclusive"
+owner = "latches"
