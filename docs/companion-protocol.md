@@ -83,7 +83,9 @@ escalate an unacknowledged alert reads it.
 
 `true` on entering the `home` geofence, `false` on leaving. The app
 registers ONE geofence and uses the platform's Geofencing API, which the
-OS runs at near-zero battery cost; it does not run a location loop.
+OS runs at near-zero battery cost; it does not run a location loop. Where
+that geofence sits is the `home` key of the provisioning blob below; a
+phone provisioned without it publishes no `presence` at all.
 
 The house fuses this with the router's WiFi sightings elsewhere; the
 phone's job is `away` and `approaching`, not `at home`.
@@ -169,12 +171,41 @@ Three things, all text:
    phone = "alice"
    username = "alice-phone"
    password = "..."
+
+   dashboard = "http://10.0.0.1:8080"
+   home = { lat = 59.33, lon = 18.06, radius_m = 150 }
    ```
 
    `broker` is the endpoint, its path the base topic when the house runs
-   a non-default one. `phone` is the subtree segment. Config as text,
-   like everything else; an install is a scan, and a re-provision is
-   another scan.
+   a non-default one. `phone` is the subtree segment. Those four are
+   required: they are the session, and without them the app has nothing
+   to connect to.
+
+   The last two are optional, and each switches off one feature of the
+   app when omitted. Neither reaches the wire — the adapter never sees
+   this blob — so a house may change either one by reprovisioning alone.
+
+   - `dashboard` is the dashboard unit's base URL, exactly as a family
+     browser would bookmark it, and is what the app's WebView loads
+     (design.md, "The companion app": same page, same unit, no new bus
+     surface). Plain `http://` over the tunnel, per the Dashboard
+     settlement — no TLS and no login, and the unit's `Host` validation
+     means this must be the address it expects. A house that has not
+     deployed the dashboard, or does not want it on a particular phone,
+     omits the key and the app shows no dashboard.
+   - `home` is the centre and radius of the one geofence the app
+     registers. `lat` and `lon` are required inside the table and take
+     the same spelling as the `position` payload; `radius_m` is optional
+     and defaults to 150, which is a house lot plus GPS slop and also
+     about the floor below which Android's geofencing stops being
+     reliable. Omit the table and the app registers no geofence and
+     publishes no `presence`; the notifier half still works.
+
+   Config as text, like everything else; an install is a scan, and a
+   re-provision is another scan. Which is also why the geofence and the
+   dashboard URL live here rather than in a settings screen: a value
+   typed per phone is a second provisioning path for the same house, and
+   the first thing to drift.
 
 ## Known limits, deliberately
 
