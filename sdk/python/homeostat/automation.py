@@ -12,7 +12,9 @@ declared expression does not cover is refused: the manifest stays the
 authority on intent.
 
 Zone references in the room slot expand against the house's zones.toml,
-the same expansion the core performs at plan time.
+and `{room}`/`{entity}` templates expand against the entities this unit
+binds — the same two expansions the core performs at plan time, so what a
+unit subscribes to is what `plan` printed for it.
 """
 
 import datetime
@@ -21,19 +23,58 @@ import json
 import os
 import signal
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
 
 import tomllib
 import zenoh
 
-from . import keys
+from . import house, keys
 from .session import UnitSession
 
 
 def context(root: str | Path = ".") -> "Context":
     return Context(os.environ[keys.ENV_UNIT], root)
+
+
+def _dedup(exprs: Iterable[str]) -> list[str]:
+    """Order-preserving unique. Two entities in one room expand a `{room}`-only
+    expression identically, and a duplicate subscription delivers twice."""
+    return list(dict.fromkeys(exprs))
+
+
+def _expand(
+    expr: str, zones: dict[str, list[str]], entities: list[house.Entity]
+) -> list[str]:
+    """The expression as the core expands it at plan time (src/expand.rs):
+    `{room}`/`{entity}` templates substituted per bound entity, or a zone
+    in the room slot expanded to one expression per member room. The two
+    are exclusive — a template is not a zone name — and only state/cmd
+    keys expand at all."""
+    segments = expr.split("/")
+    if len(segments) < 3 or segments[1] not in ("state", "cmd"):
+        return [expr]
+    if "{room}" in segments or "{entity}" in segments:
+
+        def substitute(entity: house.Entity) -> str:
+            filled = {"{room}": entity.room, "{entity}": entity.name}
+            return "/".join(filled.get(seg, seg) for seg in segments)
+
+        # A cmd path to an arbitrated entity belongs to the arbiter, not
+        # to the entity's owner, so a templated cmd expands only over the
+        # rest. Automation-owned entities are never arbitrated
+        # (`virtual-entity-arbitrated`), so this excludes nothing today;
+        # it is here because the two expansions must not drift.
+        return _dedup(
+            substitute(entity)
+            for entity in entities
+            if segments[1] != "cmd" or entity.write_mode != "arbitrated"
+        )
+    rooms = zones.get(segments[2])
+    if rooms is None:
+        return [expr]
+    return ["/".join([*segments[:2], room, *segments[3:]]) for room in rooms]
 
 
 def _typed(param_type: str, value: Any) -> Any:
@@ -73,6 +114,18 @@ class Context:
         zones_path = root / "zones.toml"
         if zones_path.exists():
             self._zones = tomllib.loads(zones_path.read_text()).get("zones", {})
+        # Entities are only needed to expand templates, and reading them
+        # means parsing the whole house. Units without templates pay
+        # nothing; those with them fail at startup rather than mid-run.
+        self._entities: list[house.Entity] = []
+        declared = [
+            *self._subscribes.values(),
+            *(p["key"] for p in self._publishes.values()),
+        ]
+        if any("{" in expr for expr in declared):
+            self._entities = [
+                e for e in house.load_house(root).entities if e.owner == unit
+            ]
 
         self.unit = unit
         self.params = _Params(self)
@@ -107,16 +160,8 @@ class Context:
         with self._lock:
             self._param_values[param] = value
 
-    def _room_variants(self, expr: str) -> list[str]:
-        """The expression, with a zone in the room slot expanded to one
-        expression per member room (state/cmd keys only)."""
-        segments = expr.split("/")
-        if len(segments) < 3 or segments[1] not in ("state", "cmd"):
-            return [expr]
-        rooms = self._zones.get(segments[2])
-        if rooms is None:
-            return [expr]
-        return ["/".join([*segments[:2], room, *segments[3:]]) for room in rooms]
+    def _variants(self, expr: str) -> list[str]:
+        return _expand(expr, self._zones, self._entities)
 
     def subscribe(self, binding: str, handler: Callable[..., None]) -> None:
         """Subscribes a `[bus.subscribes]` binding; the handler receives
@@ -154,7 +199,7 @@ class Context:
                 delivered.add(key)
             deliver(key, value, 0.0)
 
-        exprs = self._room_variants(self._subscribes[binding])
+        exprs = self._variants(self._subscribes[binding])
         for expr in exprs:
             self._subs.append(self._session.subscribe(expr, callback))
         for expr in exprs:
@@ -200,7 +245,7 @@ class Context:
             key = expr
         covered = any(
             zenoh.KeyExpr(variant).includes(zenoh.KeyExpr(key))
-            for variant in self._room_variants(expr)
+            for variant in self._variants(expr)
         )
         if not covered:
             raise ValueError(f"key {key!r} is outside the declared {expr!r}")

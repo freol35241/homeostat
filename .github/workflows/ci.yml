@@ -45,6 +45,7 @@ jobs:
           uv sync --locked --script tests/fixture_house_evening/units/evening_lights.py
           uv sync --locked --script tests/fixture_house_apply/units/probe.py
           uv sync --locked --script tests/fixture_house_virtual/units/fused_temperature.py
+          uv sync --locked --script tests/fixture_house_templates/units/latches.py
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
