@@ -23,6 +23,7 @@ import json
 import os
 import signal
 import threading
+import time
 from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
@@ -31,11 +32,16 @@ import tomllib
 import zenoh
 
 from . import house, keys
-from .session import UnitSession
+from .session import QueryError, UnitSession
 
 
 def context(root: str | Path = ".") -> "Context":
     return Context(os.environ[keys.ENV_UNIT], root)
+
+
+# The recorder's store description: the one history selector that answers
+# whether it is up, whatever the store happens to hold.
+_HISTORY_STATS = "home/history/stats"
 
 
 def _dedup(exprs: Iterable[str]) -> list[str]:
@@ -77,6 +83,19 @@ def _expand(
     return ["/".join([*segments[:2], room, *segments[3:]]) for room in rooms]
 
 
+def _house_has_recorder(root: str | Path) -> bool:
+    """Whether the house runs a recorder at all, read from the text: it is
+    the unit declaring a publish under home/history/, a class src/grants.rs
+    keeps to a single service. Without one there is nothing for `restore`
+    to wait for, and waiting out its timeout would stall every start in a
+    recorder-less house."""
+    return any(
+        spec.get("key", "").startswith("home/history/")
+        for unit in house.load_house(root).units
+        for spec in unit.publishes.values()
+    )
+
+
 def _typed(param_type: str, value: Any) -> Any:
     if param_type == "time" and isinstance(value, str):
         return datetime.time.fromisoformat(value)
@@ -102,6 +121,7 @@ class _Params:
 class Context:
     def __init__(self, unit: str, root: str | Path = "."):
         root = Path(root)
+        self._root = root
         manifest = tomllib.loads((root / "units" / f"{unit}.toml").read_text())
         bus = manifest.get("bus", {})
         self._subscribes: dict[str, str] = bus.get("subscribes", {})
@@ -132,6 +152,7 @@ class Context:
         self._lock = threading.Lock()
         self._param_values: dict[str, Any] = {}
         self._subs: list = []
+        self._recorder: bool | None = None
         self._session = UnitSession(unit, os.environ[keys.ENV_BUS])
 
         if self._param_specs:
@@ -212,22 +233,19 @@ class Context:
                     delivered.add(key)
                     deliver(key, value, age_s)
 
-    def publish(
+    def _concrete_key(
         self,
         binding: str,
-        value: Any,
         *,
-        room: str | None = None,
-        entity: str | None = None,
-        aspect: str | None = None,
-    ) -> None:
-        """Publishes through a `[bus.publishes]` expression to one concrete
-        key. Literal expression segments are defaults; wildcard segments
-        must be named via room/entity/aspect. cmd-class publishes are
-        wrapped in the envelope automatically (priority from the manifest's
-        publish declaration, actor this unit)."""
-        spec = self._publishes[binding]
-        expr = spec["key"]
+        room: str | None,
+        entity: str | None,
+        aspect: str | None,
+    ) -> str:
+        """The one concrete key a `[bus.publishes]` binding addresses.
+        Literal expression segments are defaults, wildcard and template
+        segments must be named, and a key the declared expression does not
+        cover is refused: the manifest stays the authority on intent."""
+        expr = self._publishes[binding]["key"]
         segments = expr.split("/")
         if segments[1] in ("state", "cmd"):
             slots = {"room": room, "entity": entity, "aspect": aspect}
@@ -249,6 +267,25 @@ class Context:
         )
         if not covered:
             raise ValueError(f"key {key!r} is outside the declared {expr!r}")
+        return key
+
+    def publish(
+        self,
+        binding: str,
+        value: Any,
+        *,
+        room: str | None = None,
+        entity: str | None = None,
+        aspect: str | None = None,
+    ) -> None:
+        """Publishes through a `[bus.publishes]` expression to one concrete
+        key. Literal expression segments are defaults; wildcard segments
+        must be named via room/entity/aspect. cmd-class publishes are
+        wrapped in the envelope automatically (priority from the manifest's
+        publish declaration, actor this unit)."""
+        spec = self._publishes[binding]
+        segments = spec["key"].split("/")
+        key = self._concrete_key(binding, room=room, entity=entity, aspect=aspect)
         if segments[1] == "cmd":
             priority = spec["priority"]
             if priority is None:
@@ -258,6 +295,95 @@ class Context:
                 )
             value = keys.cmd_envelope(value, priority, self.unit)
         self._session.put_json(key, value)
+
+    def _has_recorder(self) -> bool:
+        if self._recorder is None:
+            self._recorder = _house_has_recorder(self._root)
+        return self._recorder
+
+    def restore(
+        self,
+        binding: str,
+        *,
+        room: str | None = None,
+        entity: str | None = None,
+        aspect: str | None = None,
+        timeout_s: float = 30.0,
+    ) -> tuple[Any, float] | None:
+        """The last value this unit published on `binding`'s key, read back
+        from the recorder as `(value, age_s)` — or None when there is
+        nothing to restore.
+
+        The core's state mirror is in-memory, so a core restart (every
+        version upgrade is one) empties it and `subscribe`'s catch-up has
+        nothing to replay. For most units that is correct. For a latch it
+        is not: nothing can recompute a decision somebody made, and the
+        only record that it was made is the recorder's.
+
+        Never automatic, because the right behaviour is not the same for
+        all state and only the unit knows which kind it holds — an rf433
+        adapter must publish `false` at startup rather than resurrect an
+        expired motion event (docs/design.md, One-way senders), while a
+        fusion wants its inputs recomputed. So this is a call the unit
+        makes, and the age comes with the value: a latch does not care how
+        old its decision is, and a fusion very much does.
+
+        Reads only a state key this unit itself publishes, addressed by the
+        same slots as `publish` — a unit restoring somebody else's state is
+        a different and worse thing.
+
+        Returns None, rather than raising, when the house has no recorder,
+        when the series has no rows, or when the store answers an error
+        (logged as a `restore-failed` health event): a unit must still be
+        able to start on its code defaults. Because there is no start order
+        between units (docs/design.md, History / recorder) the recorder may not be
+        answering yet, so this retries until `timeout_s` — call it before
+        `ready()`, where a unit that is not yet able to do its job is
+        exactly what the supervisor should see.
+        """
+        key = self._concrete_key(binding, room=room, entity=entity, aspect=aspect)
+        segments = key.split("/")
+        if segments[1] != "state":
+            raise ValueError(f"restore {binding!r}: only state keys have a history")
+        if not self._has_recorder():
+            return None
+
+        def failed(reason: str) -> None:
+            self.health_event("restore-failed", key=key, reason=reason)
+
+        # Wait for the recorder to answer, not for rows: a series with no
+        # rows yet is not answered at all (the recorder replies per series
+        # it holds), so waiting on the series itself would stall every
+        # first start for the whole timeout. `stats` describes the store
+        # and always answers while the recorder is up.
+        deadline = time.monotonic() + timeout_s
+        while True:
+            try:
+                if self._session.get_json(_HISTORY_STATS):
+                    break
+            except QueryError as err:
+                failed(str(err))
+                return None
+            if time.monotonic() >= deadline:
+                failed(f"recorder did not answer within {timeout_s}s")
+                return None
+            time.sleep(0.2)
+
+        selector = f"{keys.history_key('state', segments[3], segments[4])}?limit=1"
+        try:
+            replies = self._session.get_json(selector)
+        except QueryError as err:
+            failed(str(err))
+            return None
+        for _, rows in replies:
+            if rows:
+                row = rows[-1]
+                stamped = datetime.datetime.fromisoformat(row["ts"])
+                age_s = (
+                    datetime.datetime.now(datetime.timezone.utc) - stamped
+                ).total_seconds()
+                return row["value"], max(age_s, 0.0)
+        return None
 
     def health_event(self, kind: str, **fields: Any) -> None:
         self._session.health_event(kind, **fields)
