@@ -859,3 +859,28 @@ pub fn assert_cli_ok(output: &Output) {
         stderr(output)
     );
 }
+
+/// Caps how many houses one test binary brings up at the same moment.
+///
+/// Every test here spawns its own supervisor, and cargo runs a binary's
+/// tests in parallel, so five four-unit houses resolve and start together.
+/// On a two-core runner the slowest starved past its health deadline and
+/// the suite failed on a test the PR had not touched (#23). Parallelism was
+/// paying for very little: measured on the dashboard suite, the five tests
+/// take 23.3 s run serially and 12.9 s in parallel on sixteen cores, but
+/// 23.5 s versus 20.7 s on two — the tests wait on fixed delays, not on the
+/// CPU. Two at a time keeps what parallelism is worth on a developer's
+/// machine and removes the herd from the runner.
+///
+/// The permit covers startup only. Hold it until the units under test
+/// report healthy, then drop it: the body of a test costs nothing to
+/// overlap, and holding it longer would serialize the suite for real.
+static STARTUP: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
+
+#[allow(dead_code)] // each test binary uses its own subset of the harness
+pub async fn startup_permit() -> tokio::sync::SemaphorePermit<'static> {
+    STARTUP
+        .acquire()
+        .await
+        .expect("startup semaphore never closes")
+}
