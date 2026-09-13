@@ -67,11 +67,18 @@ def outline(pts, w):
         L = math.hypot(dx, dy) or 1
         nx, ny = -dy / L * r, dx / L * r
         left.append((p[0] + nx, p[1] + ny)); right.append((p[0] - nx, p[1] - ny))
-    def cap(c, frm, to, steps=8):
-        a0 = math.atan2(frm[1] - c[1], frm[0] - c[0]); a1 = math.atan2(to[1] - c[1], to[0] - c[0])
-        while a1 < a0: a1 += 2 * math.pi
-        return [(c[0] + r * math.cos(a0 + (a1 - a0) * k / steps), c[1] + r * math.sin(a0 + (a1 - a0) * k / steps)) for k in range(1, steps)]
-    poly = left + cap(pts[-1], left[-1], right[-1]) + right[::-1] + cap(pts[0], right[0], left[0])
+    def cap(c, tangent, steps=8):
+        # A semicircle around c, bulging along the tangent: from the left
+        # offset, through c + tangent * r, to the right offset.
+        base = math.atan2(tangent[1], tangent[0])
+        return [(c[0] + r * math.cos(base - math.pi / 2 + math.pi * k / steps),
+                 c[1] + r * math.sin(base - math.pi / 2 + math.pi * k / steps)) for k in range(1, steps)]
+    def tangent(a, b):
+        dx, dy = b[0] - a[0], b[1] - a[1]; L = math.hypot(dx, dy) or 1
+        return (dx / L, dy / L)
+    t_end = tangent(pts[-2], pts[-1]); t_start = tangent(pts[1], pts[0])
+    # left is p + n where n = (-dy, dx): the cap runs left -> tangent -> right.
+    poly = left + cap(pts[-1], t_end)[::-1] + right[::-1] + cap(pts[0], t_start)[::-1]
     return "M" + " L".join(f"{x:.1f},{y:.1f}" for x, y in poly) + " Z"
 
 
