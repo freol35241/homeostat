@@ -630,17 +630,19 @@ async fn integrity_check_reports_corruption() {
             })
             .expect("checkpoint");
         assert_eq!(busy, 0, "checkpoint completed");
-        let page_size: u64 = conn
+        // i64, not u64: SQLite has one integer type and rusqlite 0.40
+        // dropped the lossy u64 conversion. The offset is cast once, here.
+        let page_size: i64 = conn
             .query_row("PRAGMA page_size", [], |r| r.get(0))
             .expect("page size");
-        let root: u64 = conn
+        let root: i64 = conn
             .query_row(
                 "SELECT rootpage FROM sqlite_master WHERE name = 'samples'",
                 [],
                 |r| r.get(0),
             )
             .expect("samples root page");
-        (root - 1) * page_size
+        ((root - 1) * page_size) as u64
     };
     {
         use std::io::{Seek, SeekFrom, Write};
