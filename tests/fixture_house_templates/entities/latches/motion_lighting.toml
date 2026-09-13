@@ -1,0 +1,13 @@
+schema = 1
+
+[entity]
+id = "motion_lighting"
+capability = "switch"
+room = "hallway"
+
+[naming]
+en = "motion lighting"
+
+[write_policy]
+mode = "exclusive"
+owner = "latches"

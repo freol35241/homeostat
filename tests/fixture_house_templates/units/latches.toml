@@ -1,0 +1,22 @@
+schema = 1
+
+[unit]
+name = "latches"
+kind = "automation"
+description = "House-mode latches: commandable virtual switches, one templated binding for all of them"
+
+[runtime]
+command = "uv run units/latches.py"
+restart = "on-failure"
+shutdown_grace_s = 5
+
+# Templated, not one binding per entity: the unit's whole point is that a
+# new latch is a new entity file and nothing else.
+[bus.subscribes]
+commands = "home/cmd/{room}/{entity}/**"
+
+[bus.publishes]
+state = { key = "home/state/{room}/{entity}/on" }
+
+[entities]
+dir = "entities/latches/"
