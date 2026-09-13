@@ -12,7 +12,7 @@ toml = "0.8"
 clap = { version = "4", features = ["derive"] }
 # "unstable" for the matching-status API the integration tests use to
 # synchronize on subscriber-interest propagation.
-zenoh = { version = "1.9", features = ["unstable"] }
+zenoh = { version = "1.10", features = ["unstable"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "signal", "time", "sync", "io-util"] }
 serde_json = "1.0.150"
 sha2 = "0.11.0"
@@ -23,4 +23,4 @@ schemars = "1"
 rumqttc = "0.25.1"
 # "bundled" so the recorder tests can assert on the store without a system
 # libsqlite3; the recorder itself uses Python's stdlib sqlite3.
-rusqlite = { version = "0.37", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
