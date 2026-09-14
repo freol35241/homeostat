@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "homeostat==0.11.4",
+#     "homeostat==0.12.0",
 #     "paho-mqtt>=2,<3",
 # ]
 # ///
@@ -79,7 +79,19 @@ translate to their {base}/controller/set/{field} topics as stringified
 floats; "operating_mode" — the GT3_2 boiler-sensor emulation — is
 strictly the integer 1, 2 or 3 (1=BAU normal, 2=BLOCK suppress heating,
 3=BOOST force heating; src/Controller.h, OperatingMode) and translates to
-{base}/controller/set/operating_mode as an integer string. The firmware's
+{base}/controller/set/operating_mode as an integer string.
+
+⚠️ THE SETPOINT IS PUBLISHED RETAINED AND THE OTHER THREE ARE NOT. The
+firmware gives indoor_temperature_target no `valid` predicate — it is a
+stored decision, not a control input that expires — and its default on a
+reboot is 20 degC. A retained slot is redelivered when the board
+reconnects, so a reboot or a lost write repairs itself. The expiring
+values must NOT be retained: a writer that deliberately goes quiet relies
+on the firmware dropping its value, and a retained copy re-applied on the
+next reconnect would turn that designed failure into a stuck one. See
+COMMANDS.
+
+The firmware's
 fifth set topic, controller/set/indoor_temperature_actual, is NOT a command
 aspect: it is a sensor-feedback input, a continuous signal with one master
 rather than contestable intent (docs/design.md, "Device feeds"). It and
@@ -117,6 +129,11 @@ topic is actually seen on the broker. The OwnTracks/Zigbee2MQTT incremental
 inventory pattern — discovering devices never bound by any entity file —
 is overkill for a dialect with exactly one address per entity file, known
 up front.
+
+A raw subtopic that would mint a reserved name — `available`, or one of
+the normalized names above arriving under its bus name instead of its
+firmware name — drops with a "reserved-aspect" health event; a subtopic
+that is not a legal key segment drops with "malformed-payload".
 
 Device availability (docs/design.md, "Sensor dropout and availability"):
 this firmware publishes continuously — every serial telegram fans out —
@@ -216,12 +233,45 @@ FEEDABLE = {
 }
 
 # Commandable aspect -> ({base}/controller/set/{field}, (min, max) for the
-# float aspects, or None for the strictly-enumerated operating_mode.
+# float aspects or None for the strictly-enumerated operating_mode, RETAIN).
+#
+# ⚠️ THE RETAIN FLAG IS PER ASPECT AND IT IS NOT A PREFERENCE. It follows a
+# distinction the firmware itself makes, visible in what it publishes back:
+#
+#   feed_temperature_target      {"value": 0,     "valid": false}
+#   indoor_temperature_feedback  {"value": 18.84, "valid": true}
+#   outdoor_temperature_offset   {"value": 0.013, "valid": true}
+#   indoor_temperature_target    {"value": 19}                     <- no `valid`
+#
+# GENERAL_CONTROL_VALUES_VALIDITY expires the timestamped ones. The setpoint
+# carries no validity predicate because it does not go stale: it is a stored
+# decision, and "19.5, set four days ago" is exactly as true as one set a
+# minute ago.
+#
+# So the setpoint is RETAINED and the expiring control values are NOT:
+#
+# - Retained setpoint. The board's firmware default is 20 degC, and a reboot
+#   silently adopts it. At the reporting house that board reboots DAILY on an
+#   uptime timer, so a non-retained setpoint is lost every day with nothing to
+#   restore it; the retained slot is redelivered on the board's reconnect and
+#   repairs itself. A write lost in transit -- which happens -- likewise heals
+#   on the next reconnect instead of being lost forever.
+#
+# - ⚠️ NOT the others, AND THIS DIRECTION IS THE DANGEROUS ONE. An automation
+#   that refuses (stale inputs, a dead price feed) relies on the firmware
+#   expiring its offset so the pump falls back to curve control. A retained
+#   offset would be redelivered on the next reconnect and silently re-applied
+#   AFTER the writer had deliberately stopped, converting a designed failure
+#   into a stuck value. Those aspects are kept fresh by their writer's cadence,
+#   which is the correct mechanism for something that expires.
+#
+# The same reasoning is why fed inputs are published non-retained and have
+# their retained slot actively cleared -- see the feed handler.
 COMMANDS = {
-    "setpoint": ("indoor_temperature_target", (10.0, 30.0)),
-    "feed_temperature_target": ("feed_temperature_target", (20.0, 60.0)),
-    "outdoor_temperature_offset": ("outdoor_temperature_offset", (-10.0, 10.0)),
-    "operating_mode": ("operating_mode", None),
+    "setpoint": ("indoor_temperature_target", (10.0, 30.0), True),
+    "feed_temperature_target": ("feed_temperature_target", (20.0, 60.0), False),
+    "outdoor_temperature_offset": ("outdoor_temperature_offset", (-10.0, 10.0), False),
+    "operating_mode": ("operating_mode", None, False),
 }
 
 # The aspect descriptor (docs/design.md, Aspect descriptors) this adapter
@@ -314,7 +364,7 @@ def aspect_descriptor(entity) -> dict:
     commands for (commands_for: a fed input has one master, so it is
     described but not commandable)."""
     fields = {aspect: dict(field) for aspect, field in ASPECT_FIELDS.items()}
-    for aspect, (_field, bounds) in commands_for(entity).items():
+    for aspect, (_field, bounds, _retain) in commands_for(entity).items():
         command = {"type": "enum" if bounds is None else "float", "editable_by": COMMAND_TIER[aspect]}
         if bounds is not None:
             command["constraint"] = {"min": bounds[0], "max": bounds[1]}
@@ -334,14 +384,22 @@ def state_field(segments: list[str]) -> str:
     return "_".join(segments)
 
 
-def state_aspect(source: str, field: str) -> str:
+# Names a raw firmware field may not mint: the adapter's own liveness
+# signal and the normalized names, which only their overrides may yield.
+RESERVED_ASPECTS = frozenset({"available", *ASPECT_OVERRIDES.values()})
+
+
+def state_aspect(source: str, field: str) -> str | None:
     """Maps one firmware field (`source` "state" or "controller") to a bus
     aspect name — the three settled normalizations, or the firmware name
     passed through, prefixed `controller_` on a name collision between the
-    two namespaces (see module docstring)."""
+    two namespaces (see module docstring) — or None for a raw field that
+    would mint a reserved name (callers drop it with "reserved-aspect")."""
     override = ASPECT_OVERRIDES.get((source, field))
     if override is not None:
         return override
+    if field in RESERVED_ASPECTS:
+        return None
     if source == "controller" and field in STATE_ASPECTS:
         return f"controller_{field}"
     return field
@@ -446,6 +504,7 @@ def main():
                 return
             if isinstance(value, (dict, list)):
                 return  # a nested blob; its leaves arrive on deeper subtopics
+            valid = None
             aspect = state_aspect("state", state_field(rest[2:]))
         elif len(rest) == 3 and rest[0] == "controller" and rest[1] == "state":
             try:
@@ -454,41 +513,47 @@ def main():
                 session.health_event("drop", reason="malformed-payload", topic=msg.topic)
                 return
             aspect = state_aspect("controller", rest[2])
-            if valid is not None:
-                # Ahead of the value, so a consumer reacting to the new
-                # value reads this snapshot's validity from the mirror and
-                # never the previous one's.
-                session.put_json(
-                    keys.state_key(entity.room, entity.name, f"{aspect}_valid"),
-                    bool(valid),
-                )
         else:
             return  # a whole-document blob topic
 
-        session.put_json(keys.state_key(entity.room, entity.name, aspect), value)
+        if aspect is None:
+            # A raw field naming the liveness signal or a normalized aspect
+            # must not impersonate it.
+            session.health_event("drop", reason="reserved-aspect", topic=msg.topic)
+            return
+        try:
+            key = keys.state_key(entity.room, entity.name, aspect)
+        except ValueError:
+            # A topic segment the key schema refuses (empty, a wildcard).
+            session.health_event("drop", reason="malformed-payload", topic=msg.topic)
+            return
+        if valid is not None:
+            # Ahead of the value, so a consumer reacting to the new value
+            # reads this snapshot's validity from the mirror and never the
+            # previous one's.
+            session.put_json(keys.state_key(entity.room, entity.name, f"{aspect}_valid"), bool(valid))
+        session.put_json(key, value)
 
     def cmd_handler(entity):
         def handler(sample):
+            parsed = session.parse_command(sample)
+            if parsed is None:
+                return
+            aspect, value, cmd_id = parsed
             key = str(sample.key_expr)
-            aspect = key.split("/", 4)[4]
-            try:
-                payload = json.loads(sample.payload.to_bytes())
-            except ValueError:
-                session.health_event("drop", reason="malformed-payload", key=key)
-                return
-            try:
-                value = keys.parse_cmd_envelope(payload)
-            except ValueError:
-                session.health_event("drop", reason="invalid-command", key=key)
-                return
 
             command = commands_for(entity).get(aspect)
             if command is None:
                 session.health_event(
-                    "drop", reason="invalid-command", key=key, aspect=aspect, value=value
+                    "drop",
+                    reason="invalid-command",
+                    key=key,
+                    aspect=aspect,
+                    value=value,
+                    cmd_id=cmd_id,
                 )
                 return
-            field, bounds = command
+            field, bounds, retain = command
             if bounds is None:
                 if (
                     isinstance(value, bool)
@@ -496,7 +561,12 @@ def main():
                     or value not in OPERATING_MODES
                 ):
                     session.health_event(
-                        "drop", reason="invalid-command", key=key, aspect=aspect, value=value
+                        "drop",
+                        reason="invalid-command",
+                        key=key,
+                        aspect=aspect,
+                        value=value,
+                        cmd_id=cmd_id,
                     )
                     return
                 body = str(value)
@@ -506,11 +576,16 @@ def main():
                     lo <= value <= hi
                 ):
                     session.health_event(
-                        "drop", reason="invalid-command", key=key, aspect=aspect, value=value
+                        "drop",
+                        reason="invalid-command",
+                        key=key,
+                        aspect=aspect,
+                        value=value,
+                        cmd_id=cmd_id,
                     )
                     return
                 body = str(float(value))
-            client.publish(f"{entity.id}/controller/set/{field}", body)
+            client.publish(f"{entity.id}/controller/set/{field}", body, retain=retain)
 
         return handler
 
@@ -523,7 +598,7 @@ def main():
             f"{e.id}/controller/state/+",
         )
     ]
-    client = mqtt.connect(endpoint, on_ivt_message, topics)
+    client = mqtt.connect(endpoint, on_ivt_message, topics, health=session.health_event)
 
     subscribers = [
         session.subscribe(expr, cmd_handler(e))
@@ -585,7 +660,7 @@ def main():
         for input_name, source in e.inputs.items():
             handler = feed_handler(e, input_name, source)
             subscribers.append(
-                session.subscribe(keys.state_key(source.room, source.entity, "*"), handler)
+                session.subscribe(keys.state_keyexpr(source.room, source.entity), handler)
             )
 
     session.put_json(keys.discovery_key(unit), inventory())
@@ -614,11 +689,13 @@ def main():
 
     stop.set()
     watchdog_thread.join(timeout=5)
+    # The MQTT loop stops first: an in-flight on_message during teardown
+    # would otherwise put on a closed zenoh session.
+    client.loop_stop()
+    client.disconnect()
     for sub in subscribers:
         sub.undeclare()
     session.close()
-    client.loop_stop()
-    client.disconnect()
 
 
 if __name__ == "__main__":
