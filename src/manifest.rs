@@ -303,7 +303,8 @@ pub enum DiscoveryMode {
 /// (`key-outside-schema` otherwise); a zone name in the room slot expands
 /// to its rooms at plan time; `{room}`/`{entity}` templates expand per
 /// bound entity and are valid only in adapters and automations
-/// (`template-outside-binding-unit`).
+/// (`template-outside-binding-unit`), in a unit that actually binds some
+/// (`template-without-entities`).
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct BusSection {

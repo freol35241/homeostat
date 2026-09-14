@@ -215,6 +215,14 @@ pub const CODES: &[(&str, &str)] = &[
          wildcards.",
     ),
     (
+        "template-without-entities",
+        "A `[bus]` key uses `{room}` or `{entity}` templates, but the unit \
+         declares no `[entities]` table, so the expansion is empty and the \
+         unit binds nothing: it would subscribe to nothing, publish nothing it \
+         is allowed to, and still report healthy. Add the table, or name the \
+         key concretely.",
+    ),
+    (
         "publish-missing-capability",
         "A publish under `home/cmd/` must declare `capability`. The grant table \
          resolves a cmd publish onto the entities of that capability its key \
