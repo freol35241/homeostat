@@ -1,3 +1,5 @@
+<p><img src="docs/brand/homeostat-mark.svg" alt="" width="72" align="left" hspace="12"></p>
+
 # Homeostat
 
 **A household regulator, not an assistant.** Text-first home automation:
