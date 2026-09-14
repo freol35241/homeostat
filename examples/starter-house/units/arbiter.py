@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "homeostat==0.11.4",
+#     "homeostat==0.12.0",
 # ]
 # ///
 """Arbiter service: the write-token holder for arbitrated entities (see
@@ -30,12 +30,11 @@ forgotten override self-heals. A malformed envelope drops with an
 "invalid-command" event, like any adapter. Events land at
 home/health/arbiter/event, recorded like any health event.
 
-hold_minutes is a family-editable parameter, seeded from the manifest
-default and kept live by a config subscription — replicated minimally on
-the session rather than routed through automation.Context, whose
-Context.publish only knows the state/cmd key-slot shape and has no notion
-of this service's arbitrary, per-wish home/arbiter/{room}/{entity}/{aspect}
-forwarding keys.
+hold_minutes is a family-editable parameter, kept live by the SDK's
+LiveParams (subscribe-then-get, seeded from the manifest default) rather
+than routed through automation.Context, whose Context.publish only knows
+the state/cmd key-slot shape and has no notion of this service's
+arbitrary, per-wish home/arbiter/{room}/{entity}/{aspect} forwarding keys.
 """
 
 import json
@@ -46,8 +45,17 @@ import time
 
 import homeostat
 from homeostat import house, keys
+from homeostat.params import LiveParams
 
 PARAM = "hold_minutes"
+
+
+class Params(LiveParams):
+    """hold_minutes from home/config/{unit}/*, live."""
+
+    @property
+    def hold_minutes(self) -> float:
+        return self.get(PARAM)
 
 
 def main():
@@ -55,39 +63,11 @@ def main():
     model = house.load_house(".")
     arbitrated = {(e.room, e.name) for e in model.entities if e.write_mode == "arbitrated"}
     own = next(u for u in model.units if u.name == unit)
-    hold_minutes = float(own.params[PARAM]["default"])
 
     session = homeostat.connect()
+    params = Params(session, {PARAM: float(own.params[PARAM]["default"])})
     lock = threading.Lock()
     leases: dict[tuple[str, str, str], dict] = {}
-
-    live = False
-
-    def on_config(sample):
-        nonlocal hold_minutes, live
-        param = str(sample.key_expr).rsplit("/", 1)[1]
-        if param != PARAM:
-            return
-        try:
-            value = json.loads(sample.payload.to_bytes())
-        except ValueError:
-            return
-        with lock:
-            hold_minutes = float(value)
-            live = True
-
-    # Subscribe, then get, merge: the get covers everything published
-    # before this subscription, the subscriber everything after (the same
-    # ordering automation.Context uses for [params.*]). The seed never
-    # overwrites a value the subscription already delivered — the served
-    # reply may predate a write that raced this startup.
-    config_sub = session.subscribe(keys.config_keyexpr(unit), on_config)
-    served = dict(session.get_json(keys.config_keyexpr(unit)))
-    seeded = served.get(keys.config_key(unit, PARAM))
-    if seeded is not None:
-        with lock:
-            if not live:
-                hold_minutes = float(seeded)
 
     def cmd_handler(sample):
         key = str(sample.key_expr)
@@ -99,6 +79,7 @@ def main():
         if (room, entity) not in arbitrated:
             return  # not arbitrated: its own adapter consumes this wish
 
+        envelope = None
         try:
             envelope = json.loads(sample.payload.to_bytes())
             keys.parse_cmd_envelope(envelope)
@@ -106,8 +87,14 @@ def main():
             if not isinstance(actor, str):
                 raise ValueError("cmd envelope actor is not a string")
         except (ValueError, KeyError):
-            session.health_event("drop", reason="invalid-command", key=key)
+            # A payload that never parsed has no id; one that parsed but is
+            # not an envelope may still carry the id its publisher is
+            # waiting on, and cmd_envelope_id takes either.
+            session.health_event(
+                "drop", reason="invalid-command", key=key, cmd_id=keys.cmd_envelope_id(envelope)
+            )
             return
+        cmd_id = keys.cmd_envelope_id(envelope)
 
         incoming = keys.CMD_PRIORITIES.index(priority)
         with lock:
@@ -126,10 +113,15 @@ def main():
                 leases[(room, entity, aspect)] = {
                     "priority": priority,
                     "actor": actor,
-                    "deadline": now + hold_minutes * 60,
+                    "deadline": now + params.hold_minutes * 60,
                 }
 
         if action == "refuse":
+            # The one outcome that is neither success nor failure: the
+            # command was well-formed and reached the arbiter, and a higher
+            # band simply holds the aspect. `cmd_id` is what lets whoever
+            # published it say so, instead of waiting out a timeout it was
+            # never going to win.
             session.health_event(
                 "refuse",
                 room=room,
@@ -137,6 +129,7 @@ def main():
                 aspect=aspect,
                 priority=priority,
                 actor=actor,
+                cmd_id=cmd_id,
                 holder_priority=holder["priority"],
                 holder_actor=holder["actor"],
             )
@@ -164,7 +157,6 @@ def main():
     stop.wait()
 
     cmd_sub.undeclare()
-    config_sub.undeclare()
     session.close()
 
 

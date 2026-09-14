@@ -80,6 +80,18 @@ h1.view-title { font-size: 20px; margin: 0 0 16px; }
   pointer-events: none; transition: opacity 140ms ease; max-width: 90vw; z-index: 20; }
 #toast.show { opacity: 1; }
 
+/* a command in flight (issue #94): the tap is acknowledged immediately,
+ * and the control stops taking taps until something ends the command —
+ * a readback, an arbiter refusal, an adapter's drop, or the timeout */
+.cmd-pending { position: relative; opacity: .6; pointer-events: none; }
+.cmd-pending::after { content: ''; position: absolute; top: 50%; left: 50%; width: 13px; height: 13px;
+  margin: -7px 0 0 -7px; border: 2px solid var(--muted); border-top-color: transparent;
+  border-radius: 50%; animation: cmd-spin 700ms linear infinite; }
+@keyframes cmd-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .cmd-pending::after { animation: none; border-top-color: var(--muted); opacity: .5; }
+}
+
 /* cards / widgets */
 .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px;
   box-shadow: 0 1px 2px rgba(0,0,0,.05); }
@@ -371,6 +383,12 @@ var store = {
   roomsFilter: 'all'
 };
 
+/* In-flight commands, keyed room/entity/aspect (issue #94). Deliberately
+ * outside `store`: the store is the house's state as the bus reports it,
+ * and a pending command is this browser's private business — nothing on
+ * the bus knows this tab tapped a button. */
+var pending = {};
+
 var localState = {
   sliderDrag: {},   // key -> true while user is dragging
   sparklines: {}    // entity|aspect -> {points:[], loaded:bool, loading:bool}
@@ -506,6 +524,12 @@ function handleWsMessage(msg) {
   if (applied === 'state') {
     trackLastSeen(msg.key);
     appendSparklinePoint(msg.key, msg.value);
+    logic.resolveFromState(pending, msg.key); // stage 4: the device answered
+  }
+  if (applied === 'event') {
+    // stages 2 and 3: the arbiter refused it, or an adapter dropped it
+    var outcome = logic.resolveFromEvent(pending, msg.value);
+    if (outcome) announceOutcome(outcome);
   }
   scheduleRender();
 }
@@ -535,16 +559,62 @@ function appendSparklinePoint(key, value) {
 
 // ---- commands ----
 
+/* A command is a proposal passing through stages, and the page shows
+ * which one it is in (issue #94): pending from the tap, then confirmed by
+ * readback, held by the arbiter, rejected by the adapter, or unconfirmed
+ * when nothing answers. The envelope's id, handed back by /api/cmd, is
+ * what ties an event to the command it ended. */
 function sendCmd(room, entity, aspect, value) {
+  var spec = entitySpec(room, entity);
   fetch('/api/cmd', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Homeostat': 'family' },
     body: JSON.stringify({ room: room, entity: entity, aspect: aspect, value: value })
   }).then(function (r) {
     if (!r.ok) return r.text().then(function (t) { throw new Error(t || ('HTTP ' + r.status)); });
+    return r.json();
+  }).then(function (body) {
+    // Stage 1 only: the envelope is on home/cmd, nothing more. An older
+    // dashboard unit that returns no id cannot be tracked, and showing a
+    // pending state that can never resolve is worse than showing none.
+    if (!body || !body.id) return;
+    logic.trackCommand(pending, {
+      id: body.id, room: room, entity: entity, aspect: aspect, value: value,
+      capability: spec ? spec.capability : null
+    }, Date.now());
+    scheduleRender();
   }).catch(function (e) {
+    // Refused before it ever reached the bus: nothing to wait for.
+    clearPending(room, entity, aspect);
     toast(errText(e));
+    scheduleRender();
   });
+}
+
+function entitySpec(room, entity) {
+  var entities = (store.model && store.model.entities) || [];
+  for (var i = 0; i < entities.length; i++) {
+    if (entities[i].room === room && entities[i].name === entity) return entities[i];
+  }
+  return null;
+}
+
+function clearPending(room, entity, aspect) {
+  delete pending[logic.pendingKey(room, entity, aspect)];
+}
+
+/* What the family is told when a command ends somewhere other than the
+ * device. A refusal is deliberately not worded as a failure: the command
+ * was well-formed and simply lost to a higher band, and a retry would
+ * lose identically. */
+function announceOutcome(outcome) {
+  if (outcome.outcome === 'held') {
+    toast('Held by ' + outcome.by + (outcome.actor ? ' (' + outcome.actor + ')' : ''));
+  } else if (outcome.outcome === 'rejected') {
+    toast('Rejected: ' + outcome.reason);
+  } else if (outcome.outcome === 'unconfirmed') {
+    toast('No confirmation from the device');
+  }
 }
 
 function sendLightsOff() {
@@ -769,7 +839,7 @@ function chartPathData(coords) {
 
 function formatChartValue(aspect, v) {
   if (typeof v !== 'number') return String(v);
-  return displayAspectValue(null, aspect || '', v);
+  return logic.formatAspect(aspect || '', null, v);
 }
 
 function formatChartTime(ts) {
@@ -889,15 +959,6 @@ function hideChartTooltip() {
 
 // ---- widget: entity capability rows (shared by Rooms and generic use) ----
 
-function displayAspectValue(entity, aspect, value) {
-  if (typeof value === 'number') {
-    if (aspect.indexOf('temperature') !== -1) return value.toFixed(1) + '°';
-    return value.toFixed(1);
-  }
-  if (typeof value === 'boolean') return value ? 'true' : 'false';
-  return String(value);
-}
-
 // Controls render inert when this dashboard's manifest does not grant the
 // entity's capability (model.commandable): the server refuses such a
 // command anyway, and a live-looking control for it would misreport the
@@ -1016,7 +1077,7 @@ function widgetGeneric(entity) {
   Object.keys(store.state).forEach(function (k) {
     if (k.indexOf(prefix) === 0) {
       var aspect = k.slice(prefix.length);
-      rows.push('<div class="aspect-row">' + esc(aspect) + ': ' + esc(displayAspectValue(entity, aspect, store.state[k])) + '</div>');
+      rows.push('<div class="aspect-row">' + esc(aspect) + ': ' + esc(logic.formatAspect(aspect, null, store.state[k])) + '</div>');
     }
   });
   if (rows.length === 0) rows.push('<div class="aspect-row faint">no data</div>');
@@ -1352,8 +1413,8 @@ function renderParamControl(unitName, pname, p) {
     var slideKey = unitName + '|' + pname;
     var shown = localState.sliderDrag[slideKey] !== undefined ? localState.sliderDrag[slideKey] : value;
     return '<div class="slider-row" style="padding-left:0;">' +
-      '<input type="range" min="' + min + '" max="' + max + '" step="' + step + '" value="' + shown + '" data-action="param-slider" data-unit="' + esc(unitName) + '" data-param="' + esc(pname) + '">' +
-      '<span class="sval">' + shown + '</span></div>';
+      '<input type="range" min="' + esc(min) + '" max="' + esc(max) + '" step="' + step + '" value="' + esc(shown) + '" data-action="param-slider" data-unit="' + esc(unitName) + '" data-param="' + esc(pname) + '">' +
+      '<span class="sval">' + esc(shown) + '</span></div>';
   }
   // string fallback
   return '<input type="text" id="' + id + '" value="' + esc(value === undefined ? '' : value) + '" data-action="param-text" data-unit="' + esc(unitName) + '" data-param="' + esc(pname) + '">';
@@ -1526,6 +1587,46 @@ function render() {
   renderShell();
   renderView();
   if (overlay.open) renderOverlayContent();
+  markPendingControls();
+}
+
+/* The aspect a control commands. Most carry it explicitly; the three
+ * single-aspect actions imply it, and their markup predates this. The
+ * light sliders name theirs `data-kind`. */
+var CONTROL_ASPECTS = {
+  'toggle-light': 'on',
+  'toggle-lock': 'locked',
+  'climate-step': 'setpoint'
+};
+
+function controlAspect(el) {
+  var action = el.getAttribute('data-action');
+  if (CONTROL_ASPECTS[action]) return CONTROL_ASPECTS[action];
+  if (action === 'slider') return el.getAttribute('data-kind');
+  return el.getAttribute('data-aspect');
+}
+
+/* Chrome applied after every render rather than baked into each control's
+ * markup: the views rebuild their HTML wholesale, so the pending state has
+ * to be re-applied to the new nodes anyway, and doing it in one pass keeps
+ * it out of a dozen render paths. */
+function markPendingControls() {
+  var nodes = document.querySelectorAll('[data-action][data-room][data-entity]');
+  for (var i = 0; i < nodes.length; i++) {
+    var el = nodes[i];
+    var aspect = controlAspect(el);
+    if (!aspect) continue;
+    var entry = logic.pendingFor(pending, el.getAttribute('data-room'),
+      el.getAttribute('data-entity'), aspect);
+    // A range input is exempt from the freeze. The missing-feedback
+    // problem is a tap that appears to do nothing; a slider already moves
+    // under the finger, and taking it away mid-gesture is worse than the
+    // silence. It is still tracked, so a refusal or a timeout still says
+    // so.
+    if (el.tagName !== 'INPUT') el.classList.toggle('cmd-pending', !!entry);
+    if (entry) el.setAttribute('aria-busy', 'true');
+    else el.removeAttribute('aria-busy');
+  }
 }
 
 // ---- detail overlay: open/close plumbing ----
@@ -1702,9 +1803,9 @@ function renderAspectControl(entity, r) {
   } else if (c.kind === 'stepper') {
     var canStep = r.numeric && !c.disabled;
     control = '<span class="stepper">' +
-      '<button class="step-btn" data-action="aspect-step"' + attrs + ' data-delta="' + (-c.step) + '"' + (canStep ? '' : ' disabled') + '>&minus;</button>' +
+      '<button class="step-btn" data-action="aspect-step"' + attrs + ' data-delta="' + esc(-c.step) + '"' + (canStep ? '' : ' disabled') + '>&minus;</button>' +
       '<span class="stepper-value">' + esc(r.display) + '</span>' +
-      '<button class="step-btn" data-action="aspect-step"' + attrs + ' data-delta="' + c.step + '"' + (canStep ? '' : ' disabled') + '>+</button></span>';
+      '<button class="step-btn" data-action="aspect-step"' + attrs + ' data-delta="' + esc(c.step) + '"' + (canStep ? '' : ' disabled') + '>+</button></span>';
   } else if (c.kind === 'segment') {
     control = '<div class="seg">' + c.values.map(function (v) {
       return '<button data-action="aspect-enum"' + attrs + ' data-value="' + esc(JSON.stringify(v.value)) + '" class="' + (v.value === r.value ? 'active' : '') + '"' + disabledAttr + '>' + esc(v.label) + '</button>';
@@ -1713,7 +1814,7 @@ function renderAspectControl(entity, r) {
     var slideKey = entity.name + '|' + r.aspect;
     var shown = localState.sliderDrag[slideKey] !== undefined ? localState.sliderDrag[slideKey] : r.value;
     control = '<div class="slider-row" style="padding-left:0;">' +
-      '<input type="range" min="' + c.min + '" max="' + c.max + '" step="' + c.step + '" value="' + esc(shown) + '" data-action="aspect-slider"' + attrs + disabledAttr + '>' +
+      '<input type="range" min="' + esc(c.min) + '" max="' + esc(c.max) + '" step="' + esc(c.step) + '" value="' + esc(shown) + '" data-action="aspect-slider"' + attrs + disabledAttr + '>' +
       '<span class="sval">' + esc(shown) + '</span></div>';
   } else {
     control = value;
@@ -2027,6 +2128,16 @@ document.addEventListener('input', function (e) {
 setInterval(function () {
   if (store.view === 'rooms' || store.view === 'now') scheduleRender();
 }, 30000);
+
+/* Some commands are never answered by anything: the adapter is deaf, the
+ * device is off. "No confirmation" is a real outcome and the page used to
+ * be unable to distinguish it from success. */
+setInterval(function () {
+  var expired = logic.expirePending(pending, Date.now());
+  if (!expired.length) return;
+  expired.forEach(announceOutcome);
+  scheduleRender();
+}, 1000);
 
 // ---- boot ----
 

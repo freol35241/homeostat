@@ -5,7 +5,7 @@ requires-python = ">=3.11"
 [manifest]
 requirements = [
     { name = "aiohttp", specifier = ">=3.12.14,<4" },
-    { name = "homeostat", editable = "../sdk/python" },
+    { name = "homeostat", specifier = "==0.12.0" },
 ]
 
 [[package]]
@@ -281,13 +281,13 @@ wheels = [
 [[package]]
 name = "homeostat"
 version = "0.12.0"
-source = { editable = "../sdk/python" }
+source = { registry = "/opt/homeostat-wheels" }
 dependencies = [
     { name = "eclipse-zenoh" },
 ]
-
-[package.metadata]
-requires-dist = [{ name = "eclipse-zenoh", specifier = "~=1.9" }]
+wheels = [
+    { path = "/opt/homeostat-wheels/homeostat-0.12.0-py3-none-any.whl" },
+]
 
 [[package]]
 name = "idna"

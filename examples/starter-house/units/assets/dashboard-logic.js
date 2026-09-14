@@ -87,7 +87,9 @@
       return 'snapshot';
     }
     if (msg.type === 'aspects') {
-      store.aspects[msg.entity] = msg.value;
+      // null retires a descriptor the adapter no longer publishes
+      if (msg.value === null || msg.value === undefined) delete store.aspects[msg.entity];
+      else store.aspects[msg.entity] = msg.value;
       return 'aspects';
     }
     if (msg.type === 'state') {
@@ -288,6 +290,13 @@
     var tier = cmd.editable_by || 'owner';
     if (tier !== 'family') return { kind: 'readonly', tier: tier };
     var c = cmd.constraint || {};
+    // step/min/max go into attributes and arithmetic: a non-number there
+    // is a malformed descriptor, not a control (the server refuses the
+    // command too).
+    var bounds = [cmd.step, c.min, c.max];
+    for (var i = 0; i < bounds.length; i++) {
+      if (bounds[i] !== undefined && (typeof bounds[i] !== 'number' || !isFinite(bounds[i]))) return null;
+    }
     if (cmd.type === 'enum') {
       return { kind: 'segment', values: field.values || [], disabled: !commandable };
     }
@@ -420,6 +429,113 @@
     return rows;
   }
 
+  /* ---- pending commands (issue #94) ----
+   *
+   * A command is a proposal, not a write. It passes through arbitration,
+   * the adapter's validation and finally the device's own readback, and
+   * each of those can end it. The page used to show nothing at all
+   * between the tap and stage 4, so a slow device looked like a dead
+   * button and the natural response was to tap again.
+   *
+   * Optimistic painting is not the fix: posting an out-of-range value
+   * returns ok and is then dropped at stage 3, so the control would show
+   * a value the house never took. Instead the stages are made visible,
+   * and the envelope's correlation id is what ties an event back to the
+   * command it ended. */
+
+  /* How long to wait for a readback before calling it unconfirmed. There
+   * is no readback cadence on the wire, and the capability is the only
+   * thing the browser knows about a device's class, so it is what the
+   * wait is scaled to: a z2m lamp answers in about a second, a lock waits
+   * on a motor, a burner behind a polling bridge can take half a minute
+   * (issue #94). Generous on purpose — a timeout that fires early reports
+   * a failure that did not happen. */
+  var COMMAND_TIMEOUT_MS = {
+    light: 8000,
+    switch: 8000,
+    lock: 15000,
+    climate: 15000,
+    burner: 60000
+  };
+  var DEFAULT_COMMAND_TIMEOUT_MS = 20000;
+
+  function commandTimeoutMs(capability) {
+    return COMMAND_TIMEOUT_MS[capability] || DEFAULT_COMMAND_TIMEOUT_MS;
+  }
+
+  function pendingKey(room, entity, aspect) {
+    return room + '/' + entity + '/' + aspect;
+  }
+
+  /* One in-flight command per (room, entity, aspect): a second tap on the
+   * same control replaces the first, which is what the user means by it. */
+  function trackCommand(pending, cmd, nowMs) {
+    pending[pendingKey(cmd.room, cmd.entity, cmd.aspect)] = {
+      id: cmd.id,
+      value: cmd.value,
+      at: nowMs,
+      timeoutMs: commandTimeoutMs(cmd.capability),
+      outcome: 'pending'
+    };
+    return pending;
+  }
+
+  function pendingFor(pending, room, entity, aspect) {
+    return pending[pendingKey(room, entity, aspect)] || null;
+  }
+
+  /* Stage 4. Any state update for the commanded aspect resolves it —
+   * including one whose value differs from what was asked, because a
+   * device that clamped the value has still answered. */
+  function resolveFromState(pending, key) {
+    var parts = String(key).split('/');
+    if (parts[0] !== 'home' || parts[1] !== 'state' || parts.length < 5) return null;
+    var pk = pendingKey(parts[2], parts[3], parts[4]);
+    var entry = pending[pk];
+    if (!entry || entry.outcome !== 'pending') return null;
+    delete pending[pk];
+    return { key: pk, outcome: 'confirmed' };
+  }
+
+  /* Stages 2 and 3, both carried by health events and both addressed by
+   * cmd_id. `refuse` is deliberately not a failure: the command was
+   * well-formed and simply lost to a higher band, and the user's next
+   * move differs completely from a retry. An event without a cmd_id
+   * belongs to no command we are tracking. */
+  function resolveFromEvent(pending, event) {
+    if (!event || !event.cmd_id) return null;
+    var keys = Object.keys(pending);
+    for (var i = 0; i < keys.length; i++) {
+      var entry = pending[keys[i]];
+      if (!entry || entry.id !== event.cmd_id) continue;
+      delete pending[keys[i]];
+      if (event.kind === 'refuse') {
+        return {
+          key: keys[i],
+          outcome: 'held',
+          by: event.holder_priority || 'another band',
+          actor: event.holder_actor || null
+        };
+      }
+      return { key: keys[i], outcome: 'rejected', reason: event.reason || 'dropped' };
+    }
+    return null;
+  }
+
+  /* Nothing answered. Not the same as success, and today the page cannot
+   * tell the two apart at all. */
+  function expirePending(pending, nowMs) {
+    var out = [];
+    Object.keys(pending).forEach(function (k) {
+      var entry = pending[k];
+      if (entry && entry.outcome === 'pending' && nowMs - entry.at > entry.timeoutMs) {
+        delete pending[k];
+        out.push({ key: k, outcome: 'unconfirmed' });
+      }
+    });
+    return out;
+  }
+
   return {
     PRESENCE_ASPECTS: PRESENCE_ASPECTS,
     titleCase: titleCase,
@@ -435,6 +551,15 @@
     controlFor: controlFor,
     aspectPlan: aspectPlan,
     cardPlan: cardPlan,
-    sensorCardPlan: sensorCardPlan
+    sensorCardPlan: sensorCardPlan,
+    COMMAND_TIMEOUT_MS: COMMAND_TIMEOUT_MS,
+    DEFAULT_COMMAND_TIMEOUT_MS: DEFAULT_COMMAND_TIMEOUT_MS,
+    commandTimeoutMs: commandTimeoutMs,
+    pendingKey: pendingKey,
+    trackCommand: trackCommand,
+    pendingFor: pendingFor,
+    resolveFromState: resolveFromState,
+    resolveFromEvent: resolveFromEvent,
+    expirePending: expirePending
   };
 });
