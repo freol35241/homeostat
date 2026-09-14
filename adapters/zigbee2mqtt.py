@@ -459,6 +459,7 @@ def main():
             (f"{base}/bridge/devices", 0),
             (f"{base}/bridge/state", 0),
         ],
+        health=session.health_event,
     )
 
     subscribers = [

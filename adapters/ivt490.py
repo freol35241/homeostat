@@ -586,7 +586,7 @@ def main():
             f"{e.id}/controller/state/+",
         )
     ]
-    client = mqtt.connect(endpoint, on_ivt_message, topics)
+    client = mqtt.connect(endpoint, on_ivt_message, topics, health=session.health_event)
 
     subscribers = [
         session.subscribe(expr, cmd_handler(e))
