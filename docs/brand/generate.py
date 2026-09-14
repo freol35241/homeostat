@@ -13,7 +13,7 @@ HOUSE_PTS = [(54, 12), (96, 50), (96, 96), (12, 96), (12, 50)]
 RADIUS = 4
 CURVE = [(24, 84), (36, 84), (36, 44), (47, 44), (58, 44), (58, 66), (66, 68), (72, 69.5), (76, 64), (84, 64)]
 CURVE_W = 7
-LINE = ((24, 64), (84, 64))
+LINE = ((20, 64), (84, 64))
 LINE_W = 5
 
 PINE, PINE_DARK, TRACE, AMBER = "#1F5E4A", "#2A7A61", "#F2EFE6", "#E8A33D"
@@ -82,14 +82,36 @@ def outline(pts, w):
     return "M" + " L".join(f"{x:.1f},{y:.1f}" for x, y in poly) + " Z"
 
 
-def capsule():
+def line_pieces(gap=1.0):
+    """The set point, broken where the response passes over it.
+
+    Even-odd cannot union two holes, so the line yields to the curve: each
+    kept stretch is its own capsule, ending a `gap` short of the curve's edge.
+    Where the response has settled onto the set point the line vanishes under
+    it, which is what the colour mark shows too.
+    """
     (x0, y), (x1, _) = LINE
-    return outline([(x0, y), (x1, y)], LINE_W)
+    curve = sample_curve(120)
+    clear = CURVE_W / 2 + LINE_W / 2 + gap
+    def far(x):
+        return min(math.hypot(x - cx, y - cy) for cx, cy in curve) > clear
+    pieces, start, x = [], None, x0
+    step = 0.25
+    while x <= x1 + 1e-9:
+        if far(x) and start is None:
+            start = x
+        if (not far(x) or x >= x1) and start is not None:
+            end = x if x < x1 else x1
+            if end - start >= LINE_W:
+                pieces.append((start, end))
+            start = None
+        x += step
+    return " ".join(outline([(a, y), (b, y)], LINE_W) for a, b in pieces)
 
 
 HOUSE = house_path()
 CURVE_POLY = outline(sample_curve(), CURVE_W)
-LINE_POLY = capsule()
+LINE_POLY = line_pieces()
 CUTOUT = f"{HOUSE} {CURVE_POLY} {LINE_POLY}"
 
 
