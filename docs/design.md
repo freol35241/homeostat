@@ -1285,6 +1285,30 @@ Decisions and why:
   automation-band writer on every exclusive light. Voice inherits the
   same answer: fast-path grammar → manual-band fan-out at the voice
   edge.
+- **A command's stages are shown, not collapsed (settled 2026-09-14, #94).**
+  A tap used to do nothing visible until the device reported back — a
+  second or two on an MQTT heat pump, half a minute on a burner behind a
+  polling bridge — and the natural response was to tap again. Optimistic
+  painting was rejected: a command is a proposal, not a write, so
+  asserting the device took it is sometimes simply false (an
+  out-of-range setpoint returns `ok` and is then dropped by the adapter,
+  and the control would snap back from a value the house never held).
+  Instead the control goes **pending** from the tap and stops taking
+  taps, and the stage that ends the command resolves it: a readback
+  confirms, an arbiter `refuse` shows **held** by the winning band, an
+  adapter's `invalid-command` drop shows the adapter's own reason, and a
+  timeout says "no confirmation from the device" — a real outcome that
+  was previously indistinguishable from success. A refusal is
+  deliberately not worded as a failure: the command was well-formed and
+  lost to a higher band, and a retry would lose identically. The
+  envelope's `id` is what ties an event to the command it ended; matching
+  on key and value alone crosses wires exactly when an impatient user
+  taps twice. The wait is scaled per capability, because no readback
+  cadence exists on the wire and the capability is the only thing the
+  browser knows about a device's class. Range inputs are exempt from the
+  freeze — a slider already moves under the finger, and taking it away
+  mid-gesture is worse than the silence — but are still tracked, so a
+  refusal or a timeout still says so.
 - **Purely generated from manifests; layout state exists nowhere.**
   Grouping from the entity `room` field and `zones.toml`; entity
   widgets derived from `capability` + `features` (a light with
