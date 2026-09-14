@@ -1,0 +1,26 @@
+schema = 1
+
+[unit]
+name = "companion"
+kind = "adapter"
+description = "Companion app adapter under test"
+
+[runtime]
+command = "uv run ../../adapters/companion.py"
+restart = "always"
+shutdown_grace_s = 5
+env = ["HOMEOSTAT_TEST_MQTT_PORT", "HOMEOSTAT_MQTT_CREDENTIALS"]
+
+[discovery]
+mode = "static"
+endpoint = "mqtt://127.0.0.1:${HOMEOSTAT_TEST_MQTT_PORT}"
+
+[bus.publishes]
+state = { key = "home/state/{room}/{entity}/**" }
+discovery = { key = "home/discovery/companion" }
+
+[bus.subscribes]
+commands = "home/cmd/{room}/{entity}/**"
+
+[entities]
+dir = "entities/companion/"

@@ -96,9 +96,9 @@ pub const VOCABULARY: &[Capability] = &[
     Capability {
         name: "notifier",
         base: Some("message"),
-        aspects: &["alert", "delivered"],
+        aspects: &["alert", "delivered", "acknowledged"],
         notable: None,
-        note: "A channel that reaches a person: a phone, a group chat. `message` and `alert` are commandable strings — the text itself — and two structurally separate delivery paths, granted and policed apart (an alert overrides quiet hours; a message never will). `delivered` is the epoch time the delivery service acknowledged the last message, never a human's receipt. Room `person` for one person's channel, `global` for a group (docs/design.md, Notifications).",
+        note: "A channel that reaches a person: a phone, a group chat. `message` and `alert` are commandable strings — the text itself — and two structurally separate delivery paths, granted and policed apart (an alert overrides quiet hours; a message never will). `delivered` is the epoch time the delivery service acknowledged the last message, never a human's receipt; `acknowledged` is the epoch time the person themselves dismissed it, which only a channel with an app at the far end can report. Room `person` for one person's channel, `global` for a group (docs/design.md, Notifications).",
     },
     Capability {
         name: "person",
