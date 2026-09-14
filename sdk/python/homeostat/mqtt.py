@@ -68,22 +68,36 @@ def credentials(endpoint: ParseResult) -> tuple[str | None, str | None]:
     return entry.get("username"), entry.get("password")
 
 
-def connect(endpoint: ParseResult, on_message, topics, *, timeout: float = 30) -> mqtt.Client:
-    """Builds a VERSION2 paho client wired to `on_message`, connects to
-    `endpoint`, and (re)subscribes `topics` — anything `Client.subscribe`
-    accepts, a topic string or a list of (topic, qos) tuples — on every
-    connect, including reconnects. Blocks until the first SUBACK, raising
-    TimeoutError if the broker never acks within `timeout` seconds.
+def guard(on_message, health=None):
+    """Wraps an adapter's `on_message` in the two failures that would
+    otherwise leave it deaf or silent.
 
-    Starts the network loop in a background thread (`loop_start`); the
-    caller owns the connection from here and is responsible for
-    `client.loop_stop()` / `client.disconnect()` on shutdown.
+    A topic has to become a `str` to be routed, and paho decodes it
+    lazily — `msg.topic` is a property, so a topic that is not valid UTF-8
+    raises at the adapter's first *access* rather than at receive. Forcing
+    the decode here turns that into the same typed `drop` the adapters
+    already emit for a malformed payload, with the raw bytes attached, so
+    a broker feeding an adapter garbage is countable on home/health/{unit}
+    instead of archaeology in a container log.
+
+    `health` takes a Session's `health_event`. Without one the drop still
+    happens but only as a trace, which is what an adapter that never
+    passes it gets today.
     """
-    subscribed = threading.Event()
-    refused: list = []  # a failed CONNACK's reason code, if one arrives
-    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
 
     def guarded(client, userdata, msg):
+        try:
+            _ = msg.topic  # force paho's lazy decode inside the guard
+        except UnicodeDecodeError:
+            if health is None:
+                traceback.print_exc()
+            else:
+                # `_topic` is the undecoded bytes paho keeps; reading it is
+                # the only way to report what actually arrived, and this is
+                # the one place in the estate that touches it.
+                raw = getattr(msg, "_topic", b"")
+                health("drop", reason="malformed-topic", topic=repr(raw)[:120])
+            return
         try:
             on_message(client, userdata, msg)
         except Exception:
@@ -92,6 +106,29 @@ def connect(endpoint: ParseResult, on_message, topics, *, timeout: float = 30) -
             # still says running. Drop the message with a trace instead;
             # the supervisor captures stderr at home/meta/{unit}/log.
             traceback.print_exc()
+
+    return guarded
+
+
+def connect(
+    endpoint: ParseResult, on_message, topics, *, timeout: float = 30, health=None
+) -> mqtt.Client:
+    """Builds a VERSION2 paho client wired to `on_message`, connects to
+    `endpoint`, and (re)subscribes `topics` — anything `Client.subscribe`
+    accepts, a topic string or a list of (topic, qos) tuples — on every
+    connect, including reconnects. Blocks until the first SUBACK, raising
+    TimeoutError if the broker never acks within `timeout` seconds.
+
+    `health` is the Session's `health_event`, used to report a message
+    dropped for an undecodable topic (see `guard`).
+
+    Starts the network loop in a background thread (`loop_start`); the
+    caller owns the connection from here and is responsible for
+    `client.loop_stop()` / `client.disconnect()` on shutdown.
+    """
+    subscribed = threading.Event()
+    refused: list = []  # a failed CONNACK's reason code, if one arrives
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
 
     def on_connect(client, userdata, flags, reason_code, properties=None):
         # paho calls on_connect on a failed CONNACK too (bad credentials,
@@ -103,7 +140,7 @@ def connect(endpoint: ParseResult, on_message, topics, *, timeout: float = 30) -
             return
         client.subscribe(topics)
 
-    client.on_message = guarded
+    client.on_message = guard(on_message, health)
     client.on_connect = on_connect
     client.on_subscribe = lambda *_: subscribed.set()
     username, password = credentials(endpoint)

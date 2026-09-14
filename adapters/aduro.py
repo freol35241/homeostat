@@ -313,7 +313,7 @@ def main():
         for e in config.entities
         for topic in (f"{e.id}/status", f"{e.id}/operating")
     ]
-    client = mqtt.connect(endpoint, on_aduro_message, topics)
+    client = mqtt.connect(endpoint, on_aduro_message, topics, health=session.health_event)
 
     subscribers = [
         session.subscribe(expr, cmd_handler(e))

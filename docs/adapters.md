@@ -285,6 +285,7 @@ trace: one JSON object at `home/health/{unit}/event` via
 | kind | reason / fields | when |
 |---|---|---|
 | `drop` | `reason = "malformed-payload"`, `topic` or `key` | undecodable input from either side |
+| `drop` | `reason = "malformed-topic"`, `topic` (the raw bytes, `repr`-ed) | an MQTT topic that is not valid UTF-8; emitted by the SDK's guard, not the adapter |
 | `drop` | `reason = "invalid-command"`, `key` | bad envelope, unknown aspect, wrong type, out of bounds |
 | `drop` | `reason = "unknown-device"`, `topic` | a device outside the adapter's own view, first sight only |
 | `drop` | `reason = "reserved-aspect"`, `topic` | a native field that would mint `available` |
