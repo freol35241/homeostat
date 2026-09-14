@@ -68,5 +68,27 @@ class EnvelopeTest(unittest.TestCase):
                 keys.parse_cmd_envelope(payload)
 
 
+class CorrelationIdTest(unittest.TestCase):
+    def test_every_built_envelope_carries_one(self):
+        first = keys.cmd_envelope(21.5, "manual", "dashboard")
+        second = keys.cmd_envelope(21.5, "manual", "dashboard")
+        self.assertNotEqual(first["id"], second["id"], "two commands, two ids")
+        self.assertEqual(keys.cmd_envelope_id(first), first["id"])
+
+    def test_a_caller_may_supply_its_own(self):
+        envelope = keys.cmd_envelope(True, "manual", "dashboard", cmd_id="c0ffee01")
+        self.assertEqual(envelope["id"], "c0ffee01")
+
+    def test_an_envelope_without_one_reads_as_none(self):
+        # The id is optional on the wire: a hand-rolled publisher, or an
+        # envelope minted before ids existed, is still a valid command.
+        self.assertIsNone(keys.cmd_envelope_id({"value": 1, "priority": "manual"}))
+        self.assertEqual(keys.parse_cmd_envelope({"value": 1, "priority": "manual"}), 1)
+
+    def test_a_payload_that_is_not_an_object_has_no_id(self):
+        for payload in (None, "on", 42, [1], True):
+            self.assertIsNone(keys.cmd_envelope_id(payload), repr(payload))
+
+
 if __name__ == "__main__":
     unittest.main()

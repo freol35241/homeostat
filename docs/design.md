@@ -253,7 +253,7 @@ bridge from a stable estate and the timer would fire on a healthy one.
 ### Bus payload conventions
 
 Payloads on `state` keys are bare JSON values; `cmd` keys carry the cmd
-envelope `{value, priority, actor}` (see Arbitrated mode).
+envelope `{value, priority, actor, id}` (see Arbitrated mode).
 
 State: a z2m JSON object fans out per top-level field to
 `home/state/{room}/{entity}/{field}`. The z2m `state` field is normalized —
@@ -951,10 +951,21 @@ owner = "zigbee"             # exactly one adapter binds each entity
   grant can never be confused by a subscription, and writers keep
   publishing wishes to `home/cmd` without ever learning whether a target
   is arbitrated. Every cmd payload is an envelope
-  `{value, priority, actor}`: the SDK stamps priority from the unit's own
-  manifest declaration and actor with the unit name, so automation code
+  `{value, priority, actor, id}`: the SDK stamps priority from the unit's
+  own manifest declaration and actor with the unit name, so automation code
   doesn't change; adapters drop envelope-less commands with a health
-  event; the arbiter forwards the envelope unchanged. The write token is
+  event; the arbiter forwards the envelope unchanged.
+
+  `id` (added 2026-09-14, issue #94) is the correlation handle. A command
+  is a proposal, not a write: arbitration may refuse it, an adapter may
+  drop it as out of range, and only a device readback says it took effect.
+  A publisher that wants to show the outcome — the dashboard, for the
+  family — needs to know *which* command an event ended, and matching on
+  key and value alone crosses wires when two commands to one aspect
+  overlap. The SDK mints one per envelope; it is optional on the wire, so
+  a hand-rolled publisher is still valid and its events report `null`. The
+  events that end a command (`refuse`, and `drop` for `invalid-command`)
+  echo it as `cmd_id`. The write token is
   a lease per (arbitrated entity, aspect) — amended 2026-07-18 from
   per-entity when the heat pump showed why: orthogonal control
   dimensions share an entity (the family adjusts `setpoint`, the price

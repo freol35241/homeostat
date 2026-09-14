@@ -66,9 +66,14 @@ class UnitSession:
 
     def parse_command(self, sample: zenoh.Sample):
         """The command prologue every adapter shares (docs/adapters.md, §4):
-        the aspect from the key and the envelope's value from the payload,
-        or None after a drop event — "malformed-payload" for a payload that
-        is not JSON, "invalid-command" for one that is not an envelope."""
+        the aspect, the envelope's value and its correlation id, or None
+        after a drop event — "malformed-payload" for a payload that is not
+        JSON, "invalid-command" for one that is not an envelope.
+
+        The id rides along because an adapter's own later validation (out of
+        range, no such command) ends the same command, and whoever published
+        it is waiting to hear which stage stopped it. A payload that never
+        parsed has no id to report."""
         key = str(sample.key_expr)
         aspect = key.split("/", 4)[4]
         try:
@@ -76,12 +81,13 @@ class UnitSession:
         except ValueError:
             self.health_event("drop", reason="malformed-payload", key=key)
             return None
+        cmd_id = keys.cmd_envelope_id(payload)
         try:
             value = keys.parse_cmd_envelope(payload)
         except ValueError:
-            self.health_event("drop", reason="invalid-command", key=key)
+            self.health_event("drop", reason="invalid-command", key=key, cmd_id=cmd_id)
             return None
-        return aspect, value
+        return aspect, value, cmd_id
 
     def subscribe(self, keyexpr: str, callback: Callable[[zenoh.Sample], None]):
         return self._session.declare_subscriber(keyexpr, callback)

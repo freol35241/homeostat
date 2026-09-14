@@ -441,10 +441,12 @@ def main():
             parsed = session.parse_command(sample)
             if parsed is None:
                 return
-            aspect, value = parsed
+            aspect, value, cmd_id = parsed
             body = command_body(entity, aspect, value, descriptor_fields.get(entity.name, {}))
             if body is None:
-                session.health_event("drop", reason="invalid-command", key=str(sample.key_expr))
+                session.health_event(
+                    "drop", reason="invalid-command", key=str(sample.key_expr), cmd_id=cmd_id
+                )
                 return
             client.publish(f"{base}/{entity.id}/set", json.dumps(body))
 

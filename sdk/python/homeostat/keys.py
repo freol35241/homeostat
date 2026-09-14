@@ -5,6 +5,7 @@ home/health/{unit}[...] and home/meta/{unit}/... for supervision.
 """
 
 import re
+import secrets
 from typing import Any
 
 ENV_UNIT = "HOMEOSTAT_UNIT"
@@ -77,11 +78,31 @@ def command_keyexprs(entity) -> list[str]:
 CMD_PRIORITIES = ("automation", "agent", "family", "manual")
 
 
-def cmd_envelope(value: Any, priority: str, actor: str) -> dict:
+def cmd_envelope(value: Any, priority: str, actor: str, *, cmd_id: str | None = None) -> dict:
     """Builds a home/cmd/** payload (docs/design.md, Arbitrated mode): every
     cmd payload is an envelope, priority stamped from the publishing unit's
-    manifest declaration, actor the unit name."""
-    return {"value": value, "priority": priority, "actor": actor}
+    manifest declaration, actor the unit name.
+
+    `id` correlates one command with whatever ends it. A command is a
+    proposal that passes through stages — arbitration, adapter validation,
+    device readback — and each can legitimately end it somewhere other than
+    the device. Without an id, a publisher watching for the outcome can only
+    guess by matching key and value, which crosses wires when two commands
+    to one aspect overlap. Minted here when the caller does not supply one,
+    so every envelope the SDK builds carries one."""
+    return {
+        "value": value,
+        "priority": priority,
+        "actor": actor,
+        "id": cmd_id or secrets.token_hex(4),
+    }
+
+
+def cmd_envelope_id(payload: Any) -> str | None:
+    """The correlation id of a cmd payload, or None for an envelope minted
+    by something that does not stamp one — the id is optional on the wire,
+    so nothing refuses a command for the lack of it."""
+    return payload.get("id") if isinstance(payload, dict) else None
 
 
 def parse_cmd_envelope(payload: Any) -> Any:

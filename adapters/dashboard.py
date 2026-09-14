@@ -593,7 +593,10 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         # (units/dashboard.toml) — the family always wins over automations.
         envelope = keys.cmd_envelope(value, "manual", "dashboard")
         hub.session.put_json(keys.cmd_key(room, entity, aspect), envelope)
-        return web.json_response({"ok": True})
+        # The id goes back to the browser so the control can show the command
+        # as pending and then resolve it against whatever ends it — a
+        # readback, an arbiter refusal, or an adapter's drop (issue #94).
+        return web.json_response({"ok": True, "id": envelope["id"]})
 
     async def api_lights_off(request: web.Request) -> web.Response:
         # "Darken the whole house": family intent over a set of entities,
