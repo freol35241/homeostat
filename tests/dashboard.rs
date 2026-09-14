@@ -350,10 +350,21 @@ async fn dashboard_serves_the_family_surface() {
         .expect("cmd envelope observed within 10s")
         .expect("sample");
     let envelope: Value = serde_json::from_slice(&cmd_sample.payload().to_bytes()).expect("json");
+    let cmd_id = envelope["id"]
+        .as_str()
+        .expect("envelope carries a correlation id");
     assert_eq!(
         envelope,
-        json!({"value": true, "priority": "manual", "actor": "dashboard"}),
+        json!({"value": true, "priority": "manual", "actor": "dashboard", "id": cmd_id}),
         "the dashboard stamps its own manifest priority and unit name"
+    );
+    // The browser gets that same id back, which is the whole point of it:
+    // the control can show the command pending and then resolve it against
+    // the event that ends it (issue #94).
+    assert_eq!(
+        reply,
+        json!({"ok": true, "id": cmd_id}),
+        "the id the caller is handed is the id that went on the bus"
     );
     let sample = tokio::time::timeout(Duration::from_secs(30), echo.recv_async())
         .await
@@ -493,9 +504,12 @@ async fn dashboard_serves_the_family_surface() {
         .expect("lock cmd envelope observed within 10s")
         .expect("sample");
     let envelope: Value = serde_json::from_slice(&cmd_sample.payload().to_bytes()).expect("json");
+    let cmd_id = envelope["id"]
+        .as_str()
+        .expect("envelope carries a correlation id");
     assert_eq!(
         envelope,
-        json!({"value": true, "priority": "manual", "actor": "dashboard"}),
+        json!({"value": true, "priority": "manual", "actor": "dashboard", "id": cmd_id}),
         "lock command stamps the same manual-band envelope as any other command"
     );
 
@@ -557,9 +571,12 @@ async fn dashboard_serves_the_family_surface() {
         .expect("climate cmd envelope observed within 10s")
         .expect("sample");
     let envelope: Value = serde_json::from_slice(&cmd_sample.payload().to_bytes()).expect("json");
+    let cmd_id = envelope["id"]
+        .as_str()
+        .expect("envelope carries a correlation id");
     assert_eq!(
         envelope,
-        json!({"value": 21.5, "priority": "manual", "actor": "dashboard"}),
+        json!({"value": 21.5, "priority": "manual", "actor": "dashboard", "id": cmd_id}),
         "climate setpoint command stamps the same manual-band envelope, float value intact"
     );
 
@@ -649,9 +666,12 @@ async fn dashboard_serves_the_family_surface() {
         }
     };
     let envelope: Value = serde_json::from_slice(&cmd_sample.payload().to_bytes()).expect("json");
+    let cmd_id = envelope["id"]
+        .as_str()
+        .expect("envelope carries a correlation id");
     assert_eq!(
         envelope,
-        json!({"value": 2, "priority": "manual", "actor": "dashboard"})
+        json!({"value": 2, "priority": "manual", "actor": "dashboard", "id": cmd_id})
     );
     let (status, reply) = http_request(
         &addr,
@@ -1113,9 +1133,12 @@ async fn dashboard_darkens_the_house() {
         .expect("sample");
     assert_eq!(sample.key_expr().as_str(), LAMP_CMD);
     let envelope: Value = serde_json::from_slice(&sample.payload().to_bytes()).expect("json");
+    let cmd_id = envelope["id"]
+        .as_str()
+        .expect("envelope carries a correlation id");
     assert_eq!(
         envelope,
-        json!({"value": false, "priority": "manual", "actor": "dashboard"}),
+        json!({"value": false, "priority": "manual", "actor": "dashboard", "id": cmd_id}),
         "the fan-out is stamped like any other dashboard command"
     );
 

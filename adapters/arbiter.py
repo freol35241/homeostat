@@ -82,6 +82,7 @@ def main():
         if (room, entity) not in arbitrated:
             return  # not arbitrated: its own adapter consumes this wish
 
+        envelope = None
         try:
             envelope = json.loads(sample.payload.to_bytes())
             keys.parse_cmd_envelope(envelope)
@@ -89,8 +90,14 @@ def main():
             if not isinstance(actor, str):
                 raise ValueError("cmd envelope actor is not a string")
         except (ValueError, KeyError):
-            session.health_event("drop", reason="invalid-command", key=key)
+            # A payload that never parsed has no id; one that parsed but is
+            # not an envelope may still carry the id its publisher is
+            # waiting on, and cmd_envelope_id takes either.
+            session.health_event(
+                "drop", reason="invalid-command", key=key, cmd_id=keys.cmd_envelope_id(envelope)
+            )
             return
+        cmd_id = keys.cmd_envelope_id(envelope)
 
         incoming = keys.CMD_PRIORITIES.index(priority)
         with lock:
@@ -113,6 +120,11 @@ def main():
                 }
 
         if action == "refuse":
+            # The one outcome that is neither success nor failure: the
+            # command was well-formed and reached the arbiter, and a higher
+            # band simply holds the aspect. `cmd_id` is what lets whoever
+            # published it say so, instead of waiting out a timeout it was
+            # never going to win.
             session.health_event(
                 "refuse",
                 room=room,
@@ -120,6 +132,7 @@ def main():
                 aspect=aspect,
                 priority=priority,
                 actor=actor,
+                cmd_id=cmd_id,
                 holder_priority=holder["priority"],
                 holder_actor=holder["actor"],
             )

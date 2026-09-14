@@ -407,13 +407,13 @@ def cmd_handler(entity, entity_runtime, entity_lock, loop, session):
         parsed = session.parse_command(sample)
         if parsed is None:
             return
-        aspect, value = parsed
+        aspect, value, cmd_id = parsed
         key = str(sample.key_expr)
 
         with entity_lock:
             target = entity_runtime.get(entity.name)
         if target is None:
-            session.health_event("drop", reason="device-unavailable", key=key)
+            session.health_event("drop", reason="device-unavailable", key=key, cmd_id=cmd_id)
             return
         client, esp_key = target["client"], target["key"]
 

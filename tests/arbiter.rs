@@ -34,8 +34,10 @@ async fn setup() -> (Supervisor, zenoh::Session) {
     (sup, observer)
 }
 
+/// The id is the publisher's correlation handle: the arbiter echoes it on
+/// the events that end a command, so a refusal can be told from a timeout.
 fn envelope(value: Value, priority: &str, actor: &str) -> Value {
-    json!({"value": value, "priority": priority, "actor": actor})
+    json!({"value": value, "priority": priority, "actor": actor, "id": "c0ffee01"})
 }
 
 async fn put_cmd(session: &zenoh::Session, payload: &Value) {
@@ -145,6 +147,7 @@ async fn forward_preempt_refuse_and_expiry() {
             "aspect": "locked",
             "priority": "automation",
             "actor": "scheduler",
+            "cmd_id": "c0ffee01",
             "holder_priority": "manual",
             "holder_actor": "owner",
         })
@@ -274,11 +277,15 @@ async fn malformed_envelope_drops_with_health_event() {
     )
     .await;
 
-    // An envelope with an unknown priority is just as malformed.
+    // An envelope with an unknown priority is just as malformed — but it
+    // parsed far enough to carry an id, and the drop reports it, so the
+    // publisher learns its command died here instead of waiting out a
+    // timeout. The malformed-payload case above cannot: nothing parsed.
     observer
         .put(
             CMD_KEY,
-            json!({"value": true, "priority": "urgent", "actor": "x"}).to_string(),
+            json!({"value": true, "priority": "urgent", "actor": "x", "id": "badbeef0"})
+                .to_string(),
         )
         .await
         .expect("cmd put");
@@ -286,6 +293,7 @@ async fn malformed_envelope_drops_with_health_event() {
         .await
         .expect("invalid-command event");
     assert_eq!(event["reason"], json!("invalid-command"));
+    assert_eq!(event["cmd_id"], json!("badbeef0"));
 
     // Still alive and translating afterwards.
     let ok_wish = envelope(json!(true), "automation", "scheduler");

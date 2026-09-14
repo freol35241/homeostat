@@ -100,9 +100,17 @@ async fn expect_lamp_off(sub: &Sub, timeout: Duration) {
     assert_eq!(sample.key_expr().as_str(), LAMP_CMD);
     let envelope: Value =
         serde_json::from_slice(&sample.payload().to_bytes()).expect("cmd payload is JSON");
+    let cmd_id = envelope["id"]
+        .as_str()
+        .expect("envelope carries a correlation id");
     assert_eq!(
         envelope,
-        json!({"value": false, "priority": "automation", "actor": "evening_lights"}),
+        json!({
+            "value": false,
+            "priority": "automation",
+            "actor": "evening_lights",
+            "id": cmd_id,
+        }),
         "the right command is lights off, correctly stamped"
     );
 }

@@ -542,13 +542,18 @@ def main():
             parsed = session.parse_command(sample)
             if parsed is None:
                 return
-            aspect, value = parsed
+            aspect, value, cmd_id = parsed
             key = str(sample.key_expr)
 
             command = commands_for(entity).get(aspect)
             if command is None:
                 session.health_event(
-                    "drop", reason="invalid-command", key=key, aspect=aspect, value=value
+                    "drop",
+                    reason="invalid-command",
+                    key=key,
+                    aspect=aspect,
+                    value=value,
+                    cmd_id=cmd_id,
                 )
                 return
             field, bounds, retain = command
@@ -559,7 +564,12 @@ def main():
                     or value not in OPERATING_MODES
                 ):
                     session.health_event(
-                        "drop", reason="invalid-command", key=key, aspect=aspect, value=value
+                        "drop",
+                        reason="invalid-command",
+                        key=key,
+                        aspect=aspect,
+                        value=value,
+                        cmd_id=cmd_id,
                     )
                     return
                 body = str(value)
@@ -569,7 +579,12 @@ def main():
                     lo <= value <= hi
                 ):
                     session.health_event(
-                        "drop", reason="invalid-command", key=key, aspect=aspect, value=value
+                        "drop",
+                        reason="invalid-command",
+                        key=key,
+                        aspect=aspect,
+                        value=value,
+                        cmd_id=cmd_id,
                     )
                     return
                 body = str(float(value))

@@ -202,7 +202,9 @@ Per command:
 
 1. Decode JSON; on failure drop with `malformed-payload`.
 2. `keys.parse_cmd_envelope(payload)`; on `ValueError` drop with
-   `invalid-command`.
+   `invalid-command`. `session.parse_command(sample)` does steps 1-2 and
+   hands back `(aspect, value, cmd_id)`; carry that `cmd_id` into every
+   drop below, because each one ends a command someone is waiting on.
 3. Check the aspect is one the entity takes: the capability's base
    aspect, its declared `features`, or a dialect knob this adapter
    documents. Anything else drops with `invalid-command`.
@@ -286,10 +288,10 @@ trace: one JSON object at `home/health/{unit}/event` via
 |---|---|---|
 | `drop` | `reason = "malformed-payload"`, `topic` or `key` | undecodable input from either side |
 | `drop` | `reason = "malformed-topic"`, `topic` (the raw bytes, `repr`-ed) | an MQTT topic that is not valid UTF-8; emitted by the SDK's guard, not the adapter |
-| `drop` | `reason = "invalid-command"`, `key` | bad envelope, unknown aspect, wrong type, out of bounds |
+| `drop` | `reason = "invalid-command"`, `key`, `cmd_id` | bad envelope, unknown aspect, wrong type, out of bounds |
 | `drop` | `reason = "unknown-device"`, `topic` | a device outside the adapter's own view, first sight only |
 | `drop` | `reason = "reserved-aspect"`, `topic` | a native field that would mint `available` |
-| `drop` | `reason = "device-unavailable"`, `key` | a command dropped because the device is down |
+| `drop` | `reason = "device-unavailable"`, `key`, `cmd_id` | a command dropped because the device is down |
 | `drop` | `reason = "invalid-feed"`, `input`, `key`, `value` | a fed value outside its bounds |
 | `drop` | `reason = "feed-source-unavailable"`, `input`, `key` | a fed value arriving while its source is unavailable (once per outage) |
 | `device-silent` / `bridge-silent` | `topic` or `base_topic`, `timeout_s` | a loss transition (once per transition) |
