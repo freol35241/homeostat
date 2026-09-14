@@ -460,3 +460,103 @@ test('a sensor card keeps a stale reading, flagged, and never a foreign entity',
   assert.equal(rows.find((r) => r.aspect === 'temperature').stale, true);
   assert.ok(!rows.some((r) => r.aspect === 'indoor_temperature'));
 });
+
+// ---- pending commands (issue #94) ----
+
+function cmd(overrides) {
+  return Object.assign(
+    { id: 'c0ffee01', room: 'livingroom', entity: 'lamp', aspect: 'on', value: true, capability: 'light' },
+    overrides || {}
+  );
+}
+
+test('the timeout is scaled to the capability, not one global constant', () => {
+  // The spread the issue measured: a z2m lamp answers in about a second,
+  // a burner behind a polling bridge can take half a minute.
+  assert.ok(logic.commandTimeoutMs('burner') > logic.commandTimeoutMs('light'));
+  assert.equal(logic.commandTimeoutMs('climate'), logic.COMMAND_TIMEOUT_MS.climate);
+  assert.equal(logic.commandTimeoutMs('no-such-capability'), logic.DEFAULT_COMMAND_TIMEOUT_MS);
+});
+
+test('a tracked command is pending until something ends it', () => {
+  const pending = logic.trackCommand({}, cmd(), 1000);
+  const entry = logic.pendingFor(pending, 'livingroom', 'lamp', 'on');
+  assert.equal(entry.outcome, 'pending');
+  assert.equal(entry.id, 'c0ffee01');
+  assert.equal(entry.value, true);
+  assert.equal(logic.pendingFor(pending, 'livingroom', 'lamp', 'brightness'), null);
+});
+
+test('a readback confirms it', () => {
+  const pending = logic.trackCommand({}, cmd(), 1000);
+  const done = logic.resolveFromState(pending, 'home/state/livingroom/lamp/on');
+  assert.equal(done.outcome, 'confirmed');
+  assert.equal(logic.pendingFor(pending, 'livingroom', 'lamp', 'on'), null);
+});
+
+test('a readback for another aspect leaves it pending', () => {
+  const pending = logic.trackCommand({}, cmd(), 1000);
+  assert.equal(logic.resolveFromState(pending, 'home/state/livingroom/lamp/brightness'), null);
+  assert.equal(logic.pendingFor(pending, 'livingroom', 'lamp', 'on').outcome, 'pending');
+});
+
+test('a device that clamped the value has still answered', () => {
+  // Resolution is "the aspect reported", not "the aspect reported what I
+  // asked" — otherwise a clamped setpoint hangs pending until it times out
+  // and reports a failure that did not happen.
+  const pending = logic.trackCommand({}, cmd({ aspect: 'setpoint', value: 99, capability: 'climate' }), 1000);
+  const done = logic.resolveFromState(pending, 'home/state/livingroom/lamp/setpoint');
+  assert.equal(done.outcome, 'confirmed');
+});
+
+test('an arbiter refusal is held, not failed, and names the band', () => {
+  const pending = logic.trackCommand({}, cmd(), 1000);
+  const done = logic.resolveFromEvent(pending, {
+    kind: 'refuse', cmd_id: 'c0ffee01', holder_priority: 'manual', holder_actor: 'owner'
+  });
+  assert.equal(done.outcome, 'held');
+  assert.equal(done.by, 'manual');
+  assert.equal(done.actor, 'owner');
+  assert.equal(logic.pendingFor(pending, 'livingroom', 'lamp', 'on'), null);
+});
+
+test("an adapter's drop is a rejection carrying the adapter's own reason", () => {
+  const pending = logic.trackCommand({}, cmd(), 1000);
+  const done = logic.resolveFromEvent(pending, {
+    kind: 'drop', reason: 'invalid-command', cmd_id: 'c0ffee01'
+  });
+  assert.equal(done.outcome, 'rejected');
+  assert.equal(done.reason, 'invalid-command');
+});
+
+test('an event for a different command leaves ours alone', () => {
+  // The reason the envelope carries an id at all: two commands to one
+  // aspect must not resolve each other.
+  const pending = logic.trackCommand({}, cmd(), 1000);
+  assert.equal(logic.resolveFromEvent(pending, { kind: 'refuse', cmd_id: 'somethingelse' }), null);
+  assert.equal(logic.resolveFromEvent(pending, { kind: 'refuse' }), null);
+  assert.equal(logic.pendingFor(pending, 'livingroom', 'lamp', 'on').outcome, 'pending');
+});
+
+test('a second tap replaces the first, and the stale id no longer resolves', () => {
+  let pending = logic.trackCommand({}, cmd(), 1000);
+  pending = logic.trackCommand(pending, cmd({ id: 'second', value: false }), 2000);
+  assert.equal(logic.pendingFor(pending, 'livingroom', 'lamp', 'on').id, 'second');
+  assert.equal(logic.resolveFromEvent(pending, { kind: 'refuse', cmd_id: 'c0ffee01' }), null);
+});
+
+test('nothing answering expires, and is not reported as success', () => {
+  const pending = logic.trackCommand({}, cmd(), 1000);
+  const timeout = logic.COMMAND_TIMEOUT_MS.light;
+  assert.deepEqual(logic.expirePending(pending, 1000 + timeout), []);
+  const expired = logic.expirePending(pending, 1000 + timeout + 1);
+  assert.equal(expired.length, 1);
+  assert.equal(expired[0].outcome, 'unconfirmed');
+  assert.equal(logic.pendingFor(pending, 'livingroom', 'lamp', 'on'), null);
+});
+
+test('a slow device is not expired on a fast device timeout', () => {
+  const pending = logic.trackCommand({}, cmd({ entity: 'burner', aspect: 'power_level', capability: 'burner' }), 1000);
+  assert.deepEqual(logic.expirePending(pending, 1000 + logic.COMMAND_TIMEOUT_MS.light + 1), []);
+  assert.equal(logic.expirePending(pending, 1000 + logic.COMMAND_TIMEOUT_MS.burner + 1).length, 1);
+});
