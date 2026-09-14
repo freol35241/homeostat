@@ -344,7 +344,10 @@ async fn setpoint_is_retained_and_the_expiring_offset_is_not() {
         seen.push(message);
     }
 
-    let setpoint: Vec<_> = seen.iter().filter(|(t, _)| t == SETPOINT_SET_TOPIC).collect();
+    let setpoint: Vec<_> = seen
+        .iter()
+        .filter(|(t, _)| t == SETPOINT_SET_TOPIC)
+        .collect();
     assert_eq!(
         setpoint.len(),
         1,
