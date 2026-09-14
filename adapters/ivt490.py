@@ -82,7 +82,19 @@ translate to their {base}/controller/set/{field} topics as stringified
 floats; "operating_mode" — the GT3_2 boiler-sensor emulation — is
 strictly the integer 1, 2 or 3 (1=BAU normal, 2=BLOCK suppress heating,
 3=BOOST force heating; src/Controller.h, OperatingMode) and translates to
-{base}/controller/set/operating_mode as an integer string. The firmware's
+{base}/controller/set/operating_mode as an integer string.
+
+⚠️ THE SETPOINT IS PUBLISHED RETAINED AND THE OTHER THREE ARE NOT. The
+firmware gives indoor_temperature_target no `valid` predicate — it is a
+stored decision, not a control input that expires — and its default on a
+reboot is 20 degC. A retained slot is redelivered when the board
+reconnects, so a reboot or a lost write repairs itself. The expiring
+values must NOT be retained: a writer that deliberately goes quiet relies
+on the firmware dropping its value, and a retained copy re-applied on the
+next reconnect would turn that designed failure into a stuck one. See
+COMMANDS.
+
+The firmware's
 fifth set topic, controller/set/indoor_temperature_actual, is NOT a command
 aspect: it is a sensor-feedback input, a continuous signal with one master
 rather than contestable intent (docs/design.md, "Device feeds"). It and
@@ -224,12 +236,45 @@ FEEDABLE = {
 }
 
 # Commandable aspect -> ({base}/controller/set/{field}, (min, max) for the
-# float aspects, or None for the strictly-enumerated operating_mode.
+# float aspects or None for the strictly-enumerated operating_mode, RETAIN).
+#
+# ⚠️ THE RETAIN FLAG IS PER ASPECT AND IT IS NOT A PREFERENCE. It follows a
+# distinction the firmware itself makes, visible in what it publishes back:
+#
+#   feed_temperature_target      {"value": 0,     "valid": false}
+#   indoor_temperature_feedback  {"value": 18.84, "valid": true}
+#   outdoor_temperature_offset   {"value": 0.013, "valid": true}
+#   indoor_temperature_target    {"value": 19}                     <- no `valid`
+#
+# GENERAL_CONTROL_VALUES_VALIDITY expires the timestamped ones. The setpoint
+# carries no validity predicate because it does not go stale: it is a stored
+# decision, and "19.5, set four days ago" is exactly as true as one set a
+# minute ago.
+#
+# So the setpoint is RETAINED and the expiring control values are NOT:
+#
+# - Retained setpoint. The board's firmware default is 20 degC, and a reboot
+#   silently adopts it. At the reporting house that board reboots DAILY on an
+#   uptime timer, so a non-retained setpoint is lost every day with nothing to
+#   restore it; the retained slot is redelivered on the board's reconnect and
+#   repairs itself. A write lost in transit -- which happens -- likewise heals
+#   on the next reconnect instead of being lost forever.
+#
+# - ⚠️ NOT the others, AND THIS DIRECTION IS THE DANGEROUS ONE. An automation
+#   that refuses (stale inputs, a dead price feed) relies on the firmware
+#   expiring its offset so the pump falls back to curve control. A retained
+#   offset would be redelivered on the next reconnect and silently re-applied
+#   AFTER the writer had deliberately stopped, converting a designed failure
+#   into a stuck value. Those aspects are kept fresh by their writer's cadence,
+#   which is the correct mechanism for something that expires.
+#
+# The same reasoning is why fed inputs are published non-retained and have
+# their retained slot actively cleared -- see the feed handler.
 COMMANDS = {
-    "setpoint": ("indoor_temperature_target", (10.0, 30.0)),
-    "feed_temperature_target": ("feed_temperature_target", (20.0, 60.0)),
-    "outdoor_temperature_offset": ("outdoor_temperature_offset", (-10.0, 10.0)),
-    "operating_mode": ("operating_mode", None),
+    "setpoint": ("indoor_temperature_target", (10.0, 30.0), True),
+    "feed_temperature_target": ("feed_temperature_target", (20.0, 60.0), False),
+    "outdoor_temperature_offset": ("outdoor_temperature_offset", (-10.0, 10.0), False),
+    "operating_mode": ("operating_mode", None, False),
 }
 
 # The aspect descriptor (docs/design.md, Aspect descriptors) this adapter
@@ -322,7 +367,7 @@ def aspect_descriptor(entity) -> dict:
     commands for (commands_for: a fed input has one master, so it is
     described but not commandable)."""
     fields = {aspect: dict(field) for aspect, field in ASPECT_FIELDS.items()}
-    for aspect, (_field, bounds) in commands_for(entity).items():
+    for aspect, (_field, bounds, _retain) in commands_for(entity).items():
         command = {"type": "enum" if bounds is None else "float", "editable_by": COMMAND_TIER[aspect]}
         if bounds is not None:
             command["constraint"] = {"min": bounds[0], "max": bounds[1]}
@@ -506,7 +551,7 @@ def main():
                     "drop", reason="invalid-command", key=key, aspect=aspect, value=value
                 )
                 return
-            field, bounds = command
+            field, bounds, retain = command
             if bounds is None:
                 if (
                     isinstance(value, bool)
@@ -528,7 +573,7 @@ def main():
                     )
                     return
                 body = str(float(value))
-            client.publish(f"{entity.id}/controller/set/{field}", body)
+            client.publish(f"{entity.id}/controller/set/{field}", body, retain=retain)
 
         return handler
 

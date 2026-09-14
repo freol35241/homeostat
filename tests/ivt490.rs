@@ -26,6 +26,8 @@ const AVAILABLE_KEY: &str = "home/state/utility/heatpump/available";
 const FEED_SOURCE_KEY: &str = "home/state/global/indoor_temperature/temperature";
 const FEED_SOURCE_AVAILABLE_KEY: &str = "home/state/global/indoor_temperature/available";
 const FEED_SET_TOPIC: &str = "ivt490_1/controller/set/indoor_temperature_actual";
+const OFFSET_CMD_KEY: &str = "home/cmd/utility/heatpump/outdoor_temperature_offset";
+const OFFSET_SET_TOPIC: &str = "ivt490_1/controller/set/outdoor_temperature_offset";
 
 /// Spawns broker + supervisor on the fixture and waits for the adapter's
 /// liveliness token (generous timeout: first run resolves the uv env).
@@ -291,6 +293,71 @@ async fn manual_setpoint_reaches_mqtt_via_arbiter_then_automation_refused() {
     assert!(
         silence.is_none(),
         "refused automation wish reached MQTT: {silence:?}"
+    );
+
+    sup.shutdown();
+}
+
+/// (b1) The retain flag is per aspect, and the two directions are asserted
+/// in one run against one broker so neither can pass for the other.
+///
+/// The setpoint is RETAINED: the firmware gives indoor_temperature_target no
+/// validity predicate and defaults it to 20 degC on reboot, so the retained
+/// slot is what restores a deliberate setting after the board restarts or
+/// after a write is lost. A late subscriber must therefore be handed it.
+///
+/// The outdoor offset is NOT retained, and that is the load-bearing half: it
+/// expires by design, so a writer that deliberately goes quiet lets the pump
+/// fall back to curve control. A retained copy would be re-applied on the
+/// next reconnect and turn that designed failure into a stuck value. The same
+/// late subscriber must see nothing for it.
+#[tokio::test(flavor = "multi_thread")]
+async fn setpoint_is_retained_and_the_expiring_offset_is_not() {
+    let (mosquitto, mut sup, observer) = setup().await;
+    let mut arbiter_watch = health_watch(&observer, "arbiter").await;
+    await_health(&mut arbiter_watch, Duration::from_secs(60), |h| {
+        h.status == HealthStatus::Running
+    })
+    .await;
+
+    let mut mqtt = Mqtt::connect(mosquitto.port, "test-retain").await;
+    mqtt.subscribe(&format!("{BASE}/controller/set/+")).await;
+
+    // Command both aspects at the same band, so the only difference between
+    // them is the retain decision under test.
+    for (key, value) in [(SETPOINT_CMD_KEY, 21.5), (OFFSET_CMD_KEY, 3.5)] {
+        let wish = json!({"value": value, "priority": "manual", "actor": "test"});
+        observer.put(key, wish.to_string()).await.expect("cmd put");
+        mqtt.next_message(Duration::from_secs(10))
+            .await
+            .expect("command reached its set topic");
+    }
+
+    // ONE late subscriber for both topics: if it receives nothing at all the
+    // probe proved nothing, so the setpoint it must receive is this run's own
+    // positive control.
+    let mut late = Mqtt::connect(mosquitto.port, "test-retain-late").await;
+    late.subscribe(&format!("{BASE}/controller/set/+")).await;
+
+    let mut seen: Vec<(String, Vec<u8>)> = Vec::new();
+    while let Some(message) = late.next_message(Duration::from_millis(1500)).await {
+        seen.push(message);
+    }
+
+    let setpoint: Vec<_> = seen
+        .iter()
+        .filter(|(t, _)| t == SETPOINT_SET_TOPIC)
+        .collect();
+    assert_eq!(
+        setpoint.len(),
+        1,
+        "the setpoint must be retained for a reconnecting board: {seen:?}"
+    );
+    assert_eq!(setpoint[0].1, b"21.5");
+
+    assert!(
+        !seen.iter().any(|(t, _)| t == OFFSET_SET_TOPIC),
+        "an expiring control value must NOT be retained: {seen:?}"
     );
 
     sup.shutdown();

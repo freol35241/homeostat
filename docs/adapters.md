@@ -354,6 +354,31 @@ it into `entity.inputs`. Rules:
   slot once and report `feed-source-lost`. Never retain a fed value.
 - An unknown input name in an entity file is a startup error.
 
+### Retaining a command
+
+Whether a command is published retained is a per-aspect decision, and the
+device tells you which it is: **does the device expire this value?**
+
+- **It expires** (a timestamped control input, a validity window, a
+  watchdog) — **do not retain it.** It is kept current by its writer's
+  cadence, and expiry is what lets a writer refuse. An automation that
+  goes quiet on stale inputs relies on the device dropping its value and
+  falling back to a safe default; a retained copy, redelivered when the
+  device reconnects, is re-applied *after* the writer deliberately
+  stopped, turning a designed failure into a stuck one. A fed input is
+  the strongest case of this and is covered above.
+- **It does not expire** (a stored setting, a mode, a setpoint) —
+  **retain it.** It is a decision, and a decision has no freshness: "set
+  four days ago" is as true as "set a minute ago". Retaining it means a
+  device that reboots to a firmware default, or that missed the write,
+  repairs itself on reconnect instead of silently sitting wrong.
+
+Adapters routinely have both kinds on one device, so the flag belongs
+beside each aspect's other properties rather than at the publish site.
+Test both directions in one run: a late subscriber that receives the
+retained aspect *and* does not receive the expiring one. A test that only
+asserts the absence can pass because nothing was published at all.
+
 ## 10. Testing
 
 Adapters are tested end to end against the real supervisor and a real
