@@ -25,6 +25,11 @@ Test control rides plain HTTP on the same port, out of the SOAP path:
   POST /control/break -> invalidate every subscription: the next
        PullMessages/Renew on an old address gets a SOAP fault, forcing
        the adapter to resubscribe
+  POST /control/chunked -> send every later SOAP reply with
+       Transfer-Encoding: chunked, split across two TCP writes. Real
+       cameras stream their replies; aiohttp's `web.Response` does not,
+       so without this the adapter is only ever tested against a body
+       that arrives in one piece.
 """
 
 import argparse
@@ -43,15 +48,43 @@ WSNT_NS = "http://docs.oasis-open.org/wsn/b-2"
 ONVIF_SCHEMA = "http://www.onvif.org/ver10/schema"
 
 
-def soap(body: str) -> web.Response:
-    return web.Response(
-        text=(
-            f'<s:Envelope xmlns:s="{SOAP_ENV}" xmlns:tev="{EVENTS_NS}"'
-            f' xmlns:wsnt="{WSNT_NS}" xmlns:tt="{ONVIF_SCHEMA}">'
-            f"<s:Body>{body}</s:Body></s:Envelope>"
-        ),
-        content_type="application/soap+xml",
+def envelope(body: str) -> str:
+    return (
+        f'<s:Envelope xmlns:s="{SOAP_ENV}" xmlns:tev="{EVENTS_NS}"'
+        f' xmlns:wsnt="{WSNT_NS}" xmlns:tt="{ONVIF_SCHEMA}">'
+        f"<s:Body>{body}</s:Body></s:Envelope>"
     )
+
+
+def soap(body: str) -> web.Response:
+    return web.Response(text=envelope(body), content_type="application/soap+xml")
+
+
+# Where the chunked reply below is cut. Anywhere inside the document does;
+# this lands in the opening tag, so a client that stops at the first chunk
+# fails to parse rather than quietly getting a shorter document.
+CHUNK_AT = 24
+
+
+async def soap_chunked(request: web.Request, body: str) -> web.StreamResponse:
+    """The same envelope, chunked across two TCP writes with a pause
+    between them — what a camera's own HTTP stack does, and what
+    `web.Response` cannot express. A client reading "up to n bytes" once
+    sees only the first chunk."""
+    # charset included, as web.Response(text=...) does it: the client reads
+    # the encoding off this header, and omitting it changes more than the
+    # framing, which is the one thing this is meant to vary.
+    response = web.StreamResponse(
+        headers={"Content-Type": "application/soap+xml; charset=utf-8"}
+    )
+    response.enable_chunked_encoding()
+    await response.prepare(request)
+    raw = envelope(body).encode()
+    await response.write(raw[:CHUNK_AT])
+    await asyncio.sleep(0.05)
+    await response.write(raw[CHUNK_AT:])
+    await response.write_eof()
+    return response
 
 
 def fault() -> web.Response:
@@ -86,6 +119,14 @@ class FakeCamera:
         self.reject_renew = False
         self.break_on_renew = False
         self.created = 0
+        # Whether SOAP replies stream (see soap_chunked).
+        self.chunked = False
+
+    async def reply(self, request: web.Request, body: str) -> web.StreamResponse:
+        """One SOAP reply, chunked or not as /control/chunked says."""
+        if self.chunked:
+            return await soap_chunked(request, body)
+        return soap(body)
 
     def authenticated(self, root: ElementTree.Element) -> bool:
         token = root.find(".//{*}UsernameToken")
@@ -105,7 +146,7 @@ class FakeCamera:
             return False
         return username == self.username and digest == expected
 
-    async def device_service(self, request: web.Request) -> web.Response:
+    async def device_service(self, request: web.Request) -> web.StreamResponse:
         root = ElementTree.fromstring(await request.text())
         if not self.authenticated(root):
             return web.Response(status=401)
@@ -116,17 +157,18 @@ class FakeCamera:
         self.created += 1
         # A deliberately unroutable netloc: the adapter must keep the
         # configured host and trust only the path.
-        return soap(
+        return await self.reply(
+            request,
             "<tev:CreatePullPointSubscriptionResponse>"
             "<tev:SubscriptionReference>"
             f"<wsnt:Address>http://192.0.2.1:9999/onvif/{sub_id}</wsnt:Address>"
             "</tev:SubscriptionReference>"
             f"<wsnt:CurrentTime>{now()}</wsnt:CurrentTime>"
             f"<wsnt:TerminationTime>{now()}</wsnt:TerminationTime>"
-            "</tev:CreatePullPointSubscriptionResponse>"
+            "</tev:CreatePullPointSubscriptionResponse>",
         )
 
-    async def subscription(self, request: web.Request) -> web.Response:
+    async def subscription(self, request: web.Request) -> web.StreamResponse:
         root = ElementTree.fromstring(await request.text())
         if not self.authenticated(root):
             return web.Response(status=401)
@@ -151,9 +193,10 @@ class FakeCamera:
                     ),
                     content_type="application/soap+xml",
                 )
-            return soap(
+            return await self.reply(
+                request,
                 f"<wsnt:RenewResponse><wsnt:TerminationTime>{now()}</wsnt:TerminationTime>"
-                "</wsnt:RenewResponse>"
+                "</wsnt:RenewResponse>",
             )
         if root.find(f".//{{{EVENTS_NS}}}PullMessages") is None:
             return fault()
@@ -164,12 +207,13 @@ class FakeCamera:
                 messages.append(queue.get_nowait())
         except asyncio.TimeoutError:
             pass
-        return soap(
+        return await self.reply(
+            request,
             "<tev:PullMessagesResponse>"
             f"<tev:CurrentTime>{now()}</tev:CurrentTime>"
             f"<tev:TerminationTime>{now()}</tev:TerminationTime>"
             f"{''.join(notification(v) for v in messages)}"
-            "</tev:PullMessagesResponse>"
+            "</tev:PullMessagesResponse>",
         )
 
     async def trigger(self, request: web.Request) -> web.Response:
@@ -177,6 +221,10 @@ class FakeCamera:
         for queue in self.subscriptions.values():
             queue.put_nowait(value)
         return web.json_response({"subscriptions": len(self.subscriptions)})
+
+    async def chunk_replies(self, request: web.Request) -> web.Response:
+        self.chunked = True
+        return web.json_response({"chunked": True})
 
     async def break_on_renews(self, request: web.Request) -> web.Response:
         self.break_on_renew = True
@@ -211,6 +259,7 @@ def main() -> None:
     app.router.add_post("/control/reject-renew", camera.reject_renews)
     app.router.add_post("/control/stats", camera.stats)
     app.router.add_post("/control/break-on-renew", camera.break_on_renews)
+    app.router.add_post("/control/chunked", camera.chunk_replies)
     web.run_app(app, host="127.0.0.1", port=args.port, print=None)
 
 

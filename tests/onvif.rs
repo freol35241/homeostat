@@ -499,3 +499,31 @@ async fn repeated_notifications_publish_one_transition() {
 
     sup.shutdown();
 }
+
+/// (i) A camera that streams its SOAP replies is read whole. Real ONVIF
+/// firmware answers with `Transfer-Encoding: chunked`, and aiohttp's
+/// `content.read(n)` hands back only what is buffered — the first chunk —
+/// so a single read truncates the envelope mid-document and every reply
+/// fails to parse. Every other test here passes against a body that
+/// arrives in one piece, which is exactly why the one-shot read looked
+/// correct; VP52's two cameras failed continuously on v0.12.0 with
+/// "unparseable response: unclosed token: line 2, column 0".
+///
+/// The chunking is switched on mid-run, after motion has already been
+/// proved to work, so the assertion is about the framing and nothing else.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_chunked_soap_reply_is_read_whole() {
+    let (camera, _cameras_path, mut sup, observer) = setup().await;
+    let state_sub = observer
+        .declare_subscriber(MOTION_KEY)
+        .await
+        .expect("state subscriber");
+
+    // The control: unchunked, motion arrives.
+    trigger_until_motion(&camera, &state_sub, &observer, true).await;
+
+    camera.control("/control/chunked");
+    trigger_until_motion(&camera, &state_sub, &observer, false).await;
+
+    sup.shutdown();
+}
