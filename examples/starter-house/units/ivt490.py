@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "homeostat==0.12.0",
+#     "homeostat==0.12.1",
 #     "paho-mqtt>=2,<3",
 # ]
 # ///
@@ -110,7 +110,7 @@ input name the adapter does not know is a configuration error and the
 unit refuses to start, which the supervisor makes visible. Bounds are
 adapter constants — device physics, not
 house config (setpoint 10-30 degC, feed_temperature_target 20-60 degC,
-outdoor_temperature_offset +/-10 K): a wrong-type or out-of-range command
+outdoor_temperature_offset +/-50 K): a wrong-type or out-of-range command
 DROPS with an "invalid-command" health event carrying the offending
 aspect and value, never clamped. A malformed or envelope-less command
 (keys.parse_cmd_envelope) drops the same way, like every other adapter.
@@ -224,12 +224,20 @@ ASPECT_OVERRIDES = {
 # (src/Controller.h, OperatingMode): 1=BAU, 2=BLOCK, 3=BOOST.
 OPERATING_MODES = (1, 2, 3)
 
+# The outdoor-temperature offset's bound, in kelvin, shared by the command
+# aspect and the feedable input. The firmware has no range check of its
+# own: the offset is added verbatim to the outdoor reading and the NTC
+# emulator saturates at the ends of its digipot (roughly -33 degC to a
+# readback of ~130 degC), so this bound is the only refusal in the chain
+# and must admit anything the firmware can act on.
+OFFSET_BOUNDS = (-50.0, 50.0)
+
 # Device inputs an entity file may wire to a source (docs/design.md, Device
 # feeds). Values forwarded as floats within the same physical bounds as the
 # matching command where one exists.
 FEEDABLE = {
     "indoor_temperature_actual": (-50.0, 60.0),
-    "outdoor_temperature_offset": (-10.0, 10.0),
+    "outdoor_temperature_offset": OFFSET_BOUNDS,
 }
 
 # Commandable aspect -> ({base}/controller/set/{field}, (min, max) for the
@@ -270,7 +278,7 @@ FEEDABLE = {
 COMMANDS = {
     "setpoint": ("indoor_temperature_target", (10.0, 30.0), True),
     "feed_temperature_target": ("feed_temperature_target", (20.0, 60.0), False),
-    "outdoor_temperature_offset": ("outdoor_temperature_offset", (-10.0, 10.0), False),
+    "outdoor_temperature_offset": ("outdoor_temperature_offset", OFFSET_BOUNDS, False),
     "operating_mode": ("operating_mode", None, False),
 }
 
