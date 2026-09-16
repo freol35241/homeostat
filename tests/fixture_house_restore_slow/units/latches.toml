@@ -1,0 +1,20 @@
+schema = 1
+
+[unit]
+name = "latches"
+kind = "automation"
+description = "A house-mode latch that restores its decision across a core restart"
+
+[runtime]
+command = "uv run units/latches.py"
+restart = "on-failure"
+shutdown_grace_s = 5
+
+[bus.subscribes]
+commands = "home/cmd/{room}/{entity}/**"
+
+[bus.publishes]
+state = { key = "home/state/{room}/{entity}/on" }
+
+[entities]
+dir = "entities/latches/"

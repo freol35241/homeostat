@@ -32,7 +32,7 @@ import tomllib
 import zenoh
 
 from . import house, keys
-from .session import QueryError, UnitSession
+from .session import QueryError, QueryTimeout, UnitSession
 
 
 def context(root: str | Path = ".") -> "Context":
@@ -42,6 +42,8 @@ def context(root: str | Path = ".") -> "Context":
 # The recorder's store description: the one history selector that answers
 # whether it is up, whatever the store happens to hold.
 _HISTORY_STATS = "home/history/stats"
+# How long one poll of the recorder waits before it is tried again.
+_RECORDER_POLL_S = 2.0
 
 
 def _dedup(exprs: Iterable[str]) -> list[str]:
@@ -356,11 +358,18 @@ class Context:
         # it holds), so waiting on the series itself would stall every
         # first start for the whole timeout. `stats` describes the store
         # and always answers while the recorder is up.
+        #
+        # A get that times out is the recorder not answering YET -- the
+        # very case this loop exists for -- so it keeps waiting; only a
+        # recorder answering with an error gives up. Each get is kept short
+        # so the loop, not zenoh's 10 s default, decides how long to wait.
         deadline = time.monotonic() + timeout_s
         while True:
             try:
-                if self._session.get_json(_HISTORY_STATS):
+                if self._session.get_json(_HISTORY_STATS, timeout_s=_RECORDER_POLL_S):
                     break
+            except QueryTimeout:
+                pass
             except QueryError as err:
                 failed(str(err))
                 return None

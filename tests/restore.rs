@@ -114,3 +114,20 @@ async fn a_latch_restores_its_decision_across_a_core_restart() {
     sup.shutdown();
     let _ = std::fs::remove_file(&db);
 }
+
+/// The incident from #102, reproduced: the recorder is up but not answering
+/// yet, and `restore` must wait for it rather than take the first timed-out
+/// get as the answer. The stand-in recorder holds every query for 12 s —
+/// past zenoh's 10 s default get timeout — before answering from its one
+/// row, so a `restore` that gives up on a timeout publishes the code
+/// default (false) and the row (true) never reaches the mirror; one that
+/// keeps polling until its own deadline restores it.
+#[tokio::test(flavor = "multi_thread")]
+async fn restore_waits_out_a_recorder_that_is_slow_to_answer() {
+    let mut sup = Supervisor::spawn("tests/fixture_house_restore_slow");
+    let observer = sup.observer().await;
+
+    await_mirror(&observer, LATCH, &json!(true)).await;
+
+    sup.shutdown();
+}

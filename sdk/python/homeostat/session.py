@@ -32,6 +32,12 @@ class QueryError(Exception):
     "limit: 0 is not positive", "store unavailable: ...")."""
 
 
+class QueryTimeout(QueryError):
+    """A get ran out of time before every queryable had answered. Zenoh
+    delivers this as an error reply too, but it is the queryable not
+    answering yet, not the queryable saying no."""
+
+
 class UnitSession:
     def __init__(self, unit: str, endpoint: str):
         self.unit = unit
@@ -95,23 +101,36 @@ class UnitSession:
     def declare_queryable(self, keyexpr: str, callback: Callable[[zenoh.Query], None]):
         return self._session.declare_queryable(keyexpr, callback)
 
-    def get_json(self, selector: str) -> list[tuple[str, Any]]:
+    def get_json(
+        self, selector: str, *, timeout_s: float | None = None
+    ) -> list[tuple[str, Any]]:
         """Queries the bus, returning (key, decoded JSON) per ok reply."""
-        return [(key, value) for key, value, _ in self.get_json_aged(selector)]
+        return [
+            (key, value)
+            for key, value, _ in self.get_json_aged(selector, timeout_s=timeout_s)
+        ]
 
-    def get_json_aged(self, selector: str) -> list[tuple[str, Any, float]]:
+    def get_json_aged(
+        self, selector: str, *, timeout_s: float | None = None
+    ) -> list[tuple[str, Any, float]]:
         """Queries the bus, returning (key, decoded JSON, age in seconds)
         per ok reply. The age is the reply's attachment as the core's
         last-value mirrors write it; a reply without one is age zero.
-        Non-JSON payloads are ignored, as a subscriber ignores them."""
+        Non-JSON payloads are ignored, as a subscriber ignores them.
+        `timeout_s` bounds the wait for replies (zenoh's default, 10 s,
+        when None); running out raises QueryTimeout."""
         values = []
-        for reply in self._session.get(selector):
+        for reply in self._session.get(selector, timeout=timeout_s):
             sample = reply.ok
             if sample is None:
                 # An error reply is the queryable saying no; swallowing it
                 # would read as an empty result.
                 if (err := reply.err) is not None:
                     text = err.payload.to_bytes().decode(errors="replace")
+                    # Zenoh reports its own timeout as an error reply with
+                    # this exact payload; there is no other signal for it.
+                    if text == "Timeout":
+                        raise QueryTimeout(text)
                     try:
                         decoded = json.loads(text)
                     except ValueError:
