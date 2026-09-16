@@ -26,9 +26,13 @@ Test control (plain HTTP, out of the JSON-RPC path):
   - POST /control/station?mac=..&present=true|false
   - POST /control/break                     every /ubus call becomes HTTP 500
   - POST /control/restore
+  - POST /control/chunked                   every later /ubus reply is sent
+        with Transfer-Encoding: chunked, split across two TCP writes
 """
 
 import argparse
+import asyncio
+import json
 import secrets
 import time
 
@@ -40,7 +44,13 @@ STATE = {
     "wg_handshake_age": 5,
     "stations": set(),
     "broken": False,
+    "chunked": False,
 }
+
+# Where a chunked reply is cut. Anywhere inside the document does; this
+# lands inside the opening object, so a client that stops at the first
+# chunk fails to decode rather than quietly getting a shorter one.
+CHUNK_AT = 12
 
 
 def make_app(username: str, password: str) -> web.Application:
@@ -71,7 +81,28 @@ def make_app(username: str, password: str) -> web.Application:
             return [0, {"wg0": {"peers": [{"public_key": "pk", "latest_handshake": handshake}]}}]
         return [2]  # UBUS_STATUS_INVALID_COMMAND
 
-    async def ubus(request: web.Request) -> web.Response:
+    async def reply(request: web.Request, payload: dict) -> web.StreamResponse:
+        """One ubus reply, chunked or not as /control/chunked says.
+
+        A real ubus answers with Content-Length, which arrives in one
+        piece; a reverse proxy in front of it need not, and any chunked
+        reply is what a client reading "up to n bytes" once truncates.
+        See CHUNK_AT."""
+        if not STATE["chunked"]:
+            return web.json_response(payload)
+        response = web.StreamResponse(
+            headers={"Content-Type": "application/json; charset=utf-8"}
+        )
+        response.enable_chunked_encoding()
+        await response.prepare(request)
+        raw = json.dumps(payload).encode()
+        await response.write(raw[:CHUNK_AT])
+        await asyncio.sleep(0.05)
+        await response.write(raw[CHUNK_AT:])
+        await response.write_eof()
+        return response
+
+    async def ubus(request: web.Request) -> web.StreamResponse:
         if STATE["broken"]:
             return web.Response(status=500, text="internal error")
         body = await request.json()
@@ -83,10 +114,10 @@ def make_app(username: str, password: str) -> web.Application:
             args = params[3] if len(params) > 3 else {}
             result = call(req_sid, obj, obj_method, args)
         else:
-            return web.json_response(
-                {"jsonrpc": "2.0", "id": body.get("id"), "error": {"code": -32601}}
+            return await reply(
+                request, {"jsonrpc": "2.0", "id": body.get("id"), "error": {"code": -32601}}
             )
-        return web.json_response({"jsonrpc": "2.0", "id": body.get("id"), "result": result})
+        return await reply(request, {"jsonrpc": "2.0", "id": body.get("id"), "result": result})
 
     async def control(request: web.Request) -> web.Response:
         action = request.match_info["action"]
@@ -107,6 +138,8 @@ def make_app(username: str, password: str) -> web.Application:
             STATE["broken"] = True
         elif action == "restore":
             STATE["broken"] = False
+        elif action == "chunked":
+            STATE["chunked"] = True
         else:
             return web.Response(status=404)
         return web.Response(text="ok")

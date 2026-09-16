@@ -72,6 +72,9 @@ class UbusError(Exception):
 # A ubus reply is a small JSON document; a compromised or misbehaving
 # router must not pin the unit's memory on an oversized one.
 MAX_RESPONSE_BYTES = 1024 * 1024
+# How much of the body one read takes. Only a buffer size: the cap above
+# is what bounds memory, and it is checked after every chunk.
+RESPONSE_CHUNK_BYTES = 64 * 1024
 
 
 async def ubus_rpc(http: aiohttp.ClientSession, url: str, method: str, params: list):
@@ -85,10 +88,21 @@ async def ubus_rpc(http: aiohttp.ClientSession, url: str, method: str, params: l
         ) as response:
             if response.status != 200:
                 raise UbusError(f"HTTP {response.status}")
-            raw = await response.content.read(MAX_RESPONSE_BYTES + 1)
-            if len(raw) > MAX_RESPONSE_BYTES:
-                raise UbusError(f"response exceeds {MAX_RESPONSE_BYTES} bytes")
-            data = json.loads(raw)
+            # ⚠️ READ UNTIL EOF, NOT ONCE. `content.read(n)` returns
+            # whatever is buffered, up to n -- for a chunked reply that is
+            # the FIRST CHUNK, so a single read truncates the document and
+            # every decode fails. rpcd itself answers with Content-Length,
+            # which is why this has not bitten here; a proxy in front of it
+            # need not, and the onvif adapter carried the identical read
+            # against firmware that does stream. The cap is still enforced,
+            # now after each chunk, which is also where it belongs -- it
+            # must not depend on how the body happens to be framed.
+            raw = bytearray()
+            async for chunk in response.content.iter_chunked(RESPONSE_CHUNK_BYTES):
+                raw += chunk
+                if len(raw) > MAX_RESPONSE_BYTES:
+                    raise UbusError(f"response exceeds {MAX_RESPONSE_BYTES} bytes")
+            data = json.loads(bytes(raw))
     except aiohttp.ClientError as err:
         raise UbusError(str(err)) from err
     except asyncio.TimeoutError as err:

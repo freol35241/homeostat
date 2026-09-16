@@ -255,3 +255,33 @@ async fn unreachable_router_drops_once_and_recovers() {
 
     sup.shutdown();
 }
+
+/// (e) A router whose replies stream is read whole. aiohttp's
+/// `content.read(n)` hands back only what is buffered — the first chunk of
+/// a chunked reply — so a single read truncates the JSON and every decode
+/// fails. rpcd itself answers with Content-Length, which is why this has
+/// never bitten in production here; the identical read in the onvif
+/// adapter faced firmware that does stream, and took both of VP52's
+/// cameras down on v0.12.0. The fix belongs to both call sites, so the
+/// test does too.
+///
+/// Chunking is switched on mid-run, after presence has already been proved
+/// to work, so the assertion is about the framing and nothing else.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_chunked_ubus_reply_is_read_whole() {
+    let (router, _routers_path, mut sup, observer) = setup().await;
+    let presence_sub = observer
+        .declare_subscriber(PRESENCE_KEY)
+        .await
+        .expect("presence subscriber");
+
+    // The control: unchunked, presence follows the station.
+    router.control(&format!("/control/station?mac={PHONE_MAC}&present=true"));
+    expect_state(&presence_sub, json!(true)).await;
+
+    router.control("/control/chunked");
+    router.control(&format!("/control/station?mac={PHONE_MAC}&present=false"));
+    expect_state(&presence_sub, json!(false)).await;
+
+    sup.shutdown();
+}

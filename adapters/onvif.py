@@ -196,6 +196,9 @@ def fault_detail(text: str) -> str:
 # A PullMessages reply is a few KB; a misbehaving camera must not pin
 # the unit's memory on an oversized one.
 MAX_RESPONSE_BYTES = 1024 * 1024
+# How much of the body one read takes. Only a buffer size: the cap above
+# is what bounds memory, and it is checked after every chunk.
+RESPONSE_CHUNK_BYTES = 64 * 1024
 
 
 async def soap_call(
@@ -217,10 +220,20 @@ async def soap_call(
             headers={"Content-Type": "application/soap+xml; charset=utf-8"},
             timeout=aiohttp.ClientTimeout(total=HTTP_TIMEOUT_S),
         ) as response:
-            raw = await response.content.read(MAX_RESPONSE_BYTES + 1)
-            if len(raw) > MAX_RESPONSE_BYTES:
-                raise SoapError(f"{op}: response exceeds {MAX_RESPONSE_BYTES} bytes")
-            text = raw.decode(response.get_encoding(), errors="replace")
+            # ⚠️ READ UNTIL EOF, NOT ONCE. `content.read(n)` returns
+            # whatever is buffered, up to n -- for a chunked reply that is
+            # the FIRST CHUNK, so a single read truncates mid-document and
+            # every parse fails with "unclosed token". Cameras stream their
+            # replies; aiohttp's own test responses do not, which is why a
+            # one-shot read looked correct. The cap is still enforced, now
+            # after each chunk, which is also where it belongs -- it must
+            # not depend on how the body happens to be framed.
+            raw = bytearray()
+            async for chunk in response.content.iter_chunked(RESPONSE_CHUNK_BYTES):
+                raw += chunk
+                if len(raw) > MAX_RESPONSE_BYTES:
+                    raise SoapError(f"{op}: response exceeds {MAX_RESPONSE_BYTES} bytes")
+            text = bytes(raw).decode(response.get_encoding(), errors="replace")
             if response.status != 200:
                 raise SoapError(f"{op}: HTTP {response.status}: {fault_detail(text)}")
     except aiohttp.ClientError as err:
