@@ -1461,11 +1461,15 @@ the exploration that produced it):
   the arbitrated-mode sentence. All commands ride the arbiter; the
   family's manual setpoint wins.
 - **Bounds live in the adapter**, as constants (setpoint 10–30 °C, feed
-  target 20–60 °C, outdoor offset ±10 K): device physics is dialect
+  target 20–60 °C, outdoor offset ±50 K): device physics is dialect
   knowledge, not house config. Out-of-range commands DROP with an
   invalid-command health event, never silently clamp — same ethos as
-  every other adapter, and defense in depth over the firmware's own
-  clamps.
+  every other adapter. The firmware itself has no clamps: it stores each
+  control value verbatim and the outdoor-NTC emulator saturates at the
+  ends of its digipot, so the adapter's bounds are the only refusal in
+  the chain and must be wide enough for what the firmware can act on.
+  (The offset was ±10 K through 0.12.0, a figure with no source; a
+  house's flow routinely wrote +13…+21 and lost every such write.)
 - **Dashboard v1**: a minimal climate widget — setpoint with ±0.5 °C
   steppers at the manual band, current temperature readout when the
   normalized aspects are present; expert knobs stay read-only in the
