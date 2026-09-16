@@ -1468,9 +1468,8 @@ the exploration that produced it):
   control value verbatim and the outdoor-NTC emulator saturates at the
   ends of its digipot, so the adapter's bounds are the only refusal in
   the chain and must be wide enough for what the firmware can act on.
-  The offset was ±10 K until 0.13.0, a figure with no source; the
-  reporting house's flow routinely wrote +13…+21 (confirmed by the
-  pump's own readback) and the port of it lost every such write.
+  (The offset was ±10 K through 0.12.0, a figure with no source; a
+  house's flow routinely wrote +13…+21 and lost every such write.)
 - **Dashboard v1**: a minimal climate widget — setpoint with ±0.5 °C
   steppers at the manual band, current temperature readout when the
   normalized aspects are present; expert knobs stay read-only in the
