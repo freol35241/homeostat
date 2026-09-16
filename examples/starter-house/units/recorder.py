@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "homeostat==0.12.0",
+#     "homeostat==0.12.1",
 # ]
 # ///
 """Recorder service: history end to end (see docs/design.md, step 5a).
