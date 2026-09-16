@@ -503,6 +503,67 @@ async fn out_of_range_setpoint_drops_with_invalid_command_event() {
     sup.shutdown();
 }
 
+/// (c1) The outdoor offset's bound is +/-50 K, not the +/-10 K it was
+/// through 0.12.0. The firmware has no range check of its own -- it adds the
+/// offset to the outdoor reading and the NTC emulator saturates at the ends
+/// of its digipot -- so the adapter's bound is the only refusal in the chain
+/// and it has to admit what the firmware can act on. The reporting house's
+/// automation writes flue/15 + 15*fraction, unclamped; its replaced flow was
+/// read back by the pump at +20.7, and under +/-10 the port lost every such
+/// write.
+///
+/// +16.0 is the value that matters: refused by the old bound, routine for
+/// the flow, and here the positive control -- it must reach MQTT in the same
+/// run that +60.0 is refused, or the refusal proves nothing.
+#[tokio::test(flavor = "multi_thread")]
+async fn offset_bound_admits_the_flow_and_refuses_nonsense() {
+    let (mosquitto, mut sup, observer) = setup().await;
+    let mut arbiter_watch = health_watch(&observer, "arbiter").await;
+    await_health(&mut arbiter_watch, Duration::from_secs(60), |h| {
+        h.status == HealthStatus::Running
+    })
+    .await;
+
+    let event_sub = observer
+        .declare_subscriber(EVENT_KEY)
+        .await
+        .expect("event subscriber");
+    let mut mqtt = Mqtt::connect(mosquitto.port, "test-offset-bound").await;
+    mqtt.subscribe(OFFSET_SET_TOPIC).await;
+
+    // The control: a burner-and-price push the old bound refused.
+    let wish = json!({"value": 16.0, "priority": "manual", "actor": "test"});
+    observer
+        .put(OFFSET_CMD_KEY, wish.to_string())
+        .await
+        .expect("cmd put");
+    let (topic, payload) = mqtt
+        .next_message(Duration::from_secs(10))
+        .await
+        .expect("+16.0 must reach the pump's set topic");
+    assert_eq!(topic, OFFSET_SET_TOPIC);
+    assert_eq!(payload, b"16.0");
+
+    // Beyond anything the emulator can represent: refused, with the event.
+    let wish = json!({"value": 60.0, "priority": "manual", "actor": "test"});
+    observer
+        .put(OFFSET_CMD_KEY, wish.to_string())
+        .await
+        .expect("cmd put");
+
+    let event = expect_drop_event(&event_sub, "invalid-command").await;
+    assert_eq!(event["aspect"], json!("outdoor_temperature_offset"));
+    assert_eq!(event["value"], json!(60.0));
+
+    let silence = mqtt.next_message(Duration::from_millis(1500)).await;
+    assert!(
+        silence.is_none(),
+        "out-of-range offset reached MQTT: {silence:?}"
+    );
+
+    sup.shutdown();
+}
+
 /// (c') operating_mode is strictly the integer 1, 2 or 3: a valid mode
 /// rides the arbiter to MQTT as an integer string, an out-of-enum integer
 /// and a non-integer both drop with the invalid-command event and never

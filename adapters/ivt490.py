@@ -113,7 +113,8 @@ input name the adapter does not know is a configuration error and the
 unit refuses to start, which the supervisor makes visible. Bounds are
 adapter constants — device physics, not
 house config (setpoint 10-30 degC, feed_temperature_target 20-60 degC,
-outdoor_temperature_offset +/-10 K): a wrong-type or out-of-range command
+outdoor_temperature_offset +/-50 K -- see OFFSET_BOUNDS for why that one
+is wide): a wrong-type or out-of-range command
 DROPS with an "invalid-command" health event carrying the offending
 aspect and value, never clamped. A malformed or envelope-less command
 (keys.parse_cmd_envelope) drops the same way, like every other adapter.
@@ -227,12 +228,38 @@ ASPECT_OVERRIDES = {
 # (src/Controller.h, OperatingMode): 1=BAU, 2=BLOCK, 3=BOOST.
 OPERATING_MODES = (1, 2, 3)
 
+# The outdoor-temperature offset's bound, in kelvin, shared by the command
+# aspect and the feedable input.
+#
+# ⚠️ THIS WAS +/-10 UNTIL 0.13.0, AND THAT NUMBER WAS INVENTED. The firmware
+# has no range check on this input at all: Controller::set_outdoor_temperature_
+# offset stores the float verbatim, get_control_values adds it to the
+# filtered outdoor reading (plus the weight-10 indoor correction), and the
+# only limit anywhere is the digipot emulating the outdoor NTC, whose wiper
+# fraction is capped to [0, 1] -- roughly -33 degC at one end and, at the
+# other, a resistance the pump reads back as ~130 degC. Out of range there
+# means "saturate quietly", never "refuse".
+#
+# The reporting house's automation is built on that: its offset is
+# flue_temperature/15 + 15*price_fraction, unclamped, and a lit burner alone
+# puts the first term at +7 to +15. The pump's own readback recorded +20.7
+# from the flow this adapter replaced; under the +/-10 bound, 890 of that
+# automation's writes were dropped in its first 60 hours, every one of them a
+# large positive push in an expensive hour -- and a dropped write is not a
+# smaller correction, it is none, so the pump fell back to curve control at
+# exactly the moments the rule exists for.
+#
+# +/-50 is wide enough for anything the firmware can act on (an outdoor
+# reading of -30..+35 plus the emulator's whole range) and still refuses a
+# unit that publishes nonsense.
+OFFSET_BOUNDS = (-50.0, 50.0)
+
 # Device inputs an entity file may wire to a source (docs/design.md, Device
 # feeds). Values forwarded as floats within the same physical bounds as the
 # matching command where one exists.
 FEEDABLE = {
     "indoor_temperature_actual": (-50.0, 60.0),
-    "outdoor_temperature_offset": (-10.0, 10.0),
+    "outdoor_temperature_offset": OFFSET_BOUNDS,
 }
 
 # Commandable aspect -> ({base}/controller/set/{field}, (min, max) for the
@@ -273,7 +300,7 @@ FEEDABLE = {
 COMMANDS = {
     "setpoint": ("indoor_temperature_target", (10.0, 30.0), True),
     "feed_temperature_target": ("feed_temperature_target", (20.0, 60.0), False),
-    "outdoor_temperature_offset": ("outdoor_temperature_offset", (-10.0, 10.0), False),
+    "outdoor_temperature_offset": ("outdoor_temperature_offset", OFFSET_BOUNDS, False),
     "operating_mode": ("operating_mode", None, False),
 }
 
