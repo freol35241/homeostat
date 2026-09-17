@@ -309,7 +309,10 @@
     }
     if (cmd.type === 'float' || cmd.type === 'int') {
       if (cmd.step) {
-        var kind = field.kind === 'temperature' ? 'dial' : 'stepper';
+        // a dial is an arc from min to max: without both bounds there is
+        // no arc to draw, and the stepper is the honest control
+        var bounded = typeof c.min === 'number' && typeof c.max === 'number' && c.max > c.min;
+        var kind = field.kind === 'temperature' && bounded ? 'dial' : 'stepper';
         return { kind: kind, step: cmd.step, min: c.min, max: c.max, disabled: !commandable };
       }
       var min = c.min !== undefined ? c.min : 0, max = c.max !== undefined ? c.max : 100;

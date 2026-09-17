@@ -320,6 +320,8 @@ test('richer controls: a select past four values, a stepper for non-temperatures
   assert.equal(enumOf(4).kind, 'segment');
   assert.equal(enumOf(5).kind, 'select');
   assert.equal(logic.controlFor({ kind: 'number', command: { type: 'float', step: 1, editable_by: 'family' } }, true).kind, 'stepper');
+  assert.equal(logic.controlFor({ kind: 'temperature', command: { type: 'float', step: 0.5, editable_by: 'family' } }, true).kind, 'stepper',
+    'a temperature without bounds has no arc: a stepper');
   const pct = logic.controlFor({ kind: 'percent', command: { type: 'float', constraint: { min: 0, max: 100 }, editable_by: 'family' } }, true);
   assert.equal(pct.kind, 'slider');
   assert.equal(pct.coarse, 5, 'a percent nudges by five');

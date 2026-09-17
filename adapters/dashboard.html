@@ -216,9 +216,9 @@ h1.view-title { font-size: 20px; margin: 0 0 16px; }
 /* slider row */
 .slider-row { display: flex; align-items: center; gap: 12px; padding: 6px 0 6px 18px; font-size: 12px; }
 .slider-row .slabel { flex: 0 0 70px; color: var(--secondary); }
-.slider-row .sval { flex: 0 0 60px; text-align: right; color: var(--ink); font-variant-numeric: tabular-nums; }
+.slider-row .sval { flex: 0 0 auto; min-width: 40px; text-align: right; color: var(--ink); font-variant-numeric: tabular-nums; }
 
-input[type=range] { flex: 1; -webkit-appearance: none; appearance: none; width: 100%; height: 2px;
+input[type=range] { flex: 1 1 40px; min-width: 40px; -webkit-appearance: none; appearance: none; height: 2px;
   background: var(--border); border-radius: 1px; outline: none; }
 input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%;
   background: var(--accent); cursor: pointer; border: 2px solid var(--card); box-shadow: 0 1px 2px rgba(0,0,0,.2); }
@@ -2461,7 +2461,9 @@ document.addEventListener('change', function (e) {
   if (!el.matches) return;
 
   if (el.matches('[data-action="aspect-select"]')) {
-    sendCmd(el.getAttribute('data-room'), el.getAttribute('data-entity'), el.getAttribute('data-aspect'), JSON.parse(el.value));
+    var chosen;
+    try { chosen = JSON.parse(el.value); } catch (err) { return; } // a descriptor value that is not JSON is not a command
+    sendCmd(el.getAttribute('data-room'), el.getAttribute('data-entity'), el.getAttribute('data-aspect'), chosen);
     return;
   }
   if (el.matches('[data-action="param-select"]')) {
