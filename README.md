@@ -346,7 +346,11 @@ reachable from a browser). The map over person entities (OwnTracks,
 self-hosted tiles) is settled design, not yet built. Details:
 [design record §Dashboard](docs/design.md#dashboard-settled-2026-07-15).
 
-![The dashboard's Now view, desktop and phone: signal tiles, people, the map, and the deviations feed](docs/wireframes/wireframe-hybrid-now.svg)
+![The dashboard on a desktop and a phone: a "Downstairs" view composed in dashboard.toml — the evening-lights automation's card with its setpoint, the lamp it drives and the sensors it reads, beside the room cards — and the phone's "Now" with signal tiles, people and the deviations feed](docs/screenshots/dashboard.png)
+
+*Every pixel above is generated from the house's text: the views from
+`dashboard.toml`, the cards from manifests and entity files, the
+automation's Drives/From from the grant table and its subscriptions.*
 
 ## Status
 
