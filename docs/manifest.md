@@ -300,8 +300,8 @@ places something, it never describes how it looks.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `aspect` | string | no | `chart`: the aspect charted; `tile`: narrows the tiles to one reading (every reading otherwise). A key segment (`dashboard-invalid-aspect`). |
-| `entity` | string | no | `tile`, `chart`, `entity`: the entity, by name. |
+| `aspect` | string | no | `chart`: the aspect charted; `tile`: narrows the tiles to one reading (every reading otherwise); `dial`: the temperature command to turn (the first one, or the climate setpoint, otherwise). A key segment (`dashboard-invalid-aspect`). |
+| `entity` | string | no | `tile`, `chart`, `entity`, `dial`: the entity, by name. |
 | `hours` | number | no | `chart`: the window in hours (24 when absent). |
 | `kind` | [WidgetKind](#widgetkind) | yes |  |
 | `room` | string | no | `room`: the room whose card to place. |
@@ -315,6 +315,7 @@ house's text, the grant table and the bus; no widget carries markup.
 - `tile` — A signal tile per reading of an entity: the value big, today's range under it.
 - `chart` — One aspect's history over a window.
 - `entity` — An entity's own row — its control or its readings — as a card.
+- `dial` — A thermostat dial: a temperature setpoint on an arc, the current reading beneath it.
 - `room` — A room's card: every entity in the room.
 - `unit` — A unit's card: its family setpoints, the entities it publishes, the entities it drives (from the grant table) and the entities it reads (from its subscriptions) — a pure function of its manifest.
 - `params` — A unit's family-editable parameters as one card.

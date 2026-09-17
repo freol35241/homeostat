@@ -618,7 +618,7 @@ fn check_dashboard(house: &House, errors: &mut Vec<ValidationError>) {
 /// against what it carries; None when they agree.
 fn widget_fields_message(widget: &WidgetSpec) -> Option<String> {
     let (required, optional): (&[&str], &[&str]) = match widget.kind {
-        WidgetKind::Tile => (&["entity"], &["aspect"]),
+        WidgetKind::Tile | WidgetKind::Dial => (&["entity"], &["aspect"]),
         WidgetKind::Chart => (&["entity", "aspect"], &["hours"]),
         WidgetKind::Entity => (&["entity"], &[]),
         WidgetKind::Room => (&["room"], &[]),

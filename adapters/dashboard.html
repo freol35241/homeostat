@@ -250,6 +250,23 @@ input[type=range]::-moz-range-track { background: var(--border); height: 2px; bo
   padding: 6px 12px; font-size: 12px; cursor: pointer; min-height: 32px; transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease; }
 .seg button:hover { border-color: var(--muted); }
 .seg button.active { background: var(--accent-tint); color: var(--accent); border-color: var(--accent); font-weight: 600; }
+select.control { border: 1px solid var(--border); background: var(--card); color: var(--ink); border-radius: 6px;
+  padding: 7px 10px; font-size: 13px; min-height: 32px; max-width: 100%; }
+/* a slider with its value and a coarse ± pair — the range moves under the finger, the buttons for a nudge */
+.slider-row .step-btn { flex: 0 0 auto; }
+/* thermostat dial: the target on an arc from min to max, the reading under it */
+.dial { position: relative; width: 168px; margin: 8px auto 0; }
+.dial svg { display: block; width: 100%; height: auto; }
+.dial-track { fill: none; stroke: var(--border); stroke-width: 7; stroke-linecap: round; }
+.dial-arc { fill: none; stroke: var(--accent); stroke-width: 7; stroke-linecap: round; }
+.dial-knob { fill: var(--card); stroke: var(--accent); stroke-width: 3; }
+.dial-readout { position: absolute; left: 0; right: 0; top: 34%; text-align: center; pointer-events: none; }
+.dial-target { font-size: 28px; font-weight: 650; font-variant-numeric: tabular-nums; line-height: 1.1; }
+.dial-current { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.dial-buttons { display: flex; justify-content: space-between; padding: 0 22px; margin-top: -26px; position: relative; }
+.dial-buttons .step-btn { width: 34px; height: 34px; font-size: 17px; }
+.dial-row { display: flex; flex-direction: column; align-items: stretch; }
+.dial-row .aspect-label { align-self: flex-start; }
 input[type=text], input[type=time] { border: 1px solid var(--border); background: var(--card); color: var(--ink);
   border-radius: 6px; padding: 8px 10px; font-size: 13px; }
 
@@ -1099,9 +1116,12 @@ function widgetForLight(entity) {
     var bkey = entity.room + '/' + entity.name + '/brightness';
     var pct = typeof b === 'number' ? Math.round((b / 254) * 100) : 0;
     if (localState.sliderDrag[bkey] !== undefined) pct = localState.sliderDrag[bkey];
+    var nudgeAttrs = ' data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '"' + (inert || typeof b !== 'number' ? ' disabled' : '');
     html += '<div class="slider-row entity-sub"><span class="slabel">brightness</span>' +
+      '<button class="step-btn" data-action="brightness-step"' + nudgeAttrs + ' data-delta="-10" aria-label="dimmer">&minus;</button>' +
       '<input type="range" min="0" max="100" value="' + pct + '"' + (inert ? ' disabled' : '') + ' data-action="slider" data-kind="brightness" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '">' +
-      '<span class="sval">' + pct + '%</span></div>';
+      '<span class="sval">' + pct + '%</span>' +
+      '<button class="step-btn" data-action="brightness-step"' + nudgeAttrs + ' data-delta="10" aria-label="brighter">+</button></div>';
   }
   if (entity.features && entity.features.indexOf('color_temp') !== -1) {
     var ct = stateValue(entity.room, entity.name, 'color_temp');
@@ -1137,7 +1157,7 @@ function widgetForLock(entity) {
     '</div>';
 }
 
-function widgetForClimate(entity) {
+function widgetForClimate(entity, big) {
   var setpoint = stateValue(entity.room, entity.name, 'setpoint');
   var hasSetpoint = typeof setpoint === 'number';
   var readout = hasSetpoint ? setpoint.toFixed(1) + '°' : '—';
@@ -1148,6 +1168,14 @@ function widgetForClimate(entity) {
   if (typeof feed === 'number') nowParts.push(feed.toFixed(1) + '° feed');
   var badge = entity.write_mode === 'arbitrated' ? '<span class="badge-arbitrated">ARBITRATED</span>' : '';
   var disabledAttr = hasSetpoint && !controlDisabled(entity) ? '' : ' disabled';
+  if (big) {
+    // the overlay and the dial widget: the vocabulary's setpoint on a
+    // dial, bounds the capability's usual (the adapter enforces its own)
+    return renderDial('climate-step', ' data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '"', {
+      value: setpoint, display: readout, min: 5, max: 30, step: 0.5,
+      disabled: !!disabledAttr, current: nowParts.join(' · ')
+    });
+  }
   return '<div class="entity-row row-clickable" data-action="entity-detail" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '">' +
     '<span class="entity-name" title="' + esc(entity.label) + '">' + esc(entity.label) + badge + '</span>' +
     '<span style="display:flex;align-items:center;gap:10px;">' +
@@ -1516,6 +1544,22 @@ function widgetParams(unit) {
     (rows.length ? rows.join('') : '<div class="empty-hint">No family-editable parameters.</div>') + '</div>';
 }
 
+// A thermostat dial as a card: the described temperature command named
+// (or the first one), else the climate capability's own setpoint. An
+// entity with neither falls back to its own row.
+function widgetDial(entity, aspect) {
+  var rows = [];
+  logic.aspectPlan(entity, store.state, store.aspects[entity.name], !controlDisabled(entity)).forEach(function (s) {
+    s.rows.forEach(function (r) { rows.push(r); });
+  });
+  var row = rows.filter(function (r) { return r.control && r.control.kind === 'dial' && (!aspect || r.aspect === aspect); })[0];
+  var body = row ? renderAspectControl(entity, row, true)
+    : entity.capability === 'climate' ? widgetForClimate(entity, true)
+    : widgetForEntity(entity);
+  return '<div class="card clickable" data-action="entity-detail" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '">' +
+    '<div class="card-label" title="' + esc(entity.label) + '">' + esc(entity.label).toUpperCase() + (row ? ' &middot; ' + esc(row.label).toUpperCase() : '') + '</div>' + body + '</div>';
+}
+
 // An entity's own row — its control or its readings — as a card.
 function widgetEntity(entity) {
   return '<div class="card">' + widgetForEntity(entity) + '</div>';
@@ -1579,6 +1623,10 @@ function renderWidgets(title, widgets) {
     if (w.kind === 'entity') {
       var ee = findEntityByName(w.entity);
       return ee ? widgetEntity(ee) : '';
+    }
+    if (w.kind === 'dial') {
+      var de = findEntityByName(w.entity);
+      return de ? widgetDial(de, w.aspect) : '';
     }
     if (w.kind === 'room') return renderRoomCard(w.room, entitiesInRoom(w.room));
     if (w.kind === 'unit') return widgetUnit(w.unit);
@@ -1669,6 +1717,11 @@ function renderParamControl(unitName, pname, p) {
   if (p.type === 'bool') {
     var on = !!value;
     return '<span class="toggle ' + (on ? 'on' : '') + '" data-action="param-toggle" data-unit="' + esc(unitName) + '" data-param="' + esc(pname) + '" data-value="' + (!on) + '"><span class="knob"></span></span>';
+  }
+  if (p.type === 'enum' && p.values && p.values.length > logic.SELECT_ABOVE) {
+    return '<select class="control" id="' + id + '" data-action="param-select" data-unit="' + esc(unitName) + '" data-param="' + esc(pname) + '">' + p.values.map(function (v) {
+      return '<option value="' + esc(v) + '"' + (v === value ? ' selected' : '') + '>' + esc(v) + '</option>';
+    }).join('') + '</select>';
   }
   if (p.type === 'enum' && p.values) {
     return '<div class="seg">' + p.values.map(function (v) {
@@ -1866,7 +1919,8 @@ function render() {
 var CONTROL_ASPECTS = {
   'toggle-light': 'on',
   'toggle-lock': 'locked',
-  'climate-step': 'setpoint'
+  'climate-step': 'setpoint',
+  'brightness-step': 'brightness'
 };
 
 function controlAspect(el) {
@@ -2083,7 +2137,8 @@ function renderAspectRow(entity, r) {
     return '<div class="aspect-row described row-clickable" data-action="history-detail"' + attrs + '>' +
       '<span class="aspect-label">' + esc(r.label) + '</span>' + value + '</div>';
   }
-  return '<div class="aspect-row described"><span class="aspect-label">' + esc(r.label) + '</span>' + renderAspectControl(entity, r) + '</div>';
+  var dial = r.control.kind === 'dial';
+  return '<div class="aspect-row described' + (dial ? ' dial-row' : '') + '"><span class="aspect-label">' + esc(r.label) + '</span>' + renderAspectControl(entity, r, true) + '</div>';
 }
 
 function aspectValueSpan(r) {
@@ -2091,9 +2146,55 @@ function aspectValueSpan(r) {
     (r.stale ? '<span class="stale-mark">stale</span>' : '');
 }
 
-// The control markup for a planned row with a control (overlay and room
-// card alike): the param-control shapes wired to /api/cmd.
-function renderAspectControl(entity, r) {
+// A thermostat dial: the target on a 240° arc from min to max, the
+// current reading beneath it when the entity has one, ± at the arc's
+// ends. The buttons carry the same action attributes as the compact
+// stepper, so the pending/held/timeout stages (#94) apply unchanged.
+function renderDial(action, attrs, o) {
+  var span = (o.max - o.min) || 1;
+  var f = typeof o.value === 'number' ? Math.max(0, Math.min(1, (o.value - o.min) / span)) : 0;
+  var point = function (deg) {
+    var a = deg * Math.PI / 180;
+    return { x: 60 + 46 * Math.cos(a), y: 60 + 46 * Math.sin(a) };
+  };
+  var arc = function (fromDeg, toDeg) {
+    var a = point(fromDeg), b = point(toDeg);
+    return 'M ' + a.x.toFixed(1) + ' ' + a.y.toFixed(1) + ' A 46 46 0 ' + (toDeg - fromDeg > 180 ? 1 : 0) + ' 1 ' + b.x.toFixed(1) + ' ' + b.y.toFixed(1);
+  };
+  var end = -210 + 240 * f;
+  var knob = point(end);
+  var disabled = o.disabled ? ' disabled' : '';
+  return '<div class="dial">' +
+    '<svg viewBox="0 0 120 120" aria-hidden="true"><path class="dial-track" d="' + arc(-210, 30) + '"/>' +
+    (f > 0 ? '<path class="dial-arc" d="' + arc(-210, end) + '"/>' : '') +
+    '<circle class="dial-knob" cx="' + knob.x.toFixed(1) + '" cy="' + knob.y.toFixed(1) + '" r="6"/></svg>' +
+    '<div class="dial-readout"><div class="dial-target">' + esc(o.display) + '</div>' +
+    (o.current ? '<div class="dial-current">' + esc(o.current) + '</div>' : '') + '</div>' +
+    '<div class="dial-buttons">' +
+    '<button class="step-btn" data-action="' + action + '"' + attrs + ' data-delta="' + esc(-o.step) + '"' + disabled + ' aria-label="lower">&minus;</button>' +
+    '<button class="step-btn" data-action="' + action + '"' + attrs + ' data-delta="' + esc(o.step) + '"' + disabled + ' aria-label="raise">+</button>' +
+    '</div></div>';
+}
+
+// The first temperature reading the entity has that is not itself the
+// commanded aspect — what the dial shows as "now".
+function currentTemperatureOf(entity, except) {
+  var rows = [];
+  logic.aspectPlan(entity, store.state, store.aspects[entity.name], false).forEach(function (s) {
+    s.rows.forEach(function (r) { rows.push(r); });
+  });
+  var field = function (r) { return descriptorField(entity, r.aspect); };
+  var hit = rows.filter(function (r) {
+    return r.aspect !== except && r.numeric && !r.control &&
+      ((field(r) && field(r).kind === 'temperature') || (!field(r) && r.aspect.indexOf('temperature') !== -1));
+  })[0];
+  return hit ? hit.display + ' now' : '';
+}
+
+// The control markup for a planned row with a control: the param-control
+// shapes wired to /api/cmd. `big` is the overlay and the dial widget; a
+// room card gets every control's compact form (a dial's is a stepper).
+function renderAspectControl(entity, r, big) {
   var attrs = ' data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '" data-aspect="' + esc(r.aspect) + '"';
   var value = aspectValueSpan(r);
   var c = r.control;
@@ -2101,7 +2202,16 @@ function renderAspectControl(entity, r) {
   var disabledAttr = c.disabled ? ' disabled' : '';
   if (c.kind === 'readonly') {
     control = value + '<span class="tier-badge">' + esc(c.tier) + '</span>';
-  } else if (c.kind === 'stepper') {
+  } else if (c.kind === 'dial' && big) {
+    control = renderDial('aspect-step', attrs, {
+      value: r.value, display: r.display, min: c.min, max: c.max, step: c.step,
+      disabled: c.disabled || !r.numeric, current: currentTemperatureOf(entity, r.aspect)
+    });
+  } else if (c.kind === 'select') {
+    control = '<select class="control" data-action="aspect-select"' + attrs + disabledAttr + '>' + c.values.map(function (v) {
+      return '<option value="' + esc(JSON.stringify(v.value)) + '"' + (v.value === r.value ? ' selected' : '') + '>' + esc(v.label) + '</option>';
+    }).join('') + '</select>';
+  } else if (c.kind === 'stepper' || c.kind === 'dial') {
     var canStep = r.numeric && !c.disabled;
     control = '<span class="stepper">' +
       '<button class="step-btn" data-action="aspect-step"' + attrs + ' data-delta="' + esc(-c.step) + '"' + (canStep ? '' : ' disabled') + '>&minus;</button>' +
@@ -2114,9 +2224,12 @@ function renderAspectControl(entity, r) {
   } else if (c.kind === 'slider') {
     var slideKey = entity.name + '|' + r.aspect;
     var shown = localState.sliderDrag[slideKey] !== undefined ? localState.sliderDrag[slideKey] : r.value;
+    var nudge = c.coarse && r.numeric && !c.disabled;
     control = '<div class="slider-row" style="padding-left:0;">' +
+      '<button class="step-btn" data-action="aspect-step"' + attrs + ' data-delta="' + esc(-c.coarse) + '"' + (nudge ? '' : ' disabled') + ' aria-label="lower">&minus;</button>' +
       '<input type="range" min="' + esc(c.min) + '" max="' + esc(c.max) + '" step="' + esc(c.step) + '" value="' + esc(shown) + '" data-action="aspect-slider"' + attrs + disabledAttr + '>' +
-      '<span class="sval">' + esc(shown) + '</span></div>';
+      '<span class="sval">' + esc(shown) + '</span>' +
+      '<button class="step-btn" data-action="aspect-step"' + attrs + ' data-delta="' + esc(c.coarse) + '"' + (nudge ? '' : ' disabled') + ' aria-label="raise">+</button></div>';
   } else {
     control = value;
   }
@@ -2161,7 +2274,8 @@ function renderEntityDetailBody() {
     // A capability with its own widget (a toggle, a slider) keeps it here
     // whether or not the adapter described the rest of its aspects: the
     // descriptor never declares commands for the capability's vocabulary.
-    middle = '<div class="card-label" style="margin-top:20px;">Controls</div>' + widgetForEntity(entity);
+    middle = '<div class="card-label" style="margin-top:20px;">Controls</div>' +
+      (entity.capability === 'climate' ? widgetForClimate(entity, true) : widgetForEntity(entity));
   }
   var body = '<div class="muted" style="margin-top:2px;">' + esc(meta) + '</div>' +
     '<div class="muted" style="margin-top:6px;">' + ownerLine + '</div>' +
@@ -2241,6 +2355,15 @@ document.addEventListener('click', function (e) {
     sendCmd(stepRoom, stepEntity, 'setpoint', next);
     return;
   }
+  if (action === 'brightness-step') {
+    var bRoom = el.getAttribute('data-room');
+    var bEntity = el.getAttribute('data-entity');
+    var bCurrent = stateValue(bRoom, bEntity, 'brightness');
+    if (typeof bCurrent !== 'number') return;
+    var bPct = Math.max(0, Math.min(100, Math.round(bCurrent / 254 * 100) + parseInt(el.getAttribute('data-delta'), 10)));
+    sendCmd(bRoom, bEntity, 'brightness', Math.round(bPct / 100 * 254));
+    return;
+  }
   if (action === 'aspect-step') {
     var aRoom = el.getAttribute('data-room');
     var aEntity = el.getAttribute('data-entity');
@@ -2248,6 +2371,10 @@ document.addEventListener('click', function (e) {
     var aCurrent = stateValue(aRoom, aEntity, aAspect);
     if (typeof aCurrent !== 'number') return; // no fabricated default to step from
     var aNext = Math.round((aCurrent + parseFloat(el.getAttribute('data-delta'))) * 100) / 100;
+    var aField = descriptorField(findEntity(aRoom, aEntity) || {}, aAspect);
+    var aBounds = (aField && aField.command && aField.command.constraint) || {};
+    if (typeof aBounds.min === 'number') aNext = Math.max(aBounds.min, aNext);
+    if (typeof aBounds.max === 'number') aNext = Math.min(aBounds.max, aNext);
     sendCmd(aRoom, aEntity, aAspect, aNext);
     return;
   }
@@ -2332,6 +2459,15 @@ document.addEventListener('click', function (e) {
 document.addEventListener('change', function (e) {
   var el = e.target;
   if (!el.matches) return;
+
+  if (el.matches('[data-action="aspect-select"]')) {
+    sendCmd(el.getAttribute('data-room'), el.getAttribute('data-entity'), el.getAttribute('data-aspect'), JSON.parse(el.value));
+    return;
+  }
+  if (el.matches('[data-action="param-select"]')) {
+    sendParam(el.getAttribute('data-unit'), el.getAttribute('data-param'), el.value, function () { scheduleRender(); });
+    return;
+  }
 
   if (el.matches('[data-action="slider"]')) {
     var kind = el.getAttribute('data-kind');

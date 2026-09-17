@@ -307,9 +307,9 @@ pub const CODES: &[(&str, &str)] = &[
     (
         "dashboard-widget-fields",
         "A widget in `dashboard.toml` is missing a field its kind needs, or \
-         carries one it does not take: `tile`, `chart` and `entity` name an \
-         `entity` (`chart` also an `aspect`, optionally `hours`; `tile` \
-         optionally an `aspect`), `room` a `room`, `unit` and `params` a \
+         carries one it does not take: `tile`, `chart`, `entity` and `dial` \
+         name an `entity` (`chart` also an `aspect`, optionally `hours`; \
+         `tile` and `dial` optionally an `aspect`), `room` a `room`, `unit` and `params` a \
          `unit`; `people`, `deviations` and `map` take nothing. The set is \
          closed so a typo is refused, not ignored.",
     ),
