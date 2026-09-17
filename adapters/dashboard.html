@@ -119,6 +119,7 @@ h1.view-title { font-size: 20px; margin: 0 0 16px; }
 .chart-tile { height: 36px; }
 .chart-row { height: 28px; }
 .chart-detail { height: 220px; margin: 12px 0 4px; }
+.chart-timeline { height: 64px; margin: 12px 0 4px; }
 .chart-empty { height: 100%; min-height: 36px; display: flex; align-items: center; justify-content: center;
   color: var(--muted); font-size: 12px; }
 .chart-line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;
@@ -132,6 +133,11 @@ h1.view-title { font-size: 20px; margin: 0 0 16px; }
 .chart-ylabel-top { top: 0; }
 .chart-ylabel-bottom { bottom: 0; }
 .chart-loading { opacity: .5; transition: opacity 140ms ease; }
+/* timeline (bool / string history): one band per run */
+.tl-on { fill: var(--accent); }
+.tl-off { fill: var(--accent); opacity: .12; }
+.tl-a { fill: var(--accent); opacity: .55; }
+.tl-b { fill: var(--accent); opacity: .25; }
 
 #chart-tooltip { position: fixed; left: 0; top: 0; background: var(--card); border: 1px solid var(--border);
   border-radius: 6px; padding: 6px 10px; box-shadow: 0 2px 8px rgba(0,0,0,.14); pointer-events: none;
@@ -400,9 +406,11 @@ var overlay = {
   type: null,        // 'history' | 'entity' | 'unit'
   entity: null,       // for history/entity: entity object
   aspect: null,        // for history: aspect name
+  shape: 'chart',      // for history: 'chart' (a number) | 'timeline' (a bool or string)
+  shapeSettled: true,  // false while the shape was guessed without a live value
   unit: null,           // for unit: unit name
   range: 24,             // hours, for history
-  rangeData: {},          // hours -> {points, loaded, loading}
+  rangeData: {},          // hours -> {points, window, loaded, loading}
   lastPoints: null,
   log: null,               // for unit: {lines, loaded, loading}
   expanded: {}              // for entity: group -> true when a collapsed section is opened
@@ -446,18 +454,16 @@ function stateValue(room, entity, aspect) {
   return logic.stateValue(store.state, room, entity, aspect);
 }
 
-// numeric aspects present in state for an entity (the history title's "· aspect" suffix)
-function numericAspectsFor(entity) {
+// aspects present in state for an entity (the history title's "· aspect" suffix)
+function aspectsFor(entity) {
   var prefix = 'home/state/' + entity.room + '/' + entity.name + '/';
-  var out = [];
-  Object.keys(store.state).forEach(function (k) {
-    if (k.indexOf(prefix) === 0) {
-      var aspect = k.slice(prefix.length);
-      var v = store.state[k];
-      if (typeof v === 'number') out.push(aspect);
-    }
-  });
-  return out;
+  return Object.keys(store.state).filter(function (k) { return k.indexOf(prefix) === 0; })
+    .map(function (k) { return k.slice(prefix.length); });
+}
+
+function descriptorField(entity, aspect) {
+  var d = store.aspects[entity.name];
+  return (d && d.fields && d.fields[aspect]) || null;
 }
 
 function unitLabel(unitName) {
@@ -659,49 +665,63 @@ function toast(msg) {
   toastTimer = setTimeout(function () { el.classList.remove('show'); }, 3200);
 }
 
-// ---- history fetch (tile/row sparklines, fixed 24h window) ----
+// ---- history fetch ----
+//
+// The recorder folds the window (docs/design.md, Read path): a line asks
+// for one bucket per drawn column, a timeline for the runs of the state.
+// The window travels with the points so the chart places them by time.
 
+function fetchHistory(entity, aspect, hours, shape) {
+  var win = { from: Date.now() - hours * 3600e3, to: Date.now() };
+  var url = '/api/history?entity=' + encodeURIComponent(entity) + '&aspect=' + encodeURIComponent(aspect) + '&hours=' + hours +
+    (shape === 'timeline' ? '&changes=1' : '&bucket=' + logic.bucketSeconds(hours, CHART_VBW));
+  return fetch(url)
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      var pts = [];
+      (data.series || []).forEach(function (series) {
+        (series.points || []).forEach(function (p) { pts.push(p); });
+      });
+      return { points: pts, window: win, loaded: true, loading: false };
+    })
+    .catch(function () {
+      return { points: [], window: win, loaded: true, loading: false };
+    });
+}
+
+// tile/row sparklines: numeric readings, fixed 24h window
 function ensureHistory(entity, aspect) {
   var sk = entity + '|' + aspect;
   var s = localState.sparklines[sk];
   if (s && (s.loaded || s.loading)) return;
   localState.sparklines[sk] = { points: [], loaded: false, loading: true };
-  fetch('/api/history?entity=' + encodeURIComponent(entity) + '&aspect=' + encodeURIComponent(aspect) + '&hours=24&limit=500')
-    .then(function (r) { return r.json(); })
-    .then(function (data) {
-      var pts = [];
-      (data.series || []).forEach(function (series) {
-        (series.points || []).forEach(function (p) { pts.push(p); });
-      });
-      localState.sparklines[sk] = { points: pts, loaded: true, loading: false };
-      scheduleRender();
-    })
-    .catch(function () {
-      localState.sparklines[sk] = { points: [], loaded: true, loading: false };
-    });
+  fetchHistory(entity, aspect, 24, 'chart').then(function (loaded) {
+    localState.sparklines[sk] = loaded;
+    scheduleRender();
+  });
 }
 
-// ---- history fetch (detail overlay, range-selectable) ----
-
-function fetchHistoryRange(entityName, aspect, hours) {
+// detail overlay, range-selectable
+function fetchHistoryRange(entityName, aspect, hours, shape) {
   var rd = overlay.rangeData[hours];
   if (rd && (rd.loaded || rd.loading)) return;
   overlay.rangeData[hours] = { points: [], loaded: false, loading: true };
-  fetch('/api/history?entity=' + encodeURIComponent(entityName) + '&aspect=' + encodeURIComponent(aspect) + '&hours=' + hours + '&limit=500')
-    .then(function (r) { return r.json(); })
-    .then(function (data) {
-      var pts = [];
-      (data.series || []).forEach(function (series) {
-        (series.points || []).forEach(function (p) { pts.push(p); });
-      });
-      overlay.rangeData[hours] = { points: pts, loaded: true, loading: false };
-      overlay.lastPoints = pts;
-      if (overlay.open && overlay.type === 'history') renderOverlayContent();
-    })
-    .catch(function () {
-      overlay.rangeData[hours] = { points: [], loaded: true, loading: false };
-      if (overlay.open && overlay.type === 'history') renderOverlayContent();
-    });
+  fetchHistory(entityName, aspect, hours, shape).then(function (loaded) {
+    if (!overlay.shapeSettled && loaded.points.length) {
+      // guessed without a live value: the recorded values have the say
+      overlay.shapeSettled = true;
+      var actual = logic.historyShape(loaded.points[0].value);
+      if (actual !== overlay.shape && overlay.open && overlay.aspect === aspect) {
+        overlay.shape = actual;
+        overlay.rangeData = {};
+        fetchHistoryRange(entityName, aspect, hours, actual);
+        return;
+      }
+    }
+    overlay.rangeData[hours] = loaded;
+    overlay.lastPoints = loaded.points;
+    if (overlay.open && overlay.type === 'history') renderOverlayContent();
+  });
 }
 
 // ---- log fetch (detail overlay, unit) ----
@@ -816,15 +836,23 @@ document.addEventListener('click', function (e) {
 
 // ---- charts: geometry + markup ----
 
-function computeChartGeometry(points, width, height, pad) {
+// Points sit where their timestamps fall in the window — a gap in the
+// record stays a gap — and only fall back to even spacing without one.
+// A live point past the window's end (a delta after the fetch) extends it.
+function computeChartGeometry(points, width, height, pad, win) {
   var vals = points.map(function (p) { return p.value; }).filter(function (v) { return typeof v === 'number'; });
   if (vals.length < 2) return null;
   var min = Math.min.apply(null, vals);
   var max = Math.max.apply(null, vals);
   var span = (max - min) || 1;
   var n = points.length;
+  var times = points.map(function (p) { return Date.parse(p.ts); });
+  var from = win ? win.from : times[0];
+  var to = Math.max(win ? win.to : times[n - 1], times[n - 1]);
+  var byTime = times.every(function (t) { return !isNaN(t); }) && to > from;
   var coords = points.map(function (p, i) {
-    var x = pad + (i / (n - 1)) * (width - 2 * pad);
+    var f = byTime ? (times[i] - from) / (to - from) : i / (n - 1);
+    var x = pad + f * (width - 2 * pad);
     var y = pad + (1 - (p.value - min) / span) * (height - 2 * pad);
     return { x: x, y: y, value: p.value, ts: p.ts };
   });
@@ -856,7 +884,7 @@ function buildChart(chartId, points, opts) {
   var height = opts.height || 36;
   var pad = opts.pad !== undefined ? opts.pad : 3;
   var sizeClass = opts.sizeClass || 'chart-tile';
-  var geo = computeChartGeometry(points || [], CHART_VBW, height, pad);
+  var geo = computeChartGeometry(points || [], CHART_VBW, height, pad, opts.window);
   var inner;
   if (!geo) {
     chartRegistry[chartId] = null;
@@ -889,6 +917,35 @@ function buildChart(chartId, points, opts) {
   return '<div class="chart-wrap ' + sizeClass + '" data-chart-id="' + esc(chartId) + '">' + inner + '</div>';
 }
 
+// A timeline: one band per run of a bool or string state over the window
+// (dashboard-logic.js, timelineRuns). A boolean is a filled band while
+// true and a faint one while false; a string's runs alternate two tints
+// so each change reads as an edge, and the tooltip names the value.
+function buildTimeline(chartId, points, opts) {
+  var height = opts.height || 36;
+  var sizeClass = opts.sizeClass || 'chart-tile';
+  var runs = logic.timelineRuns(points || [], opts.window.from, opts.window.to);
+  var inner;
+  if (runs.length === 0) {
+    chartRegistry[chartId] = null;
+    inner = '<div class="chart-empty">no history yet</div>';
+  } else {
+    var span = opts.window.to - opts.window.from;
+    chartRegistry[chartId] = { runs: runs, window: opts.window, width: CHART_VBW, height: height, aspect: opts.aspect, field: opts.field };
+    var svg = '<svg viewBox="0 0 ' + CHART_VBW + ' ' + height + '" preserveAspectRatio="none">';
+    runs.forEach(function (r, i) {
+      var x = (r.start - opts.window.from) / span * CHART_VBW;
+      var w = Math.max(1, (r.end - r.start) / span * CHART_VBW);
+      var cls = r.value === true ? 'tl-on' : r.value === false ? 'tl-off' : (i % 2 ? 'tl-b' : 'tl-a');
+      svg += '<rect class="' + cls + '" x="' + x.toFixed(1) + '" y="2" width="' + w.toFixed(1) + '" height="' + (height - 4) + '"/>';
+    });
+    svg += '<line class="chart-crosshair" x1="0" y1="0" x2="0" y2="' + height + '" style="display:none;"/>';
+    svg += '</svg>';
+    inner = svg;
+  }
+  return '<div class="chart-wrap ' + sizeClass + '" data-chart-id="' + esc(chartId) + '">' + inner + '</div>';
+}
+
 function minMaxCaption(points) {
   var vals = (points || []).map(function (p) { return p.value; }).filter(function (v) { return typeof v === 'number'; });
   if (vals.length === 0) return '';
@@ -903,8 +960,12 @@ function wireChartInteractions(root) {
   (root || document).querySelectorAll('.chart-wrap[data-chart-id]').forEach(function (wrap) {
     var id = wrap.getAttribute('data-chart-id');
     var reg = chartRegistry[id];
-    if (!reg || !reg.coords || reg.coords.length < 2) return;
-    wrap.addEventListener('pointermove', function (ev) { onChartPointerMove(wrap, reg, ev); });
+    if (!reg) return;
+    if (reg.runs) {
+      wrap.addEventListener('pointermove', function (ev) { onTimelinePointerMove(wrap, reg, ev); });
+    } else if (reg.coords && reg.coords.length >= 2) {
+      wrap.addEventListener('pointermove', function (ev) { onChartPointerMove(wrap, reg, ev); });
+    } else return;
     wrap.addEventListener('pointerleave', function () { onChartPointerLeave(wrap); });
   });
 }
@@ -914,9 +975,9 @@ function onChartPointerMove(wrap, reg, ev) {
   if (rect.width === 0) return;
   var fx = (ev.clientX - rect.left) / rect.width;
   fx = Math.max(0, Math.min(1, fx));
-  var n = reg.coords.length;
-  var idx = Math.round(fx * (n - 1));
-  var c = reg.coords[idx];
+  var tx = fx * reg.width;
+  var c = reg.coords[0];
+  reg.coords.forEach(function (p) { if (Math.abs(p.x - tx) < Math.abs(c.x - tx)) c = p; });
   var svg = wrap.querySelector('svg');
   if (!svg) return;
   var line = svg.querySelector('.chart-crosshair');
@@ -928,6 +989,23 @@ function onChartPointerMove(wrap, reg, ev) {
   var px = rect.left + (c.x / reg.width) * rect.width;
   var py = rect.top + (c.y / reg.height) * rect.height;
   showChartTooltip(px, py, formatChartValue(reg.aspect, c.value), formatChartTime(c.ts));
+}
+
+function onTimelinePointerMove(wrap, reg, ev) {
+  var rect = wrap.getBoundingClientRect();
+  if (rect.width === 0) return;
+  var fx = Math.max(0, Math.min(1, (ev.clientX - rect.left) / rect.width));
+  var t = reg.window.from + fx * (reg.window.to - reg.window.from);
+  var run = null;
+  reg.runs.forEach(function (r) { if (t >= r.start && t < r.end) run = r; });
+  var line = wrap.querySelector('.chart-crosshair');
+  if (!line) return;
+  var x = fx * reg.width;
+  line.setAttribute('x1', x); line.setAttribute('x2', x);
+  line.style.display = '';
+  if (!run) { hideChartTooltip(); return; }
+  showChartTooltip(ev.clientX, rect.top, logic.formatAspect(reg.aspect || '', reg.field, run.value),
+    'since ' + formatChartTime(run.start));
 }
 
 function onChartPointerLeave(wrap) {
@@ -1060,7 +1138,7 @@ function widgetForSensor(entity, withHead) {
     var sk = entity.name + '|' + r.aspect;
     ensureHistory(entity.name, r.aspect); // fetched once (guarded), on first render while visible
     var s = localState.sparklines[sk];
-    var sparkHtml = s && s.loaded ? buildChart('room-' + sk, s.points, { height: 28, sizeClass: 'chart-row', aspect: r.aspect, area: true }) : '';
+    var sparkHtml = s && s.loaded ? buildChart('room-' + sk, s.points, { height: 28, sizeClass: 'chart-row', aspect: r.aspect, area: true, window: s.window }) : '';
     var name = multi ? r.label : entity.label;
     return '<div class="entity-row row-clickable' + (multi ? ' sensor-reading' : '') + '" data-action="history-detail"' + attrs + ' data-aspect="' + esc(r.aspect) + '">' +
       '<span class="entity-name" title="' + esc(name) + '">' + esc(name) + '</span>' +
@@ -1305,7 +1383,7 @@ function renderNow() {
       var sk = e.name + '|' + aspect;
       ensureHistory(e.name, aspect);
       var s = localState.sparklines[sk];
-      var spark = s && s.loaded ? buildChart('now-' + sk, s.points, { height: 36, sizeClass: 'chart-tile', aspect: aspect, area: true }) : '';
+      var spark = s && s.loaded ? buildChart('now-' + sk, s.points, { height: 36, sizeClass: 'chart-tile', aspect: aspect, area: true, window: s.window }) : '';
       var caption = s && s.loaded ? minMaxCaption(s.points) : '';
       var tileLabel = esc(e.label) + (rows.length > 1 ? ' &middot; ' + esc(r.label) : '');
       tiles.push('<div class="card tile clickable" data-action="history-detail" data-room="' + esc(e.room) + '" data-entity="' + esc(e.name) + '" data-aspect="' + esc(aspect) + '">' +
@@ -1677,10 +1755,18 @@ function openHistoryDetail(room, entityName, aspect) {
   overlay.type = 'history';
   overlay.entity = entity;
   overlay.aspect = aspect;
+  // The shape follows the live value; without one yet (a fresh page, a
+  // sensor that has not reported) the descriptor's kind decides, and the
+  // first points fetched settle it (fetchHistoryRange).
+  var live = stateValue(room, entityName, aspect);
+  var field = descriptorField(entity, aspect);
+  overlay.shape = live !== undefined ? logic.historyShape(live)
+    : field && (field.kind === 'boolean' || field.kind === 'enum') ? 'timeline' : 'chart';
+  overlay.shapeSettled = live !== undefined;
   overlay.range = 24;
   overlay.rangeData = {};
   overlay.lastPoints = null;
-  fetchHistoryRange(entityName, aspect, 24);
+  fetchHistoryRange(entityName, aspect, 24, overlay.shape);
   showOverlay();
 }
 
@@ -1730,8 +1816,19 @@ function renderOverlayContent() {
 }
 
 function statItem(label, value, aspect) {
-  var v = value === null ? '—' : formatChartValue(aspect, value);
-  return '<div class="stat-item"><div class="stat-value">' + esc(v) + '</div><div class="stat-label">' + label + '</div></div>';
+  return statText(label, value === null ? '—' : formatChartValue(aspect, value));
+}
+
+function statText(label, text) {
+  return '<div class="stat-item"><div class="stat-value">' + esc(text) + '</div><div class="stat-label">' + label + '</div></div>';
+}
+
+function fmtDuration(ms) {
+  var mins = Math.round(ms / 60000);
+  if (mins < 60) return mins + ' min';
+  var h = Math.floor(mins / 60), m = mins % 60;
+  if (h < 48) return m ? h + ' h ' + m + ' min' : h + ' h';
+  return Math.round(h / 24) + ' d';
 }
 
 function rangeStats(points) {
@@ -1749,7 +1846,7 @@ function rangeStats(points) {
 
 function renderHistoryDetailBody() {
   var entity = overlay.entity, aspect = overlay.aspect;
-  var multi = numericAspectsFor(entity).length > 1;
+  var multi = aspectsFor(entity).length > 1;
   var label = entity.label + (multi ? ' · ' + titleCase(aspect) : '');
 
   var chips = RANGE_PRESETS.map(function (rp) {
@@ -1759,11 +1856,23 @@ function renderHistoryDetailBody() {
   var rd = overlay.rangeData[overlay.range];
   var loaded = !!(rd && rd.loaded);
   var points = loaded ? rd.points : (overlay.lastPoints || []);
-  var chartHtml = buildChart('detail-chart', points, { height: 220, sizeClass: 'chart-detail', aspect: aspect, gridlines: true, area: true, yLabels: true });
-  var stats = rangeStats(points);
-  var statsHtml = '<div class="stat-row">' +
-    statItem('Latest', stats.latest, aspect) + statItem('Min', stats.min, aspect) +
-    statItem('Max', stats.max, aspect) + statItem('Avg', stats.avg, aspect) + '</div>';
+  var win = rd && rd.window ? rd.window : { from: Date.now() - overlay.range * 3600e3, to: Date.now() };
+  var chartHtml, statsHtml;
+  if (overlay.shape === 'timeline') {
+    var field = descriptorField(entity, aspect);
+    chartHtml = buildTimeline('detail-chart', points, { height: 64, sizeClass: 'chart-timeline', aspect: aspect, field: field, window: win });
+    var tl = logic.timelineStats(logic.timelineRuns(points, win.from, win.to));
+    statsHtml = '<div class="stat-row">' +
+      statText('Now', tl.latest === null ? '—' : logic.formatAspect(aspect, field, tl.latest)) +
+      (tl.onMs === null ? '' : statText('On', fmtDuration(tl.onMs) + ' of ' + fmtDuration(win.to - win.from))) +
+      statText('Changes', String(tl.changes)) + '</div>';
+  } else {
+    chartHtml = buildChart('detail-chart', points, { height: 220, sizeClass: 'chart-detail', aspect: aspect, gridlines: true, area: true, yLabels: true, window: win });
+    var stats = rangeStats(points);
+    statsHtml = '<div class="stat-row">' +
+      statItem('Latest', stats.latest, aspect) + statItem('Min', stats.min, aspect) +
+      statItem('Max', stats.max, aspect) + statItem('Avg', stats.avg, aspect) + '</div>';
+  }
 
   var body = '<div class="seg">' + chips + '</div>' +
     '<div class="' + (loaded ? '' : 'chart-loading') + '">' + chartHtml + statsHtml + '</div>';
@@ -1778,8 +1887,8 @@ function renderAspectRow(entity, r) {
   var attrs = ' data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '" data-aspect="' + esc(r.aspect) + '"';
   var value = aspectValueSpan(r);
   if (!r.control) {
-    var clickable = r.numeric ? ' row-clickable" data-action="history-detail"' + attrs : '"';
-    return '<div class="aspect-row described' + clickable + '>' +
+    // a chart for a number, a timeline for a bool or a string
+    return '<div class="aspect-row described row-clickable" data-action="history-detail"' + attrs + '>' +
       '<span class="aspect-label">' + esc(r.label) + '</span>' + value + '</div>';
   }
   return '<div class="aspect-row described"><span class="aspect-label">' + esc(r.label) + '</span>' + renderAspectControl(entity, r) + '</div>';
@@ -2010,7 +2119,7 @@ document.addEventListener('click', function (e) {
   if (action === 'range-chip') {
     var hrs = parseInt(el.getAttribute('data-hours'), 10);
     overlay.range = hrs;
-    fetchHistoryRange(overlay.entity.name, overlay.aspect, hrs);
+    fetchHistoryRange(overlay.entity.name, overlay.aspect, hrs, overlay.shape);
     renderOverlayContent();
     return;
   }

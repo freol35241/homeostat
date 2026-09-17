@@ -558,6 +558,20 @@ ascending; `limit` (default 1000) keeps the most recent rows in range.
 Wildcards in the entity/aspect slots fan out to one reply per matching
 series. A malformed selector gets an error reply.
 
+Two optional, mutually exclusive parameters serve charts (2026-09-17):
+`bucket=<seconds>` folds the window into one point per bucket — `ts` the
+bucket's start, a number's `value` its mean with `min` and `max` beside
+it, a bool's or string's the last value seen — and `changes=1` keeps only
+the rows at which the value changed, the window's first included: a
+state's runs, for a timeline. Both fold the whole window before `limit`
+keeps the newest rows. They exist because `limit` alone made history
+length a function of publish rate: a thermometer reporting every thirty
+seconds filled 500 rows in four hours and its "7d" chart showed an
+afternoon, while a quiet sensor showed the week. Downsampling is the
+recorder's job — the page knows its pixel width, the recorder knows the
+rows — and repeats are kept in the store (each is a sighting) and
+collapsed on read.
+
 `home/history/stats` describes the store itself in one reply:
 `store_version`, `file_bytes` and `freelist_bytes` from the pager, one
 `{rows, oldest, newest}` per series keyed by its history key (RFC3339,

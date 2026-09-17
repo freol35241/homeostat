@@ -536,8 +536,61 @@
     return out;
   }
 
+  /* ---- history shapes ----
+   *
+   * The recorder folds a window two ways (docs/design.md, Read path):
+   * `bucket` for a line, one point per bucket so a chatty series fills a
+   * week instead of showing its last hour, and `changes` for a timeline,
+   * the runs of a state. Which one a reading gets is the value's type. */
+
+  function historyShape(value) {
+    return typeof value === 'number' ? 'chart' : 'timeline';
+  }
+
+  /* One bucket per drawn column: the chart's viewBox width is the most
+   * points it can show apart. */
+  function bucketSeconds(hours, width) {
+    return Math.max(1, Math.round(hours * 3600 / width));
+  }
+
+  /* The runs of a state from change rows: each row opens a run that ends
+   * where the next begins or at the window's end. Nothing is known before
+   * the first row, so a run never starts before it — the timeline shows a
+   * gap there rather than guessing. Times are epoch ms. */
+  function timelineRuns(points, fromMs, toMs) {
+    var runs = [];
+    (points || []).forEach(function (p, i) {
+      var start = Math.max(Date.parse(p.ts), fromMs);
+      var next = points[i + 1];
+      var end = next ? Math.max(Date.parse(next.ts), fromMs) : toMs;
+      if (!(end > start)) return;
+      runs.push({ value: p.value, start: start, end: end });
+    });
+    return runs;
+  }
+
+  /* What the stat row says under a timeline: how long the state was
+   * `true` (for a boolean; a string's runs have no such sum), how many
+   * changes the window holds, and what it is now. */
+  function timelineStats(runs) {
+    var onMs = 0, boolean = runs.length > 0;
+    runs.forEach(function (r) {
+      if (typeof r.value !== 'boolean') boolean = false;
+      else if (r.value) onMs += r.end - r.start;
+    });
+    return {
+      onMs: boolean ? onMs : null,
+      changes: Math.max(0, runs.length - 1),
+      latest: runs.length ? runs[runs.length - 1].value : null
+    };
+  }
+
   return {
     PRESENCE_ASPECTS: PRESENCE_ASPECTS,
+    historyShape: historyShape,
+    bucketSeconds: bucketSeconds,
+    timelineRuns: timelineRuns,
+    timelineStats: timelineStats,
     titleCase: titleCase,
     entityKey: entityKey,
     stateValue: stateValue,
