@@ -14,4 +14,8 @@ kind = "rooms"
 
 [[view]]
 name = "bad name"
-kind = "health"
+kind = "setpoints"
+
+[[view]]
+name = "health"
+kind = "now"

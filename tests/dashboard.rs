@@ -317,7 +317,7 @@ async fn dashboard_serves_the_family_surface() {
     // Dashboard: views are text).
     assert_eq!(model["views"][0]["name"], "downstairs", "{model}");
     assert_eq!(model["views"][0]["widgets"][0]["kind"], "unit");
-    assert_eq!(model["views"][1]["kind"], "health");
+    assert_eq!(model["views"][1]["kind"], "rooms");
     assert_eq!(
         evening["drives"],
         json!(["lamp"]),

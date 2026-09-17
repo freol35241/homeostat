@@ -291,6 +291,13 @@ pub const CODES: &[(&str, &str)] = &[
          unique.",
     ),
     (
+        "dashboard-reserved-view",
+        "A `[[view]]` in `dashboard.toml` is named `health` or `notshown`. \
+         Those are the dashboard's fixed chrome — Health and the list of \
+         everything no view places — reachable whatever the file says and \
+         never views in it, so a view of that name could never be shown.",
+    ),
+    (
         "dashboard-view-shape",
         "A `[[view]]` in `dashboard.toml` has both a `kind` and `widgets`, or \
          neither. A view is either a generated view kept as is (`kind = \

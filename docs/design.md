@@ -1394,7 +1394,8 @@ the exploration that produced it):
   `zones.toml`, lists the views — each a nav entry with an ordered list
   of widgets, a widget placing something the house already has (`tile`,
   `chart`, `entity`, `room`, `unit`, `params`, `people`, `deviations`,
-  `map`), or a generated view kept as is (`kind = "rooms"`). The core
+  `map`), or a generated view kept as is (`kind = "rooms"`; Health is
+  not one, and `health`/`notshown` are refused as view names). The core
   parses and validates it at `plan` time like `zones.toml` — every
   reference must resolve, the widget vocabulary is closed, a view is a
   kind or widgets and never both — and hashes it into the house-wide

@@ -9,5 +9,5 @@ widgets = [
 ]
 
 [[view]]
-name = "health"
-kind = "health"
+name = "rooms"
+kind = "rooms"

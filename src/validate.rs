@@ -531,6 +531,17 @@ fn check_dashboard(house: &House, errors: &mut Vec<ValidationError>) {
     let rooms = house.rooms();
     let mut seen: Vec<&str> = Vec::new();
     for view in &dashboard.view {
+        if matches!(view.name.as_str(), "health" | "notshown") {
+            errors.push(ValidationError::new(
+                "dashboard-reserved-view",
+                &view.name,
+                format!(
+                    "view name \"{}\" belongs to the dashboard's fixed chrome",
+                    view.name
+                ),
+                file.clone(),
+            ));
+        }
         if seen.contains(&view.name.as_str()) {
             errors.push(ValidationError::new(
                 "dashboard-duplicate-view",

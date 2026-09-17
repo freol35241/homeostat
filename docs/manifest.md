@@ -278,17 +278,17 @@ composition of widgets (`widgets`), never both (`dashboard-view-shape`).
 |---|---|---|---|
 | `kind` | [GeneratedView](#generatedview) | no | A generated view, kept exactly as the dashboard renders it without this file. |
 | `label` | string | no | Nav label; the name, title-cased, when absent. |
-| `name` | string | yes | Unique among views (`dashboard-duplicate-view`); a key segment (`invalid-name`). |
+| `name` | string | yes | Unique among views (`dashboard-duplicate-view`); a key segment (`invalid-name`); not `health` or `notshown`, the fixed chrome's own names (`dashboard-reserved-view`). |
 | `widgets` | list of [WidgetSpec](#widgetspec) | no | The view's widgets, in order. |
 
 ### GeneratedView
 
-The dashboard's generated views.
+The dashboard's generated views. Health is not among them: it is
+fixed chrome beside "Not shown", reachable whatever the file says.
 
 - `now` — People, the deviations feed and the map: the error signal.
 - `setpoints` — Every family-editable parameter as one flat list.
 - `rooms` — The room-card grid over every entity.
-- `health` — Unit status and the event feed.
 
 ### WidgetSpec
 

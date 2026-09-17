@@ -615,7 +615,8 @@ pub struct DashboardFile {
 #[serde(deny_unknown_fields)]
 pub struct ViewSpec {
     /// Unique among views (`dashboard-duplicate-view`); a key segment
-    /// (`invalid-name`).
+    /// (`invalid-name`); not `health` or `notshown`, the fixed chrome's
+    /// own names (`dashboard-reserved-view`).
     pub name: String,
     /// Nav label; the name, title-cased, when absent.
     pub label: Option<String>,
@@ -627,7 +628,8 @@ pub struct ViewSpec {
     pub widgets: Vec<WidgetSpec>,
 }
 
-/// The dashboard's generated views.
+/// The dashboard's generated views. Health is not among them: it is
+/// fixed chrome beside "Not shown", reachable whatever the file says.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum GeneratedView {
@@ -637,8 +639,6 @@ pub enum GeneratedView {
     Setpoints,
     /// The room-card grid over every entity.
     Rooms,
-    /// Unit status and the event feed.
-    Health,
 }
 
 /// One widget on a view. Which fields it takes is fixed per kind

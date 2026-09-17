@@ -592,7 +592,7 @@
    * always draws, never views here. Everything below is a pure function
    * of the model /api/model serves. */
 
-  var GENERATED_LABELS = { now: 'Now', setpoints: 'Setpoints', rooms: 'Rooms', health: 'Health' };
+  var GENERATED_LABELS = { now: 'Now', setpoints: 'Setpoints', rooms: 'Rooms' };
   var DEFAULT_VIEWS = ['now', 'setpoints', 'rooms'];
 
   function viewsOf(model) {

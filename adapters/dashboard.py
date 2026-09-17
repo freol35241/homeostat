@@ -216,8 +216,11 @@ def unit_relations(model: dict, grants: list, state_keys) -> dict[str, dict]:
     bus — not with `{room}/{entity}/**`, which would make every entity in
     a room a source of a `*/presence` subscription."""
     zones = model["zones"]
-    # Keys the bus delivered and expressions the core validated: both are
-    # well-formed by construction, so KeyExpr never raises here.
+    # Keys the bus delivered are well-formed; a manifest expression is
+    # only as well-formed as the core's own parser demands, which admits
+    # shapes zenoh refuses (`**/**`, a `$`), and the model is re-read
+    # mid-edit — so an expression that does not parse is skipped, never a
+    # 500 for every browser.
     concrete: dict[zenoh.KeyExpr, str] = {}
     for key in state_keys:
         parts = key.split("/")
@@ -234,13 +237,18 @@ def unit_relations(model: dict, grants: list, state_keys) -> dict[str, dict]:
         }
         sources: set[str] = set()
         for expr in unit["subscribes"].values():
-            parts = str(expr).split("/")
+            if not isinstance(expr, str):
+                continue
+            parts = expr.split("/")
             if len(parts) < 4 or parts[0] != "home" or parts[1] != "state":
                 continue
             if "{" in expr:
                 continue  # a template over the unit's own entities: Publishes, not From
             for room in zones.get(parts[2], [parts[2]]):
-                ke = zenoh.KeyExpr("/".join(parts[:2] + [room] + parts[3:]))
+                try:
+                    ke = zenoh.KeyExpr("/".join(parts[:2] + [room] + parts[3:]))
+                except zenoh.ZError:
+                    continue
                 sources.update(name for key, name in concrete.items() if ke.intersects(key))
         out[unit["name"]] = {"drives": sorted(drives), "sources": sorted(sources)}
     return out
