@@ -1433,6 +1433,21 @@ the exploration that produced it):
     the pain was placement, and placement is what the file solves.
   - *`[dashboard] pin` is retired* (`entity-dashboard-retired`, naming
     the `tile` widget that replaces it). One way to place a reading.
+- **Richer controls (2026-09-17).** Still the page's mapping from
+  descriptor vocabulary, no vocabulary added: a `temperature` command
+  with a step is a **dial** — the target on a 240° arc between the
+  command's bounds, the entity's first temperature reading beneath it as
+  "now", ± at the arc's ends — in the overlay and as a `dial` widget,
+  and a stepper on a room card, where there is no room; the climate
+  capability's own `setpoint` gets the same dial. An enum past four
+  values is a `<select>` instead of a segmented row (segments were
+  wrapping into two ragged lines on the pump's mode list). A slider
+  carries a coarse ± pair, a twentieth of its range rounded to something
+  a person would say (5 on a percent), because a range input is the one
+  control a finger cannot land precisely — the light's brightness gets
+  the same pair. Every new control keeps the compact stepper's action
+  attributes, so the pending/held/timeout stages (#94) apply to it
+  unchanged; the range input alone stays exempt from the freeze.
 - **English first.** `[naming]` already carries `en` and `sv`; the
   dashboard renders `en` now, and locale becomes a per-browser choice
   later. No architecture in it.

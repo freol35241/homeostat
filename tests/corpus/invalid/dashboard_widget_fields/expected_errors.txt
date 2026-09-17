@@ -3,3 +3,4 @@ error[dashboard-widget-fields] now[1]: a `chart` widget needs `aspect` (dashboar
 error[dashboard-widget-fields] now[2]: a `people` widget takes no `entity` (dashboard.toml)
 error[dashboard-widget-fields] now[3]: a `room` widget takes no `hours` (dashboard.toml)
 error[dashboard-widget-fields] now[4]: `hours` must be a positive number, not 0 (dashboard.toml)
+error[dashboard-widget-fields] now[5]: a `dial` widget needs `entity` (dashboard.toml)

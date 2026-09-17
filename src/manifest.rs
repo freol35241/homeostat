@@ -650,11 +650,12 @@ pub enum GeneratedView {
 #[serde(deny_unknown_fields)]
 pub struct WidgetSpec {
     pub kind: WidgetKind,
-    /// `tile`, `chart`, `entity`: the entity, by name.
+    /// `tile`, `chart`, `entity`, `dial`: the entity, by name.
     pub entity: Option<String>,
     /// `chart`: the aspect charted; `tile`: narrows the tiles to one
-    /// reading (every reading otherwise). A key segment
-    /// (`dashboard-invalid-aspect`).
+    /// reading (every reading otherwise); `dial`: the temperature command
+    /// to turn (the first one, or the climate setpoint, otherwise). A key
+    /// segment (`dashboard-invalid-aspect`).
     pub aspect: Option<String>,
     /// `room`: the room whose card to place.
     pub room: Option<String>,
@@ -676,6 +677,9 @@ pub enum WidgetKind {
     Chart,
     /// An entity's own row — its control or its readings — as a card.
     Entity,
+    /// A thermostat dial: a temperature setpoint on an arc, the current
+    /// reading beneath it.
+    Dial,
     /// A room's card: every entity in the room.
     Room,
     /// A unit's card: its family setpoints, the entities it publishes,

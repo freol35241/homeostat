@@ -303,7 +303,7 @@ test('described rows carry labels, kind formatting and the consumed validity fla
 
 test('controls follow the command type and tier; ungranted renders inert', () => {
   const granted = logic.aspectPlan(HEAT_PUMP, heatPumpState(), descriptor(), true)[0].rows;
-  assert.deepEqual(granted[0].control, { kind: 'stepper', step: 0.5, min: 10, max: 30, disabled: false });
+  assert.deepEqual(granted[0].control, { kind: 'dial', step: 0.5, min: 10, max: 30, disabled: false }, 'a stepped temperature is a dial');
   assert.equal(granted[1].control.kind, 'segment');
   assert.equal(granted[1].control.values.length, 3);
   assert.deepEqual(granted[2].control, { kind: 'readonly', tier: 'owner' }, 'owner commands read, never write');
@@ -312,6 +312,22 @@ test('controls follow the command type and tier; ungranted renders inert', () =>
   assert.equal(inert[1].control.disabled, true);
   assert.equal(logic.controlFor({ command: { type: 'int', constraint: { min: 0, max: 5 }, editable_by: 'family' } }, true).kind, 'slider');
   assert.equal(logic.controlFor({ label: 'x' }, true), null, 'no command, no control');
+});
+
+test('richer controls: a select past four values, a stepper for non-temperatures, coarse slider steps', () => {
+  const values = (n) => Array.from({ length: n }, (_, i) => ({ value: i, label: 'v' + i }));
+  const enumOf = (n) => logic.controlFor({ kind: 'enum', values: values(n), command: { type: 'enum', editable_by: 'family' } }, true);
+  assert.equal(enumOf(4).kind, 'segment');
+  assert.equal(enumOf(5).kind, 'select');
+  assert.equal(logic.controlFor({ kind: 'number', command: { type: 'float', step: 1, editable_by: 'family' } }, true).kind, 'stepper');
+  assert.equal(logic.controlFor({ kind: 'temperature', command: { type: 'float', step: 0.5, editable_by: 'family' } }, true).kind, 'stepper',
+    'a temperature without bounds has no arc: a stepper');
+  const pct = logic.controlFor({ kind: 'percent', command: { type: 'float', constraint: { min: 0, max: 100 }, editable_by: 'family' } }, true);
+  assert.equal(pct.kind, 'slider');
+  assert.equal(pct.coarse, 5, 'a percent nudges by five');
+  assert.equal(logic.coarseStep(0, 5, 1), 1, 'never finer than an integer step');
+  assert.equal(logic.coarseStep(150, 500, 0), 20, 'mireds nudge by a round twenty');
+  assert.equal(logic.coarseStep(0, 1, 0), 0.1);
 });
 
 test('an undescribed entity plans one flat state section, as before', () => {
@@ -394,7 +410,7 @@ test('the card plan takes the first two control-less readings and the family con
   const plan = logic.cardPlan(HEAT_PUMP, state, d, true);
   assert.deepEqual(plan.readings.map((r) => [r.label, r.display]), [['indoor', '20.3°'], ['feed line', '38.4°']]);
   assert.equal(plan.readings[0].stale, true, 'rows keep their flags');
-  assert.deepEqual(plan.controls.map((r) => [r.aspect, r.control.kind]), [['setpoint', 'stepper'], ['operating_mode', 'segment']]);
+  assert.deepEqual(plan.controls.map((r) => [r.aspect, r.control.kind]), [['setpoint', 'dial'], ['operating_mode', 'segment']]);
   // the overlay label is untouched
   assert.equal(logic.aspectPlan(HEAT_PUMP, state, d, true)[1].rows.find((r) => r.aspect === 'feed_temperature').label, 'feed line (GT1)');
 });

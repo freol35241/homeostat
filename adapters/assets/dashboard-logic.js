@@ -278,12 +278,18 @@
     return String(value);
   }
 
+  // An enum with more choices than fit on one segmented row.
+  var SELECT_ABOVE = 4;
+
   // The control a described command renders as — the param-control
-  // shapes: an enum is a segmented control, a float with a step is a
-  // stepper, any other number a slider. A command the family may not
-  // edit reads its value with a tier badge instead. `commandable` is the
-  // dashboard's own grant on the capability: without it the control is
-  // inert, as for every other widget.
+  // shapes: an enum is a segmented control (a select past SELECT_ABOVE
+  // values), a temperature with a step is a dial (the page draws its
+  // compact form, a stepper, where a card has no room), any other float
+  // with a step a stepper, any other number a slider carrying a coarse
+  // step for its ± buttons. A command the family may not edit reads its
+  // value with a tier badge instead. `commandable` is the dashboard's own
+  // grant on the capability: without it the control is inert, as for
+  // every other widget.
   function controlFor(field, commandable) {
     var cmd = field && field.command;
     if (!cmd) return null;
@@ -298,18 +304,34 @@
       if (bounds[i] !== undefined && (typeof bounds[i] !== 'number' || !isFinite(bounds[i]))) return null;
     }
     if (cmd.type === 'enum') {
-      return { kind: 'segment', values: field.values || [], disabled: !commandable };
+      var values = field.values || [];
+      return { kind: values.length > SELECT_ABOVE ? 'select' : 'segment', values: values, disabled: !commandable };
     }
     if (cmd.type === 'float' || cmd.type === 'int') {
       if (cmd.step) {
-        return { kind: 'stepper', step: cmd.step, min: c.min, max: c.max, disabled: !commandable };
+        // a dial is an arc from min to max: without both bounds there is
+        // no arc to draw, and the stepper is the honest control
+        var bounded = typeof c.min === 'number' && typeof c.max === 'number' && c.max > c.min;
+        var kind = field.kind === 'temperature' && bounded ? 'dial' : 'stepper';
+        return { kind: kind, step: cmd.step, min: c.min, max: c.max, disabled: !commandable };
       }
+      var min = c.min !== undefined ? c.min : 0, max = c.max !== undefined ? c.max : 100;
       return {
-        kind: 'slider', min: c.min !== undefined ? c.min : 0, max: c.max !== undefined ? c.max : 100,
-        step: cmd.type === 'int' ? 1 : 'any', disabled: !commandable
+        kind: 'slider', min: min, max: max,
+        step: cmd.type === 'int' ? 1 : 'any', coarse: coarseStep(min, max, cmd.type === 'int' ? 1 : 0),
+        disabled: !commandable
       };
     }
     return null;
+  }
+
+  /* A slider's ± step: a twentieth of the range, never finer than the
+   * value's own step, rounded to something a person would say (5 on a
+   * percent, 1 on a small integer range). */
+  function coarseStep(min, max, atLeast) {
+    var raw = (max - min) / 20;
+    var nice = raw >= 5 ? 5 * Math.round(raw / 5) : raw >= 1 ? Math.round(raw) : Math.round(raw * 10) / 10;
+    return Math.max(nice, atLeast, 0.1);
   }
 
   /* Sections of rows for an entity's detail, in render order: the
@@ -722,6 +744,8 @@
     computeDeviations: computeDeviations,
     formatAspect: formatAspect,
     controlFor: controlFor,
+    coarseStep: coarseStep,
+    SELECT_ABOVE: SELECT_ABOVE,
     aspectPlan: aspectPlan,
     cardPlan: cardPlan,
     sensorCardPlan: sensorCardPlan,
