@@ -908,6 +908,116 @@ async fn read_path_returns_history() {
     sup.shutdown();
 }
 
+/// The two chart shapes of the samples path: `bucket=<seconds>` folds a
+/// window into one point per bucket (mean with min/max for numbers, the
+/// last value for anything else, ts the bucket's start), and `changes=1`
+/// keeps only the rows at which the value changed — a state's runs. Both
+/// fold the whole window before `limit` keeps the newest, which is what
+/// lets a chatty series fill a week instead of showing its last hour.
+#[tokio::test(flavor = "multi_thread")]
+async fn read_path_folds_buckets_and_changes() {
+    let db = store_path("fold");
+    let (mut sup, observer) = setup(&db).await;
+
+    let power = matched_publisher(&observer, "home/state/attic/meter/power").await;
+    for value in [1.5, 2.5, 3.5] {
+        put(&power, json!(value)).await;
+    }
+    let open = matched_publisher(&observer, "home/state/attic/hatch/open").await;
+    for value in [true, true, false, false, true] {
+        put(&open, json!(value)).await;
+    }
+    rows_eventually(
+        &db,
+        "SELECT value FROM history WHERE entity IN ('meter', 'hatch')",
+        8,
+        Duration::from_secs(20),
+    )
+    .await;
+
+    // A bucket wider than the test's lifetime folds the series into one
+    // point: the mean, its extremes, and the bucket's start — an aligned
+    // instant, not any sample's own timestamp.
+    let year = 365 * 24 * 3600;
+    let replies = history_get(
+        &observer,
+        &format!("home/history/state/meter/power?bucket={year}"),
+    )
+    .await;
+    let rows = replies[0].1.as_array().expect("array").clone();
+    assert_eq!(rows.len(), 1, "one bucket: {rows:?}");
+    assert_eq!(rows[0]["value"], json!(2.5));
+    assert_eq!(rows[0]["min"], json!(1.5));
+    assert_eq!(rows[0]["max"], json!(3.5));
+    assert_eq!(rows[0]["room"], json!("attic"));
+    // A whole number of days since the epoch lands on midnight UTC.
+    assert!(
+        rows[0]["ts"]
+            .as_str()
+            .expect("ts")
+            .ends_with("T00:00:00.000000+00:00"),
+        "bucket start is aligned: {}",
+        rows[0]["ts"]
+    );
+
+    // A bool bucket has no mean: it carries the last value and no extremes.
+    let replies = history_get(
+        &observer,
+        &format!("home/history/state/hatch/open?bucket={year}"),
+    )
+    .await;
+    let rows = replies[0].1.as_array().expect("array").clone();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["value"], json!(true));
+    assert!(
+        rows[0].get("min").is_none(),
+        "no extremes on a bool: {rows:?}"
+    );
+
+    // changes=1 collapses runs, keeping the window's first row.
+    let replies = history_get(&observer, "home/history/state/hatch/open?changes=1").await;
+    let values: Vec<&Value> = replies[0]
+        .1
+        .as_array()
+        .expect("array")
+        .iter()
+        .map(|r| &r["value"])
+        .collect();
+    assert_eq!(values, vec![&json!(true), &json!(false), &json!(true)]);
+
+    // limit applies after the fold: the newest runs.
+    let replies = history_get(&observer, "home/history/state/hatch/open?changes=1;limit=2").await;
+    let values: Vec<&Value> = replies[0]
+        .1
+        .as_array()
+        .expect("array")
+        .iter()
+        .map(|r| &r["value"])
+        .collect();
+    assert_eq!(values, vec![&json!(false), &json!(true)]);
+
+    // Malformed or contradictory chart parameters are error replies.
+    for (selector, names) in [
+        ("home/history/state/meter/power?bucket=0", "positive"),
+        ("home/history/state/meter/power?bucket=soon", "integer"),
+        (
+            "home/history/state/meter/power?bucket=60;changes=1",
+            "exclusive",
+        ),
+        ("home/history/state/meter/power?changes=yes", "changes"),
+    ] {
+        let replies = observer.get(selector).await.expect("history query");
+        let reply = replies.recv_async().await.expect("a reply");
+        let err = reply.result().expect_err("rejected");
+        assert!(
+            String::from_utf8_lossy(&err.payload().to_bytes()).contains(names),
+            "{selector}: error names the violation"
+        );
+    }
+
+    sup.shutdown();
+}
+
 /// (e) A version-0 store (one wide samples table, no auto_vacuum) is
 /// migrated in place on startup: the rows survive with their series
 /// identity and room tags, the file is stamped, and the recorder keeps

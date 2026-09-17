@@ -33,7 +33,13 @@ failure domain is "can I open and commit right now".
 History reads go over the bus: a queryable on home/history/** answers two
 shapes. GET home/history/{state|cmd}/{entity}/{aspect}?from=..;to=..;limit=..
 replies one message per concrete series, a JSON array of {ts, room, value}
-(from/to are RFC3339 timestamps with a UTC offset). GET home/history/events
+(from/to are RFC3339 timestamps with a UTC offset). Two optional, mutually
+exclusive shapes of the same path serve charts: bucket=<seconds> replies
+one point per bucket (ts the bucket's start; a number's value is the mean
+and the point carries min and max; a bool's or string's is the last value
+seen), and changes=1 replies only the rows at which the value changed,
+the window's first included — a state's runs. Both fold the whole window
+before limit keeps the newest rows. GET home/history/events
 ?key=..;from=..;to=..;limit=.. replies one message, a JSON array of
 {ts, key, payload} drawn from the events audit table — key is a
 zenoh-style key expression (wildcards included) filtering which recorded
@@ -586,7 +592,7 @@ class Recorder:
 
     def _answer_samples(self, query: zenoh.Query, asked: zenoh.KeyExpr) -> None:
         try:
-            from_us, to_us, limit = parse_params(str(query.parameters))
+            from_us, to_us, limit, bucket_us, changes = parse_params(str(query.parameters))
         except ValueError as err:
             query.reply_err(json.dumps(str(err)))
             return
@@ -603,19 +609,37 @@ class Recorder:
                 series_key = f"home/history/{space}/{entity}/{aspect}"
                 if not asked.intersects(zenoh.KeyExpr(series_key)):
                     continue
-                rows = conn.execute(
-                    "SELECT ts, room, kind, value FROM ("
-                    "  SELECT ts, rooms.name AS room, kind, value FROM samples"
-                    "  JOIN rooms ON rooms.id = samples.room_id"
-                    "  WHERE series_id = ? AND ts >= ? AND ts <= ?"
-                    "  ORDER BY ts DESC LIMIT ?"
-                    ") ORDER BY ts ASC",
-                    (series_id, from_us, to_us, limit),
-                ).fetchall()
-                payload = [
-                    {"ts": iso_utc(ts), "room": room, "value": decode(kind, value)}
-                    for ts, room, kind, value in rows
-                ]
+                if bucket_us or changes:
+                    # A fold over the whole window, then the newest `limit`:
+                    # the SQL LIMIT would cut the window before bucketing.
+                    rows = conn.execute(
+                        "SELECT ts, rooms.name AS room, kind, value FROM samples"
+                        " JOIN rooms ON rooms.id = samples.room_id"
+                        " WHERE series_id = ? AND ts >= ? AND ts <= ?"
+                        " ORDER BY ts ASC",
+                        (series_id, from_us, to_us),
+                    ).fetchall()
+                    if bucket_us:
+                        payload = bucketed(rows, bucket_us)[-limit:]
+                    else:
+                        payload = [
+                            {"ts": iso_utc(ts), "room": room, "value": decode(kind, value)}
+                            for ts, room, kind, value in changes_only(rows)[-limit:]
+                        ]
+                else:
+                    rows = conn.execute(
+                        "SELECT ts, room, kind, value FROM ("
+                        "  SELECT ts, rooms.name AS room, kind, value FROM samples"
+                        "  JOIN rooms ON rooms.id = samples.room_id"
+                        "  WHERE series_id = ? AND ts >= ? AND ts <= ?"
+                        "  ORDER BY ts DESC LIMIT ?"
+                        ") ORDER BY ts ASC",
+                        (series_id, from_us, to_us, limit),
+                    ).fetchall()
+                    payload = [
+                        {"ts": iso_utc(ts), "room": room, "value": decode(kind, value)}
+                        for ts, room, kind, value in rows
+                    ]
                 query.reply(series_key, json.dumps(payload))
         except sqlite3.Error as err:
             query.reply_err(json.dumps(f"store unavailable: {err}"))
@@ -739,10 +763,12 @@ def split_selector(raw: str) -> dict[str, str]:
     return params
 
 
-def parse_params(raw: str) -> tuple[int, int, int]:
-    """from/to (RFC3339 with offset) and limit from a selector's parameters."""
+def parse_params(raw: str) -> tuple[int, int, int, int, bool]:
+    """from/to (RFC3339 with offset), limit, bucket (µs, 0 = raw rows) and
+    changes from a selector's parameters."""
     params = split_selector(raw)
     from_us, to_us, limit = 0, now_us(), DEFAULT_QUERY_LIMIT
+    bucket_us, changes = 0, False
     for bound in ("from", "to"):
         if bound not in params:
             continue
@@ -759,7 +785,68 @@ def parse_params(raw: str) -> tuple[int, int, int]:
             to_us = us
     if "limit" in params:
         limit = parse_limit(params["limit"])
-    return from_us, to_us, limit
+    if "bucket" in params:
+        bucket_us = parse_bucket(params["bucket"])
+    if "changes" in params:
+        if params["changes"] != "1":
+            raise ValueError(f"changes: {params['changes']!r} is not 1")
+        changes = True
+    if bucket_us and changes:
+        raise ValueError("bucket and changes are exclusive")
+    return from_us, to_us, limit, bucket_us, changes
+
+
+def parse_bucket(raw: str) -> int:
+    """A positive bucket width in whole seconds, returned in µs."""
+    try:
+        seconds = int(raw)
+    except ValueError:
+        raise ValueError(f"bucket: {raw!r} is not an integer")
+    if seconds < 1:
+        raise ValueError(f"bucket: {seconds} is not positive")
+    if seconds > INT64_MAX // 1_000_000:
+        raise ValueError(f"bucket: {seconds} is out of range")
+    return seconds * 1_000_000
+
+
+def bucketed(rows: list[tuple], bucket_us: int) -> list[dict]:
+    """One point per bucket from ascending (ts, room, kind, value) rows:
+    ts is the bucket's start, room the last row's; a number bucket's
+    value is the mean and carries min and max, any other kind's is the
+    last value seen (a run of bools or enum strings has no mean)."""
+    points: list[dict] = []
+    for ts, room, kind, value in rows:
+        start = ts - ts % bucket_us
+        if not points or points[-1]["_start"] != start:
+            points.append({"_start": start, "kind": kind, "last": value, "n": 0})
+        point = points[-1]
+        point["room"], point["kind"], point["last"] = room, kind, value
+        if KINDS[kind] == "number":
+            point["n"] += 1
+            point["sum"] = point.get("sum", 0.0) + value
+            point["min"] = min(point.get("min", value), value)
+            point["max"] = max(point.get("max", value), value)
+    out = []
+    for point in points:
+        row = {"ts": iso_utc(point["_start"]), "room": point["room"]}
+        if KINDS[point["kind"]] == "number" and point["n"]:
+            row["value"] = point["sum"] / point["n"]
+            row["min"], row["max"] = point["min"], point["max"]
+        else:
+            row["value"] = decode(point["kind"], point["last"])
+        out.append(row)
+    return out
+
+
+def changes_only(rows: list[tuple]) -> list[tuple]:
+    """The rows at which the value changed, the window's first included:
+    a state's runs, for timelines. Repeats are kept in the store (each is
+    a sighting) and collapsed here, on read."""
+    out: list[tuple] = []
+    for row in rows:
+        if not out or out[-1][2:] != row[2:]:
+            out.append(row)
+    return out
 
 
 def parse_limit(raw: str) -> int:

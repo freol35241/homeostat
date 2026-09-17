@@ -784,6 +784,15 @@ async fn dashboard_serves_the_family_surface() {
     );
     assert_eq!(status, 200, "{reply}");
     assert_eq!(reply["series"], json!([]), "{reply}");
+    // The recorder's chart shapes pass through, one at a time.
+    for query in [
+        "entity=lamp&aspect=brightness&hours=168&bucket=1512",
+        "entity=lamp&aspect=on&changes=1",
+    ] {
+        let (status, reply) =
+            http_request(&addr, "GET", &format!("/api/history?{query}"), &[], None);
+        assert_eq!(status, 200, "{query}: {reply}");
+    }
     for query in [
         "entity=**&aspect=brightness",
         "entity=lamp&aspect=**",
@@ -791,6 +800,8 @@ async fn dashboard_serves_the_family_surface() {
         "entity=lamp&aspect=$foo",
         "entity=lamp&aspect=..",
         "entity=no_such&aspect=brightness",
+        "entity=lamp&aspect=brightness&bucket=soon",
+        "entity=lamp&aspect=brightness&bucket=60&changes=1",
     ] {
         let (status, reply) =
             http_request(&addr, "GET", &format!("/api/history?{query}"), &[], None);

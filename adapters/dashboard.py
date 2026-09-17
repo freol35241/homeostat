@@ -33,7 +33,9 @@ a small API generated entirely from the house's text:
                      per bound light — group actions are manual-edge
                      fan-outs, never a relay entity (docs/design.md,
                      Dashboard)
-  GET  /api/history  recorder proxy for sparklines (?entity=..&aspect=..)
+  GET  /api/history  recorder proxy for charts (?entity=..&aspect=..&hours=..
+                     plus bucket=<s> for one point per bucket or changes=1
+                     for a state's runs, the recorder's chart shapes)
   GET  /api/logs     unit's captured stdout/stderr tail, for the unit detail
                      overlay (?unit=..&lines=N), proxying the supervisor's
                      home/meta/{unit}/log queryable
@@ -647,15 +649,25 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         try:
             hours = min(float(request.query.get("hours", "24")), 24 * 31)
             limit = max(1, min(int(request.query.get("limit", "500")), HISTORY_LIMIT_MAX))
+            bucket = max(0, int(request.query.get("bucket", "0")))
             start = now - datetime.timedelta(hours=hours)
         except (ValueError, OverflowError):
             # timedelta raises on NaN/inf hours; same 400 as bad `lines`.
-            return json_error("hours and limit must be numbers")
+            return json_error("hours, limit and bucket must be numbers")
+        changes = request.query.get("changes") == "1"
+        if bucket and changes:
+            return json_error("bucket and changes are exclusive")
         selector = (
             f"{keys.history_key('state', entity, aspect)}"
             f"?from={start.isoformat(timespec='seconds')}"
             f";to={now.isoformat(timespec='seconds')};limit={limit}"
         )
+        # The recorder's chart shapes (docs/design.md, Read path): one point
+        # per bucket for a line, or the runs of a state for a timeline.
+        if bucket:
+            selector += f";bucket={bucket}"
+        elif changes:
+            selector += ";changes=1"
         try:
             replies = await asyncio.get_running_loop().run_in_executor(
                 None, hub.session.get_json, selector

@@ -560,3 +560,52 @@ test('a slow device is not expired on a fast device timeout', () => {
   assert.deepEqual(logic.expirePending(pending, 1000 + logic.COMMAND_TIMEOUT_MS.light + 1), []);
   assert.equal(logic.expirePending(pending, 1000 + logic.COMMAND_TIMEOUT_MS.burner + 1).length, 1);
 });
+
+// ---- history shapes ----
+
+test('a reading is charted by its type: numbers a line, anything else a timeline', () => {
+  assert.equal(logic.historyShape(21.5), 'chart');
+  assert.equal(logic.historyShape(true), 'timeline');
+  assert.equal(logic.historyShape('auto'), 'timeline');
+  assert.equal(logic.historyShape(undefined), 'timeline');
+});
+
+test('one bucket per drawn column, never below a second', () => {
+  assert.equal(logic.bucketSeconds(24, 400), 216);
+  assert.equal(logic.bucketSeconds(168, 400), 1512);
+  assert.equal(logic.bucketSeconds(1, 400), 9);
+  assert.equal(logic.bucketSeconds(0.01, 400), 1);
+});
+
+test('change rows become runs that end where the next begins or at the window', () => {
+  const T0 = Date.parse('2026-09-17T10:00:00Z');
+  const points = [
+    { ts: '2026-09-17T09:00:00Z', value: true },   // before the window: clipped to it
+    { ts: '2026-09-17T11:00:00Z', value: false },
+    { ts: '2026-09-17T12:30:00Z', value: true },
+  ];
+  const runs = logic.timelineRuns(points, T0, T0 + 4 * 3600e3);
+  assert.deepEqual(runs, [
+    { value: true, start: T0, end: T0 + 3600e3 },
+    { value: false, start: T0 + 3600e3, end: T0 + 2.5 * 3600e3 },
+    { value: true, start: T0 + 2.5 * 3600e3, end: T0 + 4 * 3600e3 },
+  ]);
+  // nothing is known before the first row: the timeline starts there
+  const late = logic.timelineRuns(points.slice(1), T0, T0 + 4 * 3600e3);
+  assert.equal(late[0].start, T0 + 3600e3);
+  assert.deepEqual(logic.timelineRuns([], T0, T0 + 1), []);
+});
+
+test('timeline stats: time on for a boolean, changes and the latest value for any', () => {
+  const T0 = 0;
+  const bools = logic.timelineRuns(
+    [{ ts: new Date(0).toISOString(), value: true }, { ts: new Date(3600e3).toISOString(), value: false },
+     { ts: new Date(3 * 3600e3).toISOString(), value: true }],
+    T0, 4 * 3600e3);
+  assert.deepEqual(logic.timelineStats(bools), { onMs: 2 * 3600e3, changes: 2, latest: true });
+  const modes = logic.timelineRuns(
+    [{ ts: new Date(0).toISOString(), value: 'auto' }, { ts: new Date(3600e3).toISOString(), value: 'off' }],
+    T0, 2 * 3600e3);
+  assert.deepEqual(logic.timelineStats(modes), { onMs: null, changes: 1, latest: 'off' });
+  assert.deepEqual(logic.timelineStats([]), { onMs: null, changes: 0, latest: null });
+});
