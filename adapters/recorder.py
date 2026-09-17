@@ -610,21 +610,22 @@ class Recorder:
                 if not asked.intersects(zenoh.KeyExpr(series_key)):
                     continue
                 if bucket_us or changes:
-                    # A fold over the whole window, then the newest `limit`:
-                    # the SQL LIMIT would cut the window before bucketing.
+                    # A fold over the whole window, streamed off the cursor
+                    # so a wide window costs time, never memory; the SQL
+                    # LIMIT would cut the window before folding it.
                     rows = conn.execute(
                         "SELECT ts, rooms.name AS room, kind, value FROM samples"
                         " JOIN rooms ON rooms.id = samples.room_id"
                         " WHERE series_id = ? AND ts >= ? AND ts <= ?"
                         " ORDER BY ts ASC",
                         (series_id, from_us, to_us),
-                    ).fetchall()
+                    )
                     if bucket_us:
-                        payload = bucketed(rows, bucket_us)[-limit:]
+                        payload = bucketed(rows, bucket_us, limit)
                     else:
                         payload = [
                             {"ts": iso_utc(ts), "room": room, "value": decode(kind, value)}
-                            for ts, room, kind, value in changes_only(rows)[-limit:]
+                            for ts, room, kind, value in changes_only(rows, limit)
                         ]
                 else:
                     rows = conn.execute(
@@ -793,6 +794,13 @@ def parse_params(raw: str) -> tuple[int, int, int, int, bool]:
         changes = True
     if bucket_us and changes:
         raise ValueError("bucket and changes are exclusive")
+    if bucket_us and (to_us - from_us) // bucket_us > MAX_QUERY_LIMIT:
+        # The fold walks the whole window: a bucket that would yield more
+        # points than any reply carries is a scan nobody asked for.
+        raise ValueError(
+            f"bucket: {bucket_us // 1_000_000} s makes more than {MAX_QUERY_LIMIT}"
+            " buckets over the window; widen it or narrow from/to"
+        )
     return from_us, to_us, limit, bucket_us, changes
 
 
@@ -809,17 +817,19 @@ def parse_bucket(raw: str) -> int:
     return seconds * 1_000_000
 
 
-def bucketed(rows: list[tuple], bucket_us: int) -> list[dict]:
-    """One point per bucket from ascending (ts, room, kind, value) rows:
-    ts is the bucket's start, room the last row's; a number bucket's
-    value is the mean and carries min and max, any other kind's is the
-    last value seen (a run of bools or enum strings has no mean)."""
-    points: list[dict] = []
+def bucketed(rows, bucket_us: int, limit: int) -> list[dict]:
+    """One point per bucket from ascending (ts, room, kind, value) rows —
+    a cursor, folded as it streams, the newest `limit` kept: ts is the
+    bucket's start, room the last row's; a number bucket's value is the
+    mean and carries min and max, any other kind's is the last value seen
+    (a run of bools or enum strings has no mean)."""
+    points: deque[dict] = deque(maxlen=limit)
+    point: dict | None = None
     for ts, room, kind, value in rows:
         start = ts - ts % bucket_us
-        if not points or points[-1]["_start"] != start:
-            points.append({"_start": start, "kind": kind, "last": value, "n": 0})
-        point = points[-1]
+        if point is None or point["_start"] != start:
+            point = {"_start": start, "n": 0}
+            points.append(point)
         point["room"], point["kind"], point["last"] = room, kind, value
         if KINDS[kind] == "number":
             point["n"] += 1
@@ -838,15 +848,18 @@ def bucketed(rows: list[tuple], bucket_us: int) -> list[dict]:
     return out
 
 
-def changes_only(rows: list[tuple]) -> list[tuple]:
-    """The rows at which the value changed, the window's first included:
-    a state's runs, for timelines. Repeats are kept in the store (each is
-    a sighting) and collapsed here, on read."""
-    out: list[tuple] = []
+def changes_only(rows, limit: int) -> list[tuple]:
+    """The rows at which the value changed, the window's first included,
+    the newest `limit` kept: a state's runs, for timelines. Repeats are
+    kept in the store (each is a sighting) and collapsed here, on read,
+    as the cursor streams."""
+    out: deque[tuple] = deque(maxlen=limit)
+    last = None
     for row in rows:
-        if not out or out[-1][2:] != row[2:]:
+        if last is None or last[2:] != row[2:]:
             out.append(row)
-    return out
+        last = row
+    return list(out)
 
 
 def parse_limit(raw: str) -> int:

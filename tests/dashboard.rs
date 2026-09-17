@@ -801,6 +801,8 @@ async fn dashboard_serves_the_family_surface() {
         "entity=lamp&aspect=..",
         "entity=no_such&aspect=brightness",
         "entity=lamp&aspect=brightness&bucket=soon",
+        "entity=lamp&aspect=brightness&bucket=-5",
+        "entity=lamp&aspect=brightness&hours=744&bucket=1",
         "entity=lamp&aspect=brightness&bucket=60&changes=1",
     ] {
         let (status, reply) =

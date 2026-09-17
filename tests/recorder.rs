@@ -939,9 +939,12 @@ async fn read_path_folds_buckets_and_changes() {
     // point: the mean, its extremes, and the bucket's start — an aligned
     // instant, not any sample's own timestamp.
     let year = 365 * 24 * 3600;
+    // A window is needed for a fold: without `from` it starts at the epoch
+    // and would make more buckets than a reply carries.
+    let window = format!("from=1970-01-02T00:00:00+00:00;bucket={year}");
     let replies = history_get(
         &observer,
-        &format!("home/history/state/meter/power?bucket={year}"),
+        &format!("home/history/state/meter/power?{window}"),
     )
     .await;
     let rows = replies[0].1.as_array().expect("array").clone();
@@ -963,7 +966,7 @@ async fn read_path_folds_buckets_and_changes() {
     // A bool bucket has no mean: it carries the last value and no extremes.
     let replies = history_get(
         &observer,
-        &format!("home/history/state/hatch/open?bucket={year}"),
+        &format!("home/history/state/hatch/open?{window}"),
     )
     .await;
     let rows = replies[0].1.as_array().expect("array").clone();
@@ -1005,6 +1008,8 @@ async fn read_path_folds_buckets_and_changes() {
             "exclusive",
         ),
         ("home/history/state/meter/power?changes=yes", "changes"),
+        // a fold finer than any reply carries is a scan nobody asked for
+        ("home/history/state/meter/power?bucket=1", "buckets"),
     ] {
         let replies = observer.get(selector).await.expect("history query");
         let reply = replies.recv_async().await.expect("a reply");

@@ -407,6 +407,7 @@ var overlay = {
   entity: null,       // for history/entity: entity object
   aspect: null,        // for history: aspect name
   shape: 'chart',      // for history: 'chart' (a number) | 'timeline' (a bool or string)
+  shapeSettled: true,  // false while the shape was guessed without a live value
   unit: null,           // for unit: unit name
   range: 24,             // hours, for history
   rangeData: {},          // hours -> {points, window, loaded, loading}
@@ -706,6 +707,17 @@ function fetchHistoryRange(entityName, aspect, hours, shape) {
   if (rd && (rd.loaded || rd.loading)) return;
   overlay.rangeData[hours] = { points: [], loaded: false, loading: true };
   fetchHistory(entityName, aspect, hours, shape).then(function (loaded) {
+    if (!overlay.shapeSettled && loaded.points.length) {
+      // guessed without a live value: the recorded values have the say
+      overlay.shapeSettled = true;
+      var actual = logic.historyShape(loaded.points[0].value);
+      if (actual !== overlay.shape && overlay.open && overlay.aspect === aspect) {
+        overlay.shape = actual;
+        overlay.rangeData = {};
+        fetchHistoryRange(entityName, aspect, hours, actual);
+        return;
+      }
+    }
     overlay.rangeData[hours] = loaded;
     overlay.lastPoints = loaded.points;
     if (overlay.open && overlay.type === 'history') renderOverlayContent();
@@ -1743,7 +1755,14 @@ function openHistoryDetail(room, entityName, aspect) {
   overlay.type = 'history';
   overlay.entity = entity;
   overlay.aspect = aspect;
-  overlay.shape = logic.historyShape(stateValue(room, entityName, aspect));
+  // The shape follows the live value; without one yet (a fresh page, a
+  // sensor that has not reported) the descriptor's kind decides, and the
+  // first points fetched settle it (fetchHistoryRange).
+  var live = stateValue(room, entityName, aspect);
+  var field = descriptorField(entity, aspect);
+  overlay.shape = live !== undefined ? logic.historyShape(live)
+    : field && (field.kind === 'boolean' || field.kind === 'enum') ? 'timeline' : 'chart';
+  overlay.shapeSettled = live !== undefined;
   overlay.range = 24;
   overlay.rangeData = {};
   overlay.lastPoints = null;

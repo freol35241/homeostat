@@ -649,12 +649,17 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         try:
             hours = min(float(request.query.get("hours", "24")), 24 * 31)
             limit = max(1, min(int(request.query.get("limit", "500")), HISTORY_LIMIT_MAX))
-            bucket = max(0, int(request.query.get("bucket", "0")))
+            bucket = int(request.query.get("bucket", "0"))
             start = now - datetime.timedelta(hours=hours)
         except (ValueError, OverflowError):
             # timedelta raises on NaN/inf hours; same 400 as bad `lines`.
             return json_error("hours, limit and bucket must be numbers")
         changes = request.query.get("changes") == "1"
+        if bucket < 0 or (bucket and hours * 3600 / bucket > HISTORY_LIMIT_MAX):
+            # The recorder refuses a fold finer than any reply carries;
+            # the page never asks for one, so this is the same 400 as a
+            # wildcard entity — a request no browser of ours makes.
+            return json_error(f"bucket must be positive and no finer than {HISTORY_LIMIT_MAX} per window")
         if bucket and changes:
             return json_error("bucket and changes are exclusive")
         selector = (
