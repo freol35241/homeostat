@@ -1380,6 +1380,59 @@ the exploration that produced it):
   not a link-quality one. The page's body is
   the deviations feed; a house in equilibrium with no one pinned is
   people plus "In equilibrium", which is what this bullet promised.
+  Superseded 2026-09-17 by **Views are text** below: the four views
+  are what the dashboard renders without `dashboard.toml`, `pin` is
+  retired in favour of a `tile` widget, and `Health` moved from the nav
+  to the rail's fixed chrome.
+- **Views are text (settled 2026-09-17).** Living with the generated
+  views raised four things at once: everything non-spatial (`room =
+  "global"`: fused sensors, notifiers) piled into one card; automations
+  had no presence beyond a param row and a health card; there was no way
+  to say which readings and rooms belong together; and the one layout
+  hint that existed, `pin`, was a boolean on an entity file, which does
+  not compose. Settled: `dashboard.toml` at the house root, beside
+  `zones.toml`, lists the views — each a nav entry with an ordered list
+  of widgets, a widget placing something the house already has (`tile`,
+  `chart`, `entity`, `room`, `unit`, `params`, `people`, `deviations`,
+  `map`), or a generated view kept as is (`kind = "rooms"`; Health is
+  not one, and `health`/`notshown` are refused as view names). The core
+  parses and validates it at `plan` time like `zones.toml` — every
+  reference must resolve, the widget vocabulary is closed, a view is a
+  kind or widgets and never both — and hashes it into the house-wide
+  unit's inputs, so a view edit is a visible change that restarts the
+  dashboard. This is the ordering/pinning escape hatch above used in
+  full, and the "vocabulary as schema" pattern from capabilities and
+  descriptors: the core validates what the page renders and never
+  renders it. Three consequences, each argued:
+  - *The file replaces the nav; it does not augment it.* With the file
+    present the generated views exist only where it names them. So that
+    nothing becomes unreachable, two things are fixed chrome under the
+    nav, never views and never in the file: **Health**, and **Not
+    shown** — the complement of every placement (an entity placed by a
+    widget naming it, its room, a unit that publishes or drives it, or
+    `people` for a person; a param by `params`, `unit` or a generated
+    Setpoints), rendered as room cards so it is usable, not merely a
+    list, with `global` shown as "House". Without the file the
+    generated views stand in unchanged. The alternative — custom views
+    in front of the generated ones — was rejected as never letting a
+    house say "these three views are the dashboard".
+  - *The unit card is a pure function of the manifest and the grant
+    table, and adapters still declare nothing.* A `unit` widget draws
+    the unit's family setpoints, the entities it publishes
+    (`[entities]`), the entities it drives (its cmd-class rows of
+    `home/meta/system/grants`, read once at start — a grant change is a
+    manifest change, which restarts a house-wide unit anyway) and the
+    entities it reads (each `[bus.subscribes]` state expression, its
+    room slot expanded through the zones as the core expands it,
+    intersected with the concrete state keys on the bus — not with
+    `{room}/{name}/**`, which would make every entity in a room a source
+    of a `*/presence` subscription). The section labels are the page's
+    words, never schema: there is no `[dashboard] drives = […]`, and if
+    the card is wrong the manifest is wrong. Adapter- or
+    automation-declared widgets were reconsidered and rejected again:
+    the pain was placement, and placement is what the file solves.
+  - *`[dashboard] pin` is retired* (`entity-dashboard-retired`, naming
+    the `tile` widget that replaces it). One way to place a reading.
 - **English first.** `[naming]` already carries `en` and `sv`; the
   dashboard renders `en` now, and locale becomes a per-browser choice
   later. No architecture in it.

@@ -310,6 +310,54 @@ async fn dashboard_serves_the_family_surface() {
     // No HOMEOSTAT_DASHBOARD_TILES in this fixture: tiles are unavailable.
     assert_eq!(model["tiles"], json!(false), "{model}");
 
+    // 1b. dashboard.toml rides the model as written (the core validated
+    // it), and each unit carries the relations its card draws: what it
+    // drives, from the grant table, and what it reads, from its
+    // subscriptions resolved against live state keys (docs/design.md,
+    // Dashboard: views are text).
+    assert_eq!(model["views"][0]["name"], "downstairs", "{model}");
+    assert_eq!(model["views"][0]["widgets"][0]["kind"], "unit");
+    assert_eq!(model["views"][1]["kind"], "rooms");
+    assert_eq!(
+        evening["drives"],
+        json!(["lamp"]),
+        "the light grant over home/cmd/downstairs/*/on resolves onto the lamp"
+    );
+    assert_eq!(
+        evening["subscribes"]["presence"],
+        "home/state/downstairs/*/presence"
+    );
+    observer
+        .put(
+            "home/state/livingroom/presence_sensor/presence",
+            json!(true).to_string(),
+        )
+        .await
+        .expect("presence publish");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let (_, model) = http_request(&addr, "GET", "/api/model", &[], None);
+        let evening = model["units"]
+            .as_array()
+            .expect("units")
+            .iter()
+            .find(|u| u["name"] == "evening_lights")
+            .expect("evening_lights in model")
+            .clone();
+        // The zone-keyed subscription reaches the livingroom sensor once
+        // its key is on the bus (the lamp's `on`, subscribed too, is not
+        // published yet at this point — a source is a key, not a binding).
+        if evening["sources"] == json!(["presence_sensor"]) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "sources never resolved: {}",
+            evening["sources"]
+        );
+        std::thread::sleep(Duration::from_millis(200));
+    }
+
     // The page itself is served.
     let (status, _) = http_request(&addr, "GET", "/", &[], None);
     assert_eq!(status, 200);

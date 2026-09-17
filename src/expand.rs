@@ -259,6 +259,7 @@ mod tests {
                 entity("lock", "hallway", "lock", WriteMode::Arbitrated, "zigbee"),
             ],
             zones: BTreeMap::new(),
+            dashboard: None,
         };
 
         let (expanded, _warnings, errors) = expand(&house);
@@ -302,6 +303,7 @@ mod tests {
                 "zigbee",
             )],
             zones: BTreeMap::new(),
+            dashboard: None,
         };
 
         let (expanded, _warnings, errors) = expand(&house);
@@ -330,6 +332,7 @@ mod tests {
             units: vec![adapter_unit("latches", bus)],
             entities: vec![],
             zones: BTreeMap::new(),
+            dashboard: None,
         };
 
         let (_expanded, warnings, errors) = expand(&house);
@@ -360,6 +363,7 @@ mod tests {
             units: vec![unit],
             entities: vec![],
             zones: BTreeMap::new(),
+            dashboard: None,
         };
 
         let (_expanded, warnings, errors) = expand(&house);

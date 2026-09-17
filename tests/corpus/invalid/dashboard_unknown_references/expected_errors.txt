@@ -1,0 +1,4 @@
+error[dashboard-invalid-aspect] kitchen[4]: aspect "bright/ness" must be a single key segment (dashboard.toml)
+error[dashboard-unknown-entity] kitchen[1]: widget names unknown entity "kitchen_lmap" (dashboard.toml)
+error[dashboard-unknown-room] kitchen[2]: widget names unknown room "attic" (dashboard.toml)
+error[dashboard-unknown-unit] kitchen[3]: widget names unknown unit "zigbe" (dashboard.toml)

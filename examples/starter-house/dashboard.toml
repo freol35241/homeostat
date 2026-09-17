@@ -1,0 +1,33 @@
+# The family surface's views (docs/design.md, Dashboard: views are text).
+# Each [[view]] is a nav entry, in this order; a widget places something
+# the house already has — the dashboard owns every rendering. Without this
+# file the dashboard renders its generated views (Now, Setpoints, Rooms).
+# Health and "Not shown" — everything no view here places — stay reachable
+# from the rail whatever is written here. `homeostat plan` refuses a typo.
+schema = 1
+
+[[view]]
+name = "now"
+widgets = [
+  { kind = "tile", entity = "heatpump", aspect = "indoor_temperature" },
+  { kind = "people" },
+  { kind = "deviations" },
+  { kind = "map" },
+]
+
+[[view]]
+name = "heating"
+widgets = [
+  { kind = "entity", entity = "heatpump" },                                 # the setpoint control
+  { kind = "chart", entity = "heatpump", aspect = "indoor_temperature", hours = 24 },
+  { kind = "chart", entity = "heatpump", aspect = "GT2", hours = 168 },                # outdoor, a week
+]
+
+[[view]]
+name = "downstairs"
+widgets = [
+  { kind = "unit", unit = "evening_lights" },     # its off time, and the lights it drives
+  { kind = "room", room = "livingroom" },
+  { kind = "room", room = "hallway" },
+  { kind = "room", room = "porch" },
+]

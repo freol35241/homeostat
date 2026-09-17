@@ -6,22 +6,24 @@
 use schemars::schema_for;
 use serde_json::{json, Value};
 
-/// The three files a house is written in.
+/// The four files a house is written in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum File {
     Unit,
     Entity,
     Zones,
+    Dashboard,
 }
 
 impl File {
-    pub const ALL: [File; 3] = [File::Unit, File::Entity, File::Zones];
+    pub const ALL: [File; 4] = [File::Unit, File::Entity, File::Zones, File::Dashboard];
 
     pub fn parse(name: &str) -> Option<File> {
         match name {
             "unit" => Some(File::Unit),
             "entity" => Some(File::Entity),
             "zones" => Some(File::Zones),
+            "dashboard" => Some(File::Dashboard),
             _ => None,
         }
     }
@@ -31,6 +33,7 @@ impl File {
             File::Unit => "unit",
             File::Entity => "entity",
             File::Zones => "zones",
+            File::Dashboard => "dashboard",
         }
     }
 
@@ -39,6 +42,7 @@ impl File {
             File::Unit => "Unit manifest (`units/<name>.toml`)",
             File::Entity => "Entity file (`<entities dir>/<name>.toml`)",
             File::Zones => "Zones (`zones.toml`)",
+            File::Dashboard => "Dashboard views (`dashboard.toml`)",
         }
     }
 }
@@ -49,16 +53,18 @@ pub fn json(file: File) -> Value {
         File::Unit => schema_for!(crate::manifest::UnitManifest),
         File::Entity => schema_for!(crate::manifest::EntityFile),
         File::Zones => schema_for!(crate::manifest::ZonesFile),
+        File::Dashboard => schema_for!(crate::manifest::DashboardFile),
     };
     serde_json::to_value(schema).expect("schema serializes")
 }
 
-/// All three, keyed by file name.
+/// All four, keyed by file name.
 pub fn all() -> Value {
     json!({
         "unit": json(File::Unit),
         "entity": json(File::Entity),
         "zones": json(File::Zones),
+        "dashboard": json(File::Dashboard),
     })
 }
 
@@ -70,7 +76,7 @@ pub fn markdown() -> String {
         "# Manifest reference\n\n\
          Generated from the manifest structs by `homeostat schema --markdown`; \
          do not edit (a test refuses a stale copy). The same schema is served as \
-         JSON by `homeostat schema [unit|entity|zones]` and the MCP `schema` \
+         JSON by `homeostat schema [unit|entity|zones|dashboard]` and the MCP `schema` \
          tool. Rules the validator enforces beyond the shape are named by their \
          error code; `homeostat explain <code>` (or the MCP `explain` tool) has \
          the paragraph for each. Reasoning lives in docs/design.md.\n\n",

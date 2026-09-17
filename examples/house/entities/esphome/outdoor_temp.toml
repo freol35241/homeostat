@@ -14,6 +14,3 @@ aliases = []
 [write_policy]
 mode = "shared"
 owner = "esphome"
-
-[dashboard]
-pin = true   # the outdoor reading is a signal tile on Now

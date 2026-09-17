@@ -2,7 +2,9 @@ use std::collections::BTreeMap;
 
 use crate::error::ValidationError;
 use crate::keyspace::{is_reserved_word, PSEUDO_ROOMS};
-use crate::manifest::{DiscoveryMode, ParamSpec, ParamType, UnitKind, WriteMode, CAPABILITIES};
+use crate::manifest::{
+    DiscoveryMode, ParamSpec, ParamType, UnitKind, WidgetKind, WidgetSpec, WriteMode, CAPABILITIES,
+};
 use crate::repo::House;
 
 /// Structural validation that does not involve key expansion or grants:
@@ -16,6 +18,7 @@ pub fn validate(house: &House) -> Vec<ValidationError> {
     check_entities(house, &mut errors);
     check_zones(house, &mut errors);
     check_params(house, &mut errors);
+    check_dashboard(house, &mut errors);
 
     errors
 }
@@ -100,6 +103,16 @@ fn check_names(house: &House, errors: &mut Vec<ValidationError>) {
                 zone,
                 segment_message("zone name", zone),
                 Some("zones.toml".to_string()),
+            ));
+        }
+    }
+    for view in house.dashboard.iter().flat_map(|d| &d.view) {
+        if !valid_segment(&view.name) {
+            errors.push(ValidationError::new(
+                "invalid-name",
+                &view.name,
+                segment_message("view name", &view.name),
+                Some("dashboard.toml".to_string()),
             ));
         }
     }
@@ -490,4 +503,154 @@ pub(crate) fn parse_time(s: &str) -> Option<(u8, u8)> {
     let hh: u8 = hh.parse().ok()?;
     let mm: u8 = mm.parse().ok()?;
     (hh < 24 && mm < 60).then_some((hh, mm))
+}
+
+/// `dashboard.toml`: each view is a generated one or a composition, never
+/// both; each widget carries exactly the fields its kind takes, and every
+/// reference resolves against the house. The `[dashboard]` table on an
+/// entity file is retired in favour of a `tile` widget here.
+fn check_dashboard(house: &House, errors: &mut Vec<ValidationError>) {
+    for entity in &house.entities {
+        if entity.file.dashboard.is_some() {
+            errors.push(ValidationError::new(
+                "entity-dashboard-retired",
+                &entity.name,
+                format!(
+                    "[dashboard] on an entity is retired: place it with \
+                     {{ kind = \"tile\", entity = \"{}\" }} on a view in dashboard.toml",
+                    entity.name
+                ),
+                Some(entity.path.clone()),
+            ));
+        }
+    }
+    let Some(dashboard) = &house.dashboard else {
+        return;
+    };
+    let file = Some("dashboard.toml".to_string());
+    let rooms = house.rooms();
+    let mut seen: Vec<&str> = Vec::new();
+    for view in &dashboard.view {
+        if matches!(view.name.as_str(), "health" | "notshown") {
+            errors.push(ValidationError::new(
+                "dashboard-reserved-view",
+                &view.name,
+                format!(
+                    "view name \"{}\" belongs to the dashboard's fixed chrome",
+                    view.name
+                ),
+                file.clone(),
+            ));
+        }
+        if seen.contains(&view.name.as_str()) {
+            errors.push(ValidationError::new(
+                "dashboard-duplicate-view",
+                &view.name,
+                format!("view \"{}\" is declared more than once", view.name),
+                file.clone(),
+            ));
+        }
+        seen.push(&view.name);
+        if view.kind.is_some() == !view.widgets.is_empty() {
+            errors.push(ValidationError::new(
+                "dashboard-view-shape",
+                &view.name,
+                "a view is a generated `kind` or a list of `widgets`, never both or neither",
+                file.clone(),
+            ));
+        }
+        for (i, widget) in view.widgets.iter().enumerate() {
+            let subject = format!("{}[{i}]", view.name);
+            if let Some(message) = widget_fields_message(widget) {
+                errors.push(ValidationError::new(
+                    "dashboard-widget-fields",
+                    &subject,
+                    message,
+                    file.clone(),
+                ));
+                continue;
+            }
+            if let Some(entity) = &widget.entity {
+                if !house.entities.iter().any(|e| &e.name == entity) {
+                    errors.push(ValidationError::new(
+                        "dashboard-unknown-entity",
+                        &subject,
+                        format!("widget names unknown entity \"{entity}\""),
+                        file.clone(),
+                    ));
+                }
+            }
+            if let Some(aspect) = &widget.aspect {
+                if !valid_segment(aspect) {
+                    errors.push(ValidationError::new(
+                        "dashboard-invalid-aspect",
+                        &subject,
+                        format!("aspect \"{aspect}\" must be a single key segment"),
+                        file.clone(),
+                    ));
+                }
+            }
+            if let Some(room) = &widget.room {
+                if !rooms.contains(&room.as_str()) {
+                    errors.push(ValidationError::new(
+                        "dashboard-unknown-room",
+                        &subject,
+                        format!("widget names unknown room \"{room}\""),
+                        file.clone(),
+                    ));
+                }
+            }
+            if let Some(unit) = &widget.unit {
+                if house.unit(unit).is_none() {
+                    errors.push(ValidationError::new(
+                        "dashboard-unknown-unit",
+                        &subject,
+                        format!("widget names unknown unit \"{unit}\""),
+                        file.clone(),
+                    ));
+                }
+            }
+        }
+    }
+}
+
+/// The fields a widget kind takes — required ones first, then optional —
+/// against what it carries; None when they agree.
+fn widget_fields_message(widget: &WidgetSpec) -> Option<String> {
+    let (required, optional): (&[&str], &[&str]) = match widget.kind {
+        WidgetKind::Tile => (&["entity"], &["aspect"]),
+        WidgetKind::Chart => (&["entity", "aspect"], &["hours"]),
+        WidgetKind::Entity => (&["entity"], &[]),
+        WidgetKind::Room => (&["room"], &[]),
+        WidgetKind::Unit | WidgetKind::Params => (&["unit"], &[]),
+        WidgetKind::People | WidgetKind::Deviations | WidgetKind::Map => (&[], &[]),
+    };
+    let present: Vec<&str> = [
+        ("entity", widget.entity.is_some()),
+        ("aspect", widget.aspect.is_some()),
+        ("room", widget.room.is_some()),
+        ("unit", widget.unit.is_some()),
+        ("hours", widget.hours.is_some()),
+    ]
+    .into_iter()
+    .filter(|(_, set)| *set)
+    .map(|(name, _)| name)
+    .collect();
+    let kind = format!("{:?}", widget.kind).to_lowercase();
+    for field in required {
+        if !present.contains(field) {
+            return Some(format!("a `{kind}` widget needs `{field}`"));
+        }
+    }
+    for field in &present {
+        if !required.contains(field) && !optional.contains(field) {
+            return Some(format!("a `{kind}` widget takes no `{field}`"));
+        }
+    }
+    if let Some(hours) = widget.hours {
+        if !(hours > 0.0 && hours.is_finite()) {
+            return Some(format!("`hours` must be a positive number, not {hours}"));
+        }
+    }
+    None
 }

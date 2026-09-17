@@ -40,8 +40,6 @@ class Entity:
     naming: dict = field(default_factory=dict)
     # [inputs]: adapter input name -> resolved source. Empty for most.
     inputs: dict[str, InputSource] = field(default_factory=dict)
-    # [dashboard].pin: the entity's numeric readings are signal tiles on Now.
-    pin: bool = False
 
 
 @dataclass
@@ -76,7 +74,6 @@ def _entity_from(path: Path, data: dict, default_owner: str) -> Entity:
         write_mode=data["write_policy"]["mode"],
         owner=data["write_policy"].get("owner", default_owner),
         naming=dict(data.get("naming", {})),
-        pin=bool(data.get("dashboard", {}).get("pin", False)),
     )
 
 
@@ -88,6 +85,7 @@ class UnitInfo:
     naming: dict = field(default_factory=dict)
     params: dict = field(default_factory=dict)
     publishes: dict = field(default_factory=dict)  # [bus.publishes], as declared
+    subscribes: dict = field(default_factory=dict)  # [bus.subscribes], as declared
 
 
 @dataclass
@@ -95,18 +93,26 @@ class HouseModel:
     zones: dict[str, list[str]]  # zone name -> member rooms
     units: list[UnitInfo]
     entities: list[Entity]
+    # dashboard.toml's [[view]] list as written, None without the file.
+    views: list[dict] | None = None
 
 
 def load_house(root: str | Path = ".") -> HouseModel:
     """The whole house as validated text: every unit manifest, every
-    adapter's entity files, the zones. Read-only rendering data for
-    consumers like the dashboard; the core remains the validator."""
+    adapter's entity files, the zones, the dashboard's views. Read-only
+    rendering data for consumers like the dashboard; the core remains the
+    validator."""
     root = Path(root)
 
     zones: dict[str, list[str]] = {}
     zones_path = root / "zones.toml"
     if zones_path.exists():
         zones = dict(tomllib.loads(zones_path.read_text()).get("zones", {}))
+
+    views: list[dict] | None = None
+    views_path = root / "dashboard.toml"
+    if views_path.exists():
+        views = list(tomllib.loads(views_path.read_text()).get("view", []))
 
     units: list[UnitInfo] = []
     entities: list[Entity] = []
@@ -121,6 +127,7 @@ def load_house(root: str | Path = ".") -> HouseModel:
                 naming=dict(manifest.get("naming", {})),
                 params=dict(manifest.get("params", {})),
                 publishes=dict(manifest.get("bus", {}).get("publishes", {})),
+                subscribes=dict(manifest.get("bus", {}).get("subscribes", {})),
             )
         )
         entities_dir = manifest.get("entities", {}).get("dir")
@@ -128,7 +135,7 @@ def load_house(root: str | Path = ".") -> HouseModel:
             continue
         for path in sorted((root / entities_dir).glob("*.toml")):
             entities.append(_entity_from(path, tomllib.loads(path.read_text()), unit["name"]))
-    return HouseModel(zones=zones, units=units, entities=entities)
+    return HouseModel(zones=zones, units=units, entities=entities, views=views)
 
 
 def load_adapter(unit: str, root: str | Path = ".") -> AdapterConfig:

@@ -609,3 +609,89 @@ test('timeline stats: time on for a boolean, changes and the latest value for an
   assert.deepEqual(logic.timelineStats(modes), { onMs: null, changes: 1, latest: 'off' });
   assert.deepEqual(logic.timelineStats([]), { onMs: null, changes: 0, latest: null });
 });
+
+// ---- views: dashboard.toml is the nav ----
+
+function viewsModel(views) {
+  return {
+    zones: { downstairs: ['kitchen', 'livingroom'] },
+    entities: [
+      { name: 'lamp', label: 'Lamp', capability: 'light', room: 'livingroom', owner: 'zigbee' },
+      { name: 'thermo', label: 'Thermo', capability: 'sensor', room: 'kitchen', owner: 'zigbee' },
+      { name: 'fused', label: 'Fused', capability: 'sensor', room: 'global', owner: 'fusion' },
+      { name: 'anna', label: 'Anna', capability: 'person', room: 'person', owner: 'owntracks' },
+    ],
+    units: [
+      { name: 'evening_lights', params: { off_time: { type: 'time', editable_by: 'family' } }, drives: ['lamp'], sources: ['thermo'] },
+      { name: 'fusion', params: {}, drives: [], sources: ['thermo'] },
+      { name: 'zigbee', params: { poll: { type: 'float', editable_by: 'owner' } }, drives: [], sources: [] },
+      { name: 'heating', params: { night: { type: 'float', editable_by: 'family' } }, drives: [], sources: [] },
+    ],
+    views: views,
+  };
+}
+
+test('without a views file the nav is the generated three, Health living on the pin', () => {
+  assert.deepEqual(logic.viewsOf(viewsModel(null)).map((v) => [v.name, v.kind]),
+    [['now', 'now'], ['setpoints', 'setpoints'], ['rooms', 'rooms']]);
+});
+
+test('a views file is the whole nav, labels falling back to the title-cased name', () => {
+  const views = logic.viewsOf(viewsModel([
+    { name: 'downstairs', widgets: [{ kind: 'people' }] },
+    { name: 'all_rooms', kind: 'rooms' },
+    { name: 'x', label: 'Custom' },
+  ]));
+  assert.deepEqual(views.map((v) => [v.name, v.label, v.kind, v.widgets.length]),
+    [['downstairs', 'Downstairs', null, 1], ['all_rooms', 'All Rooms', 'rooms', 0], ['x', 'Custom', null, 0]]);
+});
+
+test('the generated views place everything, so nothing is unshown by default', () => {
+  assert.deepEqual(logic.placement(viewsModel(null)), { entities: [], params: [] });
+});
+
+test('placement: each widget kind places exactly what it shows', () => {
+  const names = (p) => ({ entities: p.entities.map((e) => e.name), params: p.params.map((q) => q.unit + '.' + q.param) });
+  const all = { entities: ['lamp', 'thermo', 'fused', 'anna'], params: ['evening_lights.off_time', 'heating.night'] };
+  assert.deepEqual(names(logic.placement(viewsModel([{ name: 'v', widgets: [{ kind: 'deviations' }, { kind: 'map' }] }]))), all,
+    'signals place nothing');
+  assert.deepEqual(names(logic.placement(viewsModel([{ name: 'v', widgets: [{ kind: 'tile', entity: 'thermo' }] }]))).entities,
+    ['lamp', 'fused', 'anna']);
+  assert.deepEqual(names(logic.placement(viewsModel([{ name: 'v', widgets: [{ kind: 'room', room: 'kitchen' }] }]))).entities,
+    ['lamp', 'fused', 'anna']);
+  assert.deepEqual(names(logic.placement(viewsModel([{ name: 'v', widgets: [{ kind: 'people' }] }]))).entities,
+    ['lamp', 'thermo', 'fused']);
+  // a unit card places what it publishes, drives and sets — not what it reads
+  const unit = names(logic.placement(viewsModel([{ name: 'v', widgets: [{ kind: 'unit', unit: 'evening_lights' }, { kind: 'unit', unit: 'fusion' }] }])));
+  assert.deepEqual(unit, { entities: ['thermo', 'anna'], params: ['heating.night'] });
+  assert.deepEqual(names(logic.placement(viewsModel([{ name: 'v', widgets: [{ kind: 'params', unit: 'heating' }] }]))).params,
+    ['evening_lights.off_time']);
+  // generated views inside the file place like their standalone selves
+  assert.deepEqual(names(logic.placement(viewsModel([{ name: 'r', kind: 'rooms' }]))).entities, []);
+  assert.deepEqual(names(logic.placement(viewsModel([{ name: 's', kind: 'setpoints' }]))).params, []);
+  assert.deepEqual(names(logic.placement(viewsModel([{ name: 'n', kind: 'now' }]))).entities, ['lamp', 'thermo', 'fused']);
+});
+
+test('the unit card reads its four relations back from the model', () => {
+  const plan = logic.unitCardPlan(viewsModel(null), 'evening_lights');
+  assert.deepEqual(plan.params, ['off_time']);
+  assert.deepEqual(plan.publishes, []);
+  assert.deepEqual(plan.drives.map((e) => e.name), ['lamp']);
+  assert.deepEqual(plan.sources.map((e) => e.name), ['thermo']);
+  assert.deepEqual(logic.unitCardPlan(viewsModel(null), 'fusion').publishes.map((e) => e.name), ['fused']);
+  assert.equal(logic.unitCardPlan(viewsModel(null), 'nope'), null);
+});
+
+test('a deviation tap lands on the view that shows its subject, or nowhere', () => {
+  const views = logic.viewsOf(viewsModel([
+    { name: 'heat', widgets: [{ kind: 'params', unit: 'heating' }] },
+    { name: 'down', widgets: [{ kind: 'unit', unit: 'evening_lights' }] },
+  ]));
+  assert.equal(logic.viewFor({ type: 'setpoint', unit: 'heating' }, views), 'heat');
+  assert.equal(logic.viewFor({ type: 'setpoint', unit: 'evening_lights' }, views), 'down');
+  assert.equal(logic.viewFor({ type: 'setpoint', unit: 'zigbee' }, views), null);
+  assert.equal(logic.viewFor({ type: 'rooms' }, views), null);
+  const generated = logic.viewsOf(viewsModel(null));
+  assert.equal(logic.viewFor({ type: 'setpoint', unit: 'zigbee' }, generated), 'setpoints');
+  assert.equal(logic.viewFor({ type: 'rooms' }, generated), 'rooms');
+});

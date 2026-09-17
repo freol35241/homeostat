@@ -1,0 +1,11 @@
+schema = 1
+
+[[view]]
+name = "now"
+widgets = [
+  { kind = "tile" },
+  { kind = "chart", entity = "kitchen_lamp" },
+  { kind = "people", entity = "kitchen_lamp" },
+  { kind = "room", room = "kitchen", hours = 24 },
+  { kind = "chart", entity = "kitchen_lamp", aspect = "brightness", hours = 0 },
+]

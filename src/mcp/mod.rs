@@ -278,7 +278,7 @@ pub const TOOL_NAMES: &[&str] = &[
 ];
 
 /// The `schema` tool: the manifest contract as JSON Schema, one file kind
-/// or all three — what an agent reads before authoring a unit, instead of
+/// or all four — what an agent reads before authoring a unit, instead of
 /// the validator's source.
 fn schema(args: &Value) -> Result<String, String> {
     let value = match args.get("file").and_then(Value::as_str) {
@@ -287,7 +287,7 @@ fn schema(args: &Value) -> Result<String, String> {
             Some(file) => crate::schema::json(file),
             None => {
                 return Err(format!(
-                    "unknown file kind \"{name}\": expected unit, entity or zones"
+                    "unknown file kind \"{name}\": expected unit, entity, zones or dashboard"
                 ))
             }
         },
@@ -376,14 +376,15 @@ pub fn tools() -> Value {
         {
             "name": "schema",
             "description": "The manifest contract as JSON Schema, derived from the core's \
-                own parser: every section and field of a unit manifest, an entity file \
-                and zones.toml, with descriptions and which kinds accept what. Read it \
-                before authoring a unit; pair it with explain for the validator's rules.",
+                own parser: every section and field of a unit manifest, an entity file, \
+                zones.toml and dashboard.toml, with descriptions and which kinds accept \
+                what. Read it before authoring a unit; pair it with explain for the \
+                validator's rules.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "file": {"type": "string", "enum": ["unit", "entity", "zones"],
-                             "description": "one file kind; omit for all three"}
+                    "file": {"type": "string", "enum": ["unit", "entity", "zones", "dashboard"],
+                             "description": "one file kind; omit for all four"}
                 }
             }
         },

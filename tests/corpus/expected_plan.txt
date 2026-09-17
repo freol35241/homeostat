@@ -95,6 +95,7 @@ Expanded keys:
   dashboard publishes locks: home/cmd/**
   dashboard subscribes config: home/config/*/*
   dashboard subscribes discovery: home/discovery/*
+  dashboard subscribes grants: home/meta/system/grants
   dashboard subscribes health: home/health/**
   dashboard subscribes state: home/state/**
   recorder publishes history: home/history/**

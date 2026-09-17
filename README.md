@@ -53,6 +53,7 @@ A **house repo** declares everything about your home:
 ```
 house/
   zones.toml              # named sets of rooms; zones never appear in keys
+  dashboard.toml          # the family surface's views, as text (optional)
   units/
     zigbee.toml           # adapter: discovery endpoint, templated keys, entities dir
     evening_lights.toml   # automation: subscribes, publishes, params
@@ -325,14 +326,19 @@ and pinned by a test. Details:
 ### The dashboard: the family surface
 
 A supervised web unit (`adapters/dashboard.py` + one self-contained
-HTML file) — an adapter for humans. Four views, every element generated
-from the manifests: **Now** shows the error signal (deviations from
-equilibrium: unhealthy units, lights left on, setpoints off their
-defaults) and stays deliberately empty when the house is nominal;
-**Setpoints** is every family-editable parameter as one flat list;
-**Rooms** is the spatial grid; **Health** is supervision, live. Clicking
-through opens detail panels — sensor history with ranges and a
-crosshair tooltip, entity state, unit health. Commands leave at the
+HTML file) — an adapter for humans. Every element is generated from the
+manifests; which views exist is text too: `dashboard.toml` lists them,
+each a composition of widgets over things the house already has (a
+reading as a tile, a room's card, a unit's card with what it sets,
+publishes, drives and reads, a chart, the people, the deviations feed).
+Without the file the generated views stand in: **Now** shows the error
+signal (deviations from equilibrium: unhealthy units, lights left on,
+setpoints off their defaults) and stays deliberately empty when the house
+is nominal; **Setpoints** is every family-editable parameter as one flat
+list; **Rooms** is the spatial grid. **Health** and **Not shown** —
+everything no view places — are fixed chrome, never views. Clicking
+through opens detail panels — history with ranges and a crosshair
+tooltip (a timeline for states), entity state, unit health. Commands leave at the
 manual band (the family always wins); parameter writes go through the
 core's validating queryable; access is local-only by design (LAN /
 WireGuard, no accounts — and family-tier only: nothing structural is
@@ -340,7 +346,7 @@ reachable from a browser). The map over person entities (OwnTracks,
 self-hosted tiles) is settled design, not yet built. Details:
 [design record §Dashboard](docs/design.md#dashboard-settled-2026-07-15).
 
-![The dashboard's Now view, desktop and phone: signal tiles, people, the planned map, and the deviations feed](docs/wireframes/wireframe-hybrid-now.svg)
+![The dashboard's Now view, desktop and phone: signal tiles, people, the map, and the deviations feed](docs/wireframes/wireframe-hybrid-now.svg)
 
 ## Status
 
