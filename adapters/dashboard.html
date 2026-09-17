@@ -66,12 +66,21 @@ h1.view-title { font-size: 20px; margin: 0 0 16px; }
 /* bottom tabs (mobile) */
 #tabs { display: none; position: fixed; bottom: 0; left: 0; right: 0; background: var(--card);
   border-top: 1px solid var(--border); padding: 4px 4px calc(4px + env(safe-area-inset-bottom)); z-index: 10; }
-#tabs .row { display: flex; }
-#tabs button { flex: 1; border: none; background: transparent; color: var(--muted);
+/* the file's views scroll; Health and Not shown stay put at the right, as on the rail */
+#tabs .row { display: flex; align-items: stretch; }
+#tabs .tabs-views { display: flex; flex: 1 1 auto; min-width: 0; overflow-x: auto; scroll-snap-type: x proximity;
+  scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+#tabs .tabs-views::-webkit-scrollbar { display: none; }
+#tabs .tabs-fixed { display: flex; flex: 0 0 auto; border-left: 1px solid var(--border); }
+#tabs button { flex: 0 0 auto; min-width: 72px; max-width: 110px; scroll-snap-align: start; border: none; background: transparent; color: var(--muted);
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
-  padding: 6px 2px; min-height: 44px; cursor: pointer; }
+  padding: 6px 4px; min-height: 44px; cursor: pointer; }
+#tabs .tabs-views button:only-child, #tabs .tabs-views button:nth-last-child(-n+4):first-child ~ button,
+#tabs .tabs-views button:nth-last-child(-n+4):first-child { flex: 1 1 0; max-width: none; } /* up to four views: fill the row as before */
+#tabs button .tab-label { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #tabs button svg { display: block; }
 #tabs button .tab-label { font-size: 10px; }
+#tabs .tabs-fixed button { min-width: 64px; }
 #tabs button.active { color: var(--accent); font-weight: 600; }
 
 @media (max-width: 720px) {
@@ -857,10 +866,24 @@ function renderShell() {
     return '<button data-view="' + esc(v.name) + '" class="' + (current === v.name ? 'active' : '') + '">' +
       (TAB_ICONS[v.kind] || TAB_ICONS.view) + '<span class="tab-label">' + esc(v.label) + '</span></button>';
   });
-  tabHtml.push('<button data-view="health" class="' + (current === 'health' ? 'active' : '') + '">' + TAB_ICONS.health + '<span class="tab-label">Health</span></button>');
-  tabHtml.push('<button data-view="notshown" class="' + (current === 'notshown' ? 'active' : '') + '">' + TAB_ICONS.notshown +
-    '<span class="tab-label">Not shown' + (notShownCount ? ' · ' + notShownCount : '') + '</span></button>');
-  tabs.innerHTML = tabHtml.join('');
+  var fixedHtml = '<button data-view="health" class="' + (current === 'health' ? 'active' : '') + '">' + TAB_ICONS.health + '<span class="tab-label">Health</span></button>' +
+    '<button data-view="notshown" class="' + (current === 'notshown' ? 'active' : '') + '">' + TAB_ICONS.notshown +
+    '<span class="tab-label">Not shown' + (notShownCount ? ' · ' + notShownCount : '') + '</span></button>';
+  // Rebuilding the scroller would reset its scroll position on every
+  // render; only the active marks change between renders of the same nav.
+  var viewsRow = tabs.querySelector('.tabs-views');
+  var same = viewsRow && viewsRow.getAttribute('data-views') === views.map(function (v) { return v.name; }).join('\n');
+  if (!same) {
+    tabs.innerHTML = '<div class="tabs-views" data-views="' + esc(views.map(function (v) { return v.name; }).join('\n')) + '">' + tabHtml.join('') + '</div>' +
+      '<div class="tabs-fixed">' + fixedHtml + '</div>';
+  } else {
+    tabs.querySelectorAll('button[data-view]').forEach(function (b) {
+      b.classList.toggle('active', b.getAttribute('data-view') === current);
+    });
+    tabs.querySelector('.tabs-fixed').innerHTML = fixedHtml;
+  }
+  var activeTab = tabs.querySelector('.tabs-views button.active');
+  if (activeTab && activeTab.scrollIntoView) activeTab.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 
   var hw = healthWorstAndCount();
   var pin = byId('health-pin');
