@@ -42,10 +42,17 @@ a { color: inherit; }
   min-height: 40px; transition: background-color 140ms ease, color 140ms ease; }
 #rail nav button:hover { background: var(--accent-tint); }
 #rail nav button.active { border-left-color: var(--accent); padding-left: 9px; color: var(--ink); font-weight: 600; }
-#rail .health-pin { margin-top: auto; padding: 12px 12px 4px; border-top: 1px solid var(--border); font-size: 11px; }
-#rail .health-pin .label { color: var(--muted); font-weight: 600; letter-spacing: .08em; font-size: 10.5px;
-  text-transform: uppercase; margin-bottom: 8px; }
-#rail .health-pin .row { display: flex; align-items: center; gap: 6px; color: var(--secondary); padding: 3px 0; }
+/* fixed chrome under the nav: Health and Not shown are never views */
+#rail .health-pin { margin-top: auto; padding-top: 12px; border-top: 1px solid var(--border); font-size: 11px;
+  display: flex; flex-direction: column; gap: 2px; }
+#rail .pin-btn { text-align: left; border: none; border-left: 3px solid transparent; background: transparent; color: var(--secondary);
+  padding: 8px 12px; border-radius: 0 6px 6px 0; cursor: pointer; font-size: 11px; transition: background-color 140ms ease; }
+#rail .pin-btn:hover { background: var(--accent-tint); }
+#rail .pin-btn.active { border-left-color: var(--accent); padding-left: 9px; color: var(--ink); }
+#rail .pin-btn .label { color: var(--muted); font-weight: 600; letter-spacing: .08em; font-size: 10.5px;
+  text-transform: uppercase; margin-bottom: 6px; }
+#rail .pin-btn.active .label { color: var(--accent); }
+#rail .pin-btn .row { display: flex; align-items: center; gap: 6px; color: var(--secondary); padding: 2px 0; }
 
 /* main column */
 #main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
@@ -59,12 +66,21 @@ h1.view-title { font-size: 20px; margin: 0 0 16px; }
 /* bottom tabs (mobile) */
 #tabs { display: none; position: fixed; bottom: 0; left: 0; right: 0; background: var(--card);
   border-top: 1px solid var(--border); padding: 4px 4px calc(4px + env(safe-area-inset-bottom)); z-index: 10; }
-#tabs .row { display: flex; }
-#tabs button { flex: 1; border: none; background: transparent; color: var(--muted);
+/* the file's views scroll; Health and Not shown stay put at the right, as on the rail */
+#tabs .row { display: flex; align-items: stretch; }
+#tabs .tabs-views { display: flex; flex: 1 1 auto; min-width: 0; overflow-x: auto; scroll-snap-type: x proximity;
+  scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+#tabs .tabs-views::-webkit-scrollbar { display: none; }
+#tabs .tabs-fixed { display: flex; flex: 0 0 auto; border-left: 1px solid var(--border); }
+#tabs button { flex: 0 0 auto; min-width: 72px; max-width: 110px; scroll-snap-align: start; border: none; background: transparent; color: var(--muted);
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
-  padding: 6px 2px; min-height: 44px; cursor: pointer; }
+  padding: 6px 4px; min-height: 44px; cursor: pointer; }
+#tabs .tabs-views button:only-child, #tabs .tabs-views button:nth-last-child(-n+4):first-child ~ button,
+#tabs .tabs-views button:nth-last-child(-n+4):first-child { flex: 1 1 0; max-width: none; } /* up to four views: fill the row as before */
+#tabs button .tab-label { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #tabs button svg { display: block; }
 #tabs button .tab-label { font-size: 10px; }
+#tabs .tabs-fixed button { min-width: 64px; }
 #tabs button.active { color: var(--accent); font-weight: 600; }
 
 @media (max-width: 720px) {
@@ -100,7 +116,16 @@ h1.view-title { font-size: 20px; margin: 0 0 16px; }
 .card.clickable:hover { border-color: var(--muted); box-shadow: 0 2px 8px rgba(0,0,0,.07); }
 .card-label { font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
   color: var(--muted); margin-bottom: 10px; }
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 16px; align-items: start; }
+.grid > .span-all { grid-column: 1 / -1; }
+.grid > .card + .card { margin-top: 0; } /* the gap is the grid's; the stacked-card rule above is for columns */
+.chart-card { height: 120px; margin: 8px 0 4px; }
+/* unit card: head, then the manifest's relations as sections */
+.unit-card .unit-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin: -4px -8px 4px; padding: 4px 8px; }
+.unit-card .unit-name { font-size: 15px; font-weight: 600; }
+.unit-card .unit-desc { font-size: 12.5px; color: var(--secondary); margin-top: 1px; }
+.unit-card .section-label { font-size: 10.5px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 14px 0 2px; }
+.unit-card .param-row:first-of-type { border-top: none; }
 .muted { color: var(--secondary); }
 .faint { color: var(--muted); }
 
@@ -119,6 +144,7 @@ h1.view-title { font-size: 20px; margin: 0 0 16px; }
 .chart-tile { height: 36px; }
 .chart-row { height: 28px; }
 .chart-detail { height: 220px; margin: 12px 0 4px; }
+.chart-timeline { height: 64px; margin: 12px 0 4px; }
 .chart-empty { height: 100%; min-height: 36px; display: flex; align-items: center; justify-content: center;
   color: var(--muted); font-size: 12px; }
 .chart-line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;
@@ -132,6 +158,11 @@ h1.view-title { font-size: 20px; margin: 0 0 16px; }
 .chart-ylabel-top { top: 0; }
 .chart-ylabel-bottom { bottom: 0; }
 .chart-loading { opacity: .5; transition: opacity 140ms ease; }
+/* timeline (bool / string history): one band per run */
+.tl-on { fill: var(--accent); }
+.tl-off { fill: var(--accent); opacity: .12; }
+.tl-a { fill: var(--accent); opacity: .55; }
+.tl-b { fill: var(--accent); opacity: .25; }
 
 #chart-tooltip { position: fixed; left: 0; top: 0; background: var(--card); border: 1px solid var(--border);
   border-radius: 6px; padding: 6px 10px; box-shadow: 0 2px 8px rgba(0,0,0,.14); pointer-events: none;
@@ -194,9 +225,9 @@ h1.view-title { font-size: 20px; margin: 0 0 16px; }
 /* slider row */
 .slider-row { display: flex; align-items: center; gap: 12px; padding: 6px 0 6px 18px; font-size: 12px; }
 .slider-row .slabel { flex: 0 0 70px; color: var(--secondary); }
-.slider-row .sval { flex: 0 0 60px; text-align: right; color: var(--ink); font-variant-numeric: tabular-nums; }
+.slider-row .sval { flex: 0 0 auto; min-width: 40px; text-align: right; color: var(--ink); font-variant-numeric: tabular-nums; }
 
-input[type=range] { flex: 1; -webkit-appearance: none; appearance: none; width: 100%; height: 2px;
+input[type=range] { flex: 1 1 40px; min-width: 40px; -webkit-appearance: none; appearance: none; height: 2px;
   background: var(--border); border-radius: 1px; outline: none; }
 input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%;
   background: var(--accent); cursor: pointer; border: 2px solid var(--card); box-shadow: 0 1px 2px rgba(0,0,0,.2); }
@@ -228,6 +259,23 @@ input[type=range]::-moz-range-track { background: var(--border); height: 2px; bo
   padding: 6px 12px; font-size: 12px; cursor: pointer; min-height: 32px; transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease; }
 .seg button:hover { border-color: var(--muted); }
 .seg button.active { background: var(--accent-tint); color: var(--accent); border-color: var(--accent); font-weight: 600; }
+select.control { border: 1px solid var(--border); background: var(--card); color: var(--ink); border-radius: 6px;
+  padding: 7px 10px; font-size: 13px; min-height: 32px; max-width: 100%; }
+/* a slider with its value and a coarse ± pair — the range moves under the finger, the buttons for a nudge */
+.slider-row .step-btn { flex: 0 0 auto; }
+/* thermostat dial: the target on an arc from min to max, the reading under it */
+.dial { position: relative; width: 168px; margin: 8px auto 0; }
+.dial svg { display: block; width: 100%; height: auto; }
+.dial-track { fill: none; stroke: var(--border); stroke-width: 7; stroke-linecap: round; }
+.dial-arc { fill: none; stroke: var(--accent); stroke-width: 7; stroke-linecap: round; }
+.dial-knob { fill: var(--card); stroke: var(--accent); stroke-width: 3; }
+.dial-readout { position: absolute; left: 0; right: 0; top: 34%; text-align: center; pointer-events: none; }
+.dial-target { font-size: 28px; font-weight: 650; font-variant-numeric: tabular-nums; line-height: 1.1; }
+.dial-current { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.dial-buttons { display: flex; justify-content: space-between; padding: 0 22px; margin-top: -26px; position: relative; }
+.dial-buttons .step-btn { width: 34px; height: 34px; font-size: 17px; }
+.dial-row { display: flex; flex-direction: column; align-items: stretch; }
+.dial-row .aspect-label { align-self: flex-start; }
 input[type=text], input[type=time] { border: 1px solid var(--border); background: var(--card); color: var(--ink);
   border-radius: 6px; padding: 8px 10px; font-size: 13px; }
 
@@ -359,9 +407,10 @@ video-rtc video { width: 100%; display: block; }
 'use strict';
 (function () {
 
-var VIEWS = ['now', 'setpoints', 'rooms', 'health'];
-var VIEW_LABELS = { now: 'Now', setpoints: 'Setpoints', rooms: 'Rooms', health: 'Health' };
+// Tab icons by generated view; a file's own view gets the generic one.
 var TAB_ICONS = {
+  view: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3.5" y="4" width="17" height="16" rx="2"/><line x1="3.5" y1="9.5" x2="20.5" y2="9.5"/><line x1="9" y1="9.5" x2="9" y2="20"/></svg>',
+  notshown: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="5" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.6" fill="currentColor" stroke="none"/></svg>',
   now: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 12 8 12 10 6 14 18 16 12 21 12"/></svg>',
   setpoints: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="6" y1="4" x2="6" y2="20"/><circle cx="6" cy="9" r="2.2" fill="currentColor" stroke="none"/><line x1="12" y1="4" x2="12" y2="20"/><circle cx="12" cy="16" r="2.2" fill="currentColor" stroke="none"/><line x1="18" y1="4" x2="18" y2="20"/><circle cx="18" cy="11" r="2.2" fill="currentColor" stroke="none"/></svg>',
   rooms: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><rect x="3.5" y="3.5" width="7.5" height="7.5" rx="1.4"/><rect x="13" y="3.5" width="7.5" height="7.5" rx="1.4"/><rect x="3.5" y="13" width="7.5" height="7.5" rx="1.4"/><rect x="13" y="13" width="7.5" height="7.5" rx="1.4"/></svg>',
@@ -391,7 +440,8 @@ var pending = {};
 
 var localState = {
   sliderDrag: {},   // key -> true while user is dragging
-  sparklines: {}    // entity|aspect -> {points:[], loaded:bool, loading:bool}
+  sparklines: {},   // entity|aspect -> {points:[], window, loaded:bool, loading:bool}
+  charts: {}        // entity|aspect|hours -> the same, for chart widgets
 };
 
 // detail overlay state (right slide-over / mobile sheet)
@@ -400,9 +450,11 @@ var overlay = {
   type: null,        // 'history' | 'entity' | 'unit'
   entity: null,       // for history/entity: entity object
   aspect: null,        // for history: aspect name
+  shape: 'chart',      // for history: 'chart' (a number) | 'timeline' (a bool or string)
+  shapeSettled: true,  // false while the shape was guessed without a live value
   unit: null,           // for unit: unit name
   range: 24,             // hours, for history
-  rangeData: {},          // hours -> {points, loaded, loading}
+  rangeData: {},          // hours -> {points, window, loaded, loading}
   lastPoints: null,
   log: null,               // for unit: {lines, loaded, loading}
   expanded: {}              // for entity: group -> true when a collapsed section is opened
@@ -446,18 +498,16 @@ function stateValue(room, entity, aspect) {
   return logic.stateValue(store.state, room, entity, aspect);
 }
 
-// numeric aspects present in state for an entity (the history title's "· aspect" suffix)
-function numericAspectsFor(entity) {
+// aspects present in state for an entity (the history title's "· aspect" suffix)
+function aspectsFor(entity) {
   var prefix = 'home/state/' + entity.room + '/' + entity.name + '/';
-  var out = [];
-  Object.keys(store.state).forEach(function (k) {
-    if (k.indexOf(prefix) === 0) {
-      var aspect = k.slice(prefix.length);
-      var v = store.state[k];
-      if (typeof v === 'number') out.push(aspect);
-    }
-  });
-  return out;
+  return Object.keys(store.state).filter(function (k) { return k.indexOf(prefix) === 0; })
+    .map(function (k) { return k.slice(prefix.length); });
+}
+
+function descriptorField(entity, aspect) {
+  var d = store.aspects[entity.name];
+  return (d && d.fields && d.fields[aspect]) || null;
 }
 
 function unitLabel(unitName) {
@@ -659,49 +709,63 @@ function toast(msg) {
   toastTimer = setTimeout(function () { el.classList.remove('show'); }, 3200);
 }
 
-// ---- history fetch (tile/row sparklines, fixed 24h window) ----
+// ---- history fetch ----
+//
+// The recorder folds the window (docs/design.md, Read path): a line asks
+// for one bucket per drawn column, a timeline for the runs of the state.
+// The window travels with the points so the chart places them by time.
 
+function fetchHistory(entity, aspect, hours, shape) {
+  var win = { from: Date.now() - hours * 3600e3, to: Date.now() };
+  var url = '/api/history?entity=' + encodeURIComponent(entity) + '&aspect=' + encodeURIComponent(aspect) + '&hours=' + hours +
+    (shape === 'timeline' ? '&changes=1' : '&bucket=' + logic.bucketSeconds(hours, CHART_VBW));
+  return fetch(url)
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      var pts = [];
+      (data.series || []).forEach(function (series) {
+        (series.points || []).forEach(function (p) { pts.push(p); });
+      });
+      return { points: pts, window: win, loaded: true, loading: false };
+    })
+    .catch(function () {
+      return { points: [], window: win, loaded: true, loading: false };
+    });
+}
+
+// tile/row sparklines: numeric readings, fixed 24h window
 function ensureHistory(entity, aspect) {
   var sk = entity + '|' + aspect;
   var s = localState.sparklines[sk];
   if (s && (s.loaded || s.loading)) return;
   localState.sparklines[sk] = { points: [], loaded: false, loading: true };
-  fetch('/api/history?entity=' + encodeURIComponent(entity) + '&aspect=' + encodeURIComponent(aspect) + '&hours=24&limit=500')
-    .then(function (r) { return r.json(); })
-    .then(function (data) {
-      var pts = [];
-      (data.series || []).forEach(function (series) {
-        (series.points || []).forEach(function (p) { pts.push(p); });
-      });
-      localState.sparklines[sk] = { points: pts, loaded: true, loading: false };
-      scheduleRender();
-    })
-    .catch(function () {
-      localState.sparklines[sk] = { points: [], loaded: true, loading: false };
-    });
+  fetchHistory(entity, aspect, 24, 'chart').then(function (loaded) {
+    localState.sparklines[sk] = loaded;
+    scheduleRender();
+  });
 }
 
-// ---- history fetch (detail overlay, range-selectable) ----
-
-function fetchHistoryRange(entityName, aspect, hours) {
+// detail overlay, range-selectable
+function fetchHistoryRange(entityName, aspect, hours, shape) {
   var rd = overlay.rangeData[hours];
   if (rd && (rd.loaded || rd.loading)) return;
   overlay.rangeData[hours] = { points: [], loaded: false, loading: true };
-  fetch('/api/history?entity=' + encodeURIComponent(entityName) + '&aspect=' + encodeURIComponent(aspect) + '&hours=' + hours + '&limit=500')
-    .then(function (r) { return r.json(); })
-    .then(function (data) {
-      var pts = [];
-      (data.series || []).forEach(function (series) {
-        (series.points || []).forEach(function (p) { pts.push(p); });
-      });
-      overlay.rangeData[hours] = { points: pts, loaded: true, loading: false };
-      overlay.lastPoints = pts;
-      if (overlay.open && overlay.type === 'history') renderOverlayContent();
-    })
-    .catch(function () {
-      overlay.rangeData[hours] = { points: [], loaded: true, loading: false };
-      if (overlay.open && overlay.type === 'history') renderOverlayContent();
-    });
+  fetchHistory(entityName, aspect, hours, shape).then(function (loaded) {
+    if (!overlay.shapeSettled && loaded.points.length) {
+      // guessed without a live value: the recorded values have the say
+      overlay.shapeSettled = true;
+      var actual = logic.historyShape(loaded.points[0].value);
+      if (actual !== overlay.shape && overlay.open && overlay.aspect === aspect) {
+        overlay.shape = actual;
+        overlay.rangeData = {};
+        fetchHistoryRange(entityName, aspect, hours, actual);
+        return;
+      }
+    }
+    overlay.rangeData[hours] = loaded;
+    overlay.lastPoints = loaded.points;
+    if (overlay.open && overlay.type === 'history') renderOverlayContent();
+  });
 }
 
 // ---- log fetch (detail overlay, unit) ----
@@ -777,30 +841,69 @@ function fmtOrDash(v) {
 
 var unitNameFromHealthKey = logic.unitNameFromHealthKey;
 
+// The nav is the file's views (dashboard-logic.js, viewsOf); Health and
+// Not shown are fixed chrome below it, never views the file can name.
+function currentView() {
+  var views = logic.viewsOf(store.model);
+  if (store.view === 'health' || store.view === 'notshown') return store.view;
+  var named = views.filter(function (v) { return v.name === store.view; })[0];
+  return named ? named.name : (views.length ? views[0].name : 'notshown');
+}
+
 function renderShell() {
+  var views = logic.viewsOf(store.model);
+  var current = currentView();
+  var unplaced = logic.placement(store.model);
+  var notShownCount = unplaced.entities.length + unplaced.params.length;
+
   var nav = byId('rail-nav');
-  nav.innerHTML = VIEWS.map(function (v) {
-    return '<button data-view="' + v + '" class="' + (store.view === v ? 'active' : '') + '">' + VIEW_LABELS[v] + '</button>';
+  nav.innerHTML = views.map(function (v) {
+    return '<button data-view="' + esc(v.name) + '" class="' + (current === v.name ? 'active' : '') + '">' + esc(v.label) + '</button>';
   }).join('');
 
   var tabs = byId('tabs-row');
-  tabs.innerHTML = VIEWS.map(function (v) {
-    return '<button data-view="' + v + '" class="' + (store.view === v ? 'active' : '') + '">' +
-      TAB_ICONS[v] + '<span class="tab-label">' + VIEW_LABELS[v] + '</span></button>';
-  }).join('');
+  var tabHtml = views.map(function (v) {
+    return '<button data-view="' + esc(v.name) + '" class="' + (current === v.name ? 'active' : '') + '">' +
+      (TAB_ICONS[v.kind] || TAB_ICONS.view) + '<span class="tab-label">' + esc(v.label) + '</span></button>';
+  });
+  var fixedHtml = '<button data-view="health" class="' + (current === 'health' ? 'active' : '') + '">' + TAB_ICONS.health + '<span class="tab-label">Health</span></button>' +
+    '<button data-view="notshown" class="' + (current === 'notshown' ? 'active' : '') + '">' + TAB_ICONS.notshown +
+    '<span class="tab-label">Not shown' + (notShownCount ? ' · ' + notShownCount : '') + '</span></button>';
+  // Rebuilding the scroller would reset its scroll position on every
+  // render; only the active marks change between renders of the same nav.
+  var viewsRow = tabs.querySelector('.tabs-views');
+  var same = viewsRow && viewsRow.getAttribute('data-views') === views.map(function (v) { return v.name; }).join('\n');
+  if (!same) {
+    tabs.innerHTML = '<div class="tabs-views" data-views="' + esc(views.map(function (v) { return v.name; }).join('\n')) + '">' + tabHtml.join('') + '</div>' +
+      '<div class="tabs-fixed">' + fixedHtml + '</div>';
+  } else {
+    tabs.querySelectorAll('button[data-view]').forEach(function (b) {
+      b.classList.toggle('active', b.getAttribute('data-view') === current);
+    });
+    tabs.querySelector('.tabs-fixed').innerHTML = fixedHtml;
+  }
+  var activeTab = tabs.querySelector('.tabs-views button.active');
+  if (activeTab && activeTab.scrollIntoView) activeTab.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 
   var hw = healthWorstAndCount();
   var pin = byId('health-pin');
+  var healthRows;
   if (hw.total === 0) {
-    pin.innerHTML = '<div class="label">Health</div><div class="row faint">no units yet</div>';
+    healthRows = '<div class="row faint">no units yet</div>';
   } else {
     var worstLine = hw.worst.status === 'running'
       ? ''
       : '<div class="row"><span class="status-glyph status-' + esc(hw.worst.status) + '">' + statusGlyph(hw.worst.status) + '</span>&nbsp;' +
         esc(titleCase(unitNameFromHealthKey(hw.worst.key))) + ' · ' + esc(hw.worst.status) + '</div>';
-    pin.innerHTML = '<div class="label">Health</div>' + worstLine +
+    healthRows = worstLine +
       '<div class="row"><span class="status-glyph status-running">●</span> ' + hw.ok + '/' + hw.total + ' ok</div>';
   }
+  pin.innerHTML = '<button class="pin-btn' + (current === 'health' ? ' active' : '') + '" data-view="health"><div class="label">Health</div>' + healthRows + '</button>' +
+    '<button class="pin-btn' + (current === 'notshown' ? ' active' : '') + '" data-view="notshown"><div class="label">Not shown</div>' +
+    '<div class="row">' + (notShownCount
+      ? esc(unplaced.entities.length + (unplaced.entities.length === 1 ? ' entity' : ' entities') +
+        (unplaced.params.length ? ' · ' + unplaced.params.length + (unplaced.params.length === 1 ? ' setpoint' : ' setpoints') : ''))
+      : 'everything is on a view') + '</div></button>';
 
   updateBanner();
 }
@@ -816,15 +919,23 @@ document.addEventListener('click', function (e) {
 
 // ---- charts: geometry + markup ----
 
-function computeChartGeometry(points, width, height, pad) {
+// Points sit where their timestamps fall in the window — a gap in the
+// record stays a gap — and only fall back to even spacing without one.
+// A live point past the window's end (a delta after the fetch) extends it.
+function computeChartGeometry(points, width, height, pad, win) {
   var vals = points.map(function (p) { return p.value; }).filter(function (v) { return typeof v === 'number'; });
   if (vals.length < 2) return null;
   var min = Math.min.apply(null, vals);
   var max = Math.max.apply(null, vals);
   var span = (max - min) || 1;
   var n = points.length;
+  var times = points.map(function (p) { return Date.parse(p.ts); });
+  var from = win ? win.from : times[0];
+  var to = Math.max(win ? win.to : times[n - 1], times[n - 1]);
+  var byTime = times.every(function (t) { return !isNaN(t); }) && to > from;
   var coords = points.map(function (p, i) {
-    var x = pad + (i / (n - 1)) * (width - 2 * pad);
+    var f = byTime ? (times[i] - from) / (to - from) : i / (n - 1);
+    var x = pad + f * (width - 2 * pad);
     var y = pad + (1 - (p.value - min) / span) * (height - 2 * pad);
     return { x: x, y: y, value: p.value, ts: p.ts };
   });
@@ -856,7 +967,7 @@ function buildChart(chartId, points, opts) {
   var height = opts.height || 36;
   var pad = opts.pad !== undefined ? opts.pad : 3;
   var sizeClass = opts.sizeClass || 'chart-tile';
-  var geo = computeChartGeometry(points || [], CHART_VBW, height, pad);
+  var geo = computeChartGeometry(points || [], CHART_VBW, height, pad, opts.window);
   var inner;
   if (!geo) {
     chartRegistry[chartId] = null;
@@ -889,6 +1000,35 @@ function buildChart(chartId, points, opts) {
   return '<div class="chart-wrap ' + sizeClass + '" data-chart-id="' + esc(chartId) + '">' + inner + '</div>';
 }
 
+// A timeline: one band per run of a bool or string state over the window
+// (dashboard-logic.js, timelineRuns). A boolean is a filled band while
+// true and a faint one while false; a string's runs alternate two tints
+// so each change reads as an edge, and the tooltip names the value.
+function buildTimeline(chartId, points, opts) {
+  var height = opts.height || 36;
+  var sizeClass = opts.sizeClass || 'chart-tile';
+  var runs = logic.timelineRuns(points || [], opts.window.from, opts.window.to);
+  var inner;
+  if (runs.length === 0) {
+    chartRegistry[chartId] = null;
+    inner = '<div class="chart-empty">no history yet</div>';
+  } else {
+    var span = opts.window.to - opts.window.from;
+    chartRegistry[chartId] = { runs: runs, window: opts.window, width: CHART_VBW, height: height, aspect: opts.aspect, field: opts.field };
+    var svg = '<svg viewBox="0 0 ' + CHART_VBW + ' ' + height + '" preserveAspectRatio="none">';
+    runs.forEach(function (r, i) {
+      var x = (r.start - opts.window.from) / span * CHART_VBW;
+      var w = Math.max(1, (r.end - r.start) / span * CHART_VBW);
+      var cls = r.value === true ? 'tl-on' : r.value === false ? 'tl-off' : (i % 2 ? 'tl-b' : 'tl-a');
+      svg += '<rect class="' + cls + '" x="' + x.toFixed(1) + '" y="2" width="' + w.toFixed(1) + '" height="' + (height - 4) + '"/>';
+    });
+    svg += '<line class="chart-crosshair" x1="0" y1="0" x2="0" y2="' + height + '" style="display:none;"/>';
+    svg += '</svg>';
+    inner = svg;
+  }
+  return '<div class="chart-wrap ' + sizeClass + '" data-chart-id="' + esc(chartId) + '">' + inner + '</div>';
+}
+
 function minMaxCaption(points) {
   var vals = (points || []).map(function (p) { return p.value; }).filter(function (v) { return typeof v === 'number'; });
   if (vals.length === 0) return '';
@@ -903,8 +1043,12 @@ function wireChartInteractions(root) {
   (root || document).querySelectorAll('.chart-wrap[data-chart-id]').forEach(function (wrap) {
     var id = wrap.getAttribute('data-chart-id');
     var reg = chartRegistry[id];
-    if (!reg || !reg.coords || reg.coords.length < 2) return;
-    wrap.addEventListener('pointermove', function (ev) { onChartPointerMove(wrap, reg, ev); });
+    if (!reg) return;
+    if (reg.runs) {
+      wrap.addEventListener('pointermove', function (ev) { onTimelinePointerMove(wrap, reg, ev); });
+    } else if (reg.coords && reg.coords.length >= 2) {
+      wrap.addEventListener('pointermove', function (ev) { onChartPointerMove(wrap, reg, ev); });
+    } else return;
     wrap.addEventListener('pointerleave', function () { onChartPointerLeave(wrap); });
   });
 }
@@ -914,9 +1058,9 @@ function onChartPointerMove(wrap, reg, ev) {
   if (rect.width === 0) return;
   var fx = (ev.clientX - rect.left) / rect.width;
   fx = Math.max(0, Math.min(1, fx));
-  var n = reg.coords.length;
-  var idx = Math.round(fx * (n - 1));
-  var c = reg.coords[idx];
+  var tx = fx * reg.width;
+  var c = reg.coords[0];
+  reg.coords.forEach(function (p) { if (Math.abs(p.x - tx) < Math.abs(c.x - tx)) c = p; });
   var svg = wrap.querySelector('svg');
   if (!svg) return;
   var line = svg.querySelector('.chart-crosshair');
@@ -928,6 +1072,23 @@ function onChartPointerMove(wrap, reg, ev) {
   var px = rect.left + (c.x / reg.width) * rect.width;
   var py = rect.top + (c.y / reg.height) * rect.height;
   showChartTooltip(px, py, formatChartValue(reg.aspect, c.value), formatChartTime(c.ts));
+}
+
+function onTimelinePointerMove(wrap, reg, ev) {
+  var rect = wrap.getBoundingClientRect();
+  if (rect.width === 0) return;
+  var fx = Math.max(0, Math.min(1, (ev.clientX - rect.left) / rect.width));
+  var t = reg.window.from + fx * (reg.window.to - reg.window.from);
+  var run = null;
+  reg.runs.forEach(function (r) { if (t >= r.start && t < r.end) run = r; });
+  var line = wrap.querySelector('.chart-crosshair');
+  if (!line) return;
+  var x = fx * reg.width;
+  line.setAttribute('x1', x); line.setAttribute('x2', x);
+  line.style.display = '';
+  if (!run) { hideChartTooltip(); return; }
+  showChartTooltip(ev.clientX, rect.top, logic.formatAspect(reg.aspect || '', reg.field, run.value),
+    'since ' + formatChartTime(run.start));
 }
 
 function onChartPointerLeave(wrap) {
@@ -978,9 +1139,12 @@ function widgetForLight(entity) {
     var bkey = entity.room + '/' + entity.name + '/brightness';
     var pct = typeof b === 'number' ? Math.round((b / 254) * 100) : 0;
     if (localState.sliderDrag[bkey] !== undefined) pct = localState.sliderDrag[bkey];
+    var nudgeAttrs = ' data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '"' + (inert || typeof b !== 'number' ? ' disabled' : '');
     html += '<div class="slider-row entity-sub"><span class="slabel">brightness</span>' +
+      '<button class="step-btn" data-action="brightness-step"' + nudgeAttrs + ' data-delta="-10" aria-label="dimmer">&minus;</button>' +
       '<input type="range" min="0" max="100" value="' + pct + '"' + (inert ? ' disabled' : '') + ' data-action="slider" data-kind="brightness" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '">' +
-      '<span class="sval">' + pct + '%</span></div>';
+      '<span class="sval">' + pct + '%</span>' +
+      '<button class="step-btn" data-action="brightness-step"' + nudgeAttrs + ' data-delta="10" aria-label="brighter">+</button></div>';
   }
   if (entity.features && entity.features.indexOf('color_temp') !== -1) {
     var ct = stateValue(entity.room, entity.name, 'color_temp');
@@ -1016,7 +1180,7 @@ function widgetForLock(entity) {
     '</div>';
 }
 
-function widgetForClimate(entity) {
+function widgetForClimate(entity, big) {
   var setpoint = stateValue(entity.room, entity.name, 'setpoint');
   var hasSetpoint = typeof setpoint === 'number';
   var readout = hasSetpoint ? setpoint.toFixed(1) + '°' : '—';
@@ -1027,6 +1191,14 @@ function widgetForClimate(entity) {
   if (typeof feed === 'number') nowParts.push(feed.toFixed(1) + '° feed');
   var badge = entity.write_mode === 'arbitrated' ? '<span class="badge-arbitrated">ARBITRATED</span>' : '';
   var disabledAttr = hasSetpoint && !controlDisabled(entity) ? '' : ' disabled';
+  if (big) {
+    // the overlay and the dial widget: the vocabulary's setpoint on a
+    // dial, bounds the capability's usual (the adapter enforces its own)
+    return renderDial('climate-step', ' data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '"', {
+      value: setpoint, display: readout, min: 5, max: 30, step: 0.5,
+      disabled: !!disabledAttr, current: nowParts.join(' · ')
+    });
+  }
   return '<div class="entity-row row-clickable" data-action="entity-detail" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '">' +
     '<span class="entity-name" title="' + esc(entity.label) + '">' + esc(entity.label) + badge + '</span>' +
     '<span style="display:flex;align-items:center;gap:10px;">' +
@@ -1060,7 +1232,7 @@ function widgetForSensor(entity, withHead) {
     var sk = entity.name + '|' + r.aspect;
     ensureHistory(entity.name, r.aspect); // fetched once (guarded), on first render while visible
     var s = localState.sparklines[sk];
-    var sparkHtml = s && s.loaded ? buildChart('room-' + sk, s.points, { height: 28, sizeClass: 'chart-row', aspect: r.aspect, area: true }) : '';
+    var sparkHtml = s && s.loaded ? buildChart('room-' + sk, s.points, { height: 28, sizeClass: 'chart-row', aspect: r.aspect, area: true, window: s.window }) : '';
     var name = multi ? r.label : entity.label;
     return '<div class="entity-row row-clickable' + (multi ? ' sensor-reading' : '') + '" data-action="history-detail"' + attrs + ' data-aspect="' + esc(r.aspect) + '">' +
       '<span class="entity-name" title="' + esc(name) + '">' + esc(name) + '</span>' +
@@ -1283,55 +1455,75 @@ function renderMapCard(persons) {
   var noFixHtml = noFix.length
     ? '<div class="map-nofix">' + noFix.map(function (e) { return esc(e.label); }).join(', ') + ' &mdash; no fix yet</div>'
     : '';
-  return '<div class="card" style="margin-top:16px;"><div class="card-label">Map</div>' +
+  return '<div class="card span-all"><div class="card-label">Map</div>' +
     '<div id="map-slot"></div>' + hint + noFixHtml + '</div>';
 }
 
-// ---- view: Now ----
+// ---- widgets ----
+//
+// A view is a list of widgets (dashboard.toml, or the generated views'
+// implicit lists), each a card built from what the page already renders.
+// The dashboard owns every one of these; a widget places, never draws.
 
-function renderNow() {
-  var entities = store.model.entities || [];
-  var persons = personEntities();
+// Signal tiles: one per reading of the entity, or the one reading named.
+// Which readings, in what order, is the descriptor's say — the same rows
+// as the entity's sensor card (dashboard-logic.js, sensorCardPlan).
+function widgetTiles(entity, aspect) {
+  var rows = logic.sensorCardPlan(entity, store.state, store.aspects[entity.name]);
+  if (aspect) rows = rows.filter(function (r) { return r.aspect === aspect; });
+  return rows.map(function (r) {
+    var sk = entity.name + '|' + r.aspect;
+    ensureHistory(entity.name, r.aspect);
+    var s = localState.sparklines[sk];
+    var spark = s && s.loaded ? buildChart('tile-' + sk, s.points, { height: 36, sizeClass: 'chart-tile', aspect: r.aspect, area: true, window: s.window }) : '';
+    var caption = s && s.loaded ? minMaxCaption(s.points) : '';
+    var tileLabel = esc(entity.label) + (rows.length > 1 ? ' &middot; ' + esc(r.label) : '');
+    return '<div class="card tile clickable" data-action="history-detail" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '" data-aspect="' + esc(r.aspect) + '">' +
+      '<div class="card-label" title="' + esc(entity.label) + '">' + tileLabel.toUpperCase() + '</div>' +
+      '<div class="big' + (r.stale ? ' stale' : '') + '">' + esc(r.display) + '</div>' + spark +
+      '<div class="caption">' + esc(caption) + '</div></div>';
+  }).join('');
+}
 
-  // Signal tiles: only entities the house repo pins ([dashboard] pin = true).
-  // Nothing is pinned by default — Now is the error signal, not an inventory.
-  var tiles = [];
-  entities.filter(function (e) { return e.pin; }).forEach(function (e) {
-    // Which readings, in what order, is the descriptor's say — the same
-    // rows as the entity's sensor card (dashboard-logic.js, sensorCardPlan).
-    var rows = logic.sensorCardPlan(e, store.state, store.aspects[e.name]);
-    rows.forEach(function (r) {
-      var aspect = r.aspect;
-      var sk = e.name + '|' + aspect;
-      ensureHistory(e.name, aspect);
-      var s = localState.sparklines[sk];
-      var spark = s && s.loaded ? buildChart('now-' + sk, s.points, { height: 36, sizeClass: 'chart-tile', aspect: aspect, area: true }) : '';
-      var caption = s && s.loaded ? minMaxCaption(s.points) : '';
-      var tileLabel = esc(e.label) + (rows.length > 1 ? ' &middot; ' + esc(r.label) : '');
-      tiles.push('<div class="card tile clickable" data-action="history-detail" data-room="' + esc(e.room) + '" data-entity="' + esc(e.name) + '" data-aspect="' + esc(aspect) + '">' +
-        '<div class="card-label" title="' + esc(e.label) + '">' + tileLabel.toUpperCase() + '</div>' +
-        '<div class="big' + (r.stale ? ' stale' : '') + '">' + esc(r.display) + '</div>' + spark +
-        '<div class="caption">' + esc(caption) + '</div></div>');
+// One aspect's history over a window, as a card.
+function widgetChart(entity, aspect, hours) {
+  var key = entity.name + '|' + aspect + '|' + hours;
+  var s = localState.charts[key];
+  if (!s) {
+    localState.charts[key] = { points: [], loaded: false, loading: true };
+    fetchHistory(entity.name, aspect, hours, 'chart').then(function (loaded) {
+      localState.charts[key] = loaded;
+      scheduleRender();
     });
-  });
-
-  // People: the person entities, home or away from their presence aspect;
-  // failing that, when they were last seen. Motion sensors are rooms'
-  // business, not people.
-  if (persons.length > 0) {
-    var pRows = persons.map(function (e) {
-      var st = logic.personStatus(store.state, e);
-      var detail = st.home === true ? 'Home' : st.home === false ? 'Away'
-        : st.seenAt !== undefined ? 'last fix ' + relTime(st.seenAt) : 'no signal';
-      return '<div class="row-clickable" data-action="entity-detail" data-room="' + esc(e.room) + '" data-entity="' + esc(e.name) + '" style="display:flex;align-items:center;gap:6px;padding:3px 0;">' +
-        '<span class="status-dot ' + (st.home === true ? 'dot-on' : 'dot-off') + '"></span>' +
-        '<span>' + esc(e.label) + ' &middot; ' + esc(detail) + '</span></div>';
-    }).join('');
-    tiles.push('<div class="card tile"><div class="card-label">People</div>' + pRows + '</div>');
+    s = localState.charts[key];
   }
+  var field = descriptorField(entity, aspect);
+  var value = stateValue(entity.room, entity.name, aspect);
+  var chart = s.loaded ? buildChart('chart-' + key, s.points, { height: 120, sizeClass: 'chart-card', aspect: aspect, area: true, gridlines: true, yLabels: true, window: s.window }) : '';
+  return '<div class="card tile clickable span-all" data-action="history-detail" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '" data-aspect="' + esc(aspect) + '">' +
+    '<div class="card-label">' + esc(entity.label + ' · ' + ((field && field.label) || aspect)).toUpperCase() + ' <span class="faint">' + esc(hours >= 48 ? Math.round(hours / 24) + 'd' : hours + 'h') + '</span></div>' +
+    '<div class="big">' + esc(logic.formatAspect(aspect, field, value)) + '</div>' + chart + '</div>';
+}
 
-  // out of the ordinary — the rules live in dashboard-logic.js; here each
-  // record's target maps onto the tap wiring.
+// People: the person entities, home or away from their presence aspect;
+// failing that, when they were last seen. Motion sensors are rooms'
+// business, not people.
+function widgetPeople(persons) {
+  if (persons.length === 0) return '';
+  var pRows = persons.map(function (e) {
+    var st = logic.personStatus(store.state, e);
+    var detail = st.home === true ? 'Home' : st.home === false ? 'Away'
+      : st.seenAt !== undefined ? 'last fix ' + relTime(st.seenAt) : 'no signal';
+    return '<div class="row-clickable" data-action="entity-detail" data-room="' + esc(e.room) + '" data-entity="' + esc(e.name) + '" style="display:flex;align-items:center;gap:6px;padding:3px 0;">' +
+      '<span class="status-dot ' + (st.home === true ? 'dot-on' : 'dot-off') + '"></span>' +
+      '<span>' + esc(e.label) + ' &middot; ' + esc(detail) + '</span></div>';
+  }).join('');
+  return '<div class="card tile"><div class="card-label">People</div>' + pRows + '</div>';
+}
+
+// Out of the ordinary — the rules live in dashboard-logic.js; here each
+// record's target maps onto the tap wiring.
+function widgetDeviations() {
   var deviations = logic.computeDeviations(
     store.model, store.state, store.health, store.config, store.aspects
   );
@@ -1363,13 +1555,162 @@ function renderNow() {
         '<div class="dev-tag">' + esc(d.tag) + '</div></div>';
     }).join('');
   }
+  return '<div class="card span-all"><div class="card-label">Out of the ordinary' + (deviations.length ? ' — ' + deviations.length : '') + '</div>' + devHtml + '</div>';
+}
 
-  var html = '<h1 class="view-title">Now</h1>';
-  if (tiles.length > 0) html += '<div class="grid">' + tiles.join('') + '</div>';
-  html += '<div class="card" style="' + (tiles.length > 0 ? 'margin-top:16px;' : '') + '"><div class="card-label">Out of the ordinary' + (deviations.length ? ' — ' + deviations.length : '') + '</div>' + devHtml + '</div>';
-  if (persons.length > 0) html += renderMapCard(persons);
+// A unit's family-editable parameters as one card.
+function widgetParams(unit) {
+  var params = unit.params || {};
+  var rows = Object.keys(params).filter(function (p) { return familyEditable(params[p]); })
+    .map(function (p) { return renderParamRow(unit.name, p, params[p], true); });
+  return '<div class="card"><div class="card-label">' + esc(unit.label) + '</div>' +
+    (rows.length ? rows.join('') : '<div class="empty-hint">No family-editable parameters.</div>') + '</div>';
+}
+
+// A thermostat dial as a card: the described temperature command named
+// (or the first one), else the climate capability's own setpoint. An
+// entity with neither falls back to its own row.
+function widgetDial(entity, aspect) {
+  var rows = [];
+  logic.aspectPlan(entity, store.state, store.aspects[entity.name], !controlDisabled(entity)).forEach(function (s) {
+    s.rows.forEach(function (r) { rows.push(r); });
+  });
+  var row = rows.filter(function (r) { return r.control && r.control.kind === 'dial' && (!aspect || r.aspect === aspect); })[0];
+  var body = row ? renderAspectControl(entity, row, true)
+    : entity.capability === 'climate' ? widgetForClimate(entity, true)
+    : widgetForEntity(entity);
+  return '<div class="card clickable" data-action="entity-detail" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '">' +
+    '<div class="card-label" title="' + esc(entity.label) + '">' + esc(entity.label).toUpperCase() + (row ? ' &middot; ' + esc(row.label).toUpperCase() : '') + '</div>' + body + '</div>';
+}
+
+// An entity's own row — its control or its readings — as a card.
+function widgetEntity(entity) {
+  return '<div class="card">' + widgetForEntity(entity) + '</div>';
+}
+
+// A unit's card (dashboard-logic.js, unitCardPlan): head, then the
+// relations the manifest and the grant table already state. Each section
+// is drawn only when it has members; the labels are the page's words, not
+// the manifest's, and the card can say nothing the manifest did not.
+function widgetUnit(unitName) {
+  var plan = logic.unitCardPlan(store.model, unitName);
+  if (!plan) return '';
+  var u = plan.unit;
+  var h = store.health['home/health/' + u.name] || {};
+  var status = h.status || 'stopped';
+  var html = '<div class="card unit-card">' +
+    '<div class="unit-head row-clickable" data-action="unit-detail" data-unit="' + esc(u.name) + '">' +
+    '<div><div class="unit-name" title="' + esc(u.label) + '">' + esc(u.label) + '</div>' +
+    (u.description ? '<div class="unit-desc">' + esc(u.description) + '</div>' : '') + '</div>' +
+    '<span class="status-badge" title="' + esc(healthTooltip(h)) + '"><span class="status-glyph status-' + esc(status) + '">' + statusGlyph(status) + '</span>' + esc(status) + '</span></div>';
+  var section = function (label, body) {
+    return body ? '<div class="section-label">' + label + '</div>' + body : '';
+  };
+  // its own card: the param name alone, the unit is the head
+  html += section('Setpoints', plan.params.map(function (p) { return renderParamRow(u.name, p, u.params[p], true); }).join(''));
+  html += section('Publishes', plan.publishes.map(widgetForEntity).join(''));
+  html += section('Drives', plan.drives.map(widgetForEntity).join(''));
+  html += section('From', plan.sources.map(function (e) { return widgetForEntity(e); }).join(''));
+  return html + '</div>';
+}
+
+// The room card: every entity in the room, controls first.
+function renderRoomCard(room, ents) {
+  var sorted = ents.slice().sort(function (a, b) { return capRank(a) - capRank(b); });
+  var title = room === 'global' ? 'House' : titleCase(room);
+  return '<div class="card room-card"><h3 title="' + esc(title) + '">' + esc(title) + '</h3>' + sorted.map(widgetForEntity).join('') + '</div>';
+}
+
+function entitiesInRoom(room) {
+  return (store.model.entities || []).filter(function (e) { return e.room === room; });
+}
+
+function unitByName(name) {
+  return (store.model.units || []).filter(function (u) { return u.name === name; })[0];
+}
+
+// The compositor: a view's widgets, in order, in one grid. The map is
+// mounted after the markup lands (Leaflet owns its container).
+function renderWidgets(title, widgets) {
+  var persons = personEntities();
+  var wantMap = false;
+  var cards = widgets.map(function (w) {
+    if (w.kind === 'tile') {
+      var te = findEntityByName(w.entity);
+      return te ? widgetTiles(te, w.aspect) : '';
+    }
+    if (w.kind === 'chart') {
+      var ce = findEntityByName(w.entity);
+      return ce ? widgetChart(ce, w.aspect, w.hours || 24) : '';
+    }
+    if (w.kind === 'entity') {
+      var ee = findEntityByName(w.entity);
+      return ee ? widgetEntity(ee) : '';
+    }
+    if (w.kind === 'dial') {
+      var de = findEntityByName(w.entity);
+      return de ? widgetDial(de, w.aspect) : '';
+    }
+    if (w.kind === 'room') return renderRoomCard(w.room, entitiesInRoom(w.room));
+    if (w.kind === 'unit') return widgetUnit(w.unit);
+    if (w.kind === 'params') {
+      var pu = unitByName(w.unit);
+      return pu ? widgetParams(pu) : '';
+    }
+    if (w.kind === 'people') return widgetPeople(persons);
+    if (w.kind === 'deviations') return widgetDeviations();
+    if (w.kind === 'map' && persons.length > 0) {
+      wantMap = true;
+      return renderMapCard(persons);
+    }
+    return '';
+  }).join('');
+  var html = '<h1 class="view-title">' + esc(title) + '</h1>';
+  html += cards ? '<div class="grid">' + cards + '</div>' : '<div class="card"><div class="empty-hint">Nothing to show yet.</div></div>';
   byId('view').innerHTML = html;
-  if (persons.length > 0) mountMap(persons);
+  if (wantMap) mountMap(persons);
+}
+
+function findEntityByName(name) {
+  return (store.model.entities || []).filter(function (e) { return e.name === name; })[0];
+}
+
+// ---- view: Now ----
+//
+// The error signal, not an inventory: people, what is out of the
+// ordinary, and the map when anyone has a location. A reading earns a
+// tile only by being placed in dashboard.toml.
+function renderNow() {
+  renderWidgets('Now', [{ kind: 'people' }, { kind: 'deviations' }, { kind: 'map' }]);
+}
+
+// ---- view: Not shown ----
+//
+// The complement of every placement in dashboard.toml (dashboard-logic.js,
+// placement): what the family cannot reach from the nav, by room, each
+// row its normal widget so it is usable here and not merely listed.
+function renderNotShown() {
+  var unplaced = logic.placement(store.model);
+  var byRoom = {};
+  unplaced.entities.forEach(function (e) {
+    if (!byRoom[e.room]) byRoom[e.room] = [];
+    byRoom[e.room].push(e);
+  });
+  var rooms = Object.keys(byRoom).sort(function (a, b) {
+    // the pseudo-rooms last: the house's own things, and people
+    var pa = a === 'global' || a === 'person', pb = b === 'global' || b === 'person';
+    return pa === pb ? (a < b ? -1 : 1) : (pa ? 1 : -1);
+  });
+  var cards = rooms.map(function (room) { return renderRoomCard(room, byRoom[room]); });
+  if (unplaced.params.length) {
+    cards.push('<div class="card"><h3>Setpoints</h3>' + unplaced.params.map(function (p) {
+      return renderParamRow(p.unit, p.param, p.spec);
+    }).join('') + '</div>');
+  }
+  var html = '<h1 class="view-title">Not shown</h1>';
+  html += '<div class="muted" style="margin:-8px 0 16px;max-width:62ch;">Everything no view in <code>dashboard.toml</code> places. Placing it there removes it from here.</div>';
+  html += cards.length ? '<div class="grid">' + cards.join('') + '</div>' : '<div class="card"><div class="empty-hint">Every entity and setpoint is on a view.</div></div>';
+  byId('view').innerHTML = html;
 }
 
 // ---- view: Setpoints ----
@@ -1400,6 +1741,11 @@ function renderParamControl(unitName, pname, p) {
     var on = !!value;
     return '<span class="toggle ' + (on ? 'on' : '') + '" data-action="param-toggle" data-unit="' + esc(unitName) + '" data-param="' + esc(pname) + '" data-value="' + (!on) + '"><span class="knob"></span></span>';
   }
+  if (p.type === 'enum' && p.values && p.values.length > logic.SELECT_ABOVE) {
+    return '<select class="control" id="' + id + '" data-action="param-select" data-unit="' + esc(unitName) + '" data-param="' + esc(pname) + '">' + p.values.map(function (v) {
+      return '<option value="' + esc(v) + '"' + (v === value ? ' selected' : '') + '>' + esc(v) + '</option>';
+    }).join('') + '</select>';
+  }
   if (p.type === 'enum' && p.values) {
     return '<div class="seg">' + p.values.map(function (v) {
       return '<button data-action="param-enum" data-unit="' + esc(unitName) + '" data-param="' + esc(pname) + '" data-value="' + esc(v) + '" class="' + (v === value ? 'active' : '') + '">' + esc(v) + '</button>';
@@ -1425,7 +1771,7 @@ function familyEditable(p) { return p.editable_by === 'family'; }
 // shared by the Setpoints view and the unit-detail overlay. A param the
 // family cannot edit renders its live value against the manifest default
 // instead of a control: visible, not writable (/api/param is the gate).
-function renderParamRow(unitName, pname, p) {
+function renderParamRow(unitName, pname, p, bare) {
   var body;
   if (familyEditable(p)) {
     body = '<div>' + renderParamControl(unitName, pname, p) + '</div>';
@@ -1437,7 +1783,7 @@ function renderParamRow(unitName, pname, p) {
       ' <span class="tier-badge">' + esc(p.editable_by || 'owner') + '</span></div>';
   }
   return '<div class="param-row" id="paramrow-' + unitName + '-' + pname + '"><div class="param-head">' +
-    '<span class="name" title="' + esc(unitLabel(unitName)) + ' · ' + esc(pname) + '">' + esc(unitLabel(unitName)) + ' · ' + esc(pname) + '</span></div>' +
+    '<span class="name" title="' + esc(unitLabel(unitName)) + ' · ' + esc(pname) + '">' + (bare ? '' : esc(unitLabel(unitName)) + ' · ') + esc(pname) + '</span></div>' +
     body +
     '<div class="param-caption" title="' + esc(JSON.stringify(p.constraint || {})) + '">' + esc(paramConstraintCaption(p)) + '</div></div>';
 }
@@ -1507,11 +1853,7 @@ function renderRooms() {
   });
 
   var roomNames = Object.keys(byRoom).sort();
-  var cards = roomNames.map(function (room) {
-    var ents = byRoom[room].slice().sort(function (a, b) { return capRank(a) - capRank(b); });
-    var body = ents.map(widgetForEntity).join('');
-    return '<div class="card room-card"><h3 title="' + esc(titleCase(room)) + '">' + esc(titleCase(room)) + '</h3>' + body + '</div>';
-  });
+  var cards = roomNames.map(function (room) { return renderRoomCard(room, byRoom[room]); });
 
   var html = '<h1 class="view-title">Rooms</h1>';
   html += '<div class="chips">' + chips.join('') + '</div>';
@@ -1575,11 +1917,15 @@ function renderHealth() {
 
 // ---- view dispatch ----
 
+var GENERATED = { now: renderNow, setpoints: renderSetpoints, rooms: renderRooms };
+
 function renderView() {
-  if (store.view === 'now') renderNow();
-  else if (store.view === 'setpoints') renderSetpoints();
-  else if (store.view === 'rooms') renderRooms();
-  else if (store.view === 'health') renderHealth();
+  var current = currentView();
+  var view = logic.viewsOf(store.model).filter(function (v) { return v.name === current; })[0];
+  if (current === 'health') renderHealth();
+  else if (current === 'notshown') renderNotShown();
+  else if (view && view.kind) GENERATED[view.kind]();
+  else if (view) renderWidgets(view.label, view.widgets);
   wireChartInteractions(byId('view'));
 }
 
@@ -1596,7 +1942,8 @@ function render() {
 var CONTROL_ASPECTS = {
   'toggle-light': 'on',
   'toggle-lock': 'locked',
-  'climate-step': 'setpoint'
+  'climate-step': 'setpoint',
+  'brightness-step': 'brightness'
 };
 
 function controlAspect(el) {
@@ -1677,10 +2024,18 @@ function openHistoryDetail(room, entityName, aspect) {
   overlay.type = 'history';
   overlay.entity = entity;
   overlay.aspect = aspect;
+  // The shape follows the live value; without one yet (a fresh page, a
+  // sensor that has not reported) the descriptor's kind decides, and the
+  // first points fetched settle it (fetchHistoryRange).
+  var live = stateValue(room, entityName, aspect);
+  var field = descriptorField(entity, aspect);
+  overlay.shape = live !== undefined ? logic.historyShape(live)
+    : field && (field.kind === 'boolean' || field.kind === 'enum') ? 'timeline' : 'chart';
+  overlay.shapeSettled = live !== undefined;
   overlay.range = 24;
   overlay.rangeData = {};
   overlay.lastPoints = null;
-  fetchHistoryRange(entityName, aspect, 24);
+  fetchHistoryRange(entityName, aspect, 24, overlay.shape);
   showOverlay();
 }
 
@@ -1730,8 +2085,19 @@ function renderOverlayContent() {
 }
 
 function statItem(label, value, aspect) {
-  var v = value === null ? '—' : formatChartValue(aspect, value);
-  return '<div class="stat-item"><div class="stat-value">' + esc(v) + '</div><div class="stat-label">' + label + '</div></div>';
+  return statText(label, value === null ? '—' : formatChartValue(aspect, value));
+}
+
+function statText(label, text) {
+  return '<div class="stat-item"><div class="stat-value">' + esc(text) + '</div><div class="stat-label">' + label + '</div></div>';
+}
+
+function fmtDuration(ms) {
+  var mins = Math.round(ms / 60000);
+  if (mins < 60) return mins + ' min';
+  var h = Math.floor(mins / 60), m = mins % 60;
+  if (h < 48) return m ? h + ' h ' + m + ' min' : h + ' h';
+  return Math.round(h / 24) + ' d';
 }
 
 function rangeStats(points) {
@@ -1749,7 +2115,7 @@ function rangeStats(points) {
 
 function renderHistoryDetailBody() {
   var entity = overlay.entity, aspect = overlay.aspect;
-  var multi = numericAspectsFor(entity).length > 1;
+  var multi = aspectsFor(entity).length > 1;
   var label = entity.label + (multi ? ' · ' + titleCase(aspect) : '');
 
   var chips = RANGE_PRESETS.map(function (rp) {
@@ -1759,11 +2125,23 @@ function renderHistoryDetailBody() {
   var rd = overlay.rangeData[overlay.range];
   var loaded = !!(rd && rd.loaded);
   var points = loaded ? rd.points : (overlay.lastPoints || []);
-  var chartHtml = buildChart('detail-chart', points, { height: 220, sizeClass: 'chart-detail', aspect: aspect, gridlines: true, area: true, yLabels: true });
-  var stats = rangeStats(points);
-  var statsHtml = '<div class="stat-row">' +
-    statItem('Latest', stats.latest, aspect) + statItem('Min', stats.min, aspect) +
-    statItem('Max', stats.max, aspect) + statItem('Avg', stats.avg, aspect) + '</div>';
+  var win = rd && rd.window ? rd.window : { from: Date.now() - overlay.range * 3600e3, to: Date.now() };
+  var chartHtml, statsHtml;
+  if (overlay.shape === 'timeline') {
+    var field = descriptorField(entity, aspect);
+    chartHtml = buildTimeline('detail-chart', points, { height: 64, sizeClass: 'chart-timeline', aspect: aspect, field: field, window: win });
+    var tl = logic.timelineStats(logic.timelineRuns(points, win.from, win.to));
+    statsHtml = '<div class="stat-row">' +
+      statText('Now', tl.latest === null ? '—' : logic.formatAspect(aspect, field, tl.latest)) +
+      (tl.onMs === null ? '' : statText('On', fmtDuration(tl.onMs) + ' of ' + fmtDuration(win.to - win.from))) +
+      statText('Changes', String(tl.changes)) + '</div>';
+  } else {
+    chartHtml = buildChart('detail-chart', points, { height: 220, sizeClass: 'chart-detail', aspect: aspect, gridlines: true, area: true, yLabels: true, window: win });
+    var stats = rangeStats(points);
+    statsHtml = '<div class="stat-row">' +
+      statItem('Latest', stats.latest, aspect) + statItem('Min', stats.min, aspect) +
+      statItem('Max', stats.max, aspect) + statItem('Avg', stats.avg, aspect) + '</div>';
+  }
 
   var body = '<div class="seg">' + chips + '</div>' +
     '<div class="' + (loaded ? '' : 'chart-loading') + '">' + chartHtml + statsHtml + '</div>';
@@ -1778,11 +2156,12 @@ function renderAspectRow(entity, r) {
   var attrs = ' data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '" data-aspect="' + esc(r.aspect) + '"';
   var value = aspectValueSpan(r);
   if (!r.control) {
-    var clickable = r.numeric ? ' row-clickable" data-action="history-detail"' + attrs : '"';
-    return '<div class="aspect-row described' + clickable + '>' +
+    // a chart for a number, a timeline for a bool or a string
+    return '<div class="aspect-row described row-clickable" data-action="history-detail"' + attrs + '>' +
       '<span class="aspect-label">' + esc(r.label) + '</span>' + value + '</div>';
   }
-  return '<div class="aspect-row described"><span class="aspect-label">' + esc(r.label) + '</span>' + renderAspectControl(entity, r) + '</div>';
+  var dial = r.control.kind === 'dial';
+  return '<div class="aspect-row described' + (dial ? ' dial-row' : '') + '"><span class="aspect-label">' + esc(r.label) + '</span>' + renderAspectControl(entity, r, true) + '</div>';
 }
 
 function aspectValueSpan(r) {
@@ -1790,9 +2169,55 @@ function aspectValueSpan(r) {
     (r.stale ? '<span class="stale-mark">stale</span>' : '');
 }
 
-// The control markup for a planned row with a control (overlay and room
-// card alike): the param-control shapes wired to /api/cmd.
-function renderAspectControl(entity, r) {
+// A thermostat dial: the target on a 240° arc from min to max, the
+// current reading beneath it when the entity has one, ± at the arc's
+// ends. The buttons carry the same action attributes as the compact
+// stepper, so the pending/held/timeout stages (#94) apply unchanged.
+function renderDial(action, attrs, o) {
+  var span = (o.max - o.min) || 1;
+  var f = typeof o.value === 'number' ? Math.max(0, Math.min(1, (o.value - o.min) / span)) : 0;
+  var point = function (deg) {
+    var a = deg * Math.PI / 180;
+    return { x: 60 + 46 * Math.cos(a), y: 60 + 46 * Math.sin(a) };
+  };
+  var arc = function (fromDeg, toDeg) {
+    var a = point(fromDeg), b = point(toDeg);
+    return 'M ' + a.x.toFixed(1) + ' ' + a.y.toFixed(1) + ' A 46 46 0 ' + (toDeg - fromDeg > 180 ? 1 : 0) + ' 1 ' + b.x.toFixed(1) + ' ' + b.y.toFixed(1);
+  };
+  var end = -210 + 240 * f;
+  var knob = point(end);
+  var disabled = o.disabled ? ' disabled' : '';
+  return '<div class="dial">' +
+    '<svg viewBox="0 0 120 120" aria-hidden="true"><path class="dial-track" d="' + arc(-210, 30) + '"/>' +
+    (f > 0 ? '<path class="dial-arc" d="' + arc(-210, end) + '"/>' : '') +
+    '<circle class="dial-knob" cx="' + knob.x.toFixed(1) + '" cy="' + knob.y.toFixed(1) + '" r="6"/></svg>' +
+    '<div class="dial-readout"><div class="dial-target">' + esc(o.display) + '</div>' +
+    (o.current ? '<div class="dial-current">' + esc(o.current) + '</div>' : '') + '</div>' +
+    '<div class="dial-buttons">' +
+    '<button class="step-btn" data-action="' + action + '"' + attrs + ' data-delta="' + esc(-o.step) + '"' + disabled + ' aria-label="lower">&minus;</button>' +
+    '<button class="step-btn" data-action="' + action + '"' + attrs + ' data-delta="' + esc(o.step) + '"' + disabled + ' aria-label="raise">+</button>' +
+    '</div></div>';
+}
+
+// The first temperature reading the entity has that is not itself the
+// commanded aspect — what the dial shows as "now".
+function currentTemperatureOf(entity, except) {
+  var rows = [];
+  logic.aspectPlan(entity, store.state, store.aspects[entity.name], false).forEach(function (s) {
+    s.rows.forEach(function (r) { rows.push(r); });
+  });
+  var field = function (r) { return descriptorField(entity, r.aspect); };
+  var hit = rows.filter(function (r) {
+    return r.aspect !== except && r.numeric && !r.control &&
+      ((field(r) && field(r).kind === 'temperature') || (!field(r) && r.aspect.indexOf('temperature') !== -1));
+  })[0];
+  return hit ? hit.display + ' now' : '';
+}
+
+// The control markup for a planned row with a control: the param-control
+// shapes wired to /api/cmd. `big` is the overlay and the dial widget; a
+// room card gets every control's compact form (a dial's is a stepper).
+function renderAspectControl(entity, r, big) {
   var attrs = ' data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '" data-aspect="' + esc(r.aspect) + '"';
   var value = aspectValueSpan(r);
   var c = r.control;
@@ -1800,7 +2225,16 @@ function renderAspectControl(entity, r) {
   var disabledAttr = c.disabled ? ' disabled' : '';
   if (c.kind === 'readonly') {
     control = value + '<span class="tier-badge">' + esc(c.tier) + '</span>';
-  } else if (c.kind === 'stepper') {
+  } else if (c.kind === 'dial' && big) {
+    control = renderDial('aspect-step', attrs, {
+      value: r.value, display: r.display, min: c.min, max: c.max, step: c.step,
+      disabled: c.disabled || !r.numeric, current: currentTemperatureOf(entity, r.aspect)
+    });
+  } else if (c.kind === 'select') {
+    control = '<select class="control" data-action="aspect-select"' + attrs + disabledAttr + '>' + c.values.map(function (v) {
+      return '<option value="' + esc(JSON.stringify(v.value)) + '"' + (v.value === r.value ? ' selected' : '') + '>' + esc(v.label) + '</option>';
+    }).join('') + '</select>';
+  } else if (c.kind === 'stepper' || c.kind === 'dial') {
     var canStep = r.numeric && !c.disabled;
     control = '<span class="stepper">' +
       '<button class="step-btn" data-action="aspect-step"' + attrs + ' data-delta="' + esc(-c.step) + '"' + (canStep ? '' : ' disabled') + '>&minus;</button>' +
@@ -1813,9 +2247,12 @@ function renderAspectControl(entity, r) {
   } else if (c.kind === 'slider') {
     var slideKey = entity.name + '|' + r.aspect;
     var shown = localState.sliderDrag[slideKey] !== undefined ? localState.sliderDrag[slideKey] : r.value;
+    var nudge = c.coarse && r.numeric && !c.disabled;
     control = '<div class="slider-row" style="padding-left:0;">' +
+      '<button class="step-btn" data-action="aspect-step"' + attrs + ' data-delta="' + esc(-c.coarse) + '"' + (nudge ? '' : ' disabled') + ' aria-label="lower">&minus;</button>' +
       '<input type="range" min="' + esc(c.min) + '" max="' + esc(c.max) + '" step="' + esc(c.step) + '" value="' + esc(shown) + '" data-action="aspect-slider"' + attrs + disabledAttr + '>' +
-      '<span class="sval">' + esc(shown) + '</span></div>';
+      '<span class="sval">' + esc(shown) + '</span>' +
+      '<button class="step-btn" data-action="aspect-step"' + attrs + ' data-delta="' + esc(c.coarse) + '"' + (nudge ? '' : ' disabled') + ' aria-label="raise">+</button></div>';
   } else {
     control = value;
   }
@@ -1860,7 +2297,8 @@ function renderEntityDetailBody() {
     // A capability with its own widget (a toggle, a slider) keeps it here
     // whether or not the adapter described the rest of its aspects: the
     // descriptor never declares commands for the capability's vocabulary.
-    middle = '<div class="card-label" style="margin-top:20px;">Controls</div>' + widgetForEntity(entity);
+    middle = '<div class="card-label" style="margin-top:20px;">Controls</div>' +
+      (entity.capability === 'climate' ? widgetForClimate(entity, true) : widgetForEntity(entity));
   }
   var body = '<div class="muted" style="margin-top:2px;">' + esc(meta) + '</div>' +
     '<div class="muted" style="margin-top:6px;">' + ownerLine + '</div>' +
@@ -1940,6 +2378,15 @@ document.addEventListener('click', function (e) {
     sendCmd(stepRoom, stepEntity, 'setpoint', next);
     return;
   }
+  if (action === 'brightness-step') {
+    var bRoom = el.getAttribute('data-room');
+    var bEntity = el.getAttribute('data-entity');
+    var bCurrent = stateValue(bRoom, bEntity, 'brightness');
+    if (typeof bCurrent !== 'number') return;
+    var bPct = Math.max(0, Math.min(100, Math.round(bCurrent / 254 * 100) + parseInt(el.getAttribute('data-delta'), 10)));
+    sendCmd(bRoom, bEntity, 'brightness', Math.round(bPct / 100 * 254));
+    return;
+  }
   if (action === 'aspect-step') {
     var aRoom = el.getAttribute('data-room');
     var aEntity = el.getAttribute('data-entity');
@@ -1947,6 +2394,10 @@ document.addEventListener('click', function (e) {
     var aCurrent = stateValue(aRoom, aEntity, aAspect);
     if (typeof aCurrent !== 'number') return; // no fabricated default to step from
     var aNext = Math.round((aCurrent + parseFloat(el.getAttribute('data-delta'))) * 100) / 100;
+    var aField = descriptorField(findEntity(aRoom, aEntity) || {}, aAspect);
+    var aBounds = (aField && aField.command && aField.command.constraint) || {};
+    if (typeof aBounds.min === 'number') aNext = Math.max(aBounds.min, aNext);
+    if (typeof aBounds.max === 'number') aNext = Math.min(aBounds.max, aNext);
     sendCmd(aRoom, aEntity, aAspect, aNext);
     return;
   }
@@ -1992,8 +2443,11 @@ document.addEventListener('click', function (e) {
     openUnitDetail(el.getAttribute('data-unit'));
     return;
   }
+  // Deviation taps land on whichever view shows the thing now that the
+  // nav is the file's (dashboard-logic.js, viewFor); with none, the unit
+  // overlay holds every param and Not shown holds every unplaced light.
   if (action === 'goto-rooms') {
-    store.view = 'rooms';
+    store.view = logic.viewFor({ type: 'rooms' }, logic.viewsOf(store.model)) || 'notshown';
     renderShell();
     renderView();
     return;
@@ -2001,7 +2455,12 @@ document.addEventListener('click', function (e) {
   if (action === 'goto-setpoint') {
     var gUnit = el.getAttribute('data-unit');
     var gParam = el.getAttribute('data-param');
-    store.view = 'setpoints';
+    var gView = logic.viewFor({ type: 'setpoint', unit: gUnit }, logic.viewsOf(store.model));
+    if (!gView) {
+      openUnitDetail(gUnit);
+      return;
+    }
+    store.view = gView;
     renderShell();
     renderView();
     flashParamRow(gUnit, gParam);
@@ -2010,7 +2469,7 @@ document.addEventListener('click', function (e) {
   if (action === 'range-chip') {
     var hrs = parseInt(el.getAttribute('data-hours'), 10);
     overlay.range = hrs;
-    fetchHistoryRange(overlay.entity.name, overlay.aspect, hrs);
+    fetchHistoryRange(overlay.entity.name, overlay.aspect, hrs, overlay.shape);
     renderOverlayContent();
     return;
   }
@@ -2023,6 +2482,17 @@ document.addEventListener('click', function (e) {
 document.addEventListener('change', function (e) {
   var el = e.target;
   if (!el.matches) return;
+
+  if (el.matches('[data-action="aspect-select"]')) {
+    var chosen;
+    try { chosen = JSON.parse(el.value); } catch (err) { return; } // a descriptor value that is not JSON is not a command
+    sendCmd(el.getAttribute('data-room'), el.getAttribute('data-entity'), el.getAttribute('data-aspect'), chosen);
+    return;
+  }
+  if (el.matches('[data-action="param-select"]')) {
+    sendParam(el.getAttribute('data-unit'), el.getAttribute('data-param'), el.value, function () { scheduleRender(); });
+    return;
+  }
 
   if (el.matches('[data-action="slider"]')) {
     var kind = el.getAttribute('data-kind');
@@ -2126,7 +2596,7 @@ document.addEventListener('input', function (e) {
 // ---- relative-time ticker ----
 
 setInterval(function () {
-  if (store.view === 'rooms' || store.view === 'now') scheduleRender();
+  if (currentView() !== 'health') scheduleRender(); // relative times live on every other view
 }, 30000);
 
 /* Some commands are never answered by anything: the adapter is deaf, the

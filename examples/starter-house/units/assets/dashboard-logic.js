@@ -278,12 +278,18 @@
     return String(value);
   }
 
+  // An enum with more choices than fit on one segmented row.
+  var SELECT_ABOVE = 4;
+
   // The control a described command renders as — the param-control
-  // shapes: an enum is a segmented control, a float with a step is a
-  // stepper, any other number a slider. A command the family may not
-  // edit reads its value with a tier badge instead. `commandable` is the
-  // dashboard's own grant on the capability: without it the control is
-  // inert, as for every other widget.
+  // shapes: an enum is a segmented control (a select past SELECT_ABOVE
+  // values), a temperature with a step is a dial (the page draws its
+  // compact form, a stepper, where a card has no room), any other float
+  // with a step a stepper, any other number a slider carrying a coarse
+  // step for its ± buttons. A command the family may not edit reads its
+  // value with a tier badge instead. `commandable` is the dashboard's own
+  // grant on the capability: without it the control is inert, as for
+  // every other widget.
   function controlFor(field, commandable) {
     var cmd = field && field.command;
     if (!cmd) return null;
@@ -298,18 +304,34 @@
       if (bounds[i] !== undefined && (typeof bounds[i] !== 'number' || !isFinite(bounds[i]))) return null;
     }
     if (cmd.type === 'enum') {
-      return { kind: 'segment', values: field.values || [], disabled: !commandable };
+      var values = field.values || [];
+      return { kind: values.length > SELECT_ABOVE ? 'select' : 'segment', values: values, disabled: !commandable };
     }
     if (cmd.type === 'float' || cmd.type === 'int') {
       if (cmd.step) {
-        return { kind: 'stepper', step: cmd.step, min: c.min, max: c.max, disabled: !commandable };
+        // a dial is an arc from min to max: without both bounds there is
+        // no arc to draw, and the stepper is the honest control
+        var bounded = typeof c.min === 'number' && typeof c.max === 'number' && c.max > c.min;
+        var kind = field.kind === 'temperature' && bounded ? 'dial' : 'stepper';
+        return { kind: kind, step: cmd.step, min: c.min, max: c.max, disabled: !commandable };
       }
+      var min = c.min !== undefined ? c.min : 0, max = c.max !== undefined ? c.max : 100;
       return {
-        kind: 'slider', min: c.min !== undefined ? c.min : 0, max: c.max !== undefined ? c.max : 100,
-        step: cmd.type === 'int' ? 1 : 'any', disabled: !commandable
+        kind: 'slider', min: min, max: max,
+        step: cmd.type === 'int' ? 1 : 'any', coarse: coarseStep(min, max, cmd.type === 'int' ? 1 : 0),
+        disabled: !commandable
       };
     }
     return null;
+  }
+
+  /* A slider's ± step: a twentieth of the range, never finer than the
+   * value's own step, rounded to something a person would say (5 on a
+   * percent, 1 on a small integer range). */
+  function coarseStep(min, max, atLeast) {
+    var raw = (max - min) / 20;
+    var nice = raw >= 5 ? 5 * Math.round(raw / 5) : raw >= 1 ? Math.round(raw) : Math.round(raw * 10) / 10;
+    return Math.max(nice, atLeast, 0.1);
   }
 
   /* Sections of rows for an entity's detail, in render order: the
@@ -536,8 +558,181 @@
     return out;
   }
 
+  /* ---- history shapes ----
+   *
+   * The recorder folds a window two ways (docs/design.md, Read path):
+   * `bucket` for a line, one point per bucket so a chatty series fills a
+   * week instead of showing its last hour, and `changes` for a timeline,
+   * the runs of a state. Which one a reading gets is the value's type. */
+
+  function historyShape(value) {
+    return typeof value === 'number' ? 'chart' : 'timeline';
+  }
+
+  /* One bucket per drawn column: the chart's viewBox width is the most
+   * points it can show apart. */
+  function bucketSeconds(hours, width) {
+    return Math.max(1, Math.round(hours * 3600 / width));
+  }
+
+  /* The runs of a state from change rows: each row opens a run that ends
+   * where the next begins or at the window's end. Nothing is known before
+   * the first row, so a run never starts before it — the timeline shows a
+   * gap there rather than guessing. Times are epoch ms. */
+  function timelineRuns(points, fromMs, toMs) {
+    var runs = [];
+    (points || []).forEach(function (p, i) {
+      var start = Math.max(Date.parse(p.ts), fromMs);
+      var next = points[i + 1];
+      var end = next ? Math.max(Date.parse(next.ts), fromMs) : toMs;
+      if (!(end > start)) return;
+      runs.push({ value: p.value, start: start, end: end });
+    });
+    return runs;
+  }
+
+  /* What the stat row says under a timeline: how long the state was
+   * `true` (for a boolean; a string's runs have no such sum), how many
+   * changes the window holds, and what it is now. */
+  function timelineStats(runs) {
+    var onMs = 0, boolean = runs.length > 0;
+    runs.forEach(function (r) {
+      if (typeof r.value !== 'boolean') boolean = false;
+      else if (r.value) onMs += r.end - r.start;
+    });
+    return {
+      onMs: boolean ? onMs : null,
+      changes: Math.max(0, runs.length - 1),
+      latest: runs.length ? runs[runs.length - 1].value : null
+    };
+  }
+
+  /* ---- views (docs/design.md, Dashboard: views are text) ----
+   *
+   * dashboard.toml's [[view]] list is the nav; without the file the
+   * generated views stand in. Health and "Not shown" are chrome the page
+   * always draws, never views here. Everything below is a pure function
+   * of the model /api/model serves. */
+
+  var GENERATED_LABELS = { now: 'Now', setpoints: 'Setpoints', rooms: 'Rooms' };
+  var DEFAULT_VIEWS = ['now', 'setpoints', 'rooms'];
+
+  function viewsOf(model) {
+    var views = model && model.views;
+    if (!views) {
+      return DEFAULT_VIEWS.map(function (k) { return { name: k, label: GENERATED_LABELS[k], kind: k, widgets: [] }; });
+    }
+    return views.map(function (v) {
+      return { name: v.name, label: v.label || titleCase(v.name), kind: v.kind || null, widgets: v.widgets || [] };
+    });
+  }
+
+  function familyParams(unit) {
+    var params = (unit && unit.params) || {};
+    return Object.keys(params).filter(function (p) { return params[p].editable_by === 'family'; });
+  }
+
+  /* What no view places: entities and family params the family cannot
+   * reach from the nav. An entity is placed by a widget naming it, its
+   * room, a unit that publishes or drives it, a `people` widget when it is
+   * a person, or any generated `rooms` (every entity) or `now` (people)
+   * view; a param by a `params`/`unit` widget for its unit or a generated
+   * `setpoints` view. Deviations and the map place nothing: they are
+   * signals, not inventory. */
+  function placement(model) {
+    var views = viewsOf(model);
+    var entities = (model.entities || []).slice();
+    var units = model.units || [];
+    var byName = {};
+    units.forEach(function (u) { byName[u.name] = u; });
+    var placedEntity = {}, placedParam = {};
+    var allEntities = false, allParams = false, persons = false;
+    function placeUnit(name) {
+      var u = byName[name];
+      if (!u) return;
+      familyParams(u).forEach(function (p) { placedParam[name + '.' + p] = true; });
+      (u.drives || []).forEach(function (e) { placedEntity[e] = true; });
+      entities.forEach(function (e) { if (e.owner === name) placedEntity[e.name] = true; });
+    }
+    views.forEach(function (v) {
+      if (v.kind === 'rooms') allEntities = true;
+      if (v.kind === 'setpoints') allParams = true;
+      if (v.kind === 'now') persons = true;
+      v.widgets.forEach(function (w) {
+        if (w.entity) placedEntity[w.entity] = true;
+        if (w.kind === 'room') entities.forEach(function (e) { if (e.room === w.room) placedEntity[e.name] = true; });
+        if (w.kind === 'unit') placeUnit(w.unit);
+        if (w.kind === 'params') familyParams(byName[w.unit]).forEach(function (p) { placedParam[w.unit + '.' + p] = true; });
+        if (w.kind === 'people') persons = true;
+      });
+    });
+    var unplacedEntities = allEntities ? [] : entities.filter(function (e) {
+      return !placedEntity[e.name] && !(persons && e.capability === 'person');
+    });
+    var unplacedParams = [];
+    if (!allParams) {
+      units.forEach(function (u) {
+        familyParams(u).forEach(function (p) {
+          if (!placedParam[u.name + '.' + p]) unplacedParams.push({ unit: u.name, param: p, spec: u.params[p] });
+        });
+      });
+    }
+    return { entities: unplacedEntities, params: unplacedParams };
+  }
+
+  /* The unit card's four relations, each read back from the manifest and
+   * the grant table rather than declared for the card: family params,
+   * the entities it owns, the entities its cmd grants reach, the entities
+   * its state subscriptions read. Labels are the page's; nothing here is
+   * vocabulary. */
+  function unitCardPlan(model, unitName) {
+    var unit = (model.units || []).filter(function (u) { return u.name === unitName; })[0];
+    if (!unit) return null;
+    var byName = {};
+    (model.entities || []).forEach(function (e) { byName[e.name] = e; });
+    var named = function (names) {
+      return (names || []).map(function (n) { return byName[n]; }).filter(Boolean);
+    };
+    return {
+      unit: unit,
+      params: familyParams(unit),
+      publishes: (model.entities || []).filter(function (e) { return e.owner === unitName; }),
+      drives: named(unit.drives),
+      sources: named(unit.sources)
+    };
+  }
+
+  /* Where a deviation's tap should land now that the nav is the file's:
+   * a setpoint goes to the first view carrying its unit's params (or a
+   * generated Setpoints), the lights-on deviation to a generated Rooms.
+   * null means no view shows it — the page falls back to an overlay or to
+   * Not shown. */
+  function viewFor(target, views) {
+    var found = null;
+    views.forEach(function (v) {
+      if (found) return;
+      if (target.type === 'setpoint') {
+        var hit = v.kind === 'setpoints' || v.widgets.some(function (w) {
+          return (w.kind === 'params' || w.kind === 'unit') && w.unit === target.unit;
+        });
+        if (hit) found = v.name;
+      } else if (target.type === 'rooms' && v.kind === 'rooms') {
+        found = v.name;
+      }
+    });
+    return found;
+  }
+
   return {
     PRESENCE_ASPECTS: PRESENCE_ASPECTS,
+    viewsOf: viewsOf,
+    placement: placement,
+    unitCardPlan: unitCardPlan,
+    viewFor: viewFor,
+    historyShape: historyShape,
+    bucketSeconds: bucketSeconds,
+    timelineRuns: timelineRuns,
+    timelineStats: timelineStats,
     titleCase: titleCase,
     entityKey: entityKey,
     stateValue: stateValue,
@@ -549,6 +744,8 @@
     computeDeviations: computeDeviations,
     formatAspect: formatAspect,
     controlFor: controlFor,
+    coarseStep: coarseStep,
+    SELECT_ABOVE: SELECT_ABOVE,
     aspectPlan: aspectPlan,
     cardPlan: cardPlan,
     sensorCardPlan: sensorCardPlan,

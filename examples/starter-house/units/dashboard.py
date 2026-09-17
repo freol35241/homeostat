@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "homeostat==0.12.1",
+#     "homeostat==0.13.0",
 #     "aiohttp>=3.12.14,<4",
 # ]
 # ///
@@ -12,9 +12,11 @@ bus. Serves dashboard.html (one self-contained file next to this script) and
 a small API generated entirely from the house's text:
 
   GET  /api/model    manifests rendered for the browser (zones, entities,
-                     units; params filtered to editable_by = "family";
-                     each entity marked commandable iff this unit's own
-                     manifest grants its capability)
+                     units, the views of dashboard.toml; each entity
+                     marked commandable iff this unit's own manifest
+                     grants its capability; each unit with the entities
+                     it drives, from the grant table, and reads, from
+                     its subscriptions — the unit card's relations)
   GET  /ws           snapshot of state/health/config plus every aspect
                      descriptor adapters publish in their discovery
                      records (docs/design.md, Aspect descriptors), then
@@ -30,7 +32,9 @@ a small API generated entirely from the house's text:
                      per bound light — group actions are manual-edge
                      fan-outs, never a relay entity (docs/design.md,
                      Dashboard)
-  GET  /api/history  recorder proxy for sparklines (?entity=..&aspect=..)
+  GET  /api/history  recorder proxy for charts (?entity=..&aspect=..&hours=..
+                     plus bucket=<s> for one point per bucket or changes=1
+                     for a state's runs, the recorder's chart shapes)
   GET  /api/logs     unit's captured stdout/stderr tail, for the unit detail
                      overlay (?unit=..&lines=N), proxying the supervisor's
                      home/meta/{unit}/log queryable
@@ -74,6 +78,7 @@ import traceback
 from pathlib import Path
 
 import aiohttp
+import zenoh
 from aiohttp import WSMsgType, web
 from homeostat import ConfigWriteError, connect, house, keys
 from homeostat.session import QueryError
@@ -174,7 +179,6 @@ def build_model(model: house.HouseModel, granted: set[str]) -> dict:
                 "write_mode": e.write_mode,
                 "owner": e.owner,
                 "commandable": e.capability in granted,
-                "pin": e.pin,
             }
             for e in model.entities
         ],
@@ -189,10 +193,62 @@ def build_model(model: house.HouseModel, granted: set[str]) -> dict:
                 # as a deviation and reads in the unit overlay. Only the
                 # WRITE is family-gated, at /api/param (#10).
                 "params": u.params,
+                "subscribes": u.subscribes,
             }
             for u in model.units
         ],
+        # dashboard.toml's views as written (core-validated), or null: the
+        # page then renders its generated views.
+        "views": model.views,
     }
+
+
+def unit_relations(model: dict, grants: list, state_keys) -> dict[str, dict]:
+    """Per unit, the entities it drives and the entities it reads — the
+    unit card's Drives and From sections, read back from what the manifest
+    already declares. Drives: the entities on the unit's cmd-class rows of
+    the grant table (home/meta/system/grants). Reads: each [bus.subscribes]
+    state expression, its room slot expanded through the zones exactly as
+    the core expands it, intersected with the concrete state keys on the
+    bus — not with `{room}/{entity}/**`, which would make every entity in
+    a room a source of a `*/presence` subscription."""
+    zones = model["zones"]
+    # Keys the bus delivered are well-formed; a manifest expression is
+    # only as well-formed as the core's own parser demands, which admits
+    # shapes zenoh refuses (`**/**`, a `$`), and the model is re-read
+    # mid-edit — so an expression that does not parse is skipped, never a
+    # 500 for every browser.
+    concrete: dict[zenoh.KeyExpr, str] = {}
+    for key in state_keys:
+        parts = key.split("/")
+        if len(parts) >= 5 and parts[0] == "home" and parts[1] == "state":
+            concrete[zenoh.KeyExpr(key)] = parts[3]
+    out = {}
+    for unit in model["units"]:
+        drives = {
+            e["name"]
+            for g in grants
+            if isinstance(g, dict) and g.get("unit") == unit["name"] and g.get("capability")
+            for e in g.get("entities", [])
+            if isinstance(e, dict) and isinstance(e.get("name"), str)
+        }
+        sources: set[str] = set()
+        for expr in unit["subscribes"].values():
+            if not isinstance(expr, str):
+                continue
+            parts = expr.split("/")
+            if len(parts) < 4 or parts[0] != "home" or parts[1] != "state":
+                continue
+            if "{" in expr:
+                continue  # a template over the unit's own entities: Publishes, not From
+            for room in zones.get(parts[2], [parts[2]]):
+                try:
+                    ke = zenoh.KeyExpr("/".join(parts[:2] + [room] + parts[3:]))
+                except zenoh.ZError:
+                    continue
+                sources.update(name for key, name in concrete.items() if ke.intersects(key))
+        out[unit["name"]] = {"drives": sorted(drives), "sources": sorted(sources)}
+    return out
 
 
 def descriptors_in(inventory) -> dict[str, dict]:
@@ -312,6 +368,9 @@ class Hub:
         # unit -> the entities its last discovery record described, so a
         # record that stops describing one retires the descriptor.
         self.described_by: dict[str, set[str]] = {}
+        # The grant table, read once at start: a grant change is a manifest
+        # change, which is a house input, which restarts this unit.
+        self.grants: list = []
         self.loop: asyncio.AbstractEventLoop | None = None
         # One bounded outbox per client, drained by its own writer task:
         # a browser that stops reading fills its queue and is dropped,
@@ -344,6 +403,14 @@ class Hub:
                 if unit in self.described_by:
                     continue  # the subscription already delivered fresher
             self._apply_discovery(unit, value)
+        for _key, value in self.session.get_json("home/meta/system/grants"):
+            if isinstance(value, list):
+                self.grants = value
+
+    def relations(self, model: dict) -> dict[str, dict]:
+        with self.lock:
+            state_keys = list(self.state)
+        return unit_relations(model, self.grants, state_keys)
 
     def snapshot(self) -> dict:
         with self.lock:
@@ -524,7 +591,9 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
 
     async def api_model(request: web.Request) -> web.Response:
         await model.refresh()
-        return web.json_response(dict(model.model, tiles=tiles_path() is not None))
+        relations = hub.relations(model.model)
+        units = [dict(u, **relations[u["name"]]) for u in model.model["units"]]
+        return web.json_response(dict(model.model, units=units, tiles=tiles_path() is not None))
 
     async def api_asset(request: web.Request) -> web.StreamResponse:
         name = request.match_info["name"]
@@ -644,15 +713,30 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         try:
             hours = min(float(request.query.get("hours", "24")), 24 * 31)
             limit = max(1, min(int(request.query.get("limit", "500")), HISTORY_LIMIT_MAX))
+            bucket = int(request.query.get("bucket", "0"))
             start = now - datetime.timedelta(hours=hours)
         except (ValueError, OverflowError):
             # timedelta raises on NaN/inf hours; same 400 as bad `lines`.
-            return json_error("hours and limit must be numbers")
+            return json_error("hours, limit and bucket must be numbers")
+        changes = request.query.get("changes") == "1"
+        if bucket < 0 or (bucket and hours * 3600 / bucket > HISTORY_LIMIT_MAX):
+            # The recorder refuses a fold finer than any reply carries;
+            # the page never asks for one, so this is the same 400 as a
+            # wildcard entity — a request no browser of ours makes.
+            return json_error(f"bucket must be positive and no finer than {HISTORY_LIMIT_MAX} per window")
+        if bucket and changes:
+            return json_error("bucket and changes are exclusive")
         selector = (
             f"{keys.history_key('state', entity, aspect)}"
             f"?from={start.isoformat(timespec='seconds')}"
             f";to={now.isoformat(timespec='seconds')};limit={limit}"
         )
+        # The recorder's chart shapes (docs/design.md, Read path): one point
+        # per bucket for a line, or the runs of a state for a timeline.
+        if bucket:
+            selector += f";bucket={bucket}"
+        elif changes:
+            selector += ";changes=1"
         try:
             replies = await asyncio.get_running_loop().run_in_executor(
                 None, hub.session.get_json, selector
