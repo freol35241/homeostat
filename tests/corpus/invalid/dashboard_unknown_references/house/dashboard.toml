@@ -1,0 +1,11 @@
+schema = 1
+
+[[view]]
+name = "kitchen"
+widgets = [
+  { kind = "tile", entity = "kitchen_lamp" },
+  { kind = "tile", entity = "kitchen_lmap" },
+  { kind = "room", room = "attic" },
+  { kind = "unit", unit = "zigbe" },
+  { kind = "chart", entity = "kitchen_lamp", aspect = "bright/ness" },
+]

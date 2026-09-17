@@ -62,9 +62,14 @@ State appears at `home/state/{room}/{entity}/{aspect}`, history lands in
 ## The family dashboard
 
 `units/dashboard.toml` serves the web dashboard on `:8600` — generated
-entirely from the manifests: rooms and their devices, every
-family-editable setpoint, unit health, and a "Now" view showing what
-deviates from normal. Open `http://<host>:8600` from the LAN (or over
+entirely from the manifests. `dashboard.toml` at the house root says
+which views it has: here a "Now" of the indoor temperature, the people
+and what deviates from normal, a "Heating" view, and a "Downstairs" view
+led by the evening-lights automation's card. Delete the file and the
+generated views (Now, Setpoints, Rooms) come back; whatever the file
+says, Health and everything it does not place stay one tap away in the
+rail. `homeostat plan` refuses a view that names something the house
+does not have. Open `http://<host>:8600` from the LAN (or over
 WireGuard). Access is local-only by design: there are no accounts; the
 dashboard is family-tier, so nothing structural is reachable from it.
 Serving it behind a hostname other than `homeostat.lan`/`.local`? List

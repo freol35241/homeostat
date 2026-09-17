@@ -19,6 +19,7 @@ state = "home/state/**"
 health = "home/health/**"
 config = "home/config/*/*"
 discovery = "home/discovery/*"
+grants = "home/meta/system/grants"
 
 [bus.publishes]
 lights = { key = "home/cmd/**", capability = "light", priority = "manual" }

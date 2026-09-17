@@ -1,0 +1,1 @@
+error[entity-dashboard-retired] kitchen_lamp: [dashboard] on an entity is retired: place it with { kind = "tile", entity = "kitchen_lamp" } on a view in dashboard.toml (entities/zigbee/kitchen_lamp.toml)

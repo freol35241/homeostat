@@ -585,8 +585,128 @@
     };
   }
 
+  /* ---- views (docs/design.md, Dashboard: views are text) ----
+   *
+   * dashboard.toml's [[view]] list is the nav; without the file the
+   * generated views stand in. Health and "Not shown" are chrome the page
+   * always draws, never views here. Everything below is a pure function
+   * of the model /api/model serves. */
+
+  var GENERATED_LABELS = { now: 'Now', setpoints: 'Setpoints', rooms: 'Rooms', health: 'Health' };
+  var DEFAULT_VIEWS = ['now', 'setpoints', 'rooms'];
+
+  function viewsOf(model) {
+    var views = model && model.views;
+    if (!views) {
+      return DEFAULT_VIEWS.map(function (k) { return { name: k, label: GENERATED_LABELS[k], kind: k, widgets: [] }; });
+    }
+    return views.map(function (v) {
+      return { name: v.name, label: v.label || titleCase(v.name), kind: v.kind || null, widgets: v.widgets || [] };
+    });
+  }
+
+  function familyParams(unit) {
+    var params = (unit && unit.params) || {};
+    return Object.keys(params).filter(function (p) { return params[p].editable_by === 'family'; });
+  }
+
+  /* What no view places: entities and family params the family cannot
+   * reach from the nav. An entity is placed by a widget naming it, its
+   * room, a unit that publishes or drives it, a `people` widget when it is
+   * a person, or any generated `rooms` (every entity) or `now` (people)
+   * view; a param by a `params`/`unit` widget for its unit or a generated
+   * `setpoints` view. Deviations and the map place nothing: they are
+   * signals, not inventory. */
+  function placement(model) {
+    var views = viewsOf(model);
+    var entities = (model.entities || []).slice();
+    var units = model.units || [];
+    var byName = {};
+    units.forEach(function (u) { byName[u.name] = u; });
+    var placedEntity = {}, placedParam = {};
+    var allEntities = false, allParams = false, persons = false;
+    function placeUnit(name) {
+      var u = byName[name];
+      if (!u) return;
+      familyParams(u).forEach(function (p) { placedParam[name + '.' + p] = true; });
+      (u.drives || []).forEach(function (e) { placedEntity[e] = true; });
+      entities.forEach(function (e) { if (e.owner === name) placedEntity[e.name] = true; });
+    }
+    views.forEach(function (v) {
+      if (v.kind === 'rooms') allEntities = true;
+      if (v.kind === 'setpoints') allParams = true;
+      if (v.kind === 'now') persons = true;
+      v.widgets.forEach(function (w) {
+        if (w.entity) placedEntity[w.entity] = true;
+        if (w.kind === 'room') entities.forEach(function (e) { if (e.room === w.room) placedEntity[e.name] = true; });
+        if (w.kind === 'unit') placeUnit(w.unit);
+        if (w.kind === 'params') familyParams(byName[w.unit]).forEach(function (p) { placedParam[w.unit + '.' + p] = true; });
+        if (w.kind === 'people') persons = true;
+      });
+    });
+    var unplacedEntities = allEntities ? [] : entities.filter(function (e) {
+      return !placedEntity[e.name] && !(persons && e.capability === 'person');
+    });
+    var unplacedParams = [];
+    if (!allParams) {
+      units.forEach(function (u) {
+        familyParams(u).forEach(function (p) {
+          if (!placedParam[u.name + '.' + p]) unplacedParams.push({ unit: u.name, param: p, spec: u.params[p] });
+        });
+      });
+    }
+    return { entities: unplacedEntities, params: unplacedParams };
+  }
+
+  /* The unit card's four relations, each read back from the manifest and
+   * the grant table rather than declared for the card: family params,
+   * the entities it owns, the entities its cmd grants reach, the entities
+   * its state subscriptions read. Labels are the page's; nothing here is
+   * vocabulary. */
+  function unitCardPlan(model, unitName) {
+    var unit = (model.units || []).filter(function (u) { return u.name === unitName; })[0];
+    if (!unit) return null;
+    var byName = {};
+    (model.entities || []).forEach(function (e) { byName[e.name] = e; });
+    var named = function (names) {
+      return (names || []).map(function (n) { return byName[n]; }).filter(Boolean);
+    };
+    return {
+      unit: unit,
+      params: familyParams(unit),
+      publishes: (model.entities || []).filter(function (e) { return e.owner === unitName; }),
+      drives: named(unit.drives),
+      sources: named(unit.sources)
+    };
+  }
+
+  /* Where a deviation's tap should land now that the nav is the file's:
+   * a setpoint goes to the first view carrying its unit's params (or a
+   * generated Setpoints), the lights-on deviation to a generated Rooms.
+   * null means no view shows it — the page falls back to an overlay or to
+   * Not shown. */
+  function viewFor(target, views) {
+    var found = null;
+    views.forEach(function (v) {
+      if (found) return;
+      if (target.type === 'setpoint') {
+        var hit = v.kind === 'setpoints' || v.widgets.some(function (w) {
+          return (w.kind === 'params' || w.kind === 'unit') && w.unit === target.unit;
+        });
+        if (hit) found = v.name;
+      } else if (target.type === 'rooms' && v.kind === 'rooms') {
+        found = v.name;
+      }
+    });
+    return found;
+  }
+
   return {
     PRESENCE_ASPECTS: PRESENCE_ASPECTS,
+    viewsOf: viewsOf,
+    placement: placement,
+    unitCardPlan: unitCardPlan,
+    viewFor: viewFor,
     historyShape: historyShape,
     bucketSeconds: bucketSeconds,
     timelineRuns: timelineRuns,

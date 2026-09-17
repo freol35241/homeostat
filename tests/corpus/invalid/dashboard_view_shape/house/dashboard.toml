@@ -1,0 +1,17 @@
+schema = 1
+
+[[view]]
+name = "rooms"
+kind = "rooms"
+widgets = [{ kind = "people" }]
+
+[[view]]
+name = "empty"
+
+[[view]]
+name = "rooms"
+kind = "rooms"
+
+[[view]]
+name = "bad name"
+kind = "health"

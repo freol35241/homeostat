@@ -3,7 +3,9 @@ use std::fs;
 use std::path::Path;
 
 use crate::error::ValidationError;
-use crate::manifest::{EntityFile, UnitKind, UnitManifest, ZonesFile, SUPPORTED_SCHEMA};
+use crate::manifest::{
+    DashboardFile, EntityFile, UnitKind, UnitManifest, ZonesFile, SUPPORTED_SCHEMA,
+};
 
 #[derive(Debug)]
 pub struct LoadedUnit {
@@ -29,6 +31,8 @@ pub struct House {
     pub units: Vec<LoadedUnit>,
     pub entities: Vec<LoadedEntity>,
     pub zones: BTreeMap<String, Vec<String>>,
+    /// `dashboard.toml`, when the house has one.
+    pub dashboard: Option<DashboardFile>,
 }
 
 impl House {
@@ -60,6 +64,16 @@ pub fn load(root: &Path) -> (House, Vec<ValidationError>) {
         if let Some(zones) = read_toml::<ZonesFile>(&zones_path, "zones.toml", &mut errors) {
             check_schema_version(zones.schema, "zones", "zones.toml", &mut errors);
             house.zones = zones.zones;
+        }
+    }
+
+    let dashboard_path = root.join("dashboard.toml");
+    if dashboard_path.exists() {
+        if let Some(dashboard) =
+            read_toml::<DashboardFile>(&dashboard_path, "dashboard.toml", &mut errors)
+        {
+            check_schema_version(dashboard.schema, "dashboard", "dashboard.toml", &mut errors);
+            house.dashboard = Some(dashboard);
         }
     }
 

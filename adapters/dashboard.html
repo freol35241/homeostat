@@ -42,10 +42,17 @@ a { color: inherit; }
   min-height: 40px; transition: background-color 140ms ease, color 140ms ease; }
 #rail nav button:hover { background: var(--accent-tint); }
 #rail nav button.active { border-left-color: var(--accent); padding-left: 9px; color: var(--ink); font-weight: 600; }
-#rail .health-pin { margin-top: auto; padding: 12px 12px 4px; border-top: 1px solid var(--border); font-size: 11px; }
-#rail .health-pin .label { color: var(--muted); font-weight: 600; letter-spacing: .08em; font-size: 10.5px;
-  text-transform: uppercase; margin-bottom: 8px; }
-#rail .health-pin .row { display: flex; align-items: center; gap: 6px; color: var(--secondary); padding: 3px 0; }
+/* fixed chrome under the nav: Health and Not shown are never views */
+#rail .health-pin { margin-top: auto; padding-top: 12px; border-top: 1px solid var(--border); font-size: 11px;
+  display: flex; flex-direction: column; gap: 2px; }
+#rail .pin-btn { text-align: left; border: none; border-left: 3px solid transparent; background: transparent; color: var(--secondary);
+  padding: 8px 12px; border-radius: 0 6px 6px 0; cursor: pointer; font-size: 11px; transition: background-color 140ms ease; }
+#rail .pin-btn:hover { background: var(--accent-tint); }
+#rail .pin-btn.active { border-left-color: var(--accent); padding-left: 9px; color: var(--ink); }
+#rail .pin-btn .label { color: var(--muted); font-weight: 600; letter-spacing: .08em; font-size: 10.5px;
+  text-transform: uppercase; margin-bottom: 6px; }
+#rail .pin-btn.active .label { color: var(--accent); }
+#rail .pin-btn .row { display: flex; align-items: center; gap: 6px; color: var(--secondary); padding: 2px 0; }
 
 /* main column */
 #main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
@@ -100,7 +107,15 @@ h1.view-title { font-size: 20px; margin: 0 0 16px; }
 .card.clickable:hover { border-color: var(--muted); box-shadow: 0 2px 8px rgba(0,0,0,.07); }
 .card-label { font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
   color: var(--muted); margin-bottom: 10px; }
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; align-items: start; }
+.grid > .span-all { grid-column: 1 / -1; }
+.chart-card { height: 120px; margin: 8px 0 4px; }
+/* unit card: head, then the manifest's relations as sections */
+.unit-card .unit-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin: -4px -8px 4px; padding: 4px 8px; }
+.unit-card .unit-name { font-size: 15px; font-weight: 600; }
+.unit-card .unit-desc { font-size: 12.5px; color: var(--secondary); margin-top: 1px; }
+.unit-card .section-label { font-size: 10.5px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 14px 0 2px; }
+.unit-card .param-row:first-of-type { border-top: none; }
 .muted { color: var(--secondary); }
 .faint { color: var(--muted); }
 
@@ -365,9 +380,10 @@ video-rtc video { width: 100%; display: block; }
 'use strict';
 (function () {
 
-var VIEWS = ['now', 'setpoints', 'rooms', 'health'];
-var VIEW_LABELS = { now: 'Now', setpoints: 'Setpoints', rooms: 'Rooms', health: 'Health' };
+// Tab icons by generated view; a file's own view gets the generic one.
 var TAB_ICONS = {
+  view: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3.5" y="4" width="17" height="16" rx="2"/><line x1="3.5" y1="9.5" x2="20.5" y2="9.5"/><line x1="9" y1="9.5" x2="9" y2="20"/></svg>',
+  notshown: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="5" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.6" fill="currentColor" stroke="none"/></svg>',
   now: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 12 8 12 10 6 14 18 16 12 21 12"/></svg>',
   setpoints: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="6" y1="4" x2="6" y2="20"/><circle cx="6" cy="9" r="2.2" fill="currentColor" stroke="none"/><line x1="12" y1="4" x2="12" y2="20"/><circle cx="12" cy="16" r="2.2" fill="currentColor" stroke="none"/><line x1="18" y1="4" x2="18" y2="20"/><circle cx="18" cy="11" r="2.2" fill="currentColor" stroke="none"/></svg>',
   rooms: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><rect x="3.5" y="3.5" width="7.5" height="7.5" rx="1.4"/><rect x="13" y="3.5" width="7.5" height="7.5" rx="1.4"/><rect x="3.5" y="13" width="7.5" height="7.5" rx="1.4"/><rect x="13" y="13" width="7.5" height="7.5" rx="1.4"/></svg>',
@@ -397,7 +413,8 @@ var pending = {};
 
 var localState = {
   sliderDrag: {},   // key -> true while user is dragging
-  sparklines: {}    // entity|aspect -> {points:[], loaded:bool, loading:bool}
+  sparklines: {},   // entity|aspect -> {points:[], window, loaded:bool, loading:bool}
+  charts: {}        // entity|aspect|hours -> the same, for chart widgets
 };
 
 // detail overlay state (right slide-over / mobile sheet)
@@ -797,30 +814,55 @@ function fmtOrDash(v) {
 
 var unitNameFromHealthKey = logic.unitNameFromHealthKey;
 
+// The nav is the file's views (dashboard-logic.js, viewsOf); Health and
+// Not shown are fixed chrome below it, never views the file can name.
+function currentView() {
+  var views = logic.viewsOf(store.model);
+  if (store.view === 'health' || store.view === 'notshown') return store.view;
+  var named = views.filter(function (v) { return v.name === store.view; })[0];
+  return named ? named.name : (views.length ? views[0].name : 'notshown');
+}
+
 function renderShell() {
+  var views = logic.viewsOf(store.model);
+  var current = currentView();
+  var unplaced = logic.placement(store.model);
+  var notShownCount = unplaced.entities.length + unplaced.params.length;
+
   var nav = byId('rail-nav');
-  nav.innerHTML = VIEWS.map(function (v) {
-    return '<button data-view="' + v + '" class="' + (store.view === v ? 'active' : '') + '">' + VIEW_LABELS[v] + '</button>';
+  nav.innerHTML = views.map(function (v) {
+    return '<button data-view="' + esc(v.name) + '" class="' + (current === v.name ? 'active' : '') + '">' + esc(v.label) + '</button>';
   }).join('');
 
   var tabs = byId('tabs-row');
-  tabs.innerHTML = VIEWS.map(function (v) {
-    return '<button data-view="' + v + '" class="' + (store.view === v ? 'active' : '') + '">' +
-      TAB_ICONS[v] + '<span class="tab-label">' + VIEW_LABELS[v] + '</span></button>';
-  }).join('');
+  var tabHtml = views.map(function (v) {
+    return '<button data-view="' + esc(v.name) + '" class="' + (current === v.name ? 'active' : '') + '">' +
+      (TAB_ICONS[v.kind] || TAB_ICONS.view) + '<span class="tab-label">' + esc(v.label) + '</span></button>';
+  });
+  tabHtml.push('<button data-view="health" class="' + (current === 'health' ? 'active' : '') + '">' + TAB_ICONS.health + '<span class="tab-label">Health</span></button>');
+  tabHtml.push('<button data-view="notshown" class="' + (current === 'notshown' ? 'active' : '') + '">' + TAB_ICONS.notshown +
+    '<span class="tab-label">Not shown' + (notShownCount ? ' · ' + notShownCount : '') + '</span></button>');
+  tabs.innerHTML = tabHtml.join('');
 
   var hw = healthWorstAndCount();
   var pin = byId('health-pin');
+  var healthRows;
   if (hw.total === 0) {
-    pin.innerHTML = '<div class="label">Health</div><div class="row faint">no units yet</div>';
+    healthRows = '<div class="row faint">no units yet</div>';
   } else {
     var worstLine = hw.worst.status === 'running'
       ? ''
       : '<div class="row"><span class="status-glyph status-' + esc(hw.worst.status) + '">' + statusGlyph(hw.worst.status) + '</span>&nbsp;' +
         esc(titleCase(unitNameFromHealthKey(hw.worst.key))) + ' · ' + esc(hw.worst.status) + '</div>';
-    pin.innerHTML = '<div class="label">Health</div>' + worstLine +
+    healthRows = worstLine +
       '<div class="row"><span class="status-glyph status-running">●</span> ' + hw.ok + '/' + hw.total + ' ok</div>';
   }
+  pin.innerHTML = '<button class="pin-btn' + (current === 'health' ? ' active' : '') + '" data-view="health"><div class="label">Health</div>' + healthRows + '</button>' +
+    '<button class="pin-btn' + (current === 'notshown' ? ' active' : '') + '" data-view="notshown"><div class="label">Not shown</div>' +
+    '<div class="row">' + (notShownCount
+      ? esc(unplaced.entities.length + (unplaced.entities.length === 1 ? ' entity' : ' entities') +
+        (unplaced.params.length ? ' · ' + unplaced.params.length + (unplaced.params.length === 1 ? ' setpoint' : ' setpoints') : ''))
+      : 'everything is on a view') + '</div></button>';
 
   updateBanner();
 }
@@ -1361,55 +1403,75 @@ function renderMapCard(persons) {
   var noFixHtml = noFix.length
     ? '<div class="map-nofix">' + noFix.map(function (e) { return esc(e.label); }).join(', ') + ' &mdash; no fix yet</div>'
     : '';
-  return '<div class="card" style="margin-top:16px;"><div class="card-label">Map</div>' +
+  return '<div class="card span-all"><div class="card-label">Map</div>' +
     '<div id="map-slot"></div>' + hint + noFixHtml + '</div>';
 }
 
-// ---- view: Now ----
+// ---- widgets ----
+//
+// A view is a list of widgets (dashboard.toml, or the generated views'
+// implicit lists), each a card built from what the page already renders.
+// The dashboard owns every one of these; a widget places, never draws.
 
-function renderNow() {
-  var entities = store.model.entities || [];
-  var persons = personEntities();
+// Signal tiles: one per reading of the entity, or the one reading named.
+// Which readings, in what order, is the descriptor's say — the same rows
+// as the entity's sensor card (dashboard-logic.js, sensorCardPlan).
+function widgetTiles(entity, aspect) {
+  var rows = logic.sensorCardPlan(entity, store.state, store.aspects[entity.name]);
+  if (aspect) rows = rows.filter(function (r) { return r.aspect === aspect; });
+  return rows.map(function (r) {
+    var sk = entity.name + '|' + r.aspect;
+    ensureHistory(entity.name, r.aspect);
+    var s = localState.sparklines[sk];
+    var spark = s && s.loaded ? buildChart('tile-' + sk, s.points, { height: 36, sizeClass: 'chart-tile', aspect: r.aspect, area: true, window: s.window }) : '';
+    var caption = s && s.loaded ? minMaxCaption(s.points) : '';
+    var tileLabel = esc(entity.label) + (rows.length > 1 ? ' &middot; ' + esc(r.label) : '');
+    return '<div class="card tile clickable" data-action="history-detail" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '" data-aspect="' + esc(r.aspect) + '">' +
+      '<div class="card-label" title="' + esc(entity.label) + '">' + tileLabel.toUpperCase() + '</div>' +
+      '<div class="big' + (r.stale ? ' stale' : '') + '">' + esc(r.display) + '</div>' + spark +
+      '<div class="caption">' + esc(caption) + '</div></div>';
+  }).join('');
+}
 
-  // Signal tiles: only entities the house repo pins ([dashboard] pin = true).
-  // Nothing is pinned by default — Now is the error signal, not an inventory.
-  var tiles = [];
-  entities.filter(function (e) { return e.pin; }).forEach(function (e) {
-    // Which readings, in what order, is the descriptor's say — the same
-    // rows as the entity's sensor card (dashboard-logic.js, sensorCardPlan).
-    var rows = logic.sensorCardPlan(e, store.state, store.aspects[e.name]);
-    rows.forEach(function (r) {
-      var aspect = r.aspect;
-      var sk = e.name + '|' + aspect;
-      ensureHistory(e.name, aspect);
-      var s = localState.sparklines[sk];
-      var spark = s && s.loaded ? buildChart('now-' + sk, s.points, { height: 36, sizeClass: 'chart-tile', aspect: aspect, area: true, window: s.window }) : '';
-      var caption = s && s.loaded ? minMaxCaption(s.points) : '';
-      var tileLabel = esc(e.label) + (rows.length > 1 ? ' &middot; ' + esc(r.label) : '');
-      tiles.push('<div class="card tile clickable" data-action="history-detail" data-room="' + esc(e.room) + '" data-entity="' + esc(e.name) + '" data-aspect="' + esc(aspect) + '">' +
-        '<div class="card-label" title="' + esc(e.label) + '">' + tileLabel.toUpperCase() + '</div>' +
-        '<div class="big' + (r.stale ? ' stale' : '') + '">' + esc(r.display) + '</div>' + spark +
-        '<div class="caption">' + esc(caption) + '</div></div>');
+// One aspect's history over a window, as a card.
+function widgetChart(entity, aspect, hours) {
+  var key = entity.name + '|' + aspect + '|' + hours;
+  var s = localState.charts[key];
+  if (!s) {
+    localState.charts[key] = { points: [], loaded: false, loading: true };
+    fetchHistory(entity.name, aspect, hours, 'chart').then(function (loaded) {
+      localState.charts[key] = loaded;
+      scheduleRender();
     });
-  });
-
-  // People: the person entities, home or away from their presence aspect;
-  // failing that, when they were last seen. Motion sensors are rooms'
-  // business, not people.
-  if (persons.length > 0) {
-    var pRows = persons.map(function (e) {
-      var st = logic.personStatus(store.state, e);
-      var detail = st.home === true ? 'Home' : st.home === false ? 'Away'
-        : st.seenAt !== undefined ? 'last fix ' + relTime(st.seenAt) : 'no signal';
-      return '<div class="row-clickable" data-action="entity-detail" data-room="' + esc(e.room) + '" data-entity="' + esc(e.name) + '" style="display:flex;align-items:center;gap:6px;padding:3px 0;">' +
-        '<span class="status-dot ' + (st.home === true ? 'dot-on' : 'dot-off') + '"></span>' +
-        '<span>' + esc(e.label) + ' &middot; ' + esc(detail) + '</span></div>';
-    }).join('');
-    tiles.push('<div class="card tile"><div class="card-label">People</div>' + pRows + '</div>');
+    s = localState.charts[key];
   }
+  var field = descriptorField(entity, aspect);
+  var value = stateValue(entity.room, entity.name, aspect);
+  var chart = s.loaded ? buildChart('chart-' + key, s.points, { height: 120, sizeClass: 'chart-card', aspect: aspect, area: true, gridlines: true, yLabels: true, window: s.window }) : '';
+  return '<div class="card tile clickable span-all" data-action="history-detail" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '" data-aspect="' + esc(aspect) + '">' +
+    '<div class="card-label">' + esc(entity.label + ' · ' + ((field && field.label) || aspect)).toUpperCase() + ' <span class="faint">' + esc(hours >= 48 ? Math.round(hours / 24) + 'd' : hours + 'h') + '</span></div>' +
+    '<div class="big">' + esc(logic.formatAspect(aspect, field, value)) + '</div>' + chart + '</div>';
+}
 
-  // out of the ordinary — the rules live in dashboard-logic.js; here each
-  // record's target maps onto the tap wiring.
+// People: the person entities, home or away from their presence aspect;
+// failing that, when they were last seen. Motion sensors are rooms'
+// business, not people.
+function widgetPeople(persons) {
+  if (persons.length === 0) return '';
+  var pRows = persons.map(function (e) {
+    var st = logic.personStatus(store.state, e);
+    var detail = st.home === true ? 'Home' : st.home === false ? 'Away'
+      : st.seenAt !== undefined ? 'last fix ' + relTime(st.seenAt) : 'no signal';
+    return '<div class="row-clickable" data-action="entity-detail" data-room="' + esc(e.room) + '" data-entity="' + esc(e.name) + '" style="display:flex;align-items:center;gap:6px;padding:3px 0;">' +
+      '<span class="status-dot ' + (st.home === true ? 'dot-on' : 'dot-off') + '"></span>' +
+      '<span>' + esc(e.label) + ' &middot; ' + esc(detail) + '</span></div>';
+  }).join('');
+  return '<div class="card tile"><div class="card-label">People</div>' + pRows + '</div>';
+}
+
+// Out of the ordinary — the rules live in dashboard-logic.js; here each
+// record's target maps onto the tap wiring.
+function widgetDeviations() {
   var deviations = logic.computeDeviations(
     store.model, store.state, store.health, store.config, store.aspects
   );
@@ -1441,13 +1503,142 @@ function renderNow() {
         '<div class="dev-tag">' + esc(d.tag) + '</div></div>';
     }).join('');
   }
+  return '<div class="card span-all"><div class="card-label">Out of the ordinary' + (deviations.length ? ' — ' + deviations.length : '') + '</div>' + devHtml + '</div>';
+}
 
-  var html = '<h1 class="view-title">Now</h1>';
-  if (tiles.length > 0) html += '<div class="grid">' + tiles.join('') + '</div>';
-  html += '<div class="card" style="' + (tiles.length > 0 ? 'margin-top:16px;' : '') + '"><div class="card-label">Out of the ordinary' + (deviations.length ? ' — ' + deviations.length : '') + '</div>' + devHtml + '</div>';
-  if (persons.length > 0) html += renderMapCard(persons);
+// A unit's family-editable parameters as one card.
+function widgetParams(unit) {
+  var params = unit.params || {};
+  var rows = Object.keys(params).filter(function (p) { return familyEditable(params[p]); })
+    .map(function (p) { return renderParamRow(unit.name, p, params[p], true); });
+  return '<div class="card"><div class="card-label">' + esc(unit.label) + '</div>' +
+    (rows.length ? rows.join('') : '<div class="empty-hint">No family-editable parameters.</div>') + '</div>';
+}
+
+// An entity's own row — its control or its readings — as a card.
+function widgetEntity(entity) {
+  return '<div class="card">' + widgetForEntity(entity) + '</div>';
+}
+
+// A unit's card (dashboard-logic.js, unitCardPlan): head, then the
+// relations the manifest and the grant table already state. Each section
+// is drawn only when it has members; the labels are the page's words, not
+// the manifest's, and the card can say nothing the manifest did not.
+function widgetUnit(unitName) {
+  var plan = logic.unitCardPlan(store.model, unitName);
+  if (!plan) return '';
+  var u = plan.unit;
+  var h = store.health['home/health/' + u.name] || {};
+  var status = h.status || 'stopped';
+  var html = '<div class="card unit-card">' +
+    '<div class="unit-head row-clickable" data-action="unit-detail" data-unit="' + esc(u.name) + '">' +
+    '<div><div class="unit-name" title="' + esc(u.label) + '">' + esc(u.label) + '</div>' +
+    (u.description ? '<div class="unit-desc">' + esc(u.description) + '</div>' : '') + '</div>' +
+    '<span class="status-badge" title="' + esc(healthTooltip(h)) + '"><span class="status-glyph status-' + esc(status) + '">' + statusGlyph(status) + '</span>' + esc(status) + '</span></div>';
+  var section = function (label, body) {
+    return body ? '<div class="section-label">' + label + '</div>' + body : '';
+  };
+  // its own card: the param name alone, the unit is the head
+  html += section('Setpoints', plan.params.map(function (p) { return renderParamRow(u.name, p, u.params[p], true); }).join(''));
+  html += section('Publishes', plan.publishes.map(widgetForEntity).join(''));
+  html += section('Drives', plan.drives.map(widgetForEntity).join(''));
+  html += section('From', plan.sources.map(function (e) { return widgetForEntity(e); }).join(''));
+  return html + '</div>';
+}
+
+// The room card: every entity in the room, controls first.
+function renderRoomCard(room, ents) {
+  var sorted = ents.slice().sort(function (a, b) { return capRank(a) - capRank(b); });
+  var title = room === 'global' ? 'House' : titleCase(room);
+  return '<div class="card room-card"><h3 title="' + esc(title) + '">' + esc(title) + '</h3>' + sorted.map(widgetForEntity).join('') + '</div>';
+}
+
+function entitiesInRoom(room) {
+  return (store.model.entities || []).filter(function (e) { return e.room === room; });
+}
+
+function unitByName(name) {
+  return (store.model.units || []).filter(function (u) { return u.name === name; })[0];
+}
+
+// The compositor: a view's widgets, in order, in one grid. The map is
+// mounted after the markup lands (Leaflet owns its container).
+function renderWidgets(title, widgets) {
+  var persons = personEntities();
+  var wantMap = false;
+  var cards = widgets.map(function (w) {
+    if (w.kind === 'tile') {
+      var te = findEntityByName(w.entity);
+      return te ? widgetTiles(te, w.aspect) : '';
+    }
+    if (w.kind === 'chart') {
+      var ce = findEntityByName(w.entity);
+      return ce ? widgetChart(ce, w.aspect, w.hours || 24) : '';
+    }
+    if (w.kind === 'entity') {
+      var ee = findEntityByName(w.entity);
+      return ee ? widgetEntity(ee) : '';
+    }
+    if (w.kind === 'room') return renderRoomCard(w.room, entitiesInRoom(w.room));
+    if (w.kind === 'unit') return widgetUnit(w.unit);
+    if (w.kind === 'params') {
+      var pu = unitByName(w.unit);
+      return pu ? widgetParams(pu) : '';
+    }
+    if (w.kind === 'people') return widgetPeople(persons);
+    if (w.kind === 'deviations') return widgetDeviations();
+    if (w.kind === 'map' && persons.length > 0) {
+      wantMap = true;
+      return renderMapCard(persons);
+    }
+    return '';
+  }).join('');
+  var html = '<h1 class="view-title">' + esc(title) + '</h1>';
+  html += cards ? '<div class="grid">' + cards + '</div>' : '<div class="card"><div class="empty-hint">Nothing to show yet.</div></div>';
   byId('view').innerHTML = html;
-  if (persons.length > 0) mountMap(persons);
+  if (wantMap) mountMap(persons);
+}
+
+function findEntityByName(name) {
+  return (store.model.entities || []).filter(function (e) { return e.name === name; })[0];
+}
+
+// ---- view: Now ----
+//
+// The error signal, not an inventory: people, what is out of the
+// ordinary, and the map when anyone has a location. A reading earns a
+// tile only by being placed in dashboard.toml.
+function renderNow() {
+  renderWidgets('Now', [{ kind: 'people' }, { kind: 'deviations' }, { kind: 'map' }]);
+}
+
+// ---- view: Not shown ----
+//
+// The complement of every placement in dashboard.toml (dashboard-logic.js,
+// placement): what the family cannot reach from the nav, by room, each
+// row its normal widget so it is usable here and not merely listed.
+function renderNotShown() {
+  var unplaced = logic.placement(store.model);
+  var byRoom = {};
+  unplaced.entities.forEach(function (e) {
+    if (!byRoom[e.room]) byRoom[e.room] = [];
+    byRoom[e.room].push(e);
+  });
+  var rooms = Object.keys(byRoom).sort(function (a, b) {
+    // the pseudo-rooms last: the house's own things, and people
+    var pa = a === 'global' || a === 'person', pb = b === 'global' || b === 'person';
+    return pa === pb ? (a < b ? -1 : 1) : (pa ? 1 : -1);
+  });
+  var cards = rooms.map(function (room) { return renderRoomCard(room, byRoom[room]); });
+  if (unplaced.params.length) {
+    cards.push('<div class="card"><h3>Setpoints</h3>' + unplaced.params.map(function (p) {
+      return renderParamRow(p.unit, p.param, p.spec);
+    }).join('') + '</div>');
+  }
+  var html = '<h1 class="view-title">Not shown</h1>';
+  html += '<div class="muted" style="margin:-8px 0 16px;max-width:62ch;">Everything no view in <code>dashboard.toml</code> places. Placing it there removes it from here.</div>';
+  html += cards.length ? '<div class="grid">' + cards.join('') + '</div>' : '<div class="card"><div class="empty-hint">Every entity and setpoint is on a view.</div></div>';
+  byId('view').innerHTML = html;
 }
 
 // ---- view: Setpoints ----
@@ -1503,7 +1694,7 @@ function familyEditable(p) { return p.editable_by === 'family'; }
 // shared by the Setpoints view and the unit-detail overlay. A param the
 // family cannot edit renders its live value against the manifest default
 // instead of a control: visible, not writable (/api/param is the gate).
-function renderParamRow(unitName, pname, p) {
+function renderParamRow(unitName, pname, p, bare) {
   var body;
   if (familyEditable(p)) {
     body = '<div>' + renderParamControl(unitName, pname, p) + '</div>';
@@ -1515,7 +1706,7 @@ function renderParamRow(unitName, pname, p) {
       ' <span class="tier-badge">' + esc(p.editable_by || 'owner') + '</span></div>';
   }
   return '<div class="param-row" id="paramrow-' + unitName + '-' + pname + '"><div class="param-head">' +
-    '<span class="name" title="' + esc(unitLabel(unitName)) + ' · ' + esc(pname) + '">' + esc(unitLabel(unitName)) + ' · ' + esc(pname) + '</span></div>' +
+    '<span class="name" title="' + esc(unitLabel(unitName)) + ' · ' + esc(pname) + '">' + (bare ? '' : esc(unitLabel(unitName)) + ' · ') + esc(pname) + '</span></div>' +
     body +
     '<div class="param-caption" title="' + esc(JSON.stringify(p.constraint || {})) + '">' + esc(paramConstraintCaption(p)) + '</div></div>';
 }
@@ -1585,11 +1776,7 @@ function renderRooms() {
   });
 
   var roomNames = Object.keys(byRoom).sort();
-  var cards = roomNames.map(function (room) {
-    var ents = byRoom[room].slice().sort(function (a, b) { return capRank(a) - capRank(b); });
-    var body = ents.map(widgetForEntity).join('');
-    return '<div class="card room-card"><h3 title="' + esc(titleCase(room)) + '">' + esc(titleCase(room)) + '</h3>' + body + '</div>';
-  });
+  var cards = roomNames.map(function (room) { return renderRoomCard(room, byRoom[room]); });
 
   var html = '<h1 class="view-title">Rooms</h1>';
   html += '<div class="chips">' + chips.join('') + '</div>';
@@ -1653,11 +1840,15 @@ function renderHealth() {
 
 // ---- view dispatch ----
 
+var GENERATED = { now: renderNow, setpoints: renderSetpoints, rooms: renderRooms, health: renderHealth };
+
 function renderView() {
-  if (store.view === 'now') renderNow();
-  else if (store.view === 'setpoints') renderSetpoints();
-  else if (store.view === 'rooms') renderRooms();
-  else if (store.view === 'health') renderHealth();
+  var current = currentView();
+  var view = logic.viewsOf(store.model).filter(function (v) { return v.name === current; })[0];
+  if (current === 'health') renderHealth();
+  else if (current === 'notshown') renderNotShown();
+  else if (view && view.kind) GENERATED[view.kind]();
+  else if (view) renderWidgets(view.label, view.widgets);
   wireChartInteractions(byId('view'));
 }
 
@@ -2101,8 +2292,11 @@ document.addEventListener('click', function (e) {
     openUnitDetail(el.getAttribute('data-unit'));
     return;
   }
+  // Deviation taps land on whichever view shows the thing now that the
+  // nav is the file's (dashboard-logic.js, viewFor); with none, the unit
+  // overlay holds every param and Not shown holds every unplaced light.
   if (action === 'goto-rooms') {
-    store.view = 'rooms';
+    store.view = logic.viewFor({ type: 'rooms' }, logic.viewsOf(store.model)) || 'notshown';
     renderShell();
     renderView();
     return;
@@ -2110,7 +2304,12 @@ document.addEventListener('click', function (e) {
   if (action === 'goto-setpoint') {
     var gUnit = el.getAttribute('data-unit');
     var gParam = el.getAttribute('data-param');
-    store.view = 'setpoints';
+    var gView = logic.viewFor({ type: 'setpoint', unit: gUnit }, logic.viewsOf(store.model));
+    if (!gView) {
+      openUnitDetail(gUnit);
+      return;
+    }
+    store.view = gView;
     renderShell();
     renderView();
     flashParamRow(gUnit, gParam);
@@ -2235,7 +2434,7 @@ document.addEventListener('input', function (e) {
 // ---- relative-time ticker ----
 
 setInterval(function () {
-  if (store.view === 'rooms' || store.view === 'now') scheduleRender();
+  if (currentView() !== 'health') scheduleRender(); // relative times live on every other view
 }, 30000);
 
 /* Some commands are never answered by anything: the adapter is deaf, the

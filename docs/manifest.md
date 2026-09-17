@@ -1,6 +1,6 @@
 # Manifest reference
 
-Generated from the manifest structs by `homeostat schema --markdown`; do not edit (a test refuses a stale copy). The same schema is served as JSON by `homeostat schema [unit|entity|zones]` and the MCP `schema` tool. Rules the validator enforces beyond the shape are named by their error code; `homeostat explain <code>` (or the MCP `explain` tool) has the paragraph for each. Reasoning lives in docs/design.md.
+Generated from the manifest structs by `homeostat schema --markdown`; do not edit (a test refuses a stale copy). The same schema is served as JSON by `homeostat schema [unit|entity|zones|dashboard]` and the MCP `schema` tool. Rules the validator enforces beyond the shape are named by their error code; `homeostat explain <code>` (or the MCP `explain` tool) has the paragraph for each. Reasoning lives in docs/design.md.
 
 ## Unit manifest (`units/<name>.toml`)
 
@@ -177,7 +177,7 @@ a key segment (`invalid-name`).
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `dashboard` | [EntityDashboard](#entitydashboard) | no | `[dashboard]`: presentation hints for the family surface. Text in the house repo, never browser-side state (docs/design.md, Dashboard). |
+| `dashboard` | [EntityDashboard](#entitydashboard) | no | `[dashboard]`: retired (`entity-dashboard-retired`). Where a reading appears is `dashboard.toml`'s say: `{ kind = "tile", entity = ... }` on a view replaces `pin = true` here. |
 | `entity` | [EntitySection](#entitysection) | yes |  |
 | `inputs` | table of name → [InputSource](#inputsource) | no | `[inputs]`: device inputs fed from one source each, keyed by the adapter's own input name (e.g. `indoor_temperature_actual`). A fed input is a continuous signal with one master, not a command: it stops being a command aspect for this entity, never rides the arbiter, and staleness is the device's own validity window. Only a device entity can be fed (`virtual-entity-fed`); the adapter is the authority on which input names exist. |
 | `naming` | [EntityNaming](#entitynaming) | no |  |
@@ -186,11 +186,11 @@ a key segment (`invalid-name`).
 
 ### EntityDashboard
 
-`[dashboard]` on an entity.
+`[dashboard]` on an entity — retired; any table here is an error.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `pin` | boolean | no | Pin this entity's numeric readings as signal tiles at the top of `Now`, each with today's range. Nothing is pinned by default: `Now` is the error signal, and a reading earns a place there by being named here. |
+| `pin` | boolean | no | Retired: place the entity with a `tile` widget in `dashboard.toml`. |
 
 ### EntitySection
 
@@ -253,6 +253,74 @@ room slot of key expressions.
 |---|---|---|---|
 | `schema` | integer | yes | Contract version. Must be 1. |
 | `zones` | table of name → list of string | no | `[zones]`: zone name → member rooms. A zone name is a key segment, not reserved (`reserved-zone-name`), not also a room (`zone-room-collision`); members must be rooms some entity binds (`zone-unknown-room`) and never pseudo-rooms (`zone-pseudo-room`). |
+
+## Dashboard views (`dashboard.toml`)
+
+`dashboard.toml` at the house root: the family surface's views, each a
+nav entry composed of widgets over things the house already has.
+Optional — without it the dashboard renders its generated views (Now,
+Setpoints, Rooms) — and when present it is the whole nav: Health and
+the list of everything not shown stay reachable as fixed chrome, never
+as views. Layout is text in the repo, never browser-side state
+(docs/design.md, Dashboard).
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `schema` | integer | yes | Contract version. Must be 1. |
+| `view` | list of [ViewSpec](#viewspec) | no | `[[view]]`: the nav, in order. |
+
+### ViewSpec
+
+One `[[view]]`: either a generated view kept as is (`kind`) or a
+composition of widgets (`widgets`), never both (`dashboard-view-shape`).
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `kind` | [GeneratedView](#generatedview) | no | A generated view, kept exactly as the dashboard renders it without this file. |
+| `label` | string | no | Nav label; the name, title-cased, when absent. |
+| `name` | string | yes | Unique among views (`dashboard-duplicate-view`); a key segment (`invalid-name`). |
+| `widgets` | list of [WidgetSpec](#widgetspec) | no | The view's widgets, in order. |
+
+### GeneratedView
+
+The dashboard's generated views.
+
+- `now` — People, the deviations feed and the map: the error signal.
+- `setpoints` — Every family-editable parameter as one flat list.
+- `rooms` — The room-card grid over every entity.
+- `health` — Unit status and the event feed.
+
+### WidgetSpec
+
+One widget on a view. Which fields it takes is fixed per kind
+(`dashboard-widget-fields`); references must resolve
+(`dashboard-unknown-entity`, `dashboard-unknown-room`,
+`dashboard-unknown-unit`). The dashboard owns every rendering: a widget
+places something, it never describes how it looks.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `aspect` | string | no | `chart`: the aspect charted; `tile`: narrows the tiles to one reading (every reading otherwise). A key segment (`dashboard-invalid-aspect`). |
+| `entity` | string | no | `tile`, `chart`, `entity`: the entity, by name. |
+| `hours` | number | no | `chart`: the window in hours (24 when absent). |
+| `kind` | [WidgetKind](#widgetkind) | yes |  |
+| `room` | string | no | `room`: the room whose card to place. |
+| `unit` | string | no | `unit`, `params`: the unit, by name. |
+
+### WidgetKind
+
+What a widget places. Everything is rendered by the dashboard from the
+house's text, the grant table and the bus; no widget carries markup.
+
+- `tile` — A signal tile per reading of an entity: the value big, today's range under it.
+- `chart` — One aspect's history over a window.
+- `entity` — An entity's own row — its control or its readings — as a card.
+- `room` — A room's card: every entity in the room.
+- `unit` — A unit's card: its family setpoints, the entities it publishes, the entities it drives (from the grant table) and the entities it reads (from its subscriptions) — a pure function of its manifest.
+- `params` — A unit's family-editable parameters as one card.
+- `people` — The person entities, home or away.
+- `deviations` — The deviations feed: what is out of the ordinary.
+- `map` — The map over every entity with a location.
 
 ## Capability vocabulary
 

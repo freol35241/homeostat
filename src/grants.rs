@@ -670,6 +670,7 @@ mod tests {
                 entity("lock", "hallway", "lock", WriteMode::Arbitrated, "zigbee"),
             ],
             zones: BTreeMap::new(),
+            dashboard: None,
         }
     }
 
@@ -827,6 +828,7 @@ mod tests {
                 "modes",
             )],
             zones: BTreeMap::new(),
+            dashboard: None,
         }
     }
 

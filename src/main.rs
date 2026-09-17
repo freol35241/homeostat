@@ -58,9 +58,9 @@ enum Command {
         http: Option<String>,
     },
     /// Print the manifest contract: JSON Schema for one file kind (all
-    /// three without an argument), or the Markdown reference.
+    /// four without an argument), or the Markdown reference.
     Schema {
-        /// unit | entity | zones
+        /// unit | entity | zones | dashboard
         file: Option<String>,
         /// Render docs/manifest.md instead of JSON.
         #[arg(long)]
@@ -141,7 +141,9 @@ fn schema_command(file: Option<String>, markdown: bool) -> ExitCode {
         Some(name) => match schema::File::parse(&name) {
             Some(file) => schema::json(file),
             None => {
-                eprintln!("unknown file kind \"{name}\": expected unit, entity or zones");
+                eprintln!(
+                    "unknown file kind \"{name}\": expected unit, entity, zones or dashboard"
+                );
                 return ExitCode::FAILURE;
             }
         },

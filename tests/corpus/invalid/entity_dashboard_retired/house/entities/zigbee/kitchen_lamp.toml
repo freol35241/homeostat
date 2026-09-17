@@ -1,0 +1,13 @@
+schema = 1
+
+[entity]
+id = "0x04"
+capability = "light"
+room = "kitchen"
+
+[write_policy]
+mode = "shared"
+owner = "zigbee"
+
+[dashboard]
+pin = true

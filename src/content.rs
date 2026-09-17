@@ -5,7 +5,8 @@
 //! - `files_hash`: sha256 over the unit's non-manifest repo inputs — command
 //!   tokens that resolve to files (the `uv run units/foo.py` script), the
 //!   unit's bound entity files, and `zones.toml` when any of the unit's key
-//!   expressions referenced a zone.
+//!   expressions referenced a zone. A house-wide unit (`inputs = "house"`)
+//!   also takes every manifest, every entity file and `dashboard.toml`.
 
 use std::fs;
 use std::path::Path;
@@ -68,6 +69,7 @@ pub fn files_hash(root: &Path, unit: &LoadedUnit, house: &House, unit_uses_zone:
             feed(path);
         }
         feed("zones.toml");
+        feed("dashboard.toml");
         return hasher
             .finalize()
             .iter()
@@ -165,6 +167,36 @@ mod tests {
             hash_of(&dir, "dash"),
             before,
             "a manifest edit must reach it"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_house_wide_unit_is_changed_by_the_views_file() {
+        // dashboard.toml is layout as text: editing a view must restart
+        // the unit that renders it, and the file is optional, so its
+        // arrival is a change too.
+        let dir = house_dir("house-views");
+        let before = hash_of(&dir, "dash");
+        let probe_before = hash_of(&dir, "probe");
+        let views = dir.join("dashboard.toml");
+        fs::write(&views, "schema = 1\n").unwrap();
+        let with_file = hash_of(&dir, "dash");
+        assert_ne!(with_file, before, "a new views file must reach it");
+        fs::write(
+            &views,
+            "schema = 1\n[[view]]\nname = \"now\"\nkind = \"now\"\n",
+        )
+        .unwrap();
+        assert_ne!(
+            hash_of(&dir, "dash"),
+            with_file,
+            "an edited view must reach it"
+        );
+        assert_eq!(
+            hash_of(&dir, "probe"),
+            probe_before,
+            "own scope is unaffected"
         );
         let _ = fs::remove_dir_all(&dir);
     }

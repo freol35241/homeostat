@@ -468,20 +468,17 @@ pub struct EntityFile {
     /// device entity can be fed (`virtual-entity-fed`); the adapter is the
     /// authority on which input names exist.
     pub inputs: Option<BTreeMap<String, InputSource>>,
-    /// `[dashboard]`: presentation hints for the family surface. Text in
-    /// the house repo, never browser-side state (docs/design.md,
-    /// Dashboard).
+    /// `[dashboard]`: retired (`entity-dashboard-retired`). Where a reading
+    /// appears is `dashboard.toml`'s say: `{ kind = "tile", entity = ... }`
+    /// on a view replaces `pin = true` here.
     pub dashboard: Option<EntityDashboard>,
 }
 
-/// `[dashboard]` on an entity.
+/// `[dashboard]` on an entity — retired; any table here is an error.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EntityDashboard {
-    /// Pin this entity's numeric readings as signal tiles at the top of
-    /// `Now`, each with today's range. Nothing is pinned by default: `Now`
-    /// is the error signal, and a reading earns a place there by being
-    /// named here.
+    /// Retired: place the entity with a `tile` widget in `dashboard.toml`.
     #[serde(default)]
     pub pin: bool,
 }
@@ -593,4 +590,104 @@ pub struct ZonesFile {
     /// (`zone-unknown-room`) and never pseudo-rooms (`zone-pseudo-room`).
     #[serde(default)]
     pub zones: BTreeMap<String, Vec<String>>,
+}
+
+/// `dashboard.toml` at the house root: the family surface's views, each a
+/// nav entry composed of widgets over things the house already has.
+/// Optional — without it the dashboard renders its generated views (Now,
+/// Setpoints, Rooms) — and when present it is the whole nav: Health and
+/// the list of everything not shown stay reachable as fixed chrome, never
+/// as views. Layout is text in the repo, never browser-side state
+/// (docs/design.md, Dashboard).
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DashboardFile {
+    /// Contract version. Must be 1.
+    pub schema: u32,
+    /// `[[view]]`: the nav, in order.
+    #[serde(default)]
+    pub view: Vec<ViewSpec>,
+}
+
+/// One `[[view]]`: either a generated view kept as is (`kind`) or a
+/// composition of widgets (`widgets`), never both (`dashboard-view-shape`).
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ViewSpec {
+    /// Unique among views (`dashboard-duplicate-view`); a key segment
+    /// (`invalid-name`).
+    pub name: String,
+    /// Nav label; the name, title-cased, when absent.
+    pub label: Option<String>,
+    /// A generated view, kept exactly as the dashboard renders it without
+    /// this file.
+    pub kind: Option<GeneratedView>,
+    /// The view's widgets, in order.
+    #[serde(default)]
+    pub widgets: Vec<WidgetSpec>,
+}
+
+/// The dashboard's generated views.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum GeneratedView {
+    /// People, the deviations feed and the map: the error signal.
+    Now,
+    /// Every family-editable parameter as one flat list.
+    Setpoints,
+    /// The room-card grid over every entity.
+    Rooms,
+    /// Unit status and the event feed.
+    Health,
+}
+
+/// One widget on a view. Which fields it takes is fixed per kind
+/// (`dashboard-widget-fields`); references must resolve
+/// (`dashboard-unknown-entity`, `dashboard-unknown-room`,
+/// `dashboard-unknown-unit`). The dashboard owns every rendering: a widget
+/// places something, it never describes how it looks.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WidgetSpec {
+    pub kind: WidgetKind,
+    /// `tile`, `chart`, `entity`: the entity, by name.
+    pub entity: Option<String>,
+    /// `chart`: the aspect charted; `tile`: narrows the tiles to one
+    /// reading (every reading otherwise). A key segment
+    /// (`dashboard-invalid-aspect`).
+    pub aspect: Option<String>,
+    /// `room`: the room whose card to place.
+    pub room: Option<String>,
+    /// `unit`, `params`: the unit, by name.
+    pub unit: Option<String>,
+    /// `chart`: the window in hours (24 when absent).
+    pub hours: Option<f64>,
+}
+
+/// What a widget places. Everything is rendered by the dashboard from the
+/// house's text, the grant table and the bus; no widget carries markup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum WidgetKind {
+    /// A signal tile per reading of an entity: the value big, today's
+    /// range under it.
+    Tile,
+    /// One aspect's history over a window.
+    Chart,
+    /// An entity's own row — its control or its readings — as a card.
+    Entity,
+    /// A room's card: every entity in the room.
+    Room,
+    /// A unit's card: its family setpoints, the entities it publishes,
+    /// the entities it drives (from the grant table) and the entities it
+    /// reads (from its subscriptions) — a pure function of its manifest.
+    Unit,
+    /// A unit's family-editable parameters as one card.
+    Params,
+    /// The person entities, home or away.
+    People,
+    /// The deviations feed: what is out of the ordinary.
+    Deviations,
+    /// The map over every entity with a location.
+    Map,
 }

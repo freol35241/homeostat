@@ -1,0 +1,28 @@
+# The family surface's views (docs/design.md, Dashboard: views are text).
+# Each [[view]] is a nav entry; without this file the dashboard renders
+# its generated views. Health and "Not shown" — everything no view places
+# — stay reachable from the rail whatever is written here.
+schema = 1
+
+[[view]]
+name = "now"
+widgets = [
+  { kind = "tile", entity = "outdoor_temp" },            # the outdoor reading, big, with today's range
+  { kind = "tile", entity = "downstairs_temperature" },
+  { kind = "people" },
+  { kind = "deviations" },
+]
+
+[[view]]
+name = "downstairs"
+widgets = [
+  { kind = "unit", unit = "evening_lights" },           # its setpoint, and the lights it drives
+  { kind = "unit", unit = "fused_temperature" },        # what it publishes, and what it reads
+  { kind = "room", room = "kitchen" },
+  { kind = "room", room = "livingroom" },
+  { kind = "room", room = "hallway" },
+]
+
+[[view]]
+name = "setpoints"
+kind = "setpoints"

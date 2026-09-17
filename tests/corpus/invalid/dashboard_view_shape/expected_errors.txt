@@ -1,0 +1,4 @@
+error[dashboard-duplicate-view] rooms: view "rooms" is declared more than once (dashboard.toml)
+error[dashboard-view-shape] empty: a view is a generated `kind` or a list of `widgets`, never both or neither (dashboard.toml)
+error[dashboard-view-shape] rooms: a view is a generated `kind` or a list of `widgets`, never both or neither (dashboard.toml)
+error[invalid-name] bad name: view name "bad name" must be a single key segment (letters, digits, "_", "-", ".") (dashboard.toml)

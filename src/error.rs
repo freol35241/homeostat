@@ -278,6 +278,58 @@ pub const CODES: &[(&str, &str)] = &[
          record or a second clock is refused.",
     ),
     (
+        "entity-dashboard-retired",
+        "An entity file carries a `[dashboard]` table. `pin = true` was the \
+         first placement hint and is retired: where a reading appears is \
+         `dashboard.toml`'s say, so place the entity with \
+         `{ kind = \"tile\", entity = \"<name>\" }` on a view there.",
+    ),
+    (
+        "dashboard-duplicate-view",
+        "Two `[[view]]` entries in `dashboard.toml` share a name. The name is \
+         the nav entry's identity (and its URL fragment), so it must be \
+         unique.",
+    ),
+    (
+        "dashboard-view-shape",
+        "A `[[view]]` in `dashboard.toml` has both a `kind` and `widgets`, or \
+         neither. A view is either a generated view kept as is (`kind = \
+         \"rooms\"`) or a composition of widgets — the generated views are \
+         not widget hosts, and an empty view has nothing to show.",
+    ),
+    (
+        "dashboard-widget-fields",
+        "A widget in `dashboard.toml` is missing a field its kind needs, or \
+         carries one it does not take: `tile`, `chart` and `entity` name an \
+         `entity` (`chart` also an `aspect`, optionally `hours`; `tile` \
+         optionally an `aspect`), `room` a `room`, `unit` and `params` a \
+         `unit`; `people`, `deviations` and `map` take nothing. The set is \
+         closed so a typo is refused, not ignored.",
+    ),
+    (
+        "dashboard-unknown-entity",
+        "A widget in `dashboard.toml` names an entity no unit binds. Widgets \
+         place what the house already has; the entity must exist under some \
+         unit's `[entities]` dir.",
+    ),
+    (
+        "dashboard-invalid-aspect",
+        "A widget's `aspect` in `dashboard.toml` is not a single key segment. \
+         It becomes the last slot of a state key, so wildcards and \
+         separators cannot appear in it.",
+    ),
+    (
+        "dashboard-unknown-room",
+        "A `room` widget in `dashboard.toml` names a room no entity is in. \
+         Rooms exist by being named in entity files; a room with no entities \
+         has no card.",
+    ),
+    (
+        "dashboard-unknown-unit",
+        "A `unit` or `params` widget in `dashboard.toml` names a unit with no \
+         manifest under `units/`.",
+    ),
+    (
         "state-publish-unbound",
         "A publish under `home/state/` must name, literally, the room and entity \
          of an entity this unit binds (or use `{room}`/`{entity}` templates). \

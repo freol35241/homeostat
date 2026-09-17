@@ -1,0 +1,13 @@
+schema = 1
+
+[[view]]
+name = "downstairs"
+widgets = [
+  { kind = "unit", unit = "evening_lights" },
+  { kind = "room", room = "livingroom" },
+  { kind = "people" },
+]
+
+[[view]]
+name = "health"
+kind = "health"
