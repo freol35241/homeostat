@@ -1502,7 +1502,9 @@ function widgetTiles(entity, aspect) {
     var s = localState.sparklines[sk];
     var spark = s && s.loaded ? buildChart('tile-' + sk, s.points, { height: 36, sizeClass: 'chart-tile', aspect: r.aspect, area: true, window: s.window }) : '';
     var caption = s && s.loaded ? minMaxCaption(s.points) : '';
-    var tileLabel = esc(entity.label) + (rows.length > 1 ? ' &middot; ' + esc(r.label) : '');
+    // The separator is the character, not the entity: the whole label is
+    // upper-cased below, and "&MIDDOT;" is not one.
+    var tileLabel = esc(entity.label) + (rows.length > 1 ? ' \u00b7 ' + esc(r.label) : '');
     return '<div class="card tile clickable" data-action="history-detail" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '" data-aspect="' + esc(r.aspect) + '">' +
       '<div class="card-label" title="' + esc(entity.label) + '">' + tileLabel.toUpperCase() + '</div>' +
       '<div class="big' + (r.stale ? ' stale' : '') + '">' + esc(r.display) + '</div>' + spark +

@@ -346,11 +346,12 @@ reachable from a browser). The map over person entities (OwnTracks,
 self-hosted tiles) is settled design, not yet built. Details:
 [design record §Dashboard](docs/design.md#dashboard-settled-2026-07-15).
 
-![The dashboard on a desktop and a phone: a "Downstairs" view composed in dashboard.toml — the evening-lights automation's card with its setpoint, the lamp it drives and the sensors it reads, beside the room cards — and the phone's "Now" with signal tiles, people and the deviations feed](docs/screenshots/dashboard.png)
+![The dashboard on a desktop and a phone: a "Downstairs" view composed in dashboard.toml — the evening-lights automation's card with its setpoint and its wiring opened out field by field, a heat-pump dial grouped with the room's temperature trace, and the room card — and the phone's "Now" with the burner card, people and the deviations feed](docs/screenshots/dashboard.png)
 
 *Every pixel above is generated from the house's text: the views from
 `dashboard.toml`, the cards from manifests and entity files, the
-automation's Drives/From from the grant table and its subscriptions.*
+automation's Drives/From — one row per field — from the grant table and
+its subscriptions.*
 
 ## Status
 
