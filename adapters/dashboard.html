@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
 <title>homeostat</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M3 11 L12 3 L21 11 V21 H14 V14 H10 V21 H3 Z' fill='%2318181b'/%3E%3C/svg%3E">
+<link rel="icon" href="/assets/homeostat-mark.svg">
 <link rel="stylesheet" href="/assets/leaflet.css">
 <style>
 :root {
@@ -36,6 +36,9 @@ a { color: inherit; }
 #rail { width: 210px; flex: 0 0 210px; background: var(--card); border-right: 1px solid var(--border);
   display: flex; flex-direction: column; padding: 20px 12px; }
 #rail .wordmark { font-size: 16px; font-weight: 700; padding: 4px 12px 20px; }
+/* the mark beside the name, on the rail and in the phone's top bar */
+.wordmark { display: flex; align-items: center; gap: 8px; }
+.wordmark img { width: 22px; height: 22px; display: block; }
 #rail nav { display: flex; flex-direction: column; gap: 2px; }
 #rail nav button { text-align: left; border: none; border-left: 3px solid transparent; background: transparent;
   color: var(--secondary); font-size: 13.5px; padding: 10px 12px; border-radius: 0 6px 6px 0; cursor: pointer;
@@ -365,13 +368,13 @@ video-rtc video { width: 100%; display: block; }
 <body>
 <div id="app">
   <aside id="rail">
-    <div class="wordmark">homeostat</div>
+    <div class="wordmark"><img src="/assets/homeostat-mark.svg" alt="" width="22" height="22"><span>homeostat</span></div>
     <nav id="rail-nav"></nav>
     <div class="health-pin" id="health-pin"></div>
   </aside>
   <div id="main">
     <div id="topbar">
-      <div class="wordmark">homeostat</div>
+      <div class="wordmark"><img src="/assets/homeostat-mark.svg" alt="" width="22" height="22"><span>homeostat</span></div>
     </div>
     <div id="banner">reconnecting&hellip;</div>
     <div id="view"></div>

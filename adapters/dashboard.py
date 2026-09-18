@@ -103,6 +103,7 @@ ASSETS = {
     "protomaps-leaflet.js": "text/javascript",
     "video-rtc.js": "text/javascript",
     "dashboard-logic.js": "text/javascript",
+    "homeostat-mark.svg": "image/svg+xml",
 }
 
 # Commandable aspects per capability: the capability's base aspect plus

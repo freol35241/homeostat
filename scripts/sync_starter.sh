@@ -49,6 +49,7 @@ assets/leaflet.js:assets/leaflet.js
 assets/protomaps-leaflet.js:assets/protomaps-leaflet.js
 assets/dashboard-logic.js:assets/dashboard-logic.js
 assets/video-rtc.js:assets/video-rtc.js
+assets/homeostat-mark.svg:assets/homeostat-mark.svg
 "
 
 # A shipped unit names `homeostat==VERSION` and carries no
@@ -151,6 +152,9 @@ for pair in $FILES; do
   src="${pair%%:*}"
   dst="$UNITS/${pair##*:}"
   [ -f "$REPO/adapters/$src" ] || { echo "missing adapters/$src" >&2; exit 1; }
+  # A file added since the release is not in the snapshot: it reaches the
+  # starter at the next tag, together with the page that references it.
+  have_at_tag "$src" || continue
   case "$src" in
     # Only a unit script carries an SDK source line; assets copy verbatim.
     *.py) source_at_tag "$src" | pin_sdk > "$tmp" ;;

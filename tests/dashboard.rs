@@ -369,6 +369,7 @@ async fn dashboard_serves_the_family_surface() {
         "leaflet.css",
         "protomaps-leaflet.js",
         "dashboard-logic.js",
+        "homeostat-mark.svg",
     ] {
         let (status, _) = http_request(&addr, "GET", &format!("/assets/{name}"), &[], None);
         assert_eq!(status, 200, "asset {name}");
