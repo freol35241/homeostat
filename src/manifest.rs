@@ -663,6 +663,12 @@ pub struct WidgetSpec {
     pub unit: Option<String>,
     /// `chart`: the window in hours (24 when absent).
     pub hours: Option<f64>,
+    /// `group`: the label over its members; unlabelled when absent.
+    pub label: Option<String>,
+    /// `group`: the widgets it draws as one card, in order. A group never
+    /// holds another group (`dashboard-nested-group`).
+    #[serde(default)]
+    pub widgets: Vec<WidgetSpec>,
 }
 
 /// What a widget places. Everything is rendered by the dashboard from the
@@ -694,4 +700,7 @@ pub enum WidgetKind {
     Deviations,
     /// The map over every entity with a location.
     Map,
+    /// Several widgets as one card — a dial with the traces that explain
+    /// it, a setpoint beside what it drives. One level deep.
+    Group,
 }

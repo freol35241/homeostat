@@ -305,12 +305,21 @@ pub const CODES: &[(&str, &str)] = &[
          not widget hosts, and an empty view has nothing to show.",
     ),
     (
+        "dashboard-nested-group",
+        "A `group` widget in `dashboard.toml` holds another `group`. A group \
+         is one card over its members — a dial with the traces that explain \
+         it — and one level is what that needs; nesting them would make the \
+         file a layout language, which is exactly what the dashboard owns \
+         instead.",
+    ),
+    (
         "dashboard-widget-fields",
         "A widget in `dashboard.toml` is missing a field its kind needs, or \
          carries one it does not take: `tile`, `chart`, `entity` and `dial` \
          name an `entity` (`chart` also an `aspect`, optionally `hours`; \
          `tile` and `dial` optionally an `aspect`), `room` a `room`, `unit` and `params` a \
-         `unit`; `people`, `deviations` and `map` take nothing. The set is \
+         `unit`; `group` a list of `widgets` and optionally a `label`; \
+         `people`, `deviations` and `map` take nothing. The set is \
          closed so a typo is refused, not ignored.",
     ),
     (

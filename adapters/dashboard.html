@@ -120,6 +120,12 @@ h1.view-title { font-size: 20px; margin: 0 0 16px; }
 .grid > .span-all { grid-column: 1 / -1; }
 .grid > .card + .card { margin-top: 0; } /* the gap is the grid's; the stacked-card rule above is for columns */
 .chart-card { height: 120px; margin: 8px 0 4px; }
+/* a group is one card: its members keep their own markup and lose their
+   own chrome, so a dial and the traces under it read as one thing */
+.group-card > .card-label + * { margin-top: 10px; }
+.group-card .card { background: none; border: none; border-radius: 6px; padding: 0; }
+.group-card .card + .card { margin-top: 14px; }
+.group-card .card.clickable:hover { box-shadow: none; background: var(--accent-tint); }
 /* unit card: head, then the manifest's relations as sections */
 .unit-card .unit-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin: -4px -8px 4px; padding: 4px 8px; }
 .unit-card .unit-name { font-size: 15px; font-weight: 600; }
@@ -1634,7 +1640,10 @@ function unitByName(name) {
 function renderWidgets(title, widgets) {
   var persons = personEntities();
   var wantMap = false;
-  var cards = widgets.map(function (w) {
+  // One widget's card. A group calls this for each of its members, which
+  // is the whole of "a group holds widgets": a member renders exactly as
+  // it would on the view itself.
+  function card(w) {
     if (w.kind === 'tile') {
       var te = findEntityByName(w.entity);
       return te ? widgetTiles(te, w.aspect) : '';
@@ -1663,12 +1672,26 @@ function renderWidgets(title, widgets) {
       wantMap = true;
       return renderMapCard(persons);
     }
+    if (w.kind === 'group') return widgetGroup(w, card);
     return '';
-  }).join('');
+  }
+  var cards = widgets.map(card).join('');
   var html = '<h1 class="view-title">' + esc(title) + '</h1>';
   html += cards ? '<div class="grid">' + cards + '</div>' : '<div class="card"><div class="empty-hint">Nothing to show yet.</div></div>';
   byId('view').innerHTML = html;
   if (wantMap) mountMap(persons);
+}
+
+// A group is one card over its members: its label, then each member's own
+// card, whose chrome the CSS removes inside a group — a dial with the
+// traces that explain it reads as one thing. One level deep; the core
+// refuses a group inside a group.
+function widgetGroup(w, card) {
+  var body = (w.widgets || []).map(card).join('');
+  if (!body) return '';
+  return '<div class="card group-card">' +
+    (w.label ? '<div class="card-label">' + esc(w.label).toUpperCase() + '</div>' : '') +
+    body + '</div>';
 }
 
 function findEntityByName(name) {

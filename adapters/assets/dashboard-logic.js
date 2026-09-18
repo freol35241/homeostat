@@ -632,6 +632,17 @@
     return Object.keys(params).filter(function (p) { return params[p].editable_by === 'family'; });
   }
 
+  /* A view's widgets with every group opened out: a group is a card
+   * around its members, never a placement or a destination of its own. */
+  function flatWidgets(view) {
+    var out = [];
+    (view.widgets || []).forEach(function (w) {
+      if (w.kind === 'group') (w.widgets || []).forEach(function (m) { out.push(m); });
+      else out.push(w);
+    });
+    return out;
+  }
+
   /* What no view places: entities and family params the family cannot
    * reach from the nav. An entity is placed by a widget naming it, its
    * room, a unit that publishes or drives it, a `people` widget when it is
@@ -658,7 +669,7 @@
       if (v.kind === 'rooms') allEntities = true;
       if (v.kind === 'setpoints') allParams = true;
       if (v.kind === 'now') persons = true;
-      v.widgets.forEach(function (w) {
+      flatWidgets(v).forEach(function (w) {
         if (w.entity) placedEntity[w.entity] = true;
         if (w.kind === 'room') entities.forEach(function (e) { if (e.room === w.room) placedEntity[e.name] = true; });
         if (w.kind === 'unit') placeUnit(w.unit);
@@ -712,7 +723,7 @@
     views.forEach(function (v) {
       if (found) return;
       if (target.type === 'setpoint') {
-        var hit = v.kind === 'setpoints' || v.widgets.some(function (w) {
+        var hit = v.kind === 'setpoints' || flatWidgets(v).some(function (w) {
           return (w.kind === 'params' || w.kind === 'unit') && w.unit === target.unit;
         });
         if (hit) found = v.name;
