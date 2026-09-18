@@ -120,6 +120,16 @@ h1.view-title { font-size: 20px; margin: 0 0 16px; }
 .grid > .span-all { grid-column: 1 / -1; }
 .grid > .card + .card { margin-top: 0; } /* the gap is the grid's; the stacked-card rule above is for columns */
 .chart-card { height: 120px; margin: 8px 0 4px; }
+/* burner card: the two commands, then the two temperatures with their day */
+.burner-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+.burner-state { font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.burner-state.lit { color: var(--serious); }
+.burner-control { display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  min-height: 40px; font-size: 12.5px; color: var(--secondary); }
+.burner-reading { margin-top: 10px; }
+.burner-reading .burner-reading-head { display: flex; align-items: baseline; justify-content: space-between;
+  font-size: 12.5px; color: var(--secondary); }
+.burner-reading b { color: var(--ink); font-variant-numeric: tabular-nums; }
 /* unit card: head, then the manifest's relations as sections */
 .unit-card .unit-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin: -4px -8px 4px; padding: 4px 8px; }
 .unit-card .unit-name { font-size: 15px; font-weight: 600; }
@@ -1583,6 +1593,63 @@ function widgetDial(entity, aspect) {
     '<div class="card-label" title="' + esc(entity.label) + '">' + esc(entity.label).toUpperCase() + (row ? ' &middot; ' + esc(row.label).toUpperCase() : '') + '</div>' + body + '</div>';
 }
 
+// ---- widget: burner ----
+//
+// The `burner` vocabulary as one card (docs/design.md, Burners and
+// interlocks): its two commands — the family lever `on` and the output
+// `power_level` — over the two temperatures an interlock reads, each with
+// its day. Nothing dialectal: run-state codes and a firmware's own
+// readings stay in the entity's overlay, which the card taps through to.
+// A descriptor keeps the firmware's field name in parentheses — "flue
+// (smoke_temp)" — which the overlay shows and a card has no room for, the
+// same trim the room card makes (dashboard-logic.js, cardPlan).
+function shortLabel(label) { return label.replace(/\s*\([^)]*\)$/, ''); }
+
+var BURNER_READINGS = ['flue_temperature', 'boiler_temperature'];
+var BURNER_COMMANDS = ['on', 'power_level'];
+
+function widgetBurner(entity) {
+  var rows = {};
+  logic.aspectPlan(entity, store.state, store.aspects[entity.name], !controlDisabled(entity))
+    .forEach(function (s) { s.rows.forEach(function (r) { rows[r.aspect] = r; }); });
+
+  var lit = rows.on && rows.on.value === true;
+  var state = rows.available && rows.available.value === false ? 'offline'
+    : !rows.on || rows.on.value === undefined ? 'no signal'
+    : lit ? 'burning' : 'idle';
+
+  var controls = BURNER_COMMANDS.map(function (aspect) {
+    var r = rows[aspect];
+    if (!r) return '';
+    return '<div class="burner-control"><span>' + esc(shortLabel(r.label)) + '</span>' +
+      (r.control ? renderAspectControl(entity, r) : aspectValueSpan(r)) + '</div>';
+  }).join('');
+
+  var readings = BURNER_READINGS.map(function (aspect) {
+    var r = rows[aspect];
+    if (!r) return '';
+    ensureHistory(entity.name, aspect);
+    var sk = entity.name + '|' + aspect;
+    var hist = localState.sparklines[sk];
+    var spark = hist && hist.loaded
+      ? buildChart('burner-' + sk, hist.points, { height: 36, sizeClass: 'chart-tile', aspect: aspect, area: true, window: hist.window })
+      : '';
+    return '<div class="burner-reading row-clickable" data-action="history-detail" data-room="' + esc(entity.room) +
+      '" data-entity="' + esc(entity.name) + '" data-aspect="' + esc(aspect) + '">' +
+      '<div class="burner-reading-head"><span>' + esc(shortLabel(r.label)) + '</span><b>' + esc(r.display) + '</b></div>' +
+      spark + '</div>';
+  }).join('');
+
+  // The head taps through to the entity: the run-state codes and the
+  // device's own readings live there, and the card does not repeat them.
+  return '<div class="card burner-card">' +
+    '<div class="burner-head row-clickable" data-action="entity-detail" data-room="' + esc(entity.room) +
+    '" data-entity="' + esc(entity.name) + '">' +
+    '<div class="card-label" style="margin:0;" title="' + esc(entity.label) + '">' + esc(entity.label).toUpperCase() + '</div>' +
+    '<span class="burner-state' + (lit ? ' lit' : '') + '">' + esc(state) + '</span></div>' +
+    controls + readings + '</div>';
+}
+
 // An entity's own row — its control or its readings — as a card.
 function widgetEntity(entity) {
   return '<div class="card">' + widgetForEntity(entity) + '</div>';
@@ -1650,6 +1717,10 @@ function renderWidgets(title, widgets) {
     if (w.kind === 'dial') {
       var de = findEntityByName(w.entity);
       return de ? widgetDial(de, w.aspect) : '';
+    }
+    if (w.kind === 'burner') {
+      var bu = findEntityByName(w.entity);
+      return bu ? widgetBurner(bu) : '';
     }
     if (w.kind === 'room') return renderRoomCard(w.room, entitiesInRoom(w.room));
     if (w.kind === 'unit') return widgetUnit(w.unit);

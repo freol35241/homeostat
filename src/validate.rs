@@ -571,13 +571,31 @@ fn check_dashboard(house: &House, errors: &mut Vec<ValidationError>) {
                 continue;
             }
             if let Some(entity) = &widget.entity {
-                if !house.entities.iter().any(|e| &e.name == entity) {
-                    errors.push(ValidationError::new(
+                match house.entities.iter().find(|e| &e.name == entity) {
+                    None => errors.push(ValidationError::new(
                         "dashboard-unknown-entity",
                         &subject,
                         format!("widget names unknown entity \"{entity}\""),
                         file.clone(),
-                    ));
+                    )),
+                    // A capability widget draws that capability's
+                    // vocabulary, so it is only meaningful over an entity
+                    // that speaks it.
+                    Some(e)
+                        if widget.kind == WidgetKind::Burner
+                            && e.file.entity.capability != "burner" =>
+                    {
+                        errors.push(ValidationError::new(
+                            "dashboard-widget-capability",
+                            &subject,
+                            format!(
+                                "a `burner` widget needs a burner; \"{entity}\" is a {}",
+                                e.file.entity.capability
+                            ),
+                            file.clone(),
+                        ))
+                    }
+                    Some(_) => {}
                 }
             }
             if let Some(aspect) = &widget.aspect {
@@ -619,6 +637,7 @@ fn check_dashboard(house: &House, errors: &mut Vec<ValidationError>) {
 fn widget_fields_message(widget: &WidgetSpec) -> Option<String> {
     let (required, optional): (&[&str], &[&str]) = match widget.kind {
         WidgetKind::Tile | WidgetKind::Dial => (&["entity"], &["aspect"]),
+        WidgetKind::Burner => (&["entity"], &[]),
         WidgetKind::Chart => (&["entity", "aspect"], &["hours"]),
         WidgetKind::Entity => (&["entity"], &[]),
         WidgetKind::Room => (&["room"], &[]),

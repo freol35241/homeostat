@@ -650,7 +650,9 @@ pub enum GeneratedView {
 #[serde(deny_unknown_fields)]
 pub struct WidgetSpec {
     pub kind: WidgetKind,
-    /// `tile`, `chart`, `entity`, `dial`: the entity, by name.
+    /// `tile`, `chart`, `entity`, `dial`, `burner`: the entity, by name.
+    /// `burner` takes one of `capability = "burner"`
+    /// (`dashboard-widget-capability`).
     pub entity: Option<String>,
     /// `chart`: the aspect charted; `tile`: narrows the tiles to one
     /// reading (every reading otherwise); `dial`: the temperature command
@@ -694,4 +696,7 @@ pub enum WidgetKind {
     Deviations,
     /// The map over every entity with a location.
     Map,
+    /// A burner's card: its two commands and the two temperatures an
+    /// interlock reads — the `burner` vocabulary, nothing dialectal.
+    Burner,
 }
