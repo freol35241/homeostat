@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "homeostat==0.13.0",
+#     "homeostat==0.13.1",
 #     "aiohttp>=3.12.14,<4",
 # ]
 # ///
@@ -100,6 +100,7 @@ ASSETS = {
     "protomaps-leaflet.js": "text/javascript",
     "video-rtc.js": "text/javascript",
     "dashboard-logic.js": "text/javascript",
+    "homeostat-mark.svg": "image/svg+xml",
 }
 
 # Commandable aspects per capability: the capability's base aspect plus
@@ -203,36 +204,86 @@ def build_model(model: house.HouseModel, granted: set[str]) -> dict:
     }
 
 
-def unit_relations(model: dict, grants: list, state_keys) -> dict[str, dict]:
-    """Per unit, the entities it drives and the entities it reads — the
-    unit card's Drives and From sections, read back from what the manifest
-    already declares. Drives: the entities on the unit's cmd-class rows of
-    the grant table (home/meta/system/grants). Reads: each [bus.subscribes]
-    state expression, its room slot expanded through the zones exactly as
-    the core expands it, intersected with the concrete state keys on the
-    bus — not with `{room}/{entity}/**`, which would make every entity in
-    a room a source of a `*/presence` subscription."""
+def commandable_aspects(entity: dict, descriptor: dict | None) -> set[str]:
+    """The aspects an entity takes commands on: its capability's vocabulary
+    (the base aspect plus the features it declares) and whatever its
+    descriptor declares a command for — the same two sources /api/cmd
+    accepts, so the card can name no field the page would refuse."""
+    allowed = COMMANDABLE.get(entity["capability"], set())
+    base = BASE_ASPECT.get(entity["capability"])
+    aspects = {a for a in allowed if a == base or a in entity["features"]}
+    fields = (descriptor or {}).get("fields")
+    if isinstance(fields, dict):
+        aspects |= {a for a, f in fields.items() if isinstance(f, dict) and f.get("command")}
+    return aspects
+
+
+def key_expr(key: str):
+    """A zenoh key expression, or None when the string is not one. A
+    manifest expression is only as well-formed as the core's own parser
+    demands, which admits shapes zenoh refuses (`**/**`, a `$`), and the
+    model is re-read mid-edit — so a bad expression is skipped, never a
+    500 for every browser."""
+    try:
+        return zenoh.KeyExpr(key)
+    except zenoh.ZError:
+        return None
+
+
+def unit_relations(
+    model: dict, grants: list, state_keys, descriptors: dict[str, dict]
+) -> dict[str, dict]:
+    """Per unit, the FIELDS it drives and the fields it reads — the unit
+    card's Drives and From sections, read back from what the manifest
+    already declares. Each is an {entity, aspect} pair, because a relation
+    is per aspect and an entity is routinely both driven and read (an
+    automation commands a lamp's `on` and subscribes to it): naming whole
+    entities made one card say the same thing twice and say neither
+    precisely.
+
+    Drives: the entities on the unit's cmd-class rows of the grant table
+    (home/meta/system/grants), each of their commandable aspects whose cmd
+    key the grant's own resolved keys reach — the keys are part of the
+    grant's identity, so `.../on` and `.../**` are different grants and
+    read as different rows here. An entity whose commandable aspects are
+    unknown (no vocabulary, no descriptor yet) keeps a bare entity row
+    (`aspect: null`) rather than disappearing.
+
+    Reads: each [bus.subscribes] state expression, its room slot expanded
+    through the zones exactly as the core expands it, intersected with the
+    concrete state keys on the bus — not with `{room}/{entity}/**`, which
+    would make every entity in a room a source of a `*/presence`
+    subscription."""
     zones = model["zones"]
-    # Keys the bus delivered are well-formed; a manifest expression is
-    # only as well-formed as the core's own parser demands, which admits
-    # shapes zenoh refuses (`**/**`, a `$`), and the model is re-read
-    # mid-edit — so an expression that does not parse is skipped, never a
-    # 500 for every browser.
-    concrete: dict[zenoh.KeyExpr, str] = {}
+    entities = {e["name"]: e for e in model["entities"]}
+    # Keys the bus delivered are well-formed.
+    concrete: dict = {}
     for key in state_keys:
         parts = key.split("/")
         if len(parts) >= 5 and parts[0] == "home" and parts[1] == "state":
-            concrete[zenoh.KeyExpr(key)] = parts[3]
+            concrete[zenoh.KeyExpr(key)] = (parts[3], "/".join(parts[4:]))
     out = {}
     for unit in model["units"]:
-        drives = {
-            e["name"]
-            for g in grants
-            if isinstance(g, dict) and g.get("unit") == unit["name"] and g.get("capability")
-            for e in g.get("entities", [])
-            if isinstance(e, dict) and isinstance(e.get("name"), str)
-        }
-        sources: set[str] = set()
+        drives: set[tuple[str, str | None]] = set()
+        for g in grants:
+            if not (isinstance(g, dict) and g.get("unit") == unit["name"] and g.get("capability")):
+                continue
+            granted = [k for k in (key_expr(k) for k in g.get("keys", [])) if k is not None]
+            for e in g.get("entities", []):
+                if not (isinstance(e, dict) and isinstance(e.get("name"), str)):
+                    continue
+                spec = entities.get(e["name"])
+                aspects = commandable_aspects(spec, descriptors.get(e["name"])) if spec else set()
+                reached = set()
+                for aspect in aspects:
+                    try:
+                        ke = zenoh.KeyExpr(keys.cmd_key(e["room"], e["name"], aspect))
+                    except (KeyError, ValueError, zenoh.ZError):
+                        continue  # a grant row the core would not have written
+                    if any(g_ke.intersects(ke) for g_ke in granted):
+                        reached.add(aspect)
+                drives.update((e["name"], aspect) for aspect in reached or {None})
+        sources: set[tuple[str, str]] = set()
         for expr in unit["subscribes"].values():
             if not isinstance(expr, str):
                 continue
@@ -242,13 +293,19 @@ def unit_relations(model: dict, grants: list, state_keys) -> dict[str, dict]:
             if "{" in expr:
                 continue  # a template over the unit's own entities: Publishes, not From
             for room in zones.get(parts[2], [parts[2]]):
-                try:
-                    ke = zenoh.KeyExpr("/".join(parts[:2] + [room] + parts[3:]))
-                except zenoh.ZError:
+                ke = key_expr("/".join(parts[:2] + [room] + parts[3:]))
+                if ke is None:
                     continue
-                sources.update(name for key, name in concrete.items() if ke.intersects(key))
-        out[unit["name"]] = {"drives": sorted(drives), "sources": sorted(sources)}
+                sources.update(field for key, field in concrete.items() if ke.intersects(key))
+        out[unit["name"]] = {
+            "drives": [{"entity": e, "aspect": a} for e, a in sorted(drives, key=field_order)],
+            "sources": [{"entity": e, "aspect": a} for e, a in sorted(sources, key=field_order)],
+        }
     return out
+
+
+def field_order(field: tuple[str, str | None]) -> tuple[str, str]:
+    return (field[0], field[1] or "")
 
 
 def descriptors_in(inventory) -> dict[str, dict]:
@@ -410,7 +467,8 @@ class Hub:
     def relations(self, model: dict) -> dict[str, dict]:
         with self.lock:
             state_keys = list(self.state)
-        return unit_relations(model, self.grants, state_keys)
+            descriptors = dict(self.aspects)
+        return unit_relations(model, self.grants, state_keys, descriptors)
 
     def snapshot(self) -> dict:
         with self.lock:
