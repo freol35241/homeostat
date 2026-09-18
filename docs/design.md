@@ -1453,6 +1453,19 @@ the exploration that produced it):
     looking for.
   - *`[dashboard] pin` is retired* (`entity-dashboard-retired`, naming
     the `tile` widget that replaces it). One way to place a reading.
+- **Widgets compose: the `group` widget (settled 2026-09-18).** A view
+  was a flat list of cards, so "the dial, and the two traces that explain
+  it" could only be three cards the eye had to associate. A `group`
+  widget takes an optional `label` and a nested `widgets` list, and draws
+  one card over its members; a member renders exactly as it would on the
+  view itself, losing only its own card chrome, so the group adds no
+  rendering and no widget needs a group-aware form. Placement sees
+  through it — a group places what its members place, and is never a
+  destination itself. **One level deep** (`dashboard-nested-group`):
+  nesting groups would make the file a layout language, and layout is
+  what the dashboard owns. Per-widget layout hints (`span`, a column
+  count) were rejected for the same reason: a group says what belongs
+  together, not how wide it is.
 - **Richer controls (2026-09-17).** Still the page's mapping from
   descriptor vocabulary, no vocabulary added: a `temperature` command
   with a step is a **dial** — the target on a 240° arc between the
