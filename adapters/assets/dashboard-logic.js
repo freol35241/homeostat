@@ -651,7 +651,7 @@
       var u = byName[name];
       if (!u) return;
       familyParams(u).forEach(function (p) { placedParam[name + '.' + p] = true; });
-      (u.drives || []).forEach(function (e) { placedEntity[e] = true; });
+      (u.drives || []).forEach(function (f) { placedEntity[f.entity] = true; });
       entities.forEach(function (e) { if (e.owner === name) placedEntity[e.name] = true; });
     }
     views.forEach(function (v) {
@@ -682,23 +682,29 @@
 
   /* The unit card's four relations, each read back from the manifest and
    * the grant table rather than declared for the card: family params,
-   * the entities it owns, the entities its cmd grants reach, the entities
-   * its state subscriptions read. Labels are the page's; nothing here is
-   * vocabulary. */
+   * the entities it owns, the fields its cmd grants reach, the fields its
+   * state subscriptions read. Drives and From are fields — { entity,
+   * aspect } as the model carries them (dashboard.py, unit_relations),
+   * resolved here to { entity: <the entity>, aspect } — because an
+   * automation that commands a lamp and subscribes to it named the same
+   * entity in both sections and said nothing about which part of it.
+   * Labels are the page's; nothing here is vocabulary. */
   function unitCardPlan(model, unitName) {
     var unit = (model.units || []).filter(function (u) { return u.name === unitName; })[0];
     if (!unit) return null;
     var byName = {};
     (model.entities || []).forEach(function (e) { byName[e.name] = e; });
-    var named = function (names) {
-      return (names || []).map(function (n) { return byName[n]; }).filter(Boolean);
+    var fields = function (rels) {
+      return (rels || []).map(function (f) {
+        return byName[f.entity] ? { entity: byName[f.entity], aspect: f.aspect || null } : null;
+      }).filter(Boolean);
     };
     return {
       unit: unit,
       params: familyParams(unit),
       publishes: (model.entities || []).filter(function (e) { return e.owner === unitName; }),
-      drives: named(unit.drives),
-      sources: named(unit.sources)
+      drives: fields(unit.drives),
+      sources: fields(unit.sources)
     };
   }
 

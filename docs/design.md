@@ -1431,6 +1431,26 @@ the exploration that produced it):
     the card is wrong the manifest is wrong. Adapter- or
     automation-declared widgets were reconsidered and rejected again:
     the pain was placement, and placement is what the file solves.
+    Revised 2026-09-18, from living with it: **Drives and From are
+    fields, not entities, and start collapsed.** Drawn as whole entities
+    the two sections were the card's bulk — a driven light dragged its
+    full row in — and an automation that commands a lamp and subscribes
+    to its readback listed the same entity in both, which reads as a
+    contradiction and is really two different fields. A relation is per
+    aspect, so each row is now one `{entity, aspect}` with its current
+    value: Drives is each granted entity's commandable aspects (the
+    capability's vocabulary plus whatever its descriptor declares a
+    command for) whose cmd key the grant's own resolved keys reach —
+    the keys are already part of the grant's identity, so `.../on` and
+    `.../**` read as different rows — and From is the aspect of each
+    concrete state key the subscription intersects, which it had to
+    compute anyway. An entity whose commandable aspects are not known
+    yet keeps a bare row rather than vanishing. The rows are read-only
+    and tap through to the entity: the card states the wiring, the
+    overlay is where one acts. Both sections sit behind one line
+    ("drives 2 · reads 4"), because a unit card is read for its
+    setpoints and what it publishes; its wiring is what one goes
+    looking for.
   - *`[dashboard] pin` is retired* (`entity-dashboard-retired`, naming
     the `tile` widget that replaces it). One way to place a reading.
 - **Richer controls (2026-09-17).** Still the page's mapping from
