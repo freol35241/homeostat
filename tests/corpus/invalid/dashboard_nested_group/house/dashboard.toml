@@ -1,0 +1,15 @@
+schema = 1
+
+# A group is one card over its members: they take every check a widget on
+# a view takes, and a group inside a group is refused.
+[[view]]
+name = "now"
+widgets = [
+  { kind = "group", label = "Lamp", widgets = [
+    { kind = "dial", entity = "kitchen_lamp" },
+    { kind = "chart", entity = "nosuch", aspect = "brightness" },
+    { kind = "group", widgets = [{ kind = "people" }] },
+  ] },
+  { kind = "group" },
+  { kind = "group", widgets = [{ kind = "people" }], entity = "kitchen_lamp" },
+]

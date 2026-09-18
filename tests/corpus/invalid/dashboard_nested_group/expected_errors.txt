@@ -1,0 +1,4 @@
+error[dashboard-nested-group] now[0][2]: a group holds widgets, never another group (dashboard.toml)
+error[dashboard-unknown-entity] now[0][1]: widget names unknown entity "nosuch" (dashboard.toml)
+error[dashboard-widget-fields] now[1]: a `group` widget needs `widgets` (dashboard.toml)
+error[dashboard-widget-fields] now[2]: a `group` widget takes no `entity` (dashboard.toml)

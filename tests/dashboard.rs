@@ -320,8 +320,8 @@ async fn dashboard_serves_the_family_surface() {
     assert_eq!(model["views"][1]["kind"], "rooms");
     assert_eq!(
         evening["drives"],
-        json!(["lamp"]),
-        "the light grant over home/cmd/downstairs/*/on resolves onto the lamp"
+        json!([{"entity": "lamp", "aspect": "on"}]),
+        "the light grant over home/cmd/downstairs/*/on resolves onto the lamp's `on`"
     );
     assert_eq!(
         evening["subscribes"]["presence"],
@@ -347,7 +347,7 @@ async fn dashboard_serves_the_family_surface() {
         // The zone-keyed subscription reaches the livingroom sensor once
         // its key is on the bus (the lamp's `on`, subscribed too, is not
         // published yet at this point — a source is a key, not a binding).
-        if evening["sources"] == json!(["presence_sensor"]) {
+        if evening["sources"] == json!([{"entity": "presence_sensor", "aspect": "presence"}]) {
             break;
         }
         assert!(
@@ -369,6 +369,7 @@ async fn dashboard_serves_the_family_surface() {
         "leaflet.css",
         "protomaps-leaflet.js",
         "dashboard-logic.js",
+        "homeostat-mark.svg",
     ] {
         let (status, _) = http_request(&addr, "GET", &format!("/assets/{name}"), &[], None);
         assert_eq!(status, 200, "asset {name}");

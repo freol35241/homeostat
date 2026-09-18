@@ -15,6 +15,12 @@ bumping this table.
 Leaflet's `images/` directory is intentionally omitted: the map uses
 `divIcon` markers and no layers control, so nothing references it.
 
+`homeostat-mark.svg` is not vendored either: it is the project's own mark,
+generated from the one geometry in `docs/brand/generate.py` (run it with
+this directory as a second argument) and served here so the page's favicon
+and wordmark fetch nothing external. Edit the numbers there, never this
+copy.
+
 `dashboard-logic.js` is NOT vendored — it is this repo's own code, the
 dashboard page's pure decision logic extracted from dashboard.html so
 `node --test tests/js` can pin it. Edit it like any source file.

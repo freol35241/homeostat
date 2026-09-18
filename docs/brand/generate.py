@@ -137,4 +137,8 @@ if __name__ == "__main__":
     open(f"{out}/homeostat-mark.svg", "w").write(svg_colour(PINE))
     open(f"{out}/homeostat-mark-dark.svg", "w").write(svg_colour(PINE_DARK))
     open(f"{out}/homeostat-mark-mono.svg", "w").write(svg_mono())
+    # Further directories take the colour mark alone: the dashboard serves
+    # a copy from adapters/assets, and a copy is only ever generated.
+    for extra in sys.argv[2:]:
+        open(f"{extra}/homeostat-mark.svg", "w").write(svg_colour(PINE))
     print("ok")

@@ -638,8 +638,10 @@ function viewsModel(views) {
       { name: 'anna', label: 'Anna', capability: 'person', room: 'person', owner: 'owntracks' },
     ],
     units: [
-      { name: 'evening_lights', params: { off_time: { type: 'time', editable_by: 'family' } }, drives: ['lamp'], sources: ['thermo'] },
-      { name: 'fusion', params: {}, drives: [], sources: ['thermo'] },
+      { name: 'evening_lights', params: { off_time: { type: 'time', editable_by: 'family' } },
+        drives: [{ entity: 'lamp', aspect: 'on' }],
+        sources: [{ entity: 'thermo', aspect: 'temperature' }, { entity: 'lamp', aspect: 'on' }] },
+      { name: 'fusion', params: {}, drives: [], sources: [{ entity: 'thermo', aspect: 'temperature' }] },
       { name: 'zigbee', params: { poll: { type: 'float', editable_by: 'owner' } }, drives: [], sources: [] },
       { name: 'heating', params: { night: { type: 'float', editable_by: 'family' } }, drives: [], sources: [] },
     ],
@@ -682,20 +684,39 @@ test('placement: each widget kind places exactly what it shows', () => {
   assert.deepEqual(unit, { entities: ['thermo', 'anna'], params: ['heating.night'] });
   assert.deepEqual(names(logic.placement(viewsModel([{ name: 'v', widgets: [{ kind: 'params', unit: 'heating' }] }]))).params,
     ['evening_lights.off_time']);
+  // a group places exactly what its members place, and nothing itself
+  assert.deepEqual(names(logic.placement(viewsModel([{ name: 'v', widgets: [
+    { kind: 'group', label: 'Kitchen', widgets: [{ kind: 'tile', entity: 'thermo' }, { kind: 'people' }] },
+  ] }]))).entities, ['lamp', 'fused']);
+  assert.deepEqual(names(logic.placement(viewsModel([{ name: 'v', widgets: [{ kind: 'group', widgets: [] }] }]))), all,
+    'an empty group places nothing');
   // generated views inside the file place like their standalone selves
   assert.deepEqual(names(logic.placement(viewsModel([{ name: 'r', kind: 'rooms' }]))).entities, []);
   assert.deepEqual(names(logic.placement(viewsModel([{ name: 's', kind: 'setpoints' }]))).params, []);
   assert.deepEqual(names(logic.placement(viewsModel([{ name: 'n', kind: 'now' }]))).entities, ['lamp', 'thermo', 'fused']);
 });
 
+test('a deviation tap looks inside a group for the view that shows its unit', () => {
+  const views = [{ name: 'heat', widgets: [{ kind: 'group', widgets: [{ kind: 'params', unit: 'heating' }] }] }];
+  assert.equal(logic.viewFor({ type: 'setpoint', unit: 'heating', param: 'night' }, logic.viewsOf(viewsModel(views))), 'heat');
+});
+
 test('the unit card reads its four relations back from the model', () => {
+  const field = (f) => f.entity.name + (f.aspect ? '.' + f.aspect : '');
   const plan = logic.unitCardPlan(viewsModel(null), 'evening_lights');
   assert.deepEqual(plan.params, ['off_time']);
   assert.deepEqual(plan.publishes, []);
-  assert.deepEqual(plan.drives.map((e) => e.name), ['lamp']);
-  assert.deepEqual(plan.sources.map((e) => e.name), ['thermo']);
+  // fields, not entities: the lamp is driven on `on` and read back on it,
+  // which is two rows saying different things, not one entity listed twice
+  assert.deepEqual(plan.drives.map(field), ['lamp.on']);
+  assert.deepEqual(plan.sources.map(field), ['thermo.temperature', 'lamp.on']);
   assert.deepEqual(logic.unitCardPlan(viewsModel(null), 'fusion').publishes.map((e) => e.name), ['fused']);
   assert.equal(logic.unitCardPlan(viewsModel(null), 'nope'), null);
+  // an entity the model does not carry drops out; a relation without an
+  // aspect (an entity whose commandable fields are not known yet) stays
+  const model = viewsModel(null);
+  model.units[0].drives = [{ entity: 'gone', aspect: 'on' }, { entity: 'lamp', aspect: null }];
+  assert.deepEqual(logic.unitCardPlan(model, 'evening_lights').drives.map(field), ['lamp']);
 });
 
 test('a deviation tap lands on the view that shows its subject, or nowhere', () => {

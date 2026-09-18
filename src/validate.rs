@@ -561,73 +561,100 @@ fn check_dashboard(house: &House, errors: &mut Vec<ValidationError>) {
         }
         for (i, widget) in view.widgets.iter().enumerate() {
             let subject = format!("{}[{i}]", view.name);
-            if let Some(message) = widget_fields_message(widget) {
+            check_widget(house, &rooms, widget, &subject, &file, errors);
+            // A group's members are widgets like any other, and take the
+            // same checks. One level only: a group of groups is a layout
+            // language, which the file is deliberately not.
+            for (j, member) in widget.widgets.iter().enumerate() {
+                let subject = format!("{subject}[{j}]");
+                if member.kind == WidgetKind::Group {
+                    errors.push(ValidationError::new(
+                        "dashboard-nested-group",
+                        &subject,
+                        "a group holds widgets, never another group",
+                        file.clone(),
+                    ));
+                    continue;
+                }
+                check_widget(house, &rooms, member, &subject, &file, errors);
+            }
+        }
+    }
+}
+
+/// One widget: the fields its kind takes, and references that resolve
+/// against the house.
+fn check_widget(
+    house: &House,
+    rooms: &[&str],
+    widget: &WidgetSpec,
+    subject: &str,
+    file: &Option<String>,
+    errors: &mut Vec<ValidationError>,
+) {
+    if let Some(message) = widget_fields_message(widget) {
+        errors.push(ValidationError::new(
+            "dashboard-widget-fields",
+            subject,
+            message,
+            file.clone(),
+        ));
+        return;
+    }
+    if let Some(entity) = &widget.entity {
+        match house.entities.iter().find(|e| &e.name == entity) {
+            None => errors.push(ValidationError::new(
+                "dashboard-unknown-entity",
+                subject,
+                format!("widget names unknown entity \"{entity}\""),
+                file.clone(),
+            )),
+            // A capability widget draws that capability's vocabulary, so
+            // it is only meaningful over an entity that speaks it.
+            Some(e)
+                if widget.kind == WidgetKind::Burner && e.file.entity.capability != "burner" =>
+            {
                 errors.push(ValidationError::new(
-                    "dashboard-widget-fields",
-                    &subject,
-                    message,
+                    "dashboard-widget-capability",
+                    subject,
+                    format!(
+                        "a `burner` widget needs a burner; \"{entity}\" is a {}",
+                        e.file.entity.capability
+                    ),
                     file.clone(),
-                ));
-                continue;
+                ))
             }
-            if let Some(entity) = &widget.entity {
-                match house.entities.iter().find(|e| &e.name == entity) {
-                    None => errors.push(ValidationError::new(
-                        "dashboard-unknown-entity",
-                        &subject,
-                        format!("widget names unknown entity \"{entity}\""),
-                        file.clone(),
-                    )),
-                    // A capability widget draws that capability's
-                    // vocabulary, so it is only meaningful over an entity
-                    // that speaks it.
-                    Some(e)
-                        if widget.kind == WidgetKind::Burner
-                            && e.file.entity.capability != "burner" =>
-                    {
-                        errors.push(ValidationError::new(
-                            "dashboard-widget-capability",
-                            &subject,
-                            format!(
-                                "a `burner` widget needs a burner; \"{entity}\" is a {}",
-                                e.file.entity.capability
-                            ),
-                            file.clone(),
-                        ))
-                    }
-                    Some(_) => {}
-                }
-            }
-            if let Some(aspect) = &widget.aspect {
-                if !valid_segment(aspect) {
-                    errors.push(ValidationError::new(
-                        "dashboard-invalid-aspect",
-                        &subject,
-                        format!("aspect \"{aspect}\" must be a single key segment"),
-                        file.clone(),
-                    ));
-                }
-            }
-            if let Some(room) = &widget.room {
-                if !rooms.contains(&room.as_str()) {
-                    errors.push(ValidationError::new(
-                        "dashboard-unknown-room",
-                        &subject,
-                        format!("widget names unknown room \"{room}\""),
-                        file.clone(),
-                    ));
-                }
-            }
-            if let Some(unit) = &widget.unit {
-                if house.unit(unit).is_none() {
-                    errors.push(ValidationError::new(
-                        "dashboard-unknown-unit",
-                        &subject,
-                        format!("widget names unknown unit \"{unit}\""),
-                        file.clone(),
-                    ));
-                }
-            }
+            Some(_) => {}
+        }
+    }
+    if let Some(aspect) = &widget.aspect {
+        if !valid_segment(aspect) {
+            errors.push(ValidationError::new(
+                "dashboard-invalid-aspect",
+                subject,
+                format!("aspect \"{aspect}\" must be a single key segment"),
+                file.clone(),
+            ));
+        }
+    }
+    if let Some(room) = &widget.room {
+        if !rooms.contains(&room.as_str()) {
+            errors.push(ValidationError::new(
+                "dashboard-unknown-room",
+                subject,
+                format!("widget names unknown room \"{room}\""),
+                file.clone(),
+            ));
+        }
+    }
+    if let Some(unit) = &widget.unit {
+        if house.unit(unit).is_none() {
+            errors.push(ValidationError::new(
+                "dashboard-unknown-unit",
+                subject,
+                format!("widget names unknown unit \"{unit}\""),
+                file.clone(),
+            ));
         }
     }
 }
@@ -643,6 +670,7 @@ fn widget_fields_message(widget: &WidgetSpec) -> Option<String> {
         WidgetKind::Room => (&["room"], &[]),
         WidgetKind::Unit | WidgetKind::Params => (&["unit"], &[]),
         WidgetKind::People | WidgetKind::Deviations | WidgetKind::Map => (&[], &[]),
+        WidgetKind::Group => (&["widgets"], &["label"]),
     };
     let present: Vec<&str> = [
         ("entity", widget.entity.is_some()),
@@ -650,6 +678,8 @@ fn widget_fields_message(widget: &WidgetSpec) -> Option<String> {
         ("room", widget.room.is_some()),
         ("unit", widget.unit.is_some()),
         ("hours", widget.hours.is_some()),
+        ("label", widget.label.is_some()),
+        ("widgets", !widget.widgets.is_empty()),
     ]
     .into_iter()
     .filter(|(_, set)| *set)

@@ -304,8 +304,10 @@ places something, it never describes how it looks.
 | `entity` | string | no | `tile`, `chart`, `entity`, `dial`, `burner`: the entity, by name. `burner` takes one of `capability = "burner"` (`dashboard-widget-capability`). |
 | `hours` | number | no | `chart`: the window in hours (24 when absent). |
 | `kind` | [WidgetKind](#widgetkind) | yes |  |
+| `label` | string | no | `group`: the label over its members; unlabelled when absent. |
 | `room` | string | no | `room`: the room whose card to place. |
 | `unit` | string | no | `unit`, `params`: the unit, by name. |
+| `widgets` | list of [WidgetSpec](#widgetspec) | no | `group`: the widgets it draws as one card, in order. A group never holds another group (`dashboard-nested-group`). |
 
 ### WidgetKind
 
@@ -322,6 +324,7 @@ house's text, the grant table and the bus; no widget carries markup.
 - `people` — The person entities, home or away.
 - `deviations` — The deviations feed: what is out of the ordinary.
 - `map` — The map over every entity with a location.
+- `group` — Several widgets as one card — a dial with the traces that explain it, a setpoint beside what it drives. One level deep.
 - `burner` — A burner's card: its two commands and the two temperatures an interlock reads — the `burner` vocabulary, nothing dialectal.
 
 ## Capability vocabulary
