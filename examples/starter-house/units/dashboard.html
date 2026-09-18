@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
 <title>homeostat</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M3 11 L12 3 L21 11 V21 H14 V14 H10 V21 H3 Z' fill='%2318181b'/%3E%3C/svg%3E">
+<link rel="icon" href="/assets/homeostat-mark.svg">
 <link rel="stylesheet" href="/assets/leaflet.css">
 <style>
 :root {
@@ -36,6 +36,9 @@ a { color: inherit; }
 #rail { width: 210px; flex: 0 0 210px; background: var(--card); border-right: 1px solid var(--border);
   display: flex; flex-direction: column; padding: 20px 12px; }
 #rail .wordmark { font-size: 16px; font-weight: 700; padding: 4px 12px 20px; }
+/* the mark beside the name, on the rail and in the phone's top bar */
+.wordmark { display: flex; align-items: center; gap: 8px; }
+.wordmark img { width: 22px; height: 22px; display: block; }
 #rail nav { display: flex; flex-direction: column; gap: 2px; }
 #rail nav button { text-align: left; border: none; border-left: 3px solid transparent; background: transparent;
   color: var(--secondary); font-size: 13.5px; padding: 10px 12px; border-radius: 0 6px 6px 0; cursor: pointer;
@@ -120,12 +123,33 @@ h1.view-title { font-size: 20px; margin: 0 0 16px; }
 .grid > .span-all { grid-column: 1 / -1; }
 .grid > .card + .card { margin-top: 0; } /* the gap is the grid's; the stacked-card rule above is for columns */
 .chart-card { height: 120px; margin: 8px 0 4px; }
+/* a group is one card: its members keep their own markup and lose their
+   own chrome, so a dial and the traces under it read as one thing */
+.group-card > .card-label + * { margin-top: 10px; }
+.group-card .card { background: none; border: none; border-radius: 6px; padding: 0; }
+.group-card .card + .card { margin-top: 14px; }
+.group-card .card.clickable:hover { box-shadow: none; background: var(--accent-tint); }
+/* burner card: the two commands, then the two temperatures with their day */
+.burner-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+.burner-state { font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.burner-state.lit { color: var(--serious); }
+.burner-control { display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  min-height: 40px; font-size: 12.5px; color: var(--secondary); }
+.burner-reading { margin-top: 10px; }
+.burner-reading .burner-reading-head { display: flex; align-items: baseline; justify-content: space-between;
+  font-size: 12.5px; color: var(--secondary); }
+.burner-reading b { color: var(--ink); font-variant-numeric: tabular-nums; }
 /* unit card: head, then the manifest's relations as sections */
 .unit-card .unit-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin: -4px -8px 4px; padding: 4px 8px; }
 .unit-card .unit-name { font-size: 15px; font-weight: 600; }
 .unit-card .unit-desc { font-size: 12.5px; color: var(--secondary); margin-top: 1px; }
 .unit-card .section-label { font-size: 10.5px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 14px 0 2px; }
 .unit-card .param-row:first-of-type { border-top: none; }
+/* a relation is one field: what it is on the left, what it reads on the right */
+.unit-card .group-toggle { margin-top: 14px; }
+.rel-row { display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  font-size: 12.5px; color: var(--secondary); padding: 5px 4px; min-height: 32px; }
+.rel-row .rel-value { color: var(--ink); font-variant-numeric: tabular-nums; }
 .muted { color: var(--secondary); }
 .faint { color: var(--muted); }
 
@@ -365,13 +389,13 @@ video-rtc video { width: 100%; display: block; }
 <body>
 <div id="app">
   <aside id="rail">
-    <div class="wordmark">homeostat</div>
+    <div class="wordmark"><img src="/assets/homeostat-mark.svg" alt="" width="22" height="22"><span>homeostat</span></div>
     <nav id="rail-nav"></nav>
     <div class="health-pin" id="health-pin"></div>
   </aside>
   <div id="main">
     <div id="topbar">
-      <div class="wordmark">homeostat</div>
+      <div class="wordmark"><img src="/assets/homeostat-mark.svg" alt="" width="22" height="22"><span>homeostat</span></div>
     </div>
     <div id="banner">reconnecting&hellip;</div>
     <div id="view"></div>
@@ -441,7 +465,8 @@ var pending = {};
 var localState = {
   sliderDrag: {},   // key -> true while user is dragging
   sparklines: {},   // entity|aspect -> {points:[], window, loaded:bool, loading:bool}
-  charts: {}        // entity|aspect|hours -> the same, for chart widgets
+  charts: {},       // entity|aspect|hours -> the same, for chart widgets
+  relations: {}     // unit -> true while its Drives/From sections are open
 };
 
 // detail overlay state (right slide-over / mobile sheet)
@@ -1477,7 +1502,9 @@ function widgetTiles(entity, aspect) {
     var s = localState.sparklines[sk];
     var spark = s && s.loaded ? buildChart('tile-' + sk, s.points, { height: 36, sizeClass: 'chart-tile', aspect: r.aspect, area: true, window: s.window }) : '';
     var caption = s && s.loaded ? minMaxCaption(s.points) : '';
-    var tileLabel = esc(entity.label) + (rows.length > 1 ? ' &middot; ' + esc(r.label) : '');
+    // The separator is the character, not the entity: the whole label is
+    // upper-cased below, and "&MIDDOT;" is not one.
+    var tileLabel = esc(entity.label) + (rows.length > 1 ? ' \u00b7 ' + esc(r.label) : '');
     return '<div class="card tile clickable" data-action="history-detail" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '" data-aspect="' + esc(r.aspect) + '">' +
       '<div class="card-label" title="' + esc(entity.label) + '">' + tileLabel.toUpperCase() + '</div>' +
       '<div class="big' + (r.stale ? ' stale' : '') + '">' + esc(r.display) + '</div>' + spark +
@@ -1583,6 +1610,63 @@ function widgetDial(entity, aspect) {
     '<div class="card-label" title="' + esc(entity.label) + '">' + esc(entity.label).toUpperCase() + (row ? ' &middot; ' + esc(row.label).toUpperCase() : '') + '</div>' + body + '</div>';
 }
 
+// ---- widget: burner ----
+//
+// The `burner` vocabulary as one card (docs/design.md, Burners and
+// interlocks): its two commands — the family lever `on` and the output
+// `power_level` — over the two temperatures an interlock reads, each with
+// its day. Nothing dialectal: run-state codes and a firmware's own
+// readings stay in the entity's overlay, which the card taps through to.
+// A descriptor keeps the firmware's field name in parentheses — "flue
+// (smoke_temp)" — which the overlay shows and a card has no room for, the
+// same trim the room card makes (dashboard-logic.js, cardPlan).
+function shortLabel(label) { return label.replace(/\s*\([^)]*\)$/, ''); }
+
+var BURNER_READINGS = ['flue_temperature', 'boiler_temperature'];
+var BURNER_COMMANDS = ['on', 'power_level'];
+
+function widgetBurner(entity) {
+  var rows = {};
+  logic.aspectPlan(entity, store.state, store.aspects[entity.name], !controlDisabled(entity))
+    .forEach(function (s) { s.rows.forEach(function (r) { rows[r.aspect] = r; }); });
+
+  var lit = rows.on && rows.on.value === true;
+  var state = rows.available && rows.available.value === false ? 'offline'
+    : !rows.on || rows.on.value === undefined ? 'no signal'
+    : lit ? 'burning' : 'idle';
+
+  var controls = BURNER_COMMANDS.map(function (aspect) {
+    var r = rows[aspect];
+    if (!r) return '';
+    return '<div class="burner-control"><span>' + esc(shortLabel(r.label)) + '</span>' +
+      (r.control ? renderAspectControl(entity, r) : aspectValueSpan(r)) + '</div>';
+  }).join('');
+
+  var readings = BURNER_READINGS.map(function (aspect) {
+    var r = rows[aspect];
+    if (!r) return '';
+    ensureHistory(entity.name, aspect);
+    var sk = entity.name + '|' + aspect;
+    var hist = localState.sparklines[sk];
+    var spark = hist && hist.loaded
+      ? buildChart('burner-' + sk, hist.points, { height: 36, sizeClass: 'chart-tile', aspect: aspect, area: true, window: hist.window })
+      : '';
+    return '<div class="burner-reading row-clickable" data-action="history-detail" data-room="' + esc(entity.room) +
+      '" data-entity="' + esc(entity.name) + '" data-aspect="' + esc(aspect) + '">' +
+      '<div class="burner-reading-head"><span>' + esc(shortLabel(r.label)) + '</span><b>' + esc(r.display) + '</b></div>' +
+      spark + '</div>';
+  }).join('');
+
+  // The head taps through to the entity: the run-state codes and the
+  // device's own readings live there, and the card does not repeat them.
+  return '<div class="card burner-card">' +
+    '<div class="burner-head row-clickable" data-action="entity-detail" data-room="' + esc(entity.room) +
+    '" data-entity="' + esc(entity.name) + '">' +
+    '<div class="card-label" style="margin:0;" title="' + esc(entity.label) + '">' + esc(entity.label).toUpperCase() + '</div>' +
+    '<span class="burner-state' + (lit ? ' lit' : '') + '">' + esc(state) + '</span></div>' +
+    controls + readings + '</div>';
+}
+
 // An entity's own row — its control or its readings — as a card.
 function widgetEntity(entity) {
   return '<div class="card">' + widgetForEntity(entity) + '</div>';
@@ -1609,9 +1693,37 @@ function widgetUnit(unitName) {
   // its own card: the param name alone, the unit is the head
   html += section('Setpoints', plan.params.map(function (p) { return renderParamRow(u.name, p, u.params[p], true); }).join(''));
   html += section('Publishes', plan.publishes.map(widgetForEntity).join(''));
-  html += section('Drives', plan.drives.map(widgetForEntity).join(''));
-  html += section('From', plan.sources.map(function (e) { return widgetForEntity(e); }).join(''));
+  // Drives and From are the unit's wiring, not its surface: a line saying
+  // how much of it there is, and the fields themselves when asked for.
+  var wiring = plan.drives.length + plan.sources.length;
+  if (wiring) {
+    var open = !!localState.relations[u.name];
+    var summary = [];
+    if (plan.drives.length) summary.push('drives ' + plan.drives.length);
+    if (plan.sources.length) summary.push('reads ' + plan.sources.length);
+    html += '<button class="group-toggle" data-action="toggle-relations" data-unit="' + esc(u.name) + '">' +
+      esc(summary.join(' · ')) + ' ' + (open ? '&#9662;' : '&#9656;') + '</button>';
+    if (open) {
+      html += section('Drives', plan.drives.map(relationRow).join(''));
+      html += section('From', plan.sources.map(relationRow).join(''));
+    }
+  }
   return html + '</div>';
+}
+
+// One relation: an entity's field and what it reads right now. The card
+// states the relation; a tap opens the entity, which is where one acts —
+// so a driven light does not drag its whole card into the wiring list.
+function relationRow(f) {
+  var e = f.entity;
+  var field = f.aspect ? descriptorField(e, f.aspect) : null;
+  var label = e.label + (f.aspect ? ' · ' + ((field && field.label) || f.aspect) : '');
+  var value = f.aspect
+    ? logic.formatAspect(f.aspect, field, stateValue(e.room, e.name, f.aspect))
+    : '';
+  return '<div class="rel-row row-clickable" data-action="entity-detail" data-room="' + esc(e.room) +
+    '" data-entity="' + esc(e.name) + '"><span>' + esc(label) + '</span>' +
+    '<span class="rel-value">' + esc(value) + '</span></div>';
 }
 
 // The room card: every entity in the room, controls first.
@@ -1634,7 +1746,10 @@ function unitByName(name) {
 function renderWidgets(title, widgets) {
   var persons = personEntities();
   var wantMap = false;
-  var cards = widgets.map(function (w) {
+  // One widget's card. A group calls this for each of its members, which
+  // is the whole of "a group holds widgets": a member renders exactly as
+  // it would on the view itself.
+  function card(w) {
     if (w.kind === 'tile') {
       var te = findEntityByName(w.entity);
       return te ? widgetTiles(te, w.aspect) : '';
@@ -1651,6 +1766,10 @@ function renderWidgets(title, widgets) {
       var de = findEntityByName(w.entity);
       return de ? widgetDial(de, w.aspect) : '';
     }
+    if (w.kind === 'burner') {
+      var bu = findEntityByName(w.entity);
+      return bu ? widgetBurner(bu) : '';
+    }
     if (w.kind === 'room') return renderRoomCard(w.room, entitiesInRoom(w.room));
     if (w.kind === 'unit') return widgetUnit(w.unit);
     if (w.kind === 'params') {
@@ -1663,12 +1782,26 @@ function renderWidgets(title, widgets) {
       wantMap = true;
       return renderMapCard(persons);
     }
+    if (w.kind === 'group') return widgetGroup(w, card);
     return '';
-  }).join('');
+  }
+  var cards = widgets.map(card).join('');
   var html = '<h1 class="view-title">' + esc(title) + '</h1>';
   html += cards ? '<div class="grid">' + cards + '</div>' : '<div class="card"><div class="empty-hint">Nothing to show yet.</div></div>';
   byId('view').innerHTML = html;
   if (wantMap) mountMap(persons);
+}
+
+// A group is one card over its members: its label, then each member's own
+// card, whose chrome the CSS removes inside a group — a dial with the
+// traces that explain it reads as one thing. One level deep; the core
+// refuses a group inside a group.
+function widgetGroup(w, card) {
+  var body = (w.widgets || []).map(card).join('');
+  if (!body) return '';
+  return '<div class="card group-card">' +
+    (w.label ? '<div class="card-label">' + esc(w.label).toUpperCase() + '</div>' : '') +
+    body + '</div>';
 }
 
 function findEntityByName(name) {
@@ -2404,6 +2537,12 @@ document.addEventListener('click', function (e) {
   if (action === 'aspect-enum') {
     sendCmd(el.getAttribute('data-room'), el.getAttribute('data-entity'), el.getAttribute('data-aspect'),
       JSON.parse(el.getAttribute('data-value')));
+    return;
+  }
+  if (action === 'toggle-relations') {
+    var relUnit = el.getAttribute('data-unit');
+    localState.relations[relUnit] = !localState.relations[relUnit];
+    render();
     return;
   }
   if (action === 'toggle-group') {
