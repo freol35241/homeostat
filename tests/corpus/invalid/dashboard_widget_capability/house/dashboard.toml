@@ -1,0 +1,10 @@
+schema = 1
+
+# A capability widget draws that capability's vocabulary: the lamp is a
+# light and has none of it.
+[[view]]
+name = "now"
+widgets = [
+  { kind = "burner", entity = "kitchen_lamp" },
+  { kind = "burner", entity = "kitchen_lamp", aspect = "on" },
+]

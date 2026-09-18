@@ -2511,7 +2511,19 @@ in the arbiter. Both settled here.
 - **No dashboard widget in the same change.** The described-card fallback
   already renders any capability without a bespoke widget from its
   descriptors (`climate` uses it); `burner` gets a card the day someone
-  wants one.
+  wants one. That day came 2026-09-18: **the `burner` widget** is one
+  card over the vocabulary and nothing else — the family lever `on` and
+  the output `power_level` as their described controls, then the two
+  temperatures an interlock reads, each with its day as a sparkline, and
+  a state word (`burning` / `idle` / `offline`) derived from `on` and
+  `available`. The dialect stays out of it: run-state codes and the feed
+  shaft are the entity overlay's, which the card's head taps through to,
+  because a card that listed a firmware's fields would be the
+  per-adapter UI this project rejects. The core refuses the widget over
+  an entity of another capability (`dashboard-widget-capability`): a
+  capability widget draws that capability's vocabulary, so an entity
+  that does not speak it has nothing to fill. The room card keeps the
+  described-card row — the widget is for a view, where there is room.
 - **Cost note, for whoever writes the adapter.** The reporting bridge
   republishes all 30 topics every ~32 s whether or not anything changed,
   and its `status` topic alone is 116 fields — naively that one topic is

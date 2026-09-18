@@ -313,13 +313,22 @@ pub const CODES: &[(&str, &str)] = &[
          instead.",
     ),
     (
+        "dashboard-widget-capability",
+        "A capability widget in `dashboard.toml` names an entity of another \
+         capability: a `burner` widget draws the `burner` vocabulary — the \
+         two commands and the two temperatures an interlock reads — which \
+         an entity that does not speak it has nothing to fill. Place that \
+         entity with `entity`, `tile` or `chart` instead.",
+    ),
+    (
         "dashboard-widget-fields",
         "A widget in `dashboard.toml` is missing a field its kind needs, or \
          carries one it does not take: `tile`, `chart`, `entity` and `dial` \
          name an `entity` (`chart` also an `aspect`, optionally `hours`; \
          `tile` and `dial` optionally an `aspect`), `room` a `room`, `unit` and `params` a \
          `unit`; `group` a list of `widgets` and optionally a `label`; \
-         `people`, `deviations` and `map` take nothing. The set is \
+         `burner` an `entity`; `people`, `deviations` and `map` take \
+         nothing. The set is \
          closed so a typo is refused, not ignored.",
     ),
     (
