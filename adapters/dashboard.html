@@ -126,6 +126,11 @@ h1.view-title { font-size: 20px; margin: 0 0 16px; }
 .unit-card .unit-desc { font-size: 12.5px; color: var(--secondary); margin-top: 1px; }
 .unit-card .section-label { font-size: 10.5px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 14px 0 2px; }
 .unit-card .param-row:first-of-type { border-top: none; }
+/* a relation is one field: what it is on the left, what it reads on the right */
+.unit-card .group-toggle { margin-top: 14px; }
+.rel-row { display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  font-size: 12.5px; color: var(--secondary); padding: 5px 4px; min-height: 32px; }
+.rel-row .rel-value { color: var(--ink); font-variant-numeric: tabular-nums; }
 .muted { color: var(--secondary); }
 .faint { color: var(--muted); }
 
@@ -441,7 +446,8 @@ var pending = {};
 var localState = {
   sliderDrag: {},   // key -> true while user is dragging
   sparklines: {},   // entity|aspect -> {points:[], window, loaded:bool, loading:bool}
-  charts: {}        // entity|aspect|hours -> the same, for chart widgets
+  charts: {},       // entity|aspect|hours -> the same, for chart widgets
+  relations: {}     // unit -> true while its Drives/From sections are open
 };
 
 // detail overlay state (right slide-over / mobile sheet)
@@ -1609,9 +1615,37 @@ function widgetUnit(unitName) {
   // its own card: the param name alone, the unit is the head
   html += section('Setpoints', plan.params.map(function (p) { return renderParamRow(u.name, p, u.params[p], true); }).join(''));
   html += section('Publishes', plan.publishes.map(widgetForEntity).join(''));
-  html += section('Drives', plan.drives.map(widgetForEntity).join(''));
-  html += section('From', plan.sources.map(function (e) { return widgetForEntity(e); }).join(''));
+  // Drives and From are the unit's wiring, not its surface: a line saying
+  // how much of it there is, and the fields themselves when asked for.
+  var wiring = plan.drives.length + plan.sources.length;
+  if (wiring) {
+    var open = !!localState.relations[u.name];
+    var summary = [];
+    if (plan.drives.length) summary.push('drives ' + plan.drives.length);
+    if (plan.sources.length) summary.push('reads ' + plan.sources.length);
+    html += '<button class="group-toggle" data-action="toggle-relations" data-unit="' + esc(u.name) + '">' +
+      esc(summary.join(' · ')) + ' ' + (open ? '&#9662;' : '&#9656;') + '</button>';
+    if (open) {
+      html += section('Drives', plan.drives.map(relationRow).join(''));
+      html += section('From', plan.sources.map(relationRow).join(''));
+    }
+  }
   return html + '</div>';
+}
+
+// One relation: an entity's field and what it reads right now. The card
+// states the relation; a tap opens the entity, which is where one acts —
+// so a driven light does not drag its whole card into the wiring list.
+function relationRow(f) {
+  var e = f.entity;
+  var field = f.aspect ? descriptorField(e, f.aspect) : null;
+  var label = e.label + (f.aspect ? ' · ' + ((field && field.label) || f.aspect) : '');
+  var value = f.aspect
+    ? logic.formatAspect(f.aspect, field, stateValue(e.room, e.name, f.aspect))
+    : '';
+  return '<div class="rel-row row-clickable" data-action="entity-detail" data-room="' + esc(e.room) +
+    '" data-entity="' + esc(e.name) + '"><span>' + esc(label) + '</span>' +
+    '<span class="rel-value">' + esc(value) + '</span></div>';
 }
 
 // The room card: every entity in the room, controls first.
@@ -2404,6 +2438,12 @@ document.addEventListener('click', function (e) {
   if (action === 'aspect-enum') {
     sendCmd(el.getAttribute('data-room'), el.getAttribute('data-entity'), el.getAttribute('data-aspect'),
       JSON.parse(el.getAttribute('data-value')));
+    return;
+  }
+  if (action === 'toggle-relations') {
+    var relUnit = el.getAttribute('data-unit');
+    localState.relations[relUnit] = !localState.relations[relUnit];
+    render();
     return;
   }
   if (action === 'toggle-group') {

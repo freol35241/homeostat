@@ -638,8 +638,10 @@ function viewsModel(views) {
       { name: 'anna', label: 'Anna', capability: 'person', room: 'person', owner: 'owntracks' },
     ],
     units: [
-      { name: 'evening_lights', params: { off_time: { type: 'time', editable_by: 'family' } }, drives: ['lamp'], sources: ['thermo'] },
-      { name: 'fusion', params: {}, drives: [], sources: ['thermo'] },
+      { name: 'evening_lights', params: { off_time: { type: 'time', editable_by: 'family' } },
+        drives: [{ entity: 'lamp', aspect: 'on' }],
+        sources: [{ entity: 'thermo', aspect: 'temperature' }, { entity: 'lamp', aspect: 'on' }] },
+      { name: 'fusion', params: {}, drives: [], sources: [{ entity: 'thermo', aspect: 'temperature' }] },
       { name: 'zigbee', params: { poll: { type: 'float', editable_by: 'owner' } }, drives: [], sources: [] },
       { name: 'heating', params: { night: { type: 'float', editable_by: 'family' } }, drives: [], sources: [] },
     ],
@@ -689,13 +691,21 @@ test('placement: each widget kind places exactly what it shows', () => {
 });
 
 test('the unit card reads its four relations back from the model', () => {
+  const field = (f) => f.entity.name + (f.aspect ? '.' + f.aspect : '');
   const plan = logic.unitCardPlan(viewsModel(null), 'evening_lights');
   assert.deepEqual(plan.params, ['off_time']);
   assert.deepEqual(plan.publishes, []);
-  assert.deepEqual(plan.drives.map((e) => e.name), ['lamp']);
-  assert.deepEqual(plan.sources.map((e) => e.name), ['thermo']);
+  // fields, not entities: the lamp is driven on `on` and read back on it,
+  // which is two rows saying different things, not one entity listed twice
+  assert.deepEqual(plan.drives.map(field), ['lamp.on']);
+  assert.deepEqual(plan.sources.map(field), ['thermo.temperature', 'lamp.on']);
   assert.deepEqual(logic.unitCardPlan(viewsModel(null), 'fusion').publishes.map((e) => e.name), ['fused']);
   assert.equal(logic.unitCardPlan(viewsModel(null), 'nope'), null);
+  // an entity the model does not carry drops out; a relation without an
+  // aspect (an entity whose commandable fields are not known yet) stays
+  const model = viewsModel(null);
+  model.units[0].drives = [{ entity: 'gone', aspect: 'on' }, { entity: 'lamp', aspect: null }];
+  assert.deepEqual(logic.unitCardPlan(model, 'evening_lights').drives.map(field), ['lamp']);
 });
 
 test('a deviation tap lands on the view that shows its subject, or nowhere', () => {
