@@ -519,6 +519,19 @@ async fn stats_describe_the_store() {
     // the reply is only as true as the tally behind it.
     assert_tally_matches_samples(&db);
 
+    // The rate the owner reads to see which series is filling the file.
+    // Three puts microseconds apart make it enormous but finite; the
+    // single-row series has no span to divide by and says so.
+    assert!(
+        power["rows_per_day"].as_f64().expect("a rate") > 0.0,
+        "{power}"
+    );
+    assert_eq!(
+        series["home/history/state/gauge/level"]["rows_per_day"],
+        json!(null),
+        "one row is not a rate: {stats}"
+    );
+
     // Events: the fixture's own health transitions are already there,
     // stamped in the recorder's µs convention.
     let events = &stats["events"];
