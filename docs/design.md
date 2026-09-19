@@ -1140,8 +1140,13 @@ supervisor-executed walk.
   the house repo opts in by declaring it. No special casing in the
   supervisor.
 - **Reads:** `read_state` serves live values from the core last-value
-  cache; `read_history` queries `home/history/**`. Both are bus clients;
-  the agent needs zero backend knowledge.
+  cache; `read_history` queries `home/history/**`, passing the recorder's
+  fold shapes (`bucket`, `changes`) through as tool arguments so an agent
+  asking a week-wide question does not get a chatty series' last hour
+  (2026-09-19, #110) — the same failure the dashboard had before #107,
+  and for the same reason: `limit` alone makes history length a function
+  of publish rate. Both are bus clients; the agent needs zero backend
+  knowledge.
 - **Writes go through the repo.** `propose` takes text — house-repo file
   path(s) plus new content — writes it, commits to the current branch,
   and plans. Parameter edits are repo edits: a manifest-default change
