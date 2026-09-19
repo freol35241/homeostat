@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "homeostat==0.13.1",
+#     "homeostat==0.13.2",
 #     "paho-mqtt>=2,<3",
 # ]
 # ///
@@ -133,7 +133,15 @@ up front.
 A raw subtopic that would mint a reserved name — `available`, or one of
 the normalized names above arriving under its bus name instead of its
 firmware name — drops with a "reserved-aspect" health event; a subtopic
-that is not a legal key segment drops with "malformed-payload".
+that is not a legal key segment drops with "malformed-payload". A
+controller field whose `value` is null is the firmware saying it has no
+reading — the board republishes its tracked fields that way for a minute
+or two after its daily reboot — and is treated as absent: the `valid`
+flag beside it still publishes, the value does not, and the field drops
+with a "null-value" health event. Not publishing is how the bus says
+"no reading"; a null on a key the descriptor calls a number is a
+confident-looking nothing that a late subscriber's catch-up would replay
+as the last known value.
 
 Device availability (docs/design.md, "Sensor dropout and availability"):
 this firmware publishes continuously — every serial telegram fans out —
@@ -540,6 +548,17 @@ def main():
             # reads this snapshot's validity from the mirror and never the
             # previous one's.
             session.put_json(keys.state_key(entity.room, entity.name, f"{aspect}_valid"), bool(valid))
+        if value is None:
+            # The controller republishes its tracked fields as
+            # {"value": null} before it has a reading — seen in bursts
+            # after the board's daily reboot. A null is the firmware
+            # saying "no reading", which the bus says by not publishing
+            # (plus `valid` above, already out); publishing it would put
+            # a null on a key whose descriptor says number, and a
+            # `subscribe` catch-up would replay it as the last known
+            # value. The event keeps the burst visible.
+            session.health_event("drop", reason="null-value", topic=msg.topic)
+            return
         session.put_json(key, value)
 
     def cmd_handler(entity):
