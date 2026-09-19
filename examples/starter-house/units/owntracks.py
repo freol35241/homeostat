@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "homeostat==0.13.1",
+#     "homeostat==0.13.2",
 #     "paho-mqtt>=2,<3",
 # ]
 # ///

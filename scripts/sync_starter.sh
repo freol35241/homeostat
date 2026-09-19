@@ -25,7 +25,7 @@
 set -euo pipefail
 
 # Bumped with the starter's compose image at each release.
-SDK_TAG="v0.13.1"
+SDK_TAG="v0.13.2"
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 UNITS="$REPO/examples/starter-house/units"
