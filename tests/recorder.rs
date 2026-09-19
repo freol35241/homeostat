@@ -81,6 +81,24 @@ fn read_rows(db: &Path, sql: &str) -> Vec<Vec<SqlValue>> {
     }
 }
 
+/// The per-series tally on `series` must say exactly what an aggregate
+/// over `samples` says. It is maintained incrementally — by a trigger on
+/// insert, by `_purge` on delete — so drift is the one failure mode a
+/// denormalized count has, and every test that writes or purges checks
+/// for it here rather than trusting the read that now depends on it.
+fn assert_tally_matches_samples(db: &Path) {
+    let tally = read_rows(
+        db,
+        "SELECT id, row_count, oldest_ts, newest_ts FROM series ORDER BY id",
+    );
+    let truth = read_rows(
+        db,
+        "SELECT series.id, COUNT(samples.series_id), MIN(ts), MAX(ts) FROM series
+         LEFT JOIN samples ON samples.series_id = series.id GROUP BY series.id ORDER BY series.id",
+    );
+    assert_eq!(tally, truth, "series tally drifted from samples");
+}
+
 /// Polls the store until `sql` yields at least `n` rows; panics on timeout.
 async fn rows_eventually(db: &Path, sql: &str, n: usize, timeout: Duration) -> Vec<Vec<SqlValue>> {
     let deadline = tokio::time::Instant::now() + timeout;
@@ -483,7 +501,7 @@ async fn stats_describe_the_store() {
     assert_eq!(replies.len(), 1);
     assert_eq!(replies[0].0, "home/history/stats");
     let stats = &replies[0].1;
-    assert_eq!(stats["store_version"], json!(1));
+    assert_eq!(stats["store_version"], json!(2));
     let file_bytes = stats["file_bytes"].as_i64().expect("file size");
     assert!(file_bytes >= 4096, "page_count * page_size: {stats}");
     assert!(stats["freelist_bytes"].as_i64().expect("freelist") >= 0);
@@ -496,6 +514,10 @@ async fn stats_describe_the_store() {
     let oldest = power["oldest"].as_str().expect("RFC3339 oldest");
     let newest = power["newest"].as_str().expect("RFC3339 newest");
     assert!(oldest.ends_with("+00:00") && oldest <= newest, "{power}");
+
+    // Those aggregates are read off `series`, not computed over the rows:
+    // the reply is only as true as the tally behind it.
+    assert_tally_matches_samples(&db);
 
     // Events: the fixture's own health transitions are already there,
     // stamped in the recorder's µs convention.
@@ -575,10 +597,25 @@ async fn retention_purges_old_rows() {
         read_rows(&db, "SELECT ts FROM events").len() >= audit_before,
         "the audit trail is untouched"
     );
+    // A series purged empty keeps no bounds from the rows that are gone,
+    // and stats stops listing it — what the old aggregate query did by
+    // joining.
+    assert_tally_matches_samples(&db);
+    let replies = history_get(&observer, "home/history/stats").await;
+    assert_eq!(
+        replies[0].1["series"]
+            .as_object()
+            .expect("series map")
+            .len(),
+        0,
+        "emptied series are not listed: {}",
+        replies[0].1
+    );
 
     // New samples land as before: retention deletes, it never stops writing.
     put(&power, json!(4.5)).await;
     rows_eventually(&db, "SELECT value FROM samples", 1, Duration::from_secs(20)).await;
+    assert_tally_matches_samples(&db);
 
     sup.shutdown();
 }
@@ -1088,7 +1125,8 @@ async fn v0_store_migrates_in_place() {
     );
     assert_eq!(
         read_rows(&db, "PRAGMA user_version"),
-        vec![vec![SqlValue::Integer(1)]]
+        vec![vec![SqlValue::Integer(2)]],
+        "a v0 store arrives at the current layout in one start"
     );
     assert_eq!(
         read_rows(&db, "PRAGMA auto_vacuum"),
@@ -1113,6 +1151,83 @@ async fn v0_store_migrates_in_place() {
     let replies = history_get(&observer, "home/history/state/rover/on").await;
     assert_eq!(replies.len(), 1);
     assert_eq!(replies[0].1.as_array().expect("array").len(), 3);
+    // A v0 store arrives at version 2 in one start, tally included: the
+    // rows are inserted by the migration, before the trigger exists.
+    assert_tally_matches_samples(&db);
+
+    sup.shutdown();
+}
+
+/// (e2) A version-1 store — the layout before the per-series tally — is
+/// counted once on startup and answers stats from `series` afterwards.
+/// The backfill is the scan version 2 exists to stop doing, paid once
+/// where nothing waits on a query timeout.
+#[tokio::test(flavor = "multi_thread")]
+async fn v1_store_backfills_its_tally() {
+    let db = store_path("migrate-v1");
+    {
+        let conn = Connection::open(&db).expect("create v1 store");
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL;
+             CREATE TABLE series (id INTEGER PRIMARY KEY, class TEXT NOT NULL,
+               entity TEXT NOT NULL, aspect TEXT NOT NULL, UNIQUE (class, entity, aspect));
+             CREATE TABLE rooms (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE);
+             CREATE TABLE samples (series_id INTEGER NOT NULL REFERENCES series (id),
+               ts INTEGER NOT NULL, room_id INTEGER NOT NULL REFERENCES rooms (id),
+               kind INTEGER NOT NULL, value NOT NULL,
+               PRIMARY KEY (series_id, ts)) WITHOUT ROWID;
+             CREATE TABLE events (ts INTEGER NOT NULL, key TEXT NOT NULL, payload TEXT NOT NULL);
+             INSERT INTO rooms (name) VALUES ('attic');
+             INSERT INTO series (class, entity, aspect) VALUES ('state', 'meter', 'power');
+             INSERT INTO series (class, entity, aspect) VALUES ('state', 'gauge', 'level');
+             INSERT INTO samples VALUES (1, 300, 1, 1, 1.5);
+             INSERT INTO samples VALUES (1, 100, 1, 1, 2.5);
+             INSERT INTO samples VALUES (1, 200, 1, 1, 3.5);
+             INSERT INTO samples VALUES (2, 700, 1, 1, 9);
+             PRAGMA user_version=1;",
+        )
+        .expect("populate v1 store");
+    }
+    let (mut sup, observer) = setup(&db).await;
+
+    assert_eq!(
+        read_rows(&db, "PRAGMA user_version"),
+        vec![vec![SqlValue::Integer(2)]]
+    );
+    // Counted, not guessed: the oldest row of the first series was
+    // inserted last, so a tally that took each series' first or last
+    // insert for its bounds would be wrong here.
+    assert_eq!(
+        read_rows(
+            &db,
+            "SELECT entity, row_count, oldest_ts, newest_ts FROM series ORDER BY id"
+        ),
+        vec![
+            vec![
+                SqlValue::Text("meter".into()),
+                SqlValue::Integer(3),
+                SqlValue::Integer(100),
+                SqlValue::Integer(300),
+            ],
+            vec![
+                SqlValue::Text("gauge".into()),
+                SqlValue::Integer(1),
+                SqlValue::Integer(700),
+                SqlValue::Integer(700),
+            ],
+        ]
+    );
+
+    // And the migrated store keeps tallying as it records.
+    let power = matched_publisher(&observer, "home/state/attic/meter/power").await;
+    put(&power, json!(4.5)).await;
+    rows_eventually(&db, "SELECT value FROM samples", 5, Duration::from_secs(20)).await;
+    assert_tally_matches_samples(&db);
+
+    let replies = history_get(&observer, "home/history/stats").await;
+    let series = replies[0].1["series"].as_object().expect("series map");
+    assert_eq!(series["home/history/state/meter/power"]["rows"], json!(4));
+    assert_eq!(series["home/history/state/gauge/level"]["rows"], json!(1));
 
     sup.shutdown();
 }

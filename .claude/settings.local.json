@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git add *)",
+      "Bash(git commit -m 'Dashboard design settled: a family-tier human adapter, generated from manifests *)",
+      "Bash(git push *)"
+    ]
+  }
+}

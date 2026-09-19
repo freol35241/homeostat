@@ -476,10 +476,15 @@ Scalar samples from room/entity/aspect keys, normalised so the file is
 bounded by sample count rather than by repeated strings — the store layout
 version is stamped in `PRAGMA user_version` and `init_store()` migrates an
 older file in place (version 0 was one wide `samples` table with every
-tag as TEXT on every row: measured at ~113 bytes a row against ~25 here):
+tag as TEXT on every row: measured at ~113 bytes a row against ~25 here;
+version 1 kept the per-series aggregates on `samples`, where nothing
+indexes them):
 
 ```sql
-series(id, class, entity, aspect)     -- UNIQUE (class, entity, aspect)
+series(id, class, entity, aspect,     -- UNIQUE (class, entity, aspect)
+       row_count, oldest_ts, newest_ts)
+  -- the tally home/history/stats reads, maintained by a trigger on
+  -- insert and by the purge on delete
 rooms(id, name)                       -- UNIQUE (name)
 samples(series_id, ts, room_id, kind, value)
   -- PRIMARY KEY (series_id, ts), WITHOUT ROWID: the table is the index
@@ -581,6 +586,26 @@ knowing what is in the file, the recorder is the only process that reads
 it, and a host may have no `sqlite3` binary (2026-09-09, #25). A wildcard
 over `home/history/**` fans out over series only; `stats` and `events`
 answer their own keys.
+
+The per-series aggregates are carried on `series` and maintained as rows
+arrive, rather than computed per call (2026-09-19, #123). `COUNT`, `MIN`
+and `MAX` per series have no index that answers them, so the reply used
+to be a full scan of `samples` — 1.75 s at 4.9 M rows, growing at ~1 s
+per 2.8 M — while every other read path is a seek on `(series_id, ts)`
+and flat in the file size. Two things made that worse than a slow query:
+`ctx.restore` polls `stats` to decide whether the recorder is answering
+at all, so a store large enough to push the scan past the query timeout
+resets every restoring latch to its code default; and the reply is how
+an owner sees which series is filling the file, so the diagnostic
+degraded in proportion to the problem it diagnoses. Keeping the tally on
+the write path costs one `UPDATE` of a small cached table per sample.
+Considered and rejected: dropping repeated values at write time, which
+addresses one pathology (a device republishing unchanged) and not the
+general case (a jittering float, an honest 1 Hz sensor), and costs the
+store its record that a device asserted a value at a time — a sample
+asserts an observation at its stamp, and that is true of a repeat too.
+Volume is bounded by retention, which deletes on an owner's stated
+policy rather than silently.
 
 The history key is entity-first — no room slot — because entity is the
 series identity and room is a tag carried per row: a moved entity is ONE

@@ -53,7 +53,10 @@ describing the store itself: file and freelist size, per-series row
 counts and time bounds (keyed by history key, RFC3339 like the samples
 path), the events table's count and bounds (integer µs, like the events
 path) and the layout version — what an owner needs to see before
-choosing a retention window.
+choosing a retention window. The per-series aggregates are maintained on
+the way in, so that reply is a read of one row per series and does not
+slow down as the store grows; a store's size is answerable at the size
+where the question gets asked.
 
 Retention is two parameters, retain_samples_days and retain_events_days,
 0 meaning forever (the default, so an upgrade never deletes history).
@@ -107,7 +110,10 @@ STATS_KEY = zenoh.KeyExpr("home/history/stats")
 # samples table repeating class/room/entity/aspect/kind as TEXT on every
 # row (and again in its index); measured at ~113 bytes a row against ~25
 # for this layout, which is what bounds the file between retentions.
-STORE_VERSION = 1
+# Version 1 kept every aggregate on the samples table, where COUNT/MIN/MAX
+# per series have no index that answers them; version 2 carries them on
+# series instead (see the tally trigger).
+STORE_VERSION = 2
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS series (
@@ -115,6 +121,9 @@ CREATE TABLE IF NOT EXISTS series (
   class TEXT NOT NULL,
   entity TEXT NOT NULL,
   aspect TEXT NOT NULL,
+  row_count INTEGER NOT NULL DEFAULT 0,
+  oldest_ts INTEGER,
+  newest_ts INTEGER,
   UNIQUE (class, entity, aspect)
 );
 CREATE TABLE IF NOT EXISTS rooms (
@@ -143,6 +152,40 @@ CREATE VIEW IF NOT EXISTS history AS
   FROM samples
   JOIN series ON series.id = samples.series_id
   JOIN rooms ON rooms.id = samples.room_id;
+"""
+
+# Per-series row count and time bounds, maintained on the way in so
+# home/history/stats is a read of `series` (hundreds of rows) instead of
+# SCAN samples (millions). The read matters more than its size suggests:
+# ctx.restore polls stats to decide whether the recorder is answering at
+# all, so a store big enough to push that scan past the query timeout
+# resets every restoring latch to its code default -- the diagnostic
+# degrading in proportion to the problem it diagnoses.
+#
+# A trigger rather than an UPDATE in the writer because four paths insert
+# samples -- _flush, _flush_each, seed and the v0 migration -- and two of
+# them are awkward to count in Python: _flush_each exists because some
+# rows are refused by a constraint, and seed inserts rows dated in the
+# past, so a batch's oldest row is not its contribution to oldest_ts. A
+# trigger fires on exactly the rows that landed. It costs one UPDATE on a
+# small, cached table per sample.
+#
+# Deletes are NOT triggered: retention is the only thing that deletes
+# from this store, _purge already walks series one at a time with a
+# rowcount in hand, and recomputing the bounds there is two seeks to the
+# ends of a key range rather than an aggregate per deleted row.
+#
+# Kept out of SCHEMA because migrate_v0 splits that string on ";\n" to
+# run it statement by statement inside its own transaction, and a trigger
+# body contains one.
+TRIGGERS = """
+CREATE TRIGGER IF NOT EXISTS samples_tally AFTER INSERT ON samples BEGIN
+  UPDATE series SET
+    row_count = row_count + 1,
+    oldest_ts = MIN(COALESCE(oldest_ts, NEW.ts), NEW.ts),
+    newest_ts = MAX(COALESCE(newest_ts, NEW.ts), NEW.ts)
+  WHERE id = NEW.series_id;
+END;
 """
 
 # samples.kind codes, in the order the history view spells them out; the
@@ -416,10 +459,28 @@ class Writer:
                     # writer's lock short even on a first purge of years.
                     for (series_id,) in conn.execute("SELECT id FROM series").fetchall():
                         with conn:
-                            deleted["samples"] += conn.execute(
+                            gone = conn.execute(
                                 "DELETE FROM samples WHERE series_id = ? AND ts < ?",
                                 (series_id, cutoffs["samples"]),
                             ).rowcount
+                            if gone:
+                                # The tally the insert trigger keeps, in
+                                # the same transaction as the delete it
+                                # describes. Both bounds are recomputed
+                                # rather than only the old end: a series
+                                # purged empty has no newest either, and
+                                # each subquery is a seek to one end of
+                                # this series' key range.
+                                conn.execute(
+                                    "UPDATE series SET row_count = row_count - ?,"
+                                    " oldest_ts = (SELECT MIN(ts) FROM samples"
+                                    "   WHERE series_id = ?),"
+                                    " newest_ts = (SELECT MAX(ts) FROM samples"
+                                    "   WHERE series_id = ?)"
+                                    " WHERE id = ?",
+                                    (gone, series_id, series_id, series_id),
+                                )
+                            deleted["samples"] += gone
                 if "events" in cutoffs:
                     with conn:
                         deleted["events"] = conn.execute(
@@ -716,15 +777,17 @@ class Recorder:
 
 def store_stats(conn: sqlite3.Connection) -> dict:
     """What is in the store: sizes from the pager, one aggregate per
-    series and one for the events table."""
+    series and one for the events table. The per-series aggregates are
+    read off `series`, where the insert trigger and _purge maintain them;
+    `row_count > 0` keeps the reply what the old aggregate query made it,
+    a series that has no rows right now having no entry."""
     page_size = conn.execute("PRAGMA page_size").fetchone()[0]
     page_count = conn.execute("PRAGMA page_count").fetchone()[0]
     freelist = conn.execute("PRAGMA freelist_count").fetchone()[0]
     series = {}
     for space, entity, aspect, rows, oldest, newest in conn.execute(
-        "SELECT class, entity, aspect, COUNT(*), MIN(ts), MAX(ts) FROM samples"
-        " JOIN series ON series.id = samples.series_id"
-        " GROUP BY series_id ORDER BY class, entity, aspect"
+        "SELECT class, entity, aspect, row_count, oldest_ts, newest_ts FROM series"
+        " WHERE row_count > 0 ORDER BY class, entity, aspect"
     ):
         series[f"home/history/{space}/{entity}/{aspect}"] = {
             "rows": rows,
@@ -920,13 +983,23 @@ def init_store(db_path: Path) -> None:
         conn.execute("PRAGMA auto_vacuum=INCREMENTAL")
         conn.execute("PRAGMA journal_mode=WAL")
         version = conn.execute("PRAGMA user_version").fetchone()[0]
+        existing = has_samples_table(conn)
         if version == 0 and has_v0_samples(conn):
             migrate_v0(conn)
         conn.executescript(SCHEMA)
+        conn.executescript(TRIGGERS)
+        if existing and version < 2:
+            migrate_v1(conn)
         conn.execute(f"PRAGMA user_version={STORE_VERSION}")
         conn.commit()
     finally:
         conn.close()
+
+
+def has_samples_table(conn: sqlite3.Connection) -> bool:
+    """Whether this file already holds a store — a fresh one needs no
+    migration, and its `series` is empty either way."""
+    return bool(list(conn.execute("PRAGMA table_info(samples)")))
 
 
 def has_v0_samples(conn: sqlite3.Connection) -> bool:
@@ -961,6 +1034,31 @@ def migrate_v0(conn: sqlite3.Connection) -> None:
     conn.execute("DROP TABLE samples_v0")
     conn.execute("COMMIT")
     conn.execute("VACUUM")
+
+
+def migrate_v1(conn: sqlite3.Connection) -> None:
+    """Version 1 -> 2: the per-series tally arrives, and an existing
+    store's has to be counted once — at startup, where nothing is waiting
+    on a query timeout, instead of on every stats read forever. Each
+    aggregate is a correlated subquery on the clustered primary key
+    rather than one GROUP BY over the table: the counts walk each
+    series' key range, the bounds are seeks to its ends, and nothing
+    depends on a SQLite newer than the schema already does (measured on a
+    synthetic 4.8 M-row store: 0.13 s, against 0.62 s for the aggregate
+    query this replaces). A store migrating straight from version 0
+    already has the columns — they are in SCHEMA, which built its new
+    tables — and only needs the count."""
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(series)")}
+    if "row_count" not in columns:
+        conn.execute("ALTER TABLE series ADD COLUMN row_count INTEGER NOT NULL DEFAULT 0")
+        conn.execute("ALTER TABLE series ADD COLUMN oldest_ts INTEGER")
+        conn.execute("ALTER TABLE series ADD COLUMN newest_ts INTEGER")
+    conn.execute(
+        "UPDATE series SET"
+        " row_count = (SELECT COUNT(*) FROM samples WHERE series_id = series.id),"
+        " oldest_ts = (SELECT MIN(ts) FROM samples WHERE series_id = series.id),"
+        " newest_ts = (SELECT MAX(ts) FROM samples WHERE series_id = series.id)"
+    )
 
 
 def main():
