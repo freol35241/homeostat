@@ -1002,17 +1002,16 @@ struct FakeGo2rtc {
 }
 
 impl FakeGo2rtc {
-    fn spawn(streams: &str) -> Self {
+    async fn spawn(streams: &str) -> Self {
         let port = common::free_port();
-        let child = std::process::Command::new("uv")
-            .args([
-                "run",
-                "tests/fake_go2rtc.py",
-                "--listen",
-                &format!("127.0.0.1:{port}"),
-                "--streams",
-                streams,
-            ])
+        // Not through `uv run`: it would stay alive as the script's parent
+        // and the handle below would kill it rather than the server (#140).
+        let (program, args) = common::fixture_command(&format!(
+            "uv run tests/fake_go2rtc.py --listen 127.0.0.1:{port} --streams {streams}"
+        ))
+        .await;
+        let child = std::process::Command::new(program)
+            .args(args)
             .current_dir(env!("CARGO_MANIFEST_DIR"))
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -1070,7 +1069,7 @@ fn ws_read_frame(stream: &mut TcpStream) -> (u8, Vec<u8>) {
 async fn dashboard_proxies_camera_media() {
     // The fake serves only the stream go2rtc would really have: named by
     // the entity's id, which the fixture keeps distinct from its name.
-    let go2rtc = FakeGo2rtc::spawn("porch_cam_native");
+    let go2rtc = FakeGo2rtc::spawn("porch_cam_native").await;
     let port = common::free_port();
     let addr = format!("127.0.0.1:{port}");
     let go2rtc_url = format!("http://127.0.0.1:{}", go2rtc.port);
