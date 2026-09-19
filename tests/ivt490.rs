@@ -23,6 +23,8 @@ const SETPOINT_CMD_KEY: &str = "home/cmd/utility/heatpump/setpoint";
 const SETPOINT_ARBITER_KEY: &str = "home/arbiter/utility/heatpump/setpoint";
 const SETPOINT_SET_TOPIC: &str = "ivt490_1/controller/set/indoor_temperature_target";
 const AVAILABLE_KEY: &str = "home/state/utility/heatpump/available";
+const INDOOR_KEY: &str = "home/state/utility/heatpump/indoor_temperature";
+const INDOOR_VALID_KEY: &str = "home/state/utility/heatpump/indoor_temperature_valid";
 const FEED_SOURCE_KEY: &str = "home/state/global/indoor_temperature/temperature";
 const FEED_SOURCE_AVAILABLE_KEY: &str = "home/state/global/indoor_temperature/available";
 const FEED_SET_TOPIC: &str = "ivt490_1/controller/set/indoor_temperature_actual";
@@ -217,6 +219,50 @@ async fn ivt490_state_translates_to_bus_state() {
         fields.get("GT2_raw").is_none(),
         "undescribed aspects are simply absent"
     );
+
+    sup.shutdown();
+}
+
+/// (a1) A controller field whose `value` is null is "no reading", not a
+/// reading of null: the `valid` flag beside it still publishes, the value
+/// does not — the last real reading stands on the bus, as it does for any
+/// other aspect the device stops speaking about — and the field drops
+/// with a "null-value" health event. The board republishes its tracked
+/// fields this way for a minute or two after its daily reboot.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_null_controller_value_is_absent_not_a_sample() {
+    let (mosquitto, mut sup, observer) = setup().await;
+    let value_sub = observer
+        .declare_subscriber(INDOOR_KEY)
+        .await
+        .expect("value subscriber");
+    let valid_sub = observer
+        .declare_subscriber(INDOOR_VALID_KEY)
+        .await
+        .expect("valid subscriber");
+    let event_sub = observer
+        .declare_subscriber(EVENT_KEY)
+        .await
+        .expect("event subscriber");
+    let mut mqtt = Mqtt::connect(mosquitto.port, "test-null-value").await;
+
+    let topic = format!("{BASE}/controller/state/indoor_temperature_feedback");
+    mqtt.publish(&topic, r#"{"value":20.30,"valid":true}"#)
+        .await;
+    expect_states(&value_sub, &[(INDOOR_KEY, json!(20.3))]).await;
+    expect_states(&valid_sub, &[(INDOOR_VALID_KEY, json!(true))]).await;
+
+    // The post-reboot shape: a tracked field with nothing in it yet.
+    mqtt.publish(&topic, r#"{"value":null,"valid":false}"#)
+        .await;
+    expect_states(&valid_sub, &[(INDOOR_VALID_KEY, json!(false))]).await;
+    let event = expect_drop_event(&event_sub, "null-value").await;
+    assert_eq!(event["topic"], json!(topic), "{event}");
+
+    // The value key never saw the null: by the time the flag and the event
+    // are through, a publish of it would have arrived.
+    let extra = tokio::time::timeout(Duration::from_millis(1500), value_sub.recv_async()).await;
+    assert!(extra.is_err(), "null reached the value key: {extra:?}");
 
     sup.shutdown();
 }

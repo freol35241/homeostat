@@ -291,6 +291,7 @@ trace: one JSON object at `home/health/{unit}/event` via
 | `drop` | `reason = "invalid-command"`, `key`, `cmd_id` | bad envelope, unknown aspect, wrong type, out of bounds |
 | `drop` | `reason = "unknown-device"`, `topic` | a device outside the adapter's own view, first sight only |
 | `drop` | `reason = "reserved-aspect"`, `topic` | a native field that would mint `available` |
+| `drop` | `reason = "null-value"`, `topic` or `key` | a device reporting "no reading" as a null where a value belongs |
 | `drop` | `reason = "device-unavailable"`, `key`, `cmd_id` | a command dropped because the device is down |
 | `drop` | `reason = "invalid-feed"`, `input`, `key`, `value` | a fed value outside its bounds |
 | `drop` | `reason = "feed-source-unavailable"`, `input`, `key` | a fed value arriving while its source is unavailable (once per outage) |
