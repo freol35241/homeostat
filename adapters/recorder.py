@@ -53,7 +53,9 @@ describing the store itself: file and freelist size, per-series row
 counts and time bounds (keyed by history key, RFC3339 like the samples
 path), the events table's count and bounds (integer µs, like the events
 path) and the layout version — what an owner needs to see before
-choosing a retention window. The per-series aggregates are maintained on
+choosing a retention window, each series also carrying the rate
+(`rows_per_day`, null for a series too short to have one) that says
+which of them is filling the file. The per-series aggregates are maintained on
 the way in, so that reply is a read of one row per series and does not
 slow down as the store grows; a store's size is answerable at the size
 where the question gets asked.
@@ -775,6 +777,19 @@ class Recorder:
             conn.close()
 
 
+def rows_per_day(rows: int, oldest: int, newest: int) -> float | None:
+    """A series' long-run write rate, or None for one too short to have
+    one (a single row, or every row inside one microsecond). The reply
+    already carries the three numbers this divides; it does the division
+    because "which series is filling the file" is the question stats gets
+    asked, and an owner choosing a retention window should not have to do
+    arithmetic across 479 entries to answer it."""
+    span = newest - oldest
+    if span <= 0:
+        return None
+    return round(rows * 86_400 * 1_000_000 / span, 1)
+
+
 def store_stats(conn: sqlite3.Connection) -> dict:
     """What is in the store: sizes from the pager, one aggregate per
     series and one for the events table. The per-series aggregates are
@@ -793,6 +808,7 @@ def store_stats(conn: sqlite3.Connection) -> dict:
             "rows": rows,
             "oldest": iso_utc(oldest),
             "newest": iso_utc(newest),
+            "rows_per_day": rows_per_day(rows, oldest, newest),
         }
     rows, oldest, newest = conn.execute("SELECT COUNT(*), MIN(ts), MAX(ts) FROM events").fetchone()
     return {

@@ -579,8 +579,9 @@ collapsed on read.
 
 `home/history/stats` describes the store itself in one reply:
 `store_version`, `file_bytes` and `freelist_bytes` from the pager, one
-`{rows, oldest, newest}` per series keyed by its history key (RFC3339,
-as the samples path), and `events: {rows, oldest, newest}` (integer µs,
+`{rows, oldest, newest, rows_per_day}` per series keyed by its history
+key (RFC3339, as the samples path; the rate is null for a series with no
+span to divide by), and `events: {rows, oldest, newest}` (integer µs,
 as the events path). It exists because choosing a retention window means
 knowing what is in the file, the recorder is the only process that reads
 it, and a host may have no `sqlite3` binary (2026-09-09, #25). A wildcard
