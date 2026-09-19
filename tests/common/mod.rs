@@ -181,6 +181,32 @@ impl Drop for Supervisor {
     }
 }
 
+/// A `uv run <script.py> [args]` fixture command, resolved the way the
+/// supervisor resolves a unit's: the script's environment is materialised
+/// by a process that EXITS, and what comes back is the interpreter
+/// invoked on the script directly.
+///
+/// Fixtures must not be spawned through `uv run`. It stays alive as the
+/// script's parent, so the tree is `test -> uv -> python3` and the handle
+/// the fixture holds is uv's. `Child::kill` sends SIGKILL, which uv can
+/// neither catch nor forward: uv dies, the interpreter is reparented to
+/// init, and the fake server keeps listening for the life of the machine
+/// (#140). Exec'ing the interpreter makes the process the fixture holds
+/// the process that has to die.
+///
+/// Falls back to the command as given when uv cannot resolve the script,
+/// exactly as `process::resolve` does — a fixture that cannot start is a
+/// visible failure, a leaked one is not.
+#[allow(dead_code)] // each test binary uses its own subset of the harness
+pub async fn fixture_command(command: &str) -> (String, Vec<String>) {
+    let resolved =
+        homeostat::supervisor::process::resolve(command, Path::new(env!("CARGO_MANIFEST_DIR")))
+            .await;
+    let mut parts = resolved.split_whitespace().map(str::to_string);
+    let program = parts.next().expect("a non-empty command");
+    (program, parts.collect())
+}
+
 pub fn free_port() -> u16 {
     TcpListener::bind("127.0.0.1:0")
         .expect("bind ephemeral port")

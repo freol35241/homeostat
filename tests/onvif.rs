@@ -14,8 +14,8 @@ use serde_json::{json, Value};
 use zenoh::sample::SampleKind;
 
 use common::{
-    await_mirror, cache_read, expect_drop_event, expect_state, free_port, next_event, StateSub,
-    Supervisor,
+    await_mirror, cache_read, expect_drop_event, expect_state, fixture_command, free_port,
+    next_event, StateSub, Supervisor,
 };
 
 const FIXTURE: &str = "tests/fixture_house_onvif";
@@ -27,26 +27,23 @@ const USERNAME: &str = "homeostat";
 const PASSWORD: &str = "secret123";
 
 /// A fake ONVIF camera (tests/fake_onvif.py) on a free port, killed on
-/// drop. Spawned the same way the units themselves are: `uv run`.
+/// drop. Spawned the same way the units themselves are: the interpreter
+/// of the script's own uv environment, exec'd directly (fixture_command,
+/// and #140 for what spawning `uv run` itself leaks).
 struct FakeOnvif {
     child: Child,
     port: u16,
 }
 
 impl FakeOnvif {
-    fn spawn() -> Self {
+    async fn spawn() -> Self {
         let port = free_port();
-        let child = Command::new("uv")
-            .args([
-                "run",
-                "tests/fake_onvif.py",
-                "--port",
-                &port.to_string(),
-                "--username",
-                USERNAME,
-                "--password",
-                PASSWORD,
-            ])
+        let (program, args) = fixture_command(&format!(
+            "uv run tests/fake_onvif.py --port {port} --username {USERNAME} --password {PASSWORD}"
+        ))
+        .await;
+        let child = Command::new(program)
+            .args(args)
             .current_dir(env!("CARGO_MANIFEST_DIR"))
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -134,7 +131,7 @@ fn cameras_file(port: u16) -> PathBuf {
 /// adapter's liveliness token (generous timeout: first run resolves the
 /// uv env for aiohttp too).
 async fn setup() -> (FakeOnvif, PathBuf, Supervisor, zenoh::Session) {
-    let camera = FakeOnvif::spawn();
+    let camera = FakeOnvif::spawn().await;
     let cameras_path = cameras_file(camera.port);
     let sup = Supervisor::spawn_with_env(
         FIXTURE,
