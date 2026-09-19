@@ -165,6 +165,66 @@ async fn reads_serve_live_state_and_history() {
     );
     assert!(is_error, "{text}");
 
+    // The recorder's chart shapes reach the agent (#110): bucket= folds
+    // the window into points, changes=1 keeps only the moves. Asserted
+    // against the real recorder, so these are its own folds rather than a
+    // selector that merely looks right.
+    //
+    // The window starts at the row's own stamp: the bucket count is capped
+    // against the window, and the default window reaches back to the
+    // epoch — an hour bucket over that is refused, which is the guard
+    // doing its job rather than a shape this tool should dodge.
+    let from = row["ts"].as_str().expect("row ts is RFC3339");
+    let (text, is_error) = mcp.call(
+        "read_history",
+        json!({"series": "state/mcp_probe/level", "from": from, "bucket": 3600}),
+    );
+    assert!(!is_error, "{text}");
+    let values: Value = serde_json::from_str(&text).expect("bucketed read is JSON");
+    let point = &values["home/history/state/mcp_probe/level"][0];
+    assert_eq!(
+        point["value"],
+        json!(7.0),
+        "a number's bucket is a mean, so a float: {point}"
+    );
+    assert_eq!(
+        point["min"],
+        json!(7),
+        "bounds are the stored rows: {point}"
+    );
+    assert_eq!(point["max"], json!(7), "{point}");
+
+    let (text, is_error) = mcp.call(
+        "read_history",
+        json!({"series": "state/mcp_probe/level", "changes": true}),
+    );
+    assert!(!is_error, "{text}");
+    let values: Value = serde_json::from_str(&text).expect("changes read is JSON");
+    let rows = values["home/history/state/mcp_probe/level"]
+        .as_array()
+        .expect("rows array");
+    assert_eq!(rows.len(), 1, "one value published, one change: {rows:?}");
+    assert_eq!(rows[0]["value"], json!(7), "{rows:?}");
+
+    // The two are mutually exclusive at the recorder, so the tool refuses
+    // the pair rather than building a selector that earns an error reply.
+    let (text, is_error) = mcp.call(
+        "read_history",
+        json!({"series": "state/mcp_probe/level", "bucket": 60, "changes": true}),
+    );
+    assert!(is_error, "{text}");
+    assert!(text.contains("mutually exclusive"), "{text}");
+
+    // Wrong types are refused before the bus, like from/to above.
+    for bad in [
+        json!({"series": "state/mcp_probe/level", "bucket": 0}),
+        json!({"series": "state/mcp_probe/level", "bucket": "hour"}),
+        json!({"series": "state/mcp_probe/level", "changes": 1}),
+    ] {
+        let (text, is_error) = mcp.call("read_history", bad.clone());
+        assert!(is_error, "{bad} should be refused: {text}");
+    }
+
     drop(mcp);
     let mut sup = sup;
     sup.shutdown();

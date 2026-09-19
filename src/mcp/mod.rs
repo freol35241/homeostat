@@ -135,6 +135,26 @@ impl Server {
                 .ok_or("\"limit\" must be a positive integer")?;
             params.push(format!("limit={value}"));
         }
+        // The recorder's two chart shapes (#107). Mutually exclusive there,
+        // so the refusal is here rather than as an error reply from a
+        // selector that carries both.
+        let bucket = args.get("bucket");
+        let changes = args.get("changes").map_or(Ok(false), |value| {
+            value.as_bool().ok_or("\"changes\" must be a boolean")
+        })?;
+        if bucket.is_some() && changes {
+            return Err("\"bucket\" and \"changes\" are mutually exclusive".into());
+        }
+        if let Some(value) = bucket {
+            let value = value
+                .as_u64()
+                .filter(|seconds| *seconds > 0)
+                .ok_or("\"bucket\" must be a positive integer number of seconds")?;
+            params.push(format!("bucket={value}"));
+        }
+        if changes {
+            params.push("changes=1".into());
+        }
         let selector = if params.is_empty() {
             format!("home/history/{series}")
         } else {
@@ -332,14 +352,31 @@ pub fn tools() -> Value {
             "name": "read_history",
             "description": "Read recorded history over the bus. A series is \
                 {state|cmd}/{entity}/{aspect} (wildcards allowed); rows are \
-                {ts, room, value}, ascending, one reply per concrete series.",
+                {ts, room, value}, ascending, one reply per concrete series. \
+                Over a window wider than a few hours, say how to fold it: \
+                `limit` alone keeps the newest rows, so a chatty series \
+                answers a week's question with its last hour. `bucket` for \
+                a trend in a number, `changes` for when a value moved.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "series": {"type": "string", "description": "e.g. state/livingroom_lamp/on"},
                     "from": {"type": "string", "description": "RFC3339 with offset"},
                     "to": {"type": "string", "description": "RFC3339 with offset"},
-                    "limit": {"type": "integer", "description": "keep the most recent rows"}
+                    "limit": {"type": "integer", "description": "keep the most recent rows"},
+                    "bucket": {
+                        "type": "integer",
+                        "description": "seconds per point, folding the whole window: \
+                            a number's point carries mean with min and max, a bool's \
+                            or string's the last value in the bucket. Mutually \
+                            exclusive with changes."
+                    },
+                    "changes": {
+                        "type": "boolean",
+                        "description": "keep only the rows where the value changed, \
+                            the window's first included — a state's runs. Mutually \
+                            exclusive with bucket."
+                    }
                 },
                 "required": ["series"]
             }
