@@ -17,9 +17,10 @@ def t(hour, minute=0):
 
 
 def forecast(pairs, issued=None):
+    """`pairs` are (t, v) instants or (t, v, d) intervals."""
     return Forecast(
         issued=issued or t(8),
-        points=tuple(Point(when, value) for when, value in pairs),
+        points=tuple(Point(*p) for p in pairs),
     )
 
 
@@ -66,6 +67,75 @@ class EncodeTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             encode(t(8), many)
         encode(t(8), many[:MAX_POINTS])  # one under the guard is fine
+
+
+class ExtentTest(unittest.TestCase):
+    """A point may describe a window rather than an instant: an
+    accumulation over it, or a value holding across it. Dropping that is
+    lossy in the same way dropping irregular spacing would be."""
+
+    def test_extent_survives_a_roundtrip_and_instants_stay_bare(self):
+        payload = encode(t(8), [(t(9), 1.0), (t(10), 2.0, 10800)])
+        # written only where a producer gave one, so an instant series is
+        # unchanged on the wire
+        raw = json.loads(payload)
+        self.assertNotIn("d", raw["points"][0])
+        self.assertEqual(raw["points"][1]["d"], 10800.0)
+        back = decode(payload)
+        self.assertIsNone(back.points[0].d)
+        self.assertEqual(back.points[1].d, 10800.0)
+
+    def test_an_interval_covers_its_window_half_open(self):
+        p = Point(t(9), 5.0, 3600)
+        self.assertTrue(p.covers(t(9)))
+        self.assertTrue(p.covers(t(9, 59)))
+        self.assertFalse(p.covers(t(10)))  # the next window's edge
+        self.assertFalse(p.covers(t(8, 59)))
+
+    def test_an_instant_covers_only_itself(self):
+        p = Point(t(9), 5.0)
+        self.assertTrue(p.covers(t(9)))
+        self.assertFalse(p.covers(t(9, 1)))
+
+    def test_the_horizon_runs_to_the_end_of_a_final_interval(self):
+        # Without this the last window would be unreadable past its start,
+        # which for a coarse trailing interval is most of it.
+        f = forecast([(t(9), 1.0), (t(12), 2.0, 3 * 3600)])
+        self.assertEqual(f.horizon_end, t(15))
+        self.assertEqual(f.at(t(14, 59), "step", 3600), 2.0)
+        self.assertIsNone(f.at(t(15), "step", 3600))
+        # a trailing instant still ends the horizon at itself
+        self.assertEqual(forecast([(t(9), 1.0)]).horizon_end, t(9))
+
+    def test_a_declared_extent_needs_no_gap_heuristic(self):
+        # Two 15-minute windows an hour apart: the source said what each
+        # covers, so the hole between them is not a judgement call and
+        # max_gap_s has nothing to decide.
+        f = forecast([(t(9), 1.0, 900), (t(10), 2.0, 900)])
+        self.assertEqual(f.at(t(9, 10), "step", 999999), 1.0)
+        self.assertIsNone(f.at(t(9, 30), "step", 999999))
+        self.assertEqual(f.at(t(10, 10), "step", 1), 2.0)
+
+    def test_a_held_value_reads_to_the_end_of_the_last_window(self):
+        # The case a gap heuristic cannot serve: the final point has no
+        # successor, so its hold length is only knowable if declared.
+        f = forecast([(t(9), 1.0, 900), (t(9, 15), 2.0, 900)])
+        self.assertEqual(f.at(t(9, 20), "step", 3600), 2.0)
+        self.assertIsNone(f.at(t(9, 30), "step", 3600))
+
+    def test_interpolating_an_interval_is_refused_not_guessed(self):
+        f = forecast([(t(9), 1.0, 3600), (t(10), 2.0, 3600)])
+        with self.assertRaises(ValueError):
+            f.at(t(9, 30), "linear", 3600)
+
+    def test_a_nonsense_extent_is_refused(self):
+        for bad in (0, -60, float("inf"), float("nan"), True, "6h"):
+            with self.subTest(bad), self.assertRaises(ValueError):
+                encode(t(8), [(t(9), 1.0, bad)])
+
+    def test_resampling_an_interval_series_lands_in_its_windows(self):
+        f = forecast([(t(9), 1.0, 900), (t(9, 15), 2.0, 900), (t(9, 30), 3.0, 900)])
+        self.assertEqual(f.resample(t(9), 900, 4, "step", 3600), [1.0, 2.0, 3.0, None])
 
 
 class DecodeTest(unittest.TestCase):

@@ -2824,7 +2824,7 @@ every chart walks backward from now.
   first time. Its real force (stated under Cameras) is that the bus never
   carries frames; a bounded list of timestamped numbers is not a frame.
 - **Irregular points, deliberately.** The payload is
-  `{schema, issued, points: [{t, v}]}`, what the source actually said. A
+  `{schema, issued, points: [{t, v, d?}]}`, what the source actually said. A
   regular grid was proposed and rejected: it cannot represent an irregular
   series while the reverse is trivial, so it buys no expressiveness and
   loses fidelity — and resampling is not single-valued. A spot price is a
@@ -2836,6 +2836,19 @@ every chart walks backward from now.
   no default, and `max_gap_s` refusing to invent a value across a hole the
   source left — otherwise "missing" silently becomes "interpolated", which
   is the one way absence turns into made-up data.
+- **A point may be an interval, not an instant** (added 2026-09-20, from
+  porting a real producer — the first thing that exercise found). `d` is
+  the extent in seconds a point describes: absent, the value is
+  instantaneous at `t`; present, it covers `[t, t + d)` — an accumulation
+  over that window, or a value that holds across it. This is the same rule
+  as carrying irregular spacing one level down: sources state the interval,
+  so a bare instant discards what they said. An accumulation over six
+  hours stamped at one end reads as a spike at that instant, and a held
+  value's length is otherwise only guessable from the gap to the next
+  point — which fails at the end of a horizon, where there is no next
+  point, and around any gap. Where `d` is present there is nothing to
+  guess and `max_gap_s` does not apply; asking to read such a point
+  "linear" raises rather than interpolating between two windows.
 - **`issued` is required, and is the whole staleness story.** A consumer
   applies its own max age, as `Freshness` does for state — freshness
   policy is the automation's, never a core TTL. A controller that refuses
