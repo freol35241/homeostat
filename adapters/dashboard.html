@@ -8,15 +8,28 @@
 <link rel="icon" href="/assets/homeostat-mark.svg">
 <link rel="stylesheet" href="/assets/leaflet.css">
 <style>
+/* The palette is the mark's (docs/brand/README.md): house green is the
+ * accent — interaction ink and data ink alike — and the set point's amber
+ * is the one warm colour. The page shipped in a sky blue the brand
+ * explicitly is not ("deliberately not the sky blue of the category's
+ * largest project"), which is what this corrects.
+ *
+ * `--accent` on dark is lifted past the brand's own #2A7A61. That token
+ * lifts the silhouette so a SHAPE holds on dark; the accent also carries
+ * text (an active rail entry, a segmented label), and #2A7A61 reads 3.3:1
+ * on the card — under AA for text, where the blue it replaces was 4.7:1.
+ * Same hue (160°), same saturation, lifted until the text passes: 5.0:1.
+ * No theme knob: the dashboard owns its rendering, and light/dark already
+ * follows the system. */
 :root {
   --bg: #f6f6f7; --card: #ffffff; --border: #e4e4e7; --ink: #18181b;
-  --secondary: #52525b; --muted: #a1a1aa; --accent: #2a78d6; --accent-tint: rgba(42,120,214,.10);
-  --good: #0ca30c; --warning: #fab219; --serious: #ec835a; --critical: #d03b3b;
+  --secondary: #52525b; --muted: #a1a1aa; --accent: #1f5e4a; --accent-tint: rgba(31,94,74,.10);
+  --good: #0ca30c; --warning: #e8a33d; --serious: #ec835a; --critical: #d03b3b;
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #101012; --card: #1b1b1f; --border: #2a2a30; --ink: #f4f4f5;
-    --secondary: #b0b0b8; --muted: #6b6b74; --accent: #3987e5; --accent-tint: rgba(57,135,229,.14);
+    --secondary: #b0b0b8; --muted: #6b6b74; --accent: #389a7a; --accent-tint: rgba(56,154,122,.14);
   }
 }
 * { box-sizing: border-box; }
@@ -330,9 +343,14 @@ input[type=text], input[type=time] { border: 1px solid var(--border); background
 .event-row .ts { color: var(--muted); margin-right: 6px; cursor: help; }
 .badge-arbitrated { font-size: 9px; letter-spacing: .05em; color: var(--muted); border: 1px solid var(--border);
   border-radius: 8px; padding: 2px 6px; margin-left: 6px; }
-.badge-motion { font-size: 9px; letter-spacing: .05em; color: var(--accent, #e67); border: 1px solid currentColor;
+/* Amber, not the accent: the set point's colour is the brand's alert
+   (docs/brand/README.md), and motion is the one thing on a camera card
+   that is not calm. */
+.badge-motion { font-size: 9px; letter-spacing: .05em; color: var(--warning); border: 1px solid currentColor;
   border-radius: 8px; padding: 2px 6px; margin-left: 6px; }
-.camera-poster { width: 100%; border-radius: 8px; display: block; background: #000; min-height: 80px; }
+.camera-tap { display: flex; align-items: center; justify-content: center; gap: 6px;
+  width: 100%; min-height: 72px; border-radius: 8px; border: 1px dashed var(--border);
+  background: var(--bg); color: var(--secondary); font-size: 12px; }
 video-rtc { display: block; width: 100%; min-height: 180px; background: #000; border-radius: 8px; overflow: hidden; }
 video-rtc video { width: 100%; display: block; }
 .aspect-row { font-size: 12px; color: var(--secondary); padding: 6px 4px; }
@@ -416,7 +434,13 @@ video-rtc video { width: 100%; display: block; }
     <div class="overlay-title" id="overlay-title"></div>
     <button class="overlay-close" id="overlay-close" data-action="overlay-close" aria-label="Close">&times;</button>
   </div>
-  <div class="overlay-body" id="overlay-body"></div>
+  <div class="overlay-body" id="overlay-body">
+    <div id="overlay-head"></div>
+    <!-- Never replaced: a live player sits here, between the two
+         rendered halves, so a re-render cannot tear it out. -->
+    <div id="overlay-mount"></div>
+    <div id="overlay-rest"></div>
+  </div>
 </div>
 
 <div id="chart-tooltip">
@@ -1313,16 +1337,20 @@ function widgetGeneric(entity) {
 }
 
 function widgetForCamera(entity) {
-  // The room-card poster (the /api/camera snapshot proxy); the live view
-  // lives in the entity detail overlay, opened on tap — never N always-on
-  // streams (docs/design.md, Cameras). The poster refreshes at most once
-  // a minute via the cache-busting bucket.
+  // No poster: a still frame means transcoding H.264 to JPEG, which is a
+  // transcoder in the image for a thumbnail (docs/design.md, Cameras —
+  // the plane split is a pure remux). The failing <img> rendered as a
+  // black rectangle indistinguishable from a dark room, which is worse
+  // than saying plainly the picture is a tap away. Motion still reads
+  // here, from the event plane, which is the part that matters at a
+  // glance. The live view opens in the detail overlay — never N always-on
+  // streams.
   var motion = stateValue(entity.room, entity.name, 'motion');
   var badge = motion === true ? '<span class="badge-motion">MOTION</span>' : '';
   return '<div class="entity-row row-clickable" data-action="entity-detail" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '" style="flex-direction:column;align-items:stretch;gap:6px;">' +
     '<span style="display:flex;justify-content:space-between;align-items:center;">' +
     '<span class="entity-name" title="' + esc(entity.label) + '">' + esc(entity.label) + '</span>' + badge + '</span>' +
-    '<img class="camera-poster" loading="lazy" alt="" src="/api/camera/' + encodeURIComponent(entity.name) + '/snapshot?t=' + Math.floor(Date.now() / 60000) + '">' +
+    '<span class="camera-tap">&#9654; tap to view</span>' +
     '</div>';
 }
 
@@ -2163,6 +2191,7 @@ function showOverlay() {
 function hideOverlayUI() {
   overlay.open = false;
   overlay.type = null;
+  mountCameraLive(null);  // hiding the panel only drops a class; the stream would outlive it
   byId('overlay-backdrop').classList.remove('show');
   byId('overlay-panel').classList.remove('show');
 }
@@ -2236,24 +2265,31 @@ function renderOverlayContent() {
   else if (overlay.type === 'entity') r = renderEntityDetailBody();
   else if (overlay.type === 'unit') r = renderUnitDetailBody();
   else r = { title: '', body: '' };
-  // A live camera stream must survive re-renders (every state delta
-  // re-runs this): the mounted player is carried across the innerHTML
-  // swap instead of being torn down and reconnected.
-  var live = byId('overlay-body').querySelector('video-rtc');
   byId('overlay-title').textContent = r.title;
-  byId('overlay-body').innerHTML = r.body;
-  var holder = byId('overlay-body').querySelector('[data-camera-live]');
-  if (holder) {
-    var name = holder.getAttribute('data-camera-live');
-    if (!live || live.getAttribute('data-entity') !== name) {
-      live = document.createElement('video-rtc');
-      live.setAttribute('data-entity', name);
-      live.mode = 'mse';
-      live.src = '/api/camera/' + encodeURIComponent(name) + '/live';
-    }
-    holder.appendChild(live);
-  }
+  // Every state delta re-runs this, so the swap happens either side of
+  // the mount rather than over it. Carrying the player across an
+  // innerHTML swap is not enough: detaching a <video-rtc> and putting it
+  // back re-runs its connectedCallback, which seeks to the live edge and
+  // calls play() — a stutter and a flash of native controls per delta.
+  byId('overlay-head').innerHTML = r.body;
+  byId('overlay-rest').innerHTML = r.rest || '';
+  mountCameraLive(r.camera);
   wireChartInteractions(byId('overlay-body'));
+}
+
+// The live player for `name`, or none. Mounting is idempotent: the same
+// camera leaves the running element untouched, which is the whole point.
+function mountCameraLive(name) {
+  var mount = byId('overlay-mount');
+  var live = mount.firstElementChild;
+  if (live && live.getAttribute('data-entity') === name) return;
+  mount.innerHTML = '';  // a different camera, or none: drop the stream
+  if (!name) return;
+  live = document.createElement('video-rtc');
+  live.setAttribute('data-entity', name);
+  live.mode = 'mse';
+  live.src = '/api/camera/' + encodeURIComponent(name) + '/live';
+  mount.appendChild(live);
 }
 
 function statItem(label, value, aspect) {
@@ -2478,11 +2514,12 @@ function renderEntityDetailBody() {
 
   // A camera's detail is the live view (mounted imperatively in
   // renderOverlayContent — a custom element can't ride innerHTML), not a
-  // Controls row: cameras take no commands.
-  var middle = '';
+  // Controls row: cameras take no commands. Its sections move to `rest`,
+  // below the mount, so the player keeps its place above them.
+  var middle = '', rest = sections.join(''), camera = null;
   if (entity.capability === 'camera') {
-    middle = '<div class="card-label" style="margin-top:20px;">Live</div>' +
-      '<div data-camera-live="' + esc(entity.name) + '"></div>';
+    camera = entity.name;
+    middle = '<div class="card-label" style="margin-top:20px;">Live</div>';
   } else if (entity.capability === 'sensor') {
     // A described sensor's readings are its sections, each tapping through
     // to its history; an undescribed one keeps the sparkline rows here.
@@ -2494,10 +2531,12 @@ function renderEntityDetailBody() {
     middle = '<div class="card-label" style="margin-top:20px;">Controls</div>' +
       (entity.capability === 'climate' ? widgetForClimate(entity, true) : widgetForEntity(entity));
   }
-  var body = '<div class="muted" style="margin-top:2px;">' + esc(meta) + '</div>' +
-    '<div class="muted" style="margin-top:6px;">' + ownerLine + '</div>' +
-    middle + sections.join('');
-  return { title: entity.label, body: body };
+  var head = '<div class="muted" style="margin-top:2px;">' + esc(meta) + '</div>' +
+    '<div class="muted" style="margin-top:6px;">' + ownerLine + '</div>' + middle;
+  // Without a camera everything is one half and the mount stays empty.
+  return camera
+    ? { title: entity.label, body: head, rest: rest, camera: camera }
+    : { title: entity.label, body: head + rest };
 }
 
 function renderUnitDetailBody() {

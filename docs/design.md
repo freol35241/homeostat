@@ -1940,9 +1940,20 @@ homeostat process, the small core is gone.
     that structurally cannot ride the proxy, to buy sub-second
     latency where MSE's ~0.5–1.5s is fine for glancing at a camera.
     Revisit only if two-way talk ever matters.
-  - `/api/camera/{entity}/snapshot` — proxies go2rtc's `frame.jpeg`;
-    the room-card poster. Live streams start only on tap, in the
-    entity detail overlay — never N always-on streams.
+  - **No snapshot proxy, and no room-card poster** (amended 2026-09-20,
+    from a live deployment). The original design proxied go2rtc's
+    `frame.jpeg` for a poster on each camera's room card. go2rtc can
+    only produce a JPEG from an H.264 source by transcoding, which
+    shells out to `ffmpeg` — a binary the image deliberately does not
+    carry, because restreaming is a pure remux. So the proxy 502'd on
+    every call and the `<img>` rendered as a black rectangle,
+    indistinguishable from a dark room. Shipping a transcoder for a
+    thumbnail was rejected: it is ~100 MB and a second media path, for
+    a picture that is one tap away. The card carries the entity's name
+    and its motion badge — event-plane data, which is the part worth
+    reading at a glance — over a "tap to view" affordance. Live streams
+    still start only on tap, in the entity detail overlay — never N
+    always-on streams.
   - Player: go2rtc's own `video-stream.js` web component, vendored
     into `/assets/` (the Leaflet precedent), pointed at the proxy URL.
   Video bytes do transit the dashboard unit — as an opaque socket

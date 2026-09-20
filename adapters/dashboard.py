@@ -46,15 +46,16 @@ a small API generated entirely from the house's text:
   GET  /api/logs     unit's captured stdout/stderr tail, for the unit detail
                      overlay (?unit=..&lines=N), proxying the supervisor's
                      home/meta/{unit}/log queryable
-  GET  /api/camera/{entity}/snapshot   go2rtc frame.jpeg proxy — the room-
-                     card poster for camera entities
   GET  /api/camera/{entity}/live       WebSocket relayed byte-for-byte to
                      go2rtc's api/ws (MSE) — browsers never speak go2rtc
                      (docs/design.md, Cameras); HOMEOSTAT_GO2RTC overrides
-                     the localhost default for both. Both address the
-                     stream by the camera's entity id, which is how the
-                     go2rtc shim names it — resolved server-side, since
-                     ids are not part of the browser-facing model
+                     the localhost default. It addresses the stream by the
+                     camera's entity id, which is how the go2rtc shim
+                     names it — resolved server-side, since ids are not
+                     part of the browser-facing model. There is no
+                     snapshot proxy: a still frame needs a transcode
+                     (go2rtc's frame.jpeg shells out to ffmpeg for an
+                     H.264 source) and the media plane is a pure remux
   GET  /assets/*     vendored libraries (Leaflet, protomaps-leaflet, the
                      go2rtc player), allowlisted by filename
   GET  /tiles.pmtiles  self-hosted PMTiles region extract for the map
@@ -617,7 +618,7 @@ class Model:
         self.units = {u["name"]: u for u in self.model["units"]}
         # go2rtc names each stream by entity id (adapters/go2rtc.py renders
         # its config from the same HOMEOSTAT_CAMERAS keys the onvif adapter
-        # addresses cameras by), so the media proxies must ask for the id —
+        # addresses cameras by), so the media proxy must ask for the id —
         # and it is not in the browser-facing model, which carries only what
         # the page renders. Resolved here, server-side, where it stays.
         self.stream_names = {
@@ -840,7 +841,7 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
 
     def camera_stream(request: web.Request) -> str | None:
         """The go2rtc stream name for a bound camera entity, or None for an
-        unknown or non-camera entity (the proxies' 404)."""
+        unknown or non-camera entity (the proxy's 404)."""
         spec = model.entities.get(request.match_info["entity"])
         if spec is None or spec["capability"] != "camera":
             return None
@@ -848,23 +849,6 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
 
     def go2rtc_base() -> str:
         return os.environ.get(ENV_GO2RTC, DEFAULT_GO2RTC).rstrip("/")
-
-    async def api_camera_snapshot(request: web.Request) -> web.Response:
-        stream = camera_stream(request)
-        if stream is None:
-            return json_error(f"unknown camera {request.match_info['entity']}", status=404)
-        try:
-            async with client["http"].get(
-                f"{go2rtc_base()}/api/frame.jpeg",
-                params={"src": stream},
-                timeout=aiohttp.ClientTimeout(total=10),
-            ) as upstream:
-                if upstream.status != 200:
-                    return json_error("snapshot unavailable", status=502)
-                body = await upstream.read()
-        except (aiohttp.ClientError, asyncio.TimeoutError):
-            return json_error("snapshot unavailable", status=502)
-        return web.Response(body=body, content_type="image/jpeg")
 
     async def api_camera_live(request: web.Request) -> web.WebSocketResponse:
         stream = camera_stream(request)
@@ -927,7 +911,6 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
     app.router.add_post("/api/param", api_param)
     app.router.add_get("/api/history", api_history)
     app.router.add_get("/api/logs", api_logs)
-    app.router.add_get("/api/camera/{entity}/snapshot", api_camera_snapshot)
     app.router.add_get("/api/camera/{entity}/live", api_camera_live)
     app.router.add_get("/assets/{name}", api_asset)
     app.router.add_get("/tiles.pmtiles", api_tiles)
