@@ -176,7 +176,17 @@ h1.view-title { font-size: 20px; margin: 0 0 16px; }
 .tile .caption { font-size: 12px; color: var(--muted); }
 
 /* charts (sparklines + detail chart) */
-.chart-wrap { position: relative; width: 100%; }
+/* No chart is worth selecting as text, and a press on one that becomes a
+   selection after half a second is what made a phone unable to read a
+   value off a plot at all. */
+.chart-wrap { position: relative; width: 100%;
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+/* Set by wireChartInteractions on the charts it lets a finger scrub: a
+   drag across one is a scrub, not a scroll, and `pan-y` keeps the page
+   scrolling vertically while horizontal movement stays ours. The charts
+   inside a card that taps through keep plain `auto`, so pinch-zoom over
+   them is untouched. */
+.chart-wrap.scrubbable { touch-action: pan-y; }
 .chart-wrap svg { display: block; width: 100%; height: 100%; }
 .chart-tile { height: 36px; }
 .chart-row { height: 28px; }
@@ -1032,10 +1042,26 @@ function formatChartValue(aspect, v) {
   return logic.formatAspect(aspect || '', null, v);
 }
 
-function formatChartTime(ts) {
+// A reading's time, at the precision the window justifies: on an hour of
+// history the recorder's buckets are seconds wide, so minutes alone hide
+// the thing the reader opened the chart to see. `spanMs` is the charted
+// window; without one the old day-and-minute form stands.
+function formatChartTime(ts, spanMs) {
   var d = new Date(ts);
   if (isNaN(d.getTime())) return '';
-  return d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  var fmt = { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' };
+  if (spanMs && spanMs <= 3 * 3600e3) fmt.second = '2-digit';
+  return d.toLocaleString([], fmt);
+}
+
+// The same instant with the date dropped — the far end of a run, which
+// the near end has already dated.
+function formatChartClock(ts, spanMs) {
+  var d = new Date(ts);
+  if (isNaN(d.getTime())) return '';
+  var fmt = { hour: '2-digit', minute: '2-digit' };
+  if (spanMs && spanMs <= 3 * 3600e3) fmt.second = '2-digit';
+  return d.toLocaleTimeString([], fmt);
 }
 
 // Builds a chart's markup (line + optional area/gridlines/y-labels) and
@@ -1052,7 +1078,7 @@ function buildChart(chartId, points, opts) {
     chartRegistry[chartId] = null;
     inner = '<div class="chart-empty">no history yet</div>';
   } else {
-    chartRegistry[chartId] = { coords: geo.coords, width: CHART_VBW, height: height, aspect: opts.aspect };
+    chartRegistry[chartId] = { coords: geo.coords, width: CHART_VBW, height: height, aspect: opts.aspect, window: opts.window };
     var d = chartPathData(geo.coords);
     var last = geo.coords[geo.coords.length - 1];
     var svg = '<svg viewBox="0 0 ' + CHART_VBW + ' ' + height + '" preserveAspectRatio="none">';
@@ -1123,11 +1149,32 @@ function wireChartInteractions(root) {
     var id = wrap.getAttribute('data-chart-id');
     var reg = chartRegistry[id];
     if (!reg) return;
-    if (reg.runs) {
-      wrap.addEventListener('pointermove', function (ev) { onTimelinePointerMove(wrap, reg, ev); });
-    } else if (reg.coords && reg.coords.length >= 2) {
-      wrap.addEventListener('pointermove', function (ev) { onChartPointerMove(wrap, reg, ev); });
-    } else return;
+    var onMove;
+    if (reg.runs) onMove = onTimelinePointerMove;
+    else if (reg.coords && reg.coords.length >= 2) onMove = onChartPointerMove;
+    else return;
+
+    // A chart inside a card that taps through to something else keeps
+    // hover-only reading: claiming the press there would fight the tap
+    // the card exists for. The charts a reader actually scrubs — the
+    // detail overlay's — sit in no such card.
+    if (!wrap.closest('[data-action]')) {
+      wrap.classList.add('scrubbable');
+      wrap.addEventListener('pointerdown', function (ev) {
+        // A touch has no position until it moves, so the press itself has
+        // to read: a tap showed nothing before this, and only a drag
+        // worked. Capture keeps a finger that wanders off a 64px strip
+        // scrubbing instead of dropping the gesture mid-read.
+        if (wrap.setPointerCapture) wrap.setPointerCapture(ev.pointerId);
+        onMove(wrap, reg, ev);
+      });
+    }
+    wrap.addEventListener('pointermove', function (ev) { onMove(wrap, reg, ev); });
+    // pointerleave never fires for a lifted finger, and a gesture the
+    // scroller claims arrives as pointercancel: either one would leave
+    // the crosshair and the tooltip stranded on screen.
+    wrap.addEventListener('pointerup', function () { onChartPointerLeave(wrap); });
+    wrap.addEventListener('pointercancel', function () { onChartPointerLeave(wrap); });
     wrap.addEventListener('pointerleave', function () { onChartPointerLeave(wrap); });
   });
 }
@@ -1150,7 +1197,8 @@ function onChartPointerMove(wrap, reg, ev) {
   dot.style.display = '';
   var px = rect.left + (c.x / reg.width) * rect.width;
   var py = rect.top + (c.y / reg.height) * rect.height;
-  showChartTooltip(px, py, formatChartValue(reg.aspect, c.value), formatChartTime(c.ts));
+  var span = reg.window ? reg.window.to - reg.window.from : 0;
+  showChartTooltip(px, py, formatChartValue(reg.aspect, c.value), formatChartTime(c.ts, span));
 }
 
 function onTimelinePointerMove(wrap, reg, ev) {
@@ -1166,8 +1214,16 @@ function onTimelinePointerMove(wrap, reg, ev) {
   line.setAttribute('x1', x); line.setAttribute('x2', x);
   line.style.display = '';
   if (!run) { hideChartTooltip(); return; }
+  // A run's two edges and how long it held: "since 14:32" alone could not
+  // say whether a state lasted a minute or all afternoon, which is most
+  // of what a timeline is read for. The last run has no end yet.
+  var span = reg.window.to - reg.window.from;
+  var ongoing = run.end >= reg.window.to;
+  var when = ongoing
+    ? 'since ' + formatChartTime(run.start, span)
+    : formatChartTime(run.start, span) + ' → ' + formatChartClock(run.end, span);
   showChartTooltip(ev.clientX, rect.top, logic.formatAspect(reg.aspect || '', reg.field, run.value),
-    'since ' + formatChartTime(run.start));
+    when + ' · ' + fmtDuration(run.end - run.start));
 }
 
 function onChartPointerLeave(wrap) {
