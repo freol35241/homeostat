@@ -37,7 +37,12 @@ a small API generated entirely from the house's text:
                      Dashboard)
   GET  /api/history  recorder proxy for charts (?entity=..&aspect=..&hours=..
                      plus bucket=<s> for one point per bucket or changes=1
-                     for a state's runs, the recorder's chart shapes)
+                     for a state's runs, the recorder's chart shapes).
+                     class=state (default) is what the house did;
+                     class=cmd is what was asked of it — the recorder
+                     types both on the way in, and a command strip under
+                     a chart is the only way the page can show intent
+                     against outcome
   GET  /api/logs     unit's captured stdout/stderr tail, for the unit detail
                      overlay (?unit=..&lines=N), proxying the supervisor's
                      home/meta/{unit}/log queryable
@@ -763,6 +768,12 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         aspect = request.query.get("aspect", "")
         if not entity or not aspect:
             return json_error("entity and aspect are required")
+        # The two series classes the recorder keeps per (entity, aspect):
+        # what happened, and what was asked. Anything else is neither a
+        # key the recorder answers nor one a browser of ours requests.
+        series_class = request.query.get("class", "state")
+        if series_class not in ("state", "cmd"):
+            return json_error("class must be state or cmd")
         # Verbatim into a selector, a wildcard entity would fan the
         # per-series limit out over the whole store, and `/`, `#` or `$`
         # would raise inside the executor.
@@ -788,7 +799,7 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         if bucket and changes:
             return json_error("bucket and changes are exclusive")
         selector = (
-            f"{keys.history_key('state', entity, aspect)}"
+            f"{keys.history_key(series_class, entity, aspect)}"
             f"?from={start.isoformat(timespec='seconds')}"
             f";to={now.isoformat(timespec='seconds')};limit={limit}"
         )
