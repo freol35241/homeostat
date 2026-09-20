@@ -328,8 +328,9 @@ async fn a_silent_router_cannot_assert_absence() {
     // Several poll cycles past the 2s away delay: nothing may say away.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
     while let Ok(sample) = tokio::time::timeout_at(deadline, presence_sub.recv_async()).await {
-        let value: Value = serde_json::from_slice(&sample.expect("state stream open").payload().to_bytes())
-            .expect("state payload is JSON");
+        let value: Value =
+            serde_json::from_slice(&sample.expect("state stream open").payload().to_bytes())
+                .expect("state payload is JSON");
         assert_ne!(
             value,
             json!(false),
