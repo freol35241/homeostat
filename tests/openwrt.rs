@@ -97,17 +97,21 @@ impl Drop for FakeOpenwrt {
 }
 
 /// Writes a HOMEOSTAT_OPENWRT file (outside the repo, per the settlement)
-/// giving the fixture's "gw" router the fake endpoint's host and the
-/// read-only rpcd credentials.
-fn routers_file(port: u16) -> PathBuf {
-    let path = std::env::temp_dir().join(format!("homeostat-openwrt-{port}.toml"));
-    std::fs::write(
-        &path,
-        format!(
-            "[gw]\nhost = \"127.0.0.1:{port}\"\nusername = \"{USERNAME}\"\npassword = \"{PASSWORD}\"\n"
-        ),
-    )
-    .expect("write routers file");
+/// giving each named router a fake endpoint's host and the read-only rpcd
+/// credentials. The fixture binds entities on "gw"; any further router is
+/// configured but unbound, which is all a second AP needs to be polled.
+fn routers_file(routers: &[(&str, u16)]) -> PathBuf {
+    let tag: Vec<String> = routers.iter().map(|(_, port)| port.to_string()).collect();
+    let path = std::env::temp_dir().join(format!("homeostat-openwrt-{}.toml", tag.join("-")));
+    let body: String = routers
+        .iter()
+        .map(|(name, port)| {
+            format!(
+                "[{name}]\nhost = \"127.0.0.1:{port}\"\nusername = \"{USERNAME}\"\npassword = \"{PASSWORD}\"\n"
+            )
+        })
+        .collect();
+    std::fs::write(&path, body).expect("write routers file");
     path
 }
 
@@ -116,7 +120,14 @@ fn routers_file(port: u16) -> PathBuf {
 /// uv env for aiohttp too).
 async fn setup() -> (FakeOpenwrt, PathBuf, Supervisor, zenoh::Session) {
     let router = FakeOpenwrt::spawn();
-    let routers_path = routers_file(router.port);
+    let routers_path = routers_file(&[("gw", router.port)]);
+    let (sup, observer) = start(&routers_path).await;
+    (router, routers_path, sup, observer)
+}
+
+/// The supervisor on the fixture against a written routers file, up to the
+/// adapter's liveliness token.
+async fn start(routers_path: &std::path::Path) -> (Supervisor, zenoh::Session) {
     let sup = Supervisor::spawn_with_env(
         FIXTURE,
         &[(ROUTERS_ENV, routers_path.to_str().expect("utf-8 path"))],
@@ -133,7 +144,7 @@ async fn setup() -> (FakeOpenwrt, PathBuf, Supervisor, zenoh::Session) {
         .expect("adapter liveliness token within 90s")
         .expect("liveliness stream open");
     assert_eq!(token.kind(), SampleKind::Put);
-    (router, routers_path, sup, observer)
+    (sup, observer)
 }
 
 /// (a) A phone associating to an AP becomes `presence = true` on the bus;
@@ -281,6 +292,54 @@ async fn a_chunked_ubus_reply_is_read_whole() {
 
     router.control("/control/chunked");
     router.control(&format!("/control/station?mac={PHONE_MAC}&present=false"));
+    expect_state(&presence_sub, json!(false)).await;
+
+    sup.shutdown();
+}
+
+/// (f) Partial blindness is not absence. Two routers configured, the phone
+/// associated only to the AP: when the AP goes silent the phone must hold
+/// stale, because the union of the routers that *did* answer says nothing
+/// about a device that lives on the one that did not — VP52 published
+/// `presence = false` for 37 hours with the family at home (#144). The
+/// blind spot is announced, and absence becomes assertable again once
+/// every router answers.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_silent_router_cannot_assert_absence() {
+    let gw = FakeOpenwrt::spawn();
+    let ap = FakeOpenwrt::spawn();
+    let routers_path = routers_file(&[("gw", gw.port), ("ap", ap.port)]);
+    let (mut sup, observer) = start(&routers_path).await;
+    let presence_sub = observer
+        .declare_subscriber(PRESENCE_KEY)
+        .await
+        .expect("presence subscriber");
+    let event_sub = observer
+        .declare_subscriber(EVENT_KEY)
+        .await
+        .expect("event subscriber");
+
+    ap.control(&format!("/control/station?mac={PHONE_MAC}&present=true"));
+    expect_state(&presence_sub, json!(true)).await;
+
+    ap.control("/control/break");
+    expect_event_kind(&event_sub, "presence-partial").await;
+
+    // Several poll cycles past the 2s away delay: nothing may say away.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+    while let Ok(sample) = tokio::time::timeout_at(deadline, presence_sub.recv_async()).await {
+        let value: Value = serde_json::from_slice(&sample.expect("state stream open").payload().to_bytes())
+            .expect("state payload is JSON");
+        assert_ne!(
+            value,
+            json!(false),
+            "presence asserted away while the AP that sees the phone was silent"
+        );
+    }
+
+    // The AP answering again, the phone really gone: away, as before.
+    ap.control("/control/restore");
+    ap.control(&format!("/control/station?mac={PHONE_MAC}&present=false"));
     expect_state(&presence_sub, json!(false)).await;
 
     sup.shutdown();
