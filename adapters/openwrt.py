@@ -30,7 +30,8 @@ interface up AND a peer handshake younger than 180s, so monitored tunnels
 must run persistent-keepalive); a `presence` entity's id is the device MAC,
 lowercase (aspect `presence` — sighted on any BSS of any router, absent
 only after away_delay_s of continuous non-sighting, which also absorbs AP
-reboots).
+reboots, and only while every configured router polled: a silent router is
+a blind spot, not an empty one).
 
 Aspects publish on transition only, plus each entity's current value after
 its first successful poll; a poll is a read, not an event. An unreachable
@@ -91,10 +92,10 @@ async def ubus_rpc(http: aiohttp.ClientSession, url: str, method: str, params: l
             # ⚠️ READ UNTIL EOF, NOT ONCE. `content.read(n)` returns
             # whatever is buffered, up to n -- for a chunked reply that is
             # the FIRST CHUNK, so a single read truncates the document and
-            # every decode fails. rpcd itself answers with Content-Length,
-            # which is why this has not bitten here; a proxy in front of it
-            # need not, and the onvif adapter carried the identical read
-            # against firmware that does stream. The cap is still enforced,
+            # every decode fails. rpcd here does answer chunked (OpenWrt
+            # 23.x, bodies of 1.4-5.7 kB), and a single read took VP52's
+            # AP off the air for two days (#144) -- this was never the
+            # insurance it was first described as. The cap is still enforced,
             # now after each chunk, which is also where it belongs -- it
             # must not depend on how the body happens to be framed.
             raw = bytearray()
@@ -259,6 +260,7 @@ class Adapter:
         self.last_discovery: str | None = None
         self.reachable: dict[str, bool] = {}
         self.noted: set = set()  # degraded conditions already announced
+        self.blind: frozenset = frozenset()  # routers silent as of last cycle
         self.last_seen: dict[str, float] = {}  # mac -> monotonic sighting time
 
     def note(self, key: tuple, kind: str, **fields) -> None:
@@ -355,12 +357,26 @@ class Adapter:
                 up = up and wireguard_fresh(status.get(iface_name, {}), now_epoch)
             self.publish(keys.state_key(entity.room, entity.name, "up"), up)
 
+        # Partial blindness. A sighting is evidence whoever else failed,
+        # but absence is the union of all routers seeing nothing -- with
+        # one silent, a device that lives on it would read away. Hold
+        # those stale, exactly as the total-blindness branch does, and
+        # announce the blind spot per change of which routers are silent
+        # (router-unreachable is latched once and says nothing about how
+        # long the outage runs).
+        blind = frozenset(self.routers) - polled_ok
+        if self.trackers and blind != self.blind and blind:
+            self.session.health_event("presence-partial", routers=sorted(blind))
+        self.blind = blind
+
         away_delay = self.params.away_delay_s
         for entity in self.trackers:
             seen_at = self.last_seen.get(entity.id)
             present = entity.id in sightings or (
                 seen_at is not None and now_mono - seen_at < away_delay
             )
+            if not present and blind:
+                continue
             self.publish(keys.state_key(entity.room, entity.name, "presence"), present)
 
         self.publish_discovery(interfaces, sightings)

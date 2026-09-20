@@ -2079,7 +2079,15 @@ direction.
   `away_delay_s` is what keeps a rebooting AP from marking the family
   away. Recovery publishes whatever actually changed during the
   outage; a long outage marking everyone absent is accepted v1
-  behavior, documented here.
+  behavior, documented here. Absence is only assertable while *every*
+  configured router polled: with one silent, a sighting still publishes
+  `true` (evidence is evidence) but an unsighted device holds stale
+  rather than reading away — a failed AP beside an answering router is
+  the ordinary shape of a partial failure, and the union of what
+  answered would turn "I cannot see" into "nobody is home" (#144). Each
+  change of which routers are silent emits one `presence-partial`
+  health event naming them, so a long blind spot stays visible after
+  `router-unreachable` has latched.
 - **Read-only, deliberately**: no cmd surface. OpenWrt can be
   commanded (reboot, guest WiFi, tunnel up/down); the pytapo rule
   applies — the command adapter surface is built the day a command is
