@@ -4,7 +4,7 @@ requires-python = ">=3.11"
 
 [manifest]
 requirements = [
-    { name = "homeostat", specifier = "==0.14.0-rc1" },
+    { name = "homeostat", specifier = "==0.14.0rc1" },
     { name = "paho-mqtt", specifier = ">=2,<3" },
 ]
 
@@ -32,7 +32,7 @@ dependencies = [
     { name = "eclipse-zenoh" },
 ]
 wheels = [
-    { path = "/opt/homeostat-wheels/homeostat-0.14.0-rc1-py3-none-any.whl" },
+    { path = "/opt/homeostat-wheels/homeostat-0.14.0rc1-py3-none-any.whl" },
 ]
 
 [[package]]

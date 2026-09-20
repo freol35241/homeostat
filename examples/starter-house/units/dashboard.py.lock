@@ -5,7 +5,7 @@ requires-python = ">=3.11"
 [manifest]
 requirements = [
     { name = "aiohttp", specifier = ">=3.12.14,<4" },
-    { name = "homeostat", specifier = "==0.14.0-rc1" },
+    { name = "homeostat", specifier = "==0.14.0rc1" },
 ]
 
 [[package]]
@@ -286,7 +286,7 @@ dependencies = [
     { name = "eclipse-zenoh" },
 ]
 wheels = [
-    { path = "/opt/homeostat-wheels/homeostat-0.14.0-rc1-py3-none-any.whl" },
+    { path = "/opt/homeostat-wheels/homeostat-0.14.0rc1-py3-none-any.whl" },
 ]
 
 [[package]]
