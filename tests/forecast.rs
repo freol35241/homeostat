@@ -3,8 +3,9 @@
 //! 1. A unit may publish `home/forecast/{room}/{entity}/{aspect}` for an
 //!    entity it binds — the plan accepts the class and the key shape.
 //! 2. The payload is the SDK's: `schema`, `issued`, and irregular `points`
-//!    ascending in time. Irregular is the point — a regular grid could not
-//!    carry the hourly-then-three-hourly shape real sources publish.
+//!    ascending in time, each declaring the window it covers. Irregular is
+//!    the point — a regular grid could not carry the hourly-then-coarser
+//!    shape real sources publish, nor say how long a value holds.
 //! 3. The core MIRRORS the class, which is what makes a forecast usable at
 //!    all: a day-ahead curve is published once a day, so a consumer that
 //!    starts after the publish must still get it. This is the property the
@@ -92,6 +93,19 @@ async fn a_forecast_is_published_and_mirrored_for_a_late_joiner() {
     );
 
     assert_eq!(points[0]["v"], 1.20, "{payload}");
+
+    // Each point says what it covers, so a reader never has to infer a
+    // hold length from the gap to the next point — which the last point,
+    // having no next, could not do at all.
+    let extents: Vec<f64> = points
+        .iter()
+        .map(|p| p["d"].as_f64().expect("point extent"))
+        .collect();
+    assert_eq!(
+        extents,
+        vec![3600.0, 3600.0, 3600.0, 10800.0, 10800.0, 10800.0],
+        "every point declares its window: {payload}"
+    );
 
     sup.shutdown();
 }
