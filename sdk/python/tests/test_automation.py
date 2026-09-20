@@ -11,7 +11,7 @@ Run: uv run --no-project --with-editable sdk/python python -m unittest discover 
 import unittest
 from pathlib import Path
 
-from homeostat.automation import _expand, _house_has_recorder
+from homeostat.automation import Context, _expand, _house_has_recorder
 from homeostat.house import Entity
 
 FIXTURES = Path(__file__).resolve().parents[3] / "tests"
@@ -83,6 +83,75 @@ class ZoneTest(unittest.TestCase):
     def test_a_non_entity_class_never_expands(self):
         expr = "home/discovery/z2m"
         self.assertEqual(_expand(expr, ZONES, LATCHES), [expr])
+
+    def test_forecast_expands_like_state(self):
+        # A forecast is the same series extended forward, so it is
+        # addressed per entity and expands per entity. It did not, while
+        # the core did: the mirror of the core's rule had been left behind
+        # when the class was added, and a templated forecast publish that
+        # `plan` accepted was unaddressable at runtime.
+        self.assertEqual(
+            _expand("home/forecast/{room}/{entity}/price", ZONES, LATCHES),
+            [
+                "home/forecast/global/night_mode/price",
+                "home/forecast/hallway/motion_lighting/price",
+            ],
+        )
+
+    def test_a_zone_expands_in_a_forecast_room_slot_too(self):
+        self.assertEqual(
+            _expand("home/forecast/downstairs/*/price", ZONES, []),
+            ["home/forecast/livingroom/*/price", "home/forecast/hallway/*/price"],
+        )
+
+
+def bare_context(publishes, zones=None, entities=None):
+    """A Context with only what `_concrete_key` reads. The constructor
+    opens a bus session, and key resolution is pure, so it is exercised on
+    an uninitialised instance rather than behind a live core."""
+    ctx = Context.__new__(Context)
+    ctx._publishes = publishes
+    ctx._zones = zones if zones is not None else {}
+    ctx._entities = entities if entities is not None else []
+    return ctx
+
+
+class ConcreteKeyTest(unittest.TestCase):
+    """The manifest is the authority on what a unit publishes, so a
+    binding must resolve to one key — for a forecast as for state. It did
+    not: a forecast fell through to the branch that returns the expression
+    verbatim and refuses slots, so a templated publish `plan` had accepted
+    could not be addressed at all."""
+
+    def test_a_literal_forecast_binding_resolves_to_its_key(self):
+        ctx = bare_context({"f": {"key": "home/forecast/global/spot_price/price"}})
+        self.assertEqual(
+            ctx._concrete_key("f", room=None, entity=None, aspect=None),
+            "home/forecast/global/spot_price/price",
+        )
+
+    def test_a_templated_forecast_binding_takes_slots(self):
+        ctx = bare_context(
+            {"f": {"key": "home/forecast/{room}/{entity}/price"}},
+            entities=LATCHES,
+        )
+        self.assertEqual(
+            ctx._concrete_key("f", room="hallway", entity="motion_lighting", aspect=None),
+            "home/forecast/hallway/motion_lighting/price",
+        )
+
+    def test_a_key_outside_the_declared_expression_is_refused(self):
+        ctx = bare_context(
+            {"f": {"key": "home/forecast/{room}/{entity}/price"}},
+            entities=LATCHES,
+        )
+        with self.assertRaises(ValueError):
+            ctx._concrete_key("f", room="kitchen", entity="ghost", aspect=None)
+
+    def test_an_unfilled_slot_is_refused_rather_than_published_wild(self):
+        ctx = bare_context({"f": {"key": "home/forecast/{room}/{entity}/price"}})
+        with self.assertRaises(ValueError):
+            ctx._concrete_key("f", room=None, entity=None, aspect=None)
 
 
 class RecorderPresenceTest(unittest.TestCase):

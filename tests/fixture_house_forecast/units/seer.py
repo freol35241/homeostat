@@ -12,21 +12,16 @@ Forecasts).
 
 Deliberately not an adapter for any real source: which prices, and what to
 do about them, are house content by the boundary test (docs/design.md,
-Repo split). This exists so the bus class, the SDK codec and the core's
-mirror are exercised end to end by something shaped like the real thing —
-an irregular horizon, published once, with the current value alongside it
-on the state class.
+Repo split). This exists so the bus class, the SDK codec, the manifest
+binding and the core's mirror are exercised end to end by something shaped
+like the real thing — an irregular horizon whose points declare the window
+they hold for, published through this unit's own `[bus.publishes]` entries
+rather than around them.
 """
 
 import datetime
-import time
 
-import homeostat
-from homeostat import keys
-
-ROOM = "global"
-ENTITY = "spot_price"
-ASPECT = "price"
+from homeostat import automation
 
 # Hourly, then three-hourly: the irregular shape real sources publish, and
 # the one a regular grid could not have carried. Each point declares the
@@ -37,25 +32,24 @@ VALUES = [1.20, 1.45, 1.10, 0.85, 0.40, 0.95]
 
 
 def main() -> None:
-    session = homeostat.connect()
-    try:
-        issued = datetime.datetime.now(datetime.timezone.utc).replace(
-            minute=0, second=0, microsecond=0
-        )
-        session.put_json(keys.state_key(ROOM, ENTITY, ASPECT), VALUES[0])
-        session.put_forecast(
-            keys.forecast_key(ROOM, ENTITY, ASPECT),
-            issued,
-            [
-                (issued + datetime.timedelta(hours=start), v, width * 3600)
-                for (start, width), v in zip(WINDOWS_H, VALUES)
-            ],
-        )
-        session.ready()
-        while True:
-            time.sleep(1)
-    finally:
-        session.close()
+    ctx = automation.context()
+    issued = datetime.datetime.now(datetime.timezone.utc).replace(
+        minute=0, second=0, microsecond=0
+    )
+    # The present on the state class, the future on the forecast class:
+    # one entity, one series, both reached through the declared binding
+    # rather than by handing a key to the session.
+    ctx.publish("price_now", VALUES[0])
+    ctx.publish_forecast(
+        "price_forecast",
+        issued,
+        [
+            (issued + datetime.timedelta(hours=start), v, width * 3600)
+            for (start, width), v in zip(WINDOWS_H, VALUES)
+        ],
+    )
+    ctx.ready()
+    ctx.run()
 
 
 if __name__ == "__main__":
