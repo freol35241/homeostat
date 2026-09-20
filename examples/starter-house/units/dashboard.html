@@ -8,15 +8,28 @@
 <link rel="icon" href="/assets/homeostat-mark.svg">
 <link rel="stylesheet" href="/assets/leaflet.css">
 <style>
+/* The palette is the mark's (docs/brand/README.md): house green is the
+ * accent — interaction ink and data ink alike — and the set point's amber
+ * is the one warm colour. The page shipped in a sky blue the brand
+ * explicitly is not ("deliberately not the sky blue of the category's
+ * largest project"), which is what this corrects.
+ *
+ * `--accent` on dark is lifted past the brand's own #2A7A61. That token
+ * lifts the silhouette so a SHAPE holds on dark; the accent also carries
+ * text (an active rail entry, a segmented label), and #2A7A61 reads 3.3:1
+ * on the card — under AA for text, where the blue it replaces was 4.7:1.
+ * Same hue (160°), same saturation, lifted until the text passes: 5.0:1.
+ * No theme knob: the dashboard owns its rendering, and light/dark already
+ * follows the system. */
 :root {
   --bg: #f6f6f7; --card: #ffffff; --border: #e4e4e7; --ink: #18181b;
-  --secondary: #52525b; --muted: #a1a1aa; --accent: #2a78d6; --accent-tint: rgba(42,120,214,.10);
-  --good: #0ca30c; --warning: #fab219; --serious: #ec835a; --critical: #d03b3b;
+  --secondary: #52525b; --muted: #a1a1aa; --accent: #1f5e4a; --accent-tint: rgba(31,94,74,.10);
+  --good: #0ca30c; --warning: #e8a33d; --serious: #ec835a; --critical: #d03b3b;
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #101012; --card: #1b1b1f; --border: #2a2a30; --ink: #f4f4f5;
-    --secondary: #b0b0b8; --muted: #6b6b74; --accent: #3987e5; --accent-tint: rgba(57,135,229,.14);
+    --secondary: #b0b0b8; --muted: #6b6b74; --accent: #389a7a; --accent-tint: rgba(56,154,122,.14);
   }
 }
 * { box-sizing: border-box; }
@@ -163,12 +176,24 @@ h1.view-title { font-size: 20px; margin: 0 0 16px; }
 .tile .caption { font-size: 12px; color: var(--muted); }
 
 /* charts (sparklines + detail chart) */
-.chart-wrap { position: relative; width: 100%; }
+/* No chart is worth selecting as text, and a press on one that becomes a
+   selection after half a second is what made a phone unable to read a
+   value off a plot at all. */
+.chart-wrap { position: relative; width: 100%;
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+/* Set by wireChartInteractions on the charts it lets a finger scrub: a
+   drag across one is a scrub, not a scroll, and `pan-y` keeps the page
+   scrolling vertically while horizontal movement stays ours. The charts
+   inside a card that taps through keep plain `auto`, so pinch-zoom over
+   them is untouched. */
+.chart-wrap.scrubbable { touch-action: pan-y; }
 .chart-wrap svg { display: block; width: 100%; height: 100%; }
 .chart-tile { height: 36px; }
 .chart-row { height: 28px; }
 .chart-detail { height: 220px; margin: 12px 0 4px; }
 .chart-timeline { height: 64px; margin: 12px 0 4px; }
+.chart-commands { height: 28px; margin: 8px 0 2px; }
+.chart-note { font-size: 12px; color: var(--muted); }
 .chart-empty { height: 100%; min-height: 36px; display: flex; align-items: center; justify-content: center;
   color: var(--muted); font-size: 12px; }
 .chart-line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;
@@ -328,9 +353,14 @@ input[type=text], input[type=time] { border: 1px solid var(--border); background
 .event-row .ts { color: var(--muted); margin-right: 6px; cursor: help; }
 .badge-arbitrated { font-size: 9px; letter-spacing: .05em; color: var(--muted); border: 1px solid var(--border);
   border-radius: 8px; padding: 2px 6px; margin-left: 6px; }
-.badge-motion { font-size: 9px; letter-spacing: .05em; color: var(--accent, #e67); border: 1px solid currentColor;
+/* Amber, not the accent: the set point's colour is the brand's alert
+   (docs/brand/README.md), and motion is the one thing on a camera card
+   that is not calm. */
+.badge-motion { font-size: 9px; letter-spacing: .05em; color: var(--warning); border: 1px solid currentColor;
   border-radius: 8px; padding: 2px 6px; margin-left: 6px; }
-.camera-poster { width: 100%; border-radius: 8px; display: block; background: #000; min-height: 80px; }
+.camera-tap { display: flex; align-items: center; justify-content: center; gap: 6px;
+  width: 100%; min-height: 72px; border-radius: 8px; border: 1px dashed var(--border);
+  background: var(--bg); color: var(--secondary); font-size: 12px; }
 video-rtc { display: block; width: 100%; min-height: 180px; background: #000; border-radius: 8px; overflow: hidden; }
 video-rtc video { width: 100%; display: block; }
 .aspect-row { font-size: 12px; color: var(--secondary); padding: 6px 4px; }
@@ -347,6 +377,10 @@ video-rtc video { width: 100%; display: block; }
 /* described aspects (docs/design.md, Aspect descriptors): label · value, a control when declared */
 .aspect-row.described { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 40px; }
 .aspect-row .aspect-label { color: var(--ink); font-size: 13px; }
+/* A commanded aspect's label is its way into history: the row itself
+   cannot be the target, because the row is the control. */
+.aspect-label.linked { cursor: pointer; border-radius: 4px; padding: 2px 4px; margin: -2px -4px; }
+.aspect-label.linked:hover { background-color: var(--accent-tint); color: var(--accent); }
 .aspect-row .aspect-value { color: var(--secondary); font-variant-numeric: tabular-nums; }
 .aspect-row .aspect-value.stale { color: var(--muted); text-decoration: line-through dotted; }
 .aspect-row .stale-mark { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin-left: 6px; }
@@ -410,7 +444,13 @@ video-rtc video { width: 100%; display: block; }
     <div class="overlay-title" id="overlay-title"></div>
     <button class="overlay-close" id="overlay-close" data-action="overlay-close" aria-label="Close">&times;</button>
   </div>
-  <div class="overlay-body" id="overlay-body"></div>
+  <div class="overlay-body" id="overlay-body">
+    <div id="overlay-head"></div>
+    <!-- Never replaced: a live player sits here, between the two
+         rendered halves, so a re-render cannot tear it out. -->
+    <div id="overlay-mount"></div>
+    <div id="overlay-rest"></div>
+  </div>
 </div>
 
 <div id="chart-tooltip">
@@ -480,6 +520,7 @@ var overlay = {
   unit: null,           // for unit: unit name
   range: 24,             // hours, for history
   rangeData: {},          // hours -> {points, window, loaded, loading}
+  cmdData: {},             // hours -> the same, for the cmd series (what was asked)
   lastPoints: null,
   log: null,               // for unit: {lines, loaded, loading}
   expanded: {}              // for entity: group -> true when a collapsed section is opened
@@ -740,9 +781,12 @@ function toast(msg) {
 // for one bucket per drawn column, a timeline for the runs of the state.
 // The window travels with the points so the chart places them by time.
 
-function fetchHistory(entity, aspect, hours, shape) {
+// `cls` is the recorder's series class: 'state' (the default) is what the
+// house did, 'cmd' what was asked of it.
+function fetchHistory(entity, aspect, hours, shape, cls) {
   var win = { from: Date.now() - hours * 3600e3, to: Date.now() };
   var url = '/api/history?entity=' + encodeURIComponent(entity) + '&aspect=' + encodeURIComponent(aspect) + '&hours=' + hours +
+    (cls ? '&class=' + encodeURIComponent(cls) : '') +
     (shape === 'timeline' ? '&changes=1' : '&bucket=' + logic.bucketSeconds(hours, CHART_VBW));
   return fetch(url)
     .then(function (r) { return r.json(); })
@@ -790,6 +834,26 @@ function fetchHistoryRange(entityName, aspect, hours, shape) {
     overlay.rangeData[hours] = loaded;
     overlay.lastPoints = loaded.points;
     if (overlay.open && overlay.type === 'history') renderOverlayContent();
+  });
+  fetchCommandRange(entityName, aspect, hours);
+}
+
+/* What was asked of this aspect, beside what it did. The recorder types
+ * every cmd envelope into its own series (docs/design.md, History), and
+ * until now nothing could read it back — the audit existed and had no
+ * viewer. Always fetched rather than gated on whether the page thinks the
+ * aspect is commandable: recorded commands are the honest test, and the
+ * rules for who may command what live on the server. The strip renders
+ * only when the window actually holds commands. */
+function fetchCommandRange(entityName, aspect, hours) {
+  var cd = overlay.cmdData[hours];
+  if (cd && (cd.loaded || cd.loading)) return;
+  overlay.cmdData[hours] = { points: [], loaded: false, loading: true };
+  // Commands are edges, never a curve: their runs are the shape, whatever
+  // the aspect's own readings are drawn as.
+  fetchHistory(entityName, aspect, hours, 'timeline', 'cmd').then(function (loaded) {
+    overlay.cmdData[hours] = loaded;
+    if (overlay.open && overlay.type === 'history' && overlay.aspect === aspect) renderOverlayContent();
   });
 }
 
@@ -978,10 +1042,26 @@ function formatChartValue(aspect, v) {
   return logic.formatAspect(aspect || '', null, v);
 }
 
-function formatChartTime(ts) {
+// A reading's time, at the precision the window justifies: on an hour of
+// history the recorder's buckets are seconds wide, so minutes alone hide
+// the thing the reader opened the chart to see. `spanMs` is the charted
+// window; without one the old day-and-minute form stands.
+function formatChartTime(ts, spanMs) {
   var d = new Date(ts);
   if (isNaN(d.getTime())) return '';
-  return d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  var fmt = { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' };
+  if (spanMs && spanMs <= 3 * 3600e3) fmt.second = '2-digit';
+  return d.toLocaleString([], fmt);
+}
+
+// The same instant with the date dropped — the far end of a run, which
+// the near end has already dated.
+function formatChartClock(ts, spanMs) {
+  var d = new Date(ts);
+  if (isNaN(d.getTime())) return '';
+  var fmt = { hour: '2-digit', minute: '2-digit' };
+  if (spanMs && spanMs <= 3 * 3600e3) fmt.second = '2-digit';
+  return d.toLocaleTimeString([], fmt);
 }
 
 // Builds a chart's markup (line + optional area/gridlines/y-labels) and
@@ -998,7 +1078,7 @@ function buildChart(chartId, points, opts) {
     chartRegistry[chartId] = null;
     inner = '<div class="chart-empty">no history yet</div>';
   } else {
-    chartRegistry[chartId] = { coords: geo.coords, width: CHART_VBW, height: height, aspect: opts.aspect };
+    chartRegistry[chartId] = { coords: geo.coords, width: CHART_VBW, height: height, aspect: opts.aspect, window: opts.window };
     var d = chartPathData(geo.coords);
     var last = geo.coords[geo.coords.length - 1];
     var svg = '<svg viewBox="0 0 ' + CHART_VBW + ' ' + height + '" preserveAspectRatio="none">';
@@ -1069,11 +1149,32 @@ function wireChartInteractions(root) {
     var id = wrap.getAttribute('data-chart-id');
     var reg = chartRegistry[id];
     if (!reg) return;
-    if (reg.runs) {
-      wrap.addEventListener('pointermove', function (ev) { onTimelinePointerMove(wrap, reg, ev); });
-    } else if (reg.coords && reg.coords.length >= 2) {
-      wrap.addEventListener('pointermove', function (ev) { onChartPointerMove(wrap, reg, ev); });
-    } else return;
+    var onMove;
+    if (reg.runs) onMove = onTimelinePointerMove;
+    else if (reg.coords && reg.coords.length >= 2) onMove = onChartPointerMove;
+    else return;
+
+    // A chart inside a card that taps through to something else keeps
+    // hover-only reading: claiming the press there would fight the tap
+    // the card exists for. The charts a reader actually scrubs — the
+    // detail overlay's — sit in no such card.
+    if (!wrap.closest('[data-action]')) {
+      wrap.classList.add('scrubbable');
+      wrap.addEventListener('pointerdown', function (ev) {
+        // A touch has no position until it moves, so the press itself has
+        // to read: a tap showed nothing before this, and only a drag
+        // worked. Capture keeps a finger that wanders off a 64px strip
+        // scrubbing instead of dropping the gesture mid-read.
+        if (wrap.setPointerCapture) wrap.setPointerCapture(ev.pointerId);
+        onMove(wrap, reg, ev);
+      });
+    }
+    wrap.addEventListener('pointermove', function (ev) { onMove(wrap, reg, ev); });
+    // pointerleave never fires for a lifted finger, and a gesture the
+    // scroller claims arrives as pointercancel: either one would leave
+    // the crosshair and the tooltip stranded on screen.
+    wrap.addEventListener('pointerup', function () { onChartPointerLeave(wrap); });
+    wrap.addEventListener('pointercancel', function () { onChartPointerLeave(wrap); });
     wrap.addEventListener('pointerleave', function () { onChartPointerLeave(wrap); });
   });
 }
@@ -1096,7 +1197,8 @@ function onChartPointerMove(wrap, reg, ev) {
   dot.style.display = '';
   var px = rect.left + (c.x / reg.width) * rect.width;
   var py = rect.top + (c.y / reg.height) * rect.height;
-  showChartTooltip(px, py, formatChartValue(reg.aspect, c.value), formatChartTime(c.ts));
+  var span = reg.window ? reg.window.to - reg.window.from : 0;
+  showChartTooltip(px, py, formatChartValue(reg.aspect, c.value), formatChartTime(c.ts, span));
 }
 
 function onTimelinePointerMove(wrap, reg, ev) {
@@ -1112,8 +1214,16 @@ function onTimelinePointerMove(wrap, reg, ev) {
   line.setAttribute('x1', x); line.setAttribute('x2', x);
   line.style.display = '';
   if (!run) { hideChartTooltip(); return; }
+  // A run's two edges and how long it held: "since 14:32" alone could not
+  // say whether a state lasted a minute or all afternoon, which is most
+  // of what a timeline is read for. The last run has no end yet.
+  var span = reg.window.to - reg.window.from;
+  var ongoing = run.end >= reg.window.to;
+  var when = ongoing
+    ? 'since ' + formatChartTime(run.start, span)
+    : formatChartTime(run.start, span) + ' → ' + formatChartClock(run.end, span);
   showChartTooltip(ev.clientX, rect.top, logic.formatAspect(reg.aspect || '', reg.field, run.value),
-    'since ' + formatChartTime(run.start));
+    when + ' · ' + fmtDuration(run.end - run.start));
 }
 
 function onChartPointerLeave(wrap) {
@@ -1283,16 +1393,20 @@ function widgetGeneric(entity) {
 }
 
 function widgetForCamera(entity) {
-  // The room-card poster (the /api/camera snapshot proxy); the live view
-  // lives in the entity detail overlay, opened on tap — never N always-on
-  // streams (docs/design.md, Cameras). The poster refreshes at most once
-  // a minute via the cache-busting bucket.
+  // No poster: a still frame means transcoding H.264 to JPEG, which is a
+  // transcoder in the image for a thumbnail (docs/design.md, Cameras —
+  // the plane split is a pure remux). The failing <img> rendered as a
+  // black rectangle indistinguishable from a dark room, which is worse
+  // than saying plainly the picture is a tap away. Motion still reads
+  // here, from the event plane, which is the part that matters at a
+  // glance. The live view opens in the detail overlay — never N always-on
+  // streams.
   var motion = stateValue(entity.room, entity.name, 'motion');
   var badge = motion === true ? '<span class="badge-motion">MOTION</span>' : '';
   return '<div class="entity-row row-clickable" data-action="entity-detail" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '" style="flex-direction:column;align-items:stretch;gap:6px;">' +
     '<span style="display:flex;justify-content:space-between;align-items:center;">' +
     '<span class="entity-name" title="' + esc(entity.label) + '">' + esc(entity.label) + '</span>' + badge + '</span>' +
-    '<img class="camera-poster" loading="lazy" alt="" src="/api/camera/' + encodeURIComponent(entity.name) + '/snapshot?t=' + Math.floor(Date.now() / 60000) + '">' +
+    '<span class="camera-tap">&#9654; tap to view</span>' +
     '</div>';
 }
 
@@ -1515,18 +1629,24 @@ function widgetTiles(entity, aspect) {
 // One aspect's history over a window, as a card.
 function widgetChart(entity, aspect, hours) {
   var key = entity.name + '|' + aspect + '|' + hours;
+  var field = descriptorField(entity, aspect);
+  // The same rule as the detail overlay: a described enum or boolean is
+  // runs, so the card draws a timeline and asks the recorder for changes.
+  var shape = logic.historyShape(stateValue(entity.room, entity.name, aspect), field);
   var s = localState.charts[key];
   if (!s) {
     localState.charts[key] = { points: [], loaded: false, loading: true };
-    fetchHistory(entity.name, aspect, hours, 'chart').then(function (loaded) {
+    fetchHistory(entity.name, aspect, hours, shape).then(function (loaded) {
       localState.charts[key] = loaded;
       scheduleRender();
     });
     s = localState.charts[key];
   }
-  var field = descriptorField(entity, aspect);
   var value = stateValue(entity.room, entity.name, aspect);
-  var chart = s.loaded ? buildChart('chart-' + key, s.points, { height: 120, sizeClass: 'chart-card', aspect: aspect, area: true, gridlines: true, yLabels: true, window: s.window }) : '';
+  var chart = !s.loaded ? ''
+    : shape === 'timeline'
+      ? buildTimeline('chart-' + key, s.points, { height: 64, sizeClass: 'chart-timeline', aspect: aspect, field: field, window: s.window })
+      : buildChart('chart-' + key, s.points, { height: 120, sizeClass: 'chart-card', aspect: aspect, area: true, gridlines: true, yLabels: true, window: s.window });
   return '<div class="card tile clickable span-all" data-action="history-detail" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '" data-aspect="' + esc(aspect) + '">' +
     '<div class="card-label">' + esc(entity.label + ' · ' + ((field && field.label) || aspect)).toUpperCase() + ' <span class="faint">' + esc(hours >= 48 ? Math.round(hours / 24) + 'd' : hours + 'h') + '</span></div>' +
     '<div class="big">' + esc(logic.formatAspect(aspect, field, value)) + '</div>' + chart + '</div>';
@@ -2127,6 +2247,7 @@ function showOverlay() {
 function hideOverlayUI() {
   overlay.open = false;
   overlay.type = null;
+  mountCameraLive(null);  // hiding the panel only drops a class; the stream would outlive it
   byId('overlay-backdrop').classList.remove('show');
   byId('overlay-panel').classList.remove('show');
 }
@@ -2157,16 +2278,19 @@ function openHistoryDetail(room, entityName, aspect) {
   overlay.type = 'history';
   overlay.entity = entity;
   overlay.aspect = aspect;
-  // The shape follows the live value; without one yet (a fresh page, a
-  // sensor that has not reported) the descriptor's kind decides, and the
-  // first points fetched settle it (fetchHistoryRange).
+  // The descriptor's kind decides the shape where it has one, and its
+  // word is final — an enum coded as integers is runs, not a curve.
+  // Undescribed, the live value's type decides; without a value yet (a
+  // fresh page, a sensor that has not reported) that is a guess the
+  // first points fetched settle (fetchHistoryRange).
   var live = stateValue(room, entityName, aspect);
   var field = descriptorField(entity, aspect);
-  overlay.shape = live !== undefined ? logic.historyShape(live)
-    : field && (field.kind === 'boolean' || field.kind === 'enum') ? 'timeline' : 'chart';
-  overlay.shapeSettled = live !== undefined;
+  var described = !!(field && (field.kind === 'boolean' || field.kind === 'enum'));
+  overlay.shape = logic.historyShape(live, field);
+  overlay.shapeSettled = described || live !== undefined;
   overlay.range = 24;
   overlay.rangeData = {};
+  overlay.cmdData = {};
   overlay.lastPoints = null;
   fetchHistoryRange(entityName, aspect, 24, overlay.shape);
   showOverlay();
@@ -2197,24 +2321,31 @@ function renderOverlayContent() {
   else if (overlay.type === 'entity') r = renderEntityDetailBody();
   else if (overlay.type === 'unit') r = renderUnitDetailBody();
   else r = { title: '', body: '' };
-  // A live camera stream must survive re-renders (every state delta
-  // re-runs this): the mounted player is carried across the innerHTML
-  // swap instead of being torn down and reconnected.
-  var live = byId('overlay-body').querySelector('video-rtc');
   byId('overlay-title').textContent = r.title;
-  byId('overlay-body').innerHTML = r.body;
-  var holder = byId('overlay-body').querySelector('[data-camera-live]');
-  if (holder) {
-    var name = holder.getAttribute('data-camera-live');
-    if (!live || live.getAttribute('data-entity') !== name) {
-      live = document.createElement('video-rtc');
-      live.setAttribute('data-entity', name);
-      live.mode = 'mse';
-      live.src = '/api/camera/' + encodeURIComponent(name) + '/live';
-    }
-    holder.appendChild(live);
-  }
+  // Every state delta re-runs this, so the swap happens either side of
+  // the mount rather than over it. Carrying the player across an
+  // innerHTML swap is not enough: detaching a <video-rtc> and putting it
+  // back re-runs its connectedCallback, which seeks to the live edge and
+  // calls play() — a stutter and a flash of native controls per delta.
+  byId('overlay-head').innerHTML = r.body;
+  byId('overlay-rest').innerHTML = r.rest || '';
+  mountCameraLive(r.camera);
   wireChartInteractions(byId('overlay-body'));
+}
+
+// The live player for `name`, or none. Mounting is idempotent: the same
+// camera leaves the running element untouched, which is the whole point.
+function mountCameraLive(name) {
+  var mount = byId('overlay-mount');
+  var live = mount.firstElementChild;
+  if (live && live.getAttribute('data-entity') === name) return;
+  mount.innerHTML = '';  // a different camera, or none: drop the stream
+  if (!name) return;
+  live = document.createElement('video-rtc');
+  live.setAttribute('data-entity', name);
+  live.mode = 'mse';
+  live.src = '/api/camera/' + encodeURIComponent(name) + '/live';
+  mount.appendChild(live);
 }
 
 function statItem(label, value, aspect) {
@@ -2259,9 +2390,9 @@ function renderHistoryDetailBody() {
   var loaded = !!(rd && rd.loaded);
   var points = loaded ? rd.points : (overlay.lastPoints || []);
   var win = rd && rd.window ? rd.window : { from: Date.now() - overlay.range * 3600e3, to: Date.now() };
+  var field = descriptorField(entity, aspect);
   var chartHtml, statsHtml;
   if (overlay.shape === 'timeline') {
-    var field = descriptorField(entity, aspect);
     chartHtml = buildTimeline('detail-chart', points, { height: 64, sizeClass: 'chart-timeline', aspect: aspect, field: field, window: win });
     var tl = logic.timelineStats(logic.timelineRuns(points, win.from, win.to));
     statsHtml = '<div class="stat-row">' +
@@ -2277,8 +2408,23 @@ function renderHistoryDetailBody() {
   }
 
   var body = '<div class="seg">' + chips + '</div>' +
-    '<div class="' + (loaded ? '' : 'chart-loading') + '">' + chartHtml + statsHtml + '</div>';
+    '<div class="' + (loaded ? '' : 'chart-loading') + '">' + chartHtml + statsHtml + '</div>' +
+    commandStrip(aspect, field, win);
   return { title: label, body: body };
+}
+
+/* What was asked, under what happened. An aspect nothing ever commanded
+ * has no strip at all — this is the recorder's cmd series, so the strip
+ * appears exactly where there is an audit to show. */
+function commandStrip(aspect, field, win) {
+  var cd = overlay.cmdData[overlay.range];
+  if (!cd || !cd.loaded || !cd.points.length) return '';
+  var runs = logic.timelineRuns(cd.points, win.from, win.to);
+  var latest = cd.points[cd.points.length - 1];
+  return '<div class="card-label" style="margin-top:20px;">Commanded</div>' +
+    buildTimeline('detail-cmd', cd.points, { height: 28, sizeClass: 'chart-commands', aspect: aspect, field: field, window: win }) +
+    '<div class="chart-note">' + esc(runs.length + (runs.length === 1 ? ' command' : ' commands') +
+      ' · last ' + logic.formatAspect(aspect, field, latest.value) + ' at ' + formatChartTime(latest.ts)) + '</div>';
 }
 
 // One planned row of an entity's detail: the label and the value, plus the
@@ -2293,8 +2439,15 @@ function renderAspectRow(entity, r) {
     return '<div class="aspect-row described row-clickable" data-action="history-detail"' + attrs + '>' +
       '<span class="aspect-label">' + esc(r.label) + '</span>' + value + '</div>';
   }
+  // The label taps through to history even though the row carries a
+  // control. A commanded aspect is exactly the one whose past a reader
+  // wants — and until now it was the one aspect with no way to reach it,
+  // because the row's click belongs to the control. The control's own
+  // buttons still win: closest('[data-action]') takes the innermost.
   var dial = r.control.kind === 'dial';
-  return '<div class="aspect-row described' + (dial ? ' dial-row' : '') + '"><span class="aspect-label">' + esc(r.label) + '</span>' + renderAspectControl(entity, r, true) + '</div>';
+  return '<div class="aspect-row described' + (dial ? ' dial-row' : '') + '">' +
+    '<span class="aspect-label linked" data-action="history-detail"' + attrs + '>' + esc(r.label) + '</span>' +
+    renderAspectControl(entity, r, true) + '</div>';
 }
 
 function aspectValueSpan(r) {
@@ -2417,11 +2570,12 @@ function renderEntityDetailBody() {
 
   // A camera's detail is the live view (mounted imperatively in
   // renderOverlayContent — a custom element can't ride innerHTML), not a
-  // Controls row: cameras take no commands.
-  var middle = '';
+  // Controls row: cameras take no commands. Its sections move to `rest`,
+  // below the mount, so the player keeps its place above them.
+  var middle = '', rest = sections.join(''), camera = null;
   if (entity.capability === 'camera') {
-    middle = '<div class="card-label" style="margin-top:20px;">Live</div>' +
-      '<div data-camera-live="' + esc(entity.name) + '"></div>';
+    camera = entity.name;
+    middle = '<div class="card-label" style="margin-top:20px;">Live</div>';
   } else if (entity.capability === 'sensor') {
     // A described sensor's readings are its sections, each tapping through
     // to its history; an undescribed one keeps the sparkline rows here.
@@ -2433,10 +2587,12 @@ function renderEntityDetailBody() {
     middle = '<div class="card-label" style="margin-top:20px;">Controls</div>' +
       (entity.capability === 'climate' ? widgetForClimate(entity, true) : widgetForEntity(entity));
   }
-  var body = '<div class="muted" style="margin-top:2px;">' + esc(meta) + '</div>' +
-    '<div class="muted" style="margin-top:6px;">' + ownerLine + '</div>' +
-    middle + sections.join('');
-  return { title: entity.label, body: body };
+  var head = '<div class="muted" style="margin-top:2px;">' + esc(meta) + '</div>' +
+    '<div class="muted" style="margin-top:6px;">' + ownerLine + '</div>' + middle;
+  // Without a camera everything is one half and the mount stays empty.
+  return camera
+    ? { title: entity.label, body: head, rest: rest, camera: camera }
+    : { title: entity.label, body: head + rest };
 }
 
 function renderUnitDetailBody() {
