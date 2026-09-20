@@ -406,8 +406,10 @@ exist; an automation cannot tell who publishes clock keys.
 home/{class}/{room}/{entity}/{aspect}
 ```
  
-- `class`: `state`, `cmd`, `config`, `meta`, `health`, `clock`, `history`,
-  `discovery`.
+- `class`: `state`, `cmd`, `arbiter`, `forecast`, `config`, `meta`,
+  `health`, `clock`, `history`, `discovery`. `state`, `cmd`, `arbiter` and
+  `forecast` are the entity-addressed ones — the full five-segment shape
+  above; the rest take their own shape under the class.
 - One room segment, no floor hierarchy in keys.
 - Entity names are globally unique (enforced at plan time).
 - **Zones never appear in keys.** A zone is a named set of rooms in config.
@@ -2793,6 +2795,68 @@ use — so this adapter is not thrown away when the app arrives.
 - **The homeostat app is the designated growth path** (the Frigate
   pattern): one more adapter binding its own `notifier` entities,
   acknowledging for itself, changing zero automations.
+
+## Forecasts (class settled 2026-09-20, #147)
+
+Model-predictive control is a standing assumption, and MPC without
+forecasts is not MPC. Nothing in the system could carry one: `home/state`
+holds a scalar per aspect, the recorder stamps rows with receive time, and
+every chart walks backward from now.
+
+- **Mechanism only.** Homeostat provides a place to put a forecast, a
+  store that remembers it, and a chart that draws it — never which
+  forecast, and never what to do about it. Producers (price, weather) and
+  controllers are behavioural choices, so by the boundary test under Repo
+  split they live in a house repo, as units, and graduate later under the
+  rule-of-three if several houses want the same one. This is how every
+  class works: the core no more knows what a price curve means than it
+  knows what `motion` means.
+- **Keyed like the series it extends.**
+  `home/forecast/{room}/{entity}/{aspect}` — the same triple as `state`,
+  so a forecast is that series' future. The entity's aspect descriptor
+  already supplies its label, kind and unit; past and future share one
+  chart axis; and a controller publishing its own planned trajectory on
+  the same class needs no new vocabulary for "a plan". `forecast` is
+  therefore entity-addressed in `keyspace.rs` and held to the same
+  bound-entity rule as `state` (`forecast-publish-unbound`).
+- **A document class, the second one.** `home/discovery/{unit}` already
+  carries a JSON array, so the scalar rule is not broken here for the
+  first time. Its real force (stated under Cameras) is that the bus never
+  carries frames; a bounded list of timestamped numbers is not a frame.
+- **Irregular points, deliberately.** The payload is
+  `{schema, issued, points: [{t, v}]}`, what the source actually said. A
+  regular grid was proposed and rejected: it cannot represent an irregular
+  series while the reverse is trivial, so it buys no expressiveness and
+  loses fidelity — and resampling is not single-valued. A spot price is a
+  step function that HOLDS for its interval; a temperature forecast
+  interpolates. A grid would bake one of those readings into the producer,
+  where no consumer could see or override it, and different consumers want
+  different grids anyway. The work moves to the SDK, where the consumer
+  names the rule: `Forecast.at(when, mode, max_gap_s)` with `mode` having
+  no default, and `max_gap_s` refusing to invent a value across a hole the
+  source left — otherwise "missing" silently becomes "interpolated", which
+  is the one way absence turns into made-up data.
+- **`issued` is required, and is the whole staleness story.** A consumer
+  applies its own max age, as `Freshness` does for state — freshness
+  policy is the automation's, never a core TTL. A controller that refuses
+  a stale forecast simply stops writing, and the house falls back on its
+  own: the heat pump's FEEDABLE inputs are non-retained precisely so that
+  the firmware expires them (see the IVT490 section, and the comment above
+  `COMMANDS` that already anticipated "a dead price feed"). No new
+  fail-safe was invented, and none should be.
+- **Mirrored by the core**, and more load-bearing here than for state: a
+  day-ahead curve is published once a day, so a consumer starting at
+  midday would otherwise run blind until tomorrow. Note the mirror reply's
+  age is the mirror's own; a forecast carries `issued`, which is what a
+  staleness policy reads.
+- **Bounds are an SDK guard, not a core rule.** The core never inspects
+  state-class payload content — it parses only to mirror — so the point
+  cap (generous: 2048, against 672 for 15-minute resolution over a week)
+  is refused at publish, where the producer can see it.
+- Still to come under #147: the recorder's `forecasts` table, which needs
+  two time axes — `(series_id, issued_ts, valid_ts)`, since `samples` is
+  keyed `(series_id, ts)` — and is what makes forecast verification
+  possible; and the dashboard drawing past and future on one axis.
 
 ## Voice (later phase)
  

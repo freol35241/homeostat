@@ -324,7 +324,10 @@ pub struct BusSection {
 #[serde(deny_unknown_fields)]
 pub struct PublishSpec {
     /// Key expression. Under `home/state/` it must name a bound entity's
-    /// room and entity literally or by template (`state-publish-unbound`).
+    /// room and entity literally or by template (`state-publish-unbound`);
+    /// under `home/forecast/` the same rule holds
+    /// (`forecast-publish-unbound`), a forecast being that entity's series
+    /// extended forward.
     pub key: String,
     /// Required under `home/cmd/` (`publish-missing-capability`): the grant
     /// resolves onto bound entities of this capability that the key covers.

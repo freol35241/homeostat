@@ -362,6 +362,15 @@ pub const CODES: &[(&str, &str)] = &[
          publish a derived value needs an entity file for it, which also puts \
          the value in front of the recorder and the dashboard.",
     ),
+    (
+        "forecast-publish-unbound",
+        "A publish under `home/forecast/` must name, literally, the room and \
+         entity of an entity this unit binds (or use `{room}`/`{entity}` \
+         templates) — the same rule as `home/state/`, because a forecast is \
+         that same series extended forward. A unit publishing a forecast for \
+         something no entity describes needs an entity file for it, which is \
+         also what gives the value its label, unit and place on a chart.",
+    ),
 ];
 
 /// The explanation registered for `code`, if any.

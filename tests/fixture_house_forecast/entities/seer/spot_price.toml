@@ -1,0 +1,14 @@
+schema = 1
+
+[entity]
+id = "spot_price"
+capability = "sensor"
+features = ["price"]
+room = "global"
+
+[naming]
+en = "spot price"
+
+[write_policy]
+mode = "exclusive"
+owner = "seer"

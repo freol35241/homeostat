@@ -1,0 +1,20 @@
+schema = 1
+
+[unit]
+name = "seer"
+kind = "automation"
+description = "Publishes a forecast for a price entity it binds"
+
+[runtime]
+command = "uv run units/seer.py"
+restart = "on-failure"
+shutdown_grace_s = 5
+
+[bus.publishes]
+# The forecast class is addressed per entity, exactly like state, so this
+# has to name an entity this unit binds (forecast-publish-unbound).
+price_forecast = { key = "home/forecast/global/spot_price/price" }
+price_now = { key = "home/state/global/spot_price/price" }
+
+[entities]
+dir = "entities/seer/"

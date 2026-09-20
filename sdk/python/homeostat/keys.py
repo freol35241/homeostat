@@ -1,7 +1,7 @@
 """Key builders for the homeostat key space (mirrors the Rust src/bus.rs).
 
-Schema: home/{class}/{room}/{entity}/{aspect} for state, cmd, and arbiter;
-home/health/{unit}[...] and home/meta/{unit}/... for supervision.
+Schema: home/{class}/{room}/{entity}/{aspect} for state, cmd, arbiter and
+forecast; home/health/{unit}[...] and home/meta/{unit}/... for supervision.
 """
 
 import re
@@ -43,6 +43,19 @@ def state_keyexpr(room: str, entity: str) -> str:
     for subscribing to a fed input's whole state, room/entity coming from
     the house's own manifests, not a device (see `_segments`)."""
     return "home/state/" + _segments(room, entity) + "/*"
+
+
+def forecast_key(room: str, entity: str, aspect: str) -> str:
+    """A series' future, keyed like its present (docs/design.md, Forecasts):
+    the same room/entity/aspect as `state_key`, so a forecast is the same
+    series extended forward and the entity's aspect descriptor already
+    labels it."""
+    return "home/forecast/" + _segments(room, entity, aspect)
+
+
+def forecast_keyexpr(room: str, entity: str) -> str:
+    """Key expression matching every forecast aspect of one entity."""
+    return "home/forecast/" + _segments(room, entity) + "/*"
 
 
 def cmd_key(room: str, entity: str, aspect: str) -> str:
