@@ -39,6 +39,15 @@ def context(root: str | Path = ".") -> "Context":
     return Context(os.environ[keys.ENV_UNIT], root)
 
 
+# The classes addressed per entity — home/{class}/{room}/{entity}/{aspect}
+# — so they are the ones with slots to fill and the ones that expand.
+# Mirrors ENTITY_ADDRESSED in src/keyspace.rs; `arbiter` is left out
+# because it is an adapter's class and adapters use UnitSession directly,
+# not a Context. Adding a class in the core without adding it here is what
+# made a templated forecast publish unaddressable through `ctx` while
+# `plan` validated it happily.
+_ENTITY_ADDRESSED = ("state", "cmd", "forecast")
+
 # The recorder's store description: the one history selector that answers
 # whether it is up, whatever the store happens to hold.
 _HISTORY_STATS = "home/history/stats"
@@ -58,10 +67,11 @@ def _expand(
     """The expression as the core expands it at plan time (src/expand.rs):
     `{room}`/`{entity}` templates substituted per bound entity, or a zone
     in the room slot expanded to one expression per member room. The two
-    are exclusive — a template is not a zone name — and only state/cmd
-    keys expand at all."""
+    are exclusive — a template is not a zone name — and only the
+    entity-addressed classes expand at all: those are the ones with a room
+    slot to fill (src/keyspace.rs, ENTITY_ADDRESSED)."""
     segments = expr.split("/")
-    if len(segments) < 3 or segments[1] not in ("state", "cmd"):
+    if len(segments) < 3 or segments[1] not in _ENTITY_ADDRESSED:
         return [expr]
     if "{room}" in segments or "{entity}" in segments:
 
@@ -249,7 +259,7 @@ class Context:
         cover is refused: the manifest stays the authority on intent."""
         expr = self._publishes[binding]["key"]
         segments = expr.split("/")
-        if segments[1] in ("state", "cmd"):
+        if segments[1] in _ENTITY_ADDRESSED:
             slots = {"room": room, "entity": entity, "aspect": aspect}
             defaults = dict(zip(("room", "entity", "aspect"), segments[2:5]))
             parts = []
@@ -297,6 +307,32 @@ class Context:
                 )
             value = keys.cmd_envelope(value, priority, self.unit)
         self._session.put_json(key, value)
+
+    def publish_forecast(
+        self,
+        binding: str,
+        issued: datetime.datetime,
+        points,
+        *,
+        room: str | None = None,
+        entity: str | None = None,
+        aspect: str | None = None,
+    ) -> None:
+        """Publishes a forecast through a `[bus.publishes]` expression to
+        one concrete key — `publish`, for the forecast class.
+
+        The binding is the point. Without this an automation has to reach
+        past its own manifest and hand a key to the session, which leaves
+        the declaration `plan` validated doing nothing at runtime: the
+        manifest stops being the authority on what this unit publishes.
+
+        `points` are what the source said — see homeostat.forecast for the
+        shape and for why the extent and the resampling live there."""
+        self._session.put_forecast(
+            self._concrete_key(binding, room=room, entity=entity, aspect=aspect),
+            issued,
+            points,
+        )
 
     def _has_recorder(self) -> bool:
         if self._recorder is None:

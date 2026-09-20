@@ -174,20 +174,21 @@ pub fn resolve(
         let mut keys: Vec<String> = key.exprs.iter().map(ToString::to_string).collect();
         keys.sort();
 
-        // A binding unit's state publish: the record of what it embodies,
-        // so a change to any bound entity is a grant delta.
-        if class == "state" {
+        // A binding unit's state or forecast publish: the record of what
+        // it embodies, so a change to any bound entity is a grant delta.
+        // Forecast counts for the same reason state does — it is the same
+        // series extended forward, onto the same entity — and leaving it
+        // out was not merely cosmetic: a unit publishing ONLY a forecast
+        // onto an entity it owns would produce no row at all, so a change
+        // to that entity would not read as a grant delta and apply would
+        // not see it.
+        if class == "state" || class == "forecast" {
             let mut bound: Vec<GrantEntity> = house
                 .entities
                 .iter()
                 .filter(|e| e.owner == key.unit)
                 .filter(|e| {
-                    let prefix = [
-                        "home",
-                        "state",
-                        e.file.entity.room.as_str(),
-                        e.name.as_str(),
-                    ];
+                    let prefix = ["home", class, e.file.entity.room.as_str(), e.name.as_str()];
                     key.exprs.iter().any(|expr| expr.matches_prefix(&prefix))
                 })
                 .map(|e| GrantEntity {
@@ -907,6 +908,58 @@ mod tests {
         assert_ne!(
             grants, widened_grants,
             "a wider key expression must change the grant table"
+        );
+    }
+
+    /// A forecast publish binds its entity as a state publish does — it
+    /// is the same series extended forward onto the same entity. Load
+    /// bearing beyond what `plan` prints: the grant table IS the
+    /// dependency graph, so a unit whose only publish onto an entity is a
+    /// forecast would otherwise produce no row, and a change to that
+    /// entity would not read as a grant delta for apply to act on.
+    #[test]
+    fn a_forecast_publish_binds_its_entity() {
+        let mut publishes = BTreeMap::new();
+        publishes.insert(
+            "curve".to_string(),
+            PublishSpec {
+                key: "home/forecast/global/spot_price/price".to_string(),
+                capability: None,
+                priority: None,
+            },
+        );
+        let house = House {
+            units: vec![unit(
+                "seer",
+                UnitKind::Automation,
+                BusSection {
+                    subscribes: BTreeMap::new(),
+                    publishes,
+                },
+            )],
+            entities: vec![entity(
+                "spot_price",
+                "global",
+                "sensor",
+                WriteMode::Exclusive,
+                "seer",
+            )],
+            ..House::default()
+        };
+        let (expanded, _, _) = expand(&house);
+        let (grants, errors, _) = resolve(&house, &expanded);
+        assert!(errors.is_empty(), "{errors:?}");
+        let seer = grants
+            .iter()
+            .find(|g| g.unit == "seer")
+            .expect("the forecast publish produces a grant row");
+        assert!(!seer.is_cmd(), "a forecast row is a binding, not a writer");
+        assert_eq!(
+            seer.entities
+                .iter()
+                .map(|e| e.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["spot_price"],
         );
     }
 
