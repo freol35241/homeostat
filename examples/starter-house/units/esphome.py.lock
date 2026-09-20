@@ -9,7 +9,7 @@ resolution-markers = [
 [manifest]
 requirements = [
     { name = "aioesphomeapi", specifier = ">=45,<46" },
-    { name = "homeostat", specifier = "==0.13.3" },
+    { name = "homeostat", specifier = "==0.14.0rc1" },
     { name = "zeroconf", specifier = ">=0.130,<1" },
 ]
 
@@ -321,13 +321,13 @@ wheels = [
 
 [[package]]
 name = "homeostat"
-version = "0.13.3"
+version = "0.14.0rc1"
 source = { registry = "/opt/homeostat-wheels" }
 dependencies = [
     { name = "eclipse-zenoh" },
 ]
 wheels = [
-    { path = "/opt/homeostat-wheels/homeostat-0.13.3-py3-none-any.whl" },
+    { path = "/opt/homeostat-wheels/homeostat-0.14.0rc1-py3-none-any.whl" },
 ]
 
 [[package]]

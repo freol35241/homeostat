@@ -96,9 +96,17 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # A semver prerelease (v0.14.0-rc1) must not become the repo's
+          # "Latest" release: that is what the front page offers and what a
+          # house reads when choosing a version to pin, and an rc is by
+          # definition not the thing to hand someone who asks for current.
+          # The hyphen is semver's own prerelease marker, so the tag says it.
+          prerelease=""
+          case "$GITHUB_REF_NAME" in *-*) prerelease="--prerelease" ;; esac
           gh release create "$GITHUB_REF_NAME" homeostat-*.tar.gz SHA256SUMS \
             --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
+            $prerelease \
             --title "$GITHUB_REF_NAME" \
             --generate-notes \
             --notes "Container image: \`docker pull ghcr.io/$GITHUB_REPOSITORY:${GITHUB_REF_NAME#v}\`"

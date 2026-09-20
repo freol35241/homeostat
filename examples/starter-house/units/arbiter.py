@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "homeostat==0.13.3",
+#     "homeostat==0.14.0rc1",
 # ]
 # ///
 """Arbiter service: the write-token holder for arbitrated entities (see

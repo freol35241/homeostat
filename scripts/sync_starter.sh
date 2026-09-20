@@ -25,7 +25,20 @@
 set -euo pipefail
 
 # Bumped with the starter's compose image at each release.
-SDK_TAG="v0.13.3"
+SDK_TAG="v0.14.0-rc1"
+
+# The tag's version, and that version as Python spells it. They differ for
+# a prerelease and only for a prerelease: semver puts a hyphen before the
+# label (0.14.0-rc1, which is what Cargo and the image tag take), PEP 440
+# canonically does not (0.14.0rc1, which is what uv builds the wheel as and
+# writes into a lock). Getting this wrong is not a cosmetic mismatch: a
+# wheel filename uses "-" to separate its fields, so
+# homeostat-0.14.0-rc1-py3-none-any.whl parses as version 0.14.0 with the
+# build tag "rc1" and uv refuses the lock outright, taking every unit in
+# the house down at start. PEP 440 normalisation drops the separator before
+# a prerelease label; the tags this project cuts only ever use one.
+VERSION="${SDK_TAG#v}"
+PY_VERSION="$(printf '%s' "$VERSION" | sed -E 's/-(a|b|rc|alpha|beta)/\1/')"
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 UNITS="$REPO/examples/starter-house/units"
@@ -61,7 +74,7 @@ pin_sdk() {
   # so a pattern that only matched the unpinned form would silently leave
   # them on the previous release. It did, and --check could not see it:
   # the check compares against this same transform.
-  sed -e 's|^\(# *\)"homeostat[^"]*",|\1"homeostat=='"${SDK_TAG#v}"'",|' \
+  sed -e 's|^\(# *\)"homeostat[^"]*",|\1"homeostat=='"$PY_VERSION"'",|' \
       -e '/^# \[tool\.uv\.sources\]$/d' \
       -e '/^# homeostat = /d' \
     | awk '
@@ -82,7 +95,7 @@ pin_sdk() {
 # (Dockerfile); a path wheel carries no hash, the image is the trust root.
 WHEELS=/opt/homeostat-wheels
 pin_lock() {
-  awk -v v="${SDK_TAG#v}" -v w="$WHEELS" '
+  awk -v v="$PY_VERSION" -v w="$WHEELS" '
     { sub(/name = "homeostat", editable = "[^"]*"/, "name = \"homeostat\", specifier = \"==" v "\"") }
     /^\[\[package\]\]$/ { sdk = 0 }
     /^name = "homeostat"$/ { sdk = 1 }
@@ -188,14 +201,13 @@ fi
 # left at 0.1.0 through eight releases, so every published binary reported
 # 0.1.0 -- a habit is not enough, and a version nobody can trust is worse
 # than no version at all.
-version="${SDK_TAG#v}"
 bad=""
 check_version() {
   grep -qF "$2" "$REPO/$1" || bad="$bad\n  $1: expected $2"
 }
-check_version Cargo.toml "version = \"$version\""
-check_version sdk/python/pyproject.toml "version = \"$version\""
-check_version examples/starter-house/docker-compose.yml "homeostat:$version}"
+check_version Cargo.toml "version = \"$VERSION\""
+check_version sdk/python/pyproject.toml "version = \"$PY_VERSION\""
+check_version examples/starter-house/docker-compose.yml "homeostat:$VERSION}"
 if [ -n "$bad" ]; then
   echo "version drift against SDK_TAG=$SDK_TAG:$(printf '%b' "$bad")" >&2
   echo "cutting a release bumps all four together" >&2

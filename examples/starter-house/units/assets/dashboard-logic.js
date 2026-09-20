@@ -563,9 +563,15 @@
    * The recorder folds a window two ways (docs/design.md, Read path):
    * `bucket` for a line, one point per bucket so a chatty series fills a
    * week instead of showing its last hour, and `changes` for a timeline,
-   * the runs of a state. Which one a reading gets is the value's type. */
+   * the runs of a state. The descriptor decides when there is one: an
+   * enum or a boolean has runs, not a curve, whatever JS type its values
+   * happen to be — an enum coded as integers (ivt490's operating_mode)
+   * would otherwise be drawn as a line between its codes and averaged.
+   * Undescribed, the value's type is all there is to go on. */
 
-  function historyShape(value) {
+  function historyShape(value, field) {
+    var kind = field && field.kind;
+    if (kind === 'enum' || kind === 'boolean') return 'timeline';
     return typeof value === 'number' ? 'chart' : 'timeline';
   }
 
