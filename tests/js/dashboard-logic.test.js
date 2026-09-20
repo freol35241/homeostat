@@ -579,11 +579,24 @@ test('a slow device is not expired on a fast device timeout', () => {
 
 // ---- history shapes ----
 
-test('a reading is charted by its type: numbers a line, anything else a timeline', () => {
+test('an undescribed reading is charted by its type: numbers a line, anything else a timeline', () => {
   assert.equal(logic.historyShape(21.5), 'chart');
   assert.equal(logic.historyShape(true), 'timeline');
   assert.equal(logic.historyShape('auto'), 'timeline');
   assert.equal(logic.historyShape(undefined), 'timeline');
+});
+
+test('a described enum is runs whatever its values are coded as', () => {
+  // ivt490's operating_mode: labelled codes, not a quantity — a line
+  // between 1 and 3, with a mean, says nothing.
+  const mode = { label: 'mode', kind: 'enum', values: [{ value: 1, label: 'normal' }, { value: 3, label: 'boost' }] };
+  assert.equal(logic.historyShape(1, mode), 'timeline');
+  assert.equal(logic.historyShape('auto', { kind: 'enum' }), 'timeline');
+  assert.equal(logic.historyShape(true, { kind: 'boolean' }), 'timeline');
+  // and the run's value still reads as its label
+  assert.equal(logic.formatAspect('operating_mode', mode, 1), 'normal');
+  // a described number is still a line
+  assert.equal(logic.historyShape(21.5, { kind: 'temperature' }), 'chart');
 });
 
 test('one bucket per drawn column, never below a second', () => {

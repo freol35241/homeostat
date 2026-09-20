@@ -169,6 +169,8 @@ h1.view-title { font-size: 20px; margin: 0 0 16px; }
 .chart-row { height: 28px; }
 .chart-detail { height: 220px; margin: 12px 0 4px; }
 .chart-timeline { height: 64px; margin: 12px 0 4px; }
+.chart-commands { height: 28px; margin: 8px 0 2px; }
+.chart-note { font-size: 12px; color: var(--muted); }
 .chart-empty { height: 100%; min-height: 36px; display: flex; align-items: center; justify-content: center;
   color: var(--muted); font-size: 12px; }
 .chart-line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;
@@ -347,6 +349,10 @@ video-rtc video { width: 100%; display: block; }
 /* described aspects (docs/design.md, Aspect descriptors): label · value, a control when declared */
 .aspect-row.described { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 40px; }
 .aspect-row .aspect-label { color: var(--ink); font-size: 13px; }
+/* A commanded aspect's label is its way into history: the row itself
+   cannot be the target, because the row is the control. */
+.aspect-label.linked { cursor: pointer; border-radius: 4px; padding: 2px 4px; margin: -2px -4px; }
+.aspect-label.linked:hover { background-color: var(--accent-tint); color: var(--accent); }
 .aspect-row .aspect-value { color: var(--secondary); font-variant-numeric: tabular-nums; }
 .aspect-row .aspect-value.stale { color: var(--muted); text-decoration: line-through dotted; }
 .aspect-row .stale-mark { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin-left: 6px; }
@@ -480,6 +486,7 @@ var overlay = {
   unit: null,           // for unit: unit name
   range: 24,             // hours, for history
   rangeData: {},          // hours -> {points, window, loaded, loading}
+  cmdData: {},             // hours -> the same, for the cmd series (what was asked)
   lastPoints: null,
   log: null,               // for unit: {lines, loaded, loading}
   expanded: {}              // for entity: group -> true when a collapsed section is opened
@@ -740,9 +747,12 @@ function toast(msg) {
 // for one bucket per drawn column, a timeline for the runs of the state.
 // The window travels with the points so the chart places them by time.
 
-function fetchHistory(entity, aspect, hours, shape) {
+// `cls` is the recorder's series class: 'state' (the default) is what the
+// house did, 'cmd' what was asked of it.
+function fetchHistory(entity, aspect, hours, shape, cls) {
   var win = { from: Date.now() - hours * 3600e3, to: Date.now() };
   var url = '/api/history?entity=' + encodeURIComponent(entity) + '&aspect=' + encodeURIComponent(aspect) + '&hours=' + hours +
+    (cls ? '&class=' + encodeURIComponent(cls) : '') +
     (shape === 'timeline' ? '&changes=1' : '&bucket=' + logic.bucketSeconds(hours, CHART_VBW));
   return fetch(url)
     .then(function (r) { return r.json(); })
@@ -790,6 +800,26 @@ function fetchHistoryRange(entityName, aspect, hours, shape) {
     overlay.rangeData[hours] = loaded;
     overlay.lastPoints = loaded.points;
     if (overlay.open && overlay.type === 'history') renderOverlayContent();
+  });
+  fetchCommandRange(entityName, aspect, hours);
+}
+
+/* What was asked of this aspect, beside what it did. The recorder types
+ * every cmd envelope into its own series (docs/design.md, History), and
+ * until now nothing could read it back — the audit existed and had no
+ * viewer. Always fetched rather than gated on whether the page thinks the
+ * aspect is commandable: recorded commands are the honest test, and the
+ * rules for who may command what live on the server. The strip renders
+ * only when the window actually holds commands. */
+function fetchCommandRange(entityName, aspect, hours) {
+  var cd = overlay.cmdData[hours];
+  if (cd && (cd.loaded || cd.loading)) return;
+  overlay.cmdData[hours] = { points: [], loaded: false, loading: true };
+  // Commands are edges, never a curve: their runs are the shape, whatever
+  // the aspect's own readings are drawn as.
+  fetchHistory(entityName, aspect, hours, 'timeline', 'cmd').then(function (loaded) {
+    overlay.cmdData[hours] = loaded;
+    if (overlay.open && overlay.type === 'history' && overlay.aspect === aspect) renderOverlayContent();
   });
 }
 
@@ -1515,18 +1545,24 @@ function widgetTiles(entity, aspect) {
 // One aspect's history over a window, as a card.
 function widgetChart(entity, aspect, hours) {
   var key = entity.name + '|' + aspect + '|' + hours;
+  var field = descriptorField(entity, aspect);
+  // The same rule as the detail overlay: a described enum or boolean is
+  // runs, so the card draws a timeline and asks the recorder for changes.
+  var shape = logic.historyShape(stateValue(entity.room, entity.name, aspect), field);
   var s = localState.charts[key];
   if (!s) {
     localState.charts[key] = { points: [], loaded: false, loading: true };
-    fetchHistory(entity.name, aspect, hours, 'chart').then(function (loaded) {
+    fetchHistory(entity.name, aspect, hours, shape).then(function (loaded) {
       localState.charts[key] = loaded;
       scheduleRender();
     });
     s = localState.charts[key];
   }
-  var field = descriptorField(entity, aspect);
   var value = stateValue(entity.room, entity.name, aspect);
-  var chart = s.loaded ? buildChart('chart-' + key, s.points, { height: 120, sizeClass: 'chart-card', aspect: aspect, area: true, gridlines: true, yLabels: true, window: s.window }) : '';
+  var chart = !s.loaded ? ''
+    : shape === 'timeline'
+      ? buildTimeline('chart-' + key, s.points, { height: 64, sizeClass: 'chart-timeline', aspect: aspect, field: field, window: s.window })
+      : buildChart('chart-' + key, s.points, { height: 120, sizeClass: 'chart-card', aspect: aspect, area: true, gridlines: true, yLabels: true, window: s.window });
   return '<div class="card tile clickable span-all" data-action="history-detail" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '" data-aspect="' + esc(aspect) + '">' +
     '<div class="card-label">' + esc(entity.label + ' · ' + ((field && field.label) || aspect)).toUpperCase() + ' <span class="faint">' + esc(hours >= 48 ? Math.round(hours / 24) + 'd' : hours + 'h') + '</span></div>' +
     '<div class="big">' + esc(logic.formatAspect(aspect, field, value)) + '</div>' + chart + '</div>';
@@ -2157,16 +2193,19 @@ function openHistoryDetail(room, entityName, aspect) {
   overlay.type = 'history';
   overlay.entity = entity;
   overlay.aspect = aspect;
-  // The shape follows the live value; without one yet (a fresh page, a
-  // sensor that has not reported) the descriptor's kind decides, and the
-  // first points fetched settle it (fetchHistoryRange).
+  // The descriptor's kind decides the shape where it has one, and its
+  // word is final — an enum coded as integers is runs, not a curve.
+  // Undescribed, the live value's type decides; without a value yet (a
+  // fresh page, a sensor that has not reported) that is a guess the
+  // first points fetched settle (fetchHistoryRange).
   var live = stateValue(room, entityName, aspect);
   var field = descriptorField(entity, aspect);
-  overlay.shape = live !== undefined ? logic.historyShape(live)
-    : field && (field.kind === 'boolean' || field.kind === 'enum') ? 'timeline' : 'chart';
-  overlay.shapeSettled = live !== undefined;
+  var described = !!(field && (field.kind === 'boolean' || field.kind === 'enum'));
+  overlay.shape = logic.historyShape(live, field);
+  overlay.shapeSettled = described || live !== undefined;
   overlay.range = 24;
   overlay.rangeData = {};
+  overlay.cmdData = {};
   overlay.lastPoints = null;
   fetchHistoryRange(entityName, aspect, 24, overlay.shape);
   showOverlay();
@@ -2259,9 +2298,9 @@ function renderHistoryDetailBody() {
   var loaded = !!(rd && rd.loaded);
   var points = loaded ? rd.points : (overlay.lastPoints || []);
   var win = rd && rd.window ? rd.window : { from: Date.now() - overlay.range * 3600e3, to: Date.now() };
+  var field = descriptorField(entity, aspect);
   var chartHtml, statsHtml;
   if (overlay.shape === 'timeline') {
-    var field = descriptorField(entity, aspect);
     chartHtml = buildTimeline('detail-chart', points, { height: 64, sizeClass: 'chart-timeline', aspect: aspect, field: field, window: win });
     var tl = logic.timelineStats(logic.timelineRuns(points, win.from, win.to));
     statsHtml = '<div class="stat-row">' +
@@ -2277,8 +2316,23 @@ function renderHistoryDetailBody() {
   }
 
   var body = '<div class="seg">' + chips + '</div>' +
-    '<div class="' + (loaded ? '' : 'chart-loading') + '">' + chartHtml + statsHtml + '</div>';
+    '<div class="' + (loaded ? '' : 'chart-loading') + '">' + chartHtml + statsHtml + '</div>' +
+    commandStrip(aspect, field, win);
   return { title: label, body: body };
+}
+
+/* What was asked, under what happened. An aspect nothing ever commanded
+ * has no strip at all — this is the recorder's cmd series, so the strip
+ * appears exactly where there is an audit to show. */
+function commandStrip(aspect, field, win) {
+  var cd = overlay.cmdData[overlay.range];
+  if (!cd || !cd.loaded || !cd.points.length) return '';
+  var runs = logic.timelineRuns(cd.points, win.from, win.to);
+  var latest = cd.points[cd.points.length - 1];
+  return '<div class="card-label" style="margin-top:20px;">Commanded</div>' +
+    buildTimeline('detail-cmd', cd.points, { height: 28, sizeClass: 'chart-commands', aspect: aspect, field: field, window: win }) +
+    '<div class="chart-note">' + esc(runs.length + (runs.length === 1 ? ' command' : ' commands') +
+      ' · last ' + logic.formatAspect(aspect, field, latest.value) + ' at ' + formatChartTime(latest.ts)) + '</div>';
 }
 
 // One planned row of an entity's detail: the label and the value, plus the
@@ -2293,8 +2347,15 @@ function renderAspectRow(entity, r) {
     return '<div class="aspect-row described row-clickable" data-action="history-detail"' + attrs + '>' +
       '<span class="aspect-label">' + esc(r.label) + '</span>' + value + '</div>';
   }
+  // The label taps through to history even though the row carries a
+  // control. A commanded aspect is exactly the one whose past a reader
+  // wants — and until now it was the one aspect with no way to reach it,
+  // because the row's click belongs to the control. The control's own
+  // buttons still win: closest('[data-action]') takes the innermost.
   var dial = r.control.kind === 'dial';
-  return '<div class="aspect-row described' + (dial ? ' dial-row' : '') + '"><span class="aspect-label">' + esc(r.label) + '</span>' + renderAspectControl(entity, r, true) + '</div>';
+  return '<div class="aspect-row described' + (dial ? ' dial-row' : '') + '">' +
+    '<span class="aspect-label linked" data-action="history-detail"' + attrs + '>' + esc(r.label) + '</span>' +
+    renderAspectControl(entity, r, true) + '</div>';
 }
 
 function aspectValueSpan(r) {
