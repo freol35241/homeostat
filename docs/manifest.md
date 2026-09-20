@@ -105,7 +105,7 @@ One publish the unit is allowed.
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `capability` | string | no | Required under `home/cmd/` (`publish-missing-capability`): the grant resolves onto bound entities of this capability that the key covers. Must be a known capability (`unknown-capability`). |
-| `key` | string | yes | Key expression. Under `home/state/` it must name a bound entity's room and entity literally or by template (`state-publish-unbound`). |
+| `key` | string | yes | Key expression. Under `home/state/` it must name a bound entity's room and entity literally or by template (`state-publish-unbound`); under `home/forecast/` the same rule holds (`forecast-publish-unbound`), a forecast being that entity's series extended forward. |
 | `priority` | [Priority](#priority) | no | The band commands leave at. Automations publish at `automation`; the family's surfaces (dashboard, voice) at `manual`, which always wins in arbitration. |
 
 ### DiscoveryMode

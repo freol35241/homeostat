@@ -426,18 +426,27 @@ pub fn resolve(
         ));
     }
 
-    // State keys belong to bound entities: templated state publishes are
-    // bound by construction; a concrete one must name a bound entity's room
-    // and name literally. Closes the free-form-state-key hole that virtual
-    // sensors would otherwise ride through.
+    // An entity-addressed key belongs to a bound entity: a templated publish
+    // is bound by construction; a concrete one must name a bound entity's
+    // room and name literally. Closes the free-form-key hole that virtual
+    // sensors would otherwise ride through. `forecast` is held to the same
+    // rule as `state` for the same reason — it is the same series extended
+    // forward, so it is the same entity's key space.
     for key in expanded {
         if key.direction != Direction::Publishes || key.templated {
             continue;
         }
         for expr in &key.exprs {
-            if expr.class() != Some("state") {
-                continue;
-            }
+            let class = match expr.class() {
+                Some(c @ ("state" | "forecast")) => c,
+                _ => continue,
+            };
+            // The two pushes below name their code literally rather than
+            // through `class`: src/error.rs scans this crate for the
+            // string after `ValidationError::new(` to prove every code has
+            // an explanation and every explanation a site, and a variable
+            // there makes both codes invisible to it.
+            let forecast = class == "forecast";
             let unit = house
                 .unit(&key.unit)
                 .expect("expanded key from loaded unit");
@@ -445,15 +454,16 @@ pub fn resolve(
             let (room, entity) = (expr.0.get(2), expr.0.get(3));
             let (Some(Segment::Literal(room)), Some(Segment::Literal(entity))) = (room, entity)
             else {
-                errors.push(ValidationError::new(
-                    "state-publish-unbound",
-                    subject,
-                    format!(
-                        "state publish \"{}\" needs literal room and entity segments (or {{room}}/{{entity}} templates)",
-                        key.source
-                    ),
-                    Some(unit.path.clone()),
-                ));
+                let message = format!(
+                    "{class} publish \"{}\" needs literal room and entity segments (or {{room}}/{{entity}} templates)",
+                    key.source
+                );
+                let where_ = Some(unit.path.clone());
+                errors.push(if forecast {
+                    ValidationError::new("forecast-publish-unbound", subject, message, where_)
+                } else {
+                    ValidationError::new("state-publish-unbound", subject, message, where_)
+                });
                 continue;
             };
             let bound = house
@@ -461,15 +471,16 @@ pub fn resolve(
                 .iter()
                 .any(|e| &e.name == entity && e.owner == key.unit && &e.file.entity.room == room);
             if !bound {
-                errors.push(ValidationError::new(
-                    "state-publish-unbound",
-                    subject,
-                    format!(
-                        "state key \"home/state/{room}/{entity}/…\" is not under an entity bound by \"{}\"",
-                        key.unit
-                    ),
-                    Some(unit.path.clone()),
-                ));
+                let message = format!(
+                    "{class} key \"home/{class}/{room}/{entity}/…\" is not under an entity bound by \"{}\"",
+                    key.unit
+                );
+                let where_ = Some(unit.path.clone());
+                errors.push(if forecast {
+                    ValidationError::new("forecast-publish-unbound", subject, message, where_)
+                } else {
+                    ValidationError::new("state-publish-unbound", subject, message, where_)
+                });
             }
         }
     }

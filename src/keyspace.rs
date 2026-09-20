@@ -5,6 +5,11 @@ pub const CLASSES: &[&str] = &[
     "state",
     "cmd",
     "arbiter",
+    // A series' future, keyed like its present: same room/entity/aspect, so
+    // a forecast is the same series extended forward (docs/design.md,
+    // Forecasts). The core no more knows what one means than it knows what
+    // `motion` means.
+    "forecast",
     "config",
     "meta",
     "health",
@@ -12,6 +17,10 @@ pub const CLASSES: &[&str] = &[
     "history",
     "discovery",
 ];
+
+/// The classes addressed per entity — `home/{class}/{room}/{entity}/{aspect}`
+/// — rather than by some other shape under the class.
+const ENTITY_ADDRESSED: &[&str] = &["state", "cmd", "arbiter", "forecast"];
 
 /// Reserved pseudo-rooms for non-spatial entities.
 pub const PSEUDO_ROOMS: &[&str] = &["global", "person"];
@@ -87,7 +96,7 @@ impl KeyExpr {
     }
 
     /// Checks conformance with `home/{class}/{room}/{entity}/{aspect}` (for
-    /// `state`/`cmd`/`arbiter`) or `home/{class}/...` (other classes).
+    /// the entity-addressed classes) or `home/{class}/...` (the others).
     pub fn check_schema(&self, raw: &str) -> Result<(), String> {
         match self.0.first() {
             Some(Segment::Literal(h)) if h == "home" => {}
@@ -104,7 +113,7 @@ impl KeyExpr {
                 ))
             }
         };
-        let min_len = if matches!(class, "state" | "cmd" | "arbiter") {
+        let min_len = if ENTITY_ADDRESSED.contains(&class) {
             5
         } else {
             3
@@ -120,9 +129,9 @@ impl KeyExpr {
         Ok(())
     }
 
-    /// The room slot exists only for `state`/`cmd`/`arbiter` keys.
+    /// The room slot exists only on the entity-addressed classes.
     pub fn room_slot(&self) -> Option<&Segment> {
-        if matches!(self.class(), Some("state") | Some("cmd") | Some("arbiter")) {
+        if self.class().is_some_and(|c| ENTITY_ADDRESSED.contains(&c)) {
             self.0.get(2)
         } else {
             None
@@ -231,6 +240,27 @@ mod tests {
             .is_err());
         assert!(expr("home/arbiter/hallway")
             .check_schema("home/arbiter/hallway")
+            .is_err());
+    }
+
+    #[test]
+    fn forecast_is_addressed_like_state() {
+        // Same shape as the series it extends: room/entity/aspect, a room
+        // slot, and a reserved word so no room can be called "forecast".
+        let s = "home/forecast/global/spot_price/price";
+        expr(s).check_schema(s).unwrap();
+        assert_eq!(expr(s).to_string(), s);
+        assert_eq!(
+            expr(s).room_slot(),
+            Some(&Segment::Literal("global".to_string()))
+        );
+        expr("home/forecast/{room}/{entity}/**")
+            .check_schema("home/forecast/{room}/{entity}/**")
+            .unwrap();
+        assert!(is_reserved_word("forecast"));
+        // and short of an aspect it is refused, as state is
+        assert!(expr("home/forecast/global")
+            .check_schema("home/forecast/global")
             .is_err());
     }
 

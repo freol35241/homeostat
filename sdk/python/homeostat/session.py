@@ -14,7 +14,7 @@ from typing import Any
 
 import zenoh
 
-from . import keys
+from . import forecast, keys
 
 
 def connect() -> "UnitSession":
@@ -69,6 +69,36 @@ class UnitSession:
             self.health_event("drop", reason="non-finite", key=key)
             return
         self._session.put(key, encoded)
+
+    def put_forecast(self, key: str, issued, points) -> None:
+        """Publishes a forecast (docs/design.md, Forecasts) at a
+        `home/forecast/{room}/{entity}/{aspect}` key.
+
+        Retained like state, so a consumer restarting mid-horizon has its
+        inputs at once rather than waiting for the next issue. A payload
+        the SDK refuses — a naive timestamp, a non-finite value, two
+        points at one instant, more points than the guard — drops with an
+        "invalid-forecast" health event carrying the reason, the same
+        shape as every other producer-side refusal: the unit stays up and
+        the trace names what it published."""
+        try:
+            encoded = forecast.encode(issued, points)
+        except ValueError as error:
+            self.health_event("drop", reason="invalid-forecast", key=key, detail=str(error))
+            return
+        self._session.put(key, encoded)
+
+    def parse_forecast(self, sample: zenoh.Sample):
+        """A subscribed forecast sample decoded, or None after a
+        "malformed-payload" drop event — the subscriber prologue, matching
+        `parse_command`. What the consumer does about `issued` being old
+        is its own policy, never the SDK's: see homeostat.forecast."""
+        key = str(sample.key_expr)
+        try:
+            return forecast.decode(sample.payload.to_bytes())
+        except ValueError as error:
+            self.health_event("drop", reason="malformed-payload", key=key, detail=str(error))
+            return None
 
     def parse_command(self, sample: zenoh.Sample):
         """The command prologue every adapter shares (docs/adapters.md, §4):

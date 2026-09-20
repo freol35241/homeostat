@@ -90,6 +90,13 @@ pub async fn run(check: &CheckResult, root: &Path, listen: &str) -> Result<(), S
     mirror(&session, "home/clock/*").await?;
     mirror(&session, "home/state/**").await?;
     mirror(&session, "home/discovery/*").await?;
+    // Forecasts are mirrored for the same reason as state, and more
+    // urgently: a day-ahead curve is published once a day, so a consumer
+    // restarting at midday would otherwise have no inputs until tomorrow
+    // morning. Note the reply's age is the mirror's, not the forecast's —
+    // a forecast carries its own `issued`, which is what a consumer's
+    // staleness policy reads (docs/design.md, Forecasts).
+    mirror(&session, "home/forecast/**").await?;
 
     let mut world = WorldMeta {
         grants: check.grants.clone(),
@@ -513,7 +520,8 @@ async fn serve_health(session: &Session, health: HealthMap) -> Result<(), String
 /// queryable. Clock: a late joiner sees the current minute/date instead of
 /// waiting out the next boundary. State: a late joiner (or a bus read, e.g.
 /// the MCP surface's read_state) sees every entity's current value without
-/// waiting for the next publish.
+/// waiting for the next publish. Forecast: the same, for a class whose
+/// publishes can be a day apart.
 ///
 /// Every reply carries the value's age — seconds since the mirror received
 /// it, as a decimal string in the attachment — because a mirrored value
