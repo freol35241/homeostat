@@ -27,11 +27,11 @@
 //!    "Logs and the audit trail"): known lines come back stream-tagged,
 //!    `lines=N` truncates, and an unknown unit 404s.
 //! 7. The camera media plane (docs/design.md, Cameras): browsers never
-//!    speak go2rtc — `/api/camera/{entity}/snapshot` proxies frame.jpeg,
-//!    `/api/camera/{entity}/live` relays the MSE WebSocket byte-for-byte,
-//!    both addressing the stream by the camera's entity id (how the shim
-//!    names it) rather than its entity name, and an unknown or non-camera
-//!    entity 404s.
+//!    speak go2rtc — `/api/camera/{entity}/live` relays the MSE WebSocket
+//!    byte-for-byte, addressing the stream by the camera's entity id (how
+//!    the shim names it) rather than its entity name, and an unknown or
+//!    non-camera entity 404s. There is no snapshot route: a still frame
+//!    needs a transcode the media plane does not carry.
 
 mod common;
 
@@ -1104,25 +1104,16 @@ async fn dashboard_proxies_camera_media() {
         "the adapter-native id stays server-side, out of the browser model: {cam}"
     );
 
-    // Snapshot: a JPEG straight through the proxy.
-    let (status, headers, body) = http_request_bytes(&addr, "/api/camera/porch_cam/snapshot", &[]);
-    assert_eq!(status, 200);
-    assert!(
-        headers
-            .iter()
-            .any(|(k, v)| k.eq_ignore_ascii_case("content-type") && v.starts_with("image/jpeg")),
-        "{headers:?}"
-    );
-    assert!(
-        body.starts_with(b"\xff\xd8"),
-        "JPEG magic, got {:?}",
-        &body[..4.min(body.len())]
-    );
+    // No snapshot route: go2rtc can only make a JPEG of an H.264 source by
+    // transcoding, and the media plane is a pure remux, so the room card
+    // says "tap to view" rather than showing a frame that never arrives.
+    let (status, _) = http_request(&addr, "GET", "/api/camera/porch_cam/snapshot", &[], None);
+    assert_eq!(status, 404, "the snapshot proxy is retired");
 
-    // Unknown and non-camera entities 404 — the proxy is model-gated.
-    let (status, _) = http_request(&addr, "GET", "/api/camera/no_such_cam/snapshot", &[], None);
+    // Unknown and non-camera entities 404 — the live proxy is model-gated.
+    let (status, _) = http_request(&addr, "GET", "/api/camera/no_such_cam/live", &[], None);
     assert_eq!(status, 404);
-    let (status, _) = http_request(&addr, "GET", "/api/camera/lamp/snapshot", &[], None);
+    let (status, _) = http_request(&addr, "GET", "/api/camera/lamp/live", &[], None);
     assert_eq!(status, 404, "a lamp is not a camera");
 
     // Live: the MSE handshake and the fMP4 bytes relay untouched.
