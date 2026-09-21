@@ -2819,10 +2819,29 @@ every chart walks backward from now.
   the same class needs no new vocabulary for "a plan". `forecast` is
   therefore entity-addressed in `keyspace.rs` and held to the same
   bound-entity rule as `state` (`forecast-publish-unbound`).
-- **A document class, the second one.** `home/discovery/{unit}` already
-  carries a JSON array, so the scalar rule is not broken here for the
-  first time. Its real force (stated under Cameras) is that the bus never
-  carries frames; a bounded list of timestamped numbers is not a frame.
+- **Two time coordinates is the whole difference** (sharpened 2026-09-21;
+  the first write-up said "forecasts are arrays", which is the symptom).
+  A state sample carries ONE time: when the value was true. A forecast
+  point carries TWO: when it was said, and when it is about. Value
+  cardinality is not the axis and never was — a forecast point's value is
+  a scalar, the SDK refuses anything else, and a forecast of a single
+  point still does not fit `samples`, because two issues about the same
+  future instant collide on `(series_id, ts)` exactly as a hundred would.
+  What the array does is transport one issue atomically; what makes a
+  forecast different is the second coordinate.
+  - The corollary worth stating, because it justifies `d` below: state
+    has an extent too, implicit by succession — that is precisely what
+    the `changes=1` read shape reconstructs when it builds a state's runs
+    from consecutive rows. Succession is CORRECT for state, whose last
+    run is genuinely still going, and WRONG for a forecast, whose last
+    window genuinely ends with no successor row to bound it.
+  - **A document on the bus, rows in the store**, and these are not in
+    tension: the document is the unit of issuance (one atomic publish per
+    issue, mirrored as a unit), the row is the unit of fact (one scalar
+    with its coordinates). `home/discovery/{unit}` is the precedent for
+    the first; the scalar rule's real force (stated under Cameras) is
+    that the bus never carries frames, and a bounded list of timestamped
+    numbers is not a frame.
 - **Irregular points, deliberately.** The payload is
   `{schema, issued, points: [{t, v, d?}]}`, what the source actually said. A
   regular grid was proposed and rejected: it cannot represent an irregular
@@ -2866,10 +2885,29 @@ every chart walks backward from now.
   state-class payload content — it parses only to mirror — so the point
   cap (generous: 2048, against 672 for 15-minute resolution over a week)
   is refused at publish, where the producer can see it.
-- Still to come under #147: the recorder's `forecasts` table, which needs
-  two time axes — `(series_id, issued_ts, valid_ts)`, since `samples` is
-  keyed `(series_id, ts)` — and is what makes forecast verification
-  possible; and the dashboard drawing past and future on one axis.
+- **The store follows from the coordinates.** `samples` is keyed
+  `(series_id, ts)`, one value per series per instant, so it cannot hold
+  a second opinion about the same instant — and keeping superseded issues
+  is the whole reason to record a forecast at all. Hence a `forecasts`
+  table keyed `(series_id, issued_ts, valid_ts)`, reusing `series` (whose
+  identity is already `(class, entity, aspect)`) and `rooms` (so an
+  entity move stays a tag transition, as for state). Widening `samples`
+  instead was rejected: a nullable `issued_ts` cannot ride a WITHOUT
+  ROWID primary key, so state rows would need a sentinel in the busiest
+  table in the store; the `bucket`/`changes` folds would silently apply
+  to forecast series and average across issues; and the one destructive
+  operation in the store would need a class-conditional purge.
+  - **The extent is stored, not derived**, for the reason above: a point
+    that describes `[valid_ts, valid_end)` has no successor to bound it
+    at the end of a horizon. `valid_end` is NULL for an instant, as an
+    absent `d` is on the wire, and `d` round-trips as the difference.
+    `valid_end` rather than a duration column because the verification
+    query is a small window over an unbounded history and only an end
+    gives it an indexable lower bound: `valid_ts > from - max_extent`
+    needs a `max_extent` nobody knows.
+- Still to come under #147: the recorder writing that table and answering
+  the two verification read shapes; and the dashboard drawing past and
+  future on one axis.
 
 ## Voice (later phase)
  

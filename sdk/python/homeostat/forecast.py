@@ -16,6 +16,11 @@ A point is an instant unless it carries `d`, the extent in seconds it
 describes — an accumulation over a window, or a value that holds across
 one. See `Point`.
 
+What makes a forecast different from state is not the array — it is that
+each point carries TWO times, when it was said and when it is about,
+where a state sample carries one. The array transports one issue
+atomically; the value inside it is a scalar like any other.
+
 Points are irregular by design. A regular grid cannot represent an
 irregular series while the reverse is trivial, and forcing one would make
 the producer resample — which is lossy, and worse, not single-valued: a
