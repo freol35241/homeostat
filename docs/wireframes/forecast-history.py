@@ -143,15 +143,57 @@ def plot_frame(x, y, w, h, ylo, yhi, xlo, xhi):
 YLO, YHI = 0.0, 2.15
 
 
+def window_issues() -> list:
+    """Every issue whose horizon touches the drawn window."""
+    return [k * ISSUE_EVERY for k in range(int(T1 / ISSUE_EVERY) + 1)
+            if k * ISSUE_EVERY + HORIZON >= T0 and k * ISSUE_EVERY <= T1]
+
+
+def age_ramp(f: float) -> str:
+    """A sequential step on issue age: 0 oldest and pale, 1 newest and
+    full. Issue time is ORDERED, so this is a ramp and never categorical
+    hues — and the ramp needs no legend, because darker IS newer."""
+    pale, full = (0xEA, 0xD8, 0xBC), (0xC7, 0x76, 0x1A)
+    r, g, b = (round(a + (z - a) * f) for a, z in zip(pale, full))
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
+def issue_lines(to, uniform=None) -> list:
+    """Every issue drawn as its own trajectory, clipped to the window.
+
+    A line per issue rather than an envelope over them, because an
+    envelope's edge is not a forecast: at each instant it belongs to
+    whichever issue happened to be highest there, so the boundary is
+    stitched from many and is a path nobody ever predicted. What a
+    reader wants from this chart — do the recent ones agree, is one
+    stale outlier doing the disagreeing, does each one drift the same
+    way — is exactly what an envelope flattens away.
+    """
+    issues = window_issues()
+    out = []
+    for n, issued in enumerate(issues):
+        lo, hi = max(issued, T0), min(issued + HORIZON, T1)
+        if hi - lo < 1.0:
+            continue
+        colour = uniform or age_ramp(n / max(len(issues) - 1, 1))
+        out.append(series([to(t, forecast(issued, t)) for t in grid(0.5, lo, hi)],
+                          colour, 1.3, None, 0.9))
+    return out
+
+
+def edge_owners(ts) -> int:
+    """How many distinct issues the envelope's upper edge is made of over
+    the drawn window — the measure of how much of a fiction it is."""
+    return len({max(issues_covering(t), key=lambda i: forecast(i, t)) for t in ts})
+
+
 def bundle_band(to, ts) -> str:
-    """The spread of every issue's opinion about each instant, as one
-    filled shape: a band rather than a line per issue, because twenty
-    strokes is ink without a reading. What it costs is knowing WHICH
-    issue said what — the inspection mode, not the default."""
+    """The same issues reduced to min/max per instant — kept only to show
+    what the reduction costs."""
     hi = [to(t, max(forecast(i, t) for i in issues_covering(t))) for t in ts]
     lo = [to(t, min(forecast(i, t) for i in issues_covering(t))) for t in ts]
     d = path(hi) + " L " + " L ".join(f"{px:.1f} {py:.1f}" for px, py in reversed(lo)) + " Z"
-    return f'<path d="{d}" fill="{BAND}" opacity=".6" stroke="none"/>'
+    return f'<path d="{d}" fill="{BAND}" opacity=".7" stroke="none"/>'
 
 
 # ---- panel 1: the field ----------------------------------------------------
@@ -203,28 +245,42 @@ def field_panel(x, y, w, h):
     return out
 
 
-# ---- panel 2: D, the bundle ------------------------------------------------
+# ---- panel 2: D, every issue drawn ----------------------------------------
 def bundle_panel(x, y, w, h):
     out = panel(x, y, w, h, "D — every issue at once  (the field, drawn)",
-                "The width is how much successive forecasts disagreed about each moment — "
-                "and it grows with lead time.")
-    px, py, pw, ph = x + 56, y + 74, w - 150, h - 126
+                "One line per forecast, paler the older it is. Where they fan apart is where "
+                "successive forecasts disagreed.")
+    px, py, pw, ph = x + 56, y + 76, 470, h - 140
     frame, to = plot_frame(px, py, pw, ph, YLO, YHI, T0, T1)
     out += frame
+    out += issue_lines(to)
     ts = grid()
-    out.append(bundle_band(to, ts))
-    out.append(series([to(t, truth(t)) for t in ts], ACTUAL))
-    at = T0 + 15
-    bx, by = to(at, max(forecast(i, at) for i in issues_covering(at)))
+    out.append(series([to(t, truth(t)) for t in ts], ACTUAL, 2.2))
     ax, ay = to(T0 + 2, truth(T0 + 2))
     out += [
-        text(bx, by - 10, "every issue", 11, BANDINK, "bold"),
         text(ax, ay - 14, "actual", 11, ACTUAL, "bold"),
-        text(px, py + ph + 22, "valid time →", 11, MUT),
-        text(x + w - 18, y + h - 16,
-             "one query — ?valid_from=..;valid_to=..  — and A, B and C all fall out of it",
-             11, MUT, "normal", "end"),
+        text(px + 150, py - 8, "older → newer", 10, BANDINK),
+        text(px, py + ph + 20, "valid time →", 11, MUT),
     ]
+
+    # The same data as an envelope, beside it, because the reduction is
+    # tempting and worth seeing the cost of.
+    qx, qw = x + 580, 196
+    frame2, to2 = plot_frame(qx, py, qw, ph, YLO, YHI, T0, T1)
+    out += frame2
+    out.append(bundle_band(to2, ts))
+    out.append(series([to2(t, truth(t)) for t in ts], ACTUAL, 1.8))
+    out += [
+        text(qx, py - 8, "or reduced to an envelope", 10, MUT),
+        # Counted from what is actually drawn, not asserted: the number
+        # is the point of the caption.
+        text(qx, py + ph + 20,
+             f"its edge is stitched from {edge_owners(ts)} different", 10, BANDINK),
+        text(qx, py + ph + 34, "issues — a path nobody predicted", 10, BANDINK),
+    ]
+    out.append(text(x + w - 18, y + h - 16,
+                    "one query — ?valid_from=..;valid_to=..  — and A, B and C all fall out of it",
+                    11, MUT, "normal", "end"))
     return out
 
 
@@ -241,8 +297,8 @@ def highlight_panel(x, y, w, h, which):
     frame, to = plot_frame(px, py, pw, ph, YLO, YHI, T0, T1)
     out += frame
     ts = grid()
-    out.append(bundle_band(to, ts))
-    out.append(series([to(t, truth(t)) for t in ts], ACTUAL, 1.6, None, 0.5))
+    out += issue_lines(to, uniform=BAND)
+    out.append(series([to(t, truth(t)) for t in ts], ACTUAL, 1.6, None, 0.6))
     if which == "A":
         candidates = [k * ISSUE_EVERY for k in range(int(T1 / ISSUE_EVERY) + 1)]
         candidates = [i for i in candidates if T0 <= i <= T1 - HORIZON]
