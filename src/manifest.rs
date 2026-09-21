@@ -545,11 +545,28 @@ pub struct EntityNaming {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct WritePolicy {
-    pub mode: WriteMode,
+    /// How commands are governed. Optional, and meaningful only on a
+    /// capability that takes commands at all: eight of the fourteen have
+    /// no command aspect (`sensor`, `camera`, `router`, …), and a mode on
+    /// one of those governs nothing. Required where the capability has a
+    /// base aspect (`write-mode-required`), so a light or a lock still
+    /// states its policy rather than inheriting one silently; absent, it
+    /// reads as `shared`. Use `WritePolicy::mode()` rather than this
+    /// field.
+    #[serde(default)]
+    pub mode: Option<WriteMode>,
     /// Exactly one unit binds each entity: an adapter, or an automation
     /// for virtual entities. Must exist (`missing-owner-unit`) and be the
     /// unit whose entities dir holds this file (`owner-mismatch`).
     pub owner: String,
+}
+
+impl WritePolicy {
+    /// The effective mode. An absent one is `shared`: it is only legal on
+    /// a capability that takes no commands, where nothing reads it.
+    pub fn mode(&self) -> WriteMode {
+        self.mode.unwrap_or(WriteMode::Shared)
+    }
 }
 
 /// How commands toward the entity are governed. An automation-owned

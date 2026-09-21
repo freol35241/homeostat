@@ -151,6 +151,13 @@ pub const CODES: &[(&str, &str)] = &[
          vpn) because grants, the arbiter and the dashboard key on it.",
     ),
     (
+        "write-mode-required",
+        "An entity whose capability takes commands must state `[write_policy] \
+         mode`. The mode governs how commands are resolved, so it is optional \
+         only on the capabilities that take none (sensor, camera, router and \
+         the rest with no base aspect), where it would govern nothing.",
+    ),
+    (
         "missing-owner-unit",
         "An entity file's `[write_policy] owner` names a unit that does not \
          exist in units/.",

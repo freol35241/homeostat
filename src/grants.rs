@@ -195,7 +195,7 @@ pub fn resolve(
                     name: e.name.clone(),
                     room: e.file.entity.room.clone(),
                     capability: e.file.entity.capability.clone(),
-                    write: e.file.write_policy.mode,
+                    write: e.file.write_policy.mode(),
                     owner: e.owner.clone(),
                 })
                 .collect();
@@ -245,7 +245,7 @@ pub fn resolve(
                 name: e.name.clone(),
                 room: e.file.entity.room.clone(),
                 capability: capability.clone(),
-                write: e.file.write_policy.mode,
+                write: e.file.write_policy.mode(),
                 owner: e.owner.clone(),
             })
             .collect();
@@ -296,7 +296,7 @@ pub fn resolve(
         }
     }
     for entity in &house.entities {
-        if entity.file.write_policy.mode != WriteMode::Exclusive {
+        if entity.file.write_policy.mode() != WriteMode::Exclusive {
             continue;
         }
         if let Some(writers) = writers.get(entity.name.as_str()) {
@@ -322,7 +322,7 @@ pub fn resolve(
     // check above but over `expanded` directly, since arbiter-class publishes
     // never form cmd-class grants.
     for entity in &house.entities {
-        if entity.file.write_policy.mode != WriteMode::Arbitrated {
+        if entity.file.write_policy.mode() != WriteMode::Arbitrated {
             continue;
         }
         let prefix = [
@@ -623,7 +623,7 @@ mod tests {
                 },
                 naming: None,
                 write_policy: WritePolicy {
-                    mode,
+                    mode: Some(mode),
                     owner: adapter.to_string(),
                 },
                 inputs: None,
@@ -776,10 +776,10 @@ mod tests {
         );
 
         let mut flipped = house_with_lock(arbiter_bus());
-        flipped.entities[0].file.write_policy.mode = WriteMode::Exclusive;
+        flipped.entities[0].file.write_policy.mode = Some(WriteMode::Exclusive);
         // The lamp is granted to nobody; flip the lock instead, which
         // night_mode writes.
-        flipped.entities[1].file.write_policy.mode = WriteMode::Shared;
+        flipped.entities[1].file.write_policy.mode = Some(WriteMode::Shared);
         let (expanded, _, _) = expand(&flipped);
         let (flipped_grants, _, _) = resolve(&flipped, &expanded);
         assert_ne!(
@@ -1020,7 +1020,7 @@ mod tests {
     #[test]
     fn two_bindings_in_one_unit_are_one_writer() {
         let mut house = house_with_lock(None);
-        house.entities[0].file.write_policy.mode = WriteMode::Exclusive;
+        house.entities[0].file.write_policy.mode = Some(WriteMode::Exclusive);
         let bus = house.units[1].manifest.bus.as_mut().unwrap();
         for (name, aspect) in [("lamp_on", "on"), ("lamp_brightness", "brightness")] {
             bus.publishes.insert(

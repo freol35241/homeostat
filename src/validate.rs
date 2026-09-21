@@ -4,6 +4,7 @@ use crate::error::ValidationError;
 use crate::keyspace::{is_reserved_word, PSEUDO_ROOMS};
 use crate::manifest::{
     DiscoveryMode, ParamSpec, ParamType, UnitKind, WidgetKind, WidgetSpec, WriteMode, CAPABILITIES,
+    VOCABULARY,
 };
 use crate::repo::House;
 
@@ -258,6 +259,23 @@ fn check_entities(house: &House, errors: &mut Vec<ValidationError>) {
             ));
         }
 
+        // A write mode governs commands, so it means nothing on a
+        // capability that takes none — eight of the fourteen. It stays
+        // required where there IS something to govern, so a light or a
+        // lock never inherits a policy silently.
+        if entity.file.write_policy.mode.is_none()
+            && VOCABULARY
+                .iter()
+                .any(|c| c.name == capability && c.base.is_some())
+        {
+            errors.push(ValidationError::new(
+                "write-mode-required",
+                &entity.name,
+                format!("capability \"{capability}\" takes commands, so [write_policy] needs a mode"),
+                file.clone(),
+            ));
+        }
+
         let room = &entity.file.entity.room;
         if is_reserved_word(room) && !PSEUDO_ROOMS.contains(&room.as_str()) {
             errors.push(ValidationError::new(
@@ -299,7 +317,7 @@ fn check_entities(house: &House, errors: &mut Vec<ValidationError>) {
             }
             Some(unit)
                 if unit.manifest.unit.kind == UnitKind::Automation
-                    && entity.file.write_policy.mode == WriteMode::Arbitrated =>
+                    && entity.file.write_policy.mode() == WriteMode::Arbitrated =>
             {
                 // A commandable virtual entity is a latch (docs/design.md,
                 // Commandable virtual entities): no device to contend for,

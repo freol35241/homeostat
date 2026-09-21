@@ -752,7 +752,7 @@ fn render_unit(check: &CheckResult, unit: &LoadedUnit, out: &mut String) {
                 entity.name,
                 entity.file.entity.capability,
                 format!("room={}", entity.file.entity.room),
-                entity.file.write_policy.mode,
+                entity.file.write_policy.mode(),
             ));
         }
     }

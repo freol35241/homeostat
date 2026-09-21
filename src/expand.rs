@@ -99,8 +99,8 @@ pub fn expand(house: &House) -> (Vec<ExpandedKey>, Vec<String>, Vec<ValidationEr
                     .iter()
                     .filter(|e| e.owner == unit.manifest.unit.name)
                     .filter(|e| match expr.class() {
-                        Some("cmd") => e.file.write_policy.mode != WriteMode::Arbitrated,
-                        Some("arbiter") => e.file.write_policy.mode == WriteMode::Arbitrated,
+                        Some("cmd") => e.file.write_policy.mode() != WriteMode::Arbitrated,
+                        Some("arbiter") => e.file.write_policy.mode() == WriteMode::Arbitrated,
                         _ => true,
                     })
                     .map(|e| expr.substitute(&e.file.entity.room, &e.name))
@@ -225,7 +225,7 @@ mod tests {
                 },
                 naming: None,
                 write_policy: WritePolicy {
-                    mode,
+                    mode: Some(mode),
                     owner: adapter.to_string(),
                 },
                 inputs: None,

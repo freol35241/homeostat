@@ -12,5 +12,4 @@ en = "outdoor temperature"
 aliases = []
 
 [write_policy]
-mode = "shared"
 owner = "esphome"
