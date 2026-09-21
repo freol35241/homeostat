@@ -153,6 +153,11 @@ MAX_BODY_BYTES = 64 * 1024
 # may smuggle into a selector.
 SEGMENT = re.compile(r"[A-Za-z0-9_.-]+")
 HISTORY_LIMIT_MAX = 5000
+# Issues one /api/forecasts reply may carry. A week of hourly issues is
+# 168 full horizons — megabytes on the wire and an unreadable mat on the
+# chart — so the page asks for the newest few and says how many it drew,
+# rather than the window quietly meaning something different at each range.
+FORECAST_ISSUE_MAX = 200
 
 
 def granted_capabilities(publishes: dict) -> set[str]:
@@ -840,6 +845,47 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
             {"series": [{"key": key, "points": points} for key, points in replies]}
         )
 
+    async def api_forecasts(request: web.Request) -> web.Response:
+        """The forecasts the recorder kept for one aspect over a window —
+        what the house SAID, as against what it now believes.
+
+        Its own route rather than a class on /api/history because the
+        reply is a different shape: history answers in rows, this answers
+        in issues, and one endpoint returning two shapes would have every
+        caller sniff which it got. `limit` counts issues, as the recorder
+        counts them, so a reply is never half an issue."""
+        entity = request.query.get("entity", "")
+        aspect = request.query.get("aspect", "")
+        if not entity or not aspect:
+            return json_error("entity and aspect are required")
+        if entity not in model.entities:
+            return json_error(f"unknown entity {entity}")
+        if not valid_segment(aspect):
+            return json_error("aspect must be a single key segment")
+        now = datetime.datetime.now(datetime.timezone.utc)
+        try:
+            hours = min(float(request.query.get("hours", "24")), 24 * 31)
+            limit = max(1, min(int(request.query.get("limit", "60")), FORECAST_ISSUE_MAX))
+            start = now - datetime.timedelta(hours=hours)
+        except (ValueError, OverflowError):
+            return json_error("hours and limit must be numbers")
+        # The window is the drawn one: an issue is kept when it said
+        # anything about it, so a forecast made before the window but
+        # reaching into it is still part of the picture.
+        selector = (
+            f"{keys.history_key('forecast', entity, aspect)}"
+            f"?valid_from={start.isoformat(timespec='seconds')}"
+            f";valid_to={now.isoformat(timespec='seconds')};limit={limit}"
+        )
+        try:
+            replies = await asyncio.get_running_loop().run_in_executor(
+                None, hub.session.get_json, selector
+            )
+        except QueryError as error:
+            return json_error(f"recorder: {error}", status=502)
+        issues = [issue for _key, payload in replies for issue in (payload or [])]
+        return web.json_response({"issues": issues})
+
     async def api_logs(request: web.Request) -> web.Response:
         unit = request.query.get("unit", "")
         if unit not in model.units:
@@ -930,6 +976,7 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
     app.router.add_post("/api/lights/off", api_lights_off)
     app.router.add_post("/api/param", api_param)
     app.router.add_get("/api/history", api_history)
+    app.router.add_get("/api/forecasts", api_forecasts)
     app.router.add_get("/api/logs", api_logs)
     app.router.add_get("/api/camera/{entity}/live", api_camera_live)
     app.router.add_get("/assets/{name}", api_asset)
