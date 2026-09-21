@@ -2959,9 +2959,251 @@ every chart walks backward from now.
     drew: a week of hourly issues is an unreadable mat and a large fetch,
     and a window that quietly means different things at different ranges
     is worse than one that states its limit.
+- **What a forecast IS, stated plainly** (2026-09-21, when a rename to
+  `future` was considered and dropped): a SOURCE's claim about a series'
+  future values. A controller publishing its own planned trajectory is
+  therefore in scope without a second class and without a rename — it is
+  a claim about a series' future made by the source that controls it,
+  which makes it unusually reliable, not a different kind of thing. The
+  distinction that prompted the question — a commitment versus a
+  prediction — is a property of the source, not of the class, and
+  Subjects and sources below puts the source in the key where a consumer
+  that needs to tell them apart can read it. `future` was additionally
+  refused because `Future` is Rust's async trait and every type name in
+  this crate would collide with it.
 - Still to come under #147: the recorder writing that table and answering
   the two verification read shapes; and the dashboard drawing past and
   future on one axis.
+
+## Subjects and sources: naming what a value is about (proposed 2026-09-21)
+
+The key space names the thing that *reports*, never the thing reported
+*on*. `home/state/kitchen/ceiling_lamp/on` puts `ceiling_lamp` where
+keelson puts `source_id`, not where it puts `subject` — and that has
+been invisible because for a light, a lock, a cover and a switch the
+producer and the subject are one object. Nothing was decided wrongly; a
+distinction was never forced.
+
+Forecasts forced it. Three sensors and a weather service all have an
+opinion about the outdoor air; the outdoor air has no name anywhere in
+the house; so a forecast about it had nowhere to attach that did not
+require lying about who owns a device (`forecast-publish-unbound`,
+under Forecasts). The same shape is already latent in the fused
+downstairs temperature under Virtual sensors, and in the
+presence-fusion sentence before it.
+
+### The vocabulary
+
+- **`entity` stays the umbrella; it gains two kinds, `device` and
+  `subject`.** What they share is what the registry is for: a globally
+  unique name, one room as the single source of spatial truth, a
+  naming block, and every generated surface. A device is a thing in the
+  house — an adapter-native address, liveness, sometimes commands. A
+  subject is something the house cares about the VALUE of, which has
+  none of those and instead has sources.
+- **`commandable` was considered as the rename for `device` and is
+  wrong on the facts.** Eight of the fourteen capabilities have
+  `base: None` — `binary_sensor`, `camera`, `cover`, `person`,
+  `presence`, `router`, `sensor`, `vpn`. Read-only entities are the
+  majority, and a camera is not a subject either. Commandability is a
+  property of a capability, not the axis the noun divides on.
+  - It does expose one existing oddity, noted and not fixed here:
+    `person` is a subject the house tracks, and presence detectors are
+    its sources. The pseudo-room `person` already half-admits this.
+- **`subject` over the alternatives.** `quantity` fails on a fused
+  "someone is home"; `observable` is control-theory jargon the record
+  does not otherwise use; `phenomenon` is precise and unreadable. It is
+  also keelson's word for this exact key position, which is where the
+  distinction was borrowed from.
+- **`source` names who reports**, one segment, never keelson's
+  multi-level `gnss/0` — see the positional-parsing rule below.
+
+### Subjects
+
+- **The founding decision: an entity may name a subject instead of a
+  device.** Same registry, same uniqueness, same room rule, same
+  surfaces. It differs in having no adapter-native address, no write
+  policy and no commands, and in declaring the sources that report on
+  it.
+- **Why not a capability.** `capability` is a device taxonomy — what
+  kind of appliance, which widget, which cmd grants. A subject is not a
+  kind of appliance, and adding one would put a fiction in the table
+  that decides command vocabulary.
+- **Why the virtual entity does not already cover it.** It nearly does,
+  and everything it settled stands: derived state is ordinary state,
+  and nothing downstream can tell a fused reading from a measured one.
+  What it cannot do is stop lying. A virtual entity must invent an `id`
+  that addresses nothing, must carry a `write_policy` whose `mode` is
+  dead on a thing nobody can command, and must appoint one unit to
+  compute its value before it may exist. The third is load-bearing: it
+  is why a weather service cannot forecast the outdoor air without also
+  owning the fusion of the sensors that measure it.
+- **Shape.** Declared, not inferred from an absent `id` —
+  absence-as-meaning is the magic the manifest rules refuse.
+  `[entity]` and `[subject]` are mutually exclusive in one file
+  (`entity-or-subject`).
+
+  ```toml
+  schema = 1
+
+  [subject]
+  room = "global"
+  default_source = "fused"
+
+  [naming]
+  sv = "utomhustemperaturen"
+  en = "outdoor temperature"
+
+  [aspects.temperature]
+  kind = "temperature"           # aspect-descriptor vocabulary
+
+  [sources.esphome_north]
+  entity = "outdoor_temp"        # a device entity's reading
+  aspect = "temperature"
+
+  [sources.fused]
+  unit = "outdoor"
+
+  [sources.smhi]
+  unit = "weather"
+  ```
+
+- **Sources are declared centrally, in the subject's file**, and this is
+  the membership fact: what reports on this subject, completely,
+  independent of which one anything reads. The alternative — each unit
+  declaring what it contributes to — was rejected for the reason feeds
+  name entity + aspect rather than a unit (Device feeds): the house has
+  an identity layer, one place should hold the wiring, and the plan
+  should render the edges as it renders grants. Publishing under an
+  undeclared source is a plan error (`subject-source-undeclared`); a
+  declared source no publisher consumes or produces is a warning
+  (`subject-source-unconsumed`), which is what makes the declaration a
+  checked fact rather than documentation.
+- **One canonical rule: a subject names its canonical source.** A
+  dashboard tile, a `Now` deviation, `read_state` and voice each render
+  ONE value, and `default_source` says which. A fusion is not a second
+  mechanism — it is a source that happens to be computed by a unit, so
+  `default_source = "fused"` covers the expressive case with no extra
+  vocabulary. The core never computes a subject's value; everything on
+  the bus is published by a unit, as ever.
+  - Considered and rejected: a reducer enum in the file
+    (`reduce = "median" | "first_available"`). The constraint language's
+    precedent argues for a tiny declarative vocabulary with an escape
+    hatch, but `first_available` requires the core to track liveness and
+    switch, which means the core publishing a computed value — a line
+    the architecture does not cross — and the slope from median to
+    outlier rejection to Kalman is real. Fusion is behaviour; it lives
+    in the house repo as code.
+- **A subject is never commandable.** `cmd` and `arbiter` keys under one
+  are refused at plan time (`subject-commanded`). This is not the
+  virtual-entity latch narrowed; it is the case the latch was carved out
+  of. To command the thing, declare a device. A house-mode switch stays
+  a commandable virtual entity, unchanged.
+- **Its descriptor comes from its file, not from discovery.** Aspect
+  descriptors ride `home/discovery/{unit}` because an adapter is
+  describing its devices; a subject has no adapter to describe it, so
+  the entity file carries `kind`, `label` and `unit` directly. This is a
+  second source of descriptors and the one genuinely new path here. The
+  dashboard's descriptor-to-widget mapping is unchanged and still pure.
+
+### The source segment
+
+- **A subject's `state` and `forecast` keys carry the source; a
+  device's do not.**
+
+  ```
+  home/state/global/outdoor_temperature/temperature/esphome_north
+  home/state/global/outdoor_temperature/temperature/fused
+  home/forecast/global/outdoor_temperature/temperature/smhi
+  home/state/kitchen/ceiling_lamp/on
+  ```
+
+  Both classes, not forecast alone. An earlier draft made forecast the
+  only source-carrying class on the argument that state already has a
+  source dimension — the device entity — and that a weather provider as
+  an entity is a lie where a sensor is not. That does not survive the
+  two-algorithm case: `presence_algo_a` owned by a fusion unit and
+  `outdoor_temp_smhi` owned by a weather unit are the same construction,
+  and both are wrong the same way — they concatenate a subject and its
+  provenance into one name, which is a two-field key written as a
+  string. Either both are acceptable as entities or neither is.
+- **Devices are untouched, deliberately.** Today's five-segment key,
+  `[entity]`, `write_policy`, discovery descriptors, availability,
+  arbitration: all as they are. No existing entity file, manifest,
+  subscription or stored series changes shape.
+- **Positional and unambiguous**: five segments is a device, six is a
+  subject. This holds only while a source is one segment, which is why
+  keelson's multi-level `source_id` is not taken.
+- **Publish authority moves down for subjects.** Today it is
+  structural — one binder per entity, expressed by the registry. For a
+  subject it becomes one publisher per `(subject, aspect, source)`,
+  checked at plan time; the `singleton_publishers` machinery in
+  `grants.rs` already does this for the reserved classes. Device state
+  is untouched: a device has one master and the registry should keep
+  saying so.
+- **`forecast` sheds the ownership requirement independently of all of
+  the above.** A controller publishing its planned trajectory for the
+  heat pump is forecasting a DEVICE it commands and does not bind, so no
+  subject is involved and the rule must still relax:
+  `forecast-publish-unbound` becomes an existence check plus the
+  singleton-publisher check. The sentence under Forecasts promising "a
+  controller publishing its own planned trajectory on the same class
+  needs no new vocabulary" was unbuildable as written; this is what it
+  costs to keep it. It ships first and alone.
+
+### The store
+
+- **`series` gains a `source` column; no new tables.** The `forecasts`
+  table earned its separation with a different primary key and folds
+  that would misapply to it. Neither holds for subject state: the row
+  shape is identical to a device's and `bucket`/`changes` are correct
+  for both, so splitting would duplicate the fold logic for nothing.
+- **No migration of existing rows.** Subjects are a new noun and nothing
+  is published under one today; device series keep their identity and
+  gain an empty source.
+- **The NULL trap, named here so it is not found in the recorder.**
+  SQLite treats NULLs as distinct in a unique index, so
+  `UNIQUE (class, entity, aspect, source)` with NULL for device rows
+  would silently admit duplicate device series. The column is NOT NULL
+  with an empty-string sentinel for devices.
+
+### Open, and deliberately not settled here
+
+- **Uncertainty has no representation.** A forecast point's value is a
+  scalar and the SDK refuses anything else, so an ensemble or a
+  confidence band cannot be published. Model-predictive control is a
+  standing assumption and a curve without a band is a real limit. The
+  source segment offers a tempting non-answer — `smhi_p10`, `smhi_p50`,
+  `smhi_p90` as three sources — which abuses source for a dimension it
+  does not mean; percentiles of one issue are one claim, not three
+  claims. Named here so nobody reaches for it by accident.
+- **Corrections to the past have no representation.** `state` is a
+  last-value scalar; a reanalysis that learns later what the
+  temperature actually was cannot be published. Niche, and the
+  `forecasts` table's two coordinates are suggestive, but not solved.
+
+### Rejected, deliberately
+
+- **`commandable` as the noun** — wrong for eight of fourteen
+  capabilities.
+- **A new capability for subjects** — capability decides command
+  vocabulary and widgets; a subject has neither.
+- **A `subject` key class.** A subject's state is state, exactly as a
+  fused temperature's is; this is the argument that rejected a
+  `derived` class.
+- **Separate store tables per entity kind** — see The store.
+- **Inferring subject-ness from a missing `id`.**
+- **Making `write_policy` optional on ordinary entities** so sensors may
+  skip the dead `mode`. It IS dead ceremony on the eight read-only
+  capabilities and worth fixing, but as its own change; folding a
+  cleanup into a new noun couples two things that should be reviewable
+  apart.
+- **Redefining `entity` to mean the subject and demoting devices to
+  sources** — the fully keelson-shaped option. More honest in the
+  abstract, and it rebuilds the identity layer: `cmd`, `arbiter`,
+  discovery, `available` and feeds are all device-addressed. Keelson
+  faces none of that because it is a data plane, with RPC on a separate
+  path and no family-tier surface that must show one number.
 
 ## Voice (later phase)
  
