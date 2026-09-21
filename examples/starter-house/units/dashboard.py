@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "homeostat==0.14.0rc2",
+#     "homeostat==0.14.0",
 #     "aiohttp>=3.12.14,<4",
 # ]
 # ///
@@ -17,7 +17,7 @@ a small API generated entirely from the house's text:
                      grants its capability; each unit with the entities
                      it drives, from the grant table, and reads, from
                      its subscriptions — the unit card's relations)
-  GET  /ws           snapshot of state/health/config plus every aspect
+  GET  /ws           snapshot of state/forecasts/health/config plus every aspect
                      descriptor adapters publish in their discovery
                      records (docs/design.md, Aspect descriptors), then
                      live deltas
@@ -150,6 +150,11 @@ MAX_BODY_BYTES = 64 * 1024
 # may smuggle into a selector.
 SEGMENT = re.compile(r"[A-Za-z0-9_.-]+")
 HISTORY_LIMIT_MAX = 5000
+# Issues one /api/forecasts reply may carry. A week of hourly issues is
+# 168 full horizons — megabytes on the wire and an unreadable mat on the
+# chart — so the page asks for the newest few and says how many it drew,
+# rather than the window quietly meaning something different at each range.
+FORECAST_ISSUE_MAX = 200
 
 
 def granted_capabilities(publishes: dict) -> set[str]:
@@ -421,6 +426,13 @@ class Hub:
         self.session = session
         self.lock = threading.Lock()
         self.state: dict[str, object] = {}
+        # The current forecast per home/forecast key, carried live like
+        # state rather than read back from the recorder: what a family
+        # looks at is what the house believes NOW, and a house with no
+        # recorder must still be able to see its own horizon. The
+        # recorder's copy answers a different question — what we believed
+        # THEN — which is verification, and not this surface.
+        self.forecasts: dict[str, object] = {}
         self.health: dict[str, object] = {}
         self.config: dict[str, object] = {}
         # entity name -> its adapter's aspect descriptor, lifted out of
@@ -447,6 +459,7 @@ class Hub:
         # subscription update always supersedes what the seed would write.
         self._subs = [
             self.session.subscribe("home/state/**", self._on_state),
+            self.session.subscribe("home/forecast/**", self._on_forecast),
             self.session.subscribe("home/health/**", self._on_health),
             self.session.subscribe("home/config/*/*", self._on_config),
             self.session.subscribe("home/discovery/*", self._on_discovery),
@@ -454,6 +467,9 @@ class Hub:
         for key, value in self.session.get_json("home/state/**"):
             with self.lock:
                 self.state.setdefault(key, value)
+        for key, value in self.session.get_json("home/forecast/**"):
+            with self.lock:
+                self.forecasts.setdefault(key, value)
         for key, value in self.session.get_json("home/health/*"):
             with self.lock:
                 self.health.setdefault(key, value)
@@ -481,6 +497,7 @@ class Hub:
             return {
                 "type": "snapshot",
                 "state": dict(self.state),
+                "forecasts": dict(self.forecasts),
                 "health": dict(self.health),
                 "config": dict(self.config),
                 "aspects": dict(self.aspects),
@@ -503,6 +520,14 @@ class Hub:
         with self.lock:
             self.state[key] = value
         self._emit({"type": "state", "key": key, "value": value})
+
+    def _on_forecast(self, sample) -> None:
+        if (decoded := self._decode(sample)) is None:
+            return
+        key, value = decoded
+        with self.lock:
+            self.forecasts[key] = value
+        self._emit({"type": "forecast", "key": key, "value": value})
 
     def _apply_discovery(self, unit: str, value) -> None:
         """Diffs a unit's discovery record against what it described
@@ -817,6 +842,47 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
             {"series": [{"key": key, "points": points} for key, points in replies]}
         )
 
+    async def api_forecasts(request: web.Request) -> web.Response:
+        """The forecasts the recorder kept for one aspect over a window —
+        what the house SAID, as against what it now believes.
+
+        Its own route rather than a class on /api/history because the
+        reply is a different shape: history answers in rows, this answers
+        in issues, and one endpoint returning two shapes would have every
+        caller sniff which it got. `limit` counts issues, as the recorder
+        counts them, so a reply is never half an issue."""
+        entity = request.query.get("entity", "")
+        aspect = request.query.get("aspect", "")
+        if not entity or not aspect:
+            return json_error("entity and aspect are required")
+        if entity not in model.entities:
+            return json_error(f"unknown entity {entity}")
+        if not valid_segment(aspect):
+            return json_error("aspect must be a single key segment")
+        now = datetime.datetime.now(datetime.timezone.utc)
+        try:
+            hours = min(float(request.query.get("hours", "24")), 24 * 31)
+            limit = max(1, min(int(request.query.get("limit", "60")), FORECAST_ISSUE_MAX))
+            start = now - datetime.timedelta(hours=hours)
+        except (ValueError, OverflowError):
+            return json_error("hours and limit must be numbers")
+        # The window is the drawn one: an issue is kept when it said
+        # anything about it, so a forecast made before the window but
+        # reaching into it is still part of the picture.
+        selector = (
+            f"{keys.history_key('forecast', entity, aspect)}"
+            f"?valid_from={start.isoformat(timespec='seconds')}"
+            f";valid_to={now.isoformat(timespec='seconds')};limit={limit}"
+        )
+        try:
+            replies = await asyncio.get_running_loop().run_in_executor(
+                None, hub.session.get_json, selector
+            )
+        except QueryError as error:
+            return json_error(f"recorder: {error}", status=502)
+        issues = [issue for _key, payload in replies for issue in (payload or [])]
+        return web.json_response({"issues": issues})
+
     async def api_logs(request: web.Request) -> web.Response:
         unit = request.query.get("unit", "")
         if unit not in model.units:
@@ -907,6 +973,7 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
     app.router.add_post("/api/lights/off", api_lights_off)
     app.router.add_post("/api/param", api_param)
     app.router.add_get("/api/history", api_history)
+    app.router.add_get("/api/forecasts", api_forecasts)
     app.router.add_get("/api/logs", api_logs)
     app.router.add_get("/api/camera/{entity}/live", api_camera_live)
     app.router.add_get("/assets/{name}", api_asset)

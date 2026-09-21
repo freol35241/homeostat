@@ -3,7 +3,7 @@ revision = 3
 requires-python = ">=3.11"
 
 [manifest]
-requirements = [{ name = "homeostat", specifier = "==0.14.0rc2" }]
+requirements = [{ name = "homeostat", specifier = "==0.14.0" }]
 
 [[package]]
 name = "eclipse-zenoh"
@@ -23,11 +23,11 @@ wheels = [
 
 [[package]]
 name = "homeostat"
-version = "0.14.0rc2"
+version = "0.14.0"
 source = { registry = "/opt/homeostat-wheels" }
 dependencies = [
     { name = "eclipse-zenoh" },
 ]
 wheels = [
-    { path = "/opt/homeostat-wheels/homeostat-0.14.0rc2-py3-none-any.whl" },
+    { path = "/opt/homeostat-wheels/homeostat-0.14.0-py3-none-any.whl" },
 ]

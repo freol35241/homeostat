@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "homeostat==0.14.0rc2",
+#     "homeostat==0.14.0",
 # ]
 # ///
 """Recorder service: history end to end (see docs/design.md, step 5a).
@@ -20,6 +20,20 @@ config keys land raw in an events audit table; so does every cmd envelope
 (alongside its unwrapped value in samples) — the "who" audit, askable via
 home/history/events.
 
+Forecasts (docs/design.md, Forecasts) are the one class that does NOT
+ride samples, because a forecast point carries two times — when it was
+said and when it is about — where a sample carries one, and keeping
+superseded issues is the entire reason to store a forecast. They land in
+`forecasts`, keyed (series_id, issued_ts, valid_ts) over the same
+`series` and `rooms` tables, one row per point: the document is the unit
+of issuance, the row is the unit of fact. A point's extent is stored
+(`valid_end`, NULL for an instant, as an absent `d` is on the wire)
+rather than derived from the next row, because the last point of a
+horizon has no next row — the succession that `changes=1` relies on for
+state is exactly what a forecast lacks. Rows are stamped with the
+producer's own `issued`, never receipt: a delayed or replayed issue must
+not read as a fresher opinion than it was.
+
 Timestamps are recorder receive time (µs, UTC), assigned before any
 buffering, so a backend outage never distorts history. A failed flush
 keeps samples in a bounded in-memory buffer (drop-oldest) and leaves
@@ -36,7 +50,16 @@ one point per bucket (ts the bucket's start; a number's value is the mean
 and the point carries min and max; a bool's or string's is the last value
 seen), and changes=1 replies only the rows at which the value changed,
 the window's first included — a state's runs. Both fold the whole window
-before limit keeps the newest rows. GET home/history/events
+before limit keeps the newest rows. GET home/history/forecast/{entity}/{aspect} answers in ISSUES rather than
+rows, each in the wire's own shape so a consumer can hand it to the SDK's
+decoder: at=<rfc3339> (the default, at now) is the forecast as it stood
+then — the latest issue at or before that instant — and
+valid_from=..;valid_to=.. is every issue that said something about that
+window, each carrying only its overlapping points, which is what checking
+a forecast against what happened reads. The two are exclusive, the window
+needs both ends, and `limit` counts issues: an issue is the atom here, so
+a reply is never cut across one.
+GET home/history/events
 ?key=..;from=..;to=..;limit=.. replies one message, a JSON array of
 {ts, key, payload} drawn from the events audit table — key is a
 zenoh-style key expression (wildcards included) filtering which recorded
@@ -57,8 +80,12 @@ the way in, so that reply is a read of one row per series and does not
 slow down as the store grows; a store's size is answerable at the size
 where the question gets asked.
 
-Retention is two parameters, retain_samples_days and retain_events_days,
-0 meaning forever (the default, so an upgrade never deletes history).
+Retention is three parameters — retain_samples_days,
+retain_forecasts_days and retain_events_days — 0 meaning forever (the
+default, so an upgrade never deletes history). Forecasts are purged on
+issue time, since superseded issues are what grows; the knowing cost is
+that a long-horizon forecast goes by its age even where part of its
+horizon was never verified against anything.
 The writer thread purges rows older than the window hourly and whenever
 a window changes, then returns the freed pages to the filesystem
 (PRAGMA incremental_vacuum, what the file's auto_vacuum mode is for),
@@ -84,7 +111,7 @@ from pathlib import Path
 
 import tomllib
 import zenoh
-from homeostat import house, keys, session
+from homeostat import forecast, house, keys, session
 from homeostat.params import LiveParams
 
 BUFFER_LIMIT = 10_000
@@ -92,6 +119,7 @@ RETRY_S = 1.0
 PURGE_INTERVAL_S = 3600.0
 PARAM_DEFAULTS = {
     "retain_samples_days": 0.0,
+    "retain_forecasts_days": 0.0,
     "retain_events_days": 0.0,
     "integrity_check_hours": 24.0,
 }
@@ -104,6 +132,7 @@ MAX_QUERY_LIMIT = 10_000
 INT64_MIN, INT64_MAX = -(2**63), 2**63 - 1
 EVENTS_KEY = zenoh.KeyExpr("home/history/events")
 STATS_KEY = zenoh.KeyExpr("home/history/stats")
+FORECAST_KEY = zenoh.KeyExpr("home/history/forecast/**")
 
 # Store layout, stamped in PRAGMA user_version. Version 0 was one wide
 # samples table repeating class/room/entity/aspect/kind as TEXT on every
@@ -112,7 +141,7 @@ STATS_KEY = zenoh.KeyExpr("home/history/stats")
 # Version 1 kept every aggregate on the samples table, where COUNT/MIN/MAX
 # per series have no index that answers them; version 2 carries them on
 # series instead (see the tally trigger).
-STORE_VERSION = 2
+STORE_VERSION = 3
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS series (
@@ -136,6 +165,15 @@ CREATE TABLE IF NOT EXISTS samples (
   kind INTEGER NOT NULL,
   value NOT NULL,
   PRIMARY KEY (series_id, ts)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS forecasts (
+  series_id INTEGER NOT NULL REFERENCES series (id),
+  issued_ts INTEGER NOT NULL,
+  valid_ts INTEGER NOT NULL,
+  valid_end INTEGER,
+  room_id INTEGER NOT NULL REFERENCES rooms (id),
+  value NOT NULL,
+  PRIMARY KEY (series_id, issued_ts, valid_ts)
 ) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS events (
   ts INTEGER NOT NULL,
@@ -185,6 +223,13 @@ CREATE TRIGGER IF NOT EXISTS samples_tally AFTER INSERT ON samples BEGIN
     newest_ts = MAX(COALESCE(newest_ts, NEW.ts), NEW.ts)
   WHERE id = NEW.series_id;
 END;
+CREATE TRIGGER IF NOT EXISTS forecasts_tally AFTER INSERT ON forecasts BEGIN
+  UPDATE series SET
+    row_count = row_count + 1,
+    oldest_ts = MIN(COALESCE(oldest_ts, NEW.issued_ts), NEW.issued_ts),
+    newest_ts = MAX(COALESCE(newest_ts, NEW.issued_ts), NEW.issued_ts)
+  WHERE id = NEW.series_id;
+END;
 """
 
 # samples.kind codes, in the order the history view spells them out; the
@@ -218,6 +263,10 @@ class Params(LiveParams):
     @property
     def retain_samples_days(self) -> float:
         return self.get("retain_samples_days")
+
+    @property
+    def retain_forecasts_days(self) -> float:
+        return self.get("retain_forecasts_days")
 
     @property
     def retain_events_days(self) -> float:
@@ -387,12 +436,24 @@ class Writer:
         "  ?, (SELECT id FROM rooms WHERE name = ?), ?, ?)"
     )
     EVENTS_INSERT = "INSERT INTO events VALUES (?, ?, ?)"
+    # OR IGNORE, as for samples: a producer that re-publishes an issue
+    # unchanged (a restart, a redelivery from the mirror) must not double
+    # it, and (series_id, issued_ts, valid_ts) is exactly the identity of
+    # "this issue's opinion about this instant".
+    FORECASTS_INSERT = (
+        "INSERT OR IGNORE INTO forecasts VALUES ("
+        "  (SELECT id FROM series WHERE class = 'forecast' AND entity = ? AND aspect = ?),"
+        "  ?, ?, ?, (SELECT id FROM rooms WHERE name = ?), ?)"
+    )
 
     @staticmethod
     def _bind(table: str, row: tuple) -> tuple:
         if table == "samples":
             ts, space, room, entity, aspect, kind, value = row
             return (space, entity, aspect, ts, room, kind, value)
+        if table == "forecasts":
+            issued, valid, end, room, entity, aspect, value = row
+            return (entity, aspect, issued, valid, end, room, value)
         return row
 
     def _flush(self, rows: list) -> None:
@@ -403,6 +464,10 @@ class Writer:
                 conn.executemany(
                     self.SAMPLES_INSERT,
                     [self._bind(table, row) for table, row in rows if table == "samples"],
+                )
+                conn.executemany(
+                    self.FORECASTS_INSERT,
+                    [self._bind(table, row) for table, row in rows if table == "forecasts"],
                 )
                 conn.executemany(
                     self.EVENTS_INSERT,
@@ -420,8 +485,13 @@ class Writer:
         try:
             with conn:
                 self._intern(conn, rows)
+                statements = {
+                    "samples": self.SAMPLES_INSERT,
+                    "forecasts": self.FORECASTS_INSERT,
+                    "events": self.EVENTS_INSERT,
+                }
                 for table, row in rows:
-                    sql = self.SAMPLES_INSERT if table == "samples" else self.EVENTS_INSERT
+                    sql = statements[table]
                     try:
                         conn.execute(sql, self._bind(table, row))
                     except sqlite3.IntegrityError as err:
@@ -437,6 +507,13 @@ class Writer:
         retention never fills the events table with its own bookkeeping."""
         windows = {
             "samples": self.params.retain_samples_days,
+            # Measured on issue time, not valid time: what grows without
+            # bound is superseded issues, so bounding their age bounds the
+            # table. The consequence to accept knowingly is that a
+            # long-horizon forecast is purged by its age even where part
+            # of its horizon has not happened yet and so was never
+            # verified against anything.
+            "forecasts": self.params.retain_forecasts_days,
             "events": self.params.retain_events_days,
         }
         if all(days <= 0 for days in windows.values()):
@@ -447,7 +524,7 @@ class Writer:
             for table, days in windows.items()
             if days > 0
         }
-        deleted = {"samples": 0, "events": 0}
+        deleted = {"samples": 0, "forecasts": 0, "events": 0}
         try:
             conn = sqlite3.connect(self.db_path, timeout=2.0)
             try:
@@ -480,6 +557,29 @@ class Writer:
                                     (gone, series_id, series_id, series_id),
                                 )
                             deleted["samples"] += gone
+                if "forecasts" in cutoffs:
+                    # The same walk, on the other coordinate: the primary
+                    # key is (series_id, issued_ts, valid_ts), so deleting
+                    # by issue age is a range on its leading edge and one
+                    # issue's points go together, which is what a purge of
+                    # a forecast series means.
+                    for (series_id,) in conn.execute("SELECT id FROM series").fetchall():
+                        with conn:
+                            gone = conn.execute(
+                                "DELETE FROM forecasts WHERE series_id = ? AND issued_ts < ?",
+                                (series_id, cutoffs["forecasts"]),
+                            ).rowcount
+                            if gone:
+                                conn.execute(
+                                    "UPDATE series SET row_count = row_count - ?,"
+                                    " oldest_ts = (SELECT MIN(issued_ts) FROM forecasts"
+                                    "   WHERE series_id = ?),"
+                                    " newest_ts = (SELECT MAX(issued_ts) FROM forecasts"
+                                    "   WHERE series_id = ?)"
+                                    " WHERE id = ?",
+                                    (gone, series_id, series_id, series_id),
+                                )
+                            deleted["forecasts"] += gone
                 if "events" in cutoffs:
                     with conn:
                         deleted["events"] = conn.execute(
@@ -498,6 +598,7 @@ class Writer:
         self.sess.health_event(
             "purge",
             samples=deleted["samples"],
+            forecasts=deleted["forecasts"],
             events=deleted["events"],
             pages_freed=before - after,
         )
@@ -507,11 +608,13 @@ class Writer:
         per-row inserts are id lookups."""
         conn.executemany(
             "INSERT OR IGNORE INTO series (class, entity, aspect) VALUES (?, ?, ?)",
-            {(r[1], r[3], r[4]) for t, r in rows if t == "samples"},
+            {(r[1], r[3], r[4]) for t, r in rows if t == "samples"}
+            | {("forecast", r[4], r[5]) for t, r in rows if t == "forecasts"},
         )
         conn.executemany(
             "INSERT OR IGNORE INTO rooms (name) VALUES (?)",
-            {(r[2],) for t, r in rows if t == "samples"},
+            {(r[2],) for t, r in rows if t == "samples"}
+            | {(r[3],) for t, r in rows if t == "forecasts"},
         )
 
 
@@ -559,6 +662,8 @@ class Recorder:
                     if self._live is not None:
                         self._live.add(key)
             self._record_sample(ts, key, parts, sample)
+        elif len(parts) > 1 and parts[1] == "forecast":
+            self._record_forecast(ts, key, parts, sample)
         else:
             payload = sample.payload.to_bytes().decode("utf-8", errors="replace")
             self.writer.enqueue("events", (ts, key, payload))
@@ -637,6 +742,45 @@ class Recorder:
             raw = sample.payload.to_bytes().decode("utf-8", errors="replace")
             self.writer.enqueue("events", (ts, key, raw))
 
+    def _record_forecast(self, ts, key, parts, sample) -> None:
+        """One issue becomes one row per point. The document is the unit
+        of issuance; the row is the unit of fact (docs/design.md,
+        Forecasts) — a scalar with its two coordinates, which is why it
+        cannot ride `samples` and why it decomposes so plainly once it has
+        its own table.
+
+        `ts` — the recorder's receipt — is deliberately NOT what a row is
+        stamped with. A forecast states its own `issued`, and that is the
+        coordinate verification compares against; receipt time would make
+        a replayed or delayed issue look like a fresher opinion than it
+        is. Receipt still bounds nothing here, so a producer's clock is
+        trusted for `issued` exactly as its values are trusted.
+
+        A whole issue is refused or accepted together: a document with one
+        bad point is a producer bug, and half-storing it would leave a
+        forecast that reads as complete and is not."""
+        if len(parts) < 5:
+            self.sess.health_event("drop", reason="off-schema-key", key=key)
+            return
+        try:
+            decoded = forecast.decode(sample.payload.to_bytes())
+        except ValueError as error:
+            self.sess.health_event(
+                "drop", reason="malformed-payload", key=key, detail=str(error)
+            )
+            return
+        issued_us = int(decoded.issued.timestamp() * 1_000_000)
+        room, entity, aspect = parts[2], parts[3], "/".join(parts[4:])
+        for point in decoded.points:
+            valid_us = int(point.t.timestamp() * 1_000_000)
+            end_us = (
+                valid_us + int(point.d * 1_000_000) if point.d is not None else None
+            )
+            self.writer.enqueue(
+                "forecasts",
+                (issued_us, valid_us, end_us, room, entity, aspect, point.v),
+            )
+
     def answer(self, query: zenoh.Query) -> None:
         asked = zenoh.KeyExpr(str(query.key_expr))
         # Events only when the selector sits inside the events key: the two
@@ -647,6 +791,13 @@ class Recorder:
             self._answer_events(query)
         elif STATS_KEY.includes(asked):
             self._answer_stats(query)
+        elif FORECAST_KEY.includes(asked):
+            # Same rule as events, for the same reason: the forecast path
+            # takes different parameters and replies in a different shape
+            # (issues, not rows), so a wildcard like home/history/** keeps
+            # fanning out over the sample series alone rather than mixing
+            # two answers nothing can read together.
+            self._answer_forecasts(query, asked)
         else:
             self._answer_samples(query, asked)
 
@@ -663,7 +814,7 @@ class Recorder:
             return
         try:
             series = conn.execute(
-                "SELECT id, class, entity, aspect FROM series"
+                "SELECT id, class, entity, aspect FROM series WHERE class != 'forecast'"
             ).fetchall()
             for series_id, space, entity, aspect in series:
                 series_key = f"home/history/{space}/{entity}/{aspect}"
@@ -702,6 +853,68 @@ class Recorder:
                         for ts, room, kind, value in rows
                     ]
                 query.reply(series_key, json.dumps(payload))
+        except sqlite3.Error as err:
+            query.reply_err(json.dumps(f"store unavailable: {err}"))
+        finally:
+            conn.close()
+
+    def _answer_forecasts(self, query: zenoh.Query, asked: zenoh.KeyExpr) -> None:
+        """The two verification shapes, replying in issues rather than
+        rows — an issue is the atom here, so it is also the unit `limit`
+        counts and the unit a reply is never cut in half across.
+
+        `at=<rfc3339>` (the default, at now) is the forecast as it stood
+        then: the latest issue at or before that instant. `valid_from`/
+        `valid_to` is every issue that said something about that window,
+        each carrying just the points overlapping it — what "how wrong
+        was it" reads, against the state the samples table holds for the
+        same span.
+
+        Each issue comes back in the wire's own shape, so a consumer can
+        hand it straight to the SDK's decoder rather than learning a
+        second spelling of the same thing."""
+        try:
+            at_us, from_us, to_us, limit = parse_forecast_params(str(query.parameters))
+        except ValueError as err:
+            query.reply_err(json.dumps(str(err)))
+            return
+        try:
+            conn = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True, timeout=2.0)
+        except sqlite3.Error as err:
+            query.reply_err(json.dumps(f"store unavailable: {err}"))
+            return
+        try:
+            series = conn.execute(
+                "SELECT id, entity, aspect FROM series WHERE class = 'forecast'"
+            ).fetchall()
+            for series_id, entity, aspect in series:
+                series_key = f"home/history/forecast/{entity}/{aspect}"
+                if not asked.intersects(zenoh.KeyExpr(series_key)):
+                    continue
+                if at_us is not None:
+                    rows = conn.execute(
+                        "SELECT issued_ts, valid_ts, valid_end, value FROM forecasts"
+                        " WHERE series_id = ? AND issued_ts = ("
+                        "   SELECT MAX(issued_ts) FROM forecasts"
+                        "   WHERE series_id = ? AND issued_ts <= ?)"
+                        " ORDER BY valid_ts ASC",
+                        (series_id, series_id, at_us),
+                    ).fetchall()
+                else:
+                    # A point speaks for [valid_ts, valid_end); an instant
+                    # speaks only for itself. The two want opposite
+                    # comparators at the window's near edge — an instant
+                    # AT `from` is inside it, an interval ENDING at `from`
+                    # is not — so the predicate names both cases rather
+                    # than picking one and being wrong half the time.
+                    rows = conn.execute(
+                        "SELECT issued_ts, valid_ts, valid_end, value FROM forecasts"
+                        " WHERE series_id = ? AND valid_ts < ?"
+                        "   AND (valid_end > ? OR (valid_end IS NULL AND valid_ts >= ?))"
+                        " ORDER BY issued_ts ASC, valid_ts ASC",
+                        (series_id, to_us, from_us, from_us),
+                    ).fetchall()
+                query.reply(series_key, json.dumps(as_issues(rows, limit)))
         except sqlite3.Error as err:
             query.reply_err(json.dumps(f"store unavailable: {err}"))
         finally:
@@ -878,6 +1091,61 @@ def parse_params(raw: str) -> tuple[int, int, int, int, bool]:
             " buckets over the window; widen it or narrow from/to"
         )
     return from_us, to_us, limit, bucket_us, changes
+
+
+def as_issues(rows, limit: int) -> list:
+    """Rows grouped into issues, in the wire's shape. Newest issues kept
+    when there are more than `limit` — the samples path's convention, one
+    level up: there it keeps the newest rows, here the newest issues,
+    because half an issue is not a forecast."""
+    issues: dict = {}
+    for issued_ts, valid_ts, valid_end, value in rows:
+        point = {"t": iso_utc(valid_ts), "v": value}
+        if valid_end is not None:
+            point["d"] = (valid_end - valid_ts) / 1_000_000
+        issues.setdefault(issued_ts, []).append(point)
+    kept = sorted(issues)[-limit:] if limit else sorted(issues)
+    return [
+        {"schema": forecast.SCHEMA, "issued": iso_utc(issued), "points": issues[issued]}
+        for issued in kept
+    ]
+
+
+def parse_forecast_params(raw: str) -> tuple[int | None, int, int, int]:
+    """`at` or `valid_from`+`valid_to` (RFC3339 with offset, as the
+    samples path spells time), plus `limit` in issues.
+
+    The two are exclusive and the range needs both ends: an unbounded
+    verification window over a store of superseded issues is a scan
+    nobody meant to ask for, and defaulting one end would be guessing
+    which. Neither given means `at` now — the current forecast, which is
+    what a bare read of the key should mean."""
+    params = split_selector(raw)
+    limit = parse_limit(params["limit"]) if "limit" in params else DEFAULT_QUERY_LIMIT
+    ranged = "valid_from" in params or "valid_to" in params
+    if "at" in params and ranged:
+        raise ValueError("at and valid_from/valid_to are exclusive")
+    if ranged:
+        missing = [b for b in ("valid_from", "valid_to") if b not in params]
+        if missing:
+            raise ValueError(f"{missing[0]}: a verification window needs both ends")
+        return None, rfc3339_us("valid_from", params["valid_from"]), rfc3339_us(
+            "valid_to", params["valid_to"]
+        ), limit
+    at_us = rfc3339_us("at", params["at"]) if "at" in params else now_us()
+    return at_us, 0, 0, limit
+
+
+def rfc3339_us(name: str, raw: str) -> int:
+    """An RFC3339 instant with an offset, in µs — the samples path's
+    convention, named here so the forecast path cannot drift from it."""
+    try:
+        dt = datetime.datetime.fromisoformat(raw)
+    except ValueError:
+        raise ValueError(f"{name}: {raw!r} is not RFC3339")
+    if dt.tzinfo is None:
+        raise ValueError(f"{name}: {raw!r} needs a UTC offset")
+    return int(dt.timestamp() * 1e6)
 
 
 def parse_bucket(raw: str) -> int:
