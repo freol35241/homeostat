@@ -1385,6 +1385,24 @@ Settled after wireframe review (2026-07-15, sheets in
 `docs/wireframes/` — the hybrid sheet is the direction; A and B are
 the exploration that produced it):
 
+- **The detail overlay can take the whole window** (added
+  2026-09-21). The overlay is a 440px rail, which is right on a phone
+  and right beside a view, and wrong when the subject is a dense plot.
+  A control in its header widens it to the browser window and the
+  choice is remembered per viewer, in `localStorage` — it is a reading
+  preference, not house state, so it belongs to the browser rather than
+  the bus, and nobody else's device should learn it. The chart gets
+  TALLER as well as wider: full window exists to separate lines, and a
+  plot merely stretched sideways is no easier to read. The height is
+  baked into the chart's viewBox when it is built, so the toggle
+  re-renders rather than restyling.
+  - A consequence worth recording, because it will catch the next
+    person: the chart SVG is stretched to its wrapper with
+    `preserveAspectRatio="none"`, so anything meant to be round cannot
+    live inside it. A circle in viewBox units renders as an ellipse —
+    barely at the rail's 2:1, unmissably at the full-window chart's
+    6:1 — so the value dots are positioned in the wrapper instead, by
+    percentage.
 - **Shape: four generated views** — `Now`, `Setpoints`, `Rooms`,
   `Health`, with health also summarized in the nav rail. `Setpoints`
   is every family-editable parameter in the house as one flat list:
