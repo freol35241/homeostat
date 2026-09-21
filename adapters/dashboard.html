@@ -191,6 +191,10 @@ h1.view-title { font-size: 20px; margin: 0 0 16px; }
 .chart-tile { height: 36px; }
 .chart-row { height: 28px; }
 .chart-detail { height: 220px; margin: 12px 0 4px; }
+/* Full window is for separating lines, which takes height as much as
+   width; a chart merely stretched sideways is no easier to read. */
+.chart-detail-wide { height: 440px; margin: 16px 0 4px; }
+.chart-timeline-wide { height: 96px; margin: 16px 0 4px; }
 .chart-timeline { height: 64px; margin: 12px 0 4px; }
 .chart-commands { height: 28px; margin: 8px 0 2px; }
 .chart-note { font-size: 12px; color: var(--muted); }
@@ -199,7 +203,12 @@ h1.view-title { font-size: 20px; margin: 0 0 16px; }
 .chart-line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;
   vector-effect: non-scaling-stroke; }
 .chart-area { fill: var(--accent); opacity: .08; stroke: none; }
-.chart-dot { fill: var(--accent); }
+/* Positioned in the wrapper, not the SVG: the viewBox is stretched to
+   fit (preserveAspectRatio="none"), so an SVG circle would render as an
+   ellipse — subtly at 2:1, unmissably at the full-window chart's 6:1. */
+.chart-dot, .chart-crosshair-dot { position: absolute; width: 7px; height: 7px;
+  border-radius: 50%; background: var(--accent); transform: translate(-50%, -50%);
+  pointer-events: none; }
 /* The future, in the same ink as the past because it is the same series,
    dashed because it is a belief rather than a record. */
 .chart-forecast { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linecap: round;
@@ -208,7 +217,6 @@ h1.view-title { font-size: 20px; margin: 0 0 16px; }
   vector-effect: non-scaling-stroke; }
 .chart-grid { stroke: var(--border); stroke-width: 1; vector-effect: non-scaling-stroke; }
 .chart-crosshair { stroke: var(--muted); stroke-width: 1; vector-effect: non-scaling-stroke; }
-.chart-crosshair-dot { fill: var(--accent); }
 .chart-ylabel { position: absolute; right: 4px; font-size: 12px; color: var(--muted); pointer-events: none; }
 .chart-ylabel-top { top: 0; }
 .chart-ylabel-bottom { bottom: 0; }
@@ -411,12 +419,23 @@ video-rtc video { width: 100%; display: block; }
   transform: translateX(100%); transition: transform 200ms ease; z-index: 31;
   display: flex; flex-direction: column; outline: none; }
 #overlay-panel.show { transform: translateX(0); }
+/* Full window, for reading a chart rather than glancing at one. The
+   detail overlay is a 440px rail because that is right on a phone and
+   beside a view; it is wrong when the subject is a dense plot. */
+#overlay-panel.wide { left: 0; width: 100vw; border-left: none; }
 .overlay-head { display: flex; align-items: center; justify-content: space-between; gap: 12px;
   padding: 16px; border-bottom: 1px solid var(--border); flex: 0 0 auto; }
 .overlay-title { font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .overlay-close { border: none; background: transparent; color: var(--secondary); font-size: 20px; line-height: 1;
   cursor: pointer; width: 32px; height: 32px; flex: 0 0 auto; border-radius: 6px; transition: background-color 140ms ease; }
 .overlay-close:hover { background: var(--bg); }
+.overlay-actions { display: flex; align-items: center; gap: 2px; flex: 0 0 auto; }
+.overlay-wide { border: none; background: transparent; color: var(--secondary); cursor: pointer;
+  width: 32px; height: 32px; border-radius: 6px; transition: background-color 140ms ease;
+  display: flex; align-items: center; justify-content: center; }
+.overlay-wide:hover { background: var(--bg); }
+.overlay-wide svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8;
+  stroke-linecap: round; stroke-linejoin: round; }
 .overlay-body { padding: 16px; overflow-y: auto; flex: 1 1 auto; }
 
 @media (max-width: 720px) {
@@ -448,7 +467,13 @@ video-rtc video { width: 100%; display: block; }
 <div id="overlay-panel" role="dialog" aria-modal="true" aria-labelledby="overlay-title" tabindex="-1">
   <div class="overlay-head">
     <div class="overlay-title" id="overlay-title"></div>
-    <button class="overlay-close" id="overlay-close" data-action="overlay-close" aria-label="Close">&times;</button>
+    <div class="overlay-actions">
+      <button class="overlay-wide" id="overlay-wide" data-action="overlay-wide"
+              aria-label="Full window" title="Full window" aria-pressed="false">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 2H2v4M10 2h4v4M6 14H2v-4M10 14h4v-4"/></svg>
+      </button>
+      <button class="overlay-close" id="overlay-close" data-action="overlay-close" aria-label="Close">&times;</button>
+    </div>
   </div>
   <div class="overlay-body" id="overlay-body">
     <div id="overlay-head"></div>
@@ -1139,6 +1164,7 @@ function buildChart(chartId, points, opts) {
       width: CHART_VBW, height: height, aspect: opts.aspect, window: opts.window
     };
     var d = chartPathData(geo.coords);
+    var dotHtml = '';
     // A forecast alone is enough to draw, so the recorded past can be
     // empty here — a detail overlay renders before its history arrives,
     // and a house that has a horizon but no recorder never has one.
@@ -1168,12 +1194,13 @@ function buildChart(chartId, points, opts) {
     // The dot marks the latest RECORDED value, so there is none to mark
     // when nothing has been recorded.
     if (last) {
-      svg += '<circle class="chart-dot" cx="' + last.x.toFixed(1) + '" cy="' + last.y.toFixed(1) + '" r="3"/>';
+      dotHtml = '<div class="chart-dot" style="left:' + (last.x / CHART_VBW * 100).toFixed(2) +
+        '%; top:' + (last.y / height * 100).toFixed(2) + '%;"></div>';
     }
     svg += '<line class="chart-crosshair" x1="0" y1="0" x2="0" y2="' + height + '" style="display:none;"/>';
-    svg += '<circle class="chart-crosshair-dot" cx="0" cy="0" r="3" style="display:none;"/>';
+    dotHtml += '<div class="chart-crosshair-dot" style="display:none;"></div>';
     svg += '</svg>';
-    inner = svg;
+    inner = svg + dotHtml;
     if (opts.yLabels) {
       inner += '<div class="chart-ylabel chart-ylabel-top">' + esc(formatChartValue(opts.aspect, geo.max)) + '</div>' +
         '<div class="chart-ylabel chart-ylabel-bottom">' + esc(formatChartValue(opts.aspect, geo.min)) + '</div>';
@@ -1267,11 +1294,14 @@ function onChartPointerMove(wrap, reg, ev) {
   var svg = wrap.querySelector('svg');
   if (!svg) return;
   var line = svg.querySelector('.chart-crosshair');
-  var dot = svg.querySelector('.chart-crosshair-dot');
+  var dot = wrap.querySelector('.chart-crosshair-dot');
   line.setAttribute('x1', c.x); line.setAttribute('x2', c.x);
   line.style.display = '';
-  dot.setAttribute('cx', c.x); dot.setAttribute('cy', c.y);
-  dot.style.display = '';
+  if (dot) {
+    dot.style.left = (c.x / reg.width * 100).toFixed(2) + '%';
+    dot.style.top = (c.y / reg.height * 100).toFixed(2) + '%';
+    dot.style.display = '';
+  }
   var px = rect.left + (c.x / reg.width) * rect.width;
   var py = rect.top + (c.y / reg.height) * rect.height;
   var span = reg.window ? reg.window.to - reg.window.from : 0;
@@ -2313,9 +2343,43 @@ function markPendingControls() {
 
 // ---- detail overlay: open/close plumbing ----
 
+/* Whether the detail overlay covers the window. A per-viewer
+ * convenience, so it lives in localStorage rather than on the bus: it is
+ * not house state, nobody else's browser should learn it, and a reader
+ * who widened it once means it next time too. Every access is guarded —
+ * a private window or blocked site data throws on the property itself,
+ * and a chart is not worth a blank page. */
+var WIDE_KEY = 'homeostat.overlay.wide';
+
+function overlayWide() {
+  try {
+    return window.localStorage.getItem(WIDE_KEY) === '1';
+  } catch (e) {
+    return false;
+  }
+}
+
+function setOverlayWide(wide) {
+  try {
+    window.localStorage.setItem(WIDE_KEY, wide ? '1' : '0');
+  } catch (e) {
+    // no storage: the choice still applies to this overlay, just not the next
+  }
+  applyOverlayWide(wide);
+}
+
+function applyOverlayWide(wide) {
+  byId('overlay-panel').classList.toggle('wide', wide);
+  byId('overlay-wide').setAttribute('aria-pressed', wide ? 'true' : 'false');
+  // The charts read their own width from the DOM, so they have to be
+  // rebuilt rather than merely restyled.
+  if (overlay.open) renderOverlayContent();
+}
+
 function showOverlay() {
   var wasOpen = overlay.open;
   overlay.open = true;
+  applyOverlayWide(overlayWide());
   renderOverlayContent();
   byId('overlay-backdrop').classList.add('show');
   var panel = byId('overlay-panel');
@@ -2473,16 +2537,20 @@ function renderHistoryDetailBody() {
   var points = loaded ? rd.points : (overlay.lastPoints || []);
   var win = rd && rd.window ? rd.window : { from: Date.now() - overlay.range * 3600e3, to: Date.now() };
   var field = descriptorField(entity, aspect);
+  // The viewBox height is baked when the chart is built, so a taller
+  // chart is a rebuild, not a restyle — which is why toggling the width
+  // re-renders rather than just swapping a class.
+  var wide = overlayWide();
   var chartHtml, statsHtml;
   if (overlay.shape === 'timeline') {
-    chartHtml = buildTimeline('detail-chart', points, { height: 64, sizeClass: 'chart-timeline', aspect: aspect, field: field, window: win });
+    chartHtml = buildTimeline('detail-chart', points, { height: wide ? 96 : 64, sizeClass: wide ? 'chart-timeline-wide' : 'chart-timeline', aspect: aspect, field: field, window: win });
     var tl = logic.timelineStats(logic.timelineRuns(points, win.from, win.to));
     statsHtml = '<div class="stat-row">' +
       statText('Now', tl.latest === null ? '—' : logic.formatAspect(aspect, field, tl.latest)) +
       (tl.onMs === null ? '' : statText('On', fmtDuration(tl.onMs) + ' of ' + fmtDuration(win.to - win.from))) +
       statText('Changes', String(tl.changes)) + '</div>';
   } else {
-    chartHtml = buildChart('detail-chart', points, { height: 220, sizeClass: 'chart-detail', aspect: aspect, gridlines: true, area: true, yLabels: true, window: win, forecast: forecastOf(entity, aspect) });
+    chartHtml = buildChart('detail-chart', points, { height: wide ? 440 : 220, sizeClass: wide ? 'chart-detail-wide' : 'chart-detail', aspect: aspect, gridlines: true, area: true, yLabels: true, window: win, forecast: forecastOf(entity, aspect) });
     var stats = rangeStats(points);
     statsHtml = '<div class="stat-row">' +
       statItem('Latest', stats.latest, aspect) + statItem('Min', stats.min, aspect) +
@@ -2853,6 +2921,10 @@ document.addEventListener('click', function (e) {
     overlay.range = hrs;
     fetchHistoryRange(overlay.entity.name, overlay.aspect, hrs, overlay.shape);
     renderOverlayContent();
+    return;
+  }
+  if (action === 'overlay-wide') {
+    setOverlayWide(!overlayWide());
     return;
   }
   if (action === 'overlay-close') {
