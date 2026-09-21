@@ -23,6 +23,15 @@ default = 0
 constraint = { min = 0 }
 editable_by = "owner"
 
+# Superseded issues are what grows: every re-issue of a horizon is kept
+# so a forecast can be checked against what actually happened, which is
+# the whole reason to store one. Measured on issue time.
+[params.retain_forecasts_days]
+type = "float"
+default = 0
+constraint = { min = 0 }
+editable_by = "owner"
+
 [params.retain_events_days]
 type = "float"
 default = 0
@@ -40,6 +49,9 @@ editable_by = "owner"
 
 [bus.subscribes]
 state = "home/state/**"
+# A series' future, stored beside its past. Recording forecasts is a
+# house's choice — drop this line and the class is simply not kept.
+forecast = "home/forecast/**"
 cmd = "home/cmd/**"
 health = "home/health/**"
 config = "home/config/**"
