@@ -2923,6 +2923,42 @@ every chart walks backward from now.
     query is a small window over an unbounded history and only an end
     gives it an indexable lower bound: `valid_ts > from - max_extent`
     needs a `max_extent` nobody knows.
+- **The dashboard draws stored forecasts as a braid** (added
+  2026-09-21). The history detail overlay gains a second chip row where
+  an aspect has a future — `now` draws the current belief dashed past
+  the now-rule, `what we said` draws every issue the recorder kept over
+  the window, one thin line each. This is owner work, not family work,
+  so it lives in the overlay rather than as a `dashboard.toml` widget:
+  a family wants what tonight will cost, not whether yesterday was
+  right, and the dashboard stays family-tier.
+  - **A line per issue, never an envelope over them.** An envelope's
+    edge belongs at each instant to whichever issue happened to be
+    highest there, so the boundary is stitched from many and is a path
+    nobody predicted — measured at ten distinct issues over one drawn
+    day in `docs/wireframes/forecast-history.svg`. It also flattens what
+    the chart is for: whether the recent issues agree, whether one stale
+    outlier is doing the disagreeing, whether each drifts the same way.
+  - **The braid is grey, the outcome keeps the accent**, and a pinned
+    issue takes the set point's amber. An earlier version ramped the
+    braid INTO the accent and its newest line became indistinguishable
+    from what actually happened. The pin's two steps are validated as a
+    pair against the accent in both modes; dark's is darker than the
+    obvious choice because the light step sits outside dark mode's
+    lightness band.
+  - **Scrubbing reads twice.** It highlights the nearest issue — by
+    distance in SCREEN pixels, since the viewBox is stretched and one x
+    unit is nothing like one y unit — and names it in the tooltip; and it
+    writes the whole column under the chart, "N forecasts, this to that",
+    which is the one slice whose x axis is issue time and which therefore
+    cannot share this chart. A tap pins a line, a drag does not: the two
+    arrive as the same pointer sequence and only travel separates them.
+  - `/api/forecasts` is its own route rather than a class on
+    `/api/history`, because the reply is issues where history is rows,
+    and one endpoint returning two shapes would have every caller sniff
+    which it got. The page asks for the newest few and says how many it
+    drew: a week of hourly issues is an unreadable mat and a large fetch,
+    and a window that quietly means different things at different ranges
+    is worse than one that states its limit.
 - Still to come under #147: the recorder writing that table and answering
   the two verification read shapes; and the dashboard drawing past and
   future on one axis.

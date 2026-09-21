@@ -573,7 +573,15 @@
   // millisecond timestamps here so the chart can place them on the same
   // axis as recorded history without every caller re-parsing.
   function forecastFor(forecasts, room, entity, aspect) {
-    var doc = forecasts && forecasts['home/forecast/' + room + '/' + entity + '/' + aspect];
+    return decodeForecast(
+      forecasts && forecasts['home/forecast/' + room + '/' + entity + '/' + aspect]
+    );
+  }
+
+  // One forecast document, live off the bus or stored by the recorder —
+  // the same shape either way, which is why the store replies in the
+  // wire's spelling rather than a second one.
+  function decodeForecast(doc) {
     if (!doc || !doc.points || !doc.points.length) return null;
     var issued = Date.parse(doc.issued);
     var points = [];
@@ -606,6 +614,54 @@
     }
     if (lo.v === hi.v) return null;
     return { min: lo, max: hi };
+  }
+
+  // Stored issues as the chart wants them: each decoded like a live
+  // forecast, newest last, and only those with something to draw. The
+  // wire carries them oldest-first already; sorting here anyway means a
+  // reader never has to trust that.
+  function decodeIssues(issues) {
+    var out = [];
+    (issues || []).forEach(function (doc) {
+      var decoded = decodeForecast(doc);
+      if (decoded) out.push(decoded);
+    });
+    out.sort(function (a, b) { return (a.issued || a.from) - (b.issued || b.from); });
+    return out;
+  }
+
+  // What every stored issue said about one instant — a column of the
+  // field (docs/wireframes/forecast-history.svg). The spread is the
+  // reading; the count is what makes the spread mean anything.
+  function columnAt(issues, when) {
+    var lo = null, hi = null, n = 0;
+    for (var i = 0; i < issues.length; i++) {
+      var v = valueAt(issues[i], when);
+      if (v === null) continue;
+      n += 1;
+      if (lo === null || v < lo) lo = v;
+      if (hi === null || v > hi) hi = v;
+    }
+    return n ? { count: n, min: lo, max: hi } : null;
+  }
+
+  // One issue's value at an instant, by the extent rule the SDK uses: a
+  // point with `d` speaks for [t, t+d), an instant only for itself — so
+  // between two instants the value is interpolated, and outside any
+  // point's reach there is nothing to report rather than a guess.
+  function valueAt(forecast, when) {
+    var pts = forecast.points;
+    if (!pts.length || when < pts[0].t || when > forecast.to) return null;
+    var lo = 0;
+    for (var i = 0; i < pts.length; i++) {
+      if (pts[i].t <= when) lo = i; else break;
+    }
+    var left = pts[lo];
+    if (left.d) return when < left.t + left.d * 1000 ? left.v : null;
+    if (left.t === when) return left.v;
+    var right = pts[lo + 1];
+    if (!right) return null;
+    return left.v + (right.v - left.v) * ((when - left.t) / (right.t - left.t));
   }
 
   /* ---- history shapes ----
@@ -816,6 +872,10 @@
     applyMessage: applyMessage,
     computeDeviations: computeDeviations,
     forecastFor: forecastFor,
+    decodeForecast: decodeForecast,
+    decodeIssues: decodeIssues,
+    columnAt: columnAt,
+    valueAt: valueAt,
     horizonSummary: horizonSummary,
     formatAspect: formatAspect,
     controlFor: controlFor,

@@ -24,12 +24,18 @@
 :root {
   --bg: #f6f6f7; --card: #ffffff; --border: #e4e4e7; --ink: #18181b;
   --secondary: #52525b; --muted: #a1a1aa; --accent: #1f5e4a; --accent-tint: rgba(31,94,74,.10);
+  /* A pinned forecast, against the accent the outcome wears. Validated
+     as a pair in both modes: the dark step is darker than the obvious
+     choice because the light one sits outside dark mode's lightness
+     band, where it glares rather than reads. */
+  --issue-pin: #c7761a;
   --good: #0ca30c; --warning: #e8a33d; --serious: #ec835a; --critical: #d03b3b;
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #101012; --card: #1b1b1f; --border: #2a2a30; --ink: #f4f4f5;
     --secondary: #b0b0b8; --muted: #6b6b74; --accent: #389a7a; --accent-tint: rgba(56,154,122,.14);
+    --issue-pin: #bf8134;
   }
 }
 * { box-sizing: border-box; }
@@ -211,6 +217,18 @@ h1.view-title { font-size: 20px; margin: 0 0 16px; }
   pointer-events: none; }
 /* The future, in the same ink as the past because it is the same series,
    dashed because it is a belief rather than a record. */
+/* The braid: one line per stored issue, on a sequential ramp by age —
+   older paler, because issue time is ORDERED and a ramp needs no legend
+   (darker IS newer). Never categorical hues: twenty of those would be
+   unreadable and would fail every colourblind check. A transparent
+   companion stroke makes a 1.3px line tappable with a thumb. */
+.chart-issue { fill: none; stroke-width: 1.3; stroke-linecap: round; stroke-linejoin: round;
+  vector-effect: non-scaling-stroke; }
+.chart-issue-hit { fill: none; stroke: transparent; stroke-width: 14; cursor: pointer;
+  vector-effect: non-scaling-stroke; }
+.chart-issue.pinned { stroke: var(--issue-pin); stroke-width: 2.4; }
+.chart-issue.hovered { stroke: var(--issue-pin); stroke-width: 2; }
+.chart-note + .chart-note { margin-top: 2px; }
 .chart-forecast { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linecap: round;
   stroke-linejoin: round; stroke-dasharray: 4 3; opacity: .75; vector-effect: non-scaling-stroke; }
 .chart-now { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 2 2;
@@ -512,7 +530,11 @@ var TAB_ICONS = {
   health: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20.5 C 6 15.8 2.5 12.6 2.5 8.6 C 2.5 5.8 4.7 3.6 7.4 3.6 C 9 3.6 10.6 4.4 12 6 C 13.4 4.4 15 3.6 16.6 3.6 C 19.3 3.6 21.5 5.8 21.5 8.6 C 21.5 12.6 18 15.8 12 20.5 Z"/></svg>'
 };
 var RANGE_PRESETS = [{ label: '1h', hours: 1 }, { label: '6h', hours: 6 }, { label: '24h', hours: 24 }, { label: '7d', hours: 168 }];
-var CHART_VBW = 400; // internal viewBox width used for coordinate math; visual width is CSS 100%
+var CHART_VBW = 400;
+// The newest issues a braid draws. Past this the lines stop being
+// separable and the fetch stops being small; the page says how many it
+// drew rather than letting the window quietly mean different things.
+var BRAID_ISSUES = 40; // internal viewBox width used for coordinate math; visual width is CSS 100%
 
 var store = {
   model: { zones: {}, entities: [], units: [] },
@@ -553,6 +575,10 @@ var overlay = {
   range: 24,             // hours, for history
   rangeData: {},          // hours -> {points, window, loaded, loading}
   cmdData: {},             // hours -> the same, for the cmd series (what was asked)
+  said: false,             // for history: showing stored issues rather than the current forecast
+  issues: [],              // decoded stored issues for the current window
+  issuesLoading: false,
+  pinned: null,            // the issue time a reader pinned out of the braid
   lastPoints: null,
   log: null,               // for unit: {lines, loaded, loading}
   expanded: {}              // for entity: group -> true when a collapsed section is opened
@@ -870,6 +896,29 @@ function fetchHistoryRange(entityName, aspect, hours, shape) {
   fetchCommandRange(entityName, aspect, hours);
 }
 
+/* What the house SAID about this window, as against what it now
+ * believes: every issue the recorder kept. Fetched only when the reader
+ * asks for it — a braid is analysis, and a house with no recorder has
+ * none of this while still having a forecast to draw. */
+function fetchIssues(entityName, aspect, hours) {
+  overlay.issuesLoading = true;
+  var url = '/api/forecasts?entity=' + encodeURIComponent(entityName) +
+    '&aspect=' + encodeURIComponent(aspect) + '&hours=' + hours + '&limit=' + BRAID_ISSUES;
+  fetch(url)
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      overlay.issuesLoading = false;
+      if (!overlay.open || overlay.aspect !== aspect) return;
+      overlay.issues = logic.decodeIssues(data.issues);
+      renderOverlayContent();
+    })
+    .catch(function () {
+      overlay.issuesLoading = false;
+      overlay.issues = [];
+      if (overlay.open) renderOverlayContent();
+    });
+}
+
 /* What was asked of this aspect, beside what it did. The recorder types
  * every cmd envelope into its own series (docs/design.md, History), and
  * until now nothing could read it back — the audit existed and had no
@@ -1047,10 +1096,15 @@ document.addEventListener('click', function (e) {
 // same axis — one time domain and one value scale, because a forecast
 // drawn to its own scale beside its history says nothing about whether
 // the house is about to get colder (docs/design.md, Forecasts).
-function computeChartGeometry(points, width, height, pad, win, forecast) {
+function computeChartGeometry(points, width, height, pad, win, forecast, issues) {
   var vals = points.map(function (p) { return p.value; }).filter(function (v) { return typeof v === 'number'; });
   var future = forecast ? forecast.points : [];
   var allVals = vals.concat(future.map(function (p) { return p.v; }));
+  // Every drawn issue shares the scale: a braid on its own y range would
+  // say nothing about whether the house was about to get colder.
+  (issues || []).forEach(function (f) {
+    f.points.forEach(function (pt) { allVals.push(pt.v); });
+  });
   if (allVals.length < 2) return null;
   var min = Math.min.apply(null, allVals);
   var max = Math.max.apply(null, allVals);
@@ -1063,6 +1117,7 @@ function computeChartGeometry(points, width, height, pad, win, forecast) {
   // had, so adding a forecast never silently squashes recorded history
   // into a corner without the reader seeing why.
   if (forecast) to = Math.max(to, forecast.to);
+  (issues || []).forEach(function (f) { to = Math.max(to, f.to); });
   var byTime = times.every(function (t) { return !isNaN(t); }) && to > from;
   var place = function (t, value) {
     var f = (t - from) / (to - from);
@@ -1078,6 +1133,22 @@ function computeChartGeometry(points, width, height, pad, win, forecast) {
     return { x: x, y: y, value: p.value, ts: p.ts };
   });
   var geo = { coords: coords, min: min, max: max };
+  if (issues && issues.length && byTime) {
+    // Each stored issue as its own trajectory. A line per issue rather
+    // than an envelope over them, because an envelope's edge belongs to
+    // whichever issue happened to be highest at each instant — a path
+    // nobody predicted (docs/wireframes/forecast-history.svg).
+    geo.issues = issues.map(function (f, n) {
+      return {
+        issued: f.issued,
+        age: issues.length > 1 ? n / (issues.length - 1) : 1,
+        coords: f.points.map(function (pt) {
+          var at = place(pt.t, pt.v);
+          return { x: at.x, y: at.y, value: pt.v, ts: pt.t };
+        })
+      };
+    });
+  }
   if (forecast && byTime) {
     geo.forecast = future.map(function (p) {
       var at = place(p.t, p.v);
@@ -1107,6 +1178,17 @@ function formatChartValue(aspect, v) {
 // history the recorder's buckets are seconds wide, so minutes alone hide
 // the thing the reader opened the chart to see. `spanMs` is the charted
 // window; without one the old day-and-minute form stands.
+// A stored issue's stroke: paler the older it is, within the accent's
+// own hue so the braid still reads as one series' future.
+function issueInk(age) {
+  // Neutral, and deliberately NOT ramping into the accent: the outcome
+  // wears the accent, and a braid that reached it would make its newest
+  // line indistinguishable from what actually happened.
+  var pale = [214, 218, 216], full = [113, 126, 120];
+  var c = pale.map(function (v, i) { return Math.round(v + (full[i] - v) * age); });
+  return 'rgb(' + c.join(',') + ')';
+}
+
 // The house's current belief about one aspect's future, or null.
 function forecastOf(entity, aspect) {
   return logic.forecastFor(store.forecasts, entity.room, entity.name, aspect);
@@ -1150,7 +1232,7 @@ function buildChart(chartId, points, opts) {
   var height = opts.height || 36;
   var pad = opts.pad !== undefined ? opts.pad : 3;
   var sizeClass = opts.sizeClass || 'chart-tile';
-  var geo = computeChartGeometry(points || [], CHART_VBW, height, pad, opts.window, opts.forecast);
+  var geo = computeChartGeometry(points || [], CHART_VBW, height, pad, opts.window, opts.forecast, opts.issues);
   var inner;
   if (!geo) {
     chartRegistry[chartId] = null;
@@ -1161,6 +1243,8 @@ function buildChart(chartId, points, opts) {
     // same gesture as "what was it at 03:00".
     chartRegistry[chartId] = {
       coords: geo.forecast ? geo.coords.concat(geo.forecast) : geo.coords,
+      issues: geo.issues || null,
+      actual: geo.coords,
       width: CHART_VBW, height: height, aspect: opts.aspect, window: opts.window
     };
     var d = chartPathData(geo.coords);
@@ -1178,6 +1262,15 @@ function buildChart(chartId, points, opts) {
     if (opts.area && last) {
       var areaD = d + ' L ' + last.x.toFixed(1) + ' ' + (height - pad) + ' L ' + geo.coords[0].x.toFixed(1) + ' ' + (height - pad) + ' Z';
       svg += '<path class="chart-area" d="' + areaD + '"/>';
+    }
+    if (geo.issues) {
+      geo.issues.forEach(function (f, n) {
+        var d2 = chartPathData(f.coords);
+        var pinned = opts.pinned !== undefined && opts.pinned !== null && f.issued === opts.pinned;
+        svg += '<path class="chart-issue-hit" data-issue="' + n + '" d="' + d2 + '"/>';
+        svg += '<path class="chart-issue' + (pinned ? ' pinned' : '') + '" data-issue="' + n +
+          '" d="' + d2 + '" stroke="' + (pinned ? '' : issueInk(f.age)) + '"/>';
+      });
     }
     svg += '<path class="chart-line" d="' + d + '"/>';
     if (geo.forecast && geo.forecast.length) {
@@ -1264,13 +1357,32 @@ function wireChartInteractions(root) {
     // detail overlay's — sit in no such card.
     if (!wrap.closest('[data-action]')) {
       wrap.classList.add('scrubbable');
+      var down = null;
       wrap.addEventListener('pointerdown', function (ev) {
         // A touch has no position until it moves, so the press itself has
         // to read: a tap showed nothing before this, and only a drag
         // worked. Capture keeps a finger that wanders off a 64px strip
         // scrubbing instead of dropping the gesture mid-read.
         if (wrap.setPointerCapture) wrap.setPointerCapture(ev.pointerId);
+        down = { x: ev.clientX, y: ev.clientY };
         onMove(wrap, reg, ev);
+      });
+      // A tap pins the line under it; a drag is a scrub and pins nothing.
+      // The two arrive as the same pointer sequence, so the only thing
+      // separating them is how far the pointer travelled.
+      wrap.addEventListener('pointerup', function (ev) {
+        var moved = down && Math.hypot(ev.clientX - down.x, ev.clientY - down.y) > TAP_SLOP;
+        down = null;
+        if (moved || !reg.issues) return;
+        var rect = wrap.getBoundingClientRect();
+        if (!rect.width) return;
+        var near = nearestIssue(
+          reg, rect,
+          ((ev.clientX - rect.left) / rect.width) * reg.width,
+          ((ev.clientY - rect.top) / rect.height) * reg.height
+        );
+        overlay.pinned = near && overlay.pinned !== near.issue.issued ? near.issue.issued : null;
+        renderOverlayContent();
       });
     }
     wrap.addEventListener('pointermove', function (ev) { onMove(wrap, reg, ev); });
@@ -1283,16 +1395,53 @@ function wireChartInteractions(root) {
   });
 }
 
+/* Which drawn issue the pointer is nearest, in BOTH dimensions.
+ * Scrubbing has always found the nearest point by x alone, which is
+ * right for one series and meaningless for a braid: x alone picks
+ * whichever line happens to have a sample closest horizontally, ignoring
+ * that the pointer may be nowhere near it. */
+function nearestIssue(reg, rect, tx, ty) {
+  if (!reg.issues || !reg.issues.length) return null;
+  // Distance is measured in SCREEN pixels, not viewBox units. The
+  // viewBox is stretched to the wrapper, so its x and y units are
+  // nothing like the same size — at the full-window chart one x unit is
+  // six times a y unit — and a circle of "nearness" in viewBox space is
+  // a thin ellipse to the reader, who then cannot hit the line they are
+  // pointing at.
+  var sx = rect.width / reg.width, sy = rect.height / reg.height;
+  var best = null, bestD = Infinity;
+  reg.issues.forEach(function (f, n) {
+    f.coords.forEach(function (p) {
+      var dx = (p.x - tx) * sx, dy = (p.y - ty) * sy;
+      var d = dx * dx + dy * dy;
+      if (d < bestD) { bestD = d; best = { index: n, issue: f, point: p }; }
+    });
+  });
+  // Far from every line is not a selection: a scrub across empty chart
+  // should not drag a highlight along with it.
+  return bestD <= NEAR_ISSUE * NEAR_ISSUE ? best : null;
+}
+// CSS pixels — what the reader sees, and roughly a fingertip.
+var NEAR_ISSUE = 26;
+// Pointer travel, in CSS pixels, past which a press is a scrub and not a
+// tap. A thumb never holds perfectly still, so zero would mean nothing
+// was ever tappable.
+var TAP_SLOP = 8;
+
 function onChartPointerMove(wrap, reg, ev) {
   var rect = wrap.getBoundingClientRect();
   if (rect.width === 0) return;
   var fx = (ev.clientX - rect.left) / rect.width;
   fx = Math.max(0, Math.min(1, fx));
   var tx = fx * reg.width;
-  var c = reg.coords[0];
-  reg.coords.forEach(function (p) { if (Math.abs(p.x - tx) < Math.abs(c.x - tx)) c = p; });
   var svg = wrap.querySelector('svg');
   if (!svg) return;
+  if (reg.issues) {
+    onBraidPointerMove(wrap, reg, ev, rect, tx);
+    return;
+  }
+  var c = reg.coords[0];
+  reg.coords.forEach(function (p) { if (Math.abs(p.x - tx) < Math.abs(c.x - tx)) c = p; });
   var line = svg.querySelector('.chart-crosshair');
   var dot = wrap.querySelector('.chart-crosshair-dot');
   line.setAttribute('x1', c.x); line.setAttribute('x2', c.x);
@@ -1306,6 +1455,52 @@ function onChartPointerMove(wrap, reg, ev) {
   var py = rect.top + (c.y / reg.height) * rect.height;
   var span = reg.window ? reg.window.to - reg.window.from : 0;
   showChartTooltip(px, py, formatChartValue(reg.aspect, c.value), formatChartTime(c.ts, span));
+}
+
+/* Scrubbing a braid reads two things at once: the issue under the
+ * pointer (highlighted, and named in the tooltip) and the whole column
+ * at that instant (how many forecasts spoke about it, and how far apart
+ * they were) — which is the one slice that cannot share this chart's
+ * axis, delivered by the gesture rather than by a second control. */
+function onBraidPointerMove(wrap, reg, ev, rect, tx) {
+  var ty = ((ev.clientY - rect.top) / rect.height) * reg.height;
+  var near = nearestIssue(reg, rect, tx, ty);
+  wrap.querySelectorAll('.chart-issue').forEach(function (el) {
+    el.classList.toggle('hovered', !!near && el.getAttribute('data-issue') === String(near.index));
+  });
+  var line = wrap.querySelector('.chart-crosshair');
+  if (line) { line.setAttribute('x1', tx); line.setAttribute('x2', tx); line.style.display = ''; }
+  var when = reg.window ? reg.window.from + (tx / reg.width) * (reg.window.to - reg.window.from) : null;
+  var span = reg.window ? reg.window.to - reg.window.from : 0;
+  if (!near) { hideChartTooltip(); braidColumn(reg, when); return; }
+  var dot = wrap.querySelector('.chart-crosshair-dot');
+  if (dot) {
+    dot.style.left = (near.point.x / reg.width * 100).toFixed(2) + '%';
+    dot.style.top = (near.point.y / reg.height * 100).toFixed(2) + '%';
+    dot.style.display = '';
+  }
+  showChartTooltip(
+    rect.left + (near.point.x / reg.width) * rect.width,
+    rect.top + (near.point.y / reg.height) * rect.height,
+    formatChartValue(reg.aspect, near.point.value),
+    'issued ' + formatChartTime(near.issue.issued, span) + ' \u2014 for ' +
+      formatChartClock(near.point.ts, span)
+  );
+  braidColumn(reg, when);
+}
+
+// The column reading, written under the chart rather than into the
+// tooltip: the tooltip is about one forecast, this is about all of them.
+function braidColumn(reg, when) {
+  var el = byId('braid-column');
+  if (!el) return;
+  var col = when === null ? null : logic.columnAt(overlay.issues || [], when);
+  if (!col) { el.textContent = ''; return; }
+  var field = descriptorField(overlay.entity, overlay.aspect);
+  el.textContent = formatChartClock(when) + ' \u00b7 ' + col.count + ' forecast' +
+    (col.count === 1 ? '' : 's') + ' \u00b7 ' +
+    logic.formatAspect(overlay.aspect, field, col.min) + ' to ' +
+    logic.formatAspect(overlay.aspect, field, col.max);
 }
 
 function onTimelinePointerMove(wrap, reg, ev) {
@@ -2437,6 +2632,9 @@ function openHistoryDetail(room, entityName, aspect) {
   overlay.range = 24;
   overlay.rangeData = {};
   overlay.cmdData = {};
+  overlay.said = false;
+  overlay.issues = [];
+  overlay.pinned = null;
   overlay.lastPoints = null;
   fetchHistoryRange(entityName, aspect, 24, overlay.shape);
   showOverlay();
@@ -2531,6 +2729,14 @@ function renderHistoryDetailBody() {
   var chips = RANGE_PRESETS.map(function (rp) {
     return '<button data-action="range-chip" data-hours="' + rp.hours + '" class="' + (overlay.range === rp.hours ? 'active' : '') + '">' + rp.label + '</button>';
   }).join('');
+  // The second row appears only where there is a future to have said
+  // anything about, so an ordinary sensor's overlay is unchanged.
+  var modeChips = forecastOf(entity, aspect)
+    ? '<div class="seg" style="margin-top:8px;">' +
+      '<button data-action="forecast-mode" data-said="0" class="' + (overlay.said ? '' : 'active') + '">now</button>' +
+      '<button data-action="forecast-mode" data-said="1" class="' + (overlay.said ? 'active' : '') + '">what we said</button>' +
+      '</div>'
+    : '';
 
   var rd = overlay.rangeData[overlay.range];
   var loaded = !!(rd && rd.loaded);
@@ -2550,7 +2756,15 @@ function renderHistoryDetailBody() {
       (tl.onMs === null ? '' : statText('On', fmtDuration(tl.onMs) + ' of ' + fmtDuration(win.to - win.from))) +
       statText('Changes', String(tl.changes)) + '</div>';
   } else {
-    chartHtml = buildChart('detail-chart', points, { height: wide ? 440 : 220, sizeClass: wide ? 'chart-detail-wide' : 'chart-detail', aspect: aspect, gridlines: true, area: true, yLabels: true, window: win, forecast: forecastOf(entity, aspect) });
+    chartHtml = buildChart('detail-chart', points, {
+      height: wide ? 440 : 220, sizeClass: wide ? 'chart-detail-wide' : 'chart-detail',
+      aspect: aspect, gridlines: true, area: true, yLabels: true, window: win,
+      // In "what we said" the current belief steps aside: drawing it over
+      // the braid would make one issue look special for no reason.
+      forecast: overlay.said ? null : forecastOf(entity, aspect),
+      issues: overlay.said ? overlay.issues : null,
+      pinned: overlay.pinned
+    });
     var stats = rangeStats(points);
     statsHtml = '<div class="stat-row">' +
       statItem('Latest', stats.latest, aspect) + statItem('Min', stats.min, aspect) +
@@ -2560,11 +2774,23 @@ function renderHistoryDetailBody() {
   // The four stats describe the RECORDED window the chips select, so a
   // drawn forecast can peak above the MAX beside it — which reads as a
   // contradiction unless the horizon says its own extreme out loud.
-  var ahead = horizonCaption(aspect, field, forecastOf(entity, aspect));
+  var ahead = overlay.said ? '' : horizonCaption(aspect, field, forecastOf(entity, aspect));
   var horizonHtml = ahead ? '<div class="chart-note">ahead · ' + esc(ahead) + '</div>' : '';
-  var body = '<div class="seg">' + chips + '</div>' +
+  var braidHtml = '';
+  if (overlay.said) {
+    braidHtml = '<div class="chart-note" id="braid-column"></div>' +
+      '<div class="chart-note">' + esc(
+        overlay.issuesLoading ? 'reading what we said\u2026'
+          : overlay.issues.length
+            ? overlay.issues.length + ' forecast' + (overlay.issues.length === 1 ? '' : 's') +
+              ' kept for this window' + (overlay.issues.length >= BRAID_ISSUES ? ' (newest ' + BRAID_ISSUES + ')' : '') +
+              (overlay.pinned ? ' \u00b7 one pinned \u2014 tap it again to release' : ' \u00b7 tap a line to pin it')
+            : 'nothing kept for this window \u2014 the recorder may not subscribe home/forecast/**'
+      ) + '</div>';
+  }
+  var body = '<div class="seg">' + chips + '</div>' + modeChips +
     '<div class="' + (loaded ? '' : 'chart-loading') + '">' + chartHtml + statsHtml + horizonHtml + '</div>' +
-    commandStrip(aspect, field, win);
+    braidHtml + commandStrip(aspect, field, win);
   return { title: label, body: body };
 }
 
@@ -2916,10 +3142,26 @@ document.addEventListener('click', function (e) {
     flashParamRow(gUnit, gParam);
     return;
   }
+  if (action === 'forecast-mode') {
+    overlay.said = el.getAttribute('data-said') === '1';
+    overlay.pinned = null;
+    if (overlay.said && !overlay.issues.length && !overlay.issuesLoading) {
+      fetchIssues(overlay.entity.name, overlay.aspect, overlay.range);
+    }
+    renderOverlayContent();
+    return;
+  }
   if (action === 'range-chip') {
     var hrs = parseInt(el.getAttribute('data-hours'), 10);
     overlay.range = hrs;
     fetchHistoryRange(overlay.entity.name, overlay.aspect, hrs, overlay.shape);
+    // A different window is a different set of issues, and a pin on a
+    // forecast that is no longer drawn would be a highlight on nothing.
+    if (overlay.said) {
+      overlay.issues = [];
+      overlay.pinned = null;
+      fetchIssues(overlay.entity.name, overlay.aspect, hrs);
+    }
     renderOverlayContent();
     return;
   }
