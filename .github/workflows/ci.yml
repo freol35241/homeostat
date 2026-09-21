@@ -91,7 +91,7 @@ jobs:
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       # The runner's own architecture, loaded into the daemon for the smoke
       # tests (`load:` cannot take a multi-platform build).
-      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           load: true
@@ -103,7 +103,7 @@ jobs:
       # Both release architectures, so a cross-compile or an arm64-only
       # runtime-stage breakage fails here rather than on the release tag.
       # Nothing is pushed; the amd64 half comes from the cache above.
-      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           platforms: linux/amd64,linux/arm64
