@@ -2837,6 +2837,20 @@ every chart walks backward from now.
   the same class needs no new vocabulary for "a plan". `forecast` is
   therefore entity-addressed in `keyspace.rs` and held to the same
   bound-entity rule as `state` (`forecast-publish-unbound`).
+  - **Amended 2026-09-21: the entity must exist, not be bound.** Holding
+    forecasts to state's rule was inherited rather than argued, and it
+    forbade the case this bullet advertises — a controller commands a
+    device it does not bind, so the grant graph makes "publish a plan for
+    the heat pump" unbuildable. It also forced one unit to own both the
+    fusion of a quantity's sensors and its weather provider. `state`
+    keeps the binder rule, which is what one master per entity means;
+    `forecast` requires only that the entity be declared, which is what
+    keeps the value in front of the recorder and the dashboard. The
+    single-publisher property the ownership rule gave for free is now
+    checked directly (`forecast-publish-conflict`), per entity rather
+    than per aspect because a publish may wildcard its aspect slot —
+    splitting one entity's aspects across two units is refused
+    conservatively, and is what a source segment would settle.
 - **Two time coordinates is the whole difference** (sharpened 2026-09-21;
   the first write-up said "forecasts are arrays", which is the symptom).
   A state sample carries ONE time: when the value was true. A forecast

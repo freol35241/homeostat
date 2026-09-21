@@ -1,0 +1,10 @@
+schema = 1
+
+[entity]
+id = "outdoor-temp-sensor.local"
+capability = "sensor"
+features = ["temperature"]
+room = "global"
+
+[write_policy]
+owner = "esphome"

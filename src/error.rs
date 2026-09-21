@@ -372,11 +372,25 @@ pub const CODES: &[(&str, &str)] = &[
     (
         "forecast-publish-unbound",
         "A publish under `home/forecast/` must name, literally, the room and \
-         entity of an entity this unit binds (or use `{room}`/`{entity}` \
-         templates) — the same rule as `home/state/`, because a forecast is \
-         that same series extended forward. A unit publishing a forecast for \
-         something no entity describes needs an entity file for it, which is \
-         also what gives the value its label, unit and place on a chart.",
+         entity of an entity that EXISTS in the house (or use \
+         `{room}`/`{entity}` templates, which resolve over this unit's own \
+         bound entities). Unlike `home/state/`, the entity need not be one \
+         this unit binds: a forecast is a source's claim about a series' \
+         future values, and the competent source is routinely not the binder \
+         — a weather service forecasts a sensor it does not own, and a \
+         controller forecasts a device it commands and therefore cannot \
+         bind. The entity must still exist, which is what gives the value \
+         its label, unit and place on a chart.",
+    ),
+    (
+        "forecast-publish-conflict",
+        "Two or more units publish forecasts for one series. The mirror keeps \
+         only the last document per key, so a second publisher does not add \
+         an opinion — it overwrites one. Checked per entity rather than per \
+         aspect, because a publish may wildcard its aspect slot; if two units \
+         genuinely forecast different aspects of one entity, that is the case \
+         a source segment in the key exists to settle (docs/design.md, \
+         Subjects and sources).",
     ),
 ];
 

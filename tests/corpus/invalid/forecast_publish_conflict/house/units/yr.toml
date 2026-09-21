@@ -1,0 +1,15 @@
+schema = 1
+
+[unit]
+name = "yr"
+kind = "automation"
+
+[runtime]
+command = "uv run units/yr.py"
+restart = "on-failure"
+
+[bus.publishes]
+# Both name an entity that exists and neither binds it, which the
+# relaxed rule allows. What it does not allow is two of them: the
+# mirror keeps one document per key, so the second overwrites.
+curve = { key = "home/forecast/global/outdoor_temp/temperature" }

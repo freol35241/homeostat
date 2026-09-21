@@ -1,0 +1,1 @@
+error[forecast-publish-conflict] home/forecast/global/outdoor_temp: smhi, yr all publish forecasts for this series; exactly one source may, because the mirror keeps only the last document

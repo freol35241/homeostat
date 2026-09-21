@@ -467,15 +467,34 @@ pub fn resolve(
                 });
                 continue;
             };
-            let bound = house
+            // State needs the BINDING unit: one master per entity, which
+            // is what the registry exists to say. A forecast does not —
+            // it is a source's claim about a series' future values, and
+            // the competent source is routinely not the binder. A weather
+            // service forecasts an outdoor sensor it does not own; a
+            // controller forecasts the trajectory of a device it commands
+            // and, by the grant graph, therefore cannot bind. The entity
+            // must still EXIST, which is what keeps the value in front of
+            // the recorder and the dashboard.
+            let declared = house
                 .entities
                 .iter()
-                .any(|e| &e.name == entity && e.owner == key.unit && &e.file.entity.room == room);
+                .find(|e| &e.name == entity && &e.file.entity.room == room);
+            let bound = match declared {
+                None => false,
+                Some(e) => forecast || e.owner == key.unit,
+            };
             if !bound {
-                let message = format!(
-                    "{class} key \"home/{class}/{room}/{entity}/…\" is not under an entity bound by \"{}\"",
-                    key.unit
-                );
+                let message = if forecast {
+                    format!(
+                        "forecast key \"home/forecast/{room}/{entity}/…\" names no entity in the house"
+                    )
+                } else {
+                    format!(
+                        "state key \"home/state/{room}/{entity}/…\" is not under an entity bound by \"{}\"",
+                        key.unit
+                    )
+                };
                 let where_ = Some(unit.path.clone());
                 errors.push(if forecast {
                     ValidationError::new("forecast-publish-unbound", subject, message, where_)
@@ -484,6 +503,52 @@ pub fn resolve(
                 });
             }
         }
+    }
+
+    // A forecast series has exactly one publisher. Relaxing the ownership
+    // rule above gives up the structural guarantee the registry provided —
+    // one binder per entity — so it is replaced with the property that
+    // actually mattered: two units must not clobber each other's issues on
+    // one series, where the mirror keeps only the last document. Checked
+    // per (room, entity) rather than per aspect because a publish may
+    // wildcard its aspect slot; splitting one entity's aspects between two
+    // units is therefore refused conservatively, and is exactly what a
+    // source segment would settle (docs/design.md, Subjects and sources).
+    let mut forecast_publishers: BTreeMap<(String, String), BTreeSet<&str>> = BTreeMap::new();
+    for key in expanded
+        .iter()
+        .filter(|k| k.direction == Direction::Publishes)
+    {
+        for expr in &key.exprs {
+            if expr.class() != Some("forecast") {
+                continue;
+            }
+            let (Some(Segment::Literal(room)), Some(Segment::Literal(entity))) =
+                (expr.0.get(2), expr.0.get(3))
+            else {
+                continue;
+            };
+            forecast_publishers
+                .entry((room.clone(), entity.clone()))
+                .or_default()
+                .insert(key.unit.as_str());
+        }
+    }
+    for ((room, entity), units) in &forecast_publishers {
+        if units.len() < 2 {
+            continue;
+        }
+        let names: Vec<&str> = units.iter().copied().collect();
+        errors.push(ValidationError::new(
+            "forecast-publish-conflict",
+            format!("home/forecast/{room}/{entity}"),
+            format!(
+                "{} all publish forecasts for this series; exactly one source may, \
+                 because the mirror keeps only the last document",
+                names.join(", ")
+            ),
+            None,
+        ));
     }
 
     // Reserved classes (docs/design.md, Key space): `config` and `meta` are
@@ -960,6 +1025,116 @@ mod tests {
                 .map(|e| e.name.as_str())
                 .collect::<Vec<_>>(),
             vec!["spot_price"],
+        );
+    }
+
+    /// Builds a house where `forecaster` units each publish one concrete
+    /// forecast key, and `esphome` owns the entity being forecast.
+    fn house_forecasting(entity_name: &str, room: &str, forecasters: &[(&str, &str)]) -> House {
+        let mut units = vec![unit(
+            "esphome",
+            UnitKind::Adapter,
+            BusSection {
+                subscribes: BTreeMap::new(),
+                publishes: BTreeMap::new(),
+            },
+        )];
+        for (name, key) in forecasters {
+            let mut publishes = BTreeMap::new();
+            publishes.insert(
+                "curve".to_string(),
+                PublishSpec {
+                    key: (*key).to_string(),
+                    capability: None,
+                    priority: None,
+                },
+            );
+            units.push(unit(
+                name,
+                UnitKind::Automation,
+                BusSection {
+                    subscribes: BTreeMap::new(),
+                    publishes,
+                },
+            ));
+        }
+        House {
+            units,
+            entities: vec![entity(
+                entity_name,
+                room,
+                "sensor",
+                WriteMode::Shared,
+                "esphome",
+            )],
+            ..House::default()
+        }
+    }
+
+    /// A forecast may name an entity this unit does NOT bind, which state
+    /// may not. A forecast is a source's claim about a series' future
+    /// values, and the competent source is routinely not the binder: a
+    /// weather service forecasts a sensor an adapter owns, and a
+    /// controller forecasts a device it commands and therefore — the
+    /// grant graph runs automation to device — cannot bind.
+    #[test]
+    fn a_forecast_may_name_an_entity_another_unit_owns() {
+        let house = house_forecasting(
+            "outdoor_temp",
+            "global",
+            &[("weather", "home/forecast/global/outdoor_temp/temperature")],
+        );
+        let (expanded, _, _) = expand(&house);
+        let (_, _, errors) = resolve(&house, &expanded);
+        assert!(errors.is_empty(), "{errors:?}");
+    }
+
+    /// The entity must still EXIST. Dropping the ownership requirement
+    /// does not open the free-form-key hole: a forecast under a name no
+    /// entity describes would be recorded and invisible to every
+    /// generated surface.
+    #[test]
+    fn a_forecast_for_no_entity_is_still_refused() {
+        let house = house_forecasting(
+            "outdoor_temp",
+            "global",
+            &[("weather", "home/forecast/global/nowhere/temperature")],
+        );
+        let (expanded, _, _) = expand(&house);
+        let (_, _, errors) = resolve(&house, &expanded);
+        assert_eq!(
+            errors
+                .iter()
+                .map(|e| e.code)
+                .collect::<Vec<_>>(),
+            vec!["forecast-publish-unbound"],
+        );
+    }
+
+    /// One series, one forecaster. Ownership used to guarantee this
+    /// structurally — one binder per entity — so relaxing it has to put
+    /// the property back directly: the mirror keeps only the last
+    /// document, so a second publisher overwrites rather than adds.
+    #[test]
+    fn two_units_may_not_forecast_one_series() {
+        let house = house_forecasting(
+            "outdoor_temp",
+            "global",
+            &[
+                ("smhi", "home/forecast/global/outdoor_temp/temperature"),
+                ("yr", "home/forecast/global/outdoor_temp/temperature"),
+            ],
+        );
+        let (expanded, _, _) = expand(&house);
+        let (_, _, errors) = resolve(&house, &expanded);
+        let conflict = errors
+            .iter()
+            .find(|e| e.code == "forecast-publish-conflict")
+            .expect("two forecasters on one series must conflict");
+        assert!(
+            conflict.message.contains("smhi") && conflict.message.contains("yr"),
+            "the conflict must name both publishers: {}",
+            conflict.message
         );
     }
 
