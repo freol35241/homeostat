@@ -501,7 +501,7 @@ async fn stats_describe_the_store() {
     assert_eq!(replies.len(), 1);
     assert_eq!(replies[0].0, "home/history/stats");
     let stats = &replies[0].1;
-    assert_eq!(stats["store_version"], json!(2));
+    assert_eq!(stats["store_version"], json!(3));
     let file_bytes = stats["file_bytes"].as_i64().expect("file size");
     assert!(file_bytes >= 4096, "page_count * page_size: {stats}");
     assert!(stats["freelist_bytes"].as_i64().expect("freelist") >= 0);
@@ -1138,7 +1138,7 @@ async fn v0_store_migrates_in_place() {
     );
     assert_eq!(
         read_rows(&db, "PRAGMA user_version"),
-        vec![vec![SqlValue::Integer(2)]],
+        vec![vec![SqlValue::Integer(3)]],
         "a v0 store arrives at the current layout in one start"
     );
     assert_eq!(
@@ -1205,7 +1205,7 @@ async fn v1_store_backfills_its_tally() {
 
     assert_eq!(
         read_rows(&db, "PRAGMA user_version"),
-        vec![vec![SqlValue::Integer(2)]]
+        vec![vec![SqlValue::Integer(3)]]
     );
     // Counted, not guessed: the oldest row of the first series was
     // inserted last, so a tally that took each series' first or last
@@ -1324,6 +1324,224 @@ async fn restart_seeds_missed_state_from_the_mirror() {
         1,
         "a series the store already holds is not seeded again"
     );
+
+    sup.shutdown();
+}
+
+/// (l) Forecasts are the one class that does not ride `samples`
+/// (docs/design.md, Forecasts). Two issues about the same future instant
+/// both survive — which is the whole reason the table exists — a point's
+/// declared extent is stored rather than inferred from succession, and
+/// the two verification read shapes answer in issues.
+#[tokio::test(flavor = "multi_thread")]
+async fn forecasts_keep_every_issue_and_answer_in_issues() {
+    let db = store_path("forecast");
+    let (mut sup, observer) = setup(&db).await;
+
+    // Fixed instants, and deliberately in the past: verification reads
+    // forecasts whose valid time has already come, and a test that
+    // leans on "now" would answer differently depending on the hour it
+    // runs at.
+    let noon = "2020-01-01T12:00:00+00:00";
+    let one = "2020-01-01T13:00:00+00:00";
+    let issue = |issued: &str, noon_value: f64| {
+        json!({
+            "schema": 1,
+            "issued": issued,
+            "points": [
+                // an interval: it holds for its hour and says so
+                {"t": noon, "v": noon_value, "d": 3600.0},
+                // an instant: no extent, speaks only for itself
+                {"t": one, "v": 9.0},
+            ],
+        })
+    };
+
+    let key = "home/forecast/global/spot/price";
+    let pub_ = matched_publisher(&observer, key).await;
+    put(&pub_, issue("2020-01-01T08:00:00+00:00", 21.0)).await;
+    put(&pub_, issue("2020-01-01T09:00:00+00:00", 23.5)).await;
+
+    // Four rows: two issues of two points. On `samples` the second issue
+    // would have collided with the first on (series_id, ts).
+    let rows = rows_eventually(
+        &db,
+        "SELECT issued_ts, valid_ts, valid_end, value FROM forecasts ORDER BY issued_ts, valid_ts",
+        4,
+        Duration::from_secs(20),
+    )
+    .await;
+    assert_eq!(rows.len(), 4, "{rows:?}");
+
+    // The interval carries its extent; the instant carries none.
+    let interval_end = &rows[0][2];
+    let instant_end = &rows[1][2];
+    assert!(
+        !matches!(interval_end, SqlValue::Null),
+        "an interval stores its end: {rows:?}"
+    );
+    assert!(
+        matches!(instant_end, SqlValue::Null),
+        "an instant has no end to store: {rows:?}"
+    );
+
+    // The forecast series is tallied like any other, on issue time.
+    let series = read_rows(
+        &db,
+        "SELECT class, entity, aspect, row_count FROM series WHERE class = 'forecast'",
+    );
+    assert_eq!(series.len(), 1, "{series:?}");
+    assert_eq!(series[0][3], SqlValue::Integer(4), "{series:?}");
+
+    // `at`: the forecast as it stood. Before the second issue existed,
+    // the answer is the first one — which is what verification means.
+    let replies = history_get(
+        &observer,
+        "home/history/forecast/spot/price?at=2020-01-01T08:30:00+00:00",
+    )
+    .await;
+    assert_eq!(replies.len(), 1, "{replies:?}");
+    let issues = replies[0].1.as_array().expect("issues array").clone();
+    assert_eq!(issues.len(), 1, "one issue stood at 08:30: {issues:?}");
+    // iso_utc's microsecond form, as the samples path spells a ts.
+    assert_eq!(
+        issues[0]["issued"],
+        json!("2020-01-01T08:00:00.000000+00:00")
+    );
+    let points = issues[0]["points"].as_array().expect("points");
+    assert_eq!(points[0]["v"], json!(21.0), "the older opinion: {points:?}");
+    // The wire's own shape, so the SDK's decoder reads it unchanged.
+    assert_eq!(issues[0]["schema"], json!(1));
+    assert_eq!(points[0]["d"], json!(3600.0));
+    assert!(
+        points[1].get("d").is_none(),
+        "an instant has no d: {points:?}"
+    );
+
+    // Default `at` is now, so a bare read is the current forecast.
+    let replies = history_get(&observer, "home/history/forecast/spot/price").await;
+    let issues = replies[0].1.as_array().expect("issues array").clone();
+    assert_eq!(issues.len(), 1);
+    assert_eq!(
+        issues[0]["issued"],
+        json!("2020-01-01T09:00:00.000000+00:00")
+    );
+
+    // The verification window: every issue that spoke about noon, each
+    // carrying only its overlapping points.
+    let replies = history_get(
+        &observer,
+        "home/history/forecast/spot/price\
+         ?valid_from=2020-01-01T12:00:00+00:00;valid_to=2020-01-01T13:00:00+00:00",
+    )
+    .await;
+    let issues = replies[0].1.as_array().expect("issues array").clone();
+    assert_eq!(issues.len(), 2, "both opinions about noon: {issues:?}");
+    let said: Vec<&Value> = issues
+        .iter()
+        .map(|i| &i["points"].as_array().expect("points")[0]["v"])
+        .collect();
+    assert_eq!(said, vec![&json!(21.0), &json!(23.5)]);
+    for issue in &issues {
+        assert_eq!(
+            issue["points"].as_array().expect("points").len(),
+            1,
+            "the 13:00 instant is outside [12:00, 13:00): {issue}"
+        );
+    }
+
+    // The two shapes are exclusive rather than quietly one winning.
+    let replies = observer
+        .get("home/history/forecast/spot/price?at=2020-01-01T08:00:00+00:00;valid_from=2020-01-01T12:00:00+00:00")
+        .await
+        .expect("query");
+    let reply = replies.recv_async().await.expect("a reply");
+    assert!(
+        reply.result().is_err(),
+        "at and a window together are refused"
+    );
+
+    // A wildcard over history keeps fanning out over sample series alone,
+    // so the two reply shapes never arrive mixed.
+    let replies = history_get(&observer, "home/history/**").await;
+    assert!(
+        replies.iter().all(|(key, _)| !key.contains("/forecast/")),
+        "a history wildcard must not mix in forecast issues: {replies:?}"
+    );
+
+    sup.shutdown();
+}
+
+/// (e3) A version-2 store — the layout before forecasts — gains the new
+/// table on the next start without a migration step, because the schema
+/// is applied `IF NOT EXISTS` on every open and an empty table needs no
+/// backfill. The path every existing house takes on this upgrade, and
+/// the one where "additive" quietly meaning "unreachable" would not show
+/// up until a producer published.
+#[tokio::test(flavor = "multi_thread")]
+async fn v2_store_gains_the_forecast_table() {
+    let db = store_path("migrate-v2");
+    {
+        let conn = Connection::open(&db).expect("create v2 store");
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL;
+             CREATE TABLE series (id INTEGER PRIMARY KEY, class TEXT NOT NULL,
+               entity TEXT NOT NULL, aspect TEXT NOT NULL,
+               row_count INTEGER NOT NULL DEFAULT 0, oldest_ts INTEGER, newest_ts INTEGER,
+               UNIQUE (class, entity, aspect));
+             CREATE TABLE rooms (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE);
+             CREATE TABLE samples (series_id INTEGER NOT NULL REFERENCES series (id),
+               ts INTEGER NOT NULL, room_id INTEGER NOT NULL REFERENCES rooms (id),
+               kind INTEGER NOT NULL, value NOT NULL,
+               PRIMARY KEY (series_id, ts)) WITHOUT ROWID;
+             CREATE TABLE events (ts INTEGER NOT NULL, key TEXT NOT NULL, payload TEXT NOT NULL);
+             INSERT INTO rooms (name) VALUES ('attic');
+             INSERT INTO series (class, entity, aspect, row_count, oldest_ts, newest_ts)
+               VALUES ('state', 'meter', 'power', 1, 100, 100);
+             INSERT INTO samples VALUES (1, 100, 1, 1, 2.5);
+             PRAGMA user_version=2;",
+        )
+        .expect("populate v2 store");
+    }
+    let (mut sup, observer) = setup(&db).await;
+
+    assert_eq!(
+        read_rows(&db, "PRAGMA user_version"),
+        vec![vec![SqlValue::Integer(3)]],
+        "the store reports the layout it now has"
+    );
+    // The existing series is untouched — an upgrade is not a rewrite.
+    assert_eq!(
+        read_rows(&db, "SELECT row_count FROM series WHERE entity = 'meter'"),
+        vec![vec![SqlValue::Integer(1)]],
+        "an existing tally survives"
+    );
+
+    // And the new table is not merely present but written and read: a
+    // published forecast lands, and the series is tallied beside the
+    // state one it has never met.
+    let key = "home/forecast/global/spot/price";
+    let pub_ = matched_publisher(&observer, key).await;
+    put(
+        &pub_,
+        json!({
+            "schema": 1,
+            "issued": "2020-01-01T08:00:00+00:00",
+            "points": [{"t": "2020-01-01T12:00:00+00:00", "v": 21.0, "d": 3600.0}],
+        }),
+    )
+    .await;
+    rows_eventually(
+        &db,
+        "SELECT value FROM forecasts",
+        1,
+        Duration::from_secs(20),
+    )
+    .await;
+    let replies = history_get(&observer, "home/history/forecast/spot/price").await;
+    let issues = replies[0].1.as_array().expect("issues array").clone();
+    assert_eq!(issues.len(), 1, "{issues:?}");
+    assert_eq!(issues[0]["points"][0]["v"], json!(21.0));
 
     sup.shutdown();
 }
