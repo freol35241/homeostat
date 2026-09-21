@@ -81,6 +81,7 @@
     if (!msg || !msg.type) return null;
     if (msg.type === 'snapshot') {
       store.state = msg.state || {};
+      store.forecasts = msg.forecasts || {};
       store.health = msg.health || {};
       store.config = msg.config || {};
       store.aspects = msg.aspects || {};
@@ -95,6 +96,10 @@
     if (msg.type === 'state') {
       store.state[msg.key] = msg.value;
       return 'state';
+    }
+    if (msg.type === 'forecast') {
+      store.forecasts[msg.key] = msg.value;
+      return 'forecast';
     }
     if (msg.type === 'config') {
       store.config[msg.key] = msg.value;
@@ -558,6 +563,107 @@
     return out;
   }
 
+  /* ---- forecasts (docs/design.md, Forecasts) ----
+   *
+   * What the house believes about a series' future, carried live beside
+   * its present. The wire shape is {schema, issued, points:[{t, v, d?}]};
+   * `d` is a point's extent in seconds, absent for an instant. */
+
+  // The decoded forecast for one aspect, or null. Points become
+  // millisecond timestamps here so the chart can place them on the same
+  // axis as recorded history without every caller re-parsing.
+  function forecastFor(forecasts, room, entity, aspect) {
+    return decodeForecast(
+      forecasts && forecasts['home/forecast/' + room + '/' + entity + '/' + aspect]
+    );
+  }
+
+  // One forecast document, live off the bus or stored by the recorder —
+  // the same shape either way, which is why the store replies in the
+  // wire's spelling rather than a second one.
+  function decodeForecast(doc) {
+    if (!doc || !doc.points || !doc.points.length) return null;
+    var issued = Date.parse(doc.issued);
+    var points = [];
+    for (var i = 0; i < doc.points.length; i++) {
+      var p = doc.points[i];
+      var t = Date.parse(p.t);
+      if (isNaN(t) || typeof p.v !== 'number') return null;  // malformed: show nothing
+      points.push({ t: t, v: p.v, d: typeof p.d === 'number' ? p.d : null });
+    }
+    // The horizon runs to the end of a final interval, not its start —
+    // otherwise a coarse trailing window is drawn as a dot.
+    var last = points[points.length - 1];
+    return {
+      issued: isNaN(issued) ? null : issued,
+      points: points,
+      from: points[0].t,
+      to: last.d ? last.t + last.d * 1000 : last.t
+    };
+  }
+
+  // What a tile says about a horizon: where it is going, not just where
+  // it is. An extreme is worth a glance only if the series actually
+  // moves, so a flat horizon reports nothing rather than "min = max".
+  function horizonSummary(forecast) {
+    if (!forecast || forecast.points.length < 2) return null;
+    var lo = forecast.points[0], hi = forecast.points[0];
+    for (var i = 1; i < forecast.points.length; i++) {
+      if (forecast.points[i].v < lo.v) lo = forecast.points[i];
+      if (forecast.points[i].v > hi.v) hi = forecast.points[i];
+    }
+    if (lo.v === hi.v) return null;
+    return { min: lo, max: hi };
+  }
+
+  // Stored issues as the chart wants them: each decoded like a live
+  // forecast, newest last, and only those with something to draw. The
+  // wire carries them oldest-first already; sorting here anyway means a
+  // reader never has to trust that.
+  function decodeIssues(issues) {
+    var out = [];
+    (issues || []).forEach(function (doc) {
+      var decoded = decodeForecast(doc);
+      if (decoded) out.push(decoded);
+    });
+    out.sort(function (a, b) { return (a.issued || a.from) - (b.issued || b.from); });
+    return out;
+  }
+
+  // What every stored issue said about one instant — a column of the
+  // field (docs/wireframes/forecast-history.svg). The spread is the
+  // reading; the count is what makes the spread mean anything.
+  function columnAt(issues, when) {
+    var lo = null, hi = null, n = 0;
+    for (var i = 0; i < issues.length; i++) {
+      var v = valueAt(issues[i], when);
+      if (v === null) continue;
+      n += 1;
+      if (lo === null || v < lo) lo = v;
+      if (hi === null || v > hi) hi = v;
+    }
+    return n ? { count: n, min: lo, max: hi } : null;
+  }
+
+  // One issue's value at an instant, by the extent rule the SDK uses: a
+  // point with `d` speaks for [t, t+d), an instant only for itself — so
+  // between two instants the value is interpolated, and outside any
+  // point's reach there is nothing to report rather than a guess.
+  function valueAt(forecast, when) {
+    var pts = forecast.points;
+    if (!pts.length || when < pts[0].t || when > forecast.to) return null;
+    var lo = 0;
+    for (var i = 0; i < pts.length; i++) {
+      if (pts[i].t <= when) lo = i; else break;
+    }
+    var left = pts[lo];
+    if (left.d) return when < left.t + left.d * 1000 ? left.v : null;
+    if (left.t === when) return left.v;
+    var right = pts[lo + 1];
+    if (!right) return null;
+    return left.v + (right.v - left.v) * ((when - left.t) / (right.t - left.t));
+  }
+
   /* ---- history shapes ----
    *
    * The recorder folds a window two ways (docs/design.md, Read path):
@@ -765,6 +871,12 @@
     unitNameFromHealthKey: unitNameFromHealthKey,
     applyMessage: applyMessage,
     computeDeviations: computeDeviations,
+    forecastFor: forecastFor,
+    decodeForecast: decodeForecast,
+    decodeIssues: decodeIssues,
+    columnAt: columnAt,
+    valueAt: valueAt,
+    horizonSummary: horizonSummary,
     formatAspect: formatAspect,
     controlFor: controlFor,
     coarseStep: coarseStep,

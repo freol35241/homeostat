@@ -280,7 +280,7 @@ wheels = [
 
 [[package]]
 name = "homeostat"
-version = "0.14.0rc2"
+version = "0.14.0"
 source = { editable = "../sdk/python" }
 dependencies = [
     { name = "eclipse-zenoh" },
