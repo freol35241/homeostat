@@ -857,3 +857,74 @@ test('a forecast delta lands in the store and a snapshot replaces the lot', () =
   logic.applyMessage(store, { type: 'snapshot', state: {}, forecasts: {} }, 0);
   assert.deepEqual(store.forecasts, {}, 'a snapshot is the whole truth, not a merge');
 });
+
+// ---- stored forecasts: the braid's data ----
+
+function issueDoc(issued, points) {
+  return { schema: 1, issued: issued, points: points };
+}
+
+test('stored issues decode like live ones and come back oldest first', () => {
+  // The store replies in the wire's own spelling, so one decoder serves
+  // both — which is why the recorder answers in issues rather than rows.
+  const issues = logic.decodeIssues([
+    issueDoc('2026-09-21T09:00:00+00:00', [{ t: '2026-09-21T12:00:00+00:00', v: 1.4, d: 3600 }]),
+    issueDoc('2026-09-21T08:00:00+00:00', [{ t: '2026-09-21T12:00:00+00:00', v: 1.0, d: 3600 }]),
+  ]);
+  assert.equal(issues.length, 2);
+  assert.equal(issues[0].issued, Date.parse('2026-09-21T08:00:00+00:00'));
+  assert.equal(issues[1].points[0].v, 1.4);
+});
+
+test('an unreadable issue is dropped, not drawn as a broken line', () => {
+  const issues = logic.decodeIssues([
+    issueDoc('2026-09-21T08:00:00+00:00', [{ t: 'soon', v: 1 }]),
+    issueDoc('2026-09-21T09:00:00+00:00', []),
+    issueDoc('2026-09-21T10:00:00+00:00', [{ t: '2026-09-21T12:00:00+00:00', v: 2 }]),
+  ]);
+  assert.equal(issues.length, 1);
+  assert.equal(issues[0].points[0].v, 2);
+});
+
+test("one issue's value follows the extent rule, not the nearest point", () => {
+  const [held] = logic.decodeIssues([
+    issueDoc('2026-09-21T08:00:00+00:00', [
+      { t: '2026-09-21T12:00:00+00:00', v: 1.0, d: 3600 },
+      { t: '2026-09-21T13:00:00+00:00', v: 2.0, d: 3600 },
+    ]),
+  ]);
+  // An interval HOLDS across its window rather than sliding toward the
+  // next point, and stops at its end rather than running on.
+  assert.equal(logic.valueAt(held, Date.parse('2026-09-21T12:30:00+00:00')), 1.0);
+  assert.equal(logic.valueAt(held, Date.parse('2026-09-21T13:30:00+00:00')), 2.0);
+  assert.equal(logic.valueAt(held, Date.parse('2026-09-21T14:30:00+00:00')), null);
+
+  const [instants] = logic.decodeIssues([
+    issueDoc('2026-09-21T08:00:00+00:00', [
+      { t: '2026-09-21T12:00:00+00:00', v: 1.0 },
+      { t: '2026-09-21T14:00:00+00:00', v: 2.0 },
+    ]),
+  ]);
+  // Instants interpolate between themselves.
+  assert.equal(logic.valueAt(instants, Date.parse('2026-09-21T13:00:00+00:00')), 1.5);
+  assert.equal(logic.valueAt(instants, Date.parse('2026-09-21T11:00:00+00:00')), null);
+});
+
+test('a column reads what every issue said about one instant', () => {
+  // The slice whose x axis is issue time, and which therefore cannot
+  // share the chart — delivered by the scrub instead.
+  const issues = logic.decodeIssues([
+    issueDoc('2026-09-21T08:00:00+00:00', [{ t: '2026-09-21T12:00:00+00:00', v: 1.0, d: 3600 }]),
+    issueDoc('2026-09-21T09:00:00+00:00', [{ t: '2026-09-21T12:00:00+00:00', v: 1.6, d: 3600 }]),
+    issueDoc('2026-09-21T10:00:00+00:00', [{ t: '2026-09-21T12:00:00+00:00', v: 1.3, d: 3600 }]),
+  ]);
+  assert.deepEqual(logic.columnAt(issues, Date.parse('2026-09-21T12:30:00+00:00')), {
+    count: 3,
+    min: 1.0,
+    max: 1.6,
+  });
+  // Outside every horizon there is nothing to report — not a zero-width
+  // spread, which would read as perfect agreement.
+  assert.equal(logic.columnAt(issues, Date.parse('2026-09-21T20:00:00+00:00')), null);
+  assert.equal(logic.columnAt([], Date.parse('2026-09-21T12:30:00+00:00')), null);
+});
