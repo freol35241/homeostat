@@ -45,6 +45,7 @@ Units to create (9):
     params:
       integrity_check_hours  type=float  default=24  constraint={min=0}  editable_by=owner
       retain_events_days  type=float  default=0  constraint={min=0}  editable_by=owner
+      retain_forecasts_days  type=float  default=0  constraint={min=0}  editable_by=owner
       retain_samples_days  type=float  default=0  constraint={min=0}  editable_by=owner
 
 Expanded keys:
@@ -101,6 +102,7 @@ Expanded keys:
   recorder publishes history: home/history/**
   recorder subscribes cmd: home/cmd/**
   recorder subscribes config: home/config/**
+  recorder subscribes forecast: home/forecast/**
   recorder subscribes health: home/health/**
   recorder subscribes state: home/state/**
 
