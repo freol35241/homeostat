@@ -20,7 +20,7 @@ a small API generated entirely from the house's text:
                      grants its capability; each unit with the entities
                      it drives, from the grant table, and reads, from
                      its subscriptions — the unit card's relations)
-  GET  /ws           snapshot of state/health/config plus every aspect
+  GET  /ws           snapshot of state/forecasts/health/config plus every aspect
                      descriptor adapters publish in their discovery
                      records (docs/design.md, Aspect descriptors), then
                      live deltas
@@ -424,6 +424,13 @@ class Hub:
         self.session = session
         self.lock = threading.Lock()
         self.state: dict[str, object] = {}
+        # The current forecast per home/forecast key, carried live like
+        # state rather than read back from the recorder: what a family
+        # looks at is what the house believes NOW, and a house with no
+        # recorder must still be able to see its own horizon. The
+        # recorder's copy answers a different question — what we believed
+        # THEN — which is verification, and not this surface.
+        self.forecasts: dict[str, object] = {}
         self.health: dict[str, object] = {}
         self.config: dict[str, object] = {}
         # entity name -> its adapter's aspect descriptor, lifted out of
@@ -450,6 +457,7 @@ class Hub:
         # subscription update always supersedes what the seed would write.
         self._subs = [
             self.session.subscribe("home/state/**", self._on_state),
+            self.session.subscribe("home/forecast/**", self._on_forecast),
             self.session.subscribe("home/health/**", self._on_health),
             self.session.subscribe("home/config/*/*", self._on_config),
             self.session.subscribe("home/discovery/*", self._on_discovery),
@@ -457,6 +465,9 @@ class Hub:
         for key, value in self.session.get_json("home/state/**"):
             with self.lock:
                 self.state.setdefault(key, value)
+        for key, value in self.session.get_json("home/forecast/**"):
+            with self.lock:
+                self.forecasts.setdefault(key, value)
         for key, value in self.session.get_json("home/health/*"):
             with self.lock:
                 self.health.setdefault(key, value)
@@ -484,6 +495,7 @@ class Hub:
             return {
                 "type": "snapshot",
                 "state": dict(self.state),
+                "forecasts": dict(self.forecasts),
                 "health": dict(self.health),
                 "config": dict(self.config),
                 "aspects": dict(self.aspects),
@@ -506,6 +518,14 @@ class Hub:
         with self.lock:
             self.state[key] = value
         self._emit({"type": "state", "key": key, "value": value})
+
+    def _on_forecast(self, sample) -> None:
+        if (decoded := self._decode(sample)) is None:
+            return
+        key, value = decoded
+        with self.lock:
+            self.forecasts[key] = value
+        self._emit({"type": "forecast", "key": key, "value": value})
 
     def _apply_discovery(self, unit: str, value) -> None:
         """Diffs a unit's discovery record against what it described

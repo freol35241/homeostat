@@ -745,3 +745,115 @@ test('a deviation tap lands on the view that shows its subject, or nowhere', () 
   assert.equal(logic.viewFor({ type: 'setpoint', unit: 'zigbee' }, generated), 'setpoints');
   assert.equal(logic.viewFor({ type: 'rooms' }, generated), 'rooms');
 });
+
+// ---- forecasts (docs/design.md, Forecasts) ----
+
+const FORECAST_KEY = 'home/forecast/global/spot/price';
+
+function doc(points, issued) {
+  return {
+    [FORECAST_KEY]: {
+      schema: 1,
+      issued: issued || '2026-09-21T08:00:00+00:00',
+      points,
+    },
+  };
+}
+
+test('a forecast decodes to millisecond points on the chart axis', () => {
+  const f = logic.forecastFor(
+    doc([
+      { t: '2026-09-21T09:00:00+00:00', v: 1.2, d: 3600 },
+      { t: '2026-09-21T10:00:00+00:00', v: 0.4 },
+    ]),
+    'global',
+    'spot',
+    'price',
+  );
+  assert.equal(f.points.length, 2);
+  assert.equal(f.points[0].v, 1.2);
+  assert.equal(f.points[0].d, 3600);
+  assert.equal(f.points[1].d, null, 'an instant carries no extent');
+  assert.equal(f.from, Date.parse('2026-09-21T09:00:00+00:00'));
+});
+
+test("the horizon ends where a final interval ends, not where it starts", () => {
+  // Otherwise a coarse trailing window — the shape real sources publish
+  // furthest out — is drawn as a dot at its own start.
+  const f = logic.forecastFor(
+    doc([
+      { t: '2026-09-21T09:00:00+00:00', v: 1.0, d: 3600 },
+      { t: '2026-09-21T12:00:00+00:00', v: 2.0, d: 10800 },
+    ]),
+    'global',
+    'spot',
+    'price',
+  );
+  assert.equal(f.to, Date.parse('2026-09-21T15:00:00+00:00'));
+});
+
+test('a trailing instant ends the horizon at itself', () => {
+  const f = logic.forecastFor(
+    doc([
+      { t: '2026-09-21T09:00:00+00:00', v: 1.0 },
+      { t: '2026-09-21T12:00:00+00:00', v: 2.0 },
+    ]),
+    'global',
+    'spot',
+    'price',
+  );
+  assert.equal(f.to, Date.parse('2026-09-21T12:00:00+00:00'));
+});
+
+test('nothing to draw reads as nothing, never as a broken chart', () => {
+  for (const [label, forecasts] of [
+    ['no forecast for this aspect', {}],
+    ['an empty horizon', doc([])],
+    ['a malformed timestamp', doc([{ t: 'soon', v: 1 }])],
+    ['a non-numeric value', doc([{ t: '2026-09-21T09:00:00+00:00', v: 'cold' }])],
+  ]) {
+    assert.equal(logic.forecastFor(forecasts, 'global', 'spot', 'price'), null, label);
+  }
+});
+
+test('a horizon summary names where the series goes and when', () => {
+  const f = logic.forecastFor(
+    doc([
+      { t: '2026-09-21T09:00:00+00:00', v: 1.2 },
+      { t: '2026-09-21T10:00:00+00:00', v: 0.4 },
+      { t: '2026-09-21T11:00:00+00:00', v: 1.9 },
+    ]),
+    'global',
+    'spot',
+    'price',
+  );
+  const summary = logic.horizonSummary(f);
+  assert.equal(summary.min.v, 0.4);
+  assert.equal(summary.min.t, Date.parse('2026-09-21T10:00:00+00:00'));
+  assert.equal(summary.max.v, 1.9);
+});
+
+test('a flat horizon summarises to nothing rather than to min = max', () => {
+  const f = logic.forecastFor(
+    doc([
+      { t: '2026-09-21T09:00:00+00:00', v: 7.0 },
+      { t: '2026-09-21T10:00:00+00:00', v: 7.0 },
+    ]),
+    'global',
+    'spot',
+    'price',
+  );
+  assert.equal(logic.horizonSummary(f), null);
+  assert.equal(logic.horizonSummary(null), null);
+});
+
+test('a forecast delta lands in the store and a snapshot replaces the lot', () => {
+  const store = { state: {}, forecasts: {}, health: {}, config: {}, aspects: {} };
+  assert.equal(
+    logic.applyMessage(store, { type: 'forecast', key: FORECAST_KEY, value: { schema: 1 } }, 0),
+    'forecast',
+  );
+  assert.deepEqual(store.forecasts[FORECAST_KEY], { schema: 1 });
+  logic.applyMessage(store, { type: 'snapshot', state: {}, forecasts: {} }, 0);
+  assert.deepEqual(store.forecasts, {}, 'a snapshot is the whole truth, not a merge');
+});
