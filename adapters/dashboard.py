@@ -194,6 +194,12 @@ def build_model(model: house.HouseModel, granted: set[str]) -> dict:
                 "write_mode": e.write_mode,
                 "owner": e.owner,
                 "commandable": e.capability in granted,
+                # What this entity's value is derived from, where it is
+                # computed: the history overlay draws these beside it.
+                "sources": {
+                    name: {"entity": src.entity, "aspect": src.aspect}
+                    for name, src in e.sources.items()
+                },
             }
             for e in model.entities
         ],

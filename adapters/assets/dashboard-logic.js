@@ -616,6 +616,38 @@
     return { min: lo, max: hi };
   }
 
+  /* ---- declared sources (docs/design.md, Sources) ----
+   *
+   * What a computed value is derived from, as the overlay wants it. The
+   * entity file declares contributors house-wide, not per aspect, so a
+   * contributor belongs to the aspect it contributes: a fused temperature
+   * derived from `temperature` readings shows them under `temperature`
+   * and leaves an unrelated `humidity` chart alone.
+   */
+  function contributorsFor(entities, entityName, aspect) {
+    var owner = (entities || []).filter(function (e) { return e.name === entityName; })[0];
+    if (!owner || !owner.sources) return [];
+    var byName = {};
+    (entities || []).forEach(function (e) { byName[e.name] = e; });
+    var out = [];
+    Object.keys(owner.sources).sort().forEach(function (name) {
+      var src = owner.sources[name];
+      if (!src || src.aspect !== aspect) return;
+      var e = byName[src.entity];
+      // A contributor the model does not carry cannot be drawn. The plan
+      // refuses an unknown one (`source-unknown-entity`), so this is a
+      // model the page has outrun, not a house that is wrong.
+      if (!e) return;
+      out.push({
+        name: name,
+        entity: src.entity,
+        aspect: src.aspect,
+        label: e.label || titleCase(src.entity)
+      });
+    });
+    return out;
+  }
+
   // Stored issues as the chart wants them: each decoded like a live
   // forecast, newest last, and only those with something to draw. The
   // wire carries them oldest-first already; sorting here anyway means a
@@ -873,6 +905,7 @@
     computeDeviations: computeDeviations,
     forecastFor: forecastFor,
     decodeForecast: decodeForecast,
+    contributorsFor: contributorsFor,
     decodeIssues: decodeIssues,
     columnAt: columnAt,
     valueAt: valueAt,

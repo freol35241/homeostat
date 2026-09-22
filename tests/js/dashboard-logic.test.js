@@ -928,3 +928,44 @@ test('a column reads what every issue said about one instant', () => {
   assert.equal(logic.columnAt(issues, Date.parse('2026-09-21T20:00:00+00:00')), null);
   assert.equal(logic.columnAt([], Date.parse('2026-09-21T12:30:00+00:00')), null);
 });
+
+test('contributors are the declared sources for the aspect they contribute', () => {
+  // `[sources]` is declared per entity, not per aspect, so the aspect a
+  // contributor contributes is what files it under a chart.
+  const entities = [
+    { name: 'station', label: 'Weather station' },
+    { name: 'shed', label: 'Shed sensor' },
+    { name: 'hygrometer', label: 'Hygrometer' },
+    {
+      name: 'outdoor_temperature',
+      label: 'Outdoor temperature',
+      sources: {
+        b_shed: { entity: 'shed', aspect: 'temperature' },
+        a_station: { entity: 'station', aspect: 'temperature' },
+        damp: { entity: 'hygrometer', aspect: 'humidity' },
+      },
+    },
+  ];
+  const temps = logic.contributorsFor(entities, 'outdoor_temperature', 'temperature');
+  // Sorted by contributor name, so the legend does not reshuffle between
+  // renders of the same chart.
+  assert.deepEqual(temps.map((c) => c.name), ['a_station', 'b_shed']);
+  assert.deepEqual(temps.map((c) => c.label), ['Weather station', 'Shed sensor']);
+  // The humidity contributor belongs to the humidity chart, not this one.
+  assert.deepEqual(
+    logic.contributorsFor(entities, 'outdoor_temperature', 'humidity').map((c) => c.entity),
+    ['hygrometer'],
+  );
+});
+
+test('an entity that declares no sources contributes nothing to draw', () => {
+  const entities = [{ name: 'lamp', label: 'Lamp' }];
+  assert.deepEqual(logic.contributorsFor(entities, 'lamp', 'on'), []);
+  assert.deepEqual(logic.contributorsFor(entities, 'nobody', 'on'), []);
+  // A contributor the model has not caught up with is skipped rather
+  // than drawn as a gap; the plan refuses an unknown one outright.
+  const stale = [
+    { name: 'fused', label: 'Fused', sources: { gone: { entity: 'ghost', aspect: 'temperature' } } },
+  ];
+  assert.deepEqual(logic.contributorsFor(stale, 'fused', 'temperature'), []);
+});

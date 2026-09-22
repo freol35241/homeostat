@@ -40,6 +40,9 @@ class Entity:
     naming: dict = field(default_factory=dict)
     # [inputs]: adapter input name -> resolved source. Empty for most.
     inputs: dict[str, InputSource] = field(default_factory=dict)
+    # [sources]: contributor name -> the reading this entity's value is
+    # derived from. Declared on computed entities; empty for most.
+    sources: dict[str, InputSource] = field(default_factory=dict)
 
 
 @dataclass
@@ -71,9 +74,15 @@ def _entity_from(path: Path, data: dict, default_owner: str) -> Entity:
         capability=data["entity"]["capability"],
         room=data["entity"]["room"],
         features=data["entity"].get("features", []),
-        write_mode=data["write_policy"]["mode"],
+        # `mode` governs commands, so an entity whose capability takes
+        # none may omit it; absent it reads as shared, as the core does.
+        write_mode=data["write_policy"].get("mode", "shared"),
         owner=data["write_policy"].get("owner", default_owner),
         naming=dict(data.get("naming", {})),
+        sources={
+            name: InputSource(entity=src["entity"], aspect=src["aspect"])
+            for name, src in data.get("sources", {}).items()
+        },
     )
 
 
