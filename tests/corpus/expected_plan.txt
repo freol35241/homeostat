@@ -2,7 +2,7 @@ Homeostat plan
   repo:  examples/house
   world: empty
 
-Units to create (10):
+Units to create (11):
 
 + adapter esphome (units/esphome.toml)
     command: uv run units/esphome.py
@@ -38,6 +38,8 @@ Units to create (10):
       cooldown_minutes  type=float  default=10  constraint={min=0}  editable_by=family
 + automation weather (units/weather.toml)
     command: uv run units/weather.py
++ automation weather_alt (units/weather_alt.toml)
+    command: uv run units/weather_alt.py
 + service arbiter (units/arbiter.toml)
     command: uv run units/arbiter.py
     params:
@@ -98,7 +100,8 @@ Expanded keys:
   intrusion publishes alert: home/cmd/person/alice_phone/alert
   intrusion subscribes motion: home/state/hallway/*/occupancy
   intrusion subscribes presence: home/state/global/*/presence
-  weather publishes curve: home/forecast/global/outdoor_temp/temperature
+  weather publishes curve: home/forecast/global/outdoor_temp/temperature/smhi
+  weather_alt publishes curve: home/forecast/global/outdoor_temp/temperature/yr
   arbiter publishes arbiter: home/arbiter/**
   arbiter subscribes cmd: home/cmd/**
   dashboard publishes lights: home/cmd/**
@@ -146,7 +149,9 @@ Grant table:
     -> adults       (room=global, capability=notifier, write=shared, owner=ntfy)
     -> alice_phone  (room=person, capability=notifier, write=shared, owner=ntfy)
   weather.curve  binds
-    key: home/forecast/global/outdoor_temp/temperature
+    key: home/forecast/global/outdoor_temp/temperature/smhi
+  weather_alt.curve  binds
+    key: home/forecast/global/outdoor_temp/temperature/yr
   zigbee.state  binds
     key: home/state/hallway/front_door_lock/**
     key: home/state/hallway/hallway_motion/**
@@ -166,4 +171,4 @@ Sources:
   downstairs_temperature.kitchen  <-  kitchen_temp.temperature  (home/state/kitchen/kitchen_temp/temperature, owner=zigbee)
   downstairs_temperature.livingroom  <-  livingroom_temp.temperature  (home/state/livingroom/livingroom_temp/temperature, owner=zigbee)
 
-Plan tier: structural (10 units created, 9 grants added)
+Plan tier: structural (11 units created, 10 grants added)

@@ -1,2 +1,2 @@
 error[forecast-publish-unbound] seer.ghost: forecast key "home/forecast/den/ghost/…" names no entity in the house (units/seer.toml)
-error[forecast-publish-unbound] seer.wild: forecast publish "home/forecast/*/ghost/price" needs literal room and entity segments (or {room}/{entity} templates) (units/seer.toml)
+error[forecast-publish-unbound] seer.wild: forecast publish "home/forecast/*/ghost/price/seer" needs literal room and entity segments (or {room}/{entity} templates) (units/seer.toml)

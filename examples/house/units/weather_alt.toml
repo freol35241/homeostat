@@ -1,0 +1,16 @@
+schema = 1
+
+[unit]
+name = "weather_alt"
+kind = "automation"
+description = "A second outdoor temperature forecast, for comparison"
+
+[runtime]
+command = "uv run units/weather_alt.py"
+restart = "on-failure"
+
+# The same aspect of the same entity as `weather`, under its own source.
+# Both are kept: the history overlay can braid them against what actually
+# happened, which is how you find out that one provider runs warm.
+[bus.publishes]
+curve = { key = "home/forecast/global/outdoor_temp/temperature/yr" }

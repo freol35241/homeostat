@@ -13,7 +13,7 @@ shutdown_grace_s = 5
 [bus.publishes]
 # The forecast class is addressed per entity, exactly like state, so this
 # has to name an entity this unit binds (forecast-publish-unbound).
-price_forecast = { key = "home/forecast/global/spot_price/price" }
+price_forecast = { key = "home/forecast/global/spot_price/price/nordpool" }
 price_now = { key = "home/state/global/spot_price/price" }
 
 [entities]

@@ -45,17 +45,21 @@ def state_keyexpr(room: str, entity: str) -> str:
     return "home/state/" + _segments(room, entity) + "/*"
 
 
-def forecast_key(room: str, entity: str, aspect: str) -> str:
-    """A series' future, keyed like its present (docs/design.md, Forecasts):
-    the same room/entity/aspect as `state_key`, so a forecast is the same
-    series extended forward and the entity's aspect descriptor already
-    labels it."""
-    return "home/forecast/" + _segments(room, entity, aspect)
+def forecast_key(room: str, entity: str, aspect: str, source: str) -> str:
+    """A series' future, keyed like its present plus WHO says so
+    (docs/design.md, Sources): the same room/entity/aspect as `state_key`,
+    so a forecast is the same series extended forward and the entity's
+    aspect descriptor already labels it, and then the source. Several
+    sources may speak about one series — two weather providers, or a
+    controller publishing the trajectory it plans to cause — so the slot
+    is required rather than optional."""
+    return "home/forecast/" + _segments(room, entity, aspect, source)
 
 
 def forecast_keyexpr(room: str, entity: str) -> str:
-    """Key expression matching every forecast aspect of one entity."""
-    return "home/forecast/" + _segments(room, entity) + "/*"
+    """Key expression matching every forecast aspect of one entity, from
+    every source."""
+    return "home/forecast/" + _segments(room, entity) + "/*/*"
 
 
 def cmd_key(room: str, entity: str, aspect: str) -> str:

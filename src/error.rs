@@ -397,13 +397,13 @@ pub const CODES: &[(&str, &str)] = &[
     ),
     (
         "forecast-publish-conflict",
-        "Two or more units publish forecasts for one series. The mirror keeps \
-         only the last document per key, so a second publisher does not add \
-         an opinion — it overwrites one. Checked per entity rather than per \
-         aspect, because a publish may wildcard its aspect slot; if two units \
-         genuinely forecast different aspects of one entity, that is the case \
-         a source segment in the key exists to settle (docs/design.md, \
-         Subjects and sources).",
+        "Two units publish forecasts that land on the same key. The mirror \
+         keeps only the last document per key, so the second does not add an \
+         opinion — it overwrites one. Several providers CAN forecast one \
+         aspect: that is what the source segment is for, and under their own \
+         sources they coexist. A publish that wildcards its aspect or source \
+         slot accepts anything there, so it collides with a publish that \
+         names one (docs/design.md, Sources).",
     ),
 ];
 

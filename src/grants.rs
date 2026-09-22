@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::ValidationError;
 use crate::expand::{Direction, ExpandedKey};
-use crate::keyspace::Segment;
+use crate::keyspace::{KeyExpr, Segment};
 use crate::manifest::{Priority, UnitKind, WriteMode, CAPABILITIES};
 use crate::repo::House;
 
@@ -600,16 +600,41 @@ pub fn resolve(
         }
     }
 
-    // A forecast series has exactly one publisher. Relaxing the ownership
-    // rule above gives up the structural guarantee the registry provided —
-    // one binder per entity — so it is replaced with the property that
-    // actually mattered: two units must not clobber each other's issues on
-    // one series, where the mirror keeps only the last document. Checked
-    // per (room, entity) rather than per aspect because a publish may
-    // wildcard its aspect slot; splitting one entity's aspects between two
-    // units is therefore refused conservatively, and is exactly what a
-    // source segment would settle (docs/design.md, Subjects and sources).
-    let mut forecast_publishers: BTreeMap<(String, String), BTreeSet<&str>> = BTreeMap::new();
+    // One forecast series, one publisher — where "series" now includes the
+    // SOURCE. Several providers may speak about one aspect, which is what
+    // the source segment is for; what must not happen is two units writing
+    // the same source's key, because the mirror keeps only the last
+    // document per key, so the second overwrites rather than adds.
+    //
+    // A publish may wildcard its aspect or source slot, so entries are
+    // compared pairwise for compatibility rather than bucketed by an exact
+    // key: two publishes collide when, at every slot, they agree or one of
+    // them accepts anything.
+    #[derive(PartialEq)]
+    enum Slot {
+        Exact(String),
+        Any,
+    }
+    impl Slot {
+        fn compatible(&self, other: &Slot) -> bool {
+            match (self, other) {
+                (Slot::Exact(a), Slot::Exact(b)) => a == b,
+                _ => true,
+            }
+        }
+    }
+    let slot = |expr: &KeyExpr, i: usize| -> Slot {
+        // `**` anywhere from the aspect slot on stands for every slot
+        // after it, so a key that has one accepts anything here.
+        if expr.0.iter().skip(4).any(|s| matches!(s, Segment::AnyRec)) {
+            return Slot::Any;
+        }
+        match expr.0.get(i) {
+            Some(Segment::Literal(v)) => Slot::Exact(v.clone()),
+            _ => Slot::Any,
+        }
+    };
+    let mut forecast_publishes: Vec<(&str, String, String, Slot, Slot)> = Vec::new();
     for key in expanded
         .iter()
         .filter(|k| k.direction == Direction::Publishes)
@@ -623,27 +648,39 @@ pub fn resolve(
             else {
                 continue;
             };
-            forecast_publishers
-                .entry((room.clone(), entity.clone()))
-                .or_default()
-                .insert(key.unit.as_str());
+            forecast_publishes.push((
+                key.unit.as_str(),
+                room.clone(),
+                entity.clone(),
+                slot(expr, 4),
+                slot(expr, 5),
+            ));
         }
     }
-    for ((room, entity), units) in &forecast_publishers {
-        if units.len() < 2 {
-            continue;
+    let mut reported: BTreeSet<(&str, &str)> = BTreeSet::new();
+    for (i, a) in forecast_publishes.iter().enumerate() {
+        for b in forecast_publishes.iter().skip(i + 1) {
+            if a.0 == b.0 || a.1 != b.1 || a.2 != b.2 {
+                continue;
+            }
+            if !a.3.compatible(&b.3) || !a.4.compatible(&b.4) {
+                continue;
+            }
+            let pair = if a.0 < b.0 { (a.0, b.0) } else { (b.0, a.0) };
+            if !reported.insert(pair) {
+                continue;
+            }
+            errors.push(ValidationError::new(
+                "forecast-publish-conflict",
+                format!("home/forecast/{}/{}", a.1, a.2),
+                format!(
+                    "{} and {} publish forecasts that land on the same key; \
+                     give each source its own segment, or one overwrites the other",
+                    pair.0, pair.1
+                ),
+                None,
+            ));
         }
-        let names: Vec<&str> = units.iter().copied().collect();
-        errors.push(ValidationError::new(
-            "forecast-publish-conflict",
-            format!("home/forecast/{room}/{entity}"),
-            format!(
-                "{} all publish forecasts for this series; exactly one source may, \
-                 because the mirror keeps only the last document",
-                names.join(", ")
-            ),
-            None,
-        ));
     }
 
     // Reserved classes (docs/design.md, Key space): `config` and `meta` are
@@ -731,7 +768,7 @@ pub fn resolve(
 mod tests {
     use super::*;
     use crate::expand::expand;
-    use crate::keyspace::KeyExpr;
+
     use crate::manifest::{
         BusSection, EntityFile, EntitySection, PublishSpec, RestartPolicy, RuntimeSection,
         SourceRef, UnitManifest, UnitSection, WritePolicy,
@@ -1084,7 +1121,7 @@ mod tests {
         publishes.insert(
             "curve".to_string(),
             PublishSpec {
-                key: "home/forecast/global/spot_price/price".to_string(),
+                key: "home/forecast/global/spot_price/price/nordpool".to_string(),
                 capability: None,
                 priority: None,
             },
@@ -1121,6 +1158,44 @@ mod tests {
                 .map(|e| e.name.as_str())
                 .collect::<Vec<_>>(),
             vec!["spot_price"],
+        );
+    }
+
+    /// The point of the segment: two providers, one aspect, no conflict.
+    /// This is what the per-entity check refused before a forecast key
+    /// carried its source.
+    #[test]
+    fn two_providers_may_forecast_one_aspect_under_their_own_sources() {
+        let house = house_forecasting(
+            "outdoor_temp",
+            "global",
+            &[
+                ("smhi", "home/forecast/global/outdoor_temp/temperature/smhi"),
+                ("yr", "home/forecast/global/outdoor_temp/temperature/yr"),
+            ],
+        );
+        let (expanded, _, _) = expand(&house);
+        let (_, _, errors) = resolve(&house, &expanded);
+        assert!(errors.is_empty(), "{errors:?}");
+    }
+
+    /// A wildcard slot accepts anything, so a unit publishing the whole
+    /// aspect space collides with one naming a single source inside it.
+    #[test]
+    fn a_wildcard_forecast_publish_collides_with_a_named_source() {
+        let house = house_forecasting(
+            "outdoor_temp",
+            "global",
+            &[
+                ("broad", "home/forecast/global/outdoor_temp/**"),
+                ("smhi", "home/forecast/global/outdoor_temp/temperature/smhi"),
+            ],
+        );
+        let (expanded, _, _) = expand(&house);
+        let (_, _, errors) = resolve(&house, &expanded);
+        assert_eq!(
+            errors.iter().map(|e| e.code).collect::<Vec<_>>(),
+            vec!["forecast-publish-conflict"],
         );
     }
 
@@ -1178,7 +1253,7 @@ mod tests {
         let house = house_forecasting(
             "outdoor_temp",
             "global",
-            &[("weather", "home/forecast/global/outdoor_temp/temperature")],
+            &[("weather", "home/forecast/global/outdoor_temp/temperature/smhi")],
         );
         let (expanded, _, _) = expand(&house);
         let (_, _, errors) = resolve(&house, &expanded);
@@ -1194,7 +1269,7 @@ mod tests {
         let house = house_forecasting(
             "outdoor_temp",
             "global",
-            &[("weather", "home/forecast/global/nowhere/temperature")],
+            &[("weather", "home/forecast/global/nowhere/temperature/smhi")],
         );
         let (expanded, _, _) = expand(&house);
         let (_, _, errors) = resolve(&house, &expanded);
@@ -1207,18 +1282,20 @@ mod tests {
         );
     }
 
-    /// One series, one forecaster. Ownership used to guarantee this
+    /// One source, one publisher. Ownership used to guarantee this
     /// structurally — one binder per entity — so relaxing it has to put
     /// the property back directly: the mirror keeps only the last
-    /// document, so a second publisher overwrites rather than adds.
+    /// document per key, so a second publisher on the SAME source
+    /// overwrites rather than adds. Two providers under their own source
+    /// segments are the case this exists to permit, covered below.
     #[test]
-    fn two_units_may_not_forecast_one_series() {
+    fn two_units_may_not_publish_one_forecast_source() {
         let house = house_forecasting(
             "outdoor_temp",
             "global",
             &[
-                ("smhi", "home/forecast/global/outdoor_temp/temperature"),
-                ("yr", "home/forecast/global/outdoor_temp/temperature"),
+                ("smhi", "home/forecast/global/outdoor_temp/temperature/consensus"),
+                ("yr", "home/forecast/global/outdoor_temp/temperature/consensus"),
             ],
         );
         let (expanded, _, _) = expand(&house);

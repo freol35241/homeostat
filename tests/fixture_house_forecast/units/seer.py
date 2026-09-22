@@ -38,7 +38,8 @@ def main() -> None:
     )
     # The present on the state class, the future on the forecast class:
     # one entity, one series, both reached through the declared binding
-    # rather than by handing a key to the session.
+    # rather than by handing a key to the session. The forecast binding
+    # names its source literally, so this call needs no slot of its own.
     ctx.publish("price_now", VALUES[0])
     ctx.publish_forecast(
         "price_forecast",
