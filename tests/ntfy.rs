@@ -15,8 +15,7 @@ use serde_json::{json, Value};
 use common::{
     assert_cli_ok, assert_unit_contract, await_health, await_mirror, await_states, cli,
     expect_drop_event, fixture_command, free_port, health_watch, matched_publisher, stdout,
-    temp_house, StateSub,
-    Supervisor,
+    temp_house, StateSub, Supervisor,
 };
 
 const FIXTURE: &str = "tests/fixture_house_ntfy";
