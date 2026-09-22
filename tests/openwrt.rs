@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 use zenoh::sample::SampleKind;
 
-use common::{expect_event_kind, expect_state, free_port, Supervisor};
+use common::{expect_event_kind, expect_state, fixture_command, free_port, Supervisor};
 
 const FIXTURE: &str = "tests/fixture_house_openwrt";
 const ROUTERS_ENV: &str = "HOMEOSTAT_OPENWRT";
@@ -29,26 +29,23 @@ const USERNAME: &str = "homeostat";
 const PASSWORD: &str = "secret123";
 
 /// A fake ubus endpoint (tests/fake_openwrt.py) on a free port, killed on
-/// drop. Spawned the same way the units themselves are: `uv run`.
+/// drop. Spawned the same way the units themselves are: out of the
+/// script's own uv environment, exec'd directly (fixture_command, #140),
+/// so the handle held here is the interpreter's and not uv's.
 struct FakeOpenwrt {
     child: Child,
     port: u16,
 }
 
 impl FakeOpenwrt {
-    fn spawn() -> Self {
+    async fn spawn() -> Self {
         let port = free_port();
-        let child = Command::new("uv")
-            .args([
-                "run",
-                "tests/fake_openwrt.py",
-                "--port",
-                &port.to_string(),
-                "--username",
-                USERNAME,
-                "--password",
-                PASSWORD,
-            ])
+        let (program, args) = fixture_command(&format!(
+            "uv run tests/fake_openwrt.py --port {port} --username {USERNAME} --password {PASSWORD}"
+        ))
+        .await;
+        let child = Command::new(program)
+            .args(args)
             .current_dir(env!("CARGO_MANIFEST_DIR"))
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -119,7 +116,7 @@ fn routers_file(routers: &[(&str, u16)]) -> PathBuf {
 /// adapter's liveliness token (generous timeout: first run resolves the
 /// uv env for aiohttp too).
 async fn setup() -> (FakeOpenwrt, PathBuf, Supervisor, zenoh::Session) {
-    let router = FakeOpenwrt::spawn();
+    let router = FakeOpenwrt::spawn().await;
     let routers_path = routers_file(&[("gw", router.port)]);
     let (sup, observer) = start(&routers_path).await;
     (router, routers_path, sup, observer)
@@ -306,8 +303,8 @@ async fn a_chunked_ubus_reply_is_read_whole() {
 /// every router answers.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_silent_router_cannot_assert_absence() {
-    let gw = FakeOpenwrt::spawn();
-    let ap = FakeOpenwrt::spawn();
+    let gw = FakeOpenwrt::spawn().await;
+    let ap = FakeOpenwrt::spawn().await;
     let routers_path = routers_file(&[("gw", gw.port), ("ap", ap.port)]);
     let (mut sup, observer) = start(&routers_path).await;
     let presence_sub = observer
