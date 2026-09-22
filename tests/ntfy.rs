@@ -14,8 +14,8 @@ use serde_json::{json, Value};
 
 use common::{
     assert_cli_ok, assert_unit_contract, await_health, await_mirror, await_states, cli,
-    expect_drop_event, free_port, health_watch, matched_publisher, stdout, temp_house, StateSub,
-    Supervisor,
+    expect_drop_event, fixture_command, free_port, health_watch, matched_publisher, stdout,
+    temp_house, StateSub, Supervisor,
 };
 
 const FIXTURE: &str = "tests/fixture_house_ntfy";
@@ -36,17 +36,14 @@ struct FakeNtfy {
 }
 
 impl FakeNtfy {
-    fn spawn() -> Self {
+    async fn spawn() -> Self {
         let port = free_port();
-        let child = Command::new("uv")
-            .args([
-                "run",
-                "tests/fake_ntfy.py",
-                "--port",
-                &port.to_string(),
-                "--token",
-                TOKEN,
-            ])
+        let (program, args) = fixture_command(&format!(
+            "uv run tests/fake_ntfy.py --port {port} --token {TOKEN}"
+        ))
+        .await;
+        let child = Command::new(program)
+            .args(args)
             .current_dir(env!("CARGO_MANIFEST_DIR"))
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -126,7 +123,7 @@ fn wish(text: Value, actor: &str) -> Value {
 }
 
 async fn setup() -> (FakeNtfy, Supervisor, zenoh::Session) {
-    let server = FakeNtfy::spawn();
+    let server = FakeNtfy::spawn().await;
     let port = server.port.to_string();
     let sup = Supervisor::spawn_with_env(FIXTURE, &[(PORT_ENV, &port), (TOKEN_ENV, TOKEN)]);
     let observer = sup.observer().await;
@@ -311,7 +308,7 @@ async fn failed_delivery_is_loud_and_recovers() {
 /// unreachable server, never reach `running` at all.
 #[tokio::test(flavor = "multi_thread")]
 async fn bad_credentials_and_dead_server_are_visible() {
-    let server = FakeNtfy::spawn();
+    let server = FakeNtfy::spawn().await;
     let port = server.port.to_string();
     let sup = Supervisor::spawn_with_env(FIXTURE, &[(PORT_ENV, &port), (TOKEN_ENV, "tk_wrong")]);
     let observer = sup.observer().await;
