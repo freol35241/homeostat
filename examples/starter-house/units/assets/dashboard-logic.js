@@ -572,10 +572,46 @@
   // The decoded forecast for one aspect, or null. Points become
   // millisecond timestamps here so the chart can place them on the same
   // axis as recorded history without every caller re-parsing.
-  function forecastFor(forecasts, room, entity, aspect) {
+  function forecastPrefix(room, entity, aspect) {
+    return 'home/forecast/' + room + '/' + entity + '/' + aspect + '/';
+  }
+
+  // Every source with a live forecast for one aspect, sorted so a chart
+  // and its legend agree on order between renders. A forecast key names
+  // its source (docs/design.md, Sources), so several providers appear
+  // here side by side rather than overwriting one another.
+  function forecastSourcesFor(forecasts, room, entity, aspect) {
+    var prefix = forecastPrefix(room, entity, aspect);
+    return Object.keys(forecasts || {})
+      .filter(function (k) {
+        // The source is the LAST segment: a deeper key is not this
+        // aspect's forecast, it is something else entirely.
+        return k.indexOf(prefix) === 0 &&
+          k.length > prefix.length &&
+          k.indexOf('/', prefix.length) === -1;
+      })
+      .map(function (k) { return k.slice(prefix.length); })
+      .sort();
+  }
+
+  // The decoded forecast one source currently claims, or null.
+  function forecastFor(forecasts, room, entity, aspect, source) {
     return decodeForecast(
-      forecasts && forecasts['home/forecast/' + room + '/' + entity + '/' + aspect]
+      forecasts && forecasts[forecastPrefix(room, entity, aspect) + source]
     );
+  }
+
+  // Every live claim about one aspect's future, decoded, newest source
+  // order stable. A line each and never an envelope over them, for the
+  // reason the braid gives: an envelope's edge belongs at each instant
+  // to whichever source happened to be highest, a path none predicted.
+  function forecastsFor(forecasts, room, entity, aspect) {
+    var out = [];
+    forecastSourcesFor(forecasts, room, entity, aspect).forEach(function (source) {
+      var decoded = forecastFor(forecasts, room, entity, aspect, source);
+      if (decoded) out.push({ source: source, forecast: decoded });
+    });
+    return out;
   }
 
   // One forecast document, live off the bus or stored by the recorder —
@@ -596,6 +632,11 @@
     var last = points[points.length - 1];
     return {
       issued: isNaN(issued) ? null : issued,
+      // Carried through from the recorder, which tags each stored issue
+      // with the source whose key it came from. A braid over several
+      // providers is otherwise anonymous, and "these issues disagree"
+      // would be indistinguishable from "these providers disagree".
+      source: typeof doc.source === 'string' ? doc.source : null,
       points: points,
       from: points[0].t,
       to: last.d ? last.t + last.d * 1000 : last.t
@@ -605,15 +646,83 @@
   // What a tile says about a horizon: where it is going, not just where
   // it is. An extreme is worth a glance only if the series actually
   // moves, so a flat horizon reports nothing rather than "min = max".
-  function horizonSummary(forecast) {
-    if (!forecast || forecast.points.length < 2) return null;
-    var lo = forecast.points[0], hi = forecast.points[0];
-    for (var i = 1; i < forecast.points.length; i++) {
-      if (forecast.points[i].v < lo.v) lo = forecast.points[i];
-      if (forecast.points[i].v > hi.v) hi = forecast.points[i];
+  function horizonSummary(forecast, fromTs) {
+    if (!forecast) return null;
+    // "Ahead" means ahead. An issue made hours ago still carries what it
+    // said about the hours since, and an extreme back there is not where
+    // the horizon is going — naming it would caption the chart with an
+    // instant the reader has already lived through.
+    var pts = forecast.points.filter(function (p) {
+      return fromTs === undefined || fromTs === null || p.t > fromTs;
+    });
+    if (pts.length < 2) return null;
+    var lo = pts[0], hi = pts[0];
+    for (var i = 1; i < pts.length; i++) {
+      if (pts[i].v < lo.v) lo = pts[i];
+      if (pts[i].v > hi.v) hi = pts[i];
     }
     if (lo.v === hi.v) return null;
     return { min: lo, max: hi };
+  }
+
+  /* ---- declared sources (docs/design.md, Sources) ----
+   *
+   * What a computed value is derived from, as the overlay wants it. The
+   * entity file declares contributors house-wide, not per aspect, so a
+   * contributor belongs to the aspect it contributes: a fused temperature
+   * derived from `temperature` readings shows them under `temperature`
+   * and leaves an unrelated `humidity` chart alone.
+   */
+  function contributorsFor(entities, entityName, aspect) {
+    var owner = (entities || []).filter(function (e) { return e.name === entityName; })[0];
+    if (!owner || !owner.sources) return [];
+    var byName = {};
+    (entities || []).forEach(function (e) { byName[e.name] = e; });
+    var out = [];
+    Object.keys(owner.sources).sort().forEach(function (name) {
+      var src = owner.sources[name];
+      if (!src || src.aspect !== aspect) return;
+      var e = byName[src.entity];
+      // A contributor the model does not carry cannot be drawn. The plan
+      // refuses an unknown one (`source-unknown-entity`), so this is a
+      // model the page has outrun, not a house that is wrong.
+      if (!e) return;
+      out.push({
+        name: name,
+        entity: src.entity,
+        aspect: src.aspect,
+        label: e.label || titleCase(src.entity),
+        // The contributor's own caveat — what the aspect descriptor
+        // cannot say because it is not true of every source: one sensor
+        // in the sun, or a reading that carries an offset the house
+        // itself writes and so must not be fused back in.
+        note: typeof src.note === 'string' ? src.note : null
+      });
+    });
+    return out;
+  }
+
+  /* Which declared sources were actually folded in, and when that last
+   * changed (docs/design.md, Which sources a computation actually used).
+   *
+   * Events arrive oldest-first and only on transition, so the last one
+   * before the window closes IS the state now. A source with nothing on
+   * record is participating, which is what its declaration already says
+   * — silence here means "no one has ever said otherwise", not "unknown".
+   */
+  function sourceUsage(events, contributors) {
+    var state = {};
+    (contributors || []).forEach(function (c) {
+      state[c.name] = { used: true, since: null };
+    });
+    (events || []).forEach(function (e) {
+      if (!e || typeof e.source !== 'string') return;
+      // An event for a source this entity no longer declares is history,
+      // not a contributor: it has no line to annotate.
+      if (!Object.prototype.hasOwnProperty.call(state, e.source)) return;
+      state[e.source] = { used: !!e.used, since: e.ts || null };
+    });
+    return state;
   }
 
   // Stored issues as the chart wants them: each decoded like a live
@@ -872,7 +981,11 @@
     applyMessage: applyMessage,
     computeDeviations: computeDeviations,
     forecastFor: forecastFor,
+    forecastSourcesFor: forecastSourcesFor,
+    forecastsFor: forecastsFor,
     decodeForecast: decodeForecast,
+    contributorsFor: contributorsFor,
+    sourceUsage: sourceUsage,
     decodeIssues: decodeIssues,
     columnAt: columnAt,
     valueAt: valueAt,
