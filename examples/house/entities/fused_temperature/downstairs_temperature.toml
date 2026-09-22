@@ -14,3 +14,15 @@ aliases = []
 [write_policy]
 mode = "exclusive"
 owner = "fused_temperature"
+
+# What this value is DERIVED from (docs/design.md, Sources). Declared
+# rather than inferred: the unit subscribes a zone-wide expression, and
+# nothing in a subscription says which readings feed which published
+# aspect. The history overlay draws these beside the fused line.
+[sources.kitchen]
+entity = "kitchen_temp"
+aspect = "temperature"
+
+[sources.livingroom]
+entity = "livingroom_temp"
+aspect = "temperature"
