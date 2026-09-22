@@ -2983,12 +2983,27 @@ every chart walks backward from now.
   distinction that prompted the question — a commitment versus a
   prediction — follows from the ASPECT: a future for a commandable aspect
   is a plan, one for a read-only aspect is a prediction, and a consumer
-  reads that off the descriptor without being told (Sources below). `future` was additionally
-  refused because `Future` is Rust's async trait and every type name in
-  this crate would collide with it.
-- Still to come under #147: the recorder writing that table and answering
-  the two verification read shapes; and the dashboard drawing past and
-  future on one axis.
+  reads that off the descriptor without being told (Sources below).
+  `future` was additionally refused because `Future` is Rust's async
+  trait and every type name in this crate would collide with it.
+- **A producer should publish its current forecast at startup** (recorded
+  2026-09-22, from #147's port of two real producers). The core's mirror
+  is an in-memory map, so a core restart empties it, and the class then
+  answers nothing until the producer next issues. For a once-daily curve
+  that can be most of a day. The core cannot supply this — it does not
+  know what a producer has to say — so it is a producer-side convention,
+  and one worth stating rather than leaving to be discovered by a house
+  that restarted at the wrong hour.
+- Built under #147: the class and its SDK (#151), a port of two real
+  producers onto it before the shape froze (which corrected the payload
+  twice, adding `d` to the wire and then `valid_end` to the store), the
+  recorder's table and both verification read shapes (#157), the
+  dashboard drawing past and future on one axis (#158) and the braid of
+  what a house said (#162). Deliberately deferred there and still open:
+  the `(series_id, valid_end)` index, which only pays once verification
+  is actually being run and costs the whole primary key on a
+  `WITHOUT ROWID` table (#123, #138); and a `schema: 2` delta encoding
+  for `t`, to be taken on a real measurement from a real producer.
 
 ## Sources: several opinions about one value (settled 2026-09-22)
 
