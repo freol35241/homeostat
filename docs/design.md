@@ -3156,6 +3156,26 @@ one declaration.
   fall outside its declared expression, crashing it at startup; the
   recorder's ingest folded the source into the aspect with `"/".join`.
   Neither was a design question; both are what a positional key costs.
+- **A third of that shape, found on a real house after 0.15.0 shipped**
+  (2026-09-22). "Pre-existing forecast rows keep an empty source" above
+  also said they stay readable under it, and they did not: the source is
+  a key SEGMENT on the read path, and an empty one is not a key
+  expression at all. The read loop walks EVERY forecast series to decide
+  which ones a query asked for, so one migrated row raised before
+  reaching any other series — and a zenoh query callback that raises
+  sends no reply, which a caller cannot distinguish from "this house
+  recorded nothing". An upgraded house saw empty answers for forecasts
+  it was recording correctly.
+  - **Not fabricating provenance was right; leaving the slot empty was
+    the mistake.** Version 5 names those rows `_unknown` — reserved,
+    addressable, and with the leading underscore obviously not a unit —
+    rather than skipping them, which would have kept the promise of
+    inertness while quietly breaking the promise of readability.
+  - **And a read path must not be able to build an invalid key from its
+    own store**, so the loop skips an empty source regardless of what
+    the migration did, and `answer` turns anything unexpected into an
+    error reply. An empty result and a dead responder reading alike is
+    the hazard underneath all three of these.
 
 ### Which sources a computation actually used (settled 2026-09-22, #164)
 

@@ -146,8 +146,19 @@ FORECAST_KEY = zenoh.KeyExpr("home/history/forecast/**")
 # series instead (see the tally trigger). Version 3 added the forecasts
 # table; version 4 gives `series` a `source`, because a forecast key
 # carries one (docs/design.md, Sources) and two providers speaking about
-# one aspect are two series, not one series written twice.
-STORE_VERSION = 4
+# one aspect are two series, not one series written twice. Version 5
+# names the sources version 4 left empty (see LEGACY_SOURCE).
+STORE_VERSION = 5
+
+# What a forecast series migrated from before version 4 is called. Those
+# rows predate the source segment, so the store has no provenance for
+# them and inventing a provider name would fabricate some — but the
+# source is a key SEGMENT on the read path, and an empty segment is not a
+# key expression at all: it makes the series unaddressable and, because
+# the read loop walks every forecast series, takes down the whole
+# forecast query with it. Hence a reserved name rather than no name: it
+# is addressable, and the leading underscore says it is not a unit.
+LEGACY_SOURCE = "_unknown"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS series (
@@ -798,6 +809,20 @@ class Recorder:
             )
 
     def answer(self, query: zenoh.Query) -> None:
+        # A query callback that raises sends no reply, and a caller cannot
+        # tell that from an answer of no series at all — so a bug in the
+        # read path reads as "the house recorded nothing", which is the
+        # one wrong answer a history API must never give. Anything the
+        # handlers did not expect becomes an error reply instead.
+        try:
+            self._answer(query)
+        except Exception as err:
+            self.sess.health_event(
+                "query-failed", key=str(query.key_expr), error=str(err)
+            )
+            query.reply_err(json.dumps(f"query failed: {err}"))
+
+    def _answer(self, query: zenoh.Query) -> None:
         asked = zenoh.KeyExpr(str(query.key_expr))
         # Events only when the selector sits inside the events key: the two
         # paths disagree on from/to conventions (integer µs vs RFC3339), so
@@ -909,6 +934,12 @@ class Recorder:
                 # caller can tell apart — and a caller that wants all of
                 # them asks with a wildcard in that slot rather than
                 # getting them merged (docs/design.md, Sources).
+                # Migrated stores are repaired to LEGACY_SOURCE, but the
+                # store is not this loop's to trust: an empty segment is
+                # not a key expression, and building one here would take
+                # down the query for every OTHER series too.
+                if not source:
+                    continue
                 series_key = f"home/history/forecast/{entity}/{aspect}/{source}"
                 if not asked.intersects(zenoh.KeyExpr(series_key)):
                     continue
@@ -1294,6 +1325,8 @@ def init_store(db_path: Path) -> None:
             migrate_v1(conn)
         if existing and version < 4:
             migrate_v3(conn)
+        if existing and version < 5:
+            migrate_v4(conn)
         conn.execute(f"PRAGMA user_version={STORE_VERSION}")
         conn.commit()
     finally:
@@ -1338,6 +1371,35 @@ def migrate_v0(conn: sqlite3.Connection) -> None:
     conn.execute("DROP TABLE samples_v0")
     conn.execute("COMMIT")
     conn.execute("VACUUM")
+
+
+def migrate_v4(conn: sqlite3.Connection) -> None:
+    """Version 4 -> 5: the forecast series migrate_v3 left with an empty
+    source get the reserved name instead (LEGACY_SOURCE).
+
+    migrate_v3 said those rows "stay readable under that empty source",
+    and they do not: the source is a segment of the reply key, and an
+    empty segment makes a key expression SQLite is happy to store and
+    zenoh refuses to parse. The read path walks every forecast series to
+    decide which ones the query asked for, so one such row raised before
+    the loop reached any other series — and a query that dies inside its
+    callback sends no reply at all, which a caller cannot tell from "no
+    data". Found on an upgraded house, where one legacy row hid every
+    correctly-sourced forecast in the store behind it.
+
+    Only forecast series are touched: every other class has an empty
+    source by definition, and none of them puts it in a key.
+    """
+    # OR IGNORE because the name is reserved, not impossible: a store
+    # that somehow holds both spellings of one series keeps the empty
+    # one, which the read path skips, rather than failing the migration
+    # and with it the recorder's startup.
+    conn.execute(
+        "UPDATE OR IGNORE series SET source = ?"
+        " WHERE class = 'forecast' AND source = ''",
+        (LEGACY_SOURCE,),
+    )
+    conn.commit()
 
 
 def migrate_v3(conn: sqlite3.Connection) -> None:
