@@ -1710,7 +1710,7 @@ function onBraidPointerMove(wrap, reg, ev, rect, tx) {
     rect.left + (near.point.x / reg.width) * rect.width,
     rect.top + (near.point.y / reg.height) * rect.height,
     formatChartValue(reg.aspect, near.point.value),
-    (near.issue.source ? near.issue.source + ' \u00b7 ' : '') +
+    (near.issue.source ? logic.sourceLabel(near.issue.source) + ' \u00b7 ' : '') +
       'issued ' + formatChartTime(near.issue.issued, span) + ' \u2014 for ' +
       formatChartClock(near.point.ts, span)
   );

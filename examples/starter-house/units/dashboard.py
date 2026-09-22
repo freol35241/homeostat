@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "homeostat==0.15.0",
+#     "homeostat==0.15.1",
 #     "aiohttp>=3.12.14,<4",
 # ]
 # ///
