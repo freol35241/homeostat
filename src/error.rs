@@ -383,6 +383,19 @@ pub const CODES: &[(&str, &str)] = &[
          its label, unit and place on a chart.",
     ),
     (
+        "source-unknown-entity",
+        "An entity's `[sources]` names a contributing entity that does not \
+         exist. A declared source is what the history overlay draws beside \
+         the computed value, so it must resolve to a real series.",
+    ),
+    (
+        "source-unpublished-aspect",
+        "An entity's `[sources]` names an aspect of an automation-owned \
+         entity that its owner does not publish. Same rule as a device \
+         feed: where the owner names its aspects literally, the reference \
+         is checked against them.",
+    ),
+    (
         "forecast-publish-conflict",
         "Two or more units publish forecasts for one series. The mirror keeps \
          only the last document per key, so a second publisher does not add \

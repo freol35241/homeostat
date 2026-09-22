@@ -182,6 +182,7 @@ a key segment (`invalid-name`).
 | `inputs` | table of name → [InputSource](#inputsource) | no | `[inputs]`: device inputs fed from one source each, keyed by the adapter's own input name (e.g. `indoor_temperature_actual`). A fed input is a continuous signal with one master, not a command: it stops being a command aspect for this entity, never rides the arbiter, and staleness is the device's own validity window. Only a device entity can be fed (`virtual-entity-fed`); the adapter is the authority on which input names exist. |
 | `naming` | [EntityNaming](#entitynaming) | no |  |
 | `schema` | integer | yes | Contract version. Must be 1. |
+| `sources` | table of name → [SourceRef](#sourceref) | no | `[sources]`: the readings this entity's value is DERIVED from, keyed by a short name for each contributor. Declared, not inferred — a unit subscribes many things for many reasons and nothing in its subscriptions says which feed which published aspect. It is what the history overlay draws beside the computed value (docs/design.md, Sources), and it is not `[inputs]`: a device feed carries a runtime contract that does not apply here, and a wired input stops being a command aspect, which would collide on a commandable virtual entity. |
 | `write_policy` | [WritePolicy](#writepolicy) | yes |  |
 
 ### EntityDashboard
@@ -223,6 +224,18 @@ and prints the edge, as it does a grant.
 | `aliases` | list of string | no | Alternative spoken names. |
 | `en` | string | no | English label; the dashboard falls back to the name with `_` replaced by spaces. |
 | `sv` | string | no | Swedish label. |
+
+### SourceRef
+
+One entry in `[sources]`: a reading that a computed value is derived
+from, named the same way a device feed names its source, because the
+identity layer between a unit and a bus key is the same one
+(docs/design.md, Device feeds).
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `aspect` | string | yes | The aspect that contributes. When the contributor is automation-owned, that automation's `[bus.publishes]` must cover the key (`source-unpublished-aspect`). |
+| `entity` | string | yes | Name of the contributing entity; must exist (`source-unknown-entity`). Any owner will do. |
 
 ### WritePolicy
 

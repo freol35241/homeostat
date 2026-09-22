@@ -471,6 +471,15 @@ pub struct EntityFile {
     /// device entity can be fed (`virtual-entity-fed`); the adapter is the
     /// authority on which input names exist.
     pub inputs: Option<BTreeMap<String, InputSource>>,
+    /// `[sources]`: the readings this entity's value is DERIVED from, keyed
+    /// by a short name for each contributor. Declared, not inferred — a
+    /// unit subscribes many things for many reasons and nothing in its
+    /// subscriptions says which feed which published aspect. It is what
+    /// the history overlay draws beside the computed value (docs/design.md,
+    /// Sources), and it is not `[inputs]`: a device feed carries a runtime
+    /// contract that does not apply here, and a wired input stops being a
+    /// command aspect, which would collide on a commandable virtual entity.
+    pub sources: Option<BTreeMap<String, SourceRef>>,
     /// `[dashboard]`: retired (`entity-dashboard-retired`). Where a reading
     /// appears is `dashboard.toml`'s say: `{ kind = "tile", entity = ... }`
     /// on a view replaces `pin = true` here.
@@ -499,6 +508,22 @@ pub struct InputSource {
     /// The aspect to read. When the source is automation-owned, that
     /// automation's `[bus.publishes]` must cover the key
     /// (`input-unpublished-aspect`).
+    pub aspect: String,
+}
+
+/// One entry in `[sources]`: a reading that a computed value is derived
+/// from, named the same way a device feed names its source, because the
+/// identity layer between a unit and a bus key is the same one
+/// (docs/design.md, Device feeds).
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SourceRef {
+    /// Name of the contributing entity; must exist
+    /// (`source-unknown-entity`). Any owner will do.
+    pub entity: String,
+    /// The aspect that contributes. When the contributor is
+    /// automation-owned, that automation's `[bus.publishes]` must cover the
+    /// key (`source-unpublished-aspect`).
     pub aspect: String,
 }
 

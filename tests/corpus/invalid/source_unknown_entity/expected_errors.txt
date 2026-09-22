@@ -1,0 +1,1 @@
+error[source-unknown-entity] downstairs_temperature.ghost: contributing entity "no_such_sensor" does not exist (entities/fusion/downstairs_temperature.toml)

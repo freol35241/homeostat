@@ -3125,8 +3125,8 @@ one declaration.
 - **Which sources the computation actually USED.** A sensor dropped as
   stale, or deliberately excluded, is the main thing an overlay is
   opened to find out — and it is a runtime fact, not a declared one, so
-  it needs the unit to report what it folded in. Deferred to its own
-  issue rather than widened into this one.
+  it needs the unit to report what it folded in. Deferred to #164 rather
+  than widened into this one.
 - **Uncertainty has no representation.** A forecast point's value is a
   scalar and the SDK refuses anything else, so an ensemble or a
   confidence band cannot be published. Model-predictive control is a
