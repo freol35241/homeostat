@@ -739,6 +739,16 @@
     return out;
   }
 
+  // A stored issue from before the source segment existed carries the
+  // recorder's reserved name for "the store did not record who said
+  // this" (adapters/recorder.py, LEGACY_SOURCE). Rendering it raw would
+  // put a provider called `_unknown` beside the real ones, which is the
+  // fabricated provenance the recorder refused to write in the first
+  // place.
+  function sourceLabel(source) {
+    return source === '_unknown' ? 'source not recorded' : source;
+  }
+
   // What every stored issue said about one instant — a column of the
   // field (docs/wireframes/forecast-history.svg). The spread is the
   // reading; the count is what makes the spread mean anything.
@@ -987,6 +997,7 @@
     contributorsFor: contributorsFor,
     sourceUsage: sourceUsage,
     decodeIssues: decodeIssues,
+    sourceLabel: sourceLabel,
     columnAt: columnAt,
     valueAt: valueAt,
     horizonSummary: horizonSummary,
