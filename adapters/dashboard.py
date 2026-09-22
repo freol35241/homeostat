@@ -153,6 +153,13 @@ MAX_BODY_BYTES = 64 * 1024
 # may smuggle into a selector.
 SEGMENT = re.compile(r"[A-Za-z0-9_.-]+")
 HISTORY_LIMIT_MAX = 5000
+# How far BEFORE a drawn window to read source-participation events. A
+# source excluded before the window opened has no transition inside it,
+# and would read as live for the whole span; a week covers a house that
+# has been ignoring one sensor for a while without reading all history.
+SOURCE_EVENT_LOOKBACK_H = 24 * 7
+SOURCE_EVENT_MAX = 500
+
 # Issues one /api/forecasts reply may carry. A week of hourly issues is
 # 168 full horizons — megabytes on the wire and an unreadable mat on the
 # chart — so the page asks for the newest few and says how many it drew,
@@ -909,6 +916,63 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
                 issues.append({**issue, "source": source})
         return web.json_response({"issues": issues})
 
+    async def api_source_events(request: web.Request) -> web.Response:
+        """When each declared source of a computed value went in or out.
+
+        Declared sources say what MAY contribute; these say what did
+        (docs/design.md, Which sources a computation actually used). The
+        window read is WIDER than the window drawn, because a source
+        excluded before the chart opens has no transition inside it and
+        would otherwise read as live for the whole span."""
+        entity = request.query.get("entity", "")
+        aspect = request.query.get("aspect", "")
+        if entity not in model.entities:
+            return json_error(f"unknown entity {entity}")
+        if not valid_segment(aspect):
+            return json_error("aspect must be a single key segment")
+        owner = model.entities[entity].get("owner")
+        if not owner:
+            return web.json_response({"events": []})
+        try:
+            hours = min(float(request.query.get("hours", "24")), 24 * 31)
+        except (ValueError, OverflowError):
+            return json_error("hours must be a number")
+        now = datetime.datetime.now(datetime.timezone.utc)
+        # The events path speaks integer microseconds, unlike the samples
+        # path's RFC3339 — the recorder's own two conventions.
+        to_us = int(now.timestamp() * 1_000_000)
+        from_us = to_us - int((hours + SOURCE_EVENT_LOOKBACK_H) * 3600 * 1_000_000)
+        selector = (
+            f"home/history/events?key=home/health/{owner}/event"
+            f";from={from_us};to={to_us};limit={SOURCE_EVENT_MAX}"
+        )
+        try:
+            replies = await asyncio.get_running_loop().run_in_executor(
+                None, hub.session.get_json, selector
+            )
+        except QueryError as error:
+            return json_error(f"recorder: {error}", status=502)
+        out = []
+        for _key, payload in replies:
+            for row in payload or []:
+                event = row.get("payload") or {}
+                if isinstance(event, str):
+                    continue
+                kind = event.get("kind")
+                if kind not in ("source-dropped", "source-restored"):
+                    continue
+                if event.get("entity") != entity or event.get("aspect") != aspect:
+                    continue
+                out.append(
+                    {
+                        "ts": row.get("ts"),
+                        "source": event.get("source"),
+                        "used": kind == "source-restored",
+                    }
+                )
+        out.sort(key=lambda e: e["ts"] or 0)
+        return web.json_response({"events": out})
+
     async def api_logs(request: web.Request) -> web.Response:
         unit = request.query.get("unit", "")
         if unit not in model.units:
@@ -1000,6 +1064,7 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
     app.router.add_post("/api/param", api_param)
     app.router.add_get("/api/history", api_history)
     app.router.add_get("/api/forecasts", api_forecasts)
+    app.router.add_get("/api/source-events", api_source_events)
     app.router.add_get("/api/logs", api_logs)
     app.router.add_get("/api/camera/{entity}/live", api_camera_live)
     app.router.add_get("/assets/{name}", api_asset)

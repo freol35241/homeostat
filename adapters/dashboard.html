@@ -587,6 +587,7 @@ var overlay = {
   issuesLoading: false,
   withSources: false,      // for history: drawing the declared contributors too
   sourceData: {},          // "<hours>|<entity>|<aspect>" -> fetched contributor history
+  sourceEvents: {},        // same key -> when each source went in or out
   pinned: null,            // the issue time a reader pinned out of the braid
   lastPoints: null,
   log: null,               // for unit: {lines, loaded, loading}
@@ -924,6 +925,35 @@ function contributorRoom(c) {
 
 function sourceCacheKey(hours, c) {
   return hours + '|' + c.entity + '|' + c.aspect;
+}
+
+/* When each source last went in or out of the computation. Declared
+ * sources say what MAY contribute; these say what did, so a contributor
+ * the fusion has dropped stops reading as if it were still voting
+ * (docs/design.md, Which sources a computation actually used). */
+function fetchSourceEvents(entity, aspect, hours) {
+  var ck = hours + '|' + entity.name + '|' + aspect;
+  var cached = overlay.sourceEvents[ck];
+  if (cached && (cached.loaded || cached.loading)) return;
+  overlay.sourceEvents[ck] = { events: [], loaded: false, loading: true };
+  fetch('/api/source-events?entity=' + encodeURIComponent(entity.name) +
+        '&aspect=' + encodeURIComponent(aspect) + '&hours=' + hours)
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      overlay.sourceEvents[ck] = {
+        events: (data && data.events) || [], loaded: true, loading: false
+      };
+      if (overlay.open && overlay.type === 'history') renderOverlayContent();
+    })
+    .catch(function () {
+      overlay.sourceEvents[ck] = { events: [], loaded: true, loading: false };
+    });
+}
+
+function sourceUsageNow(entity, aspect, hours, contributors) {
+  var ck = hours + '|' + entity.name + '|' + aspect;
+  var d = overlay.sourceEvents[ck];
+  return logic.sourceUsage(d && d.loaded ? d.events : [], contributors);
 }
 
 function fetchSources(entity, aspect, hours) {
@@ -2786,6 +2816,7 @@ function openHistoryDetail(room, entityName, aspect) {
   // history do not survive into the next overlay.
   overlay.withSources = false;
   overlay.sourceData = {};
+  overlay.sourceEvents = {};
   fetchHistoryRange(entityName, aspect, 24, overlay.shape);
   showOverlay();
 }
@@ -2977,13 +3008,24 @@ function renderHistoryDetailBody() {
   var legendHtml = '';
   var drawn = overlay.said ? null : drawnSources(entity, aspect, overlay.range);
   if (drawn) {
+    var usage = sourceUsageNow(entity, aspect, overlay.range,
+                               contributorsOf(entity, aspect));
     legendHtml = '<div class="chart-note source-legend" id="sources-legend">' +
       drawn.map(function (c) {
         // A contributor that has dropped out still draws — the line
         // stopping IS the diagnosis — but it must not read as live.
+        // Two different ways to be out: its own device is gone, or the
+        // computation is choosing not to use it.
         var down = stateValue(contributorRoom(c), c.entity, 'available') === false;
+        var use = usage[c.name];
+        var excluded = use && use.used === false;
+        var since = excluded && use.since
+          ? ' since ' + formatChartClock(use.since / 1000)
+          : '';
         return '<span' + (c.note ? ' title="' + esc(c.note) + '"' : '') + '>' +
-          esc(c.label) + (down ? ' \u00b7 unavailable' : '') +
+          esc(c.label) +
+          (down ? ' \u00b7 unavailable' : '') +
+          (excluded ? ' \u00b7 not used' + since : '') +
           (c.note ? ' \u00b7 ' + esc(c.note) : '') + '</span>';
       }).join('') + '</div>' +
       '<div class="chart-note" id="sources-column"></div>';
@@ -3361,6 +3403,7 @@ document.addEventListener('click', function (e) {
       // aside: two sets of grey lines on one chart read as one set.
       overlay.said = false;
       fetchSources(overlay.entity, overlay.aspect, overlay.range);
+      fetchSourceEvents(overlay.entity, overlay.aspect, overlay.range);
     }
     renderOverlayContent();
     return;
@@ -3369,7 +3412,10 @@ document.addEventListener('click', function (e) {
     var hrs = parseInt(el.getAttribute('data-hours'), 10);
     overlay.range = hrs;
     fetchHistoryRange(overlay.entity.name, overlay.aspect, hrs, overlay.shape);
-    if (overlay.withSources) fetchSources(overlay.entity, overlay.aspect, hrs);
+    if (overlay.withSources) {
+      fetchSources(overlay.entity, overlay.aspect, hrs);
+      fetchSourceEvents(overlay.entity, overlay.aspect, hrs);
+    }
     // A different window is a different set of issues, and a pin on a
     // forecast that is no longer drawn would be a highlight on nothing.
     if (overlay.said) {
