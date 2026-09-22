@@ -501,7 +501,7 @@ async fn stats_describe_the_store() {
     assert_eq!(replies.len(), 1);
     assert_eq!(replies[0].0, "home/history/stats");
     let stats = &replies[0].1;
-    assert_eq!(stats["store_version"], json!(4));
+    assert_eq!(stats["store_version"], json!(5));
     let file_bytes = stats["file_bytes"].as_i64().expect("file size");
     assert!(file_bytes >= 4096, "page_count * page_size: {stats}");
     assert!(stats["freelist_bytes"].as_i64().expect("freelist") >= 0);
@@ -1138,7 +1138,7 @@ async fn v0_store_migrates_in_place() {
     );
     assert_eq!(
         read_rows(&db, "PRAGMA user_version"),
-        vec![vec![SqlValue::Integer(4)]],
+        vec![vec![SqlValue::Integer(5)]],
         "a v0 store arrives at the current layout in one start"
     );
     assert_eq!(
@@ -1205,7 +1205,7 @@ async fn v1_store_backfills_its_tally() {
 
     assert_eq!(
         read_rows(&db, "PRAGMA user_version"),
-        vec![vec![SqlValue::Integer(4)]]
+        vec![vec![SqlValue::Integer(5)]]
     );
     // Counted, not guessed: the oldest row of the first series was
     // inserted last, so a tally that took each series' first or last
@@ -1477,6 +1477,93 @@ async fn forecasts_keep_every_issue_and_answer_in_issues() {
     sup.shutdown();
 }
 
+/// (e4) A version-4 store carries forecast series with no source: the
+/// segment did not exist when they were recorded, and that migration left
+/// them empty. Empty is not a key segment, so building the reply key for
+/// one raised inside the query callback — which sends no reply at all,
+/// and the caller reads that as "no data". The `SELECT` is unfiltered, so
+/// the one legacy series took down the answer for every OTHER forecast
+/// series in the store, including correctly-sourced ones with rows.
+/// Found on a house upgraded to 0.15.0.
+#[tokio::test(flavor = "multi_thread")]
+async fn v4_store_names_the_sources_it_left_empty() {
+    let db = store_path("migrate-v4");
+    {
+        let conn = Connection::open(&db).expect("create v4 store");
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL;
+             CREATE TABLE series (id INTEGER PRIMARY KEY, class TEXT NOT NULL,
+               entity TEXT NOT NULL, aspect TEXT NOT NULL,
+               source TEXT NOT NULL DEFAULT '',
+               row_count INTEGER NOT NULL DEFAULT 0, oldest_ts INTEGER, newest_ts INTEGER,
+               UNIQUE (class, entity, aspect, source));
+             CREATE TABLE rooms (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE);
+             CREATE TABLE samples (series_id INTEGER NOT NULL REFERENCES series (id),
+               ts INTEGER NOT NULL, room_id INTEGER NOT NULL REFERENCES rooms (id),
+               kind INTEGER NOT NULL, value NOT NULL,
+               PRIMARY KEY (series_id, ts)) WITHOUT ROWID;
+             CREATE TABLE forecasts (series_id INTEGER NOT NULL REFERENCES series (id),
+               issued_ts INTEGER NOT NULL, valid_ts INTEGER NOT NULL, valid_end INTEGER,
+               room_id INTEGER NOT NULL REFERENCES rooms (id), value NOT NULL,
+               PRIMARY KEY (series_id, issued_ts, valid_ts)) WITHOUT ROWID;
+             CREATE TABLE events (ts INTEGER NOT NULL, key TEXT NOT NULL, payload TEXT NOT NULL);
+             INSERT INTO rooms (name) VALUES ('global');
+             -- The legacy series, sorted ahead of the sourced one: it is
+             -- what the read loop reached first on the house.
+             INSERT INTO series (id, class, entity, aspect, source, row_count)
+               VALUES (1, 'forecast', 'outdoor', 'air_temperature', '', 1),
+                      (2, 'forecast', 'spot', 'price', 'nordpool', 1),
+                      (3, 'state', 'meter', 'power', '', 0);
+             INSERT INTO forecasts VALUES (1, 1577865600000000, 1577880000000000, NULL, 1, 4.0),
+                                          (2, 1577865600000000, 1577880000000000, 1577883600000000, 1, 21.0);
+             PRAGMA user_version=4;",
+        )
+        .expect("populate v4 store");
+    }
+    let (mut sup, observer) = setup(&db).await;
+
+    assert_eq!(
+        read_rows(&db, "PRAGMA user_version"),
+        vec![vec![SqlValue::Integer(5)]],
+        "the store reports the layout it now has"
+    );
+    // Only forecast series are named: every other class has an empty
+    // source by definition and never puts it in a key.
+    assert_eq!(
+        read_rows(&db, "SELECT source FROM series ORDER BY id"),
+        vec![
+            vec![SqlValue::Text("_unknown".to_string())],
+            vec![SqlValue::Text("nordpool".to_string())],
+            vec![SqlValue::Text(String::new())],
+        ],
+        "the sourceless forecast gets the reserved name, the state series none"
+    );
+
+    // The regression itself: the sourced series answers, rather than
+    // being hidden behind the legacy one the loop reaches first.
+    let replies = history_get(
+        &observer,
+        "home/history/forecast/spot/price/nordpool?at=2020-01-01T09:00:00+00:00",
+    )
+    .await;
+    assert_eq!(replies.len(), 1, "{replies:?}");
+    let issues = replies[0].1.as_array().expect("issues array").clone();
+    assert_eq!(issues.len(), 1, "{issues:?}");
+    assert_eq!(issues[0]["points"][0]["v"], json!(21.0));
+
+    // And the legacy rows are readable rather than merely inert — which
+    // is the whole reason for a reserved name over skipping them.
+    let replies = history_get(
+        &observer,
+        "home/history/forecast/outdoor/air_temperature/_unknown?at=2020-01-01T09:00:00+00:00",
+    )
+    .await;
+    let issues = replies[0].1.as_array().expect("issues array").clone();
+    assert_eq!(issues[0]["points"][0]["v"], json!(4.0), "{issues:?}");
+
+    sup.shutdown();
+}
+
 /// (e3) A version-2 store — the layout before forecasts — gains the new
 /// table AND the series `source` on the next start. The table is additive
 /// and needs no backfill; the source is not, because its uniqueness moved
@@ -1513,7 +1600,7 @@ async fn v2_store_gains_the_forecast_table() {
 
     assert_eq!(
         read_rows(&db, "PRAGMA user_version"),
-        vec![vec![SqlValue::Integer(4)]],
+        vec![vec![SqlValue::Integer(5)]],
         "the store reports the layout it now has"
     );
     // The existing series is untouched — an upgrade is not a rewrite —

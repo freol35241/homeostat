@@ -915,6 +915,15 @@ test("one issue's value follows the extent rule, not the nearest point", () => {
   assert.equal(logic.valueAt(instants, Date.parse('2026-09-21T11:00:00+00:00')), null);
 });
 
+test('a forecast recorded before sources existed is not given a provider', () => {
+  // The recorder names those rows `_unknown` so they stay addressable
+  // (adapters/recorder.py, LEGACY_SOURCE). Drawn raw beside a real
+  // provider it would read as one, which is the provenance the store
+  // deliberately did not invent.
+  assert.equal(logic.sourceLabel('_unknown'), 'source not recorded');
+  assert.equal(logic.sourceLabel('smhi'), 'smhi');
+});
+
 test('a column reads what every issue said about one instant', () => {
   // The slice whose x axis is issue time, and which therefore cannot
   // share the chart — delivered by the scrub instead.
