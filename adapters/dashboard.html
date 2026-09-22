@@ -1145,8 +1145,14 @@ document.addEventListener('click', function (e) {
 // the house is about to get colder (docs/design.md, Forecasts).
 function computeChartGeometry(points, width, height, pad, win, forecast, issues, contributors) {
   var vals = points.map(function (p) { return p.value; }).filter(function (v) { return typeof v === 'number'; });
-  var future = forecast ? forecast.points : [];
-  var allVals = vals.concat(future.map(function (p) { return p.v; }));
+  // A forecast key names its source, so an aspect may have several live
+  // claims about its future at once — a line each, never an envelope
+  // over them, for the reason the braid gives (docs/design.md, Sources).
+  var beliefs = forecast || [];
+  var allVals = vals.slice();
+  beliefs.forEach(function (b) {
+    b.forecast.points.forEach(function (p) { allVals.push(p.v); });
+  });
   // Every drawn issue shares the scale: a braid on its own y range would
   // say nothing about whether the house was about to get colder.
   (issues || []).forEach(function (f) {
@@ -1170,7 +1176,7 @@ function computeChartGeometry(points, width, height, pad, win, forecast, issues,
   // The horizon extends the axis rightward; the past keeps the width it
   // had, so adding a forecast never silently squashes recorded history
   // into a corner without the reader seeing why.
-  if (forecast) to = Math.max(to, forecast.to);
+  beliefs.forEach(function (b) { to = Math.max(to, b.forecast.to); });
   (issues || []).forEach(function (f) { to = Math.max(to, f.to); });
   var byTime = times.every(function (t) { return !isNaN(t); }) && to > from;
   var place = function (t, value) {
@@ -1214,6 +1220,7 @@ function computeChartGeometry(points, width, height, pad, win, forecast, issues,
     geo.issues = issues.map(function (f, n) {
       return {
         issued: f.issued,
+        source: f.source,
         age: issues.length > 1 ? n / (issues.length - 1) : 1,
         coords: f.points.map(function (pt) {
           var at = place(pt.t, pt.v);
@@ -1222,10 +1229,15 @@ function computeChartGeometry(points, width, height, pad, win, forecast, issues,
       };
     });
   }
-  if (forecast && byTime) {
-    geo.forecast = future.map(function (p) {
-      var at = place(p.t, p.v);
-      return { x: at.x, y: at.y, value: p.v, ts: p.t };
+  if (beliefs.length && byTime) {
+    geo.forecast = beliefs.map(function (b) {
+      return {
+        source: b.source,
+        coords: b.forecast.points.map(function (p) {
+          var at = place(p.t, p.v);
+          return { x: at.x, y: at.y, value: p.v, ts: p.t };
+        })
+      };
     });
     // Where the record stops and the belief starts. Drawn from the
     // window rather than from the last point: a gap in recording is not
@@ -1262,9 +1274,9 @@ function issueInk(age) {
   return 'rgb(' + c.join(',') + ')';
 }
 
-// The house's current belief about one aspect's future, or null.
-function forecastOf(entity, aspect) {
-  return logic.forecastFor(store.forecasts, entity.room, entity.name, aspect);
+// Every live claim about one aspect's future, one per source.
+function forecastsOf(entity, aspect) {
+  return logic.forecastsFor(store.forecasts, entity.room, entity.name, aspect);
 }
 
 // "min 0.38 at 03:00" — where the horizon goes, named at the hour it
@@ -1315,7 +1327,9 @@ function buildChart(chartId, points, opts) {
     // straight across the now-rule and "what will it be at 03:00" is the
     // same gesture as "what was it at 03:00".
     chartRegistry[chartId] = {
-      coords: geo.forecast ? geo.coords.concat(geo.forecast) : geo.coords,
+      coords: geo.forecast
+        ? geo.coords.concat.apply(geo.coords, geo.forecast.map(function (f) { return f.coords; }))
+        : geo.coords,
       issues: geo.issues || null,
       contributors: geo.contributors || null,
       actual: geo.coords,
@@ -1356,9 +1370,15 @@ function buildChart(chartId, points, opts) {
     if (geo.forecast && geo.forecast.length) {
       // Dashed, and starting from the last recorded point so the eye
       // follows one line: the change in stroke is what says "from here
-      // on this is a belief, not a record".
-      var futureFrom = last ? [last].concat(geo.forecast) : geo.forecast;
-      svg += '<path class="chart-forecast" d="' + chartPathData(futureFrom) + '"/>';
+      // on this is a belief, not a record". With several sources each
+      // gets its own line from that same point — they are claims about
+      // one future, and which is which is read from the legend and the
+      // scrub, not from a colour none of them can own.
+      geo.forecast.forEach(function (f) {
+        var futureFrom = last ? [last].concat(f.coords) : f.coords;
+        svg += '<path class="chart-forecast" data-source="' + esc(f.source) +
+          '" d="' + chartPathData(futureFrom) + '"/>';
+      });
     }
     if (geo.nowX !== undefined) {
       svg += '<line class="chart-now" x1="' + geo.nowX.toFixed(1) + '" y1="0" x2="' +
@@ -1584,7 +1604,8 @@ function onBraidPointerMove(wrap, reg, ev, rect, tx) {
     rect.left + (near.point.x / reg.width) * rect.width,
     rect.top + (near.point.y / reg.height) * rect.height,
     formatChartValue(reg.aspect, near.point.value),
-    'issued ' + formatChartTime(near.issue.issued, span) + ' \u2014 for ' +
+    (near.issue.source ? near.issue.source + ' \u00b7 ' : '') +
+      'issued ' + formatChartTime(near.issue.issued, span) + ' \u2014 for ' +
       formatChartClock(near.point.ts, span)
   );
   braidColumn(reg, when);
@@ -2019,7 +2040,7 @@ function widgetTiles(entity, aspect) {
     var sk = entity.name + '|' + r.aspect;
     ensureHistory(entity.name, r.aspect);
     var s = localState.sparklines[sk];
-    var forecast = forecastOf(entity, r.aspect);
+    var forecast = forecastsOf(entity, r.aspect);
     var spark = s && s.loaded ? buildChart('tile-' + sk, s.points, { height: 36, sizeClass: 'chart-tile', aspect: r.aspect, area: true, window: s.window, forecast: forecast }) : '';
     // A horizon says where a reading is going; today's range says where
     // it has been. The forecast wins the line when there is one, because
@@ -2056,7 +2077,7 @@ function widgetChart(entity, aspect, hours) {
   var chart = !s.loaded ? ''
     : shape === 'timeline'
       ? buildTimeline('chart-' + key, s.points, { height: 64, sizeClass: 'chart-timeline', aspect: aspect, field: field, window: s.window })
-      : buildChart('chart-' + key, s.points, { height: 120, sizeClass: 'chart-card', aspect: aspect, area: true, gridlines: true, yLabels: true, window: s.window, forecast: forecastOf(entity, aspect) });
+      : buildChart('chart-' + key, s.points, { height: 120, sizeClass: 'chart-card', aspect: aspect, area: true, gridlines: true, yLabels: true, window: s.window, forecast: forecastsOf(entity, aspect) });
   return '<div class="card tile clickable span-all" data-action="history-detail" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '" data-aspect="' + esc(aspect) + '">' +
     '<div class="card-label">' + esc(entity.label + ' · ' + ((field && field.label) || aspect)).toUpperCase() + ' <span class="faint">' + esc(hours >= 48 ? Math.round(hours / 24) + 'd' : hours + 'h') + '</span></div>' +
     '<div class="big">' + esc(logic.formatAspect(aspect, field, value)) + '</div>' + chart + '</div>';
@@ -2838,7 +2859,7 @@ function renderHistoryDetailBody() {
   }).join('');
   // The second row appears only where there is a future to have said
   // anything about, so an ordinary sensor's overlay is unchanged.
-  var modeChips = forecastOf(entity, aspect)
+  var modeChips = forecastsOf(entity, aspect).length
     ? '<div class="seg" style="margin-top:8px;">' +
       '<button data-action="forecast-mode" data-said="0" class="' + (overlay.said ? '' : 'active') + '">now</button>' +
       '<button data-action="forecast-mode" data-said="1" class="' + (overlay.said ? 'active' : '') + '">what we said</button>' +
@@ -2877,7 +2898,7 @@ function renderHistoryDetailBody() {
       aspect: aspect, gridlines: true, area: true, yLabels: true, window: win,
       // In "what we said" the current belief steps aside: drawing it over
       // the braid would make one issue look special for no reason.
-      forecast: overlay.said ? null : forecastOf(entity, aspect),
+      forecast: overlay.said ? null : forecastsOf(entity, aspect),
       issues: overlay.said ? overlay.issues : null,
       pinned: overlay.pinned,
       // Contributors stand down behind the braid: two greys on one chart,
@@ -2893,8 +2914,19 @@ function renderHistoryDetailBody() {
   // The four stats describe the RECORDED window the chips select, so a
   // drawn forecast can peak above the MAX beside it — which reads as a
   // contradiction unless the horizon says its own extreme out loud.
-  var ahead = overlay.said ? '' : horizonCaption(aspect, field, forecastOf(entity, aspect));
-  var horizonHtml = ahead ? '<div class="chart-note">ahead · ' + esc(ahead) + '</div>' : '';
+  // One caption per source: "where the horizon goes" is a claim, and
+  // averaging two providers into one sentence would state a horizon
+  // neither of them predicted.
+  var horizonHtml = '';
+  if (!overlay.said) {
+    var beliefs = forecastsOf(entity, aspect);
+    horizonHtml = beliefs.map(function (b) {
+      var ahead = horizonCaption(aspect, field, b.forecast);
+      if (!ahead) return '';
+      var who = beliefs.length > 1 ? esc(b.source) + ' · ' : '';
+      return '<div class="chart-note">ahead · ' + who + esc(ahead) + '</div>';
+    }).join('');
+  }
   var braidHtml = '';
   if (overlay.said) {
     braidHtml = '<div class="chart-note" id="braid-column"></div>' +
@@ -2902,6 +2934,15 @@ function renderHistoryDetailBody() {
         overlay.issuesLoading ? 'reading what we said\u2026'
           : overlay.issues.length
             ? overlay.issues.length + ' forecast' + (overlay.issues.length === 1 ? '' : 's') +
+              (function () {
+                // Issues from several providers in one braid would make
+                // "they disagree" and "it drifted" look the same, so the
+                // count says how many sources are mixed in.
+                var seen = {};
+                overlay.issues.forEach(function (f) { if (f.source) seen[f.source] = 1; });
+                var n = Object.keys(seen).length;
+                return n > 1 ? ' from ' + n + ' sources' : '';
+              })() +
               ' kept for this window' + (overlay.issues.length >= BRAID_ISSUES ? ' (newest ' + BRAID_ISSUES + ')' : '') +
               (overlay.pinned ? ' \u00b7 one pinned \u2014 tap it again to release' : ' \u00b7 tap a line to pin it')
             : 'nothing kept for this window \u2014 the recorder may not subscribe home/forecast/**'

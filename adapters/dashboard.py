@@ -878,8 +878,12 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         # The window is the drawn one: an issue is kept when it said
         # anything about it, so a forecast made before the window but
         # reaching into it is still part of the picture.
+        # A wildcard in the source slot: every provider that spoke about
+        # this aspect, each as its own series, rather than one merged
+        # answer that could not say who said what (docs/design.md,
+        # Sources).
         selector = (
-            f"{keys.history_key('forecast', entity, aspect)}"
+            f"{keys.history_key('forecast', entity, aspect)}/*"
             f"?valid_from={start.isoformat(timespec='seconds')}"
             f";valid_to={now.isoformat(timespec='seconds')};limit={limit}"
         )
@@ -889,7 +893,15 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
             )
         except QueryError as error:
             return json_error(f"recorder: {error}", status=502)
-        issues = [issue for _key, payload in replies for issue in (payload or [])]
+        # The reply key's last segment is the source. Tagging each issue
+        # with it keeps one flat list — the braid draws issues, not
+        # series — while letting the page say which provider a line came
+        # from, which is the whole reason to keep several.
+        issues = []
+        for key, payload in replies:
+            source = str(key).rsplit("/", 1)[-1]
+            for issue in payload or []:
+                issues.append({**issue, "source": source})
         return web.json_response({"issues": issues})
 
     async def api_logs(request: web.Request) -> web.Response:

@@ -748,7 +748,7 @@ test('a deviation tap lands on the view that shows its subject, or nowhere', () 
 
 // ---- forecasts (docs/design.md, Forecasts) ----
 
-const FORECAST_KEY = 'home/forecast/global/spot/price';
+const FORECAST_KEY = 'home/forecast/global/spot/price/nordpool';
 
 function doc(points, issued) {
   return {
@@ -769,6 +769,7 @@ test('a forecast decodes to millisecond points on the chart axis', () => {
     'global',
     'spot',
     'price',
+    'nordpool',
   );
   assert.equal(f.points.length, 2);
   assert.equal(f.points[0].v, 1.2);
@@ -788,6 +789,7 @@ test("the horizon ends where a final interval ends, not where it starts", () => 
     'global',
     'spot',
     'price',
+    'nordpool',
   );
   assert.equal(f.to, Date.parse('2026-09-21T15:00:00+00:00'));
 });
@@ -801,6 +803,7 @@ test('a trailing instant ends the horizon at itself', () => {
     'global',
     'spot',
     'price',
+    'nordpool',
   );
   assert.equal(f.to, Date.parse('2026-09-21T12:00:00+00:00'));
 });
@@ -812,7 +815,7 @@ test('nothing to draw reads as nothing, never as a broken chart', () => {
     ['a malformed timestamp', doc([{ t: 'soon', v: 1 }])],
     ['a non-numeric value', doc([{ t: '2026-09-21T09:00:00+00:00', v: 'cold' }])],
   ]) {
-    assert.equal(logic.forecastFor(forecasts, 'global', 'spot', 'price'), null, label);
+    assert.equal(logic.forecastFor(forecasts, 'global', 'spot', 'price', 'nordpool'), null, label);
   }
 });
 
@@ -826,6 +829,7 @@ test('a horizon summary names where the series goes and when', () => {
     'global',
     'spot',
     'price',
+    'nordpool',
   );
   const summary = logic.horizonSummary(f);
   assert.equal(summary.min.v, 0.4);
@@ -842,6 +846,7 @@ test('a flat horizon summarises to nothing rather than to min = max', () => {
     'global',
     'spot',
     'price',
+    'nordpool',
   );
   assert.equal(logic.horizonSummary(f), null);
   assert.equal(logic.horizonSummary(null), null);
@@ -968,4 +973,36 @@ test('an entity that declares no sources contributes nothing to draw', () => {
     { name: 'fused', label: 'Fused', sources: { gone: { entity: 'ghost', aspect: 'temperature' } } },
   ];
   assert.deepEqual(logic.contributorsFor(stale, 'fused', 'temperature'), []);
+});
+
+test('several providers claim one future, each under its own source', () => {
+  // The whole point of the source segment: before it, the second
+  // provider overwrote the first at the same key.
+  const forecasts = {
+    'home/forecast/global/spot/price/yr': {
+      schema: 1,
+      issued: '2026-09-21T08:00:00+00:00',
+      points: [{ t: '2026-09-21T09:00:00+00:00', v: 1.0 }],
+    },
+    'home/forecast/global/spot/price/smhi': {
+      schema: 1,
+      issued: '2026-09-21T08:00:00+00:00',
+      points: [{ t: '2026-09-21T09:00:00+00:00', v: 2.0 }],
+    },
+    // A different aspect, and a deeper key, are neither of them this
+    // aspect's sources.
+    'home/forecast/global/spot/volume/yr': { schema: 1, issued: 'x', points: [] },
+    'home/forecast/global/spot/price/yr/extra': { schema: 1, issued: 'x', points: [] },
+  };
+  // Sorted, so a chart and its legend agree between renders.
+  assert.deepEqual(logic.forecastSourcesFor(forecasts, 'global', 'spot', 'price'), [
+    'smhi',
+    'yr',
+  ]);
+  const claims = logic.forecastsFor(forecasts, 'global', 'spot', 'price');
+  assert.deepEqual(claims.map((c) => c.source), ['smhi', 'yr']);
+  assert.deepEqual(claims.map((c) => c.forecast.points[0].v), [2.0, 1.0]);
+  // An aspect nobody forecasts has no claims rather than a null one.
+  assert.deepEqual(logic.forecastsFor(forecasts, 'global', 'spot', 'nothing'), []);
+  assert.deepEqual(logic.forecastSourcesFor({}, 'global', 'spot', 'price'), []);
 });

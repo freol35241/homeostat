@@ -2990,7 +2990,7 @@ every chart walks backward from now.
   the two verification read shapes; and the dashboard drawing past and
   future on one axis.
 
-## Sources: several opinions about one value (proposed 2026-09-22)
+## Sources: several opinions about one value (settled 2026-09-22)
 
 The key space names the thing that *reports*, never the thing reported
 *on*. `home/state/kitchen/ceiling_lamp/on` names the lamp, and that has
@@ -3119,6 +3119,28 @@ one declaration.
     the wrong one.
   - Nothing in the store changes. Each contributor is already its own
     entity with its own series; this is a declaration and a chart mode.
+
+### Built
+
+- The source segment, required on every forecast key; the SDK's fourth
+  publish slot; `forecast-publish-conflict` narrowed from per entity to
+  per key, comparing wildcard slots pairwise; `[sources]` on a computed
+  entity with its two checks and its warning; and the history overlay
+  drawing both — contributors behind the computed value, and a line per
+  live forecast source.
+- The store took a migration after all, despite the note above that
+  subjects were new and nothing was published under one. The column is
+  additive but the UNIQUE that had to move is table-level, which SQLite
+  implements as an auto-index `DROP INDEX` refuses — so version 4 rebuilds
+  `series` the way SQLite documents. Pre-existing forecast rows keep an
+  empty source: the store they came from did not record one, and
+  inventing a provider name for them would be fabricating provenance.
+- Two things that only showed up in the building, both the same shape —
+  code that rebuilt a key from room/entity/aspect and silently dropped
+  the sixth segment. The SDK's `_concrete_key` made a unit's own publish
+  fall outside its declared expression, crashing it at startup; the
+  recorder's ingest folded the source into the aspect with `"/".join`.
+  Neither was a design question; both are what a positional key costs.
 
 ### Open
 

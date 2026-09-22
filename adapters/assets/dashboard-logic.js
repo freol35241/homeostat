@@ -572,10 +572,46 @@
   // The decoded forecast for one aspect, or null. Points become
   // millisecond timestamps here so the chart can place them on the same
   // axis as recorded history without every caller re-parsing.
-  function forecastFor(forecasts, room, entity, aspect) {
+  function forecastPrefix(room, entity, aspect) {
+    return 'home/forecast/' + room + '/' + entity + '/' + aspect + '/';
+  }
+
+  // Every source with a live forecast for one aspect, sorted so a chart
+  // and its legend agree on order between renders. A forecast key names
+  // its source (docs/design.md, Sources), so several providers appear
+  // here side by side rather than overwriting one another.
+  function forecastSourcesFor(forecasts, room, entity, aspect) {
+    var prefix = forecastPrefix(room, entity, aspect);
+    return Object.keys(forecasts || {})
+      .filter(function (k) {
+        // The source is the LAST segment: a deeper key is not this
+        // aspect's forecast, it is something else entirely.
+        return k.indexOf(prefix) === 0 &&
+          k.length > prefix.length &&
+          k.indexOf('/', prefix.length) === -1;
+      })
+      .map(function (k) { return k.slice(prefix.length); })
+      .sort();
+  }
+
+  // The decoded forecast one source currently claims, or null.
+  function forecastFor(forecasts, room, entity, aspect, source) {
     return decodeForecast(
-      forecasts && forecasts['home/forecast/' + room + '/' + entity + '/' + aspect]
+      forecasts && forecasts[forecastPrefix(room, entity, aspect) + source]
     );
+  }
+
+  // Every live claim about one aspect's future, decoded, newest source
+  // order stable. A line each and never an envelope over them, for the
+  // reason the braid gives: an envelope's edge belongs at each instant
+  // to whichever source happened to be highest, a path none predicted.
+  function forecastsFor(forecasts, room, entity, aspect) {
+    var out = [];
+    forecastSourcesFor(forecasts, room, entity, aspect).forEach(function (source) {
+      var decoded = forecastFor(forecasts, room, entity, aspect, source);
+      if (decoded) out.push({ source: source, forecast: decoded });
+    });
+    return out;
   }
 
   // One forecast document, live off the bus or stored by the recorder —
@@ -596,6 +632,11 @@
     var last = points[points.length - 1];
     return {
       issued: isNaN(issued) ? null : issued,
+      // Carried through from the recorder, which tags each stored issue
+      // with the source whose key it came from. A braid over several
+      // providers is otherwise anonymous, and "these issues disagree"
+      // would be indistinguishable from "these providers disagree".
+      source: typeof doc.source === 'string' ? doc.source : null,
       points: points,
       from: points[0].t,
       to: last.d ? last.t + last.d * 1000 : last.t
@@ -904,6 +945,8 @@
     applyMessage: applyMessage,
     computeDeviations: computeDeviations,
     forecastFor: forecastFor,
+    forecastSourcesFor: forecastSourcesFor,
+    forecastsFor: forecastsFor,
     decodeForecast: decodeForecast,
     contributorsFor: contributorsFor,
     decodeIssues: decodeIssues,
