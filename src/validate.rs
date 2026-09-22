@@ -4,6 +4,7 @@ use crate::error::ValidationError;
 use crate::keyspace::{is_reserved_word, PSEUDO_ROOMS};
 use crate::manifest::{
     DiscoveryMode, ParamSpec, ParamType, UnitKind, WidgetKind, WidgetSpec, WriteMode, CAPABILITIES,
+    VOCABULARY,
 };
 use crate::repo::House;
 
@@ -162,8 +163,11 @@ fn check_duplicates(house: &House, errors: &mut Vec<ValidationError>) {
     // adapter's `by_id` map keeps last.
     let mut entity_ids: BTreeMap<(&str, &str), Vec<&str>> = BTreeMap::new();
     for entity in &house.entities {
+        let Some(id) = &entity.file.entity.id else {
+            continue;
+        };
         entity_ids
-            .entry((&entity.owner, &entity.file.entity.id))
+            .entry((&entity.owner, id.as_str()))
             .or_default()
             .push(&entity.path);
     }
@@ -258,6 +262,40 @@ fn check_entities(house: &House, errors: &mut Vec<ValidationError>) {
             ));
         }
 
+        // A write mode governs commands, so it means nothing on a
+        // capability that takes none — eight of the fourteen. It stays
+        // required where there IS something to govern, so a light or a
+        // lock never inherits a policy silently.
+        if entity.file.write_policy.mode.is_none()
+            && VOCABULARY
+                .iter()
+                .any(|c| c.name == capability && c.base.is_some())
+        {
+            errors.push(ValidationError::new(
+                "write-mode-required",
+                &entity.name,
+                format!(
+                    "capability \"{capability}\" takes commands, so [write_policy] needs a mode"
+                ),
+                file.clone(),
+            ));
+        }
+
+        // An adapter binds periphery, so its entity files address it. An
+        // automation's do not: a computed value has no device behind it,
+        // and requiring an `id` there only made units invent one.
+        let owner_is_adapter = house
+            .unit(&entity.file.write_policy.owner)
+            .is_some_and(|u| u.manifest.unit.kind == UnitKind::Adapter);
+        if owner_is_adapter && entity.file.entity.id.is_none() {
+            errors.push(ValidationError::new(
+                "entity-id-required",
+                &entity.name,
+                "an adapter-owned entity needs an [entity] id: its adapter-native address",
+                file.clone(),
+            ));
+        }
+
         let room = &entity.file.entity.room;
         if is_reserved_word(room) && !PSEUDO_ROOMS.contains(&room.as_str()) {
             errors.push(ValidationError::new(
@@ -299,7 +337,7 @@ fn check_entities(house: &House, errors: &mut Vec<ValidationError>) {
             }
             Some(unit)
                 if unit.manifest.unit.kind == UnitKind::Automation
-                    && entity.file.write_policy.mode == WriteMode::Arbitrated =>
+                    && entity.file.write_policy.mode() == WriteMode::Arbitrated =>
             {
                 // A commandable virtual entity is a latch (docs/design.md,
                 // Commandable virtual entities): no device to contend for,

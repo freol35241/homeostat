@@ -1,0 +1,10 @@
+schema = 1
+
+# An adapter binds periphery, so its entity files must address it. Only
+# an automation-owned entity — a computed value — may omit the id.
+[entity]
+capability = "sensor"
+room = "kitchen"
+
+[write_policy]
+owner = "zigbee"

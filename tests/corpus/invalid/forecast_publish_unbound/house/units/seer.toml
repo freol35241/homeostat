@@ -11,5 +11,5 @@ restart = "on-failure"
 [bus.publishes]
 # A forecast for something no entity describes: nothing gives it a label,
 # a unit, or a place on a chart — the same hole the state rule closes.
-ghost = { key = "home/forecast/den/ghost/price" }
-wild = { key = "home/forecast/*/ghost/price" }
+ghost = { key = "home/forecast/den/ghost/price/seer" }
+wild = { key = "home/forecast/*/ghost/price/seer" }

@@ -324,10 +324,12 @@ pub struct BusSection {
 #[serde(deny_unknown_fields)]
 pub struct PublishSpec {
     /// Key expression. Under `home/state/` it must name a bound entity's
-    /// room and entity literally or by template (`state-publish-unbound`);
-    /// under `home/forecast/` the same rule holds
-    /// (`forecast-publish-unbound`), a forecast being that entity's series
-    /// extended forward.
+    /// room and entity literally or by template (`state-publish-unbound`).
+    /// Under `home/forecast/` the entity must EXIST but need not be one
+    /// this unit binds (`forecast-publish-unbound`), and the key carries a
+    /// sixth segment naming the source — who claims this future — so
+    /// several may speak about one series without overwriting each other
+    /// (`forecast-publish-conflict`).
     pub key: String,
     /// Required under `home/cmd/` (`publish-missing-capability`): the grant
     /// resolves onto bound entities of this capability that the key covers.
@@ -471,6 +473,15 @@ pub struct EntityFile {
     /// device entity can be fed (`virtual-entity-fed`); the adapter is the
     /// authority on which input names exist.
     pub inputs: Option<BTreeMap<String, InputSource>>,
+    /// `[sources]`: the readings this entity's value is DERIVED from, keyed
+    /// by a short name for each contributor. Declared, not inferred — a
+    /// unit subscribes many things for many reasons and nothing in its
+    /// subscriptions says which feed which published aspect. It is what
+    /// the history overlay draws beside the computed value (docs/design.md,
+    /// Sources), and it is not `[inputs]`: a device feed carries a runtime
+    /// contract that does not apply here, and a wired input stops being a
+    /// command aspect, which would collide on a commandable virtual entity.
+    pub sources: Option<BTreeMap<String, SourceRef>>,
     /// `[dashboard]`: retired (`entity-dashboard-retired`). Where a reading
     /// appears is `dashboard.toml`'s say: `{ kind = "tile", entity = ... }`
     /// on a view replaces `pin = true` here.
@@ -502,14 +513,47 @@ pub struct InputSource {
     pub aspect: String,
 }
 
+/// One entry in `[sources]`: a reading that a computed value is derived
+/// from, named the same way a device feed names its source, because the
+/// identity layer between a unit and a bus key is the same one
+/// (docs/design.md, Device feeds).
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SourceRef {
+    /// Name of the contributing entity; must exist
+    /// (`source-unknown-entity`). Any owner will do.
+    pub entity: String,
+    /// The aspect that contributes. When the contributor is
+    /// automation-owned, that automation's `[bus.publishes]` must cover the
+    /// key (`source-unpublished-aspect`).
+    pub aspect: String,
+    /// Free text about THIS contributor, shown beside it in the history
+    /// overlay. What belongs here is what the subject's own descriptor
+    /// cannot say because it is not true of every source: that one sensor
+    /// sits in the sun, or that a reading carries an offset the house
+    /// itself writes and so must not be fused back in. Kind and unit stay
+    /// on the aspect descriptor, which is a contract every source is held
+    /// to; this is the source's own caveat.
+    pub note: Option<String>,
+    /// The contributor's resolution in the aspect's own unit, where it
+    /// differs enough to matter — a half-degree sensor read against a
+    /// hundredth-degree one looks like it disagrees when it is merely
+    /// coarse.
+    pub precision: Option<f64>,
+}
+
 /// `[entity]`: what the device is and where.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EntitySection {
     /// The adapter-native address (a zigbee2mqtt friendly name, an ESPHome
     /// node, a camera's go2rtc stream). Unique per adapter
-    /// (`duplicate-entity-id`).
-    pub id: String,
+    /// (`duplicate-entity-id`). Required on an adapter-owned entity, where
+    /// it addresses something (`entity-id-required`); optional on an
+    /// automation-owned one, which has no periphery to address and would
+    /// otherwise have to invent a name for a device that does not exist.
+    #[serde(default)]
+    pub id: Option<String>,
     /// One of: binary_sensor, burner, camera, climate, cover, light, lock,
     /// notifier, person, presence, router, sensor, switch, vpn
     /// (`unknown-capability`). Decides
@@ -545,11 +589,28 @@ pub struct EntityNaming {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct WritePolicy {
-    pub mode: WriteMode,
+    /// How commands are governed. Optional, and meaningful only on a
+    /// capability that takes commands at all: eight of the fourteen have
+    /// no command aspect (`sensor`, `camera`, `router`, …), and a mode on
+    /// one of those governs nothing. Required where the capability has a
+    /// base aspect (`write-mode-required`), so a light or a lock still
+    /// states its policy rather than inheriting one silently; absent, it
+    /// reads as `shared`. Use `WritePolicy::mode()` rather than this
+    /// field.
+    #[serde(default)]
+    pub mode: Option<WriteMode>,
     /// Exactly one unit binds each entity: an adapter, or an automation
     /// for virtual entities. Must exist (`missing-owner-unit`) and be the
     /// unit whose entities dir holds this file (`owner-mismatch`).
     pub owner: String,
+}
+
+impl WritePolicy {
+    /// The effective mode. An absent one is `shared`: it is only legal on
+    /// a capability that takes no commands, where nothing reads it.
+    pub fn mode(&self) -> WriteMode {
+        self.mode.unwrap_or(WriteMode::Shared)
+    }
 }
 
 /// How commands toward the entity are governed. An automation-owned

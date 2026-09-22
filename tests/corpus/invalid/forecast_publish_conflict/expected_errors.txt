@@ -1,0 +1,1 @@
+error[forecast-publish-conflict] home/forecast/global/outdoor_temp: smhi and yr publish forecasts that land on the same key; give each source its own segment, or one overwrites the other

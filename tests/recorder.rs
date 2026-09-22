@@ -501,7 +501,7 @@ async fn stats_describe_the_store() {
     assert_eq!(replies.len(), 1);
     assert_eq!(replies[0].0, "home/history/stats");
     let stats = &replies[0].1;
-    assert_eq!(stats["store_version"], json!(3));
+    assert_eq!(stats["store_version"], json!(4));
     let file_bytes = stats["file_bytes"].as_i64().expect("file size");
     assert!(file_bytes >= 4096, "page_count * page_size: {stats}");
     assert!(stats["freelist_bytes"].as_i64().expect("freelist") >= 0);
@@ -1138,7 +1138,7 @@ async fn v0_store_migrates_in_place() {
     );
     assert_eq!(
         read_rows(&db, "PRAGMA user_version"),
-        vec![vec![SqlValue::Integer(3)]],
+        vec![vec![SqlValue::Integer(4)]],
         "a v0 store arrives at the current layout in one start"
     );
     assert_eq!(
@@ -1205,7 +1205,7 @@ async fn v1_store_backfills_its_tally() {
 
     assert_eq!(
         read_rows(&db, "PRAGMA user_version"),
-        vec![vec![SqlValue::Integer(3)]]
+        vec![vec![SqlValue::Integer(4)]]
     );
     // Counted, not guessed: the oldest row of the first series was
     // inserted last, so a tally that took each series' first or last
@@ -1357,7 +1357,7 @@ async fn forecasts_keep_every_issue_and_answer_in_issues() {
         })
     };
 
-    let key = "home/forecast/global/spot/price";
+    let key = "home/forecast/global/spot/price/nordpool";
     let pub_ = matched_publisher(&observer, key).await;
     put(&pub_, issue("2020-01-01T08:00:00+00:00", 21.0)).await;
     put(&pub_, issue("2020-01-01T09:00:00+00:00", 23.5)).await;
@@ -1388,16 +1388,21 @@ async fn forecasts_keep_every_issue_and_answer_in_issues() {
     // The forecast series is tallied like any other, on issue time.
     let series = read_rows(
         &db,
-        "SELECT class, entity, aspect, row_count FROM series WHERE class = 'forecast'",
+        "SELECT class, entity, aspect, source, row_count FROM series WHERE class = 'forecast'",
     );
     assert_eq!(series.len(), 1, "{series:?}");
-    assert_eq!(series[0][3], SqlValue::Integer(4), "{series:?}");
+    assert_eq!(
+        series[0][3],
+        SqlValue::Text("nordpool".to_string()),
+        "the series is identified by its source too: {series:?}"
+    );
+    assert_eq!(series[0][4], SqlValue::Integer(4), "{series:?}");
 
     // `at`: the forecast as it stood. Before the second issue existed,
     // the answer is the first one — which is what verification means.
     let replies = history_get(
         &observer,
-        "home/history/forecast/spot/price?at=2020-01-01T08:30:00+00:00",
+        "home/history/forecast/spot/price/nordpool?at=2020-01-01T08:30:00+00:00",
     )
     .await;
     assert_eq!(replies.len(), 1, "{replies:?}");
@@ -1419,7 +1424,7 @@ async fn forecasts_keep_every_issue_and_answer_in_issues() {
     );
 
     // Default `at` is now, so a bare read is the current forecast.
-    let replies = history_get(&observer, "home/history/forecast/spot/price").await;
+    let replies = history_get(&observer, "home/history/forecast/spot/price/nordpool").await;
     let issues = replies[0].1.as_array().expect("issues array").clone();
     assert_eq!(issues.len(), 1);
     assert_eq!(
@@ -1431,7 +1436,7 @@ async fn forecasts_keep_every_issue_and_answer_in_issues() {
     // carrying only its overlapping points.
     let replies = history_get(
         &observer,
-        "home/history/forecast/spot/price\
+        "home/history/forecast/spot/price/nordpool\
          ?valid_from=2020-01-01T12:00:00+00:00;valid_to=2020-01-01T13:00:00+00:00",
     )
     .await;
@@ -1452,7 +1457,7 @@ async fn forecasts_keep_every_issue_and_answer_in_issues() {
 
     // The two shapes are exclusive rather than quietly one winning.
     let replies = observer
-        .get("home/history/forecast/spot/price?at=2020-01-01T08:00:00+00:00;valid_from=2020-01-01T12:00:00+00:00")
+        .get("home/history/forecast/spot/price/nordpool?at=2020-01-01T08:00:00+00:00;valid_from=2020-01-01T12:00:00+00:00")
         .await
         .expect("query");
     let reply = replies.recv_async().await.expect("a reply");
@@ -1473,11 +1478,12 @@ async fn forecasts_keep_every_issue_and_answer_in_issues() {
 }
 
 /// (e3) A version-2 store — the layout before forecasts — gains the new
-/// table on the next start without a migration step, because the schema
-/// is applied `IF NOT EXISTS` on every open and an empty table needs no
-/// backfill. The path every existing house takes on this upgrade, and
-/// the one where "additive" quietly meaning "unreachable" would not show
-/// up until a producer published.
+/// table AND the series `source` on the next start. The table is additive
+/// and needs no backfill; the source is not, because its uniqueness moved
+/// and a table-level UNIQUE cannot be dropped in place. The path every
+/// existing house takes on this upgrade, and the one where "additive"
+/// quietly meaning "unreachable" would not show up until a producer
+/// published.
 #[tokio::test(flavor = "multi_thread")]
 async fn v2_store_gains_the_forecast_table() {
     let db = store_path("migrate-v2");
@@ -1507,20 +1513,58 @@ async fn v2_store_gains_the_forecast_table() {
 
     assert_eq!(
         read_rows(&db, "PRAGMA user_version"),
-        vec![vec![SqlValue::Integer(3)]],
+        vec![vec![SqlValue::Integer(4)]],
         "the store reports the layout it now has"
     );
-    // The existing series is untouched — an upgrade is not a rewrite.
+    // The existing series is untouched — an upgrade is not a rewrite —
+    // and it carries the empty source every non-forecast series has.
     assert_eq!(
-        read_rows(&db, "SELECT row_count FROM series WHERE entity = 'meter'"),
-        vec![vec![SqlValue::Integer(1)]],
-        "an existing tally survives"
+        read_rows(
+            &db,
+            "SELECT row_count, source FROM series WHERE entity = 'meter'"
+        ),
+        vec![vec![SqlValue::Integer(1), SqlValue::Text(String::new())]],
+        "an existing tally survives, with an empty source"
+    );
+    // The migration writes its own CREATE TABLE, so drift from SCHEMA is
+    // the failure mode. Pinned as a literal rather than compared against
+    // a second live store: spawning one inside this test contends with
+    // the supervisor already running here, and the columns are the thing
+    // worth pinning anyway.
+    assert_eq!(
+        read_rows(&db, "SELECT name FROM pragma_table_info('series')"),
+        [
+            "id",
+            "class",
+            "entity",
+            "aspect",
+            "source",
+            "row_count",
+            "oldest_ts",
+            "newest_ts"
+        ]
+        .iter()
+        .map(|c| vec![SqlValue::Text((*c).to_string())])
+        .collect::<Vec<_>>(),
+        "a migrated series must be shaped like a fresh one"
+    );
+    // And the moved uniqueness actually took: two sources, one aspect.
+    assert!(
+        Connection::open(&db)
+            .expect("open migrated store")
+            .execute_batch(
+                "INSERT INTO series (class, entity, aspect, source)
+                   VALUES ('forecast', 'spot', 'price', 'smhi'),
+                          ('forecast', 'spot', 'price', 'yr');"
+            )
+            .is_ok(),
+        "two providers for one aspect are two series, not a conflict"
     );
 
     // And the new table is not merely present but written and read: a
     // published forecast lands, and the series is tallied beside the
     // state one it has never met.
-    let key = "home/forecast/global/spot/price";
+    let key = "home/forecast/global/spot/price/nordpool";
     let pub_ = matched_publisher(&observer, key).await;
     put(
         &pub_,
@@ -1538,7 +1582,7 @@ async fn v2_store_gains_the_forecast_table() {
         Duration::from_secs(20),
     )
     .await;
-    let replies = history_get(&observer, "home/history/forecast/spot/price").await;
+    let replies = history_get(&observer, "home/history/forecast/spot/price/nordpool").await;
     let issues = replies[0].1.as_array().expect("issues array").clone();
     assert_eq!(issues.len(), 1, "{issues:?}");
     assert_eq!(issues[0]["points"][0]["v"], json!(21.0));

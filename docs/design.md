@@ -2837,6 +2837,21 @@ every chart walks backward from now.
   the same class needs no new vocabulary for "a plan". `forecast` is
   therefore entity-addressed in `keyspace.rs` and held to the same
   bound-entity rule as `state` (`forecast-publish-unbound`).
+  - **Amended 2026-09-21: the entity must exist, not be bound.** Holding
+    forecasts to state's rule was inherited rather than argued, and it
+    forbade the case this bullet advertises — a controller commands a
+    device it does not bind, so the grant graph makes "publish a plan for
+    the heat pump" unbuildable. It also forced one unit to own both the
+    fusion of a quantity's sensors and its weather provider. `state`
+    keeps the binder rule, which is what one master per entity means;
+    `forecast` requires only that the entity be declared, which is what
+    keeps the value in front of the recorder and the dashboard. The
+    single-publisher property the ownership rule gave for free is now
+    checked directly (`forecast-publish-conflict`), per entity rather
+    than per aspect because a publish may wildcard its aspect slot —
+    splitting one entity's aspects across two units is refused
+    conservatively, and narrows to per (entity, aspect, source) when
+    the source segment lands (Sources below).
 - **Two time coordinates is the whole difference** (sharpened 2026-09-21;
   the first write-up said "forecasts are arrays", which is the symptom).
   A state sample carries ONE time: when the value was true. A forecast
@@ -2959,9 +2974,216 @@ every chart walks backward from now.
     drew: a week of hourly issues is an unreadable mat and a large fetch,
     and a window that quietly means different things at different ranges
     is worse than one that states its limit.
+- **What a forecast IS, stated plainly** (2026-09-21, when a rename to
+  `future` was considered and dropped): a SOURCE's claim about a series'
+  future values. A controller publishing its own planned trajectory is
+  therefore in scope without a second class and without a rename — it is
+  a claim about a series' future made by the source that controls it,
+  which makes it unusually reliable, not a different kind of thing. The
+  distinction that prompted the question — a commitment versus a
+  prediction — follows from the ASPECT: a future for a commandable aspect
+  is a plan, one for a read-only aspect is a prediction, and a consumer
+  reads that off the descriptor without being told (Sources below). `future` was additionally
+  refused because `Future` is Rust's async trait and every type name in
+  this crate would collide with it.
 - Still to come under #147: the recorder writing that table and answering
   the two verification read shapes; and the dashboard drawing past and
   future on one axis.
+
+## Sources: several opinions about one value (settled 2026-09-22)
+
+The key space names the thing that *reports*, never the thing reported
+*on*. `home/state/kitchen/ceiling_lamp/on` names the lamp, and that has
+been invisible because for a light, a lock, a cover and a switch the
+producer and the subject are one object. Nothing was decided wrongly; a
+distinction was never forced.
+
+Forecasts forced it. Several sensors and a weather service all have an
+opinion about the outdoor air, and a forecast about it had nowhere to
+attach that did not require lying about who owns a device. A long
+detour — recorded below under Rejected — proposed a second noun for
+"the thing reported on". It was over-built. Two axes already in the
+design answer it, and what is actually missing is one key segment and
+one declaration.
+
+### The two axes, neither of them new
+
+- **Physical versus virtual is already invisible, deliberately.** Under
+  Virtual sensors: derived state is ordinary state, consumers never
+  learn whether a temperature was measured or fused, and provenance is
+  visible where structure lives — the entity file names its owner. It
+  must therefore never shape a key, and it does not.
+- **Commandable versus read-only is a property of an ASPECT, not of an
+  entity**, which the design already works by in two places and had not
+  said plainly. The arbiter's write token is "a lease per (arbitrated
+  entity, aspect) — amended 2026-07-18 from per-entity when the heat
+  pump showed why: orthogonal control dimensions share an entity". And
+  an aspect descriptor carries `command: {type, constraint, step?,
+  editable_by}` PER FIELD, so a capability with no base aspect may still
+  take commands on a described one. `capability.base` is the primary
+  commandable aspect, never the whole set.
+  - A heat pump is both at once: `feed_temperature` is a reading,
+    `feed_temperature_target` takes commands. Reasoning at entity
+    granularity — "is this thing a sensor or a control?" — is what made
+    the second noun look necessary.
+
+### A plan and a forecast are one class, and which one is derivable
+
+- A forecast is a source's claim about a series' future values
+  (Forecasts). Whether that claim is a PREDICTION or an INTENT follows
+  from the aspect it is about: a future for a commandable aspect is a
+  plan, because the publisher proposes to cause it; a future for a
+  read-only aspect is a forecast, because nobody in the house does.
+  `feed_temperature_target` ahead is intent, `feed_temperature` ahead is
+  prediction, a lamp's `on` ahead is a schedule, outdoor temperature
+  ahead is weather.
+- **So no vocabulary is needed for it.** A `kind: plan | prediction`
+  field was considered and is redundant: the descriptor already knows
+  whether the aspect takes commands. What the distinction is FOR is
+  scoring — a divergence between a prediction and the outcome measures
+  the source's accuracy, while a divergence between a plan and the
+  outcome measures the publisher's authority (it was revised,
+  arbitrated away, or clamped). A surface that computes an error must
+  not average the two, and it can tell them apart without being told.
+
+### The source segment, on forecasts only
+
+- **`home/forecast/{room}/{entity}/{aspect}/{source}`**, legal on any
+  entity, physical or virtual, commandable or not. One segment, never a
+  multi-level source: the aspect slot is positional and the ivt490
+  adapter already flattens `GT2/raw` to `GT2_raw` rather than spill out
+  of it.
+- **`home/state` does NOT grow a segment.** State multiplicity already
+  has a home: two outdoor sensors are two entities, two series, two
+  charts, and that is accurate — a sensor is a thing in the house with a
+  room, an availability signal and a failure mode. Forecast sources have
+  no such home. A weather service is not in the house, and giving it an
+  entity would name a subject and its provenance in one string.
+- This is what lets a weather service forecast a fused reading it does
+  not own, and a controller publish a planned trajectory for a device it
+  commands and therefore — the grant graph runs automation to device —
+  cannot bind. The ownership half of that already shipped: see the
+  amendment under Forecasts. `forecast-publish-conflict` is currently
+  per entity BECAUSE there is no source segment yet; when one lands it
+  narrows to per `(entity, aspect, source)`, which is the whole point.
+
+### Declared sources on a derived entity
+
+- **An entity whose value is computed may declare what it is computed
+  FROM**, as entity + aspect references — the `[inputs]` reference
+  shape, which named entity and aspect for the reason that applies here
+  too (Device feeds: the house has an identity layer between a unit and
+  a bus key, and what is consumed is one signal).
+
+  ```toml
+  [sources.station]
+  entity = "weather_station"
+  aspect = "temperature"
+
+  [sources.shed]
+  entity = "outbuilding_temp"
+  aspect = "temperature"
+  ```
+
+- **It must be declared, not inferred.** A fusion unit subscribes many
+  things for many reasons and nothing in its subscriptions says which
+  ones feed which published aspect. The plan checks the references
+  resolve and warns where the owning unit does not subscribe a declared
+  source, which makes it a checked fact rather than documentation.
+- **NOT `[inputs]`, though the shape is identical.** A device feed
+  carries a runtime contract that does not apply — not retained, cleared
+  on loss, staleness is the device's — and, decisively, a wired input
+  stops being a command aspect for that entity. A commandable virtual
+  entity with sources (a latch that also reads something) would collide
+  with that rule. Two contracts under one name is the fragmentation this
+  record refuses elsewhere.
+- **Its consumer is the chart, which is why it is worth having.** The
+  history detail overlay gains a chip row where an aspect has sources:
+  the computed value alone by default, its contributors added on
+  request. This is owner work, not family work — a family wants the
+  outdoor temperature, an owner wants to see the shed sensor reading
+  three degrees low in the afternoon — so it lives in the overlay beside
+  the forecast braid and not as a `dashboard.toml` widget, by the same
+  argument the braid settled.
+  - **A line per source, never a band across them.** An envelope's edge
+    belongs at each instant to whichever sensor happened to be highest,
+    so it traces a path no sensor took. This is the braid's rule for the
+    braid's reason.
+  - **Contributors grey, the computed value keeps the accent**, so what
+    the house believes never becomes indistinguishable from an input.
+  - **What does NOT transfer from the braid**: its lines are issues of
+    one series, transient and interchangeable, identified by scrubbing
+    to the nearest. Sources are distinct, stable and few — three to
+    eight, not a rolling mat — so they get a legend and a per-source
+    readout at the cursor. Importing the braid's interaction would be
+    the wrong one.
+  - Nothing in the store changes. Each contributor is already its own
+    entity with its own series; this is a declaration and a chart mode.
+
+### Built
+
+- The source segment, required on every forecast key; the SDK's fourth
+  publish slot; `forecast-publish-conflict` narrowed from per entity to
+  per key, comparing wildcard slots pairwise; `[sources]` on a computed
+  entity with its two checks and its warning; and the history overlay
+  drawing both — contributors behind the computed value, and a line per
+  live forecast source.
+- The store took a migration after all, despite the note above that
+  subjects were new and nothing was published under one. The column is
+  additive but the UNIQUE that had to move is table-level, which SQLite
+  implements as an auto-index `DROP INDEX` refuses — so version 4 rebuilds
+  `series` the way SQLite documents. Pre-existing forecast rows keep an
+  empty source: the store they came from did not record one, and
+  inventing a provider name for them would be fabricating provenance.
+- Two things that only showed up in the building, both the same shape —
+  code that rebuilt a key from room/entity/aspect and silently dropped
+  the sixth segment. The SDK's `_concrete_key` made a unit's own publish
+  fall outside its declared expression, crashing it at startup; the
+  recorder's ingest folded the source into the aspect with `"/".join`.
+  Neither was a design question; both are what a positional key costs.
+
+### Open
+
+- **Which sources the computation actually USED.** A sensor dropped as
+  stale, or deliberately excluded, is the main thing an overlay is
+  opened to find out — and it is a runtime fact, not a declared one, so
+  it needs the unit to report what it folded in. Deferred to #164 rather
+  than widened into this one.
+- **Uncertainty has no representation.** A forecast point's value is a
+  scalar and the SDK refuses anything else, so an ensemble or a
+  confidence band cannot be published. Model-predictive control is a
+  standing assumption and a curve without a band is a real limit. The
+  source segment offers a tempting non-answer — `smhi_p10`, `smhi_p50`,
+  `smhi_p90` as three sources — which abuses source for a dimension it
+  does not mean: percentiles of one issue are one claim, not three.
+  Named here so nobody reaches for it by accident.
+- **Corrections to the past have no representation.** `state` is a
+  last-value scalar; a reanalysis that learns later what the temperature
+  actually was cannot be published.
+
+### Rejected, deliberately
+
+- **A second noun for "the thing reported on"** — drafted at length on
+  2026-09-21 as `subject`, with its own key shape, a source segment on
+  `home/state`, a `series` migration and a canonical-selection rule.
+  It was justified on three things a virtual entity supposedly has to
+  lie about, and all three failed on inspection: the dead
+  `write_policy.mode` was fixed on its own (`write-mode-required`); a
+  fake `id` is a five-line fix, below; and "it must appoint a unit to
+  compute its value" turns out to be CORRECT rather than a lie, since a
+  computed value genuinely has a computer and the registry should say
+  who. What survived is the forecast source segment, the `[sources]`
+  block, and `id` becoming optional on automation-owned entities, where
+  there is no adapter-native address to hold — it stays required on
+  adapter-owned ones, which is where it addresses something. Recorded because the detour produced the two axes
+  at the top of this section, which are worth keeping.
+- **A `kind: plan | prediction` field** — derivable from the aspect, see
+  above.
+- **A source segment on `home/state`.** Competing estimators of one
+  value — two presence algorithms, say — would each need their own
+  entity, which does name a subject and its provenance in one string.
+  It is rare enough to defer under the pytapo rule, and `home/state` can
+  grow the segment if it stops being rare.
 
 ## Voice (later phase)
  

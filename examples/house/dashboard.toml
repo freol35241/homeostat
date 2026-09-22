@@ -28,6 +28,9 @@ name = "downstairs"
 widgets = [
   { kind = "unit", unit = "evening_lights" },           # its setpoint, and the lights it drives
   { kind = "unit", unit = "fused_temperature" },        # what it publishes, and what it reads
+  # Opening this chart's detail overlay offers "with sources": the two
+  # thermometers it is fused from, drawn beside it (docs/design.md, Sources).
+  { kind = "chart", entity = "downstairs_temperature", aspect = "temperature", hours = 24 },
   { kind = "room", room = "kitchen" },
   { kind = "room", room = "livingroom" },
   { kind = "room", room = "hallway" },

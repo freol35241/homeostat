@@ -124,25 +124,44 @@ class ConcreteKeyTest(unittest.TestCase):
     could not be addressed at all."""
 
     def test_a_literal_forecast_binding_resolves_to_its_key(self):
-        ctx = bare_context({"f": {"key": "home/forecast/global/spot_price/price"}})
+        ctx = bare_context(
+            {"f": {"key": "home/forecast/global/spot_price/price/nordpool"}}
+        )
         self.assertEqual(
             ctx._concrete_key("f", room=None, entity=None, aspect=None),
-            "home/forecast/global/spot_price/price",
+            "home/forecast/global/spot_price/price/nordpool",
         )
 
     def test_a_templated_forecast_binding_takes_slots(self):
         ctx = bare_context(
-            {"f": {"key": "home/forecast/{room}/{entity}/price"}},
+            {"f": {"key": "home/forecast/{room}/{entity}/price/planner"}},
             entities=LATCHES,
         )
         self.assertEqual(
             ctx._concrete_key("f", room="hallway", entity="motion_lighting", aspect=None),
-            "home/forecast/hallway/motion_lighting/price",
+            "home/forecast/hallway/motion_lighting/price/planner",
         )
+
+    def test_a_forecast_binding_wildcarding_its_source_needs_one_named(self):
+        # The source says WHO claims this future, so a binding that leaves
+        # the slot open must have it filled at the call — exactly as an
+        # open aspect must (docs/design.md, Sources).
+        ctx = bare_context({"f": {"key": "home/forecast/global/spot_price/price/*"}})
+        with self.assertRaises(ValueError):
+            ctx._concrete_key("f", room=None, entity=None, aspect=None)
+        self.assertEqual(
+            ctx._concrete_key("f", room=None, entity=None, aspect=None, source="yr"),
+            "home/forecast/global/spot_price/price/yr",
+        )
+
+    def test_only_a_forecast_publish_takes_a_source(self):
+        ctx = bare_context({"s": {"key": "home/state/global/spot_price/price"}})
+        with self.assertRaises(ValueError):
+            ctx._concrete_key("s", room=None, entity=None, aspect=None, source="yr")
 
     def test_a_key_outside_the_declared_expression_is_refused(self):
         ctx = bare_context(
-            {"f": {"key": "home/forecast/{room}/{entity}/price"}},
+            {"f": {"key": "home/forecast/{room}/{entity}/price/planner"}},
             entities=LATCHES,
         )
         with self.assertRaises(ValueError):

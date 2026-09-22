@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::ValidationError;
 use crate::expand::{Direction, ExpandedKey};
-use crate::keyspace::Segment;
+use crate::keyspace::{KeyExpr, Segment};
 use crate::manifest::{Priority, UnitKind, WriteMode, CAPABILITIES};
 use crate::repo::House;
 
@@ -149,6 +149,104 @@ pub fn resolve_feeds(house: &House, expanded: &[ExpandedKey]) -> (Vec<Feed>, Vec
     (feeds, errors)
 }
 
+/// One resolved `[sources]` entry: a contributor to a computed value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Source {
+    /// The computed entity and the name it gives this contributor.
+    pub entity: String,
+    pub name: String,
+    /// The contributor, resolved.
+    pub source_entity: String,
+    pub source_aspect: String,
+    pub source_owner: String,
+    pub key: String,
+    /// This contributor's own caveat, as declared.
+    pub note: Option<String>,
+}
+
+/// Resolves every `[sources]` block: the contributor exists, and an
+/// automation-owned contributor actually publishes the aspect — the same
+/// two checks `[inputs]` makes, for the same reason. The warning is the
+/// part that makes the declaration a checked fact rather than
+/// documentation: a unit that does not subscribe a source it claims to
+/// derive from is either mis-declared or has dead code, and the overlay
+/// would draw a line that never participates.
+pub fn resolve_sources(
+    house: &House,
+    expanded: &[ExpandedKey],
+) -> (Vec<Source>, Vec<String>, Vec<ValidationError>) {
+    let mut sources = Vec::new();
+    let mut warnings = Vec::new();
+    let mut errors = Vec::new();
+    for entity in &house.entities {
+        let Some(declared) = &entity.file.sources else {
+            continue;
+        };
+        let file = Some(entity.path.clone());
+        for (name, source) in declared {
+            let subject = format!("{}.{name}", entity.name);
+            let Some(src) = house.entities.iter().find(|e| e.name == source.entity) else {
+                errors.push(ValidationError::new(
+                    "source-unknown-entity",
+                    subject,
+                    format!("contributing entity \"{}\" does not exist", source.entity),
+                    file.clone(),
+                ));
+                continue;
+            };
+            let key = format!(
+                "home/state/{}/{}/{}",
+                src.file.entity.room, src.name, source.aspect
+            );
+            let segments: Vec<&str> = key.split('/').collect();
+            let src_is_automation = house
+                .unit(&src.owner)
+                .map(|u| u.manifest.unit.kind == UnitKind::Automation)
+                .unwrap_or(false);
+            if src_is_automation {
+                let published = expanded.iter().any(|k| {
+                    k.unit == src.owner
+                        && k.direction == Direction::Publishes
+                        && k.exprs.iter().any(|e| e.matches_prefix(&segments))
+                });
+                if !published {
+                    errors.push(ValidationError::new(
+                        "source-unpublished-aspect",
+                        subject,
+                        format!(
+                            "\"{}\" does not publish {key}; a declared source must be in its owner's [bus.publishes]",
+                            src.owner
+                        ),
+                        file.clone(),
+                    ));
+                    continue;
+                }
+            }
+            let consumed = expanded.iter().any(|k| {
+                k.unit == entity.owner
+                    && k.direction == Direction::Subscribes
+                    && k.exprs.iter().any(|e| e.matches_prefix(&segments))
+            });
+            if !consumed {
+                warnings.push(format!(
+                    "{subject}: \"{}\" declares {key} as a source but does not subscribe it",
+                    entity.owner
+                ));
+            }
+            sources.push(Source {
+                entity: entity.name.clone(),
+                name: name.clone(),
+                source_entity: src.name.clone(),
+                source_aspect: source.aspect.clone(),
+                source_owner: src.owner.clone(),
+                key,
+                note: source.note.clone(),
+            });
+        }
+    }
+    (sources, warnings, errors)
+}
+
 /// Resolves the grant table and enforces write policy.
 pub fn resolve(
     house: &House,
@@ -195,7 +293,7 @@ pub fn resolve(
                     name: e.name.clone(),
                     room: e.file.entity.room.clone(),
                     capability: e.file.entity.capability.clone(),
-                    write: e.file.write_policy.mode,
+                    write: e.file.write_policy.mode(),
                     owner: e.owner.clone(),
                 })
                 .collect();
@@ -245,7 +343,7 @@ pub fn resolve(
                 name: e.name.clone(),
                 room: e.file.entity.room.clone(),
                 capability: capability.clone(),
-                write: e.file.write_policy.mode,
+                write: e.file.write_policy.mode(),
                 owner: e.owner.clone(),
             })
             .collect();
@@ -296,7 +394,7 @@ pub fn resolve(
         }
     }
     for entity in &house.entities {
-        if entity.file.write_policy.mode != WriteMode::Exclusive {
+        if entity.file.write_policy.mode() != WriteMode::Exclusive {
             continue;
         }
         if let Some(writers) = writers.get(entity.name.as_str()) {
@@ -322,7 +420,7 @@ pub fn resolve(
     // check above but over `expanded` directly, since arbiter-class publishes
     // never form cmd-class grants.
     for entity in &house.entities {
-        if entity.file.write_policy.mode != WriteMode::Arbitrated {
+        if entity.file.write_policy.mode() != WriteMode::Arbitrated {
             continue;
         }
         let prefix = [
@@ -467,15 +565,34 @@ pub fn resolve(
                 });
                 continue;
             };
-            let bound = house
+            // State needs the BINDING unit: one master per entity, which
+            // is what the registry exists to say. A forecast does not —
+            // it is a source's claim about a series' future values, and
+            // the competent source is routinely not the binder. A weather
+            // service forecasts an outdoor sensor it does not own; a
+            // controller forecasts the trajectory of a device it commands
+            // and, by the grant graph, therefore cannot bind. The entity
+            // must still EXIST, which is what keeps the value in front of
+            // the recorder and the dashboard.
+            let declared = house
                 .entities
                 .iter()
-                .any(|e| &e.name == entity && e.owner == key.unit && &e.file.entity.room == room);
+                .find(|e| &e.name == entity && &e.file.entity.room == room);
+            let bound = match declared {
+                None => false,
+                Some(e) => forecast || e.owner == key.unit,
+            };
             if !bound {
-                let message = format!(
-                    "{class} key \"home/{class}/{room}/{entity}/…\" is not under an entity bound by \"{}\"",
-                    key.unit
-                );
+                let message = if forecast {
+                    format!(
+                        "forecast key \"home/forecast/{room}/{entity}/…\" names no entity in the house"
+                    )
+                } else {
+                    format!(
+                        "state key \"home/state/{room}/{entity}/…\" is not under an entity bound by \"{}\"",
+                        key.unit
+                    )
+                };
                 let where_ = Some(unit.path.clone());
                 errors.push(if forecast {
                     ValidationError::new("forecast-publish-unbound", subject, message, where_)
@@ -483,6 +600,89 @@ pub fn resolve(
                     ValidationError::new("state-publish-unbound", subject, message, where_)
                 });
             }
+        }
+    }
+
+    // One forecast series, one publisher — where "series" now includes the
+    // SOURCE. Several providers may speak about one aspect, which is what
+    // the source segment is for; what must not happen is two units writing
+    // the same source's key, because the mirror keeps only the last
+    // document per key, so the second overwrites rather than adds.
+    //
+    // A publish may wildcard its aspect or source slot, so entries are
+    // compared pairwise for compatibility rather than bucketed by an exact
+    // key: two publishes collide when, at every slot, they agree or one of
+    // them accepts anything.
+    #[derive(PartialEq)]
+    enum Slot {
+        Exact(String),
+        Any,
+    }
+    impl Slot {
+        fn compatible(&self, other: &Slot) -> bool {
+            match (self, other) {
+                (Slot::Exact(a), Slot::Exact(b)) => a == b,
+                _ => true,
+            }
+        }
+    }
+    let slot = |expr: &KeyExpr, i: usize| -> Slot {
+        // `**` anywhere from the aspect slot on stands for every slot
+        // after it, so a key that has one accepts anything here.
+        if expr.0.iter().skip(4).any(|s| matches!(s, Segment::AnyRec)) {
+            return Slot::Any;
+        }
+        match expr.0.get(i) {
+            Some(Segment::Literal(v)) => Slot::Exact(v.clone()),
+            _ => Slot::Any,
+        }
+    };
+    let mut forecast_publishes: Vec<(&str, String, String, Slot, Slot)> = Vec::new();
+    for key in expanded
+        .iter()
+        .filter(|k| k.direction == Direction::Publishes)
+    {
+        for expr in &key.exprs {
+            if expr.class() != Some("forecast") {
+                continue;
+            }
+            let (Some(Segment::Literal(room)), Some(Segment::Literal(entity))) =
+                (expr.0.get(2), expr.0.get(3))
+            else {
+                continue;
+            };
+            forecast_publishes.push((
+                key.unit.as_str(),
+                room.clone(),
+                entity.clone(),
+                slot(expr, 4),
+                slot(expr, 5),
+            ));
+        }
+    }
+    let mut reported: BTreeSet<(&str, &str)> = BTreeSet::new();
+    for (i, a) in forecast_publishes.iter().enumerate() {
+        for b in forecast_publishes.iter().skip(i + 1) {
+            if a.0 == b.0 || a.1 != b.1 || a.2 != b.2 {
+                continue;
+            }
+            if !a.3.compatible(&b.3) || !a.4.compatible(&b.4) {
+                continue;
+            }
+            let pair = if a.0 < b.0 { (a.0, b.0) } else { (b.0, a.0) };
+            if !reported.insert(pair) {
+                continue;
+            }
+            errors.push(ValidationError::new(
+                "forecast-publish-conflict",
+                format!("home/forecast/{}/{}", a.1, a.2),
+                format!(
+                    "{} and {} publish forecasts that land on the same key; \
+                     give each source its own segment, or one overwrites the other",
+                    pair.0, pair.1
+                ),
+                None,
+            ));
         }
     }
 
@@ -571,10 +771,10 @@ pub fn resolve(
 mod tests {
     use super::*;
     use crate::expand::expand;
-    use crate::keyspace::KeyExpr;
+
     use crate::manifest::{
         BusSection, EntityFile, EntitySection, PublishSpec, RestartPolicy, RuntimeSection,
-        UnitManifest, UnitSection, WritePolicy,
+        SourceRef, UnitManifest, UnitSection, WritePolicy,
     };
     use crate::repo::{LoadedEntity, LoadedUnit};
 
@@ -616,17 +816,18 @@ mod tests {
             file: EntityFile {
                 schema: 1,
                 entity: EntitySection {
-                    id: name.to_string(),
+                    id: Some(name.to_string()),
                     capability: capability.to_string(),
                     features: vec![],
                     room: room.to_string(),
                 },
                 naming: None,
                 write_policy: WritePolicy {
-                    mode,
+                    mode: Some(mode),
                     owner: adapter.to_string(),
                 },
                 inputs: None,
+                sources: None,
                 dashboard: None,
             },
             path: format!("entities/{adapter}/{name}.toml"),
@@ -776,10 +977,10 @@ mod tests {
         );
 
         let mut flipped = house_with_lock(arbiter_bus());
-        flipped.entities[0].file.write_policy.mode = WriteMode::Exclusive;
+        flipped.entities[0].file.write_policy.mode = Some(WriteMode::Exclusive);
         // The lamp is granted to nobody; flip the lock instead, which
         // night_mode writes.
-        flipped.entities[1].file.write_policy.mode = WriteMode::Shared;
+        flipped.entities[1].file.write_policy.mode = Some(WriteMode::Shared);
         let (expanded, _, _) = expand(&flipped);
         let (flipped_grants, _, _) = resolve(&flipped, &expanded);
         assert_ne!(
@@ -923,7 +1124,7 @@ mod tests {
         publishes.insert(
             "curve".to_string(),
             PublishSpec {
-                key: "home/forecast/global/spot_price/price".to_string(),
+                key: "home/forecast/global/spot_price/price/nordpool".to_string(),
                 capability: None,
                 priority: None,
             },
@@ -960,6 +1161,302 @@ mod tests {
                 .map(|e| e.name.as_str())
                 .collect::<Vec<_>>(),
             vec!["spot_price"],
+        );
+    }
+
+    /// The point of the segment: two providers, one aspect, no conflict.
+    /// This is what the per-entity check refused before a forecast key
+    /// carried its source.
+    #[test]
+    fn two_providers_may_forecast_one_aspect_under_their_own_sources() {
+        let house = house_forecasting(
+            "outdoor_temp",
+            "global",
+            &[
+                ("smhi", "home/forecast/global/outdoor_temp/temperature/smhi"),
+                ("yr", "home/forecast/global/outdoor_temp/temperature/yr"),
+            ],
+        );
+        let (expanded, _, _) = expand(&house);
+        let (_, _, errors) = resolve(&house, &expanded);
+        assert!(errors.is_empty(), "{errors:?}");
+    }
+
+    /// A wildcard slot accepts anything, so a unit publishing the whole
+    /// aspect space collides with one naming a single source inside it.
+    #[test]
+    fn a_wildcard_forecast_publish_collides_with_a_named_source() {
+        let house = house_forecasting(
+            "outdoor_temp",
+            "global",
+            &[
+                ("broad", "home/forecast/global/outdoor_temp/**"),
+                ("smhi", "home/forecast/global/outdoor_temp/temperature/smhi"),
+            ],
+        );
+        let (expanded, _, _) = expand(&house);
+        let (_, _, errors) = resolve(&house, &expanded);
+        assert_eq!(
+            errors.iter().map(|e| e.code).collect::<Vec<_>>(),
+            vec!["forecast-publish-conflict"],
+        );
+    }
+
+    /// Builds a house where `forecaster` units each publish one concrete
+    /// forecast key, and `esphome` owns the entity being forecast.
+    fn house_forecasting(entity_name: &str, room: &str, forecasters: &[(&str, &str)]) -> House {
+        let mut units = vec![unit(
+            "esphome",
+            UnitKind::Adapter,
+            BusSection {
+                subscribes: BTreeMap::new(),
+                publishes: BTreeMap::new(),
+            },
+        )];
+        for (name, key) in forecasters {
+            let mut publishes = BTreeMap::new();
+            publishes.insert(
+                "curve".to_string(),
+                PublishSpec {
+                    key: (*key).to_string(),
+                    capability: None,
+                    priority: None,
+                },
+            );
+            units.push(unit(
+                name,
+                UnitKind::Automation,
+                BusSection {
+                    subscribes: BTreeMap::new(),
+                    publishes,
+                },
+            ));
+        }
+        House {
+            units,
+            entities: vec![entity(
+                entity_name,
+                room,
+                "sensor",
+                WriteMode::Shared,
+                "esphome",
+            )],
+            ..House::default()
+        }
+    }
+
+    /// A forecast may name an entity this unit does NOT bind, which state
+    /// may not. A forecast is a source's claim about a series' future
+    /// values, and the competent source is routinely not the binder: a
+    /// weather service forecasts a sensor an adapter owns, and a
+    /// controller forecasts a device it commands and therefore — the
+    /// grant graph runs automation to device — cannot bind.
+    #[test]
+    fn a_forecast_may_name_an_entity_another_unit_owns() {
+        let house = house_forecasting(
+            "outdoor_temp",
+            "global",
+            &[(
+                "weather",
+                "home/forecast/global/outdoor_temp/temperature/smhi",
+            )],
+        );
+        let (expanded, _, _) = expand(&house);
+        let (_, _, errors) = resolve(&house, &expanded);
+        assert!(errors.is_empty(), "{errors:?}");
+    }
+
+    /// The entity must still EXIST. Dropping the ownership requirement
+    /// does not open the free-form-key hole: a forecast under a name no
+    /// entity describes would be recorded and invisible to every
+    /// generated surface.
+    #[test]
+    fn a_forecast_for_no_entity_is_still_refused() {
+        let house = house_forecasting(
+            "outdoor_temp",
+            "global",
+            &[("weather", "home/forecast/global/nowhere/temperature/smhi")],
+        );
+        let (expanded, _, _) = expand(&house);
+        let (_, _, errors) = resolve(&house, &expanded);
+        assert_eq!(
+            errors.iter().map(|e| e.code).collect::<Vec<_>>(),
+            vec!["forecast-publish-unbound"],
+        );
+    }
+
+    /// One source, one publisher. Ownership used to guarantee this
+    /// structurally — one binder per entity — so relaxing it has to put
+    /// the property back directly: the mirror keeps only the last
+    /// document per key, so a second publisher on the SAME source
+    /// overwrites rather than adds. Two providers under their own source
+    /// segments are the case this exists to permit, covered below.
+    #[test]
+    fn two_units_may_not_publish_one_forecast_source() {
+        let house = house_forecasting(
+            "outdoor_temp",
+            "global",
+            &[
+                (
+                    "smhi",
+                    "home/forecast/global/outdoor_temp/temperature/consensus",
+                ),
+                (
+                    "yr",
+                    "home/forecast/global/outdoor_temp/temperature/consensus",
+                ),
+            ],
+        );
+        let (expanded, _, _) = expand(&house);
+        let (_, _, errors) = resolve(&house, &expanded);
+        let conflict = errors
+            .iter()
+            .find(|e| e.code == "forecast-publish-conflict")
+            .expect("two forecasters on one series must conflict");
+        assert!(
+            conflict.message.contains("smhi") && conflict.message.contains("yr"),
+            "the conflict must name both publishers: {}",
+            conflict.message
+        );
+    }
+
+    /// A house where `fusion` owns a computed entity derived from one
+    /// sensor an adapter owns. `subscribes` decides whether the fusion
+    /// actually reads what it claims to.
+    fn house_with_sources(source_aspect: &str, subscribes: Option<&str>) -> House {
+        let mut publishes = BTreeMap::new();
+        publishes.insert(
+            "fused".to_string(),
+            PublishSpec {
+                key: "home/state/global/fused_temp/temperature".to_string(),
+                capability: None,
+                priority: None,
+            },
+        );
+        let mut subs = BTreeMap::new();
+        if let Some(expr) = subscribes {
+            subs.insert("inputs".to_string(), expr.to_string());
+        }
+        let mut sources = BTreeMap::new();
+        sources.insert(
+            "station".to_string(),
+            SourceRef {
+                entity: "outdoor_temp".to_string(),
+                aspect: source_aspect.to_string(),
+                note: None,
+                precision: None,
+            },
+        );
+        let mut fused = entity(
+            "fused_temp",
+            "global",
+            "sensor",
+            WriteMode::Shared,
+            "fusion",
+        );
+        fused.file.sources = Some(sources);
+        House {
+            units: vec![
+                unit(
+                    "esphome",
+                    UnitKind::Adapter,
+                    BusSection {
+                        subscribes: BTreeMap::new(),
+                        publishes: BTreeMap::new(),
+                    },
+                ),
+                unit(
+                    "fusion",
+                    UnitKind::Automation,
+                    BusSection {
+                        subscribes: subs,
+                        publishes,
+                    },
+                ),
+            ],
+            entities: vec![
+                entity(
+                    "outdoor_temp",
+                    "global",
+                    "sensor",
+                    WriteMode::Shared,
+                    "esphome",
+                ),
+                fused,
+            ],
+            ..House::default()
+        }
+    }
+
+    /// A declared source resolves to the contributor's own state key —
+    /// the entity keeps publishing where it always did, and the
+    /// declaration is a reference, never a second place for the value.
+    #[test]
+    fn a_declared_source_resolves_to_the_contributors_key() {
+        let house = house_with_sources(
+            "temperature",
+            Some("home/state/global/outdoor_temp/temperature"),
+        );
+        let (expanded, _, _) = expand(&house);
+        let (sources, warnings, errors) = resolve_sources(&house, &expanded);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(
+            sources,
+            vec![Source {
+                entity: "fused_temp".to_string(),
+                name: "station".to_string(),
+                source_entity: "outdoor_temp".to_string(),
+                source_aspect: "temperature".to_string(),
+                source_owner: "esphome".to_string(),
+                key: "home/state/global/outdoor_temp/temperature".to_string(),
+                note: None,
+            }]
+        );
+    }
+
+    /// The declaration is a checked fact, not documentation. A unit that
+    /// claims to derive from a reading it never subscribes is either
+    /// mis-declared or has dead code, and the overlay would otherwise draw
+    /// a contributor line that never participates.
+    #[test]
+    fn a_source_the_owner_does_not_subscribe_warns() {
+        let house = house_with_sources("temperature", None);
+        let (expanded, _, _) = expand(&house);
+        let (sources, warnings, errors) = resolve_sources(&house, &expanded);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(sources.len(), 1, "the source still resolves");
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(
+            warnings[0].contains("does not subscribe"),
+            "{}",
+            warnings[0]
+        );
+    }
+
+    /// A contributor that does not exist is an error, not a warning: the
+    /// overlay has no series to draw and the declaration names nothing.
+    #[test]
+    fn a_source_naming_no_entity_is_refused() {
+        let mut house = house_with_sources("temperature", None);
+        let fused = house
+            .entities
+            .iter_mut()
+            .find(|e| e.name == "fused_temp")
+            .unwrap();
+        fused
+            .file
+            .sources
+            .as_mut()
+            .unwrap()
+            .get_mut("station")
+            .unwrap()
+            .entity = "ghost".to_string();
+        let (expanded, _, _) = expand(&house);
+        let (_, _, errors) = resolve_sources(&house, &expanded);
+        assert_eq!(
+            errors.iter().map(|e| e.code).collect::<Vec<_>>(),
+            vec!["source-unknown-entity"],
         );
     }
 
@@ -1020,7 +1517,7 @@ mod tests {
     #[test]
     fn two_bindings_in_one_unit_are_one_writer() {
         let mut house = house_with_lock(None);
-        house.entities[0].file.write_policy.mode = WriteMode::Exclusive;
+        house.entities[0].file.write_policy.mode = Some(WriteMode::Exclusive);
         let bus = house.units[1].manifest.bus.as_mut().unwrap();
         for (name, aspect) in [("lamp_on", "on"), ("lamp_brightness", "brightness")] {
             bus.publishes.insert(

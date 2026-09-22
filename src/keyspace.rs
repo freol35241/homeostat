@@ -19,7 +19,8 @@ pub const CLASSES: &[&str] = &[
 ];
 
 /// The classes addressed per entity — `home/{class}/{room}/{entity}/{aspect}`
-/// — rather than by some other shape under the class.
+/// — rather than by some other shape under the class. `forecast` is one of
+/// them and takes a sixth segment, its source; see `check_schema`.
 const ENTITY_ADDRESSED: &[&str] = &["state", "cmd", "arbiter", "forecast"];
 
 /// Reserved pseudo-rooms for non-spatial entities.
@@ -113,18 +114,23 @@ impl KeyExpr {
                 ))
             }
         };
-        let min_len = if ENTITY_ADDRESSED.contains(&class) {
-            5
-        } else {
-            3
+        // A forecast carries one more: WHO says so. Every forecast has a
+        // source — the unit publishing it — and several may speak about
+        // one series, so the slot is required rather than optional: two
+        // shapes would mean a consumer wildcarding the class could not
+        // write one expression that matched every opinion
+        // (docs/design.md, Sources).
+        let min_len = match class {
+            "forecast" => 6,
+            c if ENTITY_ADDRESSED.contains(&c) => 5,
+            _ => 3,
         };
         if !self.has_any_rec() && self.0.len() < min_len {
-            if min_len == 5 {
-                return Err(format!(
-                    "\"{raw}\" needs room/entity/aspect segments after the class"
-                ));
-            }
-            return Err(format!("\"{raw}\" needs a segment after the class"));
+            return Err(match min_len {
+                6 => format!("\"{raw}\" needs room/entity/aspect/source segments after the class"),
+                5 => format!("\"{raw}\" needs room/entity/aspect segments after the class"),
+                _ => format!("\"{raw}\" needs a segment after the class"),
+            });
         }
         Ok(())
     }
@@ -244,10 +250,11 @@ mod tests {
     }
 
     #[test]
-    fn forecast_is_addressed_like_state() {
-        // Same shape as the series it extends: room/entity/aspect, a room
-        // slot, and a reserved word so no room can be called "forecast".
-        let s = "home/forecast/global/spot_price/price";
+    fn forecast_is_addressed_like_state_plus_its_source() {
+        // The series it extends, plus WHO says so: room/entity/aspect and
+        // then the source. It keeps state's room slot, and `forecast` is a
+        // reserved word so no room can be called one.
+        let s = "home/forecast/global/spot_price/price/nordpool";
         expr(s).check_schema(s).unwrap();
         assert_eq!(expr(s).to_string(), s);
         assert_eq!(
@@ -258,10 +265,17 @@ mod tests {
             .check_schema("home/forecast/{room}/{entity}/**")
             .unwrap();
         assert!(is_reserved_word("forecast"));
-        // and short of an aspect it is refused, as state is
+        // Short of an aspect it is refused, as state is.
         assert!(expr("home/forecast/global")
             .check_schema("home/forecast/global")
             .is_err());
+        // And short of a SOURCE it is refused, which state is not: every
+        // forecast has an author, and leaving the slot optional would mean
+        // no single expression matched every opinion about one series.
+        let bare = "home/forecast/global/spot_price/price";
+        assert!(expr(bare).check_schema(bare).is_err());
+        let state = "home/state/global/spot_price/price";
+        expr(state).check_schema(state).unwrap();
     }
 
     #[test]

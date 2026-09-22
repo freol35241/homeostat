@@ -3,13 +3,8 @@ schema = 1
 [entity]
 id = "outdoor-temp-sensor.local"
 capability = "sensor"
-features = ["temperature", "humidity"]
+features = ["temperature"]
 room = "global"
-
-[naming]
-sv = "utomhustemperaturen"
-en = "outdoor temperature"
-aliases = []
 
 [write_policy]
 owner = "esphome"

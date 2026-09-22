@@ -151,6 +151,21 @@ pub const CODES: &[(&str, &str)] = &[
          vpn) because grants, the arbiter and the dashboard key on it.",
     ),
     (
+        "entity-id-required",
+        "An adapter-owned entity file has no `[entity] id`. The id is the \
+         adapter-native address — a zigbee2mqtt friendly name, an ESPHome \
+         node — and an adapter binds periphery, so it needs one. An \
+         automation-owned entity may omit it: a computed value has no \
+         device behind it to address.",
+    ),
+    (
+        "write-mode-required",
+        "An entity whose capability takes commands must state `[write_policy] \
+         mode`. The mode governs how commands are resolved, so it is optional \
+         only on the capabilities that take none (sensor, camera, router and \
+         the rest with no base aspect), where it would govern nothing.",
+    ),
+    (
         "missing-owner-unit",
         "An entity file's `[write_policy] owner` names a unit that does not \
          exist in units/.",
@@ -365,11 +380,38 @@ pub const CODES: &[(&str, &str)] = &[
     (
         "forecast-publish-unbound",
         "A publish under `home/forecast/` must name, literally, the room and \
-         entity of an entity this unit binds (or use `{room}`/`{entity}` \
-         templates) — the same rule as `home/state/`, because a forecast is \
-         that same series extended forward. A unit publishing a forecast for \
-         something no entity describes needs an entity file for it, which is \
-         also what gives the value its label, unit and place on a chart.",
+         entity of an entity that EXISTS in the house (or use \
+         `{room}`/`{entity}` templates, which resolve over this unit's own \
+         bound entities). Unlike `home/state/`, the entity need not be one \
+         this unit binds: a forecast is a source's claim about a series' \
+         future values, and the competent source is routinely not the binder \
+         — a weather service forecasts a sensor it does not own, and a \
+         controller forecasts a device it commands and therefore cannot \
+         bind. The entity must still exist, which is what gives the value \
+         its label, unit and place on a chart.",
+    ),
+    (
+        "source-unknown-entity",
+        "An entity's `[sources]` names a contributing entity that does not \
+         exist. A declared source is what the history overlay draws beside \
+         the computed value, so it must resolve to a real series.",
+    ),
+    (
+        "source-unpublished-aspect",
+        "An entity's `[sources]` names an aspect of an automation-owned \
+         entity that its owner does not publish. Same rule as a device \
+         feed: where the owner names its aspects literally, the reference \
+         is checked against them.",
+    ),
+    (
+        "forecast-publish-conflict",
+        "Two units publish forecasts that land on the same key. The mirror \
+         keeps only the last document per key, so the second does not add an \
+         opinion — it overwrites one. Several providers CAN forecast one \
+         aspect: that is what the source segment is for, and under their own \
+         sources they coexist. A publish that wildcards its aspect or source \
+         slot accepts anything there, so it collides with a publish that \
+         names one (docs/design.md, Sources).",
     ),
 ];
 

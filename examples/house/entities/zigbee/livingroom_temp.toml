@@ -1,0 +1,15 @@
+schema = 1
+
+[entity]
+id = "0x00158d0009c43e17"
+capability = "sensor"
+features = ["temperature"]
+room = "livingroom"
+
+[naming]
+sv = "termometern i vardagsrummet"
+en = "living room thermometer"
+aliases = []
+
+[write_policy]
+owner = "zigbee"

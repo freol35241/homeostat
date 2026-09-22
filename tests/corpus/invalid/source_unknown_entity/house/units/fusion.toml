@@ -1,0 +1,18 @@
+schema = 1
+
+[unit]
+name = "fusion"
+kind = "automation"
+
+[runtime]
+command = "uv run units/fusion.py"
+restart = "on-failure"
+
+[bus.subscribes]
+inputs = "home/state/downstairs/*/temperature"
+
+[bus.publishes]
+fused = { key = "home/state/global/downstairs_temperature/temperature" }
+
+[entities]
+dir = "entities/fusion"

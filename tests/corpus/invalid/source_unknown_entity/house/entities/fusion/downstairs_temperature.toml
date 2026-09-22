@@ -1,0 +1,16 @@
+schema = 1
+
+[entity]
+id = "downstairs_temperature"
+capability = "sensor"
+features = ["temperature"]
+room = "global"
+
+[write_policy]
+owner = "fusion"
+
+# A contributor that does not exist: the overlay would have no series to
+# draw beside the computed value, and the declaration names nothing.
+[sources.ghost]
+entity = "no_such_sensor"
+aspect = "temperature"

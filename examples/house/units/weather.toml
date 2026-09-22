@@ -1,0 +1,18 @@
+schema = 1
+
+[unit]
+name = "weather"
+kind = "automation"
+description = "Fetches an outdoor temperature forecast from the national service"
+
+[runtime]
+command = "uv run units/weather.py"
+restart = "on-failure"
+
+# A forecast for an entity this unit does NOT bind: `outdoor_temp` is the
+# esphome adapter's device. A forecast is a source's claim about a
+# series' future values, and the competent source is routinely not the
+# binder (docs/design.md, Forecasts). The last segment says WHICH source,
+# so a second provider sits beside this one rather than overwriting it.
+[bus.publishes]
+curve = { key = "home/forecast/global/outdoor_temp/temperature/smhi" }

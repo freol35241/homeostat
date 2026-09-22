@@ -143,8 +143,11 @@ FORECAST_KEY = zenoh.KeyExpr("home/history/forecast/**")
 # for this layout, which is what bounds the file between retentions.
 # Version 1 kept every aggregate on the samples table, where COUNT/MIN/MAX
 # per series have no index that answers them; version 2 carries them on
-# series instead (see the tally trigger).
-STORE_VERSION = 3
+# series instead (see the tally trigger). Version 3 added the forecasts
+# table; version 4 gives `series` a `source`, because a forecast key
+# carries one (docs/design.md, Sources) and two providers speaking about
+# one aspect are two series, not one series written twice.
+STORE_VERSION = 4
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS series (
@@ -152,10 +155,15 @@ CREATE TABLE IF NOT EXISTS series (
   class TEXT NOT NULL,
   entity TEXT NOT NULL,
   aspect TEXT NOT NULL,
+  -- Who claims it. Empty for every class but `forecast`, and NOT NULL
+  -- with that empty string as the sentinel rather than NULL: SQLite
+  -- treats NULLs as distinct in a unique index, so a nullable column
+  -- here would silently admit duplicate state series.
+  source TEXT NOT NULL DEFAULT '',
   row_count INTEGER NOT NULL DEFAULT 0,
   oldest_ts INTEGER,
   newest_ts INTEGER,
-  UNIQUE (class, entity, aspect)
+  UNIQUE (class, entity, aspect, source)
 );
 CREATE TABLE IF NOT EXISTS rooms (
   id INTEGER PRIMARY KEY,
@@ -445,7 +453,8 @@ class Writer:
     # "this issue's opinion about this instant".
     FORECASTS_INSERT = (
         "INSERT OR IGNORE INTO forecasts VALUES ("
-        "  (SELECT id FROM series WHERE class = 'forecast' AND entity = ? AND aspect = ?),"
+        "  (SELECT id FROM series WHERE class = 'forecast'"
+        "     AND entity = ? AND aspect = ? AND source = ?),"
         "  ?, ?, ?, (SELECT id FROM rooms WHERE name = ?), ?)"
     )
 
@@ -455,8 +464,8 @@ class Writer:
             ts, space, room, entity, aspect, kind, value = row
             return (space, entity, aspect, ts, room, kind, value)
         if table == "forecasts":
-            issued, valid, end, room, entity, aspect, value = row
-            return (entity, aspect, issued, valid, end, room, value)
+            issued, valid, end, room, entity, aspect, source, value = row
+            return (entity, aspect, source, issued, valid, end, room, value)
         return row
 
     def _flush(self, rows: list) -> None:
@@ -610,9 +619,10 @@ class Writer:
         """Ensures every series and room the batch names has an id, so the
         per-row inserts are id lookups."""
         conn.executemany(
-            "INSERT OR IGNORE INTO series (class, entity, aspect) VALUES (?, ?, ?)",
-            {(r[1], r[3], r[4]) for t, r in rows if t == "samples"}
-            | {("forecast", r[4], r[5]) for t, r in rows if t == "forecasts"},
+            "INSERT OR IGNORE INTO series (class, entity, aspect, source)"
+            " VALUES (?, ?, ?, ?)",
+            {(r[1], r[3], r[4], "") for t, r in rows if t == "samples"}
+            | {("forecast", r[4], r[5], r[6]) for t, r in rows if t == "forecasts"},
         )
         conn.executemany(
             "INSERT OR IGNORE INTO rooms (name) VALUES (?)",
@@ -762,7 +772,10 @@ class Recorder:
         A whole issue is refused or accepted together: a document with one
         bad point is a producer bug, and half-storing it would leave a
         forecast that reads as complete and is not."""
-        if len(parts) < 5:
+        # room/entity/aspect/source — six segments with the class and the
+        # `home` root. An aspect never spans segments here, because the
+        # last one is the source (docs/design.md, Sources).
+        if len(parts) != 6:
             self.sess.health_event("drop", reason="off-schema-key", key=key)
             return
         try:
@@ -773,7 +786,7 @@ class Recorder:
             )
             return
         issued_us = int(decoded.issued.timestamp() * 1_000_000)
-        room, entity, aspect = parts[2], parts[3], "/".join(parts[4:])
+        room, entity, aspect, source = parts[2], parts[3], parts[4], parts[5]
         for point in decoded.points:
             valid_us = int(point.t.timestamp() * 1_000_000)
             end_us = (
@@ -781,7 +794,7 @@ class Recorder:
             )
             self.writer.enqueue(
                 "forecasts",
-                (issued_us, valid_us, end_us, room, entity, aspect, point.v),
+                (issued_us, valid_us, end_us, room, entity, aspect, source, point.v),
             )
 
     def answer(self, query: zenoh.Query) -> None:
@@ -888,10 +901,15 @@ class Recorder:
             return
         try:
             series = conn.execute(
-                "SELECT id, entity, aspect FROM series WHERE class = 'forecast'"
+                "SELECT id, entity, aspect, source FROM series WHERE class = 'forecast'"
             ).fetchall()
-            for series_id, entity, aspect in series:
-                series_key = f"home/history/forecast/{entity}/{aspect}"
+            for series_id, entity, aspect, source in series:
+                # The source is a segment of the reply key, so two
+                # providers for one aspect come back as two series a
+                # caller can tell apart — and a caller that wants all of
+                # them asks with a wildcard in that slot rather than
+                # getting them merged (docs/design.md, Sources).
+                series_key = f"home/history/forecast/{entity}/{aspect}/{source}"
                 if not asked.intersects(zenoh.KeyExpr(series_key)):
                     continue
                 if at_us is not None:
@@ -1274,6 +1292,8 @@ def init_store(db_path: Path) -> None:
         conn.executescript(TRIGGERS)
         if existing and version < 2:
             migrate_v1(conn)
+        if existing and version < 4:
+            migrate_v3(conn)
         conn.execute(f"PRAGMA user_version={STORE_VERSION}")
         conn.commit()
     finally:
@@ -1318,6 +1338,68 @@ def migrate_v0(conn: sqlite3.Connection) -> None:
     conn.execute("DROP TABLE samples_v0")
     conn.execute("COMMIT")
     conn.execute("VACUUM")
+
+
+def migrate_v3(conn: sqlite3.Connection) -> None:
+    """Version 3 -> 4: `series` gains `source`, and its uniqueness moves
+    from (class, entity, aspect) to (class, entity, aspect, source) so two
+    providers forecasting one aspect are two series rather than one series
+    written twice (docs/design.md, Sources).
+
+    A column can be added in place, but the old uniqueness cannot be
+    removed in place: it is a table-level UNIQUE, so SQLite implements it
+    as an auto-index that `DROP INDEX` refuses. Hence the rebuild SQLite
+    documents — create, copy, drop, rename — which is safe here because
+    foreign keys are not enforced and the rename restores the name the
+    other tables reference.
+
+    Existing forecast rows keep source '' — the store they came from did
+    not record one, and inventing a provider name for them would be
+    fabricating provenance. They stay readable under that empty source; a
+    producer republishing under a real one starts a new series beside them
+    rather than appending to them."""
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(series)")}
+    if "source" in columns:
+        return
+    # migrate_v1 may have run just above and left its UPDATE in an
+    # implicit transaction, which would make this BEGIN raise "cannot
+    # start a transaction within a transaction" — and a recorder that
+    # cannot open its store never reaches Running.
+    conn.commit()
+    # The triggers already in this file UPDATE `series` by name, and since
+    # 3.25 SQLite revalidates every trigger body during ALTER TABLE
+    # RENAME — so with `series` dropped the rename fails with "error in
+    # trigger samples_tally: no such table: main.series", and the recorder
+    # never opens its store. legacy_alter_table skips that revalidation,
+    # which is what it exists for; the triggers are correct again the
+    # moment the rebuilt table takes the name back.
+    conn.execute("PRAGMA legacy_alter_table=ON")
+    conn.execute("BEGIN")
+    # Mirrors the `series` definition in SCHEMA; a test pins the columns
+    # so the two cannot drift apart.
+    conn.execute(
+        "CREATE TABLE series_v4 ("
+        "  id INTEGER PRIMARY KEY,"
+        "  class TEXT NOT NULL,"
+        "  entity TEXT NOT NULL,"
+        "  aspect TEXT NOT NULL,"
+        "  source TEXT NOT NULL DEFAULT '',"
+        "  row_count INTEGER NOT NULL DEFAULT 0,"
+        "  oldest_ts INTEGER,"
+        "  newest_ts INTEGER,"
+        "  UNIQUE (class, entity, aspect, source)"
+        ")"
+    )
+    conn.execute(
+        "INSERT INTO series_v4 (id, class, entity, aspect, source,"
+        "                       row_count, oldest_ts, newest_ts)"
+        " SELECT id, class, entity, aspect, '', row_count, oldest_ts, newest_ts"
+        " FROM series"
+    )
+    conn.execute("DROP TABLE series")
+    conn.execute("ALTER TABLE series_v4 RENAME TO series")
+    conn.commit()
+    conn.execute("PRAGMA legacy_alter_table=OFF")
 
 
 def migrate_v1(conn: sqlite3.Connection) -> None:

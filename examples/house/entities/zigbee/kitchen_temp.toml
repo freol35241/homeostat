@@ -1,0 +1,16 @@
+schema = 1
+
+[entity]
+id = "0x00158d0007b21c9f"
+capability = "sensor"
+features = ["temperature"]
+room = "kitchen"
+
+[naming]
+sv = "termometern i köket"
+en = "kitchen thermometer"
+aliases = []
+
+# No `mode`: a sensor takes no commands, so there is nothing to govern.
+[write_policy]
+owner = "zigbee"

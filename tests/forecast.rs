@@ -1,7 +1,8 @@
 //! Forecast bus class, end to end (docs/design.md, Forecasts).
 //!
-//! 1. A unit may publish `home/forecast/{room}/{entity}/{aspect}` for an
-//!    entity it binds — the plan accepts the class and the key shape.
+//! 1. A unit may publish `home/forecast/{room}/{entity}/{aspect}/{source}`
+//!    for an entity that EXISTS — it need not bind it — and the plan
+//!    accepts the class and the key shape.
 //! 2. The payload is the SDK's: `schema`, `issued`, and irregular `points`
 //!    ascending in time, each declaring the window it covers. Irregular is
 //!    the point — a regular grid could not carry the hourly-then-coarser
@@ -22,7 +23,7 @@ use serde_json::Value;
 use common::{await_health, health_watch, Supervisor};
 
 const FIXTURE: &str = "tests/fixture_house_forecast";
-const FORECAST_KEY: &str = "home/forecast/global/spot_price/price";
+const FORECAST_KEY: &str = "home/forecast/global/spot_price/price/nordpool";
 
 /// Queries a key and returns the first ok reply's payload, retrying until
 /// one arrives — the mirror answers only once it has seen the put.

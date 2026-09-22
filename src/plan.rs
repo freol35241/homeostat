@@ -621,6 +621,26 @@ pub fn render(check: &CheckResult, root: &Path, repo_label: &str, world: &World)
         }
     }
 
+    // Declared sources: what a computed value is derived from. Printed
+    // like feeds and on the same terms — only when a house declares any.
+    if !check.sources.is_empty() {
+        out.push_str("\nSources:\n\n");
+        for source in &check.sources {
+            out.push_str(&format!(
+                "  {}.{}  <-  {}.{}  ({}, owner={})\n",
+                source.entity,
+                source.name,
+                source.source_entity,
+                source.source_aspect,
+                source.key,
+                source.source_owner
+            ));
+            if let Some(note) = &source.note {
+                out.push_str(&format!("      {note}\n"));
+            }
+        }
+    }
+
     if !check.warnings.is_empty() {
         out.push_str("\nWarnings:\n\n");
         for warning in &check.warnings {
@@ -752,7 +772,7 @@ fn render_unit(check: &CheckResult, unit: &LoadedUnit, out: &mut String) {
                 entity.name,
                 entity.file.entity.capability,
                 format!("room={}", entity.file.entity.room),
-                entity.file.write_policy.mode,
+                entity.file.write_policy.mode(),
             ));
         }
     }

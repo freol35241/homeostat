@@ -99,8 +99,8 @@ pub fn expand(house: &House) -> (Vec<ExpandedKey>, Vec<String>, Vec<ValidationEr
                     .iter()
                     .filter(|e| e.owner == unit.manifest.unit.name)
                     .filter(|e| match expr.class() {
-                        Some("cmd") => e.file.write_policy.mode != WriteMode::Arbitrated,
-                        Some("arbiter") => e.file.write_policy.mode == WriteMode::Arbitrated,
+                        Some("cmd") => e.file.write_policy.mode() != WriteMode::Arbitrated,
+                        Some("arbiter") => e.file.write_policy.mode() == WriteMode::Arbitrated,
                         _ => true,
                     })
                     .map(|e| expr.substitute(&e.file.entity.room, &e.name))
@@ -218,17 +218,18 @@ mod tests {
             file: EntityFile {
                 schema: 1,
                 entity: EntitySection {
-                    id: name.to_string(),
+                    id: Some(name.to_string()),
                     capability: capability.to_string(),
                     features: vec![],
                     room: room.to_string(),
                 },
                 naming: None,
                 write_policy: WritePolicy {
-                    mode,
+                    mode: Some(mode),
                     owner: adapter.to_string(),
                 },
                 inputs: None,
+                sources: None,
                 dashboard: None,
             },
             path: format!("entities/{adapter}/{name}.toml"),

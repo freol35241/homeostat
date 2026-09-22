@@ -252,16 +252,32 @@ class Context:
         room: str | None,
         entity: str | None,
         aspect: str | None,
+        source: str | None = None,
     ) -> str:
         """The one concrete key a `[bus.publishes]` binding addresses.
         Literal expression segments are defaults, wildcard and template
         segments must be named, and a key the declared expression does not
-        cover is refused: the manifest stays the authority on intent."""
+        cover is refused: the manifest stays the authority on intent.
+
+        A forecast key carries one slot more than the rest — its source,
+        which says WHO is claiming this future (docs/design.md, Sources)."""
         expr = self._publishes[binding]["key"]
         segments = expr.split("/")
         if segments[1] in _ENTITY_ADDRESSED:
-            slots = {"room": room, "entity": entity, "aspect": aspect}
-            defaults = dict(zip(("room", "entity", "aspect"), segments[2:5]))
+            if segments[1] == "forecast":
+                names = ("room", "entity", "aspect", "source")
+                slots = {
+                    "room": room,
+                    "entity": entity,
+                    "aspect": aspect,
+                    "source": source,
+                }
+            else:
+                if source is not None:
+                    raise ValueError(f"publish {binding!r} takes no source slot")
+                names = ("room", "entity", "aspect")
+                slots = {"room": room, "entity": entity, "aspect": aspect}
+            defaults = dict(zip(names, segments[2 : 2 + len(names)]))
             parts = []
             for slot, given in slots.items():
                 part = given if given is not None else defaults.get(slot)
@@ -317,6 +333,7 @@ class Context:
         room: str | None = None,
         entity: str | None = None,
         aspect: str | None = None,
+        source: str | None = None,
     ) -> None:
         """Publishes a forecast through a `[bus.publishes]` expression to
         one concrete key — `publish`, for the forecast class.
@@ -329,7 +346,9 @@ class Context:
         `points` are what the source said — see homeostat.forecast for the
         shape and for why the extent and the resampling live there."""
         self._session.put_forecast(
-            self._concrete_key(binding, room=room, entity=entity, aspect=aspect),
+            self._concrete_key(
+                binding, room=room, entity=entity, aspect=aspect, source=source
+            ),
             issued,
             points,
         )

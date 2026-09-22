@@ -105,7 +105,7 @@ One publish the unit is allowed.
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `capability` | string | no | Required under `home/cmd/` (`publish-missing-capability`): the grant resolves onto bound entities of this capability that the key covers. Must be a known capability (`unknown-capability`). |
-| `key` | string | yes | Key expression. Under `home/state/` it must name a bound entity's room and entity literally or by template (`state-publish-unbound`); under `home/forecast/` the same rule holds (`forecast-publish-unbound`), a forecast being that entity's series extended forward. |
+| `key` | string | yes | Key expression. Under `home/state/` it must name a bound entity's room and entity literally or by template (`state-publish-unbound`). Under `home/forecast/` the entity must EXIST but need not be one this unit binds (`forecast-publish-unbound`), and the key carries a sixth segment naming the source — who claims this future — so several may speak about one series without overwriting each other (`forecast-publish-conflict`). |
 | `priority` | [Priority](#priority) | no | The band commands leave at. Automations publish at `automation`; the family's surfaces (dashboard, voice) at `manual`, which always wins in arbitration. |
 
 ### DiscoveryMode
@@ -182,6 +182,7 @@ a key segment (`invalid-name`).
 | `inputs` | table of name → [InputSource](#inputsource) | no | `[inputs]`: device inputs fed from one source each, keyed by the adapter's own input name (e.g. `indoor_temperature_actual`). A fed input is a continuous signal with one master, not a command: it stops being a command aspect for this entity, never rides the arbiter, and staleness is the device's own validity window. Only a device entity can be fed (`virtual-entity-fed`); the adapter is the authority on which input names exist. |
 | `naming` | [EntityNaming](#entitynaming) | no |  |
 | `schema` | integer | yes | Contract version. Must be 1. |
+| `sources` | table of name → [SourceRef](#sourceref) | no | `[sources]`: the readings this entity's value is DERIVED from, keyed by a short name for each contributor. Declared, not inferred — a unit subscribes many things for many reasons and nothing in its subscriptions says which feed which published aspect. It is what the history overlay draws beside the computed value (docs/design.md, Sources), and it is not `[inputs]`: a device feed carries a runtime contract that does not apply here, and a wired input stops being a command aspect, which would collide on a commandable virtual entity. |
 | `write_policy` | [WritePolicy](#writepolicy) | yes |  |
 
 ### EntityDashboard
@@ -200,7 +201,7 @@ a key segment (`invalid-name`).
 |---|---|---|---|
 | `capability` | string | yes | One of: binary_sensor, burner, camera, climate, cover, light, lock, notifier, person, presence, router, sensor, switch, vpn (`unknown-capability`). Decides the base aspect, the dashboard widget and which cmd grants apply. |
 | `features` | list of string | no | Optional aspects beyond the capability's base, as the adapter names them (`brightness`, `color_temp` on a light). For a sensor it is descriptive only; its widgets come from the numeric aspects it publishes. |
-| `id` | string | yes | The adapter-native address (a zigbee2mqtt friendly name, an ESPHome node, a camera's go2rtc stream). Unique per adapter (`duplicate-entity-id`). |
+| `id` | string | no | The adapter-native address (a zigbee2mqtt friendly name, an ESPHome node, a camera's go2rtc stream). Unique per adapter (`duplicate-entity-id`). Required on an adapter-owned entity, where it addresses something (`entity-id-required`); optional on an automation-owned one, which has no periphery to address and would otherwise have to invent a name for a device that does not exist. |
 | `room` | string | yes | The single source of spatial truth for this entity. A key segment; not `home` or a key class (`reserved-room-name`). The pseudo-rooms `global` and `person` are for entities with no place. |
 
 ### InputSource
@@ -224,13 +225,27 @@ and prints the edge, as it does a grant.
 | `en` | string | no | English label; the dashboard falls back to the name with `_` replaced by spaces. |
 | `sv` | string | no | Swedish label. |
 
+### SourceRef
+
+One entry in `[sources]`: a reading that a computed value is derived
+from, named the same way a device feed names its source, because the
+identity layer between a unit and a bus key is the same one
+(docs/design.md, Device feeds).
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `aspect` | string | yes | The aspect that contributes. When the contributor is automation-owned, that automation's `[bus.publishes]` must cover the key (`source-unpublished-aspect`). |
+| `entity` | string | yes | Name of the contributing entity; must exist (`source-unknown-entity`). Any owner will do. |
+| `note` | string | no | Free text about THIS contributor, shown beside it in the history overlay. What belongs here is what the subject's own descriptor cannot say because it is not true of every source: that one sensor sits in the sun, or that a reading carries an offset the house itself writes and so must not be fused back in. Kind and unit stay on the aspect descriptor, which is a contract every source is held to; this is the source's own caveat. |
+| `precision` | number | no | The contributor's resolution in the aspect's own unit, where it differs enough to matter — a half-degree sensor read against a hundredth-degree one looks like it disagrees when it is merely coarse. |
+
 ### WritePolicy
 
 `[write_policy]`: who may command the entity and how conflicts resolve.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `mode` | [WriteMode](#writemode) | yes |  |
+| `mode` | [WriteMode](#writemode) | no | How commands are governed. Optional, and meaningful only on a capability that takes commands at all: eight of the fourteen have no command aspect (`sensor`, `camera`, `router`, …), and a mode on one of those governs nothing. Required where the capability has a base aspect (`write-mode-required`), so a light or a lock still states its policy rather than inheriting one silently; absent, it reads as `shared`. Use `WritePolicy::mode()` rather than this field. |
 | `owner` | string | yes | Exactly one unit binds each entity: an adapter, or an automation for virtual entities. Must exist (`missing-owner-unit`) and be the unit whose entities dir holds this file (`owner-mismatch`). |
 
 ### WriteMode
