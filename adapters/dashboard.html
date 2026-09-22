@@ -249,6 +249,16 @@ h1.view-title { font-size: 20px; margin: 0 0 16px; }
   text-shadow: 0 0 3px var(--card), 0 0 3px var(--card), 0 0 2px var(--card); }
 .chart-ylabel-top { top: 0; }
 .chart-ylabel-bottom { bottom: 0; }
+/* The time axis, under the plot rather than over it: a label inside the
+   frame either covers a mark or gets covered by one, and there is room
+   below. Ends only — a chart this size cannot carry a tick per hour, and
+   the scrub reads any instant between them. */
+.chart-xaxis { position: relative; display: flex; justify-content: space-between;
+  font-size: 11px; color: var(--muted); margin-top: 3px; }
+/* "now" sits under the rule it names, not in the middle of the row —
+   a centred label points at the wrong instant the moment a horizon
+   pushes the rule off centre. */
+.chart-xnow { position: absolute; transform: translateX(-50%); white-space: nowrap; }
 .chart-loading { opacity: .5; transition: opacity 140ms ease; }
 /* timeline (bool / string history): one band per run */
 .tl-on { fill: var(--accent); }
@@ -1200,10 +1210,17 @@ function computeChartGeometry(points, width, height, pad, win, forecast, issues,
   // A forecast key names its source, so an aspect may have several live
   // claims about its future at once — a line each, never an envelope
   // over them, for the reason the braid gives (docs/design.md, Sources).
-  var beliefs = forecast || [];
+  //
+  // A claim issued hours ago carries what it said about the hours since,
+  // and that part is drawn: laid over the record for the same span it is
+  // the one place a provider's shape can be judged against what actually
+  // happened without opening the braid.
+  var beliefs = (forecast || []).map(function (b) {
+    return { source: b.source, points: b.forecast.points, to: b.forecast.to };
+  });
   var allVals = vals.slice();
   beliefs.forEach(function (b) {
-    b.forecast.points.forEach(function (p) { allVals.push(p.v); });
+    b.points.forEach(function (p) { allVals.push(p.v); });
   });
   // Every drawn issue shares the scale: a braid on its own y range would
   // say nothing about whether the house was about to get colder.
@@ -1228,7 +1245,7 @@ function computeChartGeometry(points, width, height, pad, win, forecast, issues,
   // The horizon extends the axis rightward; the past keeps the width it
   // had, so adding a forecast never silently squashes recorded history
   // into a corner without the reader seeing why.
-  beliefs.forEach(function (b) { to = Math.max(to, b.forecast.to); });
+  beliefs.forEach(function (b) { to = Math.max(to, b.to); });
   (issues || []).forEach(function (f) { to = Math.max(to, f.to); });
   var byTime = times.every(function (t) { return !isNaN(t); }) && to > from;
   var place = function (t, value) {
@@ -1244,7 +1261,7 @@ function computeChartGeometry(points, width, height, pad, win, forecast, issues,
     var y = pad + (1 - (p.value - min) / span) * (height - 2 * pad);
     return { x: x, y: y, value: p.value, ts: p.ts };
   });
-  var geo = { coords: coords, min: min, max: max };
+  var geo = { coords: coords, min: min, max: max, from: from, to: to };
   if (contributors && contributors.length && byTime) {
     // A line per source, never a band across them: an envelope's edge
     // belongs at each instant to whichever sensor happened to be highest,
@@ -1285,7 +1302,7 @@ function computeChartGeometry(points, width, height, pad, win, forecast, issues,
     geo.forecast = beliefs.map(function (b) {
       return {
         source: b.source,
-        coords: b.forecast.points.map(function (p) {
+        coords: b.points.map(function (p) {
           var at = place(p.t, p.v);
           return { x: at.x, y: at.y, value: p.v, ts: p.t };
         })
@@ -1334,8 +1351,8 @@ function forecastsOf(entity, aspect) {
 // "min 0.38 at 03:00" — where the horizon goes, named at the hour it
 // gets there. A flat horizon summarises to nothing and the caption stays
 // empty rather than reporting an extreme that is just the current value.
-function horizonCaption(aspect, field, forecast) {
-  var summary = logic.horizonSummary(forecast);
+function horizonCaption(aspect, field, forecast, fromTs) {
+  var summary = logic.horizonSummary(forecast, fromTs);
   if (!summary) return '';
   var falling = summary.min.t > summary.max.t;
   var point = falling ? summary.min : summary.max;
@@ -1435,9 +1452,16 @@ function buildChart(chartId, points, opts) {
       // one future, and which is which is read from the legend and the
       // scrub, not from a colour none of them can own.
       geo.forecast.forEach(function (f) {
-        var futureFrom = last ? [last].concat(f.coords) : f.coords;
+        // Joined to the last record ONLY when it continues from there.
+        // A claim that starts earlier already spans the now-rule under
+        // its own steam, and anchoring it to the record would make the
+        // path run backwards from the present to reach its own first
+        // point — a straight dashed line into the past that no source
+        // ever drew.
+        var head = f.coords[0];
+        var joined = last && head && last.x <= head.x ? [last].concat(f.coords) : f.coords;
         svg += '<path class="chart-forecast" data-source="' + esc(f.source) +
-          '" d="' + chartPathData(futureFrom) + '"/>';
+          '" d="' + chartPathData(joined) + '"/>';
       });
     }
     if (geo.nowX !== undefined) {
@@ -1459,7 +1483,29 @@ function buildChart(chartId, points, opts) {
         '<div class="chart-ylabel chart-ylabel-bottom">' + esc(formatChartValue(opts.aspect, geo.min)) + '</div>';
     }
   }
-  return '<div class="chart-wrap ' + sizeClass + '" data-chart-id="' + esc(chartId) + '">' + inner + '</div>';
+  var wrap = '<div class="chart-wrap ' + sizeClass + '" data-chart-id="' + esc(chartId) + '">' + inner + '</div>';
+  // A chart with no time axis leaves the reader to guess how far back it
+  // goes; the range chip says "24h" but never where the window starts or
+  // ends, and with a horizon drawn the right edge is not even now. The
+  // middle slot names the now-rule when one is drawn, which is the only
+  // instant on the axis a reader has to find rather than read.
+  if (opts.yLabels && geo && geo.from && geo.to > geo.from) {
+    var span = geo.to - geo.from;
+    // The near end dates the axis; the far end only needs the clock,
+    // unless it falls on another day.
+    var sameDay = new Date(geo.from).toDateString() === new Date(geo.to).toDateString();
+    var nowPct = geo.nowX === undefined ? null : (geo.nowX / CHART_VBW) * 100;
+    // Crowded against either end it would collide with the label there,
+    // and the rule itself already says where now is.
+    var nowLabel = nowPct !== null && nowPct > 14 && nowPct < 86
+      ? '<span class="chart-xnow" style="left:' + nowPct.toFixed(1) + '%">now</span>'
+      : '';
+    wrap += '<div class="chart-xaxis">' +
+      '<span>' + esc(formatChartTime(geo.from, span)) + '</span>' + nowLabel +
+      '<span>' + esc(sameDay ? formatChartClock(geo.to, span) : formatChartTime(geo.to, span)) + '</span>' +
+      '</div>';
+  }
+  return wrap;
 }
 
 // A timeline: one band per run of a bool or string state over the window
@@ -2109,7 +2155,7 @@ function widgetTiles(entity, aspect) {
     // falls back to the range rather than picking a provider to believe
     // — comparing them is owner work and lives in the overlay.
     var caption = forecast.length === 1
-      ? horizonCaption(r.aspect, descriptorField(entity, r.aspect), forecast[0].forecast)
+      ? horizonCaption(r.aspect, descriptorField(entity, r.aspect), forecast[0].forecast, Date.now())
       : (s && s.loaded ? minMaxCaption(s.points) : '');
     // The separator is the character, not the entity: the whole label is
     // upper-cased below, and "&MIDDOT;" is not one.
@@ -2986,7 +3032,7 @@ function renderHistoryDetailBody() {
   if (!overlay.said) {
     var beliefs = forecastsOf(entity, aspect);
     horizonHtml = beliefs.map(function (b) {
-      var ahead = horizonCaption(aspect, field, b.forecast);
+      var ahead = horizonCaption(aspect, field, b.forecast, Date.now());
       if (!ahead) return '';
       var who = beliefs.length > 1 ? esc(b.source) + ' · ' : '';
       return '<div class="chart-note">ahead · ' + who + esc(ahead) + '</div>';

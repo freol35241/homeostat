@@ -646,12 +646,20 @@
   // What a tile says about a horizon: where it is going, not just where
   // it is. An extreme is worth a glance only if the series actually
   // moves, so a flat horizon reports nothing rather than "min = max".
-  function horizonSummary(forecast) {
-    if (!forecast || forecast.points.length < 2) return null;
-    var lo = forecast.points[0], hi = forecast.points[0];
-    for (var i = 1; i < forecast.points.length; i++) {
-      if (forecast.points[i].v < lo.v) lo = forecast.points[i];
-      if (forecast.points[i].v > hi.v) hi = forecast.points[i];
+  function horizonSummary(forecast, fromTs) {
+    if (!forecast) return null;
+    // "Ahead" means ahead. An issue made hours ago still carries what it
+    // said about the hours since, and an extreme back there is not where
+    // the horizon is going — naming it would caption the chart with an
+    // instant the reader has already lived through.
+    var pts = forecast.points.filter(function (p) {
+      return fromTs === undefined || fromTs === null || p.t > fromTs;
+    });
+    if (pts.length < 2) return null;
+    var lo = pts[0], hi = pts[0];
+    for (var i = 1; i < pts.length; i++) {
+      if (pts[i].v < lo.v) lo = pts[i];
+      if (pts[i].v > hi.v) hi = pts[i];
     }
     if (lo.v === hi.v) return null;
     return { min: lo, max: hi };

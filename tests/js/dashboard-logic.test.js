@@ -1035,3 +1035,30 @@ test('source usage folds transition events into the state now', () => {
   });
   assert.deepEqual(logic.sourceUsage(null, []), {});
 });
+
+test('a horizon summary describes what is still ahead', () => {
+  // An issue made hours ago still carries what it said about the hours
+  // since. Those are not the horizon, and naming an extreme back there
+  // captions the chart with an instant already lived through.
+  const f = logic.decodeForecast({
+    schema: 1,
+    issued: '2026-09-21T06:00:00+00:00',
+    points: [
+      { t: '2026-09-21T07:00:00+00:00', v: 30.0 },
+      { t: '2026-09-21T08:00:00+00:00', v: 29.0 },
+      { t: '2026-09-21T13:00:00+00:00', v: 1.0 },
+      { t: '2026-09-21T14:00:00+00:00', v: 5.0 },
+    ],
+  });
+  const noon = Date.parse('2026-09-21T12:00:00+00:00');
+  assert.deepEqual(
+    [logic.horizonSummary(f, noon).min.v, logic.horizonSummary(f, noon).max.v],
+    [1.0, 5.0],
+    'the 30.0 at 07:00 is behind us and is not the horizon',
+  );
+  // Without an instant it still summarises the whole issue, which is
+  // what a caller with no clock wants.
+  assert.equal(logic.horizonSummary(f).max.v, 30.0);
+  // Ahead of everything it says nothing rather than inventing a spread.
+  assert.equal(logic.horizonSummary(f, Date.parse('2026-09-22T00:00:00+00:00')), null);
+});
