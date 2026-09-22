@@ -3142,13 +3142,57 @@ one declaration.
   recorder's ingest folded the source into the aspect with `"/".join`.
   Neither was a design question; both are what a positional key costs.
 
+### Which sources a computation actually used (settled 2026-09-22, #164)
+
+Declared sources say what MAY contribute. A fusion that drops a source as
+stale, fails it on a plausibility check, or excludes it under a house rule
+is reporting something the declaration cannot: the overlay would otherwise
+draw a contributor that looks like it is participating when it is not,
+which is backwards, since "the shed sensor is why this went stale" is the
+main thing the overlay is opened to find out.
+
+- **Two health events, on transition**: `source-dropped` and
+  `source-restored`, each carrying `entity`, `aspect` and `source`. This
+  makes concrete a norm Virtual sensors already states as prose —
+  "publish on transition, one health event per input-loss transition" —
+  rather than inventing a channel for it. Events are recorded and the
+  recorder already answers them filtered by key expression and window, so
+  nothing new is needed to read them back.
+- **Why not ordinary state.** A list of live sources cannot ride
+  `samples`, whose value is one scalar with a kind — the same reason a
+  forecast could not, arrived at for the same reason. A boolean aspect
+  per source would put the source's name inside the aspect's name, which
+  is the subject-and-provenance-in-one-string that the source segment
+  exists to avoid. A bare count fits `samples` and cannot answer "which",
+  which is the entire question.
+- **The SDK remembers, so the producer cannot forget.**
+  `ctx.source_used(entity, aspect, source, used)` emits only on a change,
+  because "on transition" is exactly the discipline hand-written
+  producers get wrong, and a stream that repeats every tick is a stream
+  nobody can fold.
+- **A source with nothing on record is participating**, which is what the
+  declaration already says. The producer emits its current participation
+  at startup for the same reason a forecast producer re-issues at
+  startup: a consumer that starts mid-window would otherwise read silence
+  as agreement.
+  - **And that startup emission is best-effort, which was found by
+    running it.** Health events are not mirrored, so one published before
+    the recorder has subscribed is simply gone — unit start order is not
+    ordered against the recorder's. The failure is benign but not
+    invisible: a source excluded at startup and never changed since reads
+    as participating until its next transition, which is precisely the
+    case the startup emission exists to cover. A forecast does not have
+    this problem because the core mirrors that class. Options if it
+    bites: mirror the participation, or make it queryable on the
+    producer. Neither is worth building before a house is misled by it.
+- **The overlay reads a wider window than it draws**, so a source
+  excluded before the window opened is not shown as live for the whole
+  span. It reports the state in the legend rather than restyling the line
+  mid-flight; an excluded source still draws, because the line stopping
+  is the diagnosis.
+
 ### Open
 
-- **Which sources the computation actually USED.** A sensor dropped as
-  stale, or deliberately excluded, is the main thing an overlay is
-  opened to find out — and it is a runtime fact, not a declared one, so
-  it needs the unit to report what it folded in. Deferred to #164 rather
-  than widened into this one.
 - **Uncertainty has no representation.** A forecast point's value is a
   scalar and the SDK refuses anything else, so an ensemble or a
   confidence band cannot be published. Model-predictive control is a

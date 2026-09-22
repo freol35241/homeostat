@@ -8,6 +8,7 @@ and no duplicate expression.
 Run: uv run --no-project --with-editable sdk/python python -m unittest discover sdk/python/tests
 """
 
+import types
 import unittest
 from pathlib import Path
 
@@ -186,3 +187,59 @@ class RecorderPresenceTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SourceUsedTest(unittest.TestCase):
+    """Declared sources say what MAY contribute; `source_used` says what
+    did. The SDK remembers the last answer per triple so "on transition"
+    is its job and not the producer's — a stream that repeats on every
+    tick is one no consumer can fold into intervals."""
+
+    def context(self):
+        ctx = Context.__new__(Context)
+        ctx._sources_used = {}
+        ctx.emitted = []
+        ctx._session = types.SimpleNamespace(
+            health_event=lambda kind, **f: ctx.emitted.append((kind, f))
+        )
+        return ctx
+
+    def test_the_first_answer_always_reports(self):
+        # A consumer starting mid-window must not read silence as
+        # agreement, so the opening state is stated rather than assumed.
+        ctx = self.context()
+        ctx.source_used("fused", "temperature", "shed", True)
+        self.assertEqual(
+            ctx.emitted,
+            [("source-restored", {"entity": "fused", "aspect": "temperature", "source": "shed"})],
+        )
+
+    def test_only_changes_are_reported(self):
+        ctx = self.context()
+        for used in (True, True, True):
+            ctx.source_used("fused", "temperature", "shed", used)
+        self.assertEqual(len(ctx.emitted), 1, ctx.emitted)
+        ctx.source_used("fused", "temperature", "shed", False)
+        ctx.source_used("fused", "temperature", "shed", False)
+        self.assertEqual([k for k, _ in ctx.emitted], ["source-restored", "source-dropped"])
+        # And back again, because a restored source is the other half of
+        # the diagnosis.
+        ctx.source_used("fused", "temperature", "shed", True)
+        self.assertEqual(
+            [k for k, _ in ctx.emitted],
+            ["source-restored", "source-dropped", "source-restored"],
+        )
+
+    def test_each_triple_is_tracked_apart(self):
+        # Two sources of one aspect, and one source of two aspects, are
+        # three independent facts.
+        ctx = self.context()
+        ctx.source_used("fused", "temperature", "shed", True)
+        ctx.source_used("fused", "temperature", "kitchen", True)
+        ctx.source_used("fused", "humidity", "shed", True)
+        self.assertEqual(len(ctx.emitted), 3, ctx.emitted)
+        ctx.source_used("fused", "temperature", "shed", False)
+        self.assertEqual(
+            ctx.emitted[-1],
+            ("source-dropped", {"entity": "fused", "aspect": "temperature", "source": "shed"}),
+        )

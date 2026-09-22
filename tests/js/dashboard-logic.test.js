@@ -1006,3 +1006,32 @@ test('several providers claim one future, each under its own source', () => {
   assert.deepEqual(logic.forecastsFor(forecasts, 'global', 'spot', 'nothing'), []);
   assert.deepEqual(logic.forecastSourcesFor({}, 'global', 'spot', 'price'), []);
 });
+
+test('source usage folds transition events into the state now', () => {
+  // Events are emitted only on transition, so the last one before the
+  // window closes is the state now — and a source with nothing on record
+  // is participating, which is what its declaration already says.
+  const contributors = [{ name: 'kitchen' }, { name: 'shed' }];
+  const usage = logic.sourceUsage(
+    [
+      { ts: 100, source: 'shed', used: false },
+      { ts: 200, source: 'shed', used: true },
+      { ts: 300, source: 'shed', used: false },
+      // A source this entity no longer declares is history, not a
+      // contributor: there is no line for it to annotate.
+      { ts: 400, source: 'retired', used: false },
+    ],
+    contributors,
+  );
+  assert.deepEqual(usage, {
+    kitchen: { used: true, since: null },
+    shed: { used: false, since: 300 },
+  });
+
+  // Silence means nobody has ever said otherwise, not "unknown".
+  assert.deepEqual(logic.sourceUsage([], contributors), {
+    kitchen: { used: true, since: null },
+    shed: { used: true, since: null },
+  });
+  assert.deepEqual(logic.sourceUsage(null, []), {});
+});

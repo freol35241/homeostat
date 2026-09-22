@@ -694,6 +694,29 @@
     return out;
   }
 
+  /* Which declared sources were actually folded in, and when that last
+   * changed (docs/design.md, Which sources a computation actually used).
+   *
+   * Events arrive oldest-first and only on transition, so the last one
+   * before the window closes IS the state now. A source with nothing on
+   * record is participating, which is what its declaration already says
+   * — silence here means "no one has ever said otherwise", not "unknown".
+   */
+  function sourceUsage(events, contributors) {
+    var state = {};
+    (contributors || []).forEach(function (c) {
+      state[c.name] = { used: true, since: null };
+    });
+    (events || []).forEach(function (e) {
+      if (!e || typeof e.source !== 'string') return;
+      // An event for a source this entity no longer declares is history,
+      // not a contributor: it has no line to annotate.
+      if (!Object.prototype.hasOwnProperty.call(state, e.source)) return;
+      state[e.source] = { used: !!e.used, since: e.ts || null };
+    });
+    return state;
+  }
+
   // Stored issues as the chart wants them: each decoded like a live
   // forecast, newest last, and only those with something to draw. The
   // wire carries them oldest-first already; sorting here anyway means a
@@ -954,6 +977,7 @@
     forecastsFor: forecastsFor,
     decodeForecast: decodeForecast,
     contributorsFor: contributorsFor,
+    sourceUsage: sourceUsage,
     decodeIssues: decodeIssues,
     columnAt: columnAt,
     valueAt: valueAt,

@@ -166,6 +166,9 @@ class Context:
         self._subs: list = []
         self._recorder: bool | None = None
         self._session = UnitSession(unit, os.environ[keys.ENV_BUS])
+        # (entity, aspect, source) -> last reported participation, so
+        # `source_used` can emit on transition rather than on every call.
+        self._sources_used: dict[tuple[str, str, str], bool] = {}
 
         if self._param_specs:
             # Subscribe, then get, merge: the get covers everything before
@@ -451,6 +454,34 @@ class Context:
 
     def health_event(self, kind: str, **fields: Any) -> None:
         self._session.health_event(kind, **fields)
+
+    def source_used(self, entity: str, aspect: str, source: str, used: bool) -> None:
+        """Reports whether one declared source is currently folded into a
+        computed value (docs/design.md, Which sources a computation
+        actually used).
+
+        Declared sources say what MAY contribute; this says what did. A
+        source dropped as stale, failed on a plausibility check, or
+        excluded by a house rule would otherwise still be drawn as
+        participating, which is backwards — a dropped source is the
+        diagnosis.
+
+        Emits ONLY on a change, because "on transition" is the discipline
+        hand-written producers get wrong, and a stream that repeats every
+        tick is one nobody can fold into intervals. Call it every time you
+        decide, including at startup: the first call for a triple always
+        reports, so a consumer starting mid-window does not read silence
+        as agreement."""
+        triple = (entity, aspect, source)
+        if self._sources_used.get(triple) == used:
+            return
+        self._sources_used[triple] = used
+        self._session.health_event(
+            "source-restored" if used else "source-dropped",
+            entity=entity,
+            aspect=aspect,
+            source=source,
+        )
 
     def ready(self) -> None:
         self._session.ready()
