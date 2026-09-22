@@ -274,7 +274,9 @@ fn check_entities(house: &House, errors: &mut Vec<ValidationError>) {
             errors.push(ValidationError::new(
                 "write-mode-required",
                 &entity.name,
-                format!("capability \"{capability}\" takes commands, so [write_policy] needs a mode"),
+                format!(
+                    "capability \"{capability}\" takes commands, so [write_policy] needs a mode"
+                ),
                 file.clone(),
             ));
         }

@@ -1533,10 +1533,19 @@ async fn v2_store_gains_the_forecast_table() {
     // worth pinning anyway.
     assert_eq!(
         read_rows(&db, "SELECT name FROM pragma_table_info('series')"),
-        ["id", "class", "entity", "aspect", "source", "row_count", "oldest_ts", "newest_ts"]
-            .iter()
-            .map(|c| vec![SqlValue::Text((*c).to_string())])
-            .collect::<Vec<_>>(),
+        [
+            "id",
+            "class",
+            "entity",
+            "aspect",
+            "source",
+            "row_count",
+            "oldest_ts",
+            "newest_ts"
+        ]
+        .iter()
+        .map(|c| vec![SqlValue::Text((*c).to_string())])
+        .collect::<Vec<_>>(),
         "a migrated series must be shaped like a fresh one"
     );
     // And the moved uniqueness actually took: two sources, one aspect.

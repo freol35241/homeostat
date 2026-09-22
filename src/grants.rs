@@ -1256,7 +1256,10 @@ mod tests {
         let house = house_forecasting(
             "outdoor_temp",
             "global",
-            &[("weather", "home/forecast/global/outdoor_temp/temperature/smhi")],
+            &[(
+                "weather",
+                "home/forecast/global/outdoor_temp/temperature/smhi",
+            )],
         );
         let (expanded, _, _) = expand(&house);
         let (_, _, errors) = resolve(&house, &expanded);
@@ -1277,10 +1280,7 @@ mod tests {
         let (expanded, _, _) = expand(&house);
         let (_, _, errors) = resolve(&house, &expanded);
         assert_eq!(
-            errors
-                .iter()
-                .map(|e| e.code)
-                .collect::<Vec<_>>(),
+            errors.iter().map(|e| e.code).collect::<Vec<_>>(),
             vec!["forecast-publish-unbound"],
         );
     }
@@ -1297,8 +1297,14 @@ mod tests {
             "outdoor_temp",
             "global",
             &[
-                ("smhi", "home/forecast/global/outdoor_temp/temperature/consensus"),
-                ("yr", "home/forecast/global/outdoor_temp/temperature/consensus"),
+                (
+                    "smhi",
+                    "home/forecast/global/outdoor_temp/temperature/consensus",
+                ),
+                (
+                    "yr",
+                    "home/forecast/global/outdoor_temp/temperature/consensus",
+                ),
             ],
         );
         let (expanded, _, _) = expand(&house);
@@ -1341,7 +1347,13 @@ mod tests {
                 precision: None,
             },
         );
-        let mut fused = entity("fused_temp", "global", "sensor", WriteMode::Shared, "fusion");
+        let mut fused = entity(
+            "fused_temp",
+            "global",
+            "sensor",
+            WriteMode::Shared,
+            "fusion",
+        );
         fused.file.sources = Some(sources);
         House {
             units: vec![
@@ -1363,7 +1375,13 @@ mod tests {
                 ),
             ],
             entities: vec![
-                entity("outdoor_temp", "global", "sensor", WriteMode::Shared, "esphome"),
+                entity(
+                    "outdoor_temp",
+                    "global",
+                    "sensor",
+                    WriteMode::Shared,
+                    "esphome",
+                ),
                 fused,
             ],
             ..House::default()

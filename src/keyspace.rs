@@ -127,9 +127,7 @@ impl KeyExpr {
         };
         if !self.has_any_rec() && self.0.len() < min_len {
             return Err(match min_len {
-                6 => format!(
-                    "\"{raw}\" needs room/entity/aspect/source segments after the class"
-                ),
+                6 => format!("\"{raw}\" needs room/entity/aspect/source segments after the class"),
                 5 => format!("\"{raw}\" needs room/entity/aspect segments after the class"),
                 _ => format!("\"{raw}\" needs a segment after the class"),
             });
