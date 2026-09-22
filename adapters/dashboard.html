@@ -238,11 +238,15 @@ h1.view-title { font-size: 20px; margin: 0 0 16px; }
 .chart-note + .chart-note { margin-top: 2px; }
 .chart-forecast { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linecap: round;
   stroke-linejoin: round; stroke-dasharray: 4 3; opacity: .75; vector-effect: non-scaling-stroke; }
-.chart-now { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 2 2;
+.chart-now { stroke: var(--secondary); stroke-width: 1; stroke-dasharray: 3 3; opacity: .55;
   vector-effect: non-scaling-stroke; }
 .chart-grid { stroke: var(--border); stroke-width: 1; vector-effect: non-scaling-stroke; }
 .chart-crosshair { stroke: var(--muted); stroke-width: 1; vector-effect: non-scaling-stroke; }
-.chart-ylabel { position: absolute; right: 4px; font-size: 12px; color: var(--muted); pointer-events: none; }
+/* Over the plot, so it has to stay readable with a line beneath it: a
+   halo in the surface colour rather than a box, which would read as a
+   mark. */
+.chart-ylabel { position: absolute; right: 4px; font-size: 12px; color: var(--muted); pointer-events: none;
+  text-shadow: 0 0 3px var(--card), 0 0 3px var(--card), 0 0 2px var(--card); }
 .chart-ylabel-top { top: 0; }
 .chart-ylabel-bottom { bottom: 0; }
 .chart-loading { opacity: .5; transition: opacity 140ms ease; }
@@ -1395,7 +1399,15 @@ function buildChart(chartId, points, opts) {
         svg += '<line class="chart-grid" x1="0" y1="' + y.toFixed(1) + '" x2="' + CHART_VBW + '" y2="' + y.toFixed(1) + '"/>';
       });
     }
-    if (opts.area && last) {
+    // An area fill is for ONE series. Its baseline here is the smallest
+    // value drawn, not zero and not any reference the reader chose, so
+    // the filled area measures nothing — harmless while it is the only
+    // mark and a slab the moment it is not, with a hard vertical cliff
+    // where the record stops and the forecast takes over. A second
+    // series (a horizon, a braid, a contributor) turns this into a line
+    // chart, and a line chart carries its own shape.
+    var alone = !(geo.forecast || geo.issues || geo.contributors);
+    if (opts.area && last && alone) {
       var areaD = d + ' L ' + last.x.toFixed(1) + ' ' + (height - pad) + ' L ' + geo.coords[0].x.toFixed(1) + ' ' + (height - pad) + ' Z';
       svg += '<path class="chart-area" d="' + areaD + '"/>';
     }
