@@ -1,7 +1,8 @@
 schema = 1
 
+# No `id`: this value is computed, so there is no adapter-native address
+# to hold and nothing to invent one for.
 [entity]
-id = "downstairs_temperature"
 capability = "sensor"
 features = ["temperature"]
 room = "global"
@@ -22,6 +23,8 @@ owner = "fused_temperature"
 [sources.kitchen]
 entity = "kitchen_temp"
 aspect = "temperature"
+note = "south-facing; reads high on a sunny afternoon"
+precision = 0.5
 
 [sources.livingroom]
 entity = "livingroom_temp"

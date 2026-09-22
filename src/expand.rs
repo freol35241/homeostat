@@ -218,7 +218,7 @@ mod tests {
             file: EntityFile {
                 schema: 1,
                 entity: EntitySection {
-                    id: name.to_string(),
+                    id: Some(name.to_string()),
                     capability: capability.to_string(),
                     features: vec![],
                     room: room.to_string(),

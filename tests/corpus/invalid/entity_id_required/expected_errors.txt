@@ -1,0 +1,1 @@
+error[entity-id-required] nameless: an adapter-owned entity needs an [entity] id: its adapter-native address (entities/zigbee/nameless.toml)

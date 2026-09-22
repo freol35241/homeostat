@@ -29,9 +29,23 @@ class InputSource:
 
 
 @dataclass
+class SourceRef:
+    """One `[sources]` entry: a reading a computed value is derived from,
+    with the caveat that belongs to THIS contributor rather than to the
+    aspect (docs/design.md, Sources)."""
+
+    entity: str
+    aspect: str
+    note: str | None = None
+    precision: float | None = None
+
+
+@dataclass
 class Entity:
     name: str  # file stem: the globally unique entity name
-    id: str  # adapter-native address (for z2m: the topic segment)
+    # Adapter-native address (for z2m: the topic segment). Empty on an
+    # automation-owned entity, which has no periphery to address.
+    id: str
     capability: str
     room: str
     features: list[str] = field(default_factory=list)
@@ -42,7 +56,7 @@ class Entity:
     inputs: dict[str, InputSource] = field(default_factory=dict)
     # [sources]: contributor name -> the reading this entity's value is
     # derived from. Declared on computed entities; empty for most.
-    sources: dict[str, InputSource] = field(default_factory=dict)
+    sources: dict[str, SourceRef] = field(default_factory=dict)
 
 
 @dataclass
@@ -70,7 +84,7 @@ def _entity_from(path: Path, data: dict, default_owner: str) -> Entity:
     # [inputs] is resolved in load_adapter, which sees every entity file.
     return Entity(
         name=path.stem,
-        id=data["entity"]["id"],
+        id=data["entity"].get("id", ""),
         capability=data["entity"]["capability"],
         room=data["entity"]["room"],
         features=data["entity"].get("features", []),
@@ -80,7 +94,12 @@ def _entity_from(path: Path, data: dict, default_owner: str) -> Entity:
         owner=data["write_policy"].get("owner", default_owner),
         naming=dict(data.get("naming", {})),
         sources={
-            name: InputSource(entity=src["entity"], aspect=src["aspect"])
+            name: SourceRef(
+                entity=src["entity"],
+                aspect=src["aspect"],
+                note=src.get("note"),
+                precision=src.get("precision"),
+            )
             for name, src in data.get("sources", {}).items()
         },
     )

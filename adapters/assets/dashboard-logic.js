@@ -683,7 +683,12 @@
         name: name,
         entity: src.entity,
         aspect: src.aspect,
-        label: e.label || titleCase(src.entity)
+        label: e.label || titleCase(src.entity),
+        // The contributor's own caveat — what the aspect descriptor
+        // cannot say because it is not true of every source: one sensor
+        // in the sun, or a reading that carries an offset the house
+        // itself writes and so must not be fused back in.
+        note: typeof src.note === 'string' ? src.note : null
       });
     });
     return out;

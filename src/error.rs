@@ -151,6 +151,14 @@ pub const CODES: &[(&str, &str)] = &[
          vpn) because grants, the arbiter and the dashboard key on it.",
     ),
     (
+        "entity-id-required",
+        "An adapter-owned entity file has no `[entity] id`. The id is the \
+         adapter-native address — a zigbee2mqtt friendly name, an ESPHome \
+         node — and an adapter binds periphery, so it needs one. An \
+         automation-owned entity may omit it: a computed value has no \
+         device behind it to address.",
+    ),
+    (
         "write-mode-required",
         "An entity whose capability takes commands must state `[write_policy] \
          mode`. The mode governs how commands are resolved, so it is optional \

@@ -163,8 +163,11 @@ fn check_duplicates(house: &House, errors: &mut Vec<ValidationError>) {
     // adapter's `by_id` map keeps last.
     let mut entity_ids: BTreeMap<(&str, &str), Vec<&str>> = BTreeMap::new();
     for entity in &house.entities {
+        let Some(id) = &entity.file.entity.id else {
+            continue;
+        };
         entity_ids
-            .entry((&entity.owner, &entity.file.entity.id))
+            .entry((&entity.owner, id.as_str()))
             .or_default()
             .push(&entity.path);
     }
@@ -272,6 +275,21 @@ fn check_entities(house: &House, errors: &mut Vec<ValidationError>) {
                 "write-mode-required",
                 &entity.name,
                 format!("capability \"{capability}\" takes commands, so [write_policy] needs a mode"),
+                file.clone(),
+            ));
+        }
+
+        // An adapter binds periphery, so its entity files address it. An
+        // automation's do not: a computed value has no device behind it,
+        // and requiring an `id` there only made units invent one.
+        let owner_is_adapter = house
+            .unit(&entity.file.write_policy.owner)
+            .is_some_and(|u| u.manifest.unit.kind == UnitKind::Adapter);
+        if owner_is_adapter && entity.file.entity.id.is_none() {
+            errors.push(ValidationError::new(
+                "entity-id-required",
+                &entity.name,
+                "an adapter-owned entity needs an [entity] id: its adapter-native address",
                 file.clone(),
             ));
         }

@@ -635,6 +635,9 @@ pub fn render(check: &CheckResult, root: &Path, repo_label: &str, world: &World)
                 source.key,
                 source.source_owner
             ));
+            if let Some(note) = &source.note {
+                out.push_str(&format!("      {note}\n"));
+            }
         }
     }
 

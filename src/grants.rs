@@ -160,6 +160,8 @@ pub struct Source {
     pub source_aspect: String,
     pub source_owner: String,
     pub key: String,
+    /// This contributor's own caveat, as declared.
+    pub note: Option<String>,
 }
 
 /// Resolves every `[sources]` block: the contributor exists, and an
@@ -238,6 +240,7 @@ pub fn resolve_sources(
                 source_aspect: source.aspect.clone(),
                 source_owner: src.owner.clone(),
                 key,
+                note: source.note.clone(),
             });
         }
     }
@@ -813,7 +816,7 @@ mod tests {
             file: EntityFile {
                 schema: 1,
                 entity: EntitySection {
-                    id: name.to_string(),
+                    id: Some(name.to_string()),
                     capability: capability.to_string(),
                     features: vec![],
                     room: room.to_string(),
@@ -1334,6 +1337,8 @@ mod tests {
             SourceRef {
                 entity: "outdoor_temp".to_string(),
                 aspect: source_aspect.to_string(),
+                note: None,
+                precision: None,
             },
         );
         let mut fused = entity("fused_temp", "global", "sensor", WriteMode::Shared, "fusion");
@@ -1387,6 +1392,7 @@ mod tests {
                 source_aspect: "temperature".to_string(),
                 source_owner: "esphome".to_string(),
                 key: "home/state/global/outdoor_temp/temperature".to_string(),
+                note: None,
             }]
         );
     }

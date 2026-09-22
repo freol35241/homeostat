@@ -197,7 +197,12 @@ def build_model(model: house.HouseModel, granted: set[str]) -> dict:
                 # What this entity's value is derived from, where it is
                 # computed: the history overlay draws these beside it.
                 "sources": {
-                    name: {"entity": src.entity, "aspect": src.aspect}
+                    name: {
+                        "entity": src.entity,
+                        "aspect": src.aspect,
+                        "note": src.note,
+                        "precision": src.precision,
+                    }
                     for name, src in e.sources.items()
                 },
             }

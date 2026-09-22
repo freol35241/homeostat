@@ -913,6 +913,15 @@ function contributorsOf(entity, aspect) {
   return logic.contributorsFor((store.model && store.model.entities) || [], entity.name, aspect);
 }
 
+// A contributor's room, for reading its own `available` aspect.
+function contributorRoom(c) {
+  var entities = (store.model && store.model.entities) || [];
+  for (var i = 0; i < entities.length; i++) {
+    if (entities[i].name === c.entity) return entities[i].room;
+  }
+  return null;
+}
+
 function sourceCacheKey(hours, c) {
   return hours + '|' + c.entity + '|' + c.aspect;
 }
@@ -938,7 +947,16 @@ function drawnSources(entity, aspect, hours) {
   contributorsOf(entity, aspect).forEach(function (c) {
     var d = overlay.sourceData[sourceCacheKey(hours, c)];
     if (!d || !d.loaded || !d.points.length) return;
-    out.push({ name: c.name, label: c.label, points: d.points });
+    // Carries the contributor's identity and caveat, not just its line:
+    // the legend names it, says whether it is still reporting, and shows
+    // what is true of THIS source and not of the aspect.
+    out.push({
+      name: c.name,
+      label: c.label,
+      entity: c.entity,
+      note: c.note,
+      points: d.points
+    });
   });
   return out.length ? out : null;
 }
@@ -2044,8 +2062,12 @@ function widgetTiles(entity, aspect) {
     var spark = s && s.loaded ? buildChart('tile-' + sk, s.points, { height: 36, sizeClass: 'chart-tile', aspect: r.aspect, area: true, window: s.window, forecast: forecast }) : '';
     // A horizon says where a reading is going; today's range says where
     // it has been. The forecast wins the line when there is one, because
-    // a number you can still act on beats one you cannot.
-    var caption = forecast ? horizonCaption(r.aspect, descriptorField(entity, r.aspect), forecast)
+    // a number you can still act on beats one you cannot. A tile is
+    // family-tier and has room for ONE claim, so with several sources it
+    // falls back to the range rather than picking a provider to believe
+    // — comparing them is owner work and lives in the overlay.
+    var caption = forecast.length === 1
+      ? horizonCaption(r.aspect, descriptorField(entity, r.aspect), forecast[0].forecast)
       : (s && s.loaded ? minMaxCaption(s.points) : '');
     // The separator is the character, not the entity: the whole label is
     // upper-cased below, and "&MIDDOT;" is not one.
@@ -2957,7 +2979,12 @@ function renderHistoryDetailBody() {
   if (drawn) {
     legendHtml = '<div class="chart-note source-legend" id="sources-legend">' +
       drawn.map(function (c) {
-        return '<span>' + esc(c.label) + '</span>';
+        // A contributor that has dropped out still draws — the line
+        // stopping IS the diagnosis — but it must not read as live.
+        var down = stateValue(contributorRoom(c), c.entity, 'available') === false;
+        return '<span' + (c.note ? ' title="' + esc(c.note) + '"' : '') + '>' +
+          esc(c.label) + (down ? ' \u00b7 unavailable' : '') +
+          (c.note ? ' \u00b7 ' + esc(c.note) : '') + '</span>';
       }).join('') + '</div>' +
       '<div class="chart-note" id="sources-column"></div>';
   } else if (overlay.withSources && !overlay.said && contributorsOf(entity, aspect).length) {

@@ -169,6 +169,7 @@ Grant table:
 Sources:
 
   downstairs_temperature.kitchen  <-  kitchen_temp.temperature  (home/state/kitchen/kitchen_temp/temperature, owner=zigbee)
+      south-facing; reads high on a sunny afternoon
   downstairs_temperature.livingroom  <-  livingroom_temp.temperature  (home/state/livingroom/livingroom_temp/temperature, owner=zigbee)
 
 Plan tier: structural (11 units created, 10 grants added)
