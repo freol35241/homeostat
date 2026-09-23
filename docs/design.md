@@ -2996,6 +2996,41 @@ every chart walks backward from now.
     drew: a week of hourly issues is an unreadable mat and a large fetch,
     and a window that quietly means different things at different ranges
     is worse than one that states its limit.
+- **The dashboard states a belief's age, and stops drawing a spent one**
+  (added 2026-09-23). `issued` is required and the max age is the
+  consumer's, which left the one consumer that draws forecasts with no
+  policy at all: a curve issued thirty hours ago was drawn exactly like
+  one issued ten minutes ago, and the only place `issued` reached a reader
+  was the braid's tooltip — owner work, behind a chip row. Worse, the
+  mirror holds a producer's last word for as long as the core lives, so a
+  producer that stopped left its curve on the page until the horizon ran
+  out underneath it, at which point the tile's caption went BLANK: the
+  horizon summary names only points ahead of now, and a tile with one
+  source never fell back to today's range. A dead producer made the page
+  say less than no producer at all. Settled, as the dashboard's own
+  policy rather than a core TTL or a per-entity knob:
+  - *A spent claim is not the future.* Where the horizon has run out the
+    belief stops being drawn as one — no dashed span, no now-rule, and
+    the tile is back to today's range. It remains in the overlay, under
+    `what we said` and as a `spent · ran out …` note, which is where a
+    claim is judged against what actually happened; the family/owner split
+    the braid already drew.
+  - *Every drawn belief says when it was said* — `issued 09:00` in the
+    tile and card captions and in the overlay's note, carrying the date
+    once the claim is older than today, because a bare clock on
+    yesterday's claim reads as this afternoon.
+  - *Stale is age > the span it has left to say*, and the line goes grey
+    and the caption takes the `stale` mark. Self-scaling, so no constant
+    per aspect and no new vocabulary: a day-ahead curve issued at 13:00
+    is fresh all evening (10 h old, 25 h left) and stale by the following
+    afternoon (31 h old, 4 h left), when its successor is long overdue,
+    while a ten-minute-old two-day forecast never trips it. A claim whose
+    `issued` did not parse has no age and is never called stale — the page
+    does not guess at a fact the producer failed to state.
+  - *A producer gone quiet is not a deviation.* A crashed one is already
+    supervision; a running one whose upstream is failing should publish
+    its own health event. Inferring a unit's health from the age of its
+    last document would put the diagnosis in the wrong place.
 - **What a forecast IS, stated plainly** (2026-09-21, when a rename to
   `future` was considered and dropped): a SOURCE's claim about a series'
   future values. A controller publishing its own planned trajectory is
