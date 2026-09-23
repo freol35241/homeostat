@@ -20,7 +20,6 @@ pub const CAPABILITIES: &[&str] = &[
     "router",
     "sensor",
     "switch",
-    "vpn",
 ];
 
 /// One capability's aspect vocabulary: what an adapter binding it must
@@ -133,13 +132,6 @@ pub const VOCABULARY: &[Capability] = &[
         base: Some("on"),
         aspects: &[],
         notable: None,
-        note: "",
-    },
-    Capability {
-        name: "vpn",
-        base: None,
-        aspects: &["up"],
-        notable: Some("up = false"),
         note: "",
     },
 ];
@@ -555,7 +547,7 @@ pub struct EntitySection {
     #[serde(default)]
     pub id: Option<String>,
     /// One of: binary_sensor, burner, camera, climate, cover, light, lock,
-    /// notifier, person, presence, router, sensor, switch, vpn
+    /// notifier, person, presence, router, sensor, switch
     /// (`unknown-capability`). Decides
     /// the base aspect, the dashboard widget and which cmd grants apply.
     pub capability: String,

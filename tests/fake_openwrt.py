@@ -11,29 +11,14 @@ presence and connectivity (settled 2026-07-25)").
 Speaks the slice of the ubus JSON-RPC surface the adapter touches: POST
 /ubus with `session.login` (rpcd credential check, real session id
 enforcement on every later call — status 6 on a bad sid, like rpcd),
-`list` for hostapd.* object names, `network.interface dump`,
-`hostapd.X get_clients`, and the `luci.wireguard` status call -- whose
-name is firmware-dependent (`getWgInstances` on current
-luci-proto-wireguard, `getWireguardStatus` on older builds), so the fake
-answers to one at a time and the other is method-not-found, like rpcd.
+`list` for hostapd.* object names, `network.interface dump`, and
+`hostapd.X get_clients`.
 
-The modelled router has a WAN (dhcp), a WireGuard tunnel wg0, an
-OpenVPN-style tunnel vpn0 (proto none on a tun device — netifd's view of
-a service-managed tunnel), and one hostapd BSS whose associated stations
-the tests mutate.
+The modelled router has a WAN (dhcp) and one hostapd BSS whose
+associated stations the tests mutate.
 
 Test control (plain HTTP, out of the JSON-RPC path):
   - POST /control/wan?up=true|false
-  - POST /control/tunnel?iface=vpn0&up=true|false
-  - POST /control/wg?age=<seconds>          handshake age of wg0's peer
-  - POST /control/wg_acl?deny=<method>|none  rpcd ACL: a call to a
-        denied method answers a JSON-RPC error object with no `result`
-        at all, which is a different failure shape from a method that
-        does not exist (below)
-  - POST /control/wg_method?name=getWgInstances|getWireguardStatus
-        which status method this firmware has; any other method name
-        (including a name matching neither) answers ubus status 3,
-        method not found
   - POST /control/station?mac=..&present=true|false
   - POST /control/break                     every /ubus call becomes HTTP 500
   - POST /control/restore
@@ -45,16 +30,11 @@ import argparse
 import asyncio
 import json
 import secrets
-import time
 
 from aiohttp import web
 
 STATE = {
     "wan_up": True,
-    "vpn0_up": True,
-    "wg_handshake_age": 5,
-    "wg_method": "getWireguardStatus",
-    "denied": set(),
     "stations": set(),
     "broken": False,
     "chunked": False,
@@ -73,8 +53,6 @@ def make_app(username: str, password: str) -> web.Application:
         return [
             {"interface": "lan", "up": True, "proto": "static", "device": "br-lan"},
             {"interface": "wan", "up": STATE["wan_up"], "proto": "dhcp", "device": "eth1"},
-            {"interface": "wg0", "up": True, "proto": "wireguard", "device": "wg0"},
-            {"interface": "vpn0", "up": STATE["vpn0_up"], "proto": "none", "device": "tun0"},
         ]
 
     def call(req_sid: str, obj: str, method: str, args: dict):
@@ -89,23 +67,6 @@ def make_app(username: str, password: str) -> web.Application:
             return [0, {"interface": interfaces()}]
         if obj == "hostapd.phy0-ap0" and method == "get_clients":
             return [0, {"clients": {mac: {"auth": True} for mac in STATE["stations"]}}]
-        if obj == "luci.wireguard" and method in ("getWgInstances", "getWireguardStatus"):
-            if method != STATE["wg_method"]:
-                return [3]  # UBUS_STATUS_METHOD_NOT_FOUND
-            handshake = int(time.time()) - STATE["wg_handshake_age"]
-            if method == "getWgInstances":
-                # Measured against a live OpenWrt build: peers are a LIST,
-                # and every value is a STRING -- latest_handshake included,
-                # epoch seconds as decimal digits. The adapter coerces it;
-                # a fixture emitting an int would let that coercion be
-                # refactored away and break every real router silently.
-                peers = [{"public_key": "pk", "latest_handshake": str(handshake),
-                          "endpoint": "1.2.3.4:51820", "transfer_rx": "12345678"}]
-            else:
-                # The older call, peers keyed by public key -- the other
-                # shape wireguard_fresh normalises.
-                peers = {"pk": {"public_key": "pk", "latest_handshake": handshake}}
-            return [0, {"wg0": {"peers": peers}}]
         return [2]  # UBUS_STATUS_INVALID_COMMAND
 
     async def reply(request: web.Request, payload: dict) -> web.StreamResponse:
@@ -139,18 +100,6 @@ def make_app(username: str, password: str) -> web.Application:
         elif method == "call":
             req_sid, obj, obj_method = params[0], params[1], params[2]
             args = params[3] if len(params) > 3 else {}
-            if obj_method in STATE["denied"]:
-                # rpcd refuses an ungranted method before the object ever
-                # sees it: an error object, no `result` -- unlike a granted
-                # method that does not exist, which answers a normal result
-                # carrying a ubus status.
-                return await reply(
-                    request,
-                    {
-                        "jsonrpc": "2.0", "id": body.get("id"),
-                        "error": {"code": -32002, "message": "Access denied"},
-                    },
-                )
             result = call(req_sid, obj, obj_method, args)
         else:
             return await reply(
@@ -163,14 +112,6 @@ def make_app(username: str, password: str) -> web.Application:
         q = request.query
         if action == "wan":
             STATE["wan_up"] = q["up"] == "true"
-        elif action == "tunnel":
-            STATE["vpn0_up"] = q["up"] == "true"
-        elif action == "wg":
-            STATE["wg_handshake_age"] = int(q["age"])
-        elif action == "wg_method":
-            STATE["wg_method"] = q["name"]
-        elif action == "wg_acl":
-            STATE["denied"] = set() if q["deny"] == "none" else {q["deny"]}
         elif action == "station":
             mac = q["mac"].lower()
             if q["present"] == "true":

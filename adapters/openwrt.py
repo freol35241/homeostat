@@ -14,20 +14,17 @@ connectivity (settled 2026-07-25)").
 Named for the dialect it speaks: ubus JSON-RPC over HTTP (uhttpd-mod-ubus,
 rpcd session auth). The first polling adapter — each cycle logs in fresh
 (rpcd expires idle sessions; nothing to renew) and asks every configured
-router three questions: `network.interface dump` for WAN and tunnel state,
-`get_clients` on every hostapd BSS for WiFi sightings, and the
-`luci.wireguard` status call for handshakes when a bound tunnel's proto is
-wireguard. Scope is presence and connectivity state only; network metrics
-are the monitoring stack's job, deliberately.
+router two questions: `network.interface dump` for WAN state and
+`get_clients` on every hostapd BSS for WiFi sightings. Scope is presence
+and WAN state only; network metrics are the monitoring stack's job,
+deliberately, and tunnel state left with the `vpn` capability
+(docs/design.md, amended 2026-09-23).
 
 The manifest's [discovery].endpoint is the HOMEOSTAT_OPENWRT credentials
 file itself: an out-of-repo TOML keyed by router name with `host`
 (optionally `host:port`), `username`, `password` — a dedicated read-only
 rpcd ACL login per router, never root. Entity binding: a `router` entity's
-id is its name in that file (aspect `wan`); a `vpn` entity's id is
-`{router}/{netifd-interface}` (aspect `up` — for proto wireguard, up means
-interface up AND a peer handshake younger than 180s, so monitored tunnels
-must run persistent-keepalive); a `presence` entity's id is the device MAC,
+id is its name in that file (aspect `wan`); a `presence` entity's id is the device MAC,
 lowercase (aspect `presence` — sighted on any BSS of any router, absent
 only after away_delay_s of continuous non-sighting, which also absorbs AP
 reboots, and only while every configured router polled: a silent router is
@@ -61,7 +58,6 @@ from homeostat.params import LiveParams
 
 NULL_SID = "0" * 32
 HTTP_TIMEOUT_S = 10
-WG_HANDSHAKE_FRESH_S = 180  # WG rekeys ~2min under traffic; keepalive assumed
 PARAM_DEFAULTS = {"poll_interval_s": 30, "away_delay_s": 180}
 
 
@@ -142,45 +138,6 @@ async def login(http, url: str, username: str, password: str) -> str:
     return sid
 
 
-# The status call's name is firmware-dependent: luci-proto-wireguard
-# calls it getWgInstances, older builds getWireguardStatus. Both answer
-# the same per-interface map of peers, so ask for one and fall back --
-# a router that has (or grants) neither degrades its own tunnels, which
-# is already how any failure of this call is handled.
-WG_STATUS_METHODS = ("getWgInstances", "getWireguardStatus")
-
-
-async def wireguard_status(http, url: str, sid: str) -> tuple[dict | None, str | None]:
-    """The peer map, or None and why -- both method names' failures, since
-    which one this firmware answers to is exactly what is in question."""
-    errors = []
-    for method in WG_STATUS_METHODS:
-        try:
-            return await ubus_call(http, url, sid, "luci.wireguard", method, {}), None
-        except UbusError as err:
-            errors.append(str(err))
-    return None, "; ".join(errors)
-
-
-def wireguard_fresh(iface_status, now_epoch: float) -> bool:
-    """A live tunnel has some peer handshake younger than the freshness
-    window; peers arrive as a list or dict depending on the luci version,
-    and getWgInstances answers strings throughout -- latest_handshake as
-    decimal epoch seconds, which int() takes either way.
-    Entries of any other shape count as no handshake — this runs outside
-    the per-router poll guard, so it must not raise."""
-    peers = iface_status.get("peers", []) if isinstance(iface_status, dict) else []
-    if isinstance(peers, dict):
-        peers = list(peers.values())
-    latest = 0
-    for peer in peers:
-        if not isinstance(peer, dict):
-            continue
-        with contextlib.suppress(TypeError, ValueError):
-            latest = max(latest, int(peer.get("latest_handshake", 0)))
-    return latest > 0 and now_epoch - latest < WG_HANDSHAKE_FRESH_S
-
-
 class Params(LiveParams):
     """poll_interval_s / away_delay_s from home/config/{unit}/*, live."""
 
@@ -205,23 +162,13 @@ def load_routers(endpoint: str | None) -> dict:
 def classify(entities, routers, session):
     """Splits bound entities by capability, dropping unusable bindings
     with a health event each — one bad entity never takes the unit down."""
-    router_entities, vpn_entities, trackers = [], [], []
+    router_entities, trackers = [], []
     for entity in entities:
         if entity.capability == "router":
             if entity.id not in routers:
                 session.health_event("drop", reason="router-unconfigured", entity=entity.name)
                 continue
             router_entities.append(entity)
-        elif entity.capability == "vpn":
-            router_name, _, iface = entity.id.partition("/")
-            if not iface or router_name not in routers:
-                session.health_event(
-                    "drop",
-                    reason="router-unconfigured" if iface else "malformed-id",
-                    entity=entity.name,
-                )
-                continue
-            vpn_entities.append(entity)
         elif entity.capability == "presence":
             if entity.id != entity.id.lower():
                 # Sightings are lowercased; an uppercase MAC would just
@@ -237,14 +184,12 @@ def classify(entities, routers, session):
                 "drop", reason="unsupported-capability", entity=entity.name,
                 capability=entity.capability,
             )
-    return router_entities, vpn_entities, trackers
+    return router_entities, trackers
 
 
-async def poll_router(http, name: str, conf: dict, wg_ifaces: set[str]):
-    """One router, one cycle: fresh login, interface dump, station union,
-    and wireguard status when a bound tunnel needs it. Any failure of the
-    login/dump/hostapd path marks the router unreachable; a failed
-    wireguard call degrades only the wireguard tunnels (wg_status None)."""
+async def poll_router(http, name: str, conf: dict):
+    """One router, one cycle: fresh login, interface dump, station union.
+    Any failure marks the router unreachable."""
     url = f"http://{conf['host']}/ubus"
     sid = await login(http, url, conf["username"], conf["password"])
 
@@ -260,20 +205,14 @@ async def poll_router(http, name: str, conf: dict, wg_ifaces: set[str]):
         clients = await ubus_call(http, url, sid, obj, "get_clients", {})
         stations |= {mac.lower() for mac in clients.get("clients", {})}
 
-    wg_status: dict | None = {}
-    wg_error: str | None = None
-    if any(interfaces.get(iface, {}).get("proto") == "wireguard" for iface in wg_ifaces):
-        wg_status, wg_error = await wireguard_status(http, url, sid)
-
-    return interfaces, stations, wg_status, wg_error
+    return interfaces, stations
 
 
 class Adapter:
-    def __init__(self, session, routers, router_entities, vpn_entities, trackers):
+    def __init__(self, session, routers, router_entities, trackers):
         self.session = session
         self.routers = routers
         self.router_entities = router_entities
-        self.vpn_entities = vpn_entities
         self.trackers = trackers
         self.params = Params(session, PARAM_DEFAULTS)
         self.published: dict[str, object] = {}
@@ -300,22 +239,13 @@ class Adapter:
             self.published[key] = value
 
     async def cycle(self, http) -> None:
-        wg_by_router: dict[str, set[str]] = {}
-        for entity in self.vpn_entities:
-            router, _, iface = entity.id.partition("/")
-            wg_by_router.setdefault(router, set()).add(iface)
-
         interfaces: dict[str, dict] = {}
-        wg_status: dict[str, dict | None] = {}
-        wg_errors: dict[str, str | None] = {}
         sightings: dict[str, list[str]] = {}  # mac -> routers that saw it
         polled_ok: set[str] = set()
 
         for name, conf in self.routers.items():
             try:
-                ifaces, stations, wg, wg_err = await poll_router(
-                    http, name, conf, wg_by_router.get(name, set())
-                )
+                ifaces, stations = await poll_router(http, name, conf)
             except UbusError as err:
                 if self.reachable.get(name, True):
                     self.session.health_event(
@@ -325,7 +255,7 @@ class Adapter:
                 continue
             except Exception as err:
                 # A payload shape this build did not anticipate (hostapd
-                # clients as a list, a non-dict wireguard peer, ...): the
+                # clients as a list, an interface dump that is not one, ...): the
                 # router answered, the answer just did not parse. Stale, not
                 # a crash loop — one bad router never takes the unit down.
                 if self.reachable.get(name, True):
@@ -337,8 +267,6 @@ class Adapter:
             self.reachable[name] = True
             polled_ok.add(name)
             interfaces[name] = ifaces
-            wg_status[name] = wg
-            wg_errors[name] = wg_err
             for mac in stations:
                 sightings.setdefault(mac, []).append(name)
 
@@ -346,7 +274,6 @@ class Adapter:
             return  # total blindness: everything stays stale
 
         now_mono = time.monotonic()
-        now_epoch = time.time()
         for mac in sightings:
             self.last_seen[mac] = now_mono
 
@@ -359,31 +286,6 @@ class Adapter:
                 continue
             self.clear(("iface", entity.name))
             self.publish(keys.state_key(entity.room, entity.name, "wan"), bool(wan.get("up")))
-
-        for entity in self.vpn_entities:
-            router, _, iface_name = entity.id.partition("/")
-            if router not in polled_ok:
-                continue
-            iface = interfaces[router].get(iface_name)
-            if iface is None:
-                self.note(("iface", entity.name), "unknown-interface", entity=entity.name, iface=iface_name)
-                continue
-            self.clear(("iface", entity.name))
-            up = bool(iface.get("up"))
-            if iface.get("proto") == "wireguard":
-                status = wg_status[router]
-                if status is None:
-                    # The error text is the whole diagnosis: a ubus status
-                    # (method absent) is a firmware fact, "Access denied" an
-                    # ACL one, anything else transport.
-                    self.note(
-                        ("wg", router), "wireguard-status-unavailable",
-                        router=router, error=wg_errors[router],
-                    )
-                    continue
-                self.clear(("wg", router))
-                up = up and wireguard_fresh(status.get(iface_name, {}), now_epoch)
-            self.publish(keys.state_key(entity.room, entity.name, "up"), up)
 
         # Partial blindness. A sighting is evidence whoever else failed,
         # but absence is the union of all routers seeing nothing -- with
@@ -407,7 +309,7 @@ class Adapter:
                 continue
             self.publish(keys.state_key(entity.room, entity.name, "presence"), present)
 
-        self.publish_discovery(interfaces, sightings)
+        self.publish_discovery(sightings)
 
     # A class-level constant, shared read-only across instances — never
     # mutated per router.
@@ -418,16 +320,6 @@ class Adapter:
             "fields": {
                 "wan": {
                     "label": "WAN link (wan)", "kind": "boolean", "group": "readings",
-                    "values": [{"value": True, "label": "up"}, {"value": False, "label": "down"}],
-                }
-            },
-        },
-        "vpn": {
-            "schema": 1,
-            "groups": ["readings"],
-            "fields": {
-                "up": {
-                    "label": "tunnel (up)", "kind": "boolean", "group": "readings",
                     "values": [{"value": True, "label": "up"}, {"value": False, "label": "down"}],
                 }
             },
@@ -444,11 +336,11 @@ class Adapter:
         },
     }
 
-    def publish_discovery(self, interfaces, sightings) -> None:
+    def publish_discovery(self, sightings) -> None:
         """The complete current view of the periphery (docs/design.md,
         Discovery), from data the cycle already fetched; republished only
         when it changes."""
-        bound = {e.id: e.name for e in self.router_entities + self.vpn_entities + self.trackers}
+        bound = {e.id: e.name for e in self.router_entities + self.trackers}
 
         def record(rid: str, capability: str, description: dict) -> dict:
             rec = {
@@ -466,18 +358,6 @@ class Adapter:
             record(name, "router", {"reachable": self.reachable.get(name, False)})
             for name in self.routers
         ]
-        for router, ifaces in interfaces.items():
-            for name, iface in ifaces.items():
-                device = str(iface.get("device", ""))
-                tunnel = iface.get("proto") == "wireguard" or device.startswith(("tun", "tap"))
-                if tunnel or f"{router}/{name}" in bound:
-                    records.append(
-                        record(
-                            f"{router}/{name}",
-                            "vpn",
-                            {"proto": iface.get("proto"), "up": bool(iface.get("up"))},
-                        )
-                    )
         for mac in sorted(sightings):
             records.append(record(mac, "presence", {"seen_by": sorted(sightings[mac])}))
 
