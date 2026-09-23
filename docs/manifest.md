@@ -199,7 +199,7 @@ a key segment (`invalid-name`).
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `capability` | string | yes | One of: binary_sensor, burner, camera, climate, cover, light, lock, notifier, person, presence, router, sensor, switch, vpn (`unknown-capability`). Decides the base aspect, the dashboard widget and which cmd grants apply. |
+| `capability` | string | yes | One of: binary_sensor, burner, camera, climate, cover, light, lock, notifier, person, presence, router, sensor, switch (`unknown-capability`). Decides the base aspect, the dashboard widget and which cmd grants apply. |
 | `features` | list of string | no | Optional aspects beyond the capability's base, as the adapter names them (`brightness`, `color_temp` on a light). For a sensor it is descriptive only; its widgets come from the numeric aspects it publishes. |
 | `id` | string | no | The adapter-native address (a zigbee2mqtt friendly name, an ESPHome node, a camera's go2rtc stream). Unique per adapter (`duplicate-entity-id`). Required on an adapter-owned entity, where it addresses something (`entity-id-required`); optional on an automation-owned one, which has no periphery to address and would otherwise have to invent a name for a device that does not exist. |
 | `room` | string | yes | The single source of spatial truth for this entity. A key segment; not `home` or a key class (`reserved-room-name`). The pseudo-rooms `global` and `person` are for entities with no place. |
@@ -361,7 +361,6 @@ What an entity of each capability publishes under which names (docs/adapters.md,
 | `router` | — | `wan` | `wan = false` |  |
 | `sensor` | — | — | — | Numeric aspects under descriptive names (`temperature`, `humidity`); widgets come from what is published. |
 | `switch` | `on` | — | — |  |
-| `vpn` | — | `up` | `up = false` |  |
 
 Every capability may also publish:
 

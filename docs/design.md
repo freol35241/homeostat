@@ -2049,11 +2049,15 @@ homeostat process, the small core is gone.
 
 ## Network presence and connectivity (settled 2026-07-25)
 
+**Amended 2026-09-23: the `vpn` capability is withdrawn.** Tunnel state
+left the adapter for the reasons below; `router`/`wan` and `presence`
+stand exactly as settled.
+
 The founding decision is a scope split, the network analogue of "pixels
 are the media plane": **presence and connectivity state are house state;
 network metrics are observability.** Homeostat carries what regulation
-and the family consume — who is home, whether the WAN and the VPN
-tunnels are up. Throughput curves, router CPU, latency histories,
+and the family consume — who is home, whether the WAN is up
+(tunnels: see the amendment). Throughput curves, router CPU, latency histories,
 per-interface counters are owner-facing diagnostics: mature-tooling
 territory (Prometheus + Grafana beside homeostat, blackbox probes,
 `prometheus-node-exporter-lua` on the routers), and anything built here
@@ -2072,26 +2076,9 @@ direction.
   `${HOMEOSTAT_OPENWRT}` itself, the recorder's endpoint-as-store shape.
   Operational note: a dedicated read-only rpcd ACL login per router,
   never root. A fresh login per poll cycle; rpcd expires idle sessions.
-- **Vocabulary** (two new capabilities, `router` and `vpn`):
+- **Vocabulary** (one new capability, `router`):
   - `router`, aspect `wan` (bool): the netifd interface named `wan` is
     up. Entity `id` = the router's name in the credentials file.
-  - `vpn`, aspect `up` (bool). `id` = `{router}/{interface}` — the
-    two-segment shape. A tunnel is a **netifd interface** (standard
-    OpenWrt practice; firewall zones demand it), which is what makes
-    WireGuard and OpenVPN one rule apart: proto `wireguard` is up iff
-    the interface is up AND the freshest peer handshake is younger than
-    180 s (adapter constant — WireGuard rekeys about every 2 minutes
-    under traffic; monitored tunnels must run persistent-keepalive, the
-    operational note); any other proto is the interface's own up flag.
-    Handshakes come from rpcd's `luci.wireguard` status call
-    (`luci-proto-wireguard`, present on any LuCI-managed WG router).
-    That call's name is firmware-dependent — `getWgInstances` on
-    current builds, `getWireguardStatus` on older ones — so the adapter
-    tries both and the rpcd ACL must grant both; a tunnel whose status
-    call fails publishes nothing rather than a false state, and says so
-    once per router with the failure in the health event (a ubus status
-    means the method is absent, "Access denied" means the ACL, anything
-    else the transport).
   - WiFi presence: capability `presence` (existing vocabulary), aspect
     `presence` (bool), `id` = the device MAC, lowercase, `room =
     "global"` (a phone is non-spatial). A sighting is association to
@@ -2131,8 +2118,7 @@ direction.
   applies — the command adapter surface is built the day a command is
   actually wanted, and reboot smells owner-tier.
 - **Discovery** from data already fetched: associated stations
-  (suggested `presence`), tunnel-shaped interfaces (suggested `vpn`),
-  the routers themselves. DHCP-lease hostnames would make station
+  (suggested `presence`) and the routers themselves. DHCP-lease hostnames would make station
   records self-identifying; deferred until bare MACs prove
   insufficient in practice.
 - **The remote ASUS router is deferred** — the QuestDB pattern. Its
@@ -2140,11 +2126,40 @@ direction.
   monitoring side); an `asuswrt.py` arrives the day its state feeds an
   automation or a family-facing deviation, as a sibling dialect
   adapter, changing nothing here.
-- **Dashboard**: `wan = false` and `up = false` join the notable-state
-  vocabulary — a downed tunnel is exactly "out of the ordinary".
+- **Dashboard**: `wan = false` joins the notable-state vocabulary — no
+  internet is exactly "out of the ordinary".
   Parameters: `poll_interval_s` (owner-editable, default 30) and
   `away_delay_s` ride the live parameter path like any other; both
   have adapter-side fallbacks so a manifest may omit them.
+
+### Tunnels leave: the `vpn` capability is withdrawn (amended 2026-09-23)
+
+`vpn`/`up` collapsed every peer on an interface to "someone is
+connected" — right for a single-peer site-to-site tunnel, and the wrong
+question for anything else. Making it right meant per-peer visibility,
+and per-peer visibility ran into three walls at once: a peer's endpoint
+is a movement trace of whoever carries the device (the trail #51
+rejected for the companion app, arriving from the router with no opt-in
+and nobody's consent); a public key cannot be a key segment, so peer
+identity needed an entity-file binding of its own; and — measured — a
+peer is not a device and a handshake is not presence, since one phone
+held two peers on two tunnels and handshook from a private address on
+one while tunnelling from inside the house. Meanwhile the capability
+had no users: the one house reporting on it had never bound a `vpn`
+entity, and the tunnel fault that prompted the review was found by a
+phone failing to connect.
+
+What is left is owner-facing diagnosis, which the scope split above
+already assigns to the monitoring stack. So the rule stands rather than
+bending: **tunnel reachability is observability, not house state.**
+Removing the rule rather than the code was the choice — dropping
+`wireguard_fresh` while keeping `vpn` would leave proto `wireguard`
+reading the interface's own up flag, which netifd reports true whether
+or not a peer can be reached: a false assurance, worse than no signal.
+
+The adapter is presence and WAN. It no longer touches `luci.wireguard`,
+so a router's read-only rpcd ACL need grant only `network.interface`
+and `hostapd.*`. Issue #176 (peer visibility) closes with this.
 
 ## Virtual sensors: derived state (settled 2026-07-26)
 

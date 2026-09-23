@@ -147,8 +147,8 @@ pub const CODES: &[(&str, &str)] = &[
         "unknown-capability",
         "An entity file's `capability`, or a cmd publish's `capability`, is not \
          one the core knows. The vocabulary is fixed (binary_sensor, camera, \
-         climate, cover, light, lock, person, presence, router, sensor, switch, \
-         vpn) because grants, the arbiter and the dashboard key on it.",
+         climate, cover, light, lock, person, presence, router, sensor, \
+         switch) because grants, the arbiter and the dashboard key on it.",
     ),
     (
         "entity-id-required",

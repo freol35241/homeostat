@@ -29,7 +29,6 @@ function model(overrides) {
         { name: 'desk_lamp', room: 'office', capability: 'light', label: 'Desk lamp' },
         { name: 'front_door', room: 'hallway', capability: 'lock', label: 'Front door' },
         { name: 'gateway', room: 'hallway', capability: 'router', label: 'Gateway' },
-        { name: 'site_tunnel', room: 'global', capability: 'vpn', label: 'Site tunnel' },
         { name: 'shed_temp', room: 'shed', capability: 'sensor', label: 'Shed temp' },
       ],
     },
@@ -87,12 +86,9 @@ test('an unlocked lock deviates; a locked or unknown one does not', () => {
   assert.deepEqual(deviations({}), [], 'no state at all: stale, never false');
 });
 
-test('WAN and VPN down are connectivity deviations', () => {
-  const devs = deviations({
-    'home/state/hallway/gateway/wan': false,
-    'home/state/global/site_tunnel/up': false,
-  });
-  assert.deepEqual(devs.map((d) => d.title), ['Gateway — WAN down', 'Site tunnel down']);
+test('WAN down is a connectivity deviation', () => {
+  const devs = deviations({ 'home/state/hallway/gateway/wan': false });
+  assert.deepEqual(devs.map((d) => d.title), ['Gateway — WAN down']);
 });
 
 test('available === false deviates for any capability; stale is not false', () => {

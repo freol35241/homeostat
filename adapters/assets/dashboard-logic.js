@@ -182,15 +182,10 @@
       }
     });
 
-    // state: connectivity — WAN or a VPN tunnel down
+    // state: connectivity — WAN down
     entities.filter(function (e) { return e.capability === 'router'; }).forEach(function (e) {
       if (stateValue(state, e.room, e.name, 'wan') === false) {
         deviations.push(entityRow(e, e.label + ' — WAN down'));
-      }
-    });
-    entities.filter(function (e) { return e.capability === 'vpn'; }).forEach(function (e) {
-      if (stateValue(state, e.room, e.name, 'up') === false) {
-        deviations.push(entityRow(e, e.label + ' down'));
       }
     });
 

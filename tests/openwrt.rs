@@ -20,8 +20,6 @@ const FIXTURE: &str = "tests/fixture_house_openwrt";
 const ROUTERS_ENV: &str = "HOMEOSTAT_OPENWRT";
 const EVENT_KEY: &str = "home/health/openwrt/event";
 const WAN_KEY: &str = "home/state/hallway/gateway/wan";
-const SITE_TUNNEL_KEY: &str = "home/state/global/site_tunnel/up";
-const OFFICE_TUNNEL_KEY: &str = "home/state/global/office_tunnel/up";
 const PRESENCE_KEY: &str = "home/state/global/dads_phone/presence";
 const DISCOVERY_KEY: &str = "home/discovery/openwrt";
 const PHONE_MAC: &str = "aa:bb:cc:dd:ee:ff";
@@ -204,10 +202,9 @@ async fn wifi_association_drives_presence() {
     sup.shutdown();
 }
 
-/// (b) Connectivity state: WAN down is a `wan = false` transition; a
-/// stale WireGuard handshake takes the tunnel down even though the
-/// interface stays up; a service-managed tunnel follows its interface's
-/// own up flag; a fresh handshake brings the WireGuard tunnel back.
+/// (b) Connectivity state: WAN down is a `wan = false` transition, and
+/// back up again. Tunnels left with the `vpn` capability (design.md,
+/// amended 2026-09-23): this adapter reports presence and WAN.
 #[tokio::test(flavor = "multi_thread")]
 async fn connectivity_state_translates_to_bus() {
     let (router, _routers_path, mut sup, observer) = setup().await;
@@ -215,26 +212,12 @@ async fn connectivity_state_translates_to_bus() {
         .declare_subscriber(WAN_KEY)
         .await
         .expect("wan subscriber");
-    let site_sub = observer
-        .declare_subscriber(SITE_TUNNEL_KEY)
-        .await
-        .expect("site tunnel subscriber");
-    let office_sub = observer
-        .declare_subscriber(OFFICE_TUNNEL_KEY)
-        .await
-        .expect("office tunnel subscriber");
 
     router.control("/control/wan?up=false");
     expect_state(&wan_sub, json!(false)).await;
 
-    router.control("/control/wg?age=9999");
-    expect_state(&site_sub, json!(false)).await;
-
-    router.control("/control/tunnel?iface=vpn0&up=false");
-    expect_state(&office_sub, json!(false)).await;
-
-    router.control("/control/wg?age=5");
-    expect_state(&site_sub, json!(true)).await;
+    router.control("/control/wan?up=true");
+    expect_state(&wan_sub, json!(true)).await;
 
     sup.shutdown();
 }
@@ -339,73 +322,6 @@ async fn a_silent_router_cannot_assert_absence() {
     ap.control("/control/restore");
     ap.control(&format!("/control/station?mac={PHONE_MAC}&present=false"));
     expect_state(&presence_sub, json!(false)).await;
-
-    sup.shutdown();
-}
-
-/// (g) The `luci.wireguard` status call is named `getWgInstances` on
-/// current luci-proto-wireguard and `getWireguardStatus` on older builds
-/// (VP52's router has only the former, so its tunnels could never report:
-/// the call failed and the vpn entity published nothing at all). Either
-/// name must do, including the peer map keyed by public key that the
-/// current call answers with; a router that has neither still says so,
-/// now with the failure itself in the health event, because
-/// method-not-found, access-denied and a dead transport are three
-/// different things to go fix.
-#[tokio::test(flavor = "multi_thread")]
-async fn either_wireguard_status_method_reports_the_tunnel() {
-    let (router, _routers_path, mut sup, observer) = setup().await;
-    let site_sub = observer
-        .declare_subscriber(SITE_TUNNEL_KEY)
-        .await
-        .expect("site tunnel subscriber");
-    let event_sub = observer
-        .declare_subscriber(EVENT_KEY)
-        .await
-        .expect("event subscriber");
-
-    // The upgrade path, and the one every house that copied the ACL out
-    // of the docs is on: rpcd grants only the older method, so the first
-    // call is refused. That refusal is a JSON-RPC error object with no
-    // `result` at all -- a different shape from a granted method that does
-    // not exist, which answers a normal result carrying a ubus status. The
-    // fallback has to cover both, or the upgrade breaks a tunnel monitor
-    // that was working.
-    router.control("/control/wg_acl?deny=getWgInstances");
-    router.control("/control/wg?age=9999");
-    expect_state(&site_sub, json!(false)).await;
-    router.control("/control/wg_acl?deny=none");
-    router.control("/control/wg?age=5");
-    expect_state(&site_sub, json!(true)).await;
-
-    // Neither name: the tunnel degrades, and the event carries why.
-    router.control("/control/wg_method?name=none");
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
-    loop {
-        let sample = tokio::time::timeout_at(deadline, event_sub.recv_async())
-            .await
-            .expect("wireguard-status-unavailable within 20s")
-            .expect("event stream open");
-        let event: Value =
-            serde_json::from_slice(&sample.payload().to_bytes()).expect("health event is JSON");
-        if event["kind"] == "wireguard-status-unavailable" {
-            let error = event["error"].as_str().unwrap_or_default();
-            assert!(
-                error.contains("getWgInstances") && error.contains("getWireguardStatus"),
-                "both attempts belong in the diagnosis: {event}"
-            );
-            break;
-        }
-    }
-
-    // Only the current name: handshakes are read again out of the shape a
-    // live build actually answers with -- peers as a list, every value a
-    // string, the epoch seconds of latest_handshake included.
-    router.control("/control/wg_method?name=getWgInstances");
-    router.control("/control/wg?age=9999");
-    expect_state(&site_sub, json!(false)).await;
-    router.control("/control/wg?age=5");
-    expect_state(&site_sub, json!(true)).await;
 
     sup.shutdown();
 }
