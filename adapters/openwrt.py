@@ -142,9 +142,31 @@ async def login(http, url: str, username: str, password: str) -> str:
     return sid
 
 
+# The status call's name is firmware-dependent: luci-proto-wireguard
+# calls it getWgInstances, older builds getWireguardStatus. Both answer
+# the same per-interface map of peers, so ask for one and fall back --
+# a router that has (or grants) neither degrades its own tunnels, which
+# is already how any failure of this call is handled.
+WG_STATUS_METHODS = ("getWgInstances", "getWireguardStatus")
+
+
+async def wireguard_status(http, url: str, sid: str) -> tuple[dict | None, str | None]:
+    """The peer map, or None and why -- both method names' failures, since
+    which one this firmware answers to is exactly what is in question."""
+    errors = []
+    for method in WG_STATUS_METHODS:
+        try:
+            return await ubus_call(http, url, sid, "luci.wireguard", method, {}), None
+        except UbusError as err:
+            errors.append(str(err))
+    return None, "; ".join(errors)
+
+
 def wireguard_fresh(iface_status, now_epoch: float) -> bool:
     """A live tunnel has some peer handshake younger than the freshness
-    window; peers arrive as a list or dict depending on the luci version.
+    window; peers arrive as a list or dict depending on the luci version,
+    and getWgInstances answers strings throughout -- latest_handshake as
+    decimal epoch seconds, which int() takes either way.
     Entries of any other shape count as no handshake — this runs outside
     the per-router poll guard, so it must not raise."""
     peers = iface_status.get("peers", []) if isinstance(iface_status, dict) else []
@@ -239,13 +261,11 @@ async def poll_router(http, name: str, conf: dict, wg_ifaces: set[str]):
         stations |= {mac.lower() for mac in clients.get("clients", {})}
 
     wg_status: dict | None = {}
+    wg_error: str | None = None
     if any(interfaces.get(iface, {}).get("proto") == "wireguard" for iface in wg_ifaces):
-        try:
-            wg_status = await ubus_call(http, url, sid, "luci.wireguard", "getWireguardStatus", {})
-        except UbusError:
-            wg_status = None
+        wg_status, wg_error = await wireguard_status(http, url, sid)
 
-    return interfaces, stations, wg_status
+    return interfaces, stations, wg_status, wg_error
 
 
 class Adapter:
@@ -287,12 +307,13 @@ class Adapter:
 
         interfaces: dict[str, dict] = {}
         wg_status: dict[str, dict | None] = {}
+        wg_errors: dict[str, str | None] = {}
         sightings: dict[str, list[str]] = {}  # mac -> routers that saw it
         polled_ok: set[str] = set()
 
         for name, conf in self.routers.items():
             try:
-                ifaces, stations, wg = await poll_router(
+                ifaces, stations, wg, wg_err = await poll_router(
                     http, name, conf, wg_by_router.get(name, set())
                 )
             except UbusError as err:
@@ -317,6 +338,7 @@ class Adapter:
             polled_ok.add(name)
             interfaces[name] = ifaces
             wg_status[name] = wg
+            wg_errors[name] = wg_err
             for mac in stations:
                 sightings.setdefault(mac, []).append(name)
 
@@ -351,7 +373,13 @@ class Adapter:
             if iface.get("proto") == "wireguard":
                 status = wg_status[router]
                 if status is None:
-                    self.note(("wg", router), "wireguard-status-unavailable", router=router)
+                    # The error text is the whole diagnosis: a ubus status
+                    # (method absent) is a firmware fact, "Access denied" an
+                    # ACL one, anything else transport.
+                    self.note(
+                        ("wg", router), "wireguard-status-unavailable",
+                        router=router, error=wg_errors[router],
+                    )
                     continue
                 self.clear(("wg", router))
                 up = up and wireguard_fresh(status.get(iface_name, {}), now_epoch)

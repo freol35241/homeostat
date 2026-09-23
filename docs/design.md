@@ -2085,6 +2085,13 @@ direction.
     operational note); any other proto is the interface's own up flag.
     Handshakes come from rpcd's `luci.wireguard` status call
     (`luci-proto-wireguard`, present on any LuCI-managed WG router).
+    That call's name is firmware-dependent — `getWgInstances` on
+    current builds, `getWireguardStatus` on older ones — so the adapter
+    tries both and the rpcd ACL must grant both; a tunnel whose status
+    call fails publishes nothing rather than a false state, and says so
+    once per router with the failure in the health event (a ubus status
+    means the method is absent, "Access denied" means the ACL, anything
+    else the transport).
   - WiFi presence: capability `presence` (existing vocabulary), aspect
     `presence` (bool), `id` = the device MAC, lowercase, `room =
     "global"` (a phone is non-spatial). A sighting is association to
