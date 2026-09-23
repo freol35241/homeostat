@@ -228,11 +228,24 @@ h1.view-title { font-size: 20px; margin: 0 0 16px; }
   vector-effect: non-scaling-stroke; }
 /* A contributing source: grey and thin, so the computed value's accent
    always reads as what the house believes (docs/design.md, Sources). */
-.chart-contributor { fill: none; stroke: var(--muted); stroke-width: 1.2; stroke-linecap: round;
-  stroke-linejoin: round; opacity: .85; vector-effect: non-scaling-stroke; }
+.chart-contributor { fill: none; stroke: var(--muted); stroke-width: 1.5; stroke-linecap: round;
+  stroke-linejoin: round; vector-effect: non-scaling-stroke;
+  /* Dotted, where the forecast is dashed (4 3): both are secondary to the
+     accent's solid record, and they must not read as each other. A zero
+     dash under a round cap IS the dot. */
+  stroke-dasharray: 0 3; }
 .source-legend { display: flex; gap: 10px; flex-wrap: wrap; }
 .source-legend span::before { content: ''; display: inline-block; width: 12px; height: 0;
-  border-top: 2px solid var(--muted); vertical-align: middle; margin-right: 5px; }
+  border-top: 2px dotted var(--muted); vertical-align: middle; margin-right: 5px; }
+/* Naming a source in the legend only identifies a line if the reader can
+   tell the lines apart, and one deliberate grey means they cannot. So the
+   legend lights its own line on demand: emphasis, never a colour a
+   contributor must not own (docs/design.md, Sources). */
+.source-legend span { cursor: default; }
+.chart-contributor.hi { stroke: var(--secondary); stroke-width: 2; opacity: 1; }
+.chart-contributor.dim { opacity: .4; }
+.source-legend span.hi { color: var(--ink); }
+.source-legend span.dim { opacity: .45; }
 .chart-issue.pinned { stroke: var(--issue-pin); stroke-width: 2.4; }
 .chart-issue.hovered { stroke: var(--issue-pin); stroke-width: 2; }
 .chart-note + .chart-note { margin-top: 2px; }
@@ -1438,8 +1451,8 @@ function buildChart(chartId, points, opts) {
       });
     }
     if (geo.contributors) {
-      geo.contributors.forEach(function (c, n) {
-        svg += '<path class="chart-contributor" data-source="' + n + '" d="' +
+      geo.contributors.forEach(function (c) {
+        svg += '<path class="chart-contributor" data-source="' + esc(c.name) + '" d="' +
           chartPathData(c.coords) + '"/>';
       });
     }
@@ -2914,6 +2927,36 @@ function renderOverlayContent() {
   byId('overlay-rest').innerHTML = r.rest || '';
   mountCameraLive(r.camera);
   wireChartInteractions(byId('overlay-body'));
+  wireSourceLegend(byId('overlay-body'));
+}
+
+/* Which line is which, on demand: pointing at a source in the legend
+ * lights its line and stands the others down, and a tap holds that until
+ * it is tapped again. Emphasis, not colour — a contributor owning a hue
+ * would compete with the accent the computed value keeps
+ * (docs/design.md, Sources). */
+function wireSourceLegend(root) {
+  var scope = root || document;
+  var entries = scope.querySelectorAll('.source-legend span[data-source]');
+  if (!entries.length) return;
+  var sticky = null;
+  var marks = scope.querySelectorAll('.chart-contributor, .source-legend span');
+  var highlight = function (name) {
+    marks.forEach(function (el) {
+      var own = el.getAttribute('data-source');
+      el.classList.toggle('hi', !!name && own === name);
+      el.classList.toggle('dim', !!name && own !== name);
+    });
+  };
+  entries.forEach(function (el) {
+    var name = el.getAttribute('data-source');
+    el.addEventListener('pointerenter', function () { if (!sticky) highlight(name); });
+    el.addEventListener('pointerleave', function () { if (!sticky) highlight(null); });
+    el.addEventListener('click', function () {
+      sticky = sticky === name ? null : name;
+      highlight(sticky);
+    });
+  });
 }
 
 // The live player for `name`, or none. Mounting is idempotent: the same
@@ -3080,7 +3123,8 @@ function renderHistoryDetailBody() {
         var since = excluded && use.since
           ? ' since ' + formatChartClock(use.since / 1000)
           : '';
-        return '<span' + (c.note ? ' title="' + esc(c.note) + '"' : '') + '>' +
+        return '<span data-source="' + esc(c.name) + '"' +
+          (c.note ? ' title="' + esc(c.note) + '"' : '') + '>' +
           esc(c.label) +
           (down ? ' \u00b7 unavailable' : '') +
           (excluded ? ' \u00b7 not used' + since : '') +
