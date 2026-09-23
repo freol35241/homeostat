@@ -848,6 +848,69 @@ test('a flat horizon summarises to nothing rather than to min = max', () => {
   assert.equal(logic.horizonSummary(null), null);
 });
 
+// Freshness: the dashboard's own max age, since `issued` is required and
+// the policy belongs to the consumer (docs/design.md, Forecasts).
+const belief = (points, issued) =>
+  logic.forecastFor(doc(points, issued), 'global', 'spot', 'price', 'nordpool');
+
+test('a claim with more ahead of it than behind it is neither stale nor expired', () => {
+  const f = belief(
+    [
+      { t: '2026-09-21T09:00:00+00:00', v: 1.0 },
+      { t: '2026-09-23T09:00:00+00:00', v: 2.0 },
+    ],
+    '2026-09-21T08:00:00+00:00',
+  );
+  const fresh = logic.forecastFreshness(f, Date.parse('2026-09-21T08:10:00+00:00'));
+  assert.equal(fresh.stale, false);
+  assert.equal(fresh.expired, false);
+  assert.equal(fresh.age, 10 * 60e3);
+});
+
+test('a day-ahead curve is fresh all evening and stale once its successor is overdue', () => {
+  // Issued at 13:00, covering tomorrow whole: the rule scales itself off
+  // what the claim has left to say, so no per-aspect constant is needed.
+  const f = belief(
+    [
+      { t: '2026-09-22T00:00:00+00:00', v: 0.4, d: 3600 },
+      { t: '2026-09-22T23:00:00+00:00', v: 0.9, d: 3600 },
+    ],
+    '2026-09-21T13:00:00+00:00',
+  );
+  assert.equal(
+    logic.forecastFreshness(f, Date.parse('2026-09-21T23:00:00+00:00')).stale,
+    false,
+    '10 h old with 25 h left',
+  );
+  assert.equal(
+    logic.forecastFreshness(f, Date.parse('2026-09-22T20:00:00+00:00')).stale,
+    true,
+    '31 h old with 4 h left — tomorrow\'s curve never came',
+  );
+});
+
+test('a horizon that has run out is expired, and expired is not stale', () => {
+  const f = belief(
+    [{ t: '2026-09-21T09:00:00+00:00', v: 1.0, d: 3600 }],
+    '2026-09-21T08:00:00+00:00',
+  );
+  const fresh = logic.forecastFreshness(f, Date.parse('2026-09-21T12:00:00+00:00'));
+  assert.equal(fresh.expired, true);
+  assert.equal(fresh.stale, false, 'nothing left to be stale about');
+});
+
+test('a claim that failed to say when it was issued has no age and is never stale', () => {
+  const f = belief([{ t: '2026-09-21T09:00:00+00:00', v: 1.0 }], 'the other day');
+  const fresh = logic.forecastFreshness(f, Date.parse('2026-09-21T08:00:00+00:00'));
+  assert.equal(fresh.age, null);
+  assert.equal(fresh.stale, false);
+  assert.equal(fresh.expired, false, 'it still has a horizon');
+});
+
+test('nothing to describe reads as nothing', () => {
+  assert.equal(logic.forecastFreshness(null, Date.now()), null);
+});
+
 test('a forecast delta lands in the store and a snapshot replaces the lot', () => {
   const store = { state: {}, forecasts: {}, health: {}, config: {}, aspects: {} };
   assert.equal(

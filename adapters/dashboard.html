@@ -251,6 +251,10 @@ h1.view-title { font-size: 20px; margin: 0 0 16px; }
 .chart-note + .chart-note { margin-top: 2px; }
 .chart-forecast { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linecap: round;
   stroke-linejoin: round; stroke-dasharray: 4 3; opacity: .75; vector-effect: non-scaling-stroke; }
+/* Still the house's current belief, so still dashed — but older than the
+   span it has left to say, so it does not get to wear the accent
+   (docs/design.md, Forecasts). */
+.chart-forecast.stale { stroke: var(--muted); opacity: .6; }
 .chart-now { stroke: var(--secondary); stroke-width: 1; stroke-dasharray: 3 3; opacity: .55;
   vector-effect: non-scaling-stroke; }
 .chart-grid { stroke: var(--border); stroke-width: 1; vector-effect: non-scaling-stroke; }
@@ -449,7 +453,7 @@ video-rtc video { width: 100%; display: block; }
 .aspect-label.linked:hover { background-color: var(--accent-tint); color: var(--accent); }
 .aspect-row .aspect-value { color: var(--secondary); font-variant-numeric: tabular-nums; }
 .aspect-row .aspect-value.stale { color: var(--muted); text-decoration: line-through dotted; }
-.aspect-row .stale-mark { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin-left: 6px; }
+.stale-mark { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin-left: 6px; }
 .group-toggle { background: none; border: none; color: var(--muted); font: inherit; font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; cursor: pointer; padding: 0; margin-top: 20px; }
 .empty-hint { color: var(--muted); font-size: 12.5px; padding: 8px 0; }
 .log-feed { margin-top: 10px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px; }
@@ -1229,7 +1233,13 @@ function computeChartGeometry(points, width, height, pad, win, forecast, issues,
   // the one place a provider's shape can be judged against what actually
   // happened without opening the braid.
   var beliefs = (forecast || []).map(function (b) {
-    return { source: b.source, points: b.forecast.points, to: b.forecast.to };
+    return {
+      source: b.source, points: b.forecast.points, to: b.forecast.to,
+      // Older than the span it has left to say: drawn, because it is
+      // still the house's current belief, but not drawn as if it were
+      // fresh (docs/design.md, Forecasts).
+      stale: logic.forecastFreshness(b.forecast, Date.now()).stale
+    };
   });
   var allVals = vals.slice();
   beliefs.forEach(function (b) {
@@ -1315,6 +1325,7 @@ function computeChartGeometry(points, width, height, pad, win, forecast, issues,
     geo.forecast = beliefs.map(function (b) {
       return {
         source: b.source,
+        stale: b.stale,
         coords: b.points.map(function (p) {
           var at = place(p.t, p.v);
           return { x: at.x, y: at.y, value: p.v, ts: p.t };
@@ -1359,6 +1370,31 @@ function issueInk(age) {
 // Every live claim about one aspect's future, one per source.
 function forecastsOf(entity, aspect) {
   return logic.forecastsFor(store.forecasts, entity.room, entity.name, aspect);
+}
+
+// The claims that are still about the future. A belief whose horizon has
+// run out is not drawn as one — the mirror keeps a producer's last word
+// for as long as the core lives, and a curve that ends before now says
+// nothing about what is ahead (docs/design.md, Forecasts). It stays in
+// the overlay under "what we said", which is where a spent claim is
+// judged against what actually happened.
+function liveForecastsOf(entity, aspect) {
+  return forecastsOf(entity, aspect).filter(function (b) {
+    return !logic.forecastFreshness(b.forecast, Date.now()).expired;
+  });
+}
+
+// When a drawn belief was issued, said out loud. Without it a claim made
+// yesterday reads exactly like one made ten minutes ago.
+function issuedCaption(forecast) {
+  var f = logic.forecastFreshness(forecast, Date.now());
+  if (!f || f.issued === null) return '';
+  // A bare clock is only unambiguous within the day it was said: "issued
+  // 13:00" on a claim made yesterday reads as this afternoon, which is
+  // the misreading this caption exists to prevent. Older than today, the
+  // date comes with it.
+  var sameDay = new Date(f.issued).toDateString() === new Date(Date.now()).toDateString();
+  return 'issued ' + (sameDay ? formatChartClock(f.issued) : formatChartTime(f.issued));
 }
 
 // "min 0.38 at 03:00" — where the horizon goes, named at the hour it
@@ -1473,8 +1509,8 @@ function buildChart(chartId, points, opts) {
         // ever drew.
         var head = f.coords[0];
         var joined = last && head && last.x <= head.x ? [last].concat(f.coords) : f.coords;
-        svg += '<path class="chart-forecast" data-source="' + esc(f.source) +
-          '" d="' + chartPathData(joined) + '"/>';
+        svg += '<path class="chart-forecast' + (f.stale ? ' stale' : '') +
+          '" data-source="' + esc(f.source) + '" d="' + chartPathData(joined) + '"/>';
       });
     }
     if (geo.nowX !== undefined) {
@@ -2159,7 +2195,7 @@ function widgetTiles(entity, aspect) {
     var sk = entity.name + '|' + r.aspect;
     ensureHistory(entity.name, r.aspect);
     var s = localState.sparklines[sk];
-    var forecast = forecastsOf(entity, r.aspect);
+    var forecast = liveForecastsOf(entity, r.aspect);
     var spark = s && s.loaded ? buildChart('tile-' + sk, s.points, { height: 36, sizeClass: 'chart-tile', aspect: r.aspect, area: true, window: s.window, forecast: forecast }) : '';
     // A horizon says where a reading is going; today's range says where
     // it has been. The forecast wins the line when there is one, because
@@ -2167,16 +2203,27 @@ function widgetTiles(entity, aspect) {
     // family-tier and has room for ONE claim, so with several sources it
     // falls back to the range rather than picking a provider to believe
     // — comparing them is owner work and lives in the overlay.
-    var caption = forecast.length === 1
+    // A belief carries when it was said, always; a stale one is marked,
+    // because a caption the reader has to do arithmetic on is not a
+    // caption a phone can be read from in three seconds.
+    var ahead = forecast.length === 1
       ? horizonCaption(r.aspect, descriptorField(entity, r.aspect), forecast[0].forecast, Date.now())
-      : (s && s.loaded ? minMaxCaption(s.points) : '');
+      : '';
+    var aged = forecast.length === 1 && logic.forecastFreshness(forecast[0].forecast, Date.now()).stale;
+    var caption = forecast.length === 1
+      ? [ahead, issuedCaption(forecast[0].forecast)].filter(Boolean).join(' \u00b7 ')
+      : '';
+    // With no belief to draw — or several, which a tile has no room to
+    // tell apart — the caption is today's range, as it always was.
+    if (!caption && s && s.loaded) caption = minMaxCaption(s.points);
     // The separator is the character, not the entity: the whole label is
     // upper-cased below, and "&MIDDOT;" is not one.
     var tileLabel = esc(entity.label) + (rows.length > 1 ? ' \u00b7 ' + esc(r.label) : '');
     return '<div class="card tile clickable" data-action="history-detail" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '" data-aspect="' + esc(r.aspect) + '">' +
       '<div class="card-label" title="' + esc(entity.label) + '">' + tileLabel.toUpperCase() + '</div>' +
       '<div class="big' + (r.stale ? ' stale' : '') + '">' + esc(r.display) + '</div>' + spark +
-      '<div class="caption">' + esc(caption) + '</div></div>';
+      '<div class="caption">' + esc(caption) +
+      (aged ? '<span class="stale-mark">stale</span>' : '') + '</div></div>';
   }).join('');
 }
 
@@ -2197,13 +2244,21 @@ function widgetChart(entity, aspect, hours) {
     s = localState.charts[key];
   }
   var value = stateValue(entity.room, entity.name, aspect);
+  var beliefs = shape === 'timeline' ? [] : liveForecastsOf(entity, aspect);
   var chart = !s.loaded ? ''
     : shape === 'timeline'
       ? buildTimeline('chart-' + key, s.points, { height: 64, sizeClass: 'chart-timeline', aspect: aspect, field: field, window: s.window })
-      : buildChart('chart-' + key, s.points, { height: 120, sizeClass: 'chart-card', aspect: aspect, area: true, gridlines: true, yLabels: true, window: s.window, forecast: forecastsOf(entity, aspect) });
+      : buildChart('chart-' + key, s.points, { height: 120, sizeClass: 'chart-card', aspect: aspect, area: true, gridlines: true, yLabels: true, window: s.window, forecast: beliefs });
+  // The same rule as a tile: a drawn belief says when it was said. One
+  // line for one source; with several, the overlay names each.
+  var beliefCaption = beliefs.length === 1
+    ? '<div class="caption">' + esc(issuedCaption(beliefs[0].forecast)) +
+      (logic.forecastFreshness(beliefs[0].forecast, Date.now()).stale
+        ? '<span class="stale-mark">stale</span>' : '') + '</div>'
+    : '';
   return '<div class="card tile clickable span-all" data-action="history-detail" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '" data-aspect="' + esc(aspect) + '">' +
     '<div class="card-label">' + esc(entity.label + ' · ' + ((field && field.label) || aspect)).toUpperCase() + ' <span class="faint">' + esc(hours >= 48 ? Math.round(hours / 24) + 'd' : hours + 'h') + '</span></div>' +
-    '<div class="big">' + esc(logic.formatAspect(aspect, field, value)) + '</div>' + chart + '</div>';
+    '<div class="big">' + esc(logic.formatAspect(aspect, field, value)) + '</div>' + chart + beliefCaption + '</div>';
 }
 
 // People: the person entities, home or away from their presence aspect;
@@ -3052,7 +3107,7 @@ function renderHistoryDetailBody() {
       aspect: aspect, gridlines: true, area: true, yLabels: true, window: win,
       // In "what we said" the current belief steps aside: drawing it over
       // the braid would make one issue look special for no reason.
-      forecast: overlay.said ? null : forecastsOf(entity, aspect),
+      forecast: overlay.said ? null : liveForecastsOf(entity, aspect),
       issues: overlay.said ? overlay.issues : null,
       pinned: overlay.pinned,
       // Contributors stand down behind the braid: two greys on one chart,
@@ -3075,10 +3130,22 @@ function renderHistoryDetailBody() {
   if (!overlay.said) {
     var beliefs = forecastsOf(entity, aspect);
     horizonHtml = beliefs.map(function (b) {
-      var ahead = horizonCaption(aspect, field, b.forecast, Date.now());
-      if (!ahead) return '';
+      var fresh = logic.forecastFreshness(b.forecast, Date.now());
       var who = beliefs.length > 1 ? esc(b.source) + ' · ' : '';
-      return '<div class="chart-note">ahead · ' + who + esc(ahead) + '</div>';
+      var issued = issuedCaption(b.forecast);
+      // A claim whose horizon has run out is not drawn here, so this note
+      // is the only thing that distinguishes "this producer stopped" from
+      // "this aspect has no forecast" — the braid beside it is where the
+      // spent claim itself can still be read.
+      if (fresh.expired) {
+        return '<div class="chart-note">spent · ' + who + 'ran out ' +
+          esc(formatChartTime(b.forecast.to)) + (issued ? ' · ' + esc(issued) : '') + '</div>';
+      }
+      var ahead = horizonCaption(aspect, field, b.forecast, Date.now());
+      if (!ahead && !issued) return '';
+      return '<div class="chart-note">ahead · ' + who +
+        (ahead ? esc(ahead) + (issued ? ' · ' : '') : '') + esc(issued) +
+        (fresh.stale ? '<span class="stale-mark">stale</span>' : '') + '</div>';
     }).join('');
   }
   var braidHtml = '';
