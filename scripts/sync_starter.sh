@@ -25,7 +25,7 @@
 set -euo pipefail
 
 # Bumped with the starter's compose image at each release.
-SDK_TAG="v0.15.1"
+SDK_TAG="v0.15.2"
 
 # The tag's version, and that version as Python spells it. They differ for
 # a prerelease and only for a prerelease: semver puts a hyphen before the
