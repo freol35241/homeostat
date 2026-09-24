@@ -1526,6 +1526,26 @@ the exploration that produced it):
     looking for.
   - *`[dashboard] pin` is retired* (`entity-dashboard-retired`, naming
     the `tile` widget that replaces it). One way to place a reading.
+- **A reader's choices about a chart belong to the overlay, not to its
+  DOM** (added 2026-09-24, from living with it). Live state re-renders the
+  detail panel — a forecast re-issue is enough — which replaces its nodes
+  and every class on them. The braid's pin was already held in overlay
+  state for that reason; the source legend's was not, so tapping a
+  contributor to light its line held only until the next delta, after
+  which the highlight was re-derived from wherever the pointer happened to
+  be: a pin that silently dropped, or moved to another source, while the
+  reader was still reading it. Both pins now live in the overlay and are
+  re-applied on each render. The general rule, since this is the second
+  time: anything a reader chose survives a re-render only if it is held
+  outside the markup.
+- **A range input must not steal a scroll** (added 2026-09-24). A slider
+  is the one control a finger can operate by accident: a page scroll that
+  begins on the thumb drags it, which on a phone commands the device. The
+  inputs take `touch-action: pan-y`, giving vertical panning back to the
+  page and keeping horizontal drags for the control — the same trade the
+  scrubbable chart makes. This is containment rather than a cure: the
+  value can still be changed in one gesture with nothing to undo it, which
+  is the open half of the problem.
 - **Widgets compose: the `group` widget (settled 2026-09-18).** A view
   was a flat list of cards, so "the dial, and the two traces that explain
   it" could only be three cards the eye had to associate. A `group`

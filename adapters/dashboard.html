@@ -346,7 +346,12 @@ h1.view-title { font-size: 20px; margin: 0 0 16px; }
 .slider-row .slabel { flex: 0 0 70px; color: var(--secondary); }
 .slider-row .sval { flex: 0 0 auto; min-width: 40px; text-align: right; color: var(--ink); font-variant-numeric: tabular-nums; }
 
-input[type=range] { flex: 1 1 40px; min-width: 40px; -webkit-appearance: none; appearance: none; height: 2px;
+/* A finger scrolling the page past a slider must not drag it. `pan-y`
+   gives vertical panning back to the page and keeps horizontal drags for
+   the control — the same trade the scrubbable chart makes above. Without
+   it a scroll that starts on the thumb commands the device, and on a
+   phone that is most of the surface. */
+input[type=range] { touch-action: pan-y; flex: 1 1 40px; min-width: 40px; -webkit-appearance: none; appearance: none; height: 2px;
   background: var(--border); border-radius: 1px; outline: none; }
 input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%;
   background: var(--accent); cursor: pointer; border: 2px solid var(--card); box-shadow: 0 1px 2px rgba(0,0,0,.2); }
@@ -624,6 +629,7 @@ var overlay = {
   sourceData: {},          // "<hours>|<entity>|<aspect>" -> fetched contributor history
   sourceEvents: {},        // same key -> when each source went in or out
   pinned: null,            // the issue time a reader pinned out of the braid
+  sourcePinned: null,      // the contributor a reader pinned out of the legend
   lastPoints: null,
   log: null,               // for unit: {lines, loaded, loading}
   expanded: {}              // for entity: group -> true when a collapsed section is opened
@@ -2941,6 +2947,7 @@ function openHistoryDetail(room, entityName, aspect) {
   overlay.layer = '';
   overlay.issues = [];
   overlay.pinned = null;
+  overlay.sourcePinned = null;
   overlay.lastPoints = null;
   // Sources are this entity's, so the layer and the fetched contributor
   // history do not survive into the next overlay.
@@ -2997,7 +3004,14 @@ function wireSourceLegend(root) {
   var scope = root || document;
   var entries = scope.querySelectorAll('.source-legend span[data-source]');
   if (!entries.length) return;
-  var sticky = null;
+  // The pin belongs to the overlay, not to this wiring. Live state
+  // re-renders the panel — a forecast re-issue is enough — which throws
+  // away these nodes and every class on them, and the fresh closure then
+  // took its highlight from whatever the pointer happened to be over: a
+  // pin that quietly moved to another source, or vanished, while the
+  // reader was still reading. Same reason the braid's pin lives in
+  // `overlay.pinned`.
+  var sticky = overlay.sourcePinned || null;
   var marks = scope.querySelectorAll('.chart-contributor, .source-legend span');
   var highlight = function (name) {
     marks.forEach(function (el) {
@@ -3012,9 +3026,13 @@ function wireSourceLegend(root) {
     el.addEventListener('pointerleave', function () { if (!sticky) highlight(null); });
     el.addEventListener('click', function () {
       sticky = sticky === name ? null : name;
+      overlay.sourcePinned = sticky;
       highlight(sticky);
     });
   });
+  // Re-apply on every wiring, so a re-render restores the pin rather than
+  // dropping it.
+  highlight(sticky);
 }
 
 // The live player for `name`, or none. Mounting is idempotent: the same
@@ -3565,8 +3583,9 @@ document.addEventListener('click', function (e) {
     // Choosing one layer is what puts the other away: two sets of thin
     // grey lines on one chart read as one set.
     overlay.layer = el.getAttribute('data-layer') || '';
-    // A pin belongs to a braid that may no longer be drawn.
+    // A pin belongs to a braid, or a legend, that may no longer be drawn.
     overlay.pinned = null;
+    overlay.sourcePinned = null;
     if (overlay.layer === 'forecasts' && !overlay.issues.length && !overlay.issuesLoading) {
       fetchIssues(overlay.entity.name, overlay.aspect, overlay.range);
     }
