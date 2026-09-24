@@ -2963,7 +2963,7 @@ every chart walks backward from now.
 - **The dashboard draws stored forecasts as a braid** (added
   2026-09-21). The history detail overlay gains a second chip row where
   an aspect has a future — `now` draws the current belief dashed past
-  the now-rule, `what we said` draws every issue the recorder kept over
+  the now-rule, `forecasts` draws every issue the recorder kept over
   the window, one thin line each. This is owner work, not family work,
   so it lives in the overlay rather than as a `dashboard.toml` widget:
   a family wants what tonight will cost, not whether yesterday was
@@ -3012,7 +3012,7 @@ every chart walks backward from now.
   - *A spent claim is not the future.* Where the horizon has run out the
     belief stops being drawn as one — no dashed span, no now-rule, and
     the tile is back to today's range. It remains in the overlay, under
-    `what we said` and as a `spent · ran out …` note, which is where a
+    `forecasts` and as a `spent · ran out …` note, which is where a
     claim is judged against what actually happened; the family/owner split
     the braid already drew.
   - *Every drawn belief says when it was said* — `issued 09:00` in the
@@ -3031,6 +3031,22 @@ every chart walks backward from now.
     supervision; a running one whose upstream is failing should publish
     its own health event. Inferring a unit's health from the age of its
     last document would put the diagnosis in the wrong place.
+- **One control, not two** (2026-09-24). The chart's two extra layers —
+  the contributors a computed value is derived from (Sources below) and
+  the braid — arrived as a chip row each: four buttons in which `value`
+  and `now` both meant "neither layer", over a state space of three,
+  because the layers were already mutually exclusive (two sets of thin
+  grey lines on one chart read as one set). A one-of-three state wearing
+  two controls also let a chip claim a state the chart was not in:
+  pressing `value` during the braid cleared the sources flag and left the
+  braid drawn. They are now one segmented control — `value · sources ·
+  forecasts` — rendering only the chips the house has something for, so
+  an ordinary sensor's overlay is unchanged. The pairing is exact, and is
+  the reason the two belong in one control rather than merely fitting in
+  one: `sources` is the several opinions behind the value's past,
+  `forecasts` the several claims about its future. `what we said` was
+  retired with the row — the claims belong to `nordpool` or `smhi`, not
+  to the house, which only kept them.
 - **What a forecast IS, stated plainly** (2026-09-21, when a rename to
   `future` was considered and dropped): a SOURCE's claim about a series'
   future values. A controller publishing its own planned trajectory is

@@ -613,10 +613,14 @@ var overlay = {
   range: 24,             // hours, for history
   rangeData: {},          // hours -> {points, window, loaded, loading}
   cmdData: {},             // hours -> the same, for the cmd series (what was asked)
-  said: false,             // for history: showing stored issues rather than the current forecast
+  // What is drawn beside the record: '' (the value and its current
+  // belief), 'sources' (the contributors it is derived from) or
+  // 'forecasts' (every issue the recorder kept). One at a time — two sets
+  // of thin grey lines on one chart read as one set — so one field, not
+  // a flag each (docs/design.md, Forecasts and Sources).
+  layer: '',
   issues: [],              // decoded stored issues for the current window
   issuesLoading: false,
-  withSources: false,      // for history: drawing the declared contributors too
   sourceData: {},          // "<hours>|<entity>|<aspect>" -> fetched contributor history
   sourceEvents: {},        // same key -> when each source went in or out
   pinned: null,            // the issue time a reader pinned out of the braid
@@ -1003,7 +1007,7 @@ function fetchSources(entity, aspect, hours) {
 // The contributors the chart should draw right now: declared, asked for,
 // and arrived. One still loading simply is not drawn yet.
 function drawnSources(entity, aspect, hours) {
-  if (!overlay.withSources) return null;
+  if (overlay.layer !== 'sources') return null;
   var out = [];
   contributorsOf(entity, aspect).forEach(function (c) {
     var d = overlay.sourceData[sourceCacheKey(hours, c)];
@@ -1376,7 +1380,7 @@ function forecastsOf(entity, aspect) {
 // run out is not drawn as one — the mirror keeps a producer's last word
 // for as long as the core lives, and a curve that ends before now says
 // nothing about what is ahead (docs/design.md, Forecasts). It stays in
-// the overlay under "what we said", which is where a spent claim is
+// the overlay under `forecasts`, which is where a spent claim is
 // judged against what actually happened.
 function liveForecastsOf(entity, aspect) {
   return forecastsOf(entity, aspect).filter(function (b) {
@@ -2934,13 +2938,12 @@ function openHistoryDetail(room, entityName, aspect) {
   overlay.range = 24;
   overlay.rangeData = {};
   overlay.cmdData = {};
-  overlay.said = false;
+  overlay.layer = '';
   overlay.issues = [];
   overlay.pinned = null;
   overlay.lastPoints = null;
-  // Sources are this entity's, so the toggle and the fetched contributor
+  // Sources are this entity's, so the layer and the fetched contributor
   // history do not survive into the next overlay.
-  overlay.withSources = false;
   overlay.sourceData = {};
   overlay.sourceEvents = {};
   fetchHistoryRange(entityName, aspect, 24, overlay.shape);
@@ -3066,22 +3069,25 @@ function renderHistoryDetailBody() {
   var chips = RANGE_PRESETS.map(function (rp) {
     return '<button data-action="range-chip" data-hours="' + rp.hours + '" class="' + (overlay.range === rp.hours ? 'active' : '') + '">' + rp.label + '</button>';
   }).join('');
-  // The second row appears only where there is a future to have said
-  // anything about, so an ordinary sensor's overlay is unchanged.
-  var modeChips = forecastsOf(entity, aspect).length
-    ? '<div class="seg" style="margin-top:8px;">' +
-      '<button data-action="forecast-mode" data-said="0" class="' + (overlay.said ? '' : 'active') + '">now</button>' +
-      '<button data-action="forecast-mode" data-said="1" class="' + (overlay.said ? 'active' : '') + '">what we said</button>' +
-      '</div>'
-    : '';
-  // And a row for what the value is derived from, where anything is
-  // declared. Owner work like the braid, so it lives here rather than on
-  // a tile: a family wants the temperature, not which sensor was low.
-  var sourceChips = overlay.shape !== 'timeline' && contributorsOf(entity, aspect).length
-    ? '<div class="seg" style="margin-top:8px;">' +
-      '<button data-action="source-mode" data-on="0" class="' + (overlay.withSources ? '' : 'active') + '">value</button>' +
-      '<button data-action="source-mode" data-on="1" class="' + (overlay.withSources ? 'active' : '') + '">with sources</button>' +
-      '</div>'
+  // One row for what is drawn beside the record: the several opinions
+  // behind the value's past, or the several claims about its future.
+  // Both are owner work, which is why they live here and not on a tile —
+  // a family wants the temperature, not which sensor read low — and only
+  // one can be drawn at a time, so they are one control and not two
+  // (docs/design.md, Sources). A chip appears only where the house has
+  // the thing it names, so an ordinary sensor's overlay is unchanged.
+  var layers = [{ id: '', label: 'value' }];
+  if (overlay.shape !== 'timeline' && contributorsOf(entity, aspect).length) {
+    layers.push({ id: 'sources', label: 'sources' });
+  }
+  if (forecastsOf(entity, aspect).length) {
+    layers.push({ id: 'forecasts', label: 'forecasts' });
+  }
+  var layerChips = layers.length > 1
+    ? '<div class="seg" style="margin-top:8px;">' + layers.map(function (l) {
+      return '<button data-action="chart-layer" data-layer="' + l.id + '" class="' +
+        (overlay.layer === l.id ? 'active' : '') + '">' + l.label + '</button>';
+    }).join('') + '</div>'
     : '';
 
   var rd = overlay.rangeData[overlay.range];
@@ -3105,14 +3111,14 @@ function renderHistoryDetailBody() {
     chartHtml = buildChart('detail-chart', points, {
       height: wide ? 440 : 220, sizeClass: wide ? 'chart-detail-wide' : 'chart-detail',
       aspect: aspect, gridlines: true, area: true, yLabels: true, window: win,
-      // In "what we said" the current belief steps aside: drawing it over
+      // Under `forecasts` the current belief steps aside: drawing it over
       // the braid would make one issue look special for no reason.
-      forecast: overlay.said ? null : liveForecastsOf(entity, aspect),
-      issues: overlay.said ? overlay.issues : null,
+      forecast: overlay.layer === 'forecasts' ? null : liveForecastsOf(entity, aspect),
+      issues: overlay.layer === 'forecasts' ? overlay.issues : null,
       pinned: overlay.pinned,
       // Contributors stand down behind the braid: two greys on one chart,
       // one per issue and one per source, would read as one set of lines.
-      contributors: overlay.said ? null : drawnSources(entity, aspect, overlay.range)
+      contributors: overlay.layer === 'forecasts' ? null : drawnSources(entity, aspect, overlay.range)
     });
     var stats = rangeStats(points);
     statsHtml = '<div class="stat-row">' +
@@ -3127,7 +3133,7 @@ function renderHistoryDetailBody() {
   // averaging two providers into one sentence would state a horizon
   // neither of them predicted.
   var horizonHtml = '';
-  if (!overlay.said) {
+  if (overlay.layer !== 'forecasts') {
     var beliefs = forecastsOf(entity, aspect);
     horizonHtml = beliefs.map(function (b) {
       var fresh = logic.forecastFreshness(b.forecast, Date.now());
@@ -3149,10 +3155,10 @@ function renderHistoryDetailBody() {
     }).join('');
   }
   var braidHtml = '';
-  if (overlay.said) {
+  if (overlay.layer === 'forecasts') {
     braidHtml = '<div class="chart-note" id="braid-column"></div>' +
       '<div class="chart-note">' + esc(
-        overlay.issuesLoading ? 'reading what we said\u2026'
+        overlay.issuesLoading ? 'reading the forecasts\u2026'
           : overlay.issues.length
             ? overlay.issues.length + ' forecast' + (overlay.issues.length === 1 ? '' : 's') +
               (function () {
@@ -3174,7 +3180,7 @@ function renderHistoryDetailBody() {
   // cannot tell them apart — they are all the same grey, deliberately —
   // so naming them is the identification.
   var legendHtml = '';
-  var drawn = overlay.said ? null : drawnSources(entity, aspect, overlay.range);
+  var drawn = overlay.layer === 'forecasts' ? null : drawnSources(entity, aspect, overlay.range);
   if (drawn) {
     var usage = sourceUsageNow(entity, aspect, overlay.range,
                                contributorsOf(entity, aspect));
@@ -3198,10 +3204,10 @@ function renderHistoryDetailBody() {
           (c.note ? ' \u00b7 ' + esc(c.note) : '') + '</span>';
       }).join('') + '</div>' +
       '<div class="chart-note" id="sources-column"></div>';
-  } else if (overlay.withSources && !overlay.said && contributorsOf(entity, aspect).length) {
+  } else if (overlay.layer === 'sources' && contributorsOf(entity, aspect).length) {
     legendHtml = '<div class="chart-note">reading the sources\u2026</div>';
   }
-  var body = '<div class="seg">' + chips + '</div>' + modeChips + sourceChips +
+  var body = '<div class="seg">' + chips + '</div>' + layerChips +
     '<div class="' + (loaded ? '' : 'chart-loading') + '">' + chartHtml + statsHtml + horizonHtml + '</div>' +
     legendHtml + braidHtml + commandStrip(aspect, field, win);
   return { title: label, body: body };
@@ -3555,22 +3561,16 @@ document.addEventListener('click', function (e) {
     flashParamRow(gUnit, gParam);
     return;
   }
-  if (action === 'forecast-mode') {
-    overlay.said = el.getAttribute('data-said') === '1';
+  if (action === 'chart-layer') {
+    // Choosing one layer is what puts the other away: two sets of thin
+    // grey lines on one chart read as one set.
+    overlay.layer = el.getAttribute('data-layer') || '';
+    // A pin belongs to a braid that may no longer be drawn.
     overlay.pinned = null;
-    if (overlay.said) overlay.withSources = false;
-    if (overlay.said && !overlay.issues.length && !overlay.issuesLoading) {
+    if (overlay.layer === 'forecasts' && !overlay.issues.length && !overlay.issuesLoading) {
       fetchIssues(overlay.entity.name, overlay.aspect, overlay.range);
     }
-    renderOverlayContent();
-    return;
-  }
-  if (action === 'source-mode') {
-    overlay.withSources = el.getAttribute('data-on') === '1';
-    if (overlay.withSources) {
-      // Asking for sources is asking to compare them, so the braid steps
-      // aside: two sets of grey lines on one chart read as one set.
-      overlay.said = false;
+    if (overlay.layer === 'sources') {
       fetchSources(overlay.entity, overlay.aspect, overlay.range);
       fetchSourceEvents(overlay.entity, overlay.aspect, overlay.range);
     }
@@ -3581,13 +3581,13 @@ document.addEventListener('click', function (e) {
     var hrs = parseInt(el.getAttribute('data-hours'), 10);
     overlay.range = hrs;
     fetchHistoryRange(overlay.entity.name, overlay.aspect, hrs, overlay.shape);
-    if (overlay.withSources) {
+    if (overlay.layer === 'sources') {
       fetchSources(overlay.entity, overlay.aspect, hrs);
       fetchSourceEvents(overlay.entity, overlay.aspect, hrs);
     }
     // A different window is a different set of issues, and a pin on a
     // forecast that is no longer drawn would be a highlight on nothing.
-    if (overlay.said) {
+    if (overlay.layer === 'forecasts') {
       overlay.issues = [];
       overlay.pinned = null;
       fetchIssues(overlay.entity.name, overlay.aspect, hrs);
