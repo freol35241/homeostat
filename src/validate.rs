@@ -4,8 +4,7 @@ use crate::error::ValidationError;
 use crate::keyspace::{is_reserved_word, PSEUDO_ROOMS};
 use crate::manifest::{
     ControlSpec, DiscoveryMode, ParamSpec, ParamType, UnitKind, WidgetKind, WidgetSpec, WriteMode,
-    CAPABILITIES,
-    VOCABULARY,
+    CAPABILITIES, VOCABULARY,
 };
 use crate::repo::House;
 
@@ -686,7 +685,13 @@ fn check_control(
             )),
             // A step is the grain of a control, so it must name a
             // parameter that gets one: the unit's own, by name.
-            Some(u) if !u.manifest.params.as_ref().is_some_and(|p| p.contains_key(param)) => {
+            Some(u)
+                if !u
+                    .manifest
+                    .params
+                    .as_ref()
+                    .is_some_and(|p| p.contains_key(param)) =>
+            {
                 errors.push(ValidationError::new(
                     "dashboard-unknown-param",
                     subject,
