@@ -39,3 +39,18 @@ widgets = [
 [[view]]
 name = "setpoints"
 kind = "setpoints"
+
+# How coarse a control is, keyed by what it controls rather than by the
+# widget that places it — so the same grain applies on the room card, on a
+# view and in the detail overlay. Without an entry the dashboard derives
+# one (a twentieth of the range), which is a guess the house may know
+# better than. A slider is the one control a finger moves by accident.
+[[control]]
+entity = "livingroom_lamp"
+aspect = "brightness"
+step = 5
+
+[[control]]
+unit = "intrusion"
+param = "cooldown_minutes"
+step = 5

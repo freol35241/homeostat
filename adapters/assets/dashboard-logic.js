@@ -290,7 +290,26 @@
   // value with a tier badge instead. `commandable` is the dashboard's own
   // grant on the capability: without it the control is inert, as for
   // every other widget.
-  function controlFor(field, commandable) {
+  /* ---- declared control grain (docs/design.md, Dashboard) ----
+   *
+   * `dashboard.toml`'s `[[control]]` entries say how coarse a control is,
+   * keyed by what it controls — an entity's aspect, or a unit's parameter
+   * — so one grain applies wherever that control is drawn: room card,
+   * view or overlay. A derived step (a twentieth of the range) is a guess
+   * the house may know better than. Null where nothing is declared, and
+   * the derived step stands.
+   */
+  function declaredStep(controls, target) {
+    var match = (controls || []).filter(function (c) {
+      if (!c || typeof c.step !== 'number' || !(c.step > 0)) return false;
+      return target.entity !== undefined
+        ? c.entity === target.entity && c.aspect === target.aspect
+        : c.unit === target.unit && c.param === target.param;
+    })[0];
+    return match ? match.step : null;
+  }
+
+  function controlFor(field, commandable, step) {
     var cmd = field && field.command;
     if (!cmd) return null;
     var tier = cmd.editable_by || 'owner';
@@ -316,9 +335,14 @@
         return { kind: kind, step: cmd.step, min: c.min, max: c.max, disabled: !commandable };
       }
       var min = c.min !== undefined ? c.min : 0, max = c.max !== undefined ? c.max : 100;
+      // A declared step governs the drag AND the nudge: a slider quantised
+      // to 5 beside buttons that move by 5.7 reads as a bug, and the
+      // quantised drag is what turns a mis-swipe into one notch out
+      // rather than an arbitrary value.
       return {
         kind: 'slider', min: min, max: max,
-        step: cmd.type === 'int' ? 1 : 'any', coarse: coarseStep(min, max, cmd.type === 'int' ? 1 : 0),
+        step: step || (cmd.type === 'int' ? 1 : 'any'),
+        coarse: step || coarseStep(min, max, cmd.type === 'int' ? 1 : 0),
         disabled: !commandable
       };
     }
@@ -346,7 +370,7 @@
    * `{aspect}_valid` beside an undescribed `{aspect}` is consumed the
    * same way a declared pointer is.
    * Rows: { aspect, label, value, display, stale, numeric, control }. */
-  function aspectPlan(entity, state, descriptor, commandable) {
+  function aspectPlan(entity, state, descriptor, commandable, controls) {
     var prefix = 'home/state/' + entity.room + '/' + entity.name + '/';
     var present = {};
     Object.keys(state).forEach(function (k) {
@@ -385,7 +409,9 @@
         display: formatAspect(aspect, field, value),
         stale: stale,
         numeric: typeof value === 'number',
-        control: controlFor(field, commandable)
+        control: controlFor(
+          field, commandable, declaredStep(controls, { entity: entity.name, aspect: aspect })
+        )
       };
     };
 
@@ -411,8 +437,8 @@
    * that has any, so the adapter's own ordering decides — revisited if an
    * adapter ever needs to say otherwise. Card labels drop a trailing
    * "(CODE)" the overlay keeps: "feed line (GT1)" reads as "feed line". */
-  function cardPlan(entity, state, descriptor, commandable) {
-    var sections = aspectPlan(entity, state, descriptor, commandable);
+  function cardPlan(entity, state, descriptor, commandable, controls) {
+    var sections = aspectPlan(entity, state, descriptor, commandable, controls);
     var controls = [];
     var readings = [];
     sections.forEach(function (s) {
@@ -1026,6 +1052,7 @@
     forecastFreshness: forecastFreshness,
     formatAspect: formatAspect,
     controlFor: controlFor,
+    declaredStep: declaredStep,
     coarseStep: coarseStep,
     SELECT_ABOVE: SELECT_ABOVE,
     aspectPlan: aspectPlan,

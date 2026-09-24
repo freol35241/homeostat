@@ -663,6 +663,34 @@ pub struct DashboardFile {
     /// `[[view]]`: the nav, in order.
     #[serde(default)]
     pub view: Vec<ViewSpec>,
+    /// `[[control]]`: the grain a control moves in, per thing controlled.
+    #[serde(default)]
+    pub control: Vec<ControlSpec>,
+}
+
+/// One `[[control]]`: how coarse a slider is for the thing it controls.
+/// Keyed by what is controlled — an entity's aspect, or a unit's parameter
+/// — never by the widget that happens to place it, because the same
+/// control is drawn on a room card, in a view and in the detail overlay,
+/// and a grain that differed between them would read as a bug.
+///
+/// This is the house's say over a rendering the dashboard would otherwise
+/// derive (a twentieth of the range). It is not a layout hint: it says
+/// what the control does, not where it sits.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ControlSpec {
+    /// With `aspect`: the entity whose aspect this control commands.
+    pub entity: Option<String>,
+    /// With `entity`: the commandable aspect. A key segment.
+    pub aspect: Option<String>,
+    /// With `param`: the unit whose parameter this control edits.
+    pub unit: Option<String>,
+    /// With `unit`: the parameter, by name.
+    pub param: Option<String>,
+    /// The step the slider moves in, and the nudge its ± buttons make.
+    /// Positive and finite (`dashboard-control-step`).
+    pub step: f64,
 }
 
 /// One `[[view]]`: either a generated view kept as is (`kind`) or a

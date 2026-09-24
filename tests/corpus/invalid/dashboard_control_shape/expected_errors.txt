@@ -1,0 +1,7 @@
+error[dashboard-control-step] control[2]: `step` must be a positive number, not 0 (dashboard.toml)
+error[dashboard-control-target] control[0]: a control names one target: `entity` with `aspect`, or `unit` with `param` (dashboard.toml)
+error[dashboard-control-target] control[1]: a control names one target: `entity` with `aspect`, or `unit` with `param` (dashboard.toml)
+error[dashboard-invalid-aspect] control[3]: aspect "brightness/**" must be a single key segment (dashboard.toml)
+error[dashboard-unknown-entity] control[3]: control names unknown entity "no_such_lamp" (dashboard.toml)
+error[dashboard-unknown-param] control[4]: control names unknown parameter "no_such_param" on unit "zigbee" (dashboard.toml)
+error[dashboard-unknown-unit] control[5]: control names unknown unit "no_such_unit" (dashboard.toml)

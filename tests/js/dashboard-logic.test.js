@@ -326,6 +326,58 @@ test('richer controls: a select past four values, a stepper for non-temperatures
   assert.equal(logic.coarseStep(0, 1, 0), 0.1);
 });
 
+// dashboard.toml's [[control]]: the grain a control moves in, keyed by
+// what it controls (docs/design.md, Dashboard).
+test('a declared step is found by what it controls, not by where it is drawn', () => {
+  const controls = [
+    { entity: 'lamp', aspect: 'brightness', step: 5 },
+    { unit: 'evening_lights', param: 'grace_minutes', step: 5 },
+  ];
+  assert.equal(logic.declaredStep(controls, { entity: 'lamp', aspect: 'brightness' }), 5);
+  assert.equal(logic.declaredStep(controls, { unit: 'evening_lights', param: 'grace_minutes' }), 5);
+  assert.equal(logic.declaredStep(controls, { entity: 'lamp', aspect: 'color_temp' }), null,
+    'another aspect of the same entity is another control');
+  assert.equal(logic.declaredStep(controls, { unit: 'evening_lights', param: 'off_time' }), null);
+  assert.equal(logic.declaredStep([], { entity: 'lamp', aspect: 'brightness' }), null);
+  assert.equal(logic.declaredStep(undefined, { entity: 'lamp', aspect: 'brightness' }), null);
+});
+
+test('a step that is not a positive number is ignored, never rendered', () => {
+  // The core refuses these at plan time; a page that trusted them would
+  // put step="0" in an attribute and freeze the control.
+  for (const step of [0, -5, 'coarse', null, undefined, NaN]) {
+    assert.equal(
+      logic.declaredStep([{ entity: 'lamp', aspect: 'brightness', step }], { entity: 'lamp', aspect: 'brightness' }),
+      null,
+      `step ${String(step)}`,
+    );
+  }
+});
+
+test('a declared step governs both the drag and the nudge', () => {
+  const field = { kind: 'percent', command: { type: 'float', constraint: { min: 0, max: 100 }, editable_by: 'family' } };
+  const derived = logic.controlFor(field, true);
+  assert.equal(derived.step, 'any');
+  assert.equal(derived.coarse, 5, 'a twentieth of the range, as before');
+
+  const declared = logic.controlFor(field, true, 10);
+  assert.equal(declared.step, 10, 'the drag quantises');
+  assert.equal(declared.coarse, 10, 'and the buttons move by the same amount');
+});
+
+test('a declared step reaches the control through the plan, so no caller can forget it', () => {
+  const controls = [{ entity: HEAT_PUMP.name, aspect: 'fan_speed', step: 10 }];
+  const field = { label: 'fan', kind: 'percent', group: 'climate', command: { type: 'float', constraint: { min: 0, max: 100 }, editable_by: 'family' } };
+  const d = descriptor();
+  d.fields.fan_speed = field;
+  const state = heatPumpState();
+  state[`home/state/${HEAT_PUMP.room}/${HEAT_PUMP.name}/fan_speed`] = 40;
+  const rowOf = (plan) => plan.flatMap((s) => s.rows).find((r) => r.aspect === 'fan_speed');
+  assert.equal(rowOf(logic.aspectPlan(HEAT_PUMP, state, d, true, controls)).control.step, 10);
+  assert.equal(rowOf(logic.aspectPlan(HEAT_PUMP, state, d, true)).control.step, 'any',
+    'and without one the derived step stands');
+});
+
 test('an undescribed entity plans one flat state section, as before', () => {
   const plan = logic.aspectPlan(HEAT_PUMP, heatPumpState(), undefined, true);
   assert.equal(plan.length, 1);

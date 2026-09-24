@@ -123,6 +123,10 @@ class HouseModel:
     entities: list[Entity]
     # dashboard.toml's [[view]] list as written, None without the file.
     views: list[dict] | None = None
+    # dashboard.toml's [[control]] list as written: the grain each named
+    # control moves in, keyed by what it controls rather than by where it
+    # is drawn. Empty without the file.
+    controls: list[dict] = field(default_factory=list)
 
 
 def load_house(root: str | Path = ".") -> HouseModel:
@@ -138,9 +142,12 @@ def load_house(root: str | Path = ".") -> HouseModel:
         zones = dict(tomllib.loads(zones_path.read_text()).get("zones", {}))
 
     views: list[dict] | None = None
+    controls: list[dict] = []
     views_path = root / "dashboard.toml"
     if views_path.exists():
-        views = list(tomllib.loads(views_path.read_text()).get("view", []))
+        dashboard = tomllib.loads(views_path.read_text())
+        views = list(dashboard.get("view", []))
+        controls = list(dashboard.get("control", []))
 
     units: list[UnitInfo] = []
     entities: list[Entity] = []
@@ -163,7 +170,9 @@ def load_house(root: str | Path = ".") -> HouseModel:
             continue
         for path in sorted((root / entities_dir).glob("*.toml")):
             entities.append(_entity_from(path, tomllib.loads(path.read_text()), unit["name"]))
-    return HouseModel(zones=zones, units=units, entities=entities, views=views)
+    return HouseModel(
+        zones=zones, units=units, entities=entities, views=views, controls=controls
+    )
 
 
 def load_adapter(unit: str, root: str | Path = ".") -> AdapterConfig:

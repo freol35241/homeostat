@@ -3,7 +3,8 @@ use std::collections::BTreeMap;
 use crate::error::ValidationError;
 use crate::keyspace::{is_reserved_word, PSEUDO_ROOMS};
 use crate::manifest::{
-    DiscoveryMode, ParamSpec, ParamType, UnitKind, WidgetKind, WidgetSpec, WriteMode, CAPABILITIES,
+    ControlSpec, DiscoveryMode, ParamSpec, ParamType, UnitKind, WidgetKind, WidgetSpec, WriteMode,
+    CAPABILITIES,
     VOCABULARY,
 };
 use crate::repo::House;
@@ -616,6 +617,84 @@ fn check_dashboard(house: &House, errors: &mut Vec<ValidationError>) {
                 }
                 check_widget(house, &rooms, member, &subject, &file, errors);
             }
+        }
+    }
+    for (i, control) in dashboard.control.iter().enumerate() {
+        check_control(house, control, &format!("control[{i}]"), &file, errors);
+    }
+}
+
+/// One `[[control]]`: exactly one target, a reference that resolves, and a
+/// step that is a step. The dashboard reads this wherever it draws that
+/// control; the core only checks that it names something real.
+fn check_control(
+    house: &House,
+    control: &ControlSpec,
+    subject: &str,
+    file: &Option<String>,
+    errors: &mut Vec<ValidationError>,
+) {
+    let entity_target = control.entity.is_some() || control.aspect.is_some();
+    let param_target = control.unit.is_some() || control.param.is_some();
+    let complete = match (entity_target, param_target) {
+        (true, false) => control.entity.is_some() && control.aspect.is_some(),
+        (false, true) => control.unit.is_some() && control.param.is_some(),
+        _ => false,
+    };
+    if !complete {
+        errors.push(ValidationError::new(
+            "dashboard-control-target",
+            subject,
+            "a control names one target: `entity` with `aspect`, or `unit` with `param`",
+            file.clone(),
+        ));
+        return;
+    }
+    if !(control.step.is_finite() && control.step > 0.0) {
+        errors.push(ValidationError::new(
+            "dashboard-control-step",
+            subject,
+            format!("`step` must be a positive number, not {}", control.step),
+            file.clone(),
+        ));
+    }
+    if let (Some(entity), Some(aspect)) = (&control.entity, &control.aspect) {
+        if !house.entities.iter().any(|e| &e.name == entity) {
+            errors.push(ValidationError::new(
+                "dashboard-unknown-entity",
+                subject,
+                format!("control names unknown entity \"{entity}\""),
+                file.clone(),
+            ));
+        }
+        if !valid_segment(aspect) {
+            errors.push(ValidationError::new(
+                "dashboard-invalid-aspect",
+                subject,
+                format!("aspect \"{aspect}\" must be a single key segment"),
+                file.clone(),
+            ));
+        }
+    }
+    if let (Some(unit), Some(param)) = (&control.unit, &control.param) {
+        match house.unit(unit) {
+            None => errors.push(ValidationError::new(
+                "dashboard-unknown-unit",
+                subject,
+                format!("control names unknown unit \"{unit}\""),
+                file.clone(),
+            )),
+            // A step is the grain of a control, so it must name a
+            // parameter that gets one: the unit's own, by name.
+            Some(u) if !u.manifest.params.as_ref().is_some_and(|p| p.contains_key(param)) => {
+                errors.push(ValidationError::new(
+                    "dashboard-unknown-param",
+                    subject,
+                    format!("control names unknown parameter \"{param}\" on unit \"{unit}\""),
+                    file.clone(),
+                ))
+            }
+            Some(_) => {}
         }
     }
 }
