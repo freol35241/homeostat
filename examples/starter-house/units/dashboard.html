@@ -228,16 +228,33 @@ h1.view-title { font-size: 20px; margin: 0 0 16px; }
   vector-effect: non-scaling-stroke; }
 /* A contributing source: grey and thin, so the computed value's accent
    always reads as what the house believes (docs/design.md, Sources). */
-.chart-contributor { fill: none; stroke: var(--muted); stroke-width: 1.2; stroke-linecap: round;
-  stroke-linejoin: round; opacity: .85; vector-effect: non-scaling-stroke; }
+.chart-contributor { fill: none; stroke: var(--muted); stroke-width: 1.5; stroke-linecap: round;
+  stroke-linejoin: round; vector-effect: non-scaling-stroke;
+  /* Dotted, where the forecast is dashed (4 3): both are secondary to the
+     accent's solid record, and they must not read as each other. A zero
+     dash under a round cap IS the dot. */
+  stroke-dasharray: 0 3; }
 .source-legend { display: flex; gap: 10px; flex-wrap: wrap; }
 .source-legend span::before { content: ''; display: inline-block; width: 12px; height: 0;
-  border-top: 2px solid var(--muted); vertical-align: middle; margin-right: 5px; }
+  border-top: 2px dotted var(--muted); vertical-align: middle; margin-right: 5px; }
+/* Naming a source in the legend only identifies a line if the reader can
+   tell the lines apart, and one deliberate grey means they cannot. So the
+   legend lights its own line on demand: emphasis, never a colour a
+   contributor must not own (docs/design.md, Sources). */
+.source-legend span { cursor: default; }
+.chart-contributor.hi { stroke: var(--secondary); stroke-width: 2; opacity: 1; }
+.chart-contributor.dim { opacity: .4; }
+.source-legend span.hi { color: var(--ink); }
+.source-legend span.dim { opacity: .45; }
 .chart-issue.pinned { stroke: var(--issue-pin); stroke-width: 2.4; }
 .chart-issue.hovered { stroke: var(--issue-pin); stroke-width: 2; }
 .chart-note + .chart-note { margin-top: 2px; }
 .chart-forecast { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linecap: round;
   stroke-linejoin: round; stroke-dasharray: 4 3; opacity: .75; vector-effect: non-scaling-stroke; }
+/* Still the house's current belief, so still dashed — but older than the
+   span it has left to say, so it does not get to wear the accent
+   (docs/design.md, Forecasts). */
+.chart-forecast.stale { stroke: var(--muted); opacity: .6; }
 .chart-now { stroke: var(--secondary); stroke-width: 1; stroke-dasharray: 3 3; opacity: .55;
   vector-effect: non-scaling-stroke; }
 .chart-grid { stroke: var(--border); stroke-width: 1; vector-effect: non-scaling-stroke; }
@@ -436,7 +453,7 @@ video-rtc video { width: 100%; display: block; }
 .aspect-label.linked:hover { background-color: var(--accent-tint); color: var(--accent); }
 .aspect-row .aspect-value { color: var(--secondary); font-variant-numeric: tabular-nums; }
 .aspect-row .aspect-value.stale { color: var(--muted); text-decoration: line-through dotted; }
-.aspect-row .stale-mark { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin-left: 6px; }
+.stale-mark { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin-left: 6px; }
 .group-toggle { background: none; border: none; color: var(--muted); font: inherit; font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; cursor: pointer; padding: 0; margin-top: 20px; }
 .empty-hint { color: var(--muted); font-size: 12.5px; padding: 8px 0; }
 .log-feed { margin-top: 10px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px; }
@@ -596,10 +613,14 @@ var overlay = {
   range: 24,             // hours, for history
   rangeData: {},          // hours -> {points, window, loaded, loading}
   cmdData: {},             // hours -> the same, for the cmd series (what was asked)
-  said: false,             // for history: showing stored issues rather than the current forecast
+  // What is drawn beside the record: '' (the value and its current
+  // belief), 'sources' (the contributors it is derived from) or
+  // 'forecasts' (every issue the recorder kept). One at a time — two sets
+  // of thin grey lines on one chart read as one set — so one field, not
+  // a flag each (docs/design.md, Forecasts and Sources).
+  layer: '',
   issues: [],              // decoded stored issues for the current window
   issuesLoading: false,
-  withSources: false,      // for history: drawing the declared contributors too
   sourceData: {},          // "<hours>|<entity>|<aspect>" -> fetched contributor history
   sourceEvents: {},        // same key -> when each source went in or out
   pinned: null,            // the issue time a reader pinned out of the braid
@@ -986,7 +1007,7 @@ function fetchSources(entity, aspect, hours) {
 // The contributors the chart should draw right now: declared, asked for,
 // and arrived. One still loading simply is not drawn yet.
 function drawnSources(entity, aspect, hours) {
-  if (!overlay.withSources) return null;
+  if (overlay.layer !== 'sources') return null;
   var out = [];
   contributorsOf(entity, aspect).forEach(function (c) {
     var d = overlay.sourceData[sourceCacheKey(hours, c)];
@@ -1216,7 +1237,13 @@ function computeChartGeometry(points, width, height, pad, win, forecast, issues,
   // the one place a provider's shape can be judged against what actually
   // happened without opening the braid.
   var beliefs = (forecast || []).map(function (b) {
-    return { source: b.source, points: b.forecast.points, to: b.forecast.to };
+    return {
+      source: b.source, points: b.forecast.points, to: b.forecast.to,
+      // Older than the span it has left to say: drawn, because it is
+      // still the house's current belief, but not drawn as if it were
+      // fresh (docs/design.md, Forecasts).
+      stale: logic.forecastFreshness(b.forecast, Date.now()).stale
+    };
   });
   var allVals = vals.slice();
   beliefs.forEach(function (b) {
@@ -1302,6 +1329,7 @@ function computeChartGeometry(points, width, height, pad, win, forecast, issues,
     geo.forecast = beliefs.map(function (b) {
       return {
         source: b.source,
+        stale: b.stale,
         coords: b.points.map(function (p) {
           var at = place(p.t, p.v);
           return { x: at.x, y: at.y, value: p.v, ts: p.t };
@@ -1346,6 +1374,31 @@ function issueInk(age) {
 // Every live claim about one aspect's future, one per source.
 function forecastsOf(entity, aspect) {
   return logic.forecastsFor(store.forecasts, entity.room, entity.name, aspect);
+}
+
+// The claims that are still about the future. A belief whose horizon has
+// run out is not drawn as one — the mirror keeps a producer's last word
+// for as long as the core lives, and a curve that ends before now says
+// nothing about what is ahead (docs/design.md, Forecasts). It stays in
+// the overlay under `forecasts`, which is where a spent claim is
+// judged against what actually happened.
+function liveForecastsOf(entity, aspect) {
+  return forecastsOf(entity, aspect).filter(function (b) {
+    return !logic.forecastFreshness(b.forecast, Date.now()).expired;
+  });
+}
+
+// When a drawn belief was issued, said out loud. Without it a claim made
+// yesterday reads exactly like one made ten minutes ago.
+function issuedCaption(forecast) {
+  var f = logic.forecastFreshness(forecast, Date.now());
+  if (!f || f.issued === null) return '';
+  // A bare clock is only unambiguous within the day it was said: "issued
+  // 13:00" on a claim made yesterday reads as this afternoon, which is
+  // the misreading this caption exists to prevent. Older than today, the
+  // date comes with it.
+  var sameDay = new Date(f.issued).toDateString() === new Date(Date.now()).toDateString();
+  return 'issued ' + (sameDay ? formatChartClock(f.issued) : formatChartTime(f.issued));
 }
 
 // "min 0.38 at 03:00" — where the horizon goes, named at the hour it
@@ -1438,8 +1491,8 @@ function buildChart(chartId, points, opts) {
       });
     }
     if (geo.contributors) {
-      geo.contributors.forEach(function (c, n) {
-        svg += '<path class="chart-contributor" data-source="' + n + '" d="' +
+      geo.contributors.forEach(function (c) {
+        svg += '<path class="chart-contributor" data-source="' + esc(c.name) + '" d="' +
           chartPathData(c.coords) + '"/>';
       });
     }
@@ -1460,8 +1513,8 @@ function buildChart(chartId, points, opts) {
         // ever drew.
         var head = f.coords[0];
         var joined = last && head && last.x <= head.x ? [last].concat(f.coords) : f.coords;
-        svg += '<path class="chart-forecast" data-source="' + esc(f.source) +
-          '" d="' + chartPathData(joined) + '"/>';
+        svg += '<path class="chart-forecast' + (f.stale ? ' stale' : '') +
+          '" data-source="' + esc(f.source) + '" d="' + chartPathData(joined) + '"/>';
       });
     }
     if (geo.nowX !== undefined) {
@@ -2146,7 +2199,7 @@ function widgetTiles(entity, aspect) {
     var sk = entity.name + '|' + r.aspect;
     ensureHistory(entity.name, r.aspect);
     var s = localState.sparklines[sk];
-    var forecast = forecastsOf(entity, r.aspect);
+    var forecast = liveForecastsOf(entity, r.aspect);
     var spark = s && s.loaded ? buildChart('tile-' + sk, s.points, { height: 36, sizeClass: 'chart-tile', aspect: r.aspect, area: true, window: s.window, forecast: forecast }) : '';
     // A horizon says where a reading is going; today's range says where
     // it has been. The forecast wins the line when there is one, because
@@ -2154,16 +2207,27 @@ function widgetTiles(entity, aspect) {
     // family-tier and has room for ONE claim, so with several sources it
     // falls back to the range rather than picking a provider to believe
     // — comparing them is owner work and lives in the overlay.
-    var caption = forecast.length === 1
+    // A belief carries when it was said, always; a stale one is marked,
+    // because a caption the reader has to do arithmetic on is not a
+    // caption a phone can be read from in three seconds.
+    var ahead = forecast.length === 1
       ? horizonCaption(r.aspect, descriptorField(entity, r.aspect), forecast[0].forecast, Date.now())
-      : (s && s.loaded ? minMaxCaption(s.points) : '');
+      : '';
+    var aged = forecast.length === 1 && logic.forecastFreshness(forecast[0].forecast, Date.now()).stale;
+    var caption = forecast.length === 1
+      ? [ahead, issuedCaption(forecast[0].forecast)].filter(Boolean).join(' \u00b7 ')
+      : '';
+    // With no belief to draw — or several, which a tile has no room to
+    // tell apart — the caption is today's range, as it always was.
+    if (!caption && s && s.loaded) caption = minMaxCaption(s.points);
     // The separator is the character, not the entity: the whole label is
     // upper-cased below, and "&MIDDOT;" is not one.
     var tileLabel = esc(entity.label) + (rows.length > 1 ? ' \u00b7 ' + esc(r.label) : '');
     return '<div class="card tile clickable" data-action="history-detail" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '" data-aspect="' + esc(r.aspect) + '">' +
       '<div class="card-label" title="' + esc(entity.label) + '">' + tileLabel.toUpperCase() + '</div>' +
       '<div class="big' + (r.stale ? ' stale' : '') + '">' + esc(r.display) + '</div>' + spark +
-      '<div class="caption">' + esc(caption) + '</div></div>';
+      '<div class="caption">' + esc(caption) +
+      (aged ? '<span class="stale-mark">stale</span>' : '') + '</div></div>';
   }).join('');
 }
 
@@ -2184,13 +2248,21 @@ function widgetChart(entity, aspect, hours) {
     s = localState.charts[key];
   }
   var value = stateValue(entity.room, entity.name, aspect);
+  var beliefs = shape === 'timeline' ? [] : liveForecastsOf(entity, aspect);
   var chart = !s.loaded ? ''
     : shape === 'timeline'
       ? buildTimeline('chart-' + key, s.points, { height: 64, sizeClass: 'chart-timeline', aspect: aspect, field: field, window: s.window })
-      : buildChart('chart-' + key, s.points, { height: 120, sizeClass: 'chart-card', aspect: aspect, area: true, gridlines: true, yLabels: true, window: s.window, forecast: forecastsOf(entity, aspect) });
+      : buildChart('chart-' + key, s.points, { height: 120, sizeClass: 'chart-card', aspect: aspect, area: true, gridlines: true, yLabels: true, window: s.window, forecast: beliefs });
+  // The same rule as a tile: a drawn belief says when it was said. One
+  // line for one source; with several, the overlay names each.
+  var beliefCaption = beliefs.length === 1
+    ? '<div class="caption">' + esc(issuedCaption(beliefs[0].forecast)) +
+      (logic.forecastFreshness(beliefs[0].forecast, Date.now()).stale
+        ? '<span class="stale-mark">stale</span>' : '') + '</div>'
+    : '';
   return '<div class="card tile clickable span-all" data-action="history-detail" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '" data-aspect="' + esc(aspect) + '">' +
     '<div class="card-label">' + esc(entity.label + ' · ' + ((field && field.label) || aspect)).toUpperCase() + ' <span class="faint">' + esc(hours >= 48 ? Math.round(hours / 24) + 'd' : hours + 'h') + '</span></div>' +
-    '<div class="big">' + esc(logic.formatAspect(aspect, field, value)) + '</div>' + chart + '</div>';
+    '<div class="big">' + esc(logic.formatAspect(aspect, field, value)) + '</div>' + chart + beliefCaption + '</div>';
 }
 
 // People: the person entities, home or away from their presence aspect;
@@ -2866,13 +2938,12 @@ function openHistoryDetail(room, entityName, aspect) {
   overlay.range = 24;
   overlay.rangeData = {};
   overlay.cmdData = {};
-  overlay.said = false;
+  overlay.layer = '';
   overlay.issues = [];
   overlay.pinned = null;
   overlay.lastPoints = null;
-  // Sources are this entity's, so the toggle and the fetched contributor
+  // Sources are this entity's, so the layer and the fetched contributor
   // history do not survive into the next overlay.
-  overlay.withSources = false;
   overlay.sourceData = {};
   overlay.sourceEvents = {};
   fetchHistoryRange(entityName, aspect, 24, overlay.shape);
@@ -2914,6 +2985,36 @@ function renderOverlayContent() {
   byId('overlay-rest').innerHTML = r.rest || '';
   mountCameraLive(r.camera);
   wireChartInteractions(byId('overlay-body'));
+  wireSourceLegend(byId('overlay-body'));
+}
+
+/* Which line is which, on demand: pointing at a source in the legend
+ * lights its line and stands the others down, and a tap holds that until
+ * it is tapped again. Emphasis, not colour — a contributor owning a hue
+ * would compete with the accent the computed value keeps
+ * (docs/design.md, Sources). */
+function wireSourceLegend(root) {
+  var scope = root || document;
+  var entries = scope.querySelectorAll('.source-legend span[data-source]');
+  if (!entries.length) return;
+  var sticky = null;
+  var marks = scope.querySelectorAll('.chart-contributor, .source-legend span');
+  var highlight = function (name) {
+    marks.forEach(function (el) {
+      var own = el.getAttribute('data-source');
+      el.classList.toggle('hi', !!name && own === name);
+      el.classList.toggle('dim', !!name && own !== name);
+    });
+  };
+  entries.forEach(function (el) {
+    var name = el.getAttribute('data-source');
+    el.addEventListener('pointerenter', function () { if (!sticky) highlight(name); });
+    el.addEventListener('pointerleave', function () { if (!sticky) highlight(null); });
+    el.addEventListener('click', function () {
+      sticky = sticky === name ? null : name;
+      highlight(sticky);
+    });
+  });
 }
 
 // The live player for `name`, or none. Mounting is idempotent: the same
@@ -2968,22 +3069,25 @@ function renderHistoryDetailBody() {
   var chips = RANGE_PRESETS.map(function (rp) {
     return '<button data-action="range-chip" data-hours="' + rp.hours + '" class="' + (overlay.range === rp.hours ? 'active' : '') + '">' + rp.label + '</button>';
   }).join('');
-  // The second row appears only where there is a future to have said
-  // anything about, so an ordinary sensor's overlay is unchanged.
-  var modeChips = forecastsOf(entity, aspect).length
-    ? '<div class="seg" style="margin-top:8px;">' +
-      '<button data-action="forecast-mode" data-said="0" class="' + (overlay.said ? '' : 'active') + '">now</button>' +
-      '<button data-action="forecast-mode" data-said="1" class="' + (overlay.said ? 'active' : '') + '">what we said</button>' +
-      '</div>'
-    : '';
-  // And a row for what the value is derived from, where anything is
-  // declared. Owner work like the braid, so it lives here rather than on
-  // a tile: a family wants the temperature, not which sensor was low.
-  var sourceChips = overlay.shape !== 'timeline' && contributorsOf(entity, aspect).length
-    ? '<div class="seg" style="margin-top:8px;">' +
-      '<button data-action="source-mode" data-on="0" class="' + (overlay.withSources ? '' : 'active') + '">value</button>' +
-      '<button data-action="source-mode" data-on="1" class="' + (overlay.withSources ? 'active' : '') + '">with sources</button>' +
-      '</div>'
+  // One row for what is drawn beside the record: the several opinions
+  // behind the value's past, or the several claims about its future.
+  // Both are owner work, which is why they live here and not on a tile —
+  // a family wants the temperature, not which sensor read low — and only
+  // one can be drawn at a time, so they are one control and not two
+  // (docs/design.md, Sources). A chip appears only where the house has
+  // the thing it names, so an ordinary sensor's overlay is unchanged.
+  var layers = [{ id: '', label: 'value' }];
+  if (overlay.shape !== 'timeline' && contributorsOf(entity, aspect).length) {
+    layers.push({ id: 'sources', label: 'sources' });
+  }
+  if (forecastsOf(entity, aspect).length) {
+    layers.push({ id: 'forecasts', label: 'forecasts' });
+  }
+  var layerChips = layers.length > 1
+    ? '<div class="seg" style="margin-top:8px;">' + layers.map(function (l) {
+      return '<button data-action="chart-layer" data-layer="' + l.id + '" class="' +
+        (overlay.layer === l.id ? 'active' : '') + '">' + l.label + '</button>';
+    }).join('') + '</div>'
     : '';
 
   var rd = overlay.rangeData[overlay.range];
@@ -3007,14 +3111,14 @@ function renderHistoryDetailBody() {
     chartHtml = buildChart('detail-chart', points, {
       height: wide ? 440 : 220, sizeClass: wide ? 'chart-detail-wide' : 'chart-detail',
       aspect: aspect, gridlines: true, area: true, yLabels: true, window: win,
-      // In "what we said" the current belief steps aside: drawing it over
+      // Under `forecasts` the current belief steps aside: drawing it over
       // the braid would make one issue look special for no reason.
-      forecast: overlay.said ? null : forecastsOf(entity, aspect),
-      issues: overlay.said ? overlay.issues : null,
+      forecast: overlay.layer === 'forecasts' ? null : liveForecastsOf(entity, aspect),
+      issues: overlay.layer === 'forecasts' ? overlay.issues : null,
       pinned: overlay.pinned,
       // Contributors stand down behind the braid: two greys on one chart,
       // one per issue and one per source, would read as one set of lines.
-      contributors: overlay.said ? null : drawnSources(entity, aspect, overlay.range)
+      contributors: overlay.layer === 'forecasts' ? null : drawnSources(entity, aspect, overlay.range)
     });
     var stats = rangeStats(points);
     statsHtml = '<div class="stat-row">' +
@@ -3029,20 +3133,32 @@ function renderHistoryDetailBody() {
   // averaging two providers into one sentence would state a horizon
   // neither of them predicted.
   var horizonHtml = '';
-  if (!overlay.said) {
+  if (overlay.layer !== 'forecasts') {
     var beliefs = forecastsOf(entity, aspect);
     horizonHtml = beliefs.map(function (b) {
-      var ahead = horizonCaption(aspect, field, b.forecast, Date.now());
-      if (!ahead) return '';
+      var fresh = logic.forecastFreshness(b.forecast, Date.now());
       var who = beliefs.length > 1 ? esc(b.source) + ' · ' : '';
-      return '<div class="chart-note">ahead · ' + who + esc(ahead) + '</div>';
+      var issued = issuedCaption(b.forecast);
+      // A claim whose horizon has run out is not drawn here, so this note
+      // is the only thing that distinguishes "this producer stopped" from
+      // "this aspect has no forecast" — the braid beside it is where the
+      // spent claim itself can still be read.
+      if (fresh.expired) {
+        return '<div class="chart-note">spent · ' + who + 'ran out ' +
+          esc(formatChartTime(b.forecast.to)) + (issued ? ' · ' + esc(issued) : '') + '</div>';
+      }
+      var ahead = horizonCaption(aspect, field, b.forecast, Date.now());
+      if (!ahead && !issued) return '';
+      return '<div class="chart-note">ahead · ' + who +
+        (ahead ? esc(ahead) + (issued ? ' · ' : '') : '') + esc(issued) +
+        (fresh.stale ? '<span class="stale-mark">stale</span>' : '') + '</div>';
     }).join('');
   }
   var braidHtml = '';
-  if (overlay.said) {
+  if (overlay.layer === 'forecasts') {
     braidHtml = '<div class="chart-note" id="braid-column"></div>' +
       '<div class="chart-note">' + esc(
-        overlay.issuesLoading ? 'reading what we said\u2026'
+        overlay.issuesLoading ? 'reading the forecasts\u2026'
           : overlay.issues.length
             ? overlay.issues.length + ' forecast' + (overlay.issues.length === 1 ? '' : 's') +
               (function () {
@@ -3064,7 +3180,7 @@ function renderHistoryDetailBody() {
   // cannot tell them apart — they are all the same grey, deliberately —
   // so naming them is the identification.
   var legendHtml = '';
-  var drawn = overlay.said ? null : drawnSources(entity, aspect, overlay.range);
+  var drawn = overlay.layer === 'forecasts' ? null : drawnSources(entity, aspect, overlay.range);
   if (drawn) {
     var usage = sourceUsageNow(entity, aspect, overlay.range,
                                contributorsOf(entity, aspect));
@@ -3080,17 +3196,18 @@ function renderHistoryDetailBody() {
         var since = excluded && use.since
           ? ' since ' + formatChartClock(use.since / 1000)
           : '';
-        return '<span' + (c.note ? ' title="' + esc(c.note) + '"' : '') + '>' +
+        return '<span data-source="' + esc(c.name) + '"' +
+          (c.note ? ' title="' + esc(c.note) + '"' : '') + '>' +
           esc(c.label) +
           (down ? ' \u00b7 unavailable' : '') +
           (excluded ? ' \u00b7 not used' + since : '') +
           (c.note ? ' \u00b7 ' + esc(c.note) : '') + '</span>';
       }).join('') + '</div>' +
       '<div class="chart-note" id="sources-column"></div>';
-  } else if (overlay.withSources && !overlay.said && contributorsOf(entity, aspect).length) {
+  } else if (overlay.layer === 'sources' && contributorsOf(entity, aspect).length) {
     legendHtml = '<div class="chart-note">reading the sources\u2026</div>';
   }
-  var body = '<div class="seg">' + chips + '</div>' + modeChips + sourceChips +
+  var body = '<div class="seg">' + chips + '</div>' + layerChips +
     '<div class="' + (loaded ? '' : 'chart-loading') + '">' + chartHtml + statsHtml + horizonHtml + '</div>' +
     legendHtml + braidHtml + commandStrip(aspect, field, win);
   return { title: label, body: body };
@@ -3444,22 +3561,16 @@ document.addEventListener('click', function (e) {
     flashParamRow(gUnit, gParam);
     return;
   }
-  if (action === 'forecast-mode') {
-    overlay.said = el.getAttribute('data-said') === '1';
+  if (action === 'chart-layer') {
+    // Choosing one layer is what puts the other away: two sets of thin
+    // grey lines on one chart read as one set.
+    overlay.layer = el.getAttribute('data-layer') || '';
+    // A pin belongs to a braid that may no longer be drawn.
     overlay.pinned = null;
-    if (overlay.said) overlay.withSources = false;
-    if (overlay.said && !overlay.issues.length && !overlay.issuesLoading) {
+    if (overlay.layer === 'forecasts' && !overlay.issues.length && !overlay.issuesLoading) {
       fetchIssues(overlay.entity.name, overlay.aspect, overlay.range);
     }
-    renderOverlayContent();
-    return;
-  }
-  if (action === 'source-mode') {
-    overlay.withSources = el.getAttribute('data-on') === '1';
-    if (overlay.withSources) {
-      // Asking for sources is asking to compare them, so the braid steps
-      // aside: two sets of grey lines on one chart read as one set.
-      overlay.said = false;
+    if (overlay.layer === 'sources') {
       fetchSources(overlay.entity, overlay.aspect, overlay.range);
       fetchSourceEvents(overlay.entity, overlay.aspect, overlay.range);
     }
@@ -3470,13 +3581,13 @@ document.addEventListener('click', function (e) {
     var hrs = parseInt(el.getAttribute('data-hours'), 10);
     overlay.range = hrs;
     fetchHistoryRange(overlay.entity.name, overlay.aspect, hrs, overlay.shape);
-    if (overlay.withSources) {
+    if (overlay.layer === 'sources') {
       fetchSources(overlay.entity, overlay.aspect, hrs);
       fetchSourceEvents(overlay.entity, overlay.aspect, hrs);
     }
     // A different window is a different set of issues, and a pin on a
     // forecast that is no longer drawn would be a highlight on nothing.
-    if (overlay.said) {
+    if (overlay.layer === 'forecasts') {
       overlay.issues = [];
       overlay.pinned = null;
       fetchIssues(overlay.entity.name, overlay.aspect, hrs);
