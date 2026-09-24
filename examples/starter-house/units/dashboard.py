@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "homeostat==0.16.0",
+#     "homeostat==0.16.1",
 #     "aiohttp>=3.12.14,<4",
 # ]
 # ///
@@ -100,6 +100,27 @@ MODEL_TTL_S = 2.0  # a burst of page loads parses the house once
 
 # Vendored assets served at /assets/{name} — allowlisted by filename so
 # the route can't become a path-traversal surface.
+# The page and its assets are ONE artifact: dashboard.html and
+# dashboard-logic.js are written against each other and change together at
+# an upgrade. aiohttp's FileResponse sets ETag and Last-Modified but no
+# Cache-Control, which leaves a browser on heuristic freshness — commonly a
+# tenth of the file's age — so a file untouched for a fortnight earns about
+# a day during which it is not revalidated at all. Upgrade inside that
+# window and the browser pairs the new page with the old logic: a page that
+# renders empty and takes no taps, with a healthy backend behind it and
+# nothing in the log. The failure gets likelier the longer a release has
+# been stable, and lands hardest on a phone, where there is no console and
+# no easy hard reload.
+#
+# `no-cache` is "cache it, but revalidate before use": the ETag makes the
+# revalidation a 304 on a LAN or a tunnel, and the heuristic is gone. The
+# alternative — versioned asset URLs, cached hard — was not taken: the
+# version would have to reach three `src` attributes in a file the design
+# keeps hand-editable, either by a serve-time rewrite or by hand at every
+# release, and a hand-edited version is the drift that sync_starter.sh
+# exists to prevent.
+REVALIDATE = {"Cache-Control": "no-cache"}
+
 ASSETS = {
     "leaflet.js": "text/javascript",
     "leaflet.css": "text/css",
@@ -694,7 +715,7 @@ class Model:
 def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Application:
 
     async def index(request: web.Request) -> web.StreamResponse:
-        return web.FileResponse(page)
+        return web.FileResponse(page, headers=REVALIDATE)
 
     async def api_model(request: web.Request) -> web.Response:
         await model.refresh()
@@ -707,7 +728,9 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         content_type = ASSETS.get(name)
         if content_type is None:
             raise web.HTTPNotFound()
-        return web.FileResponse(assets_dir / name, headers={"Content-Type": content_type})
+        return web.FileResponse(
+            assets_dir / name, headers={"Content-Type": content_type, **REVALIDATE}
+        )
 
     async def api_tiles(request: web.Request) -> web.StreamResponse:
         path = tiles_path()
