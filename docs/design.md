@@ -1381,6 +1381,28 @@ Decisions and why:
   unavoidable; server-rendered-with-sprinkles was rejected on those
   grounds.
 
+- **The page and its assets are one artifact (added 2026-09-24, found on
+  a real upgrade).** `dashboard.html` and `assets/dashboard-logic.js` are
+  written against each other and change together at a release. aiohttp
+  serves both with `ETag` and `Last-Modified` and no `Cache-Control`,
+  which leaves the browser on heuristic freshness — commonly a tenth of
+  the file's age — so a file untouched for a fortnight earns roughly a day
+  in which it is never revalidated. Upgrade inside that window and the
+  browser pairs the new page with the cached old logic: views render
+  empty, taps do nothing, and the backend is healthy throughout, so the
+  symptom points at the release rather than at the cache. It gets likelier
+  the longer a release has been stable, and lands hardest on a phone,
+  where there is no console and no easy hard reload. Both are now served
+  `Cache-Control: no-cache` — cache it, but revalidate before use — which
+  the ETag makes a 304 and which removes the heuristic entirely. Versioned
+  asset URLs cached hard were rejected: the version would have to reach
+  three `src` attributes in a file this design keeps hand-editable, by a
+  serve-time rewrite or by hand at each release, and a hand-edited version
+  is exactly the drift `sync_starter.sh` exists to prevent. `tiles.pmtiles`
+  is deliberately left alone: it is an operator-supplied region extract
+  fetched by ranges, a stale map is not a broken page, and revalidating
+  every range request is a real cost over a tunnel.
+
 Settled after wireframe review (2026-07-15, sheets in
 `docs/wireframes/` — the hybrid sheet is the direction; A and B are
 the exploration that produced it):
