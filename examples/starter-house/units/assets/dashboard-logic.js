@@ -182,15 +182,10 @@
       }
     });
 
-    // state: connectivity — WAN or a VPN tunnel down
+    // state: connectivity — WAN down
     entities.filter(function (e) { return e.capability === 'router'; }).forEach(function (e) {
       if (stateValue(state, e.room, e.name, 'wan') === false) {
         deviations.push(entityRow(e, e.label + ' — WAN down'));
-      }
-    });
-    entities.filter(function (e) { return e.capability === 'vpn'; }).forEach(function (e) {
-      if (stateValue(state, e.room, e.name, 'up') === false) {
-        deviations.push(entityRow(e, e.label + ' down'));
       }
     });
 
@@ -665,6 +660,33 @@
     return { min: lo, max: hi };
   }
 
+  // How old a claim about the future is, and whether it still has one.
+  // `issued` is the whole staleness story (docs/design.md, Forecasts) and
+  // the max age is the CONSUMER's, never a core TTL — so this is the
+  // dashboard's policy, stated once, here:
+  //   expired — the horizon has run out, so there is nothing ahead to draw
+  //             and the claim is no longer about the future at all;
+  //   stale   — older than the span it still has left to say. Self-scaling
+  //             rather than a constant per aspect: a day-ahead curve
+  //             issued at 13:00 is fresh all evening and stale by the next
+  //             afternoon, when its successor is long overdue, while a
+  //             ten-minute-old two-day forecast never trips it.
+  // A document whose `issued` did not parse has no age, so it can run out
+  // but is never called stale — the page does not guess at a fact the
+  // producer failed to state.
+  function forecastFreshness(forecast, now) {
+    if (!forecast) return null;
+    var remaining = forecast.to - now;
+    var age = forecast.issued === null ? null : now - forecast.issued;
+    return {
+      issued: forecast.issued,
+      age: age,
+      remaining: remaining,
+      expired: remaining <= 0,
+      stale: remaining > 0 && age !== null && age > remaining
+    };
+  }
+
   /* ---- declared sources (docs/design.md, Sources) ----
    *
    * What a computed value is derived from, as the overlay wants it. The
@@ -1001,6 +1023,7 @@
     columnAt: columnAt,
     valueAt: valueAt,
     horizonSummary: horizonSummary,
+    forecastFreshness: forecastFreshness,
     formatAspect: formatAspect,
     controlFor: controlFor,
     coarseStep: coarseStep,
