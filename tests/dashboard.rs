@@ -362,6 +362,27 @@ async fn dashboard_serves_the_family_surface() {
     let (status, _) = http_request(&addr, "GET", "/", &[], None);
     assert_eq!(status, 200);
 
+    // ...and tells the browser to revalidate it. The page and its logic
+    // asset are one artifact written against each other; without this the
+    // browser is on heuristic freshness and an upgrade can pair the new
+    // page with the cached old logic — an empty page that takes no taps,
+    // with a healthy backend behind it (docs/design.md, Dashboard).
+    let revalidates = |path: &str| {
+        let (status, headers, _) = http_request_bytes(&addr, path, &[]);
+        assert_eq!(status, 200, "{path}");
+        let cache_control = headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case("cache-control"))
+            .map(|(_, value)| value.to_ascii_lowercase())
+            .unwrap_or_else(|| panic!("{path} served without Cache-Control"));
+        assert!(
+            cache_control.contains("no-cache"),
+            "{path}: Cache-Control {cache_control:?} lets a browser skip revalidation"
+        );
+    };
+    revalidates("/");
+    revalidates("/assets/dashboard-logic.js");
+
     // Vendored map assets and the extracted page logic are served,
     // allowlisted by filename.
     for name in [
