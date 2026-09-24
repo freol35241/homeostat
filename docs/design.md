@@ -1526,6 +1526,63 @@ the exploration that produced it):
     looking for.
   - *`[dashboard] pin` is retired* (`entity-dashboard-retired`, naming
     the `tile` widget that replaces it). One way to place a reading.
+- **A reader's choices about a chart belong to the overlay, not to its
+  DOM** (added 2026-09-24, from living with it). Live state re-renders the
+  detail panel — a forecast re-issue is enough — which replaces its nodes
+  and every class on them. The braid's pin was already held in overlay
+  state for that reason; the source legend's was not, so tapping a
+  contributor to light its line held only until the next delta, after
+  which the highlight was re-derived from wherever the pointer happened to
+  be: a pin that silently dropped, or moved to another source, while the
+  reader was still reading it. Both pins now live in the overlay and are
+  re-applied on each render. The general rule, since this is the second
+  time: anything a reader chose survives a re-render only if it is held
+  outside the markup.
+- **The house says how coarse a control is: `[[control]]` (settled
+  2026-09-24).** The dashboard derives a slider's grain from its range — a
+  twentieth, rounded — which is a guess, and the guess is wrong wherever
+  the house knows the useful increment (brightness in fives, a cooldown in
+  whole minutes). A derived grain also leaves the accidental-drag problem
+  above at its worst: a mis-swipe lands on an arbitrary number rather than
+  one notch out. So `dashboard.toml` grows a second kind of entry beside
+  its views — `[[control]]`, naming `entity` + `aspect` or `unit` +
+  `param`, and a positive `step` — validated at plan time like every other
+  reference in the file (`dashboard-control-target`,
+  `dashboard-control-step`, `dashboard-unknown-param`). Three things this
+  settles, each argued:
+  - *It is keyed by what is controlled, never by the widget that places
+    it.* The same control is drawn on a room card, on a view and in the
+    detail overlay; a step carried by a widget would make one control
+    coarse in one place and fine in another, and would say nothing at all
+    about the overlay, which is reached by tapping rather than by
+    placement. The page therefore reads it through the aspect plan, where
+    no caller can forget it.
+  - *This is not the per-widget layout hint that was rejected above.*
+    `span` and a column count were refused because where a card sits is
+    the dashboard's own business. A step is not where a control sits but
+    what it does, and the house genuinely knows things about its own
+    devices that the descriptor's range cannot express.
+  - *A declared step governs the drag and the nudge together.* A slider
+    quantised to 5 beside ± buttons moving by 5.7 reads as a bug. Nothing
+    else about the control changes: the descriptor still decides whether
+    the control is a slider, a dial or a stepper, and `[[control]]` cannot
+    turn one into another — vocabulary stays the adapter's, rendering
+    stays the dashboard's.
+- **A family parameter prints its manifest default** (added 2026-09-24).
+  A slider moved by accident has nothing to undo it with, and the honest
+  cheap answer is not an undo but the number it came from: the caption
+  under every param control now reads `0–60 · default 5`. An entity aspect
+  has no default to print and gets nothing — an undo of the last command
+  is the thing that would answer it there, and it is deliberately not
+  built on spec.
+- **A range input must not steal a scroll** (added 2026-09-24). A slider
+  is the one control a finger can operate by accident: a page scroll that
+  begins on the thumb drags it, which on a phone commands the device. The
+  inputs take `touch-action: pan-y`, giving vertical panning back to the
+  page and keeping horizontal drags for the control — the same trade the
+  scrubbable chart makes. This is containment rather than a cure: the
+  value can still be changed in one gesture with nothing to undo it, which
+  is the open half of the problem.
 - **Widgets compose: the `group` widget (settled 2026-09-18).** A view
   was a flat list of cards, so "the dial, and the two traces that explain
   it" could only be three cards the eye had to associate. A `group`

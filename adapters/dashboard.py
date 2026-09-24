@@ -254,6 +254,10 @@ def build_model(model: house.HouseModel, granted: set[str]) -> dict:
         # dashboard.toml's views as written (core-validated), or null: the
         # page then renders its generated views.
         "views": model.views,
+        # ...and the grain each named control moves in. Keyed by what is
+        # controlled, so the page applies it wherever that control is
+        # drawn — room card, view or overlay.
+        "controls": model.controls,
     }
 
 

@@ -370,6 +370,28 @@ pub const CODES: &[(&str, &str)] = &[
          manifest under `units/`.",
     ),
     (
+        "dashboard-control-target",
+        "A `[[control]]` in `dashboard.toml` does not name exactly one thing \
+         to control: `entity` with `aspect`, or `unit` with `param`. A \
+         control is keyed by what it commands, never by the widget that \
+         places it — the same control is drawn on a room card, on a view \
+         and in the detail overlay, and a grain that differed between them \
+         would read as a bug.",
+    ),
+    (
+        "dashboard-control-step",
+        "A `[[control]]`'s `step` is not a positive number. It is the \
+         distance the slider moves and the nudge its ± buttons make, so \
+         zero or a negative is not a coarser control but no control at all.",
+    ),
+    (
+        "dashboard-unknown-param",
+        "A `[[control]]` in `dashboard.toml` names a parameter the unit's \
+         manifest does not declare. The control tunes something the house \
+         already has; a typo here would silently leave the derived step in \
+         place.",
+    ),
+    (
         "state-publish-unbound",
         "A publish under `home/state/` must name, literally, the room and entity \
          of an entity this unit binds (or use `{room}`/`{entity}` templates). \

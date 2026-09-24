@@ -1,0 +1,40 @@
+schema = 1
+
+[[view]]
+name = "now"
+widgets = [{ kind = "entity", entity = "kitchen_lamp" }]
+
+# Neither target complete: an aspect with no entity.
+[[control]]
+aspect = "brightness"
+step = 5
+
+# Both targets at once.
+[[control]]
+entity = "kitchen_lamp"
+aspect = "brightness"
+unit = "zigbee"
+param = "transition_s"
+step = 5
+
+# A step that is not a step.
+[[control]]
+entity = "kitchen_lamp"
+aspect = "brightness"
+step = 0
+
+# References that do not resolve.
+[[control]]
+entity = "no_such_lamp"
+aspect = "brightness/**"
+step = 5
+
+[[control]]
+unit = "zigbee"
+param = "no_such_param"
+step = 5
+
+[[control]]
+unit = "no_such_unit"
+param = "transition_s"
+step = 5

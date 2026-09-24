@@ -31,3 +31,12 @@ widgets = [
   { kind = "room", room = "hallway" },
   { kind = "room", room = "porch" },
 ]
+
+# The grain a control moves in, keyed by what it controls — so a brightness
+# slider is as coarse on the room card as in the detail overlay. Without an
+# entry the dashboard derives one from the range. `homeostat plan` refuses
+# a control that names nothing.
+[[control]]
+entity = "livingroom_lamp"
+aspect = "brightness"
+step = 5

@@ -346,7 +346,12 @@ h1.view-title { font-size: 20px; margin: 0 0 16px; }
 .slider-row .slabel { flex: 0 0 70px; color: var(--secondary); }
 .slider-row .sval { flex: 0 0 auto; min-width: 40px; text-align: right; color: var(--ink); font-variant-numeric: tabular-nums; }
 
-input[type=range] { flex: 1 1 40px; min-width: 40px; -webkit-appearance: none; appearance: none; height: 2px;
+/* A finger scrolling the page past a slider must not drag it. `pan-y`
+   gives vertical panning back to the page and keeps horizontal drags for
+   the control — the same trade the scrubbable chart makes above. Without
+   it a scroll that starts on the thumb commands the device, and on a
+   phone that is most of the surface. */
+input[type=range] { touch-action: pan-y; flex: 1 1 40px; min-width: 40px; -webkit-appearance: none; appearance: none; height: 2px;
   background: var(--border); border-radius: 1px; outline: none; }
 input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%;
   background: var(--accent); cursor: pointer; border: 2px solid var(--card); box-shadow: 0 1px 2px rgba(0,0,0,.2); }
@@ -624,6 +629,7 @@ var overlay = {
   sourceData: {},          // "<hours>|<entity>|<aspect>" -> fetched contributor history
   sourceEvents: {},        // same key -> when each source went in or out
   pinned: null,            // the issue time a reader pinned out of the braid
+  sourcePinned: null,      // the contributor a reader pinned out of the legend
   lastPoints: null,
   log: null,               // for unit: {lines, loaded, loading}
   expanded: {}              // for entity: group -> true when a collapsed section is opened
@@ -1372,6 +1378,12 @@ function issueInk(age) {
 }
 
 // Every live claim about one aspect's future, one per source.
+// dashboard.toml's [[control]] entries, or none. The house's say over a
+// control's grain, applied wherever that control is drawn.
+function houseControls() {
+  return (store.model && store.model.controls) || [];
+}
+
 function forecastsOf(entity, aspect) {
   return logic.forecastsFor(store.forecasts, entity.room, entity.name, aspect);
 }
@@ -1860,11 +1872,14 @@ function widgetForLight(entity) {
     var pct = typeof b === 'number' ? Math.round((b / 254) * 100) : 0;
     if (localState.sliderDrag[bkey] !== undefined) pct = localState.sliderDrag[bkey];
     var nudgeAttrs = ' data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '"' + (inert || typeof b !== 'number' ? ' disabled' : '');
+    // This is a percent the house may want in fives; the bespoke light
+    // controls read the same [[control]] entries as every other slider.
+    var bstep = logic.declaredStep(houseControls(), { entity: entity.name, aspect: 'brightness' });
     html += '<div class="slider-row entity-sub"><span class="slabel">brightness</span>' +
-      '<button class="step-btn" data-action="brightness-step"' + nudgeAttrs + ' data-delta="-10" aria-label="dimmer">&minus;</button>' +
-      '<input type="range" min="0" max="100" value="' + pct + '"' + (inert ? ' disabled' : '') + ' data-action="slider" data-kind="brightness" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '">' +
+      '<button class="step-btn" data-action="brightness-step"' + nudgeAttrs + ' data-delta="' + esc(-(bstep || 10)) + '" aria-label="dimmer">&minus;</button>' +
+      '<input type="range" min="0" max="100"' + (bstep ? ' step="' + esc(bstep) + '"' : '') + ' value="' + pct + '"' + (inert ? ' disabled' : '') + ' data-action="slider" data-kind="brightness" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '">' +
       '<span class="sval">' + pct + '%</span>' +
-      '<button class="step-btn" data-action="brightness-step"' + nudgeAttrs + ' data-delta="10" aria-label="brighter">+</button></div>';
+      '<button class="step-btn" data-action="brightness-step"' + nudgeAttrs + ' data-delta="' + esc(bstep || 10) + '" aria-label="brighter">+</button></div>';
   }
   if (entity.features && entity.features.indexOf('color_temp') !== -1) {
     var ct = stateValue(entity.room, entity.name, 'color_temp');
@@ -2001,7 +2016,7 @@ function widgetForCamera(entity) {
 // stepper row the undescribed climate widget degrades to in a narrow
 // column. Which readings are headline is dashboard-logic.js's cardPlan.
 function widgetForDescribed(entity) {
-  var plan = logic.cardPlan(entity, store.state, store.aspects[entity.name], !controlDisabled(entity));
+  var plan = logic.cardPlan(entity, store.state, store.aspects[entity.name], !controlDisabled(entity), houseControls());
   var badge = entity.write_mode === 'arbitrated' ? '<span class="badge-arbitrated">ARBITRATED</span>' : '';
   var control = plan.controls.length ? renderAspectControl(entity, plan.controls[0]) : '';
   var readings = plan.readings.map(function (r) {
@@ -2332,7 +2347,7 @@ function widgetParams(unit) {
 // entity with neither falls back to its own row.
 function widgetDial(entity, aspect) {
   var rows = [];
-  logic.aspectPlan(entity, store.state, store.aspects[entity.name], !controlDisabled(entity)).forEach(function (s) {
+  logic.aspectPlan(entity, store.state, store.aspects[entity.name], !controlDisabled(entity), houseControls()).forEach(function (s) {
     s.rows.forEach(function (r) { rows.push(r); });
   });
   var row = rows.filter(function (r) { return r.control && r.control.kind === 'dial' && (!aspect || r.aspect === aspect); })[0];
@@ -2360,7 +2375,7 @@ var BURNER_COMMANDS = ['on', 'power_level'];
 
 function widgetBurner(entity) {
   var rows = {};
-  logic.aspectPlan(entity, store.state, store.aspects[entity.name], !controlDisabled(entity))
+  logic.aspectPlan(entity, store.state, store.aspects[entity.name], !controlDisabled(entity), houseControls())
     .forEach(function (s) { s.rows.forEach(function (r) { rows[r.aspect] = r; }); });
 
   var lit = rows.on && rows.on.value === true;
@@ -2621,7 +2636,8 @@ function renderParamControl(unitName, pname, p) {
     var c = p.constraint || {};
     var min = c.min !== undefined ? c.min : 0;
     var max = c.max !== undefined ? c.max : 100;
-    var step = p.type === 'float' ? 'any' : '1';
+    var declared = logic.declaredStep(houseControls(), { unit: unitName, param: pname });
+    var step = declared ? String(declared) : (p.type === 'float' ? 'any' : '1');
     var slideKey = unitName + '|' + pname;
     var shown = localState.sliderDrag[slideKey] !== undefined ? localState.sliderDrag[slideKey] : value;
     return '<div class="slider-row" style="padding-left:0;">' +
@@ -2630,6 +2646,16 @@ function renderParamControl(unitName, pname, p) {
   }
   // string fallback
   return '<input type="text" id="' + id + '" value="' + esc(value === undefined ? '' : value) + '" data-action="param-text" data-unit="' + esc(unitName) + '" data-param="' + esc(pname) + '">';
+}
+
+// What the manifest says this parameter is, so a value nudged off it can
+// be put back by reading rather than by remembering. A slider is easy to
+// move by accident and there is nothing to undo it with; the number it
+// came from is the next best thing, and it is house text the page already
+// has. A param with no default has nothing to say here.
+function paramDefaultCaption(p) {
+  if (p.default === undefined || p.default === null) return '';
+  return 'default ' + String(p.default);
 }
 
 function familyEditable(p) { return p.editable_by === 'family'; }
@@ -2651,7 +2677,9 @@ function renderParamRow(unitName, pname, p, bare) {
   return '<div class="param-row" id="paramrow-' + unitName + '-' + pname + '"><div class="param-head">' +
     '<span class="name" title="' + esc(unitLabel(unitName)) + ' · ' + esc(pname) + '">' + (bare ? '' : esc(unitLabel(unitName)) + ' · ') + esc(pname) + '</span></div>' +
     body +
-    '<div class="param-caption" title="' + esc(JSON.stringify(p.constraint || {})) + '">' + esc(paramConstraintCaption(p)) + '</div></div>';
+    '<div class="param-caption" title="' + esc(JSON.stringify(p.constraint || {})) + '">' +
+    esc([paramConstraintCaption(p), paramDefaultCaption(p)].filter(Boolean).join(' \u00b7 ')) +
+    '</div></div>';
 }
 
 // Setpoints is the family's levers: family-editable params only. Owner
@@ -2941,6 +2969,7 @@ function openHistoryDetail(room, entityName, aspect) {
   overlay.layer = '';
   overlay.issues = [];
   overlay.pinned = null;
+  overlay.sourcePinned = null;
   overlay.lastPoints = null;
   // Sources are this entity's, so the layer and the fetched contributor
   // history do not survive into the next overlay.
@@ -2997,7 +3026,14 @@ function wireSourceLegend(root) {
   var scope = root || document;
   var entries = scope.querySelectorAll('.source-legend span[data-source]');
   if (!entries.length) return;
-  var sticky = null;
+  // The pin belongs to the overlay, not to this wiring. Live state
+  // re-renders the panel — a forecast re-issue is enough — which throws
+  // away these nodes and every class on them, and the fresh closure then
+  // took its highlight from whatever the pointer happened to be over: a
+  // pin that quietly moved to another source, or vanished, while the
+  // reader was still reading. Same reason the braid's pin lives in
+  // `overlay.pinned`.
+  var sticky = overlay.sourcePinned || null;
   var marks = scope.querySelectorAll('.chart-contributor, .source-legend span');
   var highlight = function (name) {
     marks.forEach(function (el) {
@@ -3012,9 +3048,13 @@ function wireSourceLegend(root) {
     el.addEventListener('pointerleave', function () { if (!sticky) highlight(null); });
     el.addEventListener('click', function () {
       sticky = sticky === name ? null : name;
+      overlay.sourcePinned = sticky;
       highlight(sticky);
     });
   });
+  // Re-apply on every wiring, so a re-render restores the pin rather than
+  // dropping it.
+  highlight(sticky);
 }
 
 // The live player for `name`, or none. Mounting is idempotent: the same
@@ -3289,7 +3329,7 @@ function renderDial(action, attrs, o) {
 // commanded aspect — what the dial shows as "now".
 function currentTemperatureOf(entity, except) {
   var rows = [];
-  logic.aspectPlan(entity, store.state, store.aspects[entity.name], false).forEach(function (s) {
+  logic.aspectPlan(entity, store.state, store.aspects[entity.name], false, houseControls()).forEach(function (s) {
     s.rows.forEach(function (r) { rows.push(r); });
   });
   var field = function (r) { return descriptorField(entity, r.aspect); };
@@ -3357,7 +3397,7 @@ function renderEntityDetailBody() {
   // one flat State list. A described climate's declared commands render
   // in their own group, so its Controls row is not repeated.
   var descriptor = store.aspects[entity.name];
-  var plan = logic.aspectPlan(entity, store.state, descriptor, !controlDisabled(entity));
+  var plan = logic.aspectPlan(entity, store.state, descriptor, !controlDisabled(entity), houseControls());
   var sections = plan.map(function (section) {
     var open = !section.collapsed || overlay.expanded[section.group];
     var head = section.collapsed
@@ -3565,8 +3605,9 @@ document.addEventListener('click', function (e) {
     // Choosing one layer is what puts the other away: two sets of thin
     // grey lines on one chart read as one set.
     overlay.layer = el.getAttribute('data-layer') || '';
-    // A pin belongs to a braid that may no longer be drawn.
+    // A pin belongs to a braid, or a legend, that may no longer be drawn.
     overlay.pinned = null;
+    overlay.sourcePinned = null;
     if (overlay.layer === 'forecasts' && !overlay.issues.length && !overlay.issuesLoading) {
       fetchIssues(overlay.entity.name, overlay.aspect, overlay.range);
     }
