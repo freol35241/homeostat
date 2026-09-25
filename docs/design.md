@@ -1712,7 +1712,37 @@ the exploration that produced it):
   deviation rules, WebSocket store application, presence-key parsing)
   into `assets/dashboard-logic.js` so `node --test tests/js` — Node's
   built-in runner, zero packages — can pin it; the DOM wiring stays in
-  the page and stays untested by design.
+  the page.
+  - **Amended 2026-09-25 (#181): the wiring is no longer untested, and
+    the line moved.** "Untested by design" held while the page was
+    wiring; it is now 3,700 lines and 150 functions, and every rendering
+    bug this project has had was found by a person opening a browser —
+    a pin that died on a re-render, `&MIDDOT;` in an upper-cased label, a
+    spent forecast blanking a caption, three key rebuilds that dropped a
+    segment. `tests/browser` runs the real page in a real browser against
+    canned fixtures, asserting through the DOM and the network only.
+    Three things were settled with it, each because the obvious version
+    is worse:
+    - *It is not sold as prediction.* Asked honestly whether a suite
+      written before those four bugs would have contained the assertion
+      for each, the answer is one, optimistically two. What it carries is
+      lock-in of rules already learned — "what a reader chose survives a
+      re-render only if it is held outside the markup" has five instances
+      and one shipped broken because nobody re-checked the others — and a
+      broad net (no page errors, every view renders, every widget kind
+      draws) whose odds against an unnamed bug beat any hand-picked
+      assertion. **Discovery stays manual**: browser-verify the change.
+    - *The house behind the page is canned, and the fixtures are watched.*
+      A supervisor per test would be slow and would make the states worth
+      testing — a spent forecast, a hold at each band, a contributor that
+      dropped out — cost minutes each. The price is drift, paid for by one
+      canary in `tests/dashboard.rs` that compares a real `/api/model`'s
+      field names against the fixture's.
+    - *Decisions keep moving out.* `chartGeometry` went to the logic
+      module with the suite in place to catch the move, and the rule for
+      what follows it is: arithmetic and selection move, markup stays.
+      Arithmetic asserted on numbers is worth more than the same
+      arithmetic read back out of a DOM.
 
 ## ESPHome adapter (settled 2026-07-16)
 

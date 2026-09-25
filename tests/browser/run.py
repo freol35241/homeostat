@@ -132,6 +132,190 @@ class Smoke(PageTest):
         self.assertEqual(pinned, ["health", "notshown"])
 
 
+class ChoiceSurvivesRerender(PageTest):
+    """`docs/design.md`, Dashboard: what a reader chose survives a
+    re-render only if it is held outside the markup.
+
+    Live state re-renders the panel and replaces its nodes; the rule has
+    five instances and one of them (the source legend's pin) shipped
+    broken because nobody re-checked the others. One test each, so the
+    insight stays a checklist item.
+    """
+
+    async def rerender(self) -> None:
+        """A state delta, which is what re-renders the panel in a house."""
+        await self.house.push(
+            {
+                "type": "state",
+                "key": "home/state/livingroom/livingroom_temp/temperature",
+                "value": 20.9,
+            }
+        )
+        await self.page.wait_for_timeout(400)
+
+    async def open_sources(self) -> None:
+        await self.view("heating")
+        await self.page.click(
+            '[data-action="history-detail"][data-entity="downstairs_temperature"]'
+        )
+        await self.page.wait_for_timeout(700)
+        await self.page.click('[data-action="chart-layer"][data-layer="sources"]')
+        await self.page.wait_for_timeout(700)
+
+    async def test_a_pinned_source_stays_pinned(self):
+        await self.open_sources()
+        entries = self.page.locator(".source-legend span[data-source]")
+        self.assertGreater(await entries.count(), 1, "two contributors to tell apart")
+        name = await entries.nth(1).get_attribute("data-source")
+        await entries.nth(1).click()
+        await self.page.mouse.move(5, 5)  # a hover must not be what holds it
+
+        await self.rerender()
+
+        highlighted = self.page.locator(".source-legend span.hi")
+        self.assertEqual(await highlighted.count(), 1, "the pin survived")
+        self.assertEqual(await highlighted.get_attribute("data-source"), name)
+
+    async def test_the_chosen_layer_stays_chosen(self):
+        await self.open_sources()
+        await self.rerender()
+        active = self.page.locator('[data-action="chart-layer"].active')
+        self.assertEqual(await active.get_attribute("data-layer"), "sources")
+
+    async def test_the_chosen_range_stays_chosen(self):
+        await self.view("heating")
+        await self.page.click('[data-action="history-detail"][data-entity="livingroom_temp"]')
+        await self.page.wait_for_timeout(700)
+        await self.page.click('[data-action="range-chip"][data-hours="168"]')
+        await self.page.wait_for_timeout(700)
+
+        await self.rerender()
+
+        active = self.page.locator('[data-action="range-chip"].active')
+        self.assertEqual(await active.get_attribute("data-hours"), "168")
+
+    async def test_an_unsent_drag_is_not_snatched_back(self):
+        # A slider moved but not RELEASED holds the reader's value, not the
+        # house's: a delta mid-drag that reset it would fight the finger.
+        # `input` is the drag, `change` is the release — Playwright's fill()
+        # fires both, which is a finished drag and a different test.
+        await self.view("downstairs")
+        slider = self.page.locator(
+            'input[data-action="slider"][data-kind="brightness"][data-entity="livingroom_lamp"]'
+        )
+        await slider.evaluate(
+            "el => { el.value = '35'; el.dispatchEvent(new Event('input', { bubbles: true })); }"
+        )
+        await self.page.wait_for_timeout(200)
+        self.assertEqual(self.house.posted("/api/cmd"), [], "a drag in progress is not a command")
+
+        await self.rerender()
+
+        self.assertEqual(await slider.input_value(), "35")
+
+        # Releasing it is what commands, once — and in the device's scale,
+        # not the slider's: the control is a percent, `brightness` is
+        # 0-254, so 35 % leaves as 89.
+        await slider.dispatch_event("change")
+        await self.page.wait_for_timeout(300)
+        self.assertEqual(
+            self.house.posted("/api/cmd"),
+            [{"room": "livingroom", "entity": "livingroom_lamp", "aspect": "brightness", "value": 89}],
+        )
+
+
+class RulesAboutControls(PageTest):
+    """The house's say over a control, and the command's own stages."""
+
+    async def test_a_declared_step_reaches_the_slider_and_its_buttons(self):
+        # dashboard.toml's [[control]] for this lamp says 5.
+        await self.view("downstairs")
+        slider = self.page.locator(
+            'input[data-action="slider"][data-kind="brightness"][data-entity="livingroom_lamp"]'
+        )
+        self.assertEqual(await slider.get_attribute("step"), "5")
+        self.assertEqual(
+            await slider.evaluate("el => getComputedStyle(el).touchAction"),
+            "pan-y",
+            "a scroll that starts on the thumb must not drag it",
+        )
+        nudge = self.page.locator(
+            '[data-action="brightness-step"][data-entity="livingroom_lamp"]'
+        ).first
+        self.assertEqual(await nudge.get_attribute("data-delta"), "-5")
+
+    async def test_a_command_is_a_proposal_until_the_device_answers(self):
+        await self.view("downstairs")
+        toggle = self.page.locator(
+            '[data-action="toggle-light"][data-entity="livingroom_lamp"]'
+        ).first
+        await toggle.click()
+        await self.page.wait_for_timeout(300)
+
+        posted = self.house.posted("/api/cmd")
+        self.assertEqual(len(posted), 1, "one tap, one command")
+        self.assertEqual(
+            posted[0],
+            {"room": "livingroom", "entity": "livingroom_lamp", "aspect": "on", "value": False},
+        )
+        self.assertGreater(
+            await self.page.locator(".cmd-pending").count(), 0, "pending until answered"
+        )
+
+        # Stage 4: the device reports back and the command is over.
+        await self.house.push(
+            {"type": "state", "key": "home/state/livingroom/livingroom_lamp/on", "value": False}
+        )
+        await self.page.wait_for_timeout(400)
+        self.assertEqual(await self.page.locator(".cmd-pending").count(), 0)
+
+
+class HoldsOnNow(PageTest):
+    """`docs/design.md`, Arbitrated mode: a hold is a deviation when it
+    displaced somebody, and possession shows on the control either way."""
+
+    async def test_a_hold_over_an_automated_aspect_is_a_deviation(self):
+        await self.view("now")
+        body = await self.text()
+        self.assertIn("heat pump", body.lower())
+        self.assertRegex(body, r"held by \w+ until \d{2}:\d{2}")
+        self.assertRegex(body, r"2 wishes refused")
+
+    async def test_a_hold_that_displaces_nobody_says_nothing_here(self):
+        # The same hold, moved to an aspect no unit is granted to drive.
+        await self.house.push(
+            {
+                "type": "hold",
+                "key": "home/hold/arbiter",
+                "value": {
+                    "schema": 1,
+                    "holds": [
+                        {
+                            "room": "hallway",
+                            "entity": "front_door",
+                            "aspect": "locked",
+                            "priority": "manual",
+                            "actor": "dashboard",
+                            "since": "2026-09-25T06:00:00Z",
+                            "until": "2099-01-01T00:00:00Z",
+                            "refused": 0,
+                        }
+                    ],
+                },
+            }
+        )
+        await self.view("now")
+        self.assertNotRegex(await self.text(), r"held by")
+
+    async def test_a_held_aspect_is_marked_on_its_control(self):
+        await self.view("heating")
+        await self.page.click('[data-action="entity-detail"][data-entity="heat_pump"]')
+        await self.page.wait_for_timeout(700)
+        marks = self.page.locator("#overlay-panel .stale-mark")
+        texts = await marks.evaluate_all("els => els.map(e => e.textContent)")
+        self.assertIn("held", texts)
+
+
 class SmokePhone(Smoke):
     """The same net at phone width, where the family surface mostly lives:
     a different nav, a different grid, the same page."""

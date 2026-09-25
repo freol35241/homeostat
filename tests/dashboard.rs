@@ -211,6 +211,62 @@ async fn cache_read(session: &zenoh::Session, key: &str) -> Option<Value> {
     value
 }
 
+/// The browser suite (tests/browser) runs the real page against canned
+/// fixtures, which is what makes it fast and deterministic — and what
+/// makes it able to drift: hand-maintained JSON can quietly stop looking
+/// like what this unit actually emits, and every test above it would go on
+/// passing. This is the canary. It compares the field names of a REAL
+/// `/api/model` against the fixture's, and fails when the real one grows a
+/// field the fixture has never heard of.
+///
+/// Names only, never values: the fixture house is a different house, and
+/// the point is the shape.
+#[tokio::test(flavor = "multi_thread")]
+async fn browser_fixtures_still_look_like_the_real_model() {
+    let port = common::free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let permit = startup_permit().await;
+    let mut sup =
+        Supervisor::spawn_with_env(FIXTURE, &[("HOMEOSTAT_DASHBOARD_PORT", &port.to_string())]);
+    let observer = sup.observer().await;
+    let mut dash = health_watch(&observer, "dashboard").await;
+    await_health(&mut dash, Duration::from_secs(180), |h| {
+        h.status == HealthStatus::Running
+    })
+    .await;
+    drop(permit);
+
+    let (status, model) = http_request(&addr, "GET", "/api/model", &[], None);
+    assert_eq!(status, 200);
+
+    let fixture: Value = serde_json::from_str(include_str!("browser/fixtures/model.json"))
+        .expect("browser fixture model is JSON");
+
+    let names = |v: &Value| -> Vec<String> {
+        v.as_object()
+            .expect("an object")
+            .keys()
+            .map(|k| k.to_string())
+            .collect()
+    };
+    let missing = |real: &Value, canned: &Value, what: &str| {
+        let canned_names = names(canned);
+        for field in names(real) {
+            assert!(
+                canned_names.contains(&field),
+                "{what}: /api/model carries \"{field}\", the browser fixture does not — \
+                 tests/browser/fixtures/model.json has drifted from what the unit emits"
+            );
+        }
+    };
+
+    missing(&model, &fixture, "model");
+    missing(&model["entities"][0], &fixture["entities"][0], "an entity");
+    missing(&model["units"][0], &fixture["units"][0], "a unit");
+
+    sup.shutdown();
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn dashboard_serves_the_family_surface() {
     let port = common::free_port();
