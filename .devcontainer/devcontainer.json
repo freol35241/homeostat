@@ -19,7 +19,10 @@
 	// test, as CI does; there is no devcontainer feature for it. The tests
 	// start their own broker on a free port, so the system service stays
 	// disabled.
-	"postCreateCommand": "sudo apt-get update && sudo apt-get install -y --no-install-recommends mosquitto && sudo service mosquitto stop || true"
+	// A browser for tests/browser, likewise: ~115 MB, so a failure here
+	// warns rather than failing the container — run
+	// scripts/install_browser.sh by hand afterwards.
+	"postCreateCommand": "sudo apt-get update && sudo apt-get install -y --no-install-recommends mosquitto && sudo service mosquitto stop; scripts/install_browser.sh || echo 'browser install failed; run scripts/install_browser.sh when online'"
 
 	// Use 'mounts' to make the cargo cache persistent in a Docker Volume.
 	// "mounts": [

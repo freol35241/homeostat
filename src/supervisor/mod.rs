@@ -97,6 +97,10 @@ pub async fn run(check: &CheckResult, root: &Path, listen: &str) -> Result<(), S
     // a forecast carries its own `issued`, which is what a consumer's
     // staleness policy reads (docs/design.md, Forecasts).
     mirror(&session, "home/forecast/**").await?;
+    // The arbiter's holds, for the same late-joiner reason: a browser
+    // opening mid-hold must see it, and the arbiter republishes only on
+    // change (docs/design.md, Arbitrated mode).
+    mirror(&session, "home/hold/*").await?;
 
     let mut world = WorldMeta {
         grants: check.grants.clone(),

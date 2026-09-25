@@ -1,0 +1,494 @@
+{
+ "zones": {
+  "downstairs": [
+   "hallway",
+   "kitchen",
+   "livingroom",
+   "porch",
+   "utility"
+  ]
+ },
+ "entities": [
+  {
+   "name": "downstairs_temperature",
+   "label": "downstairs temperature",
+   "capability": "sensor",
+   "features": [
+    "temperature"
+   ],
+   "room": "global",
+   "write_mode": "shared",
+   "owner": "fused",
+   "commandable": false,
+   "sources": {
+    "livingroom": {
+     "entity": "livingroom_temp",
+     "aspect": "temperature",
+     "note": null,
+     "precision": null
+    },
+    "kitchen": {
+     "entity": "kitchen_temp",
+     "aspect": "temperature",
+     "note": "south-facing; reads high on a sunny afternoon",
+     "precision": null
+    }
+   }
+  },
+  {
+   "name": "alex",
+   "label": "Alex",
+   "capability": "person",
+   "features": [],
+   "room": "person",
+   "write_mode": "shared",
+   "owner": "stage",
+   "commandable": false,
+   "sources": {}
+  },
+  {
+   "name": "front_door",
+   "label": "front door",
+   "capability": "lock",
+   "features": [],
+   "room": "hallway",
+   "write_mode": "shared",
+   "owner": "stage",
+   "commandable": true,
+   "sources": {}
+  },
+  {
+   "name": "hallway_lamp",
+   "label": "hallway lamp",
+   "capability": "light",
+   "features": [],
+   "room": "hallway",
+   "write_mode": "shared",
+   "owner": "stage",
+   "commandable": true,
+   "sources": {}
+  },
+  {
+   "name": "heat_pump",
+   "label": "heat pump",
+   "capability": "climate",
+   "features": [
+    "setpoint"
+   ],
+   "room": "livingroom",
+   "write_mode": "arbitrated",
+   "owner": "stage",
+   "commandable": true,
+   "sources": {}
+  },
+  {
+   "name": "kitchen_temp",
+   "label": "kitchen sensor",
+   "capability": "sensor",
+   "features": [
+    "temperature"
+   ],
+   "room": "kitchen",
+   "write_mode": "shared",
+   "owner": "stage",
+   "commandable": false,
+   "sources": {}
+  },
+  {
+   "name": "livingroom_lamp",
+   "label": "living room lamp",
+   "capability": "light",
+   "features": [
+    "brightness"
+   ],
+   "room": "livingroom",
+   "write_mode": "shared",
+   "owner": "stage",
+   "commandable": true,
+   "sources": {}
+  },
+  {
+   "name": "livingroom_temp",
+   "label": "living room sensor",
+   "capability": "sensor",
+   "features": [
+    "temperature",
+    "humidity"
+   ],
+   "room": "livingroom",
+   "write_mode": "shared",
+   "owner": "stage",
+   "commandable": false,
+   "sources": {}
+  },
+  {
+   "name": "robin",
+   "label": "Robin",
+   "capability": "person",
+   "features": [],
+   "room": "person",
+   "write_mode": "shared",
+   "owner": "stage",
+   "commandable": false,
+   "sources": {}
+  },
+  {
+   "name": "spot",
+   "label": "spot price",
+   "capability": "sensor",
+   "features": [
+    "price"
+   ],
+   "room": "global",
+   "write_mode": "shared",
+   "owner": "stage",
+   "commandable": false,
+   "sources": {}
+  },
+  {
+   "name": "stove",
+   "label": "wood stove",
+   "capability": "burner",
+   "features": [
+    "flue_temperature",
+    "power"
+   ],
+   "room": "utility",
+   "write_mode": "shared",
+   "owner": "stage",
+   "commandable": true,
+   "sources": {}
+  },
+  {
+   "name": "porch_cam",
+   "label": "porch camera",
+   "capability": "camera",
+   "features": [],
+   "room": "porch",
+   "write_mode": "shared",
+   "owner": "stage",
+   "commandable": false,
+   "sources": {},
+   "id": "porch-cam-1"
+  }
+ ],
+ "units": [
+  {
+   "name": "arbiter",
+   "label": "arbiter",
+   "kind": "service",
+   "description": "Holds the write token for arbitrated entities",
+   "params": {
+    "hold_minutes": {
+     "type": "float",
+     "default": 30,
+     "editable_by": "family"
+    }
+   },
+   "subscribes": {
+    "cmd": "home/cmd/**"
+   },
+   "drives": [],
+   "sources": []
+  },
+  {
+   "name": "clock",
+   "label": "clock",
+   "kind": "service",
+   "description": "Civil time on the bus",
+   "params": {
+    "timezone": {
+     "type": "string",
+     "default": "Europe/Stockholm",
+     "editable_by": "owner"
+    }
+   },
+   "subscribes": {},
+   "drives": [],
+   "sources": []
+  },
+  {
+   "name": "dashboard",
+   "label": "dashboard",
+   "kind": "service",
+   "description": "Family web dashboard: generated views over state, setpoints and health",
+   "params": {},
+   "subscribes": {
+    "state": "home/state/**",
+    "forecast": "home/forecast/**",
+    "health": "home/health/**",
+    "config": "home/config/*/*",
+    "discovery": "home/discovery/*",
+    "grants": "home/meta/system/grants"
+   },
+   "drives": [
+    {
+     "entity": "front_door",
+     "aspect": "locked"
+    },
+    {
+     "entity": "hallway_lamp",
+     "aspect": "on"
+    },
+    {
+     "entity": "heat_pump",
+     "aspect": "mode"
+    },
+    {
+     "entity": "heat_pump",
+     "aspect": "setpoint"
+    },
+    {
+     "entity": "livingroom_lamp",
+     "aspect": "brightness"
+    },
+    {
+     "entity": "livingroom_lamp",
+     "aspect": "on"
+    }
+   ],
+   "sources": []
+  },
+  {
+   "name": "evening_lights",
+   "label": "evening lights",
+   "kind": "automation",
+   "description": "Turns downstairs lights off after off_time when nobody is present",
+   "params": {
+    "off_time": {
+     "type": "time",
+     "default": "22:00",
+     "constraint": {
+      "after": "20:00",
+      "before": "02:00"
+     },
+     "editable_by": "family"
+    },
+    "grace_minutes": {
+     "type": "int",
+     "default": 5,
+     "constraint": {
+      "min": 0,
+      "max": 60
+     },
+     "editable_by": "family"
+    }
+   },
+   "subscribes": {
+    "presence": "home/state/downstairs/*/presence",
+    "light_state": "home/state/downstairs/*/on",
+    "clock": "home/clock/minute"
+   },
+   "drives": [
+    {
+     "entity": "hallway_lamp",
+     "aspect": "on"
+    },
+    {
+     "entity": "livingroom_lamp",
+     "aspect": "on"
+    }
+   ],
+   "sources": [
+    {
+     "entity": "hallway_lamp",
+     "aspect": "on"
+    },
+    {
+     "entity": "livingroom_lamp",
+     "aspect": "on"
+    }
+   ]
+  },
+  {
+   "name": "fused",
+   "label": "downstairs temperature fusion",
+   "kind": "automation",
+   "description": "Fuses the downstairs temperatures into one virtual sensor, and forecasts it",
+   "params": {},
+   "subscribes": {
+    "temperatures": "home/state/downstairs/*/temperature"
+   },
+   "drives": [
+    {
+     "entity": "heat_pump",
+     "aspect": "mode"
+    }
+   ],
+   "sources": [
+    {
+     "entity": "kitchen_temp",
+     "aspect": "temperature"
+    },
+    {
+     "entity": "livingroom_temp",
+     "aspect": "temperature"
+    }
+   ]
+  },
+  {
+   "name": "recorder",
+   "label": "recorder",
+   "kind": "service",
+   "description": "Writes home/state/** to the time-series store",
+   "params": {
+    "retain_samples_days": {
+     "type": "float",
+     "default": 0,
+     "constraint": {
+      "min": 0
+     },
+     "editable_by": "owner"
+    },
+    "retain_forecasts_days": {
+     "type": "float",
+     "default": 0,
+     "constraint": {
+      "min": 0
+     },
+     "editable_by": "owner"
+    },
+    "retain_events_days": {
+     "type": "float",
+     "default": 0,
+     "constraint": {
+      "min": 0
+     },
+     "editable_by": "owner"
+    },
+    "integrity_check_hours": {
+     "type": "float",
+     "default": 24,
+     "constraint": {
+      "min": 0
+     },
+     "editable_by": "owner"
+    }
+   },
+   "subscribes": {
+    "state": "home/state/**",
+    "forecast": "home/forecast/**",
+    "cmd": "home/cmd/**",
+    "health": "home/health/**",
+    "config": "home/config/**"
+   },
+   "drives": [],
+   "sources": []
+  },
+  {
+   "name": "stage",
+   "label": "stage",
+   "kind": "adapter",
+   "description": "Staged devices for a screenshot: publishes state, descriptors and a forecast",
+   "params": {},
+   "subscribes": {
+    "commands": "home/cmd/{room}/{entity}/**",
+    "arbitrated": "home/arbiter/{room}/{entity}/**"
+   },
+   "drives": [],
+   "sources": []
+  }
+ ],
+ "views": [
+  {
+   "name": "now",
+   "widgets": [
+    {
+     "kind": "tile",
+     "entity": "spot",
+     "aspect": "price"
+    },
+    {
+     "kind": "people"
+    },
+    {
+     "kind": "deviations"
+    },
+    {
+     "kind": "map"
+    }
+   ]
+  },
+  {
+   "name": "heating",
+   "widgets": [
+    {
+     "kind": "group",
+     "label": "Heating",
+     "widgets": [
+      {
+       "kind": "dial",
+       "entity": "heat_pump"
+      },
+      {
+       "kind": "chart",
+       "entity": "livingroom_temp",
+       "aspect": "temperature",
+       "hours": 24
+      }
+     ]
+    },
+    {
+     "kind": "chart",
+     "entity": "downstairs_temperature",
+     "aspect": "temperature",
+     "hours": 24
+    },
+    {
+     "kind": "burner",
+     "entity": "stove"
+    },
+    {
+     "kind": "entity",
+     "entity": "porch_cam"
+    }
+   ]
+  },
+  {
+   "name": "downstairs",
+   "widgets": [
+    {
+     "kind": "unit",
+     "unit": "evening_lights"
+    },
+    {
+     "kind": "params",
+     "unit": "recorder"
+    },
+    {
+     "kind": "room",
+     "room": "livingroom"
+    },
+    {
+     "kind": "room",
+     "room": "hallway"
+    }
+   ]
+  },
+  {
+   "name": "everything",
+   "kind": "rooms"
+  }
+ ],
+ "controls": [
+  {
+   "entity": "livingroom_lamp",
+   "aspect": "brightness",
+   "step": 5
+  },
+  {
+   "unit": "evening_lights",
+   "param": "grace_minutes",
+   "step": 5
+  }
+ ],
+ "tiles": false,
+ "driven": {
+  "livingroom/heat_pump/mode": "automation",
+  "livingroom/heat_pump/setpoint": "manual",
+  "hallway/hallway_lamp/on": "automation",
+  "livingroom/livingroom_lamp/brightness": "manual",
+  "livingroom/livingroom_lamp/on": "automation",
+  "hallway/front_door/locked": "manual"
+ }
+}

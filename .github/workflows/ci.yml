@@ -57,7 +57,7 @@ jobs:
       # the MQTT adapters bring their own paho for — but its message guard
       # is tested here, so the runner needs it.
       - run: uv run --no-project --with-editable sdk/python --with 'paho-mqtt>=2,<3' python -m unittest discover sdk/python/tests
-      - run: uvx ruff@0.16.7 check adapters sdk
+      - run: uvx ruff@0.16.7 check adapters sdk tests/browser
       # The dashboard's extracted decision logic (adapters/assets/
       # dashboard-logic.js): Node's built-in runner, no packages. The
       # shell expands the glob — newer Node treats a bare directory
@@ -67,6 +67,22 @@ jobs:
       # fails the build the moment one is edited by hand or a release
       # forgets to regenerate them.
       - run: scripts/sync_starter.sh --check
+
+  # The dashboard page in a real browser against canned fixtures (see
+  # tests/browser/README.md). Its own job because it is the only thing here
+  # that needs a browser; blocking, because a job that cannot fail the
+  # build is one nobody repairs.
+  browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: tests/browser/run.py.lock
+      - name: Install Chromium
+        run: scripts/install_browser.sh
+      - run: uv run --script tests/browser/run.py
 
   # Known vulnerabilities in Cargo.lock, against the RustSec database.
   # Accepted transitive ones are listed, with reasons, in .cargo/audit.toml.

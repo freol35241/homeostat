@@ -287,6 +287,47 @@ def key_expr(key: str):
         return None
 
 
+def driven_aspects(model: dict, grants: list, descriptors: dict[str, dict]) -> dict[str, str]:
+    """Per commandable aspect, the LOWEST band any unit is granted to
+    command it at — "room/entity/aspect" -> band.
+
+    This is what makes an arbiter hold a deviation or not: a hold displaces
+    somebody when it stands above a band some unit normally writes at. The
+    grant table is the only honest source for that, because it says who may
+    command what and at which band, resolved at plan time — where guessing
+    from an automation's last refusal would instead depend on how often
+    that automation happens to publish (docs/design.md, Arbitrated mode)."""
+    entities = {e["name"]: e for e in model["entities"]}
+    lowest: dict[str, str] = {}
+    for g in grants:
+        if not (isinstance(g, dict) and g.get("capability") and isinstance(g.get("priority"), str)):
+            continue
+        band = g["priority"]
+        if band not in keys.CMD_PRIORITIES:
+            continue
+        granted = [k for k in (key_expr(k) for k in g.get("keys", [])) if k is not None]
+        for e in g.get("entities", []):
+            if not (isinstance(e, dict) and isinstance(e.get("name"), str)):
+                continue
+            spec = entities.get(e["name"])
+            if spec is None:
+                continue
+            for aspect in commandable_aspects(spec, descriptors.get(e["name"])):
+                try:
+                    ke = zenoh.KeyExpr(keys.cmd_key(e["room"], e["name"], aspect))
+                except (KeyError, ValueError, zenoh.ZError):
+                    continue
+                if not any(g_ke.intersects(ke) for g_ke in granted):
+                    continue
+                slot = f"{e['room']}/{e['name']}/{aspect}"
+                current = lowest.get(slot)
+                if current is None or keys.CMD_PRIORITIES.index(band) < keys.CMD_PRIORITIES.index(
+                    current
+                ):
+                    lowest[slot] = band
+    return lowest
+
+
 def unit_relations(
     model: dict, grants: list, state_keys, descriptors: dict[str, dict]
 ) -> dict[str, dict]:
@@ -479,6 +520,11 @@ class Hub:
         # recorder's copy answers a different question — what we believed
         # THEN — which is verification, and not this surface.
         self.forecasts: dict[str, object] = {}
+        # home/hold/{unit} -> what that arbiter is holding right now. State,
+        # not the audit trail: the preempt/refuse events say what happened,
+        # this says what is in force, which is the question a browser
+        # opening mid-hold is asking (docs/design.md, Arbitrated mode).
+        self.holds: dict[str, object] = {}
         self.health: dict[str, object] = {}
         self.config: dict[str, object] = {}
         # entity name -> its adapter's aspect descriptor, lifted out of
@@ -506,6 +552,7 @@ class Hub:
         self._subs = [
             self.session.subscribe("home/state/**", self._on_state),
             self.session.subscribe("home/forecast/**", self._on_forecast),
+            self.session.subscribe("home/hold/*", self._on_hold),
             self.session.subscribe("home/health/**", self._on_health),
             self.session.subscribe("home/config/*/*", self._on_config),
             self.session.subscribe("home/discovery/*", self._on_discovery),
@@ -516,6 +563,9 @@ class Hub:
         for key, value in self.session.get_json("home/forecast/**"):
             with self.lock:
                 self.forecasts.setdefault(key, value)
+        for key, value in self.session.get_json("home/hold/*"):
+            with self.lock:
+                self.holds.setdefault(key, value)
         for key, value in self.session.get_json("home/health/*"):
             with self.lock:
                 self.health.setdefault(key, value)
@@ -538,12 +588,18 @@ class Hub:
             descriptors = dict(self.aspects)
         return unit_relations(model, self.grants, state_keys, descriptors)
 
+    def driven(self, model: dict) -> dict[str, str]:
+        with self.lock:
+            descriptors = dict(self.aspects)
+        return driven_aspects(model, self.grants, descriptors)
+
     def snapshot(self) -> dict:
         with self.lock:
             return {
                 "type": "snapshot",
                 "state": dict(self.state),
                 "forecasts": dict(self.forecasts),
+                "holds": dict(self.holds),
                 "health": dict(self.health),
                 "config": dict(self.config),
                 "aspects": dict(self.aspects),
@@ -566,6 +622,14 @@ class Hub:
         with self.lock:
             self.state[key] = value
         self._emit({"type": "state", "key": key, "value": value})
+
+    def _on_hold(self, sample) -> None:
+        if (decoded := self._decode(sample)) is None:
+            return
+        key, value = decoded
+        with self.lock:
+            self.holds[key] = value
+        self._emit({"type": "hold", "key": key, "value": value})
 
     def _on_forecast(self, sample) -> None:
         if (decoded := self._decode(sample)) is None:
@@ -728,7 +792,18 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         await model.refresh()
         relations = hub.relations(model.model)
         units = [dict(u, **relations[u["name"]]) for u in model.model["units"]]
-        return web.json_response(dict(model.model, units=units, tiles=tiles_path() is not None))
+        return web.json_response(
+            dict(
+                model.model,
+                units=units,
+                tiles=tiles_path() is not None,
+                # Which aspects something drives, and at what band: the page
+                # reads an arbiter hold against this to tell "the family took
+                # over from the heating" from "the family locked a door
+                # nothing automates" (docs/design.md, Arbitrated mode).
+                driven=hub.driven(model.model),
+            )
+        )
 
     async def api_asset(request: web.Request) -> web.StreamResponse:
         name = request.match_info["name"]

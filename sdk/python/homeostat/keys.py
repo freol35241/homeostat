@@ -152,6 +152,14 @@ def history_key(space: str, entity: str, aspect: str) -> str:
     return "home/history/" + _segments(space, entity, aspect)
 
 
+def hold_key(unit: str) -> str:
+    """What an arbiter is currently holding: one document per arbiter unit,
+    the discovery shape, mirrored by the core. State, not the audit trail —
+    the preempt/refuse events answer "what happened", this answers "is this
+    aspect held right now?" (docs/design.md, Arbitrated mode)."""
+    return "home/hold/" + _segments(unit)
+
+
 def discovery_key(unit: str) -> str:
     """An adapter's complete current view of its periphery: one JSON array
     of device records (see docs/design.md, Discovery)."""

@@ -16,6 +16,12 @@ pub const CLASSES: &[&str] = &[
     "clock",
     "history",
     "discovery",
+    // What the arbiter is currently holding: one document per arbiter unit
+    // (`home/hold/{unit}`), the discovery shape, mirrored so a late joiner
+    // can ask "is this aspect held right now?" — which an event stream
+    // cannot answer (docs/design.md, Arbitrated mode). Held state, not the
+    // audit trail: the preempt/refuse events stay where they are.
+    "hold",
 ];
 
 /// The classes addressed per entity — `home/{class}/{room}/{entity}/{aspect}`

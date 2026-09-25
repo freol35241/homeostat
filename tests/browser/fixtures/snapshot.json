@@ -1,0 +1,415 @@
+{
+ "state": {
+  "home/state/global/spot/price": 0.71,
+  "home/state/hallway/front_door/locked": false,
+  "home/state/livingroom/livingroom_lamp/brightness": 60,
+  "home/state/livingroom/heat_pump/indoor_temperature": 20.6,
+  "home/state/hallway/hallway_lamp/available": false,
+  "home/state/livingroom/livingroom_temp/humidity": 41.0,
+  "home/state/person/alex/presence": true,
+  "home/state/livingroom/heat_pump/setpoint": 21.0,
+  "home/state/person/robin/presence": false,
+  "home/state/livingroom/heat_pump/outdoor_temperature": 7.4,
+  "home/state/livingroom/heat_pump/mode": "heat",
+  "home/state/global/downstairs_temperature/temperature": 20.7,
+  "home/state/livingroom/livingroom_lamp/on": true,
+  "home/state/livingroom/livingroom_temp/temperature": 20.8,
+  "home/state/hallway/hallway_lamp/on": false,
+  "home/state/livingroom/livingroom_temp/battery": 88,
+  "home/state/kitchen/kitchen_temp/temperature": 21.4,
+  "home/state/utility/stove/on": true,
+  "home/state/utility/stove/flue_temperature": 184.0,
+  "home/state/utility/stove/power": 50,
+  "home/state/porch/porch_cam/available": true
+ },
+ "forecasts": {
+  "home/forecast/global/spot/price/nordpool": {
+   "schema": 1,
+   "issued": "2026-09-25T06:06:13.950012Z",
+   "points": [
+    {
+     "t": "2026-09-25T07:00:00Z",
+     "v": 0.83,
+     "d": 3600
+    },
+    {
+     "t": "2026-09-25T08:00:00Z",
+     "v": 0.95,
+     "d": 3600
+    },
+    {
+     "t": "2026-09-25T09:00:00Z",
+     "v": 0.88,
+     "d": 3600
+    },
+    {
+     "t": "2026-09-25T10:00:00Z",
+     "v": 0.74,
+     "d": 3600
+    },
+    {
+     "t": "2026-09-25T11:00:00Z",
+     "v": 0.66,
+     "d": 3600
+    },
+    {
+     "t": "2026-09-25T12:00:00Z",
+     "v": 0.61,
+     "d": 3600
+    },
+    {
+     "t": "2026-09-25T13:00:00Z",
+     "v": 0.58,
+     "d": 3600
+    },
+    {
+     "t": "2026-09-25T14:00:00Z",
+     "v": 0.59,
+     "d": 3600
+    },
+    {
+     "t": "2026-09-25T15:00:00Z",
+     "v": 0.66,
+     "d": 3600
+    },
+    {
+     "t": "2026-09-25T16:00:00Z",
+     "v": 0.79,
+     "d": 3600
+    },
+    {
+     "t": "2026-09-25T17:00:00Z",
+     "v": 0.94,
+     "d": 3600
+    },
+    {
+     "t": "2026-09-25T18:00:00Z",
+     "v": 1.02,
+     "d": 3600
+    },
+    {
+     "t": "2026-09-25T19:00:00Z",
+     "v": 0.93,
+     "d": 3600
+    },
+    {
+     "t": "2026-09-25T20:00:00Z",
+     "v": 0.78,
+     "d": 3600
+    },
+    {
+     "t": "2026-09-25T21:00:00Z",
+     "v": 0.63,
+     "d": 3600
+    },
+    {
+     "t": "2026-09-25T22:00:00Z",
+     "v": 0.51,
+     "d": 3600
+    },
+    {
+     "t": "2026-09-25T23:00:00Z",
+     "v": 0.43,
+     "d": 3600
+    },
+    {
+     "t": "2026-09-26T00:00:00Z",
+     "v": 0.38,
+     "d": 3600
+    },
+    {
+     "t": "2026-09-26T01:00:00Z",
+     "v": 0.35,
+     "d": 3600
+    },
+    {
+     "t": "2026-09-26T02:00:00Z",
+     "v": 0.33,
+     "d": 3600
+    },
+    {
+     "t": "2026-09-26T03:00:00Z",
+     "v": 0.33,
+     "d": 3600
+    },
+    {
+     "t": "2026-09-26T04:00:00Z",
+     "v": 0.36,
+     "d": 3600
+    }
+   ]
+  },
+  "home/forecast/global/downstairs_temperature/temperature/model": {
+   "schema": 1,
+   "issued": "2026-09-25T06:52:43.906522Z",
+   "points": [
+    {
+     "t": "2026-09-25T07:00:00Z",
+     "v": 20.7
+    },
+    {
+     "t": "2026-09-25T08:00:00Z",
+     "v": 20.85
+    },
+    {
+     "t": "2026-09-25T09:00:00Z",
+     "v": 20.99
+    },
+    {
+     "t": "2026-09-25T10:00:00Z",
+     "v": 21.11
+    },
+    {
+     "t": "2026-09-25T11:00:00Z",
+     "v": 21.2
+    },
+    {
+     "t": "2026-09-25T12:00:00Z",
+     "v": 21.27
+    },
+    {
+     "t": "2026-09-25T13:00:00Z",
+     "v": 21.3
+    },
+    {
+     "t": "2026-09-25T14:00:00Z",
+     "v": 21.29
+    },
+    {
+     "t": "2026-09-25T15:00:00Z",
+     "v": 21.25
+    },
+    {
+     "t": "2026-09-25T16:00:00Z",
+     "v": 21.17
+    },
+    {
+     "t": "2026-09-25T17:00:00Z",
+     "v": 21.06
+    },
+    {
+     "t": "2026-09-25T18:00:00Z",
+     "v": 20.93
+    }
+   ]
+  }
+ },
+ "holds": {
+  "home/hold/arbiter": {
+   "schema": 1,
+   "holds": [
+    {
+     "room": "livingroom",
+     "entity": "heat_pump",
+     "aspect": "mode",
+     "priority": "manual",
+     "actor": "dashboard",
+     "since": "2026-09-25T06:00:00Z",
+     "until": "2026-09-25T06:30:00Z",
+     "refused": 2
+    }
+   ]
+  }
+ },
+ "health": {
+  "home/health/recorder": {
+   "status": "running",
+   "pid": 36007,
+   "restarts": 0,
+   "backoff_ms": null,
+   "last_exit_code": null
+  },
+  "home/health/stage": {
+   "status": "running",
+   "pid": 36070,
+   "restarts": 0,
+   "backoff_ms": null,
+   "last_exit_code": null
+  },
+  "home/health/clock": {
+   "status": "running",
+   "pid": 36006,
+   "restarts": 0,
+   "backoff_ms": null,
+   "last_exit_code": null
+  },
+  "home/health/arbiter": {
+   "status": "running",
+   "pid": 36004,
+   "restarts": 0,
+   "backoff_ms": null,
+   "last_exit_code": null
+  },
+  "home/health/dashboard": {
+   "status": "running",
+   "pid": 36005,
+   "restarts": 0,
+   "backoff_ms": null,
+   "last_exit_code": null
+  },
+  "home/health/evening_lights": {
+   "status": "running",
+   "pid": 36008,
+   "restarts": 0,
+   "backoff_ms": null,
+   "last_exit_code": null
+  },
+  "home/health/fused": {
+   "status": "running",
+   "pid": 36069,
+   "restarts": 0,
+   "backoff_ms": null,
+   "last_exit_code": null
+  }
+ },
+ "config": {
+  "home/config/evening_lights/off_time": "22:00",
+  "home/config/recorder/retain_events_days": 0.0,
+  "home/config/evening_lights/grace_minutes": 5,
+  "home/config/recorder/retain_forecasts_days": 0.0,
+  "home/config/clock/timezone": "Europe/Stockholm",
+  "home/config/recorder/retain_samples_days": 0.0,
+  "home/config/arbiter/hold_minutes": 30.0,
+  "home/config/recorder/integrity_check_hours": 24.0
+ },
+ "aspects": {
+  "heat_pump": {
+   "schema": 1,
+   "groups": [
+    "climate",
+    "diagnostics"
+   ],
+   "fields": {
+    "setpoint": {
+     "label": "target",
+     "kind": "temperature",
+     "group": "climate",
+     "unit": "\u00b0C",
+     "command": {
+      "type": "float",
+      "step": 0.5,
+      "editable_by": "family",
+      "constraint": {
+       "min": 16,
+       "max": 24
+      }
+     }
+    },
+    "indoor_temperature": {
+     "label": "indoor",
+     "kind": "temperature",
+     "group": "climate",
+     "unit": "\u00b0C"
+    },
+    "outdoor_temperature": {
+     "label": "outdoor",
+     "kind": "temperature",
+     "group": "climate",
+     "unit": "\u00b0C"
+    },
+    "mode": {
+     "label": "mode",
+     "kind": "enum",
+     "group": "climate",
+     "values": [
+      {
+       "value": "off",
+       "label": "off"
+      },
+      {
+       "value": "heat",
+       "label": "heat"
+      },
+      {
+       "value": "hot_water",
+       "label": "hot_water"
+      },
+      {
+       "value": "auto",
+       "label": "auto"
+      }
+     ],
+     "command": {
+      "type": "enum",
+      "editable_by": "family"
+     }
+    }
+   }
+  },
+  "livingroom_temp": {
+   "schema": 1,
+   "groups": [
+    "readings",
+    "diagnostics"
+   ],
+   "fields": {
+    "temperature": {
+     "label": "temperature",
+     "kind": "temperature",
+     "group": "readings",
+     "unit": "\u00b0C"
+    },
+    "humidity": {
+     "label": "humidity",
+     "kind": "number",
+     "group": "readings",
+     "unit": "%"
+    },
+    "battery": {
+     "label": "battery",
+     "kind": "number",
+     "group": "diagnostics",
+     "unit": "%"
+    }
+   }
+  },
+  "spot": {
+   "schema": 1,
+   "groups": [
+    "readings"
+   ],
+   "fields": {
+    "price": {
+     "label": "price",
+     "kind": "number",
+     "group": "readings",
+     "unit": "SEK/kWh"
+    }
+   }
+  },
+  "stove": {
+   "schema": 1,
+   "groups": [
+    "burner",
+    "diagnostics"
+   ],
+   "fields": {
+    "on": {
+     "label": "burning",
+     "kind": "boolean",
+     "group": "burner"
+    },
+    "flue_temperature": {
+     "label": "flue",
+     "kind": "temperature",
+     "group": "burner",
+     "unit": "\u00b0C"
+    },
+    "power": {
+     "label": "power",
+     "kind": "percent",
+     "group": "burner",
+     "unit": "%",
+     "command": {
+      "type": "int",
+      "editable_by": "family",
+      "constraint": {
+       "min": 0,
+       "max": 100
+      }
+     }
+    }
+   }
+  }
+ }
+}

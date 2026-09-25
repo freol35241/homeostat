@@ -121,6 +121,98 @@ test('an owner param off its default deviates too, tapping to the unit rather th
   assert.deepEqual(off[0].target, { type: 'unit', unit: 'evening_lights' });
 });
 
+// Arbiter holds (docs/design.md, Arbitrated mode). A lease is taken by
+// every forwarded command, so what makes one worth a row is displacement:
+// it stands above a band something is granted to drive that aspect at.
+const HOLD_UNTIL = Date.parse('2026-09-25T20:47:00Z');
+const NOW = Date.parse('2026-09-25T20:20:00Z');
+const holdDoc = (over) => ({
+  'home/hold/arbiter': {
+    schema: 1,
+    holds: [
+      Object.assign(
+        {
+          room: 'hallway', entity: 'front_door', aspect: 'locked',
+          priority: 'manual', actor: 'dashboard',
+          since: '2026-09-25T20:17:00Z', until: '2026-09-25T20:47:00Z', refused: 0,
+        },
+        over || {},
+      ),
+    ],
+  },
+});
+
+test('a hold over something an automation drives is a deviation, from the moment it is taken', () => {
+  const m = model({ driven: { 'hallway/front_door/locked': 'automation' } });
+  const devs = logic.computeDeviations(m, {}, {}, {}, {}, holdDoc(), NOW);
+  assert.equal(devs.length, 1);
+  assert.equal(devs[0].tag, 'hold');
+  assert.equal(devs[0].title, 'Front door — locked');
+  assert.match(devs[0].detail, /^held by dashboard until /);
+  assert.equal(devs[0].until, HOLD_UNTIL);
+  assert.deepEqual(devs[0].target, { type: 'entity', room: 'hallway', entity: 'front_door' });
+  assert.equal(devs[0].detail.includes('refused'), false, 'nothing refused yet, nothing claimed');
+});
+
+test('what the hold has refused rides along as detail, never as the trigger', () => {
+  const m = model({ driven: { 'hallway/front_door/locked': 'automation' } });
+  const devs = logic.computeDeviations(m, {}, {}, {}, {}, holdDoc({ refused: 2 }), NOW);
+  assert.match(devs[0].detail, /2 wishes refused/);
+  const one = logic.computeDeviations(m, {}, {}, {}, {}, holdDoc({ refused: 1 }), NOW);
+  assert.match(one[0].detail, /1 wish refused/);
+});
+
+test('a hold that displaces nobody says nothing here', () => {
+  // Nothing is granted to command this aspect below the manual band: the
+  // family used the house, which is not a deviation.
+  assert.deepEqual(logic.computeDeviations(model(), {}, {}, {}, {}, holdDoc(), NOW), []);
+  const sameBand = model({ driven: { 'hallway/front_door/locked': 'manual' } });
+  assert.deepEqual(logic.computeDeviations(sameBand, {}, {}, {}, {}, holdDoc(), NOW), [],
+    'an equal band displaces nobody either');
+  const ownHold = model({ driven: { 'hallway/front_door/locked': 'automation' } });
+  assert.deepEqual(
+    logic.computeDeviations(ownHold, {}, {}, {}, {}, holdDoc({ priority: 'automation' }), NOW), [],
+    "an automation's own hold is the house working");
+});
+
+test('an expired hold is not a hold', () => {
+  const m = model({ driven: { 'hallway/front_door/locked': 'automation' } });
+  const after = Date.parse('2026-09-25T20:47:30Z');
+  assert.deepEqual(logic.computeDeviations(m, {}, {}, {}, {}, holdDoc(), after), []);
+  assert.deepEqual(logic.liveHolds(holdDoc(), after), []);
+});
+
+test('holds come back soonest-first, and a malformed entry is dropped rather than drawn', () => {
+  const docs = {
+    'home/hold/arbiter': {
+      schema: 1,
+      holds: [
+        { room: 'hallway', entity: 'front_door', aspect: 'locked', priority: 'manual', actor: 'a', until: '2026-09-25T20:47:00Z' },
+        { room: 'livingroom', entity: 'heatpump', aspect: 'mode', priority: 'manual', actor: 'b', until: '2026-09-25T20:30:00Z' },
+        { room: 'livingroom', entity: 'heatpump', aspect: 'setpoint', priority: 'manual', actor: 'b', until: 'soon' },
+        { entity: 'heatpump', until: '2026-09-25T21:00:00Z' },
+      ],
+    },
+  };
+  const live = logic.liveHolds(docs, NOW);
+  assert.deepEqual(live.map((h) => h.aspect), ['mode', 'locked']);
+  assert.equal(live[0].refused, 0, 'a missing tally reads as none, not as undefined');
+});
+
+test('holdOn answers for one aspect, which is what a control asks', () => {
+  assert.equal(logic.holdOn(holdDoc(), 'hallway', 'front_door', 'locked', NOW).actor, 'dashboard');
+  assert.equal(logic.holdOn(holdDoc(), 'hallway', 'front_door', 'on', NOW), null);
+  assert.equal(logic.holdOn({}, 'hallway', 'front_door', 'locked', NOW), null);
+});
+
+test('a hold delta lands in the store and a snapshot replaces the lot', () => {
+  const store = { holds: { 'home/hold/old': { schema: 1, holds: [] } } };
+  assert.equal(logic.applyMessage(store, { type: 'hold', key: 'home/hold/arbiter', value: holdDoc()['home/hold/arbiter'] }, 0), 'hold');
+  assert.equal(store.holds['home/hold/arbiter'].holds.length, 1);
+  logic.applyMessage(store, { type: 'snapshot', holds: {} }, 0);
+  assert.deepEqual(store.holds, {});
+});
+
 test('deviations render in a stable order: supervision, state, setpoints', () => {
   const devs = deviations(
     {

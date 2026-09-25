@@ -82,6 +82,7 @@
     if (msg.type === 'snapshot') {
       store.state = msg.state || {};
       store.forecasts = msg.forecasts || {};
+      store.holds = msg.holds || {};
       store.health = msg.health || {};
       store.config = msg.config || {};
       store.aspects = msg.aspects || {};
@@ -96,6 +97,10 @@
     if (msg.type === 'state') {
       store.state[msg.key] = msg.value;
       return 'state';
+    }
+    if (msg.type === 'hold') {
+      store.holds[msg.key] = msg.value;
+      return 'hold';
     }
     if (msg.type === 'forecast') {
       store.forecasts[msg.key] = msg.value;
@@ -117,14 +122,83 @@
     return null;
   }
 
+  /* ---- arbiter holds (docs/design.md, Arbitrated mode) ----
+   *
+   * Each arbiter publishes one document of what it is holding. A lease is
+   * taken by EVERY forwarded command, not only by a preemption, so most
+   * holds are simply the house working; what makes one worth saying out
+   * loud is that it displaced somebody.
+   */
+  var CMD_BANDS = ['automation', 'agent', 'family', 'manual'];
+
+  // A deviation row is built here, so it needs the one piece of formatting
+  // it prints. Local time, no date: a hold never outlives the hour or two
+  // a countdown is read in.
+  function clockOf(ts) {
+    var d = new Date(ts);
+    return isNaN(d.getTime()) ? '' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+
+  // Every live hold across every arbiter, expired ones dropped. The
+  // document states `until` and the reader applies it, the same division
+  // as a forecast's `issued` — and the arbiter republishes at the deadline,
+  // so this is belt and braces rather than the only guard.
+  function liveHolds(holds, now) {
+    var out = [];
+    Object.keys(holds || {}).forEach(function (key) {
+      var doc = holds[key];
+      if (!doc || !Array.isArray(doc.holds)) return;
+      doc.holds.forEach(function (h) {
+        if (!h || typeof h.entity !== 'string' || typeof h.aspect !== 'string') return;
+        var until = Date.parse(h.until);
+        if (isNaN(until) || until <= now) return;
+        out.push({
+          room: h.room, entity: h.entity, aspect: h.aspect,
+          priority: h.priority, actor: h.actor,
+          refused: typeof h.refused === 'number' ? h.refused : 0,
+          until: until
+        });
+      });
+    });
+    return out.sort(function (a, b) { return a.until - b.until; });
+  }
+
+  // The hold in force over one aspect, or null — what a control renders as
+  // "held" whether or not it displaced anyone.
+  function holdOn(holds, room, entity, aspect, now) {
+    return liveHolds(holds, now).filter(function (h) {
+      return h.room === room && h.entity === entity && h.aspect === aspect;
+    })[0] || null;
+  }
+
+  /* Whether a hold displaced somebody: it stands at a band above one that
+   * something is granted to command this aspect at. `driven` is that band
+   * per "room/entity/aspect", resolved from the grant table at plan time.
+   *
+   * Structure rather than observation, deliberately. The alternative —
+   * waiting until the displaced automation is actually refused — makes the
+   * deviation appear or not according to how often that automation happens
+   * to publish, which is a fact about its author rather than about the
+   * house. An override of a boost schedule is a takeover the moment it is
+   * taken, and it is a takeover even if the schedule would not have
+   * written again until morning.
+   */
+  function displaces(hold, driven) {
+    var band = (driven || {})[hold.room + '/' + hold.entity + '/' + hold.aspect];
+    var below = CMD_BANDS.indexOf(band);
+    var holder = CMD_BANDS.indexOf(hold.priority);
+    return below !== -1 && holder !== -1 && holder > below;
+  }
+
   /* The Now view's "out of the ordinary" list, in render order. Each
    * record: { tag, title, detail, target, button? } where target names
    * what a tap opens — {type:'unit', unit}, {type:'rooms'},
    * {type:'entity', room, entity}, {type:'setpoint', unit, param} (a
    * family-editable param) or {type:'unit', unit} (an owner param) —
    * and button is the optional corrective action. */
-  function computeDeviations(model, state, health, config, aspects) {
+  function computeDeviations(model, state, health, config, aspects, holds, now) {
     aspects = aspects || {};
+    now = now === undefined ? Date.now() : now;
     var entities = model.entities || [];
     var units = model.units || [];
     var labels = {};
@@ -234,9 +308,31 @@
       });
     });
 
-    // 4. arbiter preemptions — not yet a data source; leave as future
-    // work. TODO: once the arbiter publishes preemption events, surface
-    // "{entity} — manual override active" here.
+    // 4. arbitration: an aspect held above the band something normally
+    // drives it at. The house is not doing its own thing here, and it will
+    // resume by itself when the hold expires — which is exactly what this
+    // feed is for. A hold that displaced nobody is the family using the
+    // house and says nothing here; it still reads as `held` on the control.
+    var entityByName = {};
+    entities.forEach(function (e) { entityByName[e.name] = e; });
+    liveHolds(holds, now).forEach(function (hold) {
+      if (!displaces(hold, model.driven)) return;
+      var e = entityByName[hold.entity];
+      var label = e ? e.label || titleCase(hold.entity) : titleCase(hold.entity);
+      var detail = 'held by ' + hold.actor + ' until ' + clockOf(hold.until);
+      if (hold.refused) {
+        detail += ' \u00b7 ' + hold.refused + (hold.refused === 1 ? ' wish' : ' wishes') + ' refused';
+      }
+      deviations.push({
+        tag: 'hold',
+        title: label + ' \u2014 ' + hold.aspect,
+        detail: detail,
+        until: hold.until,
+        target: e
+          ? { type: 'entity', room: hold.room, entity: hold.entity }
+          : { type: 'rooms' }
+      });
+    });
 
     return deviations;
   }
@@ -1038,6 +1134,9 @@
     unitNameFromHealthKey: unitNameFromHealthKey,
     applyMessage: applyMessage,
     computeDeviations: computeDeviations,
+    liveHolds: liveHolds,
+    holdOn: holdOn,
+    displaces: displaces,
     forecastFor: forecastFor,
     forecastSourcesFor: forecastSourcesFor,
     forecastsFor: forecastsFor,

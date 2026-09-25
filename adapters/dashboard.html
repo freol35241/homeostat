@@ -583,6 +583,7 @@ var store = {
   model: { zones: {}, entities: [], units: [] },
   state: {},
   forecasts: {},    // home/forecast key -> the house's current belief about its future
+  holds: {},        // home/hold/{unit} -> what that arbiter is holding right now
   health: {},
   config: {},
   aspects: {},      // entity -> its adapter's aspect descriptor (from discovery)
@@ -741,6 +742,22 @@ function updateBanner() {
   var b = byId('banner');
   if (!b) return;
   b.classList.toggle('show', !store.connected);
+}
+
+// The next moment a drawn hold ends, as a single timer: the rows are
+// sorted by deadline, so the first is the only one that matters.
+var holdTimer = null;
+function scheduleHoldExpiry(deviations) {
+  var next = deviations
+    .filter(function (d) { return d.tag === 'hold' && d.until; })
+    .map(function (d) { return d.until; })
+    .sort(function (a, b) { return a - b; })[0];
+  if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
+  if (!next) return;
+  holdTimer = setTimeout(function () {
+    holdTimer = null;
+    scheduleRender();
+  }, Math.max(250, next - Date.now() + 250));
 }
 
 function handleWsMessage(msg) {
@@ -2300,8 +2317,13 @@ function widgetPeople(persons) {
 // record's target maps onto the tap wiring.
 function widgetDeviations() {
   var deviations = logic.computeDeviations(
-    store.model, store.state, store.health, store.config, store.aspects
+    store.model, store.state, store.health, store.config, store.aspects, store.holds
   );
+  // A hold ends on its own, and nothing arrives on the bus to say so — the
+  // arbiter republishes, but a browser that missed it (or a clock a second
+  // ahead) would leave the row standing. Re-render at the earliest
+  // deadline drawn, and the row simply is not there next time.
+  scheduleHoldExpiry(deviations);
 
   function deviationAttrs(target) {
     if (target.type === 'unit') {
@@ -3274,10 +3296,19 @@ function commandStrip(aspect, field, win) {
 function renderAspectRow(entity, r) {
   var attrs = ' data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '" data-aspect="' + esc(r.aspect) + '"';
   var value = aspectValueSpan(r);
+  // Possession, wherever the aspect is: an arbiter lease is in force here,
+  // so an automation's wish for it is being refused. `Now` says so only
+  // when the hold displaced somebody; the control says so whenever it is
+  // held, because this is where a person stands when they wonder why the
+  // house is not driving it (docs/design.md, Arbitrated mode).
+  var hold = logic.holdOn(store.holds, entity.room, entity.name, r.aspect, Date.now());
+  var heldMark = hold
+    ? '<span class="stale-mark" title="' + esc('held by ' + hold.actor + ' at the ' + hold.priority + ' band') + '">held</span>'
+    : '';
   if (!r.control) {
     // a chart for a number, a timeline for a bool or a string
     return '<div class="aspect-row described row-clickable" data-action="history-detail"' + attrs + '>' +
-      '<span class="aspect-label">' + esc(r.label) + '</span>' + value + '</div>';
+      '<span class="aspect-label">' + esc(r.label) + '</span>' + value + heldMark + '</div>';
   }
   // The label taps through to history even though the row carries a
   // control. A commanded aspect is exactly the one whose past a reader
@@ -3286,7 +3317,7 @@ function renderAspectRow(entity, r) {
   // buttons still win: closest('[data-action]') takes the innermost.
   var dial = r.control.kind === 'dial';
   return '<div class="aspect-row described' + (dial ? ' dial-row' : '') + '">' +
-    '<span class="aspect-label linked" data-action="history-detail"' + attrs + '>' + esc(r.label) + '</span>' +
+    '<span class="aspect-label linked" data-action="history-detail"' + attrs + '>' + esc(r.label) + heldMark + '</span>' +
     renderAspectControl(entity, r, true) + '</div>';
 }
 
