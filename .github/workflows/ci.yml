@@ -81,7 +81,7 @@ jobs:
           enable-cache: true
           cache-dependency-glob: tests/browser/run.py.lock
       - name: Install Chromium
-        run: uv run --script tests/browser/run.py --install-browser
+        run: scripts/install_browser.sh
       - run: uv run --script tests/browser/run.py
 
   # Known vulnerabilities in Cargo.lock, against the RustSec database.
