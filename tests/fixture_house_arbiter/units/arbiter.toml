@@ -15,6 +15,9 @@ cmd = "home/cmd/**"
 
 [bus.publishes]
 arbiter = { key = "home/arbiter/**" }
+# What it is holding, as state: one document, republished on change
+# (docs/design.md, Arbitrated mode).
+holds = { key = "home/hold/arbiter" }
 
 [params.hold_minutes]
 type = "float"

@@ -1020,6 +1020,40 @@ owner = "zigbee"             # exactly one adapter binds each entity
   refused with an event; expiry reopens the entity to automations, so a
   forgotten override self-heals. Arbiter events land at
   `home/health/arbiter/event` and are recorded like any health event.
+
+  **What is held is published as state (settled 2026-09-25, #179).** The
+  events are an audit trail and answer "what happened"; nothing answered
+  "is this aspect held right now?", which is what a browser opening
+  mid-hold, or any late joiner, is asking — and a lease lived only in the
+  arbiter's memory. So each arbiter publishes `home/hold/{unit}`, one
+  document of what it currently holds, the `home/discovery/{unit}` shape,
+  mirrored by the core. Four things this settles:
+  - *One document, not a key per lease.* It makes the awkward cases
+    trivial rather than clever: a restart publishes an empty list — the
+    leases were memory and are gone, and there is no set of keys to
+    enumerate and clear — expiry needs one timer rather than one per
+    lease, and a reader sees a consistent set. The cost is that a consumer
+    wanting one aspect filters a short list.
+  - *Enforcement stays on `time.monotonic()`; the published `until` is its
+    wall-clock twin.* No clock step can shorten or stretch a real hold,
+    and a countdown is the only kind of deadline that means anything in
+    another process. They can disagree after an NTP step, and only the
+    countdown suffers.
+  - *Expiry is published, not merely evaluated.* Arbitration expires a
+    lease lazily — on the next wish for that key — which is correct for
+    arbitration and wrong for a document, which would go on claiming a
+    hold that had ended. One thread waits on the earliest deadline and
+    republishes. Readers drop an entry past its `until` as well, the same
+    division as a forecast's `issued`.
+  - *A hold carries what it has refused.* Not what makes it a hold — see
+    the dashboard's rule below — but what says the override cost
+    something, without a consumer replaying the event log.
+
+  Deliberately not built: a way to hand control back. Equal-or-higher
+  bands take the lease, so a second family command refreshes rather than
+  releases, and the only exits are the countdown and `hold_minutes`. That
+  is a protocol question (a field on the envelope? a surface of the
+  arbiter's own?) and it is #188.
   Plan-time structure: an adapter's templated cmd subscription expands
   only over its non-arbitrated bound entities, and a templated
   arbiter-class subscription expands only over the arbitrated ones — an
@@ -1431,7 +1465,7 @@ the exploration that produced it):
   the family's levers. `Rooms` is the spatial room-card grid. **`Now`
   shows the error signal, not an inventory**: people, a few key
   signals with today's range, and one deviations feed drawn from four
-  sources — supervision events, arbiter preemptions, notable state
+  sources — supervision events, arbiter holds, notable state
   (lights on, doors open), and setpoints differing from their manifest
   default. A house in equilibrium renders a nearly empty page,
   deliberately. What counts as "notable state" is per-capability
@@ -1538,6 +1572,31 @@ the exploration that produced it):
   re-applied on each render. The general rule, since this is the second
   time: anything a reader chose survives a re-render only if it is held
   outside the markup.
+- **A hold is a deviation when it displaced somebody (settled
+  2026-09-25, #179).** The arbiter takes a lease on every forwarded
+  command, not only on a preemption, so most holds are simply the house
+  working: listing them all would put a row on `Now` for half an hour
+  every time anyone touches a lock. What makes one worth saying out loud
+  is that it stands above a band something is granted to drive that aspect
+  at — which the grant table answers, resolved at plan time, per aspect
+  and per band. Two readings were rejected on the way:
+  - *Waiting for a refusal* — surfacing a hold once it has actually turned
+    an automation away. It was the first proposal and it is wrong: the row
+    would then appear according to how often the displaced automation
+    happens to publish, which is a fact about its author, not about the
+    house. Overriding a boost schedule is a takeover the moment it is
+    taken, even if the schedule would not have written again until
+    morning. What a hold has refused rides along as detail instead.
+  - *Listing possession* — every hold, contested or not. A family locking
+    a door nothing automates has displaced nobody and is not an error
+    signal. Possession is still shown, on the control itself, marked
+    **held** in the same vocabulary a refused command already uses (#94):
+    that is where a person stands when they wonder why the house is not
+    driving something.
+  The rule needs no new vocabulary and no judgement in the page: `driven`
+  is the lowest band anything may command an aspect at, computed from the
+  grant table the dashboard already reads for its unit cards, and the
+  comparison is a band index.
 - **The house says how coarse a control is: `[[control]]` (settled
   2026-09-24).** The dashboard derives a slider's grain from its range — a
   twentieth, rounded — which is a guess, and the guess is wrong wherever

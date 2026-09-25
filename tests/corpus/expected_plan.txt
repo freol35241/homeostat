@@ -103,6 +103,7 @@ Expanded keys:
   weather publishes curve: home/forecast/global/outdoor_temp/temperature/smhi
   weather_alt publishes curve: home/forecast/global/outdoor_temp/temperature/yr
   arbiter publishes arbiter: home/arbiter/**
+  arbiter publishes holds: home/hold/arbiter
   arbiter subscribes cmd: home/cmd/**
   dashboard publishes lights: home/cmd/**
   dashboard publishes locks: home/cmd/**

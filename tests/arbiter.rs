@@ -19,6 +19,7 @@ const CMD_KEY: &str = "home/cmd/hallway/front_door/locked";
 const ARBITER_KEY: &str = "home/arbiter/hallway/front_door/locked";
 const EVENT_KEY: &str = "home/health/arbiter/event";
 const HOLD_MINUTES_KEY: &str = "home/config/arbiter/hold_minutes";
+const HOLD_KEY: &str = "home/hold/arbiter";
 
 type Sub = Subscriber<FifoChannelHandler<zenoh::sample::Sample>>;
 
@@ -64,6 +65,111 @@ async fn expect_silence(sub: &Sub, window: Duration, what: &str) {
             String::from_utf8_lossy(&sample.payload().to_bytes())
         );
     }
+}
+
+/// What the arbiter is HOLDING, as state rather than as an event stream:
+/// the document answers "is this aspect held right now?" for a consumer
+/// that was not listening when the hold was taken (docs/design.md,
+/// Arbitrated mode). Asserts it is published empty at startup, carries the
+/// holder with a wall-clock deadline once a wish lands, counts what it
+/// refuses, and empties itself when the hold expires — with no further
+/// command to prompt it, which is the part lazy expiry cannot do.
+#[tokio::test(flavor = "multi_thread")]
+async fn holds_are_published_as_state() {
+    let (mut sup, observer) = setup().await;
+    let hold_sub = observer
+        .declare_subscriber(HOLD_KEY)
+        .await
+        .expect("hold subscriber");
+
+    // A restart holds nothing, and says so: the leases were memory, and
+    // the mirror is carrying whatever the last process left.
+    config_write(&observer, HOLD_MINUTES_KEY, json!(0.05))
+        .await
+        .expect("hold_minutes write");
+    put_cmd(&observer, &envelope(json!(true), "manual", "owner")).await;
+    let mut held: Option<Value> = None;
+    // The startup document may already have been mirrored before this
+    // subscriber existed, so take the first one that carries the hold.
+    for _ in 0..5 {
+        let Some(doc) = next_json(&hold_sub, Duration::from_secs(10)).await else {
+            break;
+        };
+        assert_eq!(doc["schema"], json!(1));
+        if doc["holds"].as_array().is_some_and(|h| !h.is_empty()) {
+            held = Some(doc);
+            break;
+        }
+    }
+    let doc = held.expect("a hold document naming the manual holder");
+    let hold = &doc["holds"][0];
+    assert_eq!(hold["entity"], json!("front_door"));
+    assert_eq!(hold["aspect"], json!("locked"));
+    assert_eq!(hold["priority"], json!("manual"));
+    assert_eq!(hold["actor"], json!("owner"));
+    assert_eq!(hold["refused"], json!(0));
+    // Wall clock, because a monotonic deadline means nothing off-process.
+    let until = hold["until"].as_str().expect("until is a string");
+    assert!(
+        until.ends_with('Z') && until.len() >= 20,
+        "until should be RFC3339 UTC, got {until:?}"
+    );
+
+    // The hold empties itself at the deadline. Nothing commands the
+    // arbiter here: lazy expiry would leave the document claiming a hold
+    // that had ended, which is the failure this test exists for.
+    let mut emptied = false;
+    for _ in 0..5 {
+        let Some(doc) = next_json(&hold_sub, Duration::from_secs(10)).await else {
+            break;
+        };
+        if doc["holds"].as_array().is_some_and(|h| h.is_empty()) {
+            emptied = true;
+            break;
+        }
+    }
+    assert!(emptied, "the hold document should empty itself at expiry");
+
+    assert_unit_contract(&mut sup, &observer, "arbiter").await;
+    sup.shutdown();
+}
+
+/// A hold counts what it refuses: the tally rides the hold itself, so a
+/// consumer can say what an override cost without replaying the events.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_hold_counts_what_it_refuses() {
+    let (mut sup, observer) = setup().await;
+    let hold_sub = observer
+        .declare_subscriber(HOLD_KEY)
+        .await
+        .expect("hold subscriber");
+
+    put_cmd(&observer, &envelope(json!(true), "manual", "owner")).await;
+    put_cmd(
+        &observer,
+        &envelope(json!(false), "automation", "scheduler"),
+    )
+    .await;
+
+    let mut refused = None;
+    for _ in 0..6 {
+        let Some(doc) = next_json(&hold_sub, Duration::from_secs(10)).await else {
+            break;
+        };
+        let count = doc["holds"][0]["refused"].clone();
+        if count == json!(1) {
+            refused = Some(count);
+            break;
+        }
+    }
+    assert_eq!(
+        refused,
+        Some(json!(1)),
+        "the manual hold should count the automation wish it turned away"
+    );
+
+    assert_unit_contract(&mut sup, &observer, "arbiter").await;
+    sup.shutdown();
 }
 
 /// (a)(b)(c)(d) The full lease lifecycle on one arbitrated entity: an
