@@ -19,7 +19,11 @@
 	// test, as CI does; there is no devcontainer feature for it. The tests
 	// start their own broker on a free port, so the system service stays
 	// disabled.
-	"postCreateCommand": "sudo apt-get update && sudo apt-get install -y --no-install-recommends mosquitto && sudo service mosquitto stop || true"
+	// mosquitto: the MQTT suites (ivt490, owntracks, z2m) spawn a real
+	// broker per test, as CI does, and there is no devcontainer feature
+	// for it. chromium: tests/browser drives the dashboard page in a real
+	// browser, and --with-deps brings the system libraries it needs.
+	"postCreateCommand": "sudo apt-get update && sudo apt-get install -y --no-install-recommends mosquitto && sudo service mosquitto stop; uv run --script tests/browser/run.py --install-browser"
 
 	// Use 'mounts' to make the cargo cache persistent in a Docker Volume.
 	// "mounts": [
