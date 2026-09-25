@@ -992,6 +992,120 @@ test('a flat horizon summarises to nothing rather than to min = max', () => {
   assert.equal(logic.horizonSummary(null), null);
 });
 
+// Chart geometry (docs/design.md, Dashboard). Asserted on numbers here
+// rather than through a DOM: this is arithmetic, and the browser suite
+// only checks that the right paths exist.
+const W = 400, H = 100, PAD = 3;
+const at = (iso, value) => ({ ts: iso, value });
+const WIN = {
+  from: Date.parse('2026-09-25T00:00:00Z'),
+  to: Date.parse('2026-09-25T12:00:00Z'),
+};
+const record = [
+  at('2026-09-25T00:00:00Z', 10),
+  at('2026-09-25T06:00:00Z', 20),
+  at('2026-09-25T12:00:00Z', 10),
+];
+
+test('a point sits where its timestamp falls, so a gap stays a gap', () => {
+  const geo = logic.chartGeometry(record, W, H, PAD, WIN);
+  const xs = geo.coords.map((c) => Math.round(c.x));
+  assert.deepEqual(xs, [PAD, W / 2, W - PAD], 'placed by time, not by index');
+
+  // Three points bunched into the first hour must NOT spread across the
+  // window: even spacing would draw a day of history from twenty minutes.
+  const bunched = logic.chartGeometry(
+    [at('2026-09-25T00:00:00Z', 10), at('2026-09-25T00:20:00Z', 11), at('2026-09-25T00:40:00Z', 12)],
+    W, H, PAD, WIN,
+  );
+  assert.ok(bunched.coords[2].x < W / 4, 'a short run stays short');
+});
+
+test('a value at the top of the range sits at the top of the box', () => {
+  const geo = logic.chartGeometry(record, W, H, PAD, WIN);
+  assert.equal(geo.min, 10);
+  assert.equal(geo.max, 20);
+  assert.equal(Math.round(geo.coords[1].y), PAD, 'the maximum is at the top');
+  assert.equal(Math.round(geo.coords[0].y), H - PAD, 'the minimum at the bottom');
+});
+
+test('a forecast extends the axis rightward and the past keeps its width', () => {
+  const forecast = [{
+    source: 'nordpool',
+    forecast: {
+      issued: Date.parse('2026-09-25T11:00:00Z'),
+      points: [
+        { t: Date.parse('2026-09-25T12:00:00Z'), v: 15 },
+        { t: Date.parse('2026-09-25T18:00:00Z'), v: 25 },
+      ],
+      from: Date.parse('2026-09-25T12:00:00Z'),
+      to: Date.parse('2026-09-25T18:00:00Z'),
+    },
+  }];
+  const geo = logic.chartGeometry(record, W, H, PAD, WIN, forecast);
+  assert.equal(geo.to, Date.parse('2026-09-25T18:00:00Z'), 'the horizon extends the domain');
+  assert.equal(geo.from, WIN.from, 'the window still starts where it did');
+  assert.equal(geo.max, 25, 'one value scale over record and belief together');
+  assert.equal(geo.forecast.length, 1);
+  assert.equal(geo.forecast[0].source, 'nordpool');
+  // now sits two thirds along an 18-hour domain that began at midnight
+  assert.ok(geo.nowX === undefined || (geo.nowX > PAD && geo.nowX < W - PAD));
+});
+
+test('a belief older than the span it has left is marked on the line', () => {
+  const stale = (issuedIso, toIso) => [{
+    source: 'model',
+    forecast: {
+      issued: Date.parse(issuedIso),
+      points: [{ t: Date.parse(toIso), v: 12 }],
+      from: Date.parse(toIso),
+      to: Date.parse(toIso),
+    },
+  }];
+  const now = Date.now();
+  const soon = new Date(now + 3600e3).toISOString();
+  const fresh = logic.chartGeometry(record, W, H, PAD, WIN, stale(new Date(now - 60e3).toISOString(), soon));
+  assert.equal(fresh.forecast[0].stale, false);
+  const old = logic.chartGeometry(record, W, H, PAD, WIN, stale(new Date(now - 30 * 3600e3).toISOString(), soon));
+  assert.equal(old.forecast[0].stale, true);
+});
+
+test('the braid shares one scale, and each issue carries its age', () => {
+  const issue = (v, to) => ({
+    issued: Date.parse('2026-09-25T06:00:00Z'),
+    points: [{ t: Date.parse('2026-09-25T06:00:00Z'), v }, { t: Date.parse(to), v }],
+    to: Date.parse(to),
+  });
+  const geo = logic.chartGeometry(record, W, H, PAD, WIN, null, [
+    issue(30, '2026-09-25T12:00:00Z'),
+    issue(5, '2026-09-25T15:00:00Z'),
+  ]);
+  assert.equal(geo.max, 30, 'an issue above the record raises the scale');
+  assert.equal(geo.min, 5);
+  assert.equal(geo.to, Date.parse('2026-09-25T15:00:00Z'), 'the furthest issue extends the axis');
+  assert.deepEqual(geo.issues.map((i) => i.age), [0, 1], 'oldest to newest, normalised');
+});
+
+test('nothing to scale draws nothing, rather than dividing by zero', () => {
+  assert.equal(logic.chartGeometry([], W, H, PAD, WIN), null);
+  assert.equal(logic.chartGeometry([at('2026-09-25T00:00:00Z', 10)], W, H, PAD, WIN), null,
+    'one value has no range to draw against');
+  const flat = logic.chartGeometry(
+    [at('2026-09-25T00:00:00Z', 10), at('2026-09-25T12:00:00Z', 10)], W, H, PAD, WIN,
+  );
+  assert.equal(flat.min, flat.max, 'a flat series still draws');
+  assert.ok(flat.coords.every((c) => isFinite(c.y)), 'and does not divide by a zero span');
+});
+
+test('a contributor with one point is not a line', () => {
+  const contributors = [
+    { name: 'kitchen', label: 'Kitchen', points: [at('2026-09-25T01:00:00Z', 11)] },
+    { name: 'living', label: 'Living', points: [at('2026-09-25T01:00:00Z', 11), at('2026-09-25T09:00:00Z', 19)] },
+  ];
+  const geo = logic.chartGeometry(record, W, H, PAD, WIN, null, null, contributors);
+  assert.deepEqual(geo.contributors.map((c) => c.name), ['living']);
+});
+
 // Freshness: the dashboard's own max age, since `issued` is required and
 // the policy belongs to the consumer (docs/design.md, Forecasts).
 const belief = (points, issued) =>

@@ -1242,131 +1242,6 @@ document.addEventListener('click', function (e) {
 
 // ---- charts: geometry + markup ----
 
-// Points sit where their timestamps fall in the window — a gap in the
-// record stays a gap — and only fall back to even spacing without one.
-// A live point past the window's end (a delta after the fetch) extends it.
-// Geometry for a series and, when the house has one, its future on the
-// same axis — one time domain and one value scale, because a forecast
-// drawn to its own scale beside its history says nothing about whether
-// the house is about to get colder (docs/design.md, Forecasts).
-function computeChartGeometry(points, width, height, pad, win, forecast, issues, contributors) {
-  var vals = points.map(function (p) { return p.value; }).filter(function (v) { return typeof v === 'number'; });
-  // A forecast key names its source, so an aspect may have several live
-  // claims about its future at once — a line each, never an envelope
-  // over them, for the reason the braid gives (docs/design.md, Sources).
-  //
-  // A claim issued hours ago carries what it said about the hours since,
-  // and that part is drawn: laid over the record for the same span it is
-  // the one place a provider's shape can be judged against what actually
-  // happened without opening the braid.
-  var beliefs = (forecast || []).map(function (b) {
-    return {
-      source: b.source, points: b.forecast.points, to: b.forecast.to,
-      // Older than the span it has left to say: drawn, because it is
-      // still the house's current belief, but not drawn as if it were
-      // fresh (docs/design.md, Forecasts).
-      stale: logic.forecastFreshness(b.forecast, Date.now()).stale
-    };
-  });
-  var allVals = vals.slice();
-  beliefs.forEach(function (b) {
-    b.points.forEach(function (p) { allVals.push(p.v); });
-  });
-  // Every drawn issue shares the scale: a braid on its own y range would
-  // say nothing about whether the house was about to get colder.
-  (issues || []).forEach(function (f) {
-    f.points.forEach(function (pt) { allVals.push(pt.v); });
-  });
-  // Contributors share the scale for the same reason issues do: a source
-  // drawn on its own y range would look like it agrees when it does not.
-  (contributors || []).forEach(function (c) {
-    (c.points || []).forEach(function (p) {
-      if (typeof p.value === 'number') allVals.push(p.value);
-    });
-  });
-  if (allVals.length < 2) return null;
-  var min = Math.min.apply(null, allVals);
-  var max = Math.max.apply(null, allVals);
-  var span = (max - min) || 1;
-  var n = points.length;
-  var times = points.map(function (p) { return Date.parse(p.ts); });
-  var from = win ? win.from : times[0];
-  var to = Math.max(win ? win.to : times[n - 1] || 0, times[n - 1] || 0);
-  // The horizon extends the axis rightward; the past keeps the width it
-  // had, so adding a forecast never silently squashes recorded history
-  // into a corner without the reader seeing why.
-  beliefs.forEach(function (b) { to = Math.max(to, b.to); });
-  (issues || []).forEach(function (f) { to = Math.max(to, f.to); });
-  var byTime = times.every(function (t) { return !isNaN(t); }) && to > from;
-  var place = function (t, value) {
-    var f = (t - from) / (to - from);
-    return {
-      x: pad + f * (width - 2 * pad),
-      y: pad + (1 - (value - min) / span) * (height - 2 * pad)
-    };
-  };
-  var coords = points.map(function (p, i) {
-    var f = byTime ? (times[i] - from) / (to - from) : i / (n - 1);
-    var x = pad + f * (width - 2 * pad);
-    var y = pad + (1 - (p.value - min) / span) * (height - 2 * pad);
-    return { x: x, y: y, value: p.value, ts: p.ts };
-  });
-  var geo = { coords: coords, min: min, max: max, from: from, to: to };
-  if (contributors && contributors.length && byTime) {
-    // A line per source, never a band across them: an envelope's edge
-    // belongs at each instant to whichever sensor happened to be highest,
-    // so it traces a path no sensor took. The braid's rule, for the
-    // braid's reason (docs/design.md, Sources).
-    geo.contributors = contributors.map(function (c) {
-      return {
-        name: c.name,
-        label: c.label,
-        coords: (c.points || [])
-          .filter(function (p) { return typeof p.value === 'number'; })
-          .map(function (p) {
-            var at = place(Date.parse(p.ts), p.value);
-            return { x: at.x, y: at.y, value: p.value, ts: p.ts };
-          })
-          .filter(function (pt) { return !isNaN(pt.x); })
-      };
-    }).filter(function (c) { return c.coords.length > 1; });
-  }
-  if (issues && issues.length && byTime) {
-    // Each stored issue as its own trajectory. A line per issue rather
-    // than an envelope over them, because an envelope's edge belongs to
-    // whichever issue happened to be highest at each instant — a path
-    // nobody predicted (docs/wireframes/forecast-history.svg).
-    geo.issues = issues.map(function (f, n) {
-      return {
-        issued: f.issued,
-        source: f.source,
-        age: issues.length > 1 ? n / (issues.length - 1) : 1,
-        coords: f.points.map(function (pt) {
-          var at = place(pt.t, pt.v);
-          return { x: at.x, y: at.y, value: pt.v, ts: pt.t };
-        })
-      };
-    });
-  }
-  if (beliefs.length && byTime) {
-    geo.forecast = beliefs.map(function (b) {
-      return {
-        source: b.source,
-        stale: b.stale,
-        coords: b.points.map(function (p) {
-          var at = place(p.t, p.v);
-          return { x: at.x, y: at.y, value: p.v, ts: p.t };
-        })
-      };
-    });
-    // Where the record stops and the belief starts. Drawn from the
-    // window rather than from the last point: a gap in recording is not
-    // the present moment.
-    var nowAt = (Date.now() - from) / (to - from);
-    if (nowAt > 0 && nowAt < 1) geo.nowX = pad + nowAt * (width - 2 * pad);
-  }
-  return geo;
-}
 
 function chartPathData(coords) {
   return coords.map(function (c, i) {
@@ -1468,7 +1343,7 @@ function buildChart(chartId, points, opts) {
   var height = opts.height || 36;
   var pad = opts.pad !== undefined ? opts.pad : 3;
   var sizeClass = opts.sizeClass || 'chart-tile';
-  var geo = computeChartGeometry(points || [], CHART_VBW, height, pad, opts.window, opts.forecast, opts.issues, opts.contributors);
+  var geo = logic.chartGeometry(points || [], CHART_VBW, height, pad, opts.window, opts.forecast, opts.issues, opts.contributors);
   var inner;
   if (!geo) {
     chartRegistry[chartId] = null;
