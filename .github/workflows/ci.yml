@@ -67,6 +67,12 @@ jobs:
       # fails the build the moment one is edited by hand or a release
       # forgets to regenerate them.
       - run: scripts/sync_starter.sh --check
+      # Running without Docker: the binary and the SDK wheel on this bare
+      # runner, the way a release's tarball and wheel are installed. See
+      # scripts/smoke_bare.sh for what it asserts.
+      - run: uv build --wheel sdk/python -o "$RUNNER_TEMP/wheels"
+      - run: cargo build --bin homeostat
+      - run: scripts/smoke_bare.sh target/debug/homeostat "$RUNNER_TEMP/wheels"
 
   # The dashboard page in a real browser against canned fixtures (see
   # tests/browser/README.md). Its own job because it is the only thing here

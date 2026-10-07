@@ -32,58 +32,9 @@ fail() {
 # and Cargo.toml agree, sync_starter.sh --check holds them there).
 SDK_VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' "$REPO/Cargo.toml" | head -1)"
 
-# A minimal house: the clock adapter as its one unit, its SDK dependency
-# rewritten from the in-repo path source to `homeostat==VERSION` with no
-# sources block — the shape a deployed unit has (docs/design.md, SDK
-# distribution), so the smoke test resolves the SDK from the bundled
-# wheel the way a real house does. The rewrite mirrors pin_sdk in
-# scripts/sync_starter.sh.
+# A minimal house, its clock unit pinned to the bundled SDK wheel.
 HOUSE="$WORK/house"
-mkdir -p "$HOUSE/units"
-sed -e 's|^\(# *\)"homeostat[^"]*",|\1"homeostat=='"$SDK_VERSION"'",|' \
-    -e '/^# \[tool\.uv\.sources\]$/d' \
-    -e '/^# homeostat = /d' \
-    "$REPO/adapters/clock.py" \
-  | awk '
-    /^#$/ { held = 1; next }
-    held && !/^# \/\/\/$/ { print "#" }
-    { held = 0; print }
-  ' > "$HOUSE/units/clock.py"
-grep -q "\"homeostat==$SDK_VERSION\"" "$HOUSE/units/clock.py" \
-  && ! grep -q 'tool.uv.sources' "$HOUSE/units/clock.py" \
-  || { echo "SMOKE FAIL: clock.py SDK dependency line drifted; rewrite missed" >&2; exit 1; }
-cat > "$HOUSE/zones.toml" <<'EOF'
-schema = 1
-
-[zones]
-EOF
-cat > "$HOUSE/units/clock.toml" <<'EOF'
-schema = 1
-
-[unit]
-name = "clock"
-kind = "service"
-description = "Civil time on the bus"
-
-[runtime]
-command = "uv run units/clock.py"
-restart = "always"
-shutdown_grace_s = 5
-
-[bus.publishes]
-minute = { key = "home/clock/minute" }
-date = { key = "home/clock/date" }
-
-[params.timezone]
-type = "string"
-default = "Europe/Stockholm"
-editable_by = "owner"
-EOF
-git -C "$HOUSE" init -q
-git -C "$HOUSE" -c user.name=smoke -c user.email=smoke@example.com \
-  add -A
-git -C "$HOUSE" -c user.name=smoke -c user.email=smoke@example.com \
-  commit -qm "smoke house"
+"$REPO/scripts/smoke_house.sh" "$HOUSE" "$SDK_VERSION"
 
 docker network create "$NET" >/dev/null
 docker run -d --name "$SUP" --network "$NET" -v "$HOUSE:/house" "$IMAGE" >/dev/null
