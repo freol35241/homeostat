@@ -873,7 +873,8 @@ function sendCmd(room, entity, aspect, value) {
   var seq = ++cmdSeq;
   logic.trackCommand(pending, {
     room: room, entity: entity, aspect: aspect, value: value, seq: seq, tolerance: cmdTolerance(aspect),
-    capability: spec ? spec.capability : null, before: stateValue(room, entity, aspect)
+    capability: spec ? spec.capability : null, descriptor: store.aspects[entity],
+    before: stateValue(room, entity, aspect)
   }, Date.now(), 'sending');
   scheduleRender();
   fetch('/api/cmd', {
@@ -906,7 +907,8 @@ function stepCmd(room, entity, aspect, value) {
   var spec = entitySpec(room, entity);
   logic.trackCommand(pending, {
     room: room, entity: entity, aspect: aspect, value: value, tolerance: cmdTolerance(aspect),
-    capability: spec ? spec.capability : null, before: stateValue(room, entity, aspect)
+    capability: spec ? spec.capability : null, descriptor: store.aspects[entity],
+    before: stateValue(room, entity, aspect)
   }, Date.now(), 'draft');
   clearTimeout(drafts[key]);
   drafts[key] = setTimeout(function () {
