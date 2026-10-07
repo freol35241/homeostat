@@ -5,6 +5,7 @@ Run: uv run --no-project --with-editable sdk/python python -m unittest discover 
 """
 
 import json
+import threading
 import unittest
 
 from homeostat.session import UnitSession
@@ -13,9 +14,25 @@ from homeostat.session import UnitSession
 class FakeZenoh:
     def __init__(self):
         self.puts = []
+        self.declared = []
+        self.subscribed = set()
 
     def put(self, key, payload):
         self.puts.append((key, json.loads(payload)))
+
+    def declare_publisher(self, key):
+        self.declared.append(key)
+        return FakePublisher(self, key)
+
+
+class FakePublisher:
+    def __init__(self, zenoh, key):
+        self._zenoh = zenoh
+        self._key = key
+
+    @property
+    def matching_status(self):
+        return type("Status", (), {"matching": self._key in self._zenoh.subscribed})()
 
 
 class FakeSample:
@@ -33,6 +50,7 @@ def stub_session():
     session.unit = "u"
     session._session = FakeZenoh()
     session._token = None
+    session._publishers = {}
     return session
 
 
@@ -114,3 +132,23 @@ class ParseCommandTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HasSubscriberTest(unittest.TestCase):
+    def test_answers_from_the_publishers_matching_status(self):
+        session = stub_session()
+        session._session.subscribed.add("home/cmd/r/lamp/on")
+        self.assertTrue(session.has_subscriber("home/cmd/r/lamp/on"))
+        self.assertFalse(session.has_subscriber("home/cmd/r/gone/on", wait_s=0.05))
+
+    def test_a_subscriber_that_arrives_during_the_wait_counts(self):
+        session = stub_session()
+        key = "home/cmd/r/lamp/on"
+        threading.Timer(0.05, lambda: session._session.subscribed.add(key)).start()
+        self.assertTrue(session.has_subscriber(key, wait_s=2))
+
+    def test_one_publisher_per_key(self):
+        session = stub_session()
+        for _ in range(3):
+            session.has_subscriber("home/cmd/r/gone/on", wait_s=0)
+        self.assertEqual(session._session.declared, ["home/cmd/r/gone/on"])
