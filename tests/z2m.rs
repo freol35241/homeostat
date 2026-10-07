@@ -639,9 +639,22 @@ fn house_with_base(tag: &str, base: &str, inventory_timeout_s: Option<f64>) -> s
 
 /// Spawns broker + supervisor on a base-topic variant of the fixture.
 async fn setup_at(house: &std::path::Path) -> (Mosquitto, Supervisor, zenoh::Session) {
+    let (mosquitto, sup, observer) = start_at(house).await;
+    await_alive(&observer).await;
+    (mosquitto, sup, observer)
+}
+
+/// `setup_at` without waiting for the adapter, for a test that must
+/// subscribe before the adapter's first event can fire.
+async fn start_at(house: &std::path::Path) -> (Mosquitto, Supervisor, zenoh::Session) {
     let mosquitto = Mosquitto::spawn();
     let sup = Supervisor::spawn_at(house, &[(PORT_ENV, &mosquitto.port.to_string())]);
     let observer = sup.observer().await;
+    (mosquitto, sup, observer)
+}
+
+/// Waits for the adapter's liveliness token.
+async fn await_alive(observer: &zenoh::Session) {
     let token_sub = observer
         .liveliness()
         .declare_subscriber("home/health/zigbee/alive")
@@ -653,7 +666,6 @@ async fn setup_at(house: &std::path::Path) -> (Mosquitto, Supervisor, zenoh::Ses
         .expect("adapter liveliness token within 60s")
         .expect("liveliness stream open");
     assert_eq!(token.kind(), SampleKind::Put);
-    (mosquitto, sup, observer)
 }
 
 /// (h) A non-default, multi-segment base topic works in every direction.
@@ -747,11 +759,15 @@ async fn a_non_default_base_topic_translates_both_directions() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_base_topic_that_matches_nothing_reports_bridge_silent() {
     let house = house_with_base("z2m-deaf", "wrong/prefix", Some(1.0));
-    let (mosquitto, mut sup, observer) = setup_at(&house).await;
+    // Subscribed before the adapter is up: its watchdog starts at ready
+    // and reports once, so a subscriber declared after the liveliness
+    // token can arrive too late on a loaded host and wait for nothing.
+    let (mosquitto, mut sup, observer) = start_at(&house).await;
     let event_sub = observer
         .declare_subscriber(EVENT_KEY)
         .await
         .expect("event subscriber");
+    await_alive(&observer).await;
 
     // The estate is alive under the real prefix; the adapter is listening
     // somewhere else entirely.
