@@ -110,6 +110,12 @@ issue stay behind as well, because restore, the seed and latest-value
 reads find a series' last word in the hot file. home/history/** answers
 from the hot file alone: an archive is for people and tools (sqlite3,
 DuckDB ATTACH), and home/history/stats lists what has been sealed.
+Archives are kept forever unless retain_archives_months is set (opt-in,
+0 by default): then a whole file goes once its month closed more than
+that many months ago. Settings that undercut each other — a retention
+window that deletes rows before they are old enough to archive, or
+archives kept no longer than archiving waits — leave one
+`archive-misconfigured` event per change.
 
 SQLite has no page checksums, so a disk returning corrupt data is silent
 until a read happens to hit it. Every integrity_check_hours (default
@@ -153,7 +159,9 @@ PARAM_DEFAULTS = {
     "retain_events_days": 0.0,
     "integrity_check_hours": 24.0,
     "archive_after_months": 0,
+    "retain_archives_months": 0,
 }
+RETENTION_PARAMS = ("retain_samples_days", "retain_forecasts_days", "retain_events_days")
 DEFAULT_QUERY_LIMIT = 1000
 DEFAULT_EVENTS_LIMIT = 500
 # The most rows one reply carries; a larger limit is clamped, never refused.
@@ -456,6 +464,10 @@ class Params(LiveParams):
     def archive_after_months(self) -> int:
         return int(self.get("archive_after_months"))
 
+    @property
+    def retain_archives_months(self) -> int:
+        return int(self.get("retain_archives_months"))
+
 
 class IntegrityChecker:
     """Runs PRAGMA integrity_check on its own read-only connection every
@@ -528,6 +540,9 @@ class Writer:
         # month per pass, so flushes run between months of a first archive
         # of years rather than queueing behind all of it.
         self.archive_due = False
+        # The settings problems last reported, so each is said once per
+        # change rather than every hour.
+        self._misconfigured: list[str] = []
         # The checker before the params: a config sample can arrive the
         # moment the params subscription exists, and the change handler
         # wakes both.
@@ -587,6 +602,8 @@ class Writer:
                 # rather than archived and then deleted.
                 if purge:
                     self._purge()
+                    self._check_archive_settings()
+                    self._drop_archives()
                 if archive and self._archive():
                     with self.cond:
                         self.archive_due = True
@@ -837,6 +854,68 @@ class Writer:
             return False
         finally:
             conn.close()
+
+    def _drop_archives(self) -> None:
+        """Deletes sealed archive files whose month closed more than
+        retain_archives_months ago — whole files only, since a sealed file
+        is never rewritten. Opt-in: 0, the default, keeps them forever, and
+        the retain_*_days windows never reach them. Runs whether or not
+        archive_after_months still is, so archives made earlier age out
+        too. The file goes before its record: a crash between the two
+        leaves a record of a missing file, which the next pass finishes."""
+        months = self.params.retain_archives_months
+        if months <= 0:
+            return
+        archive_dir = self.db_path.parent / ARCHIVE_DIR
+        dropped = []
+        try:
+            boundary = archive_boundary_us(now_us(), months)
+            conn = sqlite3.connect(self.db_path, timeout=2.0)
+            try:
+                for name, month in conn.execute(
+                    "SELECT file, month FROM archives WHERE state = 'sealed' ORDER BY month"
+                ).fetchall():
+                    year, number = (int(part) for part in month.split("-"))
+                    if month_start_us(year, number) >= boundary:
+                        continue
+                    (archive_dir / name).unlink(missing_ok=True)
+                    with conn:
+                        conn.execute("DELETE FROM archives WHERE file = ?", (name,))
+                    dropped.append(name)
+            finally:
+                conn.close()
+        except (sqlite3.Error, OSError, ValueError, OverflowError) as err:
+            self.sess.health_event("archive-drop-failed", dropped=dropped, error=str(err))
+            return
+        if dropped:
+            self.sess.health_event("archive-dropped", files=dropped)
+
+    def _check_archive_settings(self) -> None:
+        """Says so, once per change, when the archive settings undercut
+        each other. A month is archived once it closed more than
+        archive_after_months ago, so its first rows are by then up to
+        archive_after_months + 1 months old: a retention window shorter
+        than that deletes them before they are archived. And archives kept
+        no longer than archiving waits are dropped as soon as sealed."""
+        archive = self.params.archive_after_months
+        problems = []
+        if archive > 0:
+            for param in RETENTION_PARAMS:
+                days = self.params.get(param)
+                if 0 < days < (archive + 1) * 31:
+                    problems.append(
+                        f"{param} ({days:g} days) deletes rows before"
+                        f" archive_after_months ({archive}) archives them"
+                    )
+            keep = self.params.retain_archives_months
+            if 0 < keep <= archive:
+                problems.append(
+                    f"retain_archives_months ({keep}) drops archives as soon as"
+                    f" archive_after_months ({archive}) seals them"
+                )
+        if problems and problems != self._misconfigured:
+            self.sess.health_event("archive-misconfigured", problems=problems)
+        self._misconfigured = problems
 
     def _finish_interrupted(
         self, conn: sqlite3.Connection, archive_dir: Path, failures: tuple

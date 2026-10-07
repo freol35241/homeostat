@@ -2075,3 +2075,95 @@ async fn an_impossible_archive_window_fails_without_stopping_the_writer() {
 
     sup.shutdown();
 }
+
+/// Archive retention is opt-in and whole-file: with retain_archives_months
+/// set, an archive whose month closed more than that long ago is deleted,
+/// file and record, and nothing else is. Settings that undercut each other
+/// are named once per change: a retention window that deletes rows before
+/// they are old enough to archive is allowed, but not silent.
+#[tokio::test(flavor = "multi_thread")]
+async fn old_archives_are_dropped_when_asked_and_bad_settings_are_named() {
+    let db = store_path("archive-retention");
+    let files = ArchiveFiles::of(&db);
+    let (mut sup, observer) = setup(&db).await;
+    let events = observer
+        .declare_subscriber("home/health/recorder/event")
+        .await
+        .expect("event subscriber");
+
+    let power = matched_publisher(&observer, "home/state/attic/meter/power").await;
+    put(&power, json!(9.5)).await;
+    rows_eventually(&db, "SELECT value FROM samples", 1, Duration::from_secs(20)).await;
+    let jan = utc_us(2026, 1, 1);
+    {
+        let conn = Connection::open(&db).expect("open store");
+        conn.busy_timeout(Duration::from_secs(5))
+            .expect("busy timeout");
+        conn.execute(
+            "INSERT INTO samples SELECT s.id, ?1, r.id, 1, 1.0 FROM series s, rooms r
+             WHERE s.entity = 'meter' AND r.name = 'attic'",
+            [jan + 86_400 * 1_000_000],
+        )
+        .expect("january row");
+    }
+
+    config_write(
+        &observer,
+        "home/config/recorder/archive_after_months",
+        json!(1),
+    )
+    .await
+    .expect("in-constraint write accepted");
+    let sealed = await_event(&events, Duration::from_secs(30), |e| e["kind"] == "archive").await;
+    assert_eq!(sealed["month"], json!("2026-01"), "{sealed}");
+    assert!(files.path("2026-01").exists());
+
+    // A month's first rows are up to two months old by the time a window
+    // of one month archives them; thirty days of retention deletes them
+    // first. Allowed, and said.
+    config_write(
+        &observer,
+        "home/config/recorder/retain_samples_days",
+        json!(30),
+    )
+    .await
+    .expect("in-constraint write accepted");
+    let warned = await_event(&events, Duration::from_secs(30), |e| {
+        e["kind"] == "archive-misconfigured"
+    })
+    .await;
+    assert_eq!(
+        warned["problems"],
+        json!(["retain_samples_days (30 days) deletes rows before archive_after_months (1) archives them"]),
+        "{warned}"
+    );
+
+    config_write(
+        &observer,
+        "home/config/recorder/retain_archives_months",
+        json!(3),
+    )
+    .await
+    .expect("in-constraint write accepted");
+    let dropped = await_event(&events, Duration::from_secs(30), |e| {
+        e["kind"] == "archive-dropped"
+    })
+    .await;
+    assert_eq!(
+        dropped["files"],
+        json!([format!("{}-2026-01.db", files.stem)]),
+        "{dropped}"
+    );
+    assert!(!files.path("2026-01").exists(), "the file is gone");
+    assert_eq!(
+        count(&db, "SELECT COUNT(*) FROM archives"),
+        0,
+        "and its record"
+    );
+    let stats = history_get(&observer, "home/history/stats").await;
+    assert_eq!(stats[0].1["archives"], json!([]), "{}", stats[0].1);
+    // The hot file is retention's, not archive retention's: today's row stays.
+    assert_eq!(count(&db, "SELECT COUNT(*) FROM samples"), 1);
+
+    sup.shutdown();
+}
