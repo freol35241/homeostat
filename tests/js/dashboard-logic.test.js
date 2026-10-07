@@ -643,26 +643,119 @@ test('a tracked command is pending until something ends it', () => {
   assert.equal(logic.pendingFor(pending, 'livingroom', 'lamp', 'brightness'), null);
 });
 
-test('a readback confirms it', () => {
-  const pending = logic.trackCommand({}, cmd(), 1000);
-  const done = logic.resolveFromState(pending, 'home/state/livingroom/lamp/on');
+test('a readback of the value asked for confirms it', () => {
+  const pending = logic.trackCommand({}, cmd({ before: false }), 1000);
+  const done = logic.resolveFromState(pending, 'home/state/livingroom/lamp/on', true);
   assert.equal(done.outcome, 'confirmed');
+  assert.equal(done.value, true);
   assert.equal(logic.pendingFor(pending, 'livingroom', 'lamp', 'on'), null);
 });
 
 test('a readback for another aspect leaves it pending', () => {
   const pending = logic.trackCommand({}, cmd(), 1000);
-  assert.equal(logic.resolveFromState(pending, 'home/state/livingroom/lamp/brightness'), null);
+  assert.equal(logic.resolveFromState(pending, 'home/state/livingroom/lamp/brightness', 120), null);
   assert.equal(logic.pendingFor(pending, 'livingroom', 'lamp', 'on').outcome, 'pending');
 });
 
-test('a device that clamped the value has still answered', () => {
-  // Resolution is "the aspect reported", not "the aspect reported what I
-  // asked" — otherwise a clamped setpoint hangs pending until it times out
-  // and reports a failure that did not happen.
-  const pending = logic.trackCommand({}, cmd({ aspect: 'setpoint', value: 99, capability: 'climate' }), 1000);
-  const done = logic.resolveFromState(pending, 'home/state/livingroom/lamp/setpoint');
-  assert.equal(done.outcome, 'confirmed');
+test('a bridge republishing the old value is not an answer', () => {
+  // ivt490's bridge sends the setpoint on every poll. Counting any
+  // readback as confirmation cleared the control on the next poll — the
+  // old value — before the pump had done anything.
+  const pending = logic.trackCommand({}, cmd({ aspect: 'setpoint', value: 22.5, before: 21, capability: 'climate' }), 1000);
+  assert.equal(logic.resolveFromState(pending, 'home/state/livingroom/lamp/setpoint', 21), null);
+  const entry = logic.pendingFor(pending, 'livingroom', 'lamp', 'setpoint');
+  assert.equal(entry.outcome, 'pending');
+  assert.equal(entry.seen, 21, 'the stale report is kept, for "still reports 21"');
+});
+
+test('a device that clamped the value has answered, with its own value', () => {
+  // Not a timeout: the device moved, just not to where it was asked.
+  const pending = logic.trackCommand({}, cmd({ aspect: 'setpoint', value: 99, before: 21, capability: 'climate' }), 1000);
+  const done = logic.resolveFromState(pending, 'home/state/livingroom/lamp/setpoint', 30);
+  assert.equal(done.outcome, 'adjusted');
+  assert.equal(done.value, 99);
+  assert.equal(done.seen, 30);
+});
+
+test('steps stack on the request in flight, and its readback on the way is progress', () => {
+  let pending = logic.trackCommand({}, cmd({ aspect: 'setpoint', value: 21.5, before: 21, capability: 'climate' }), 1000);
+  assert.equal(logic.commandBase(pending, 'livingroom', 'lamp', 'setpoint', 21), 21.5);
+  pending = logic.trackCommand(pending, cmd({ id: 'second', aspect: 'setpoint', value: 22, capability: 'climate' }), 1200);
+  const entry = logic.pendingFor(pending, 'livingroom', 'lamp', 'setpoint');
+  assert.equal(entry.before, 21, 'before is the report from ahead of the first tap');
+  // The first request's readback arrives: neither confirmation nor a clamp.
+  assert.equal(logic.resolveFromState(pending, 'home/state/livingroom/lamp/setpoint', 21.5), null);
+  assert.equal(logic.resolveFromState(pending, 'home/state/livingroom/lamp/setpoint', 22).outcome, 'confirmed');
+  assert.equal(logic.commandBase(pending, 'livingroom', 'lamp', 'setpoint', 22), 22, 'nothing in flight: the report');
+});
+
+test('a draft is not sent, so nothing can answer it or time it out', () => {
+  const pending = logic.trackCommand({}, cmd({ id: null, value: false, before: true }), 1000, 'draft');
+  assert.equal(logic.resolveFromState(pending, 'home/state/livingroom/lamp/on', false), null);
+  assert.deepEqual(logic.expirePending(pending, 1000 + 10 * logic.COMMAND_TIMEOUT_MS.light), []);
+  assert.equal(logic.pendingFor(pending, 'livingroom', 'lamp', 'on').outcome, 'draft');
+});
+
+test('the POST reply makes a sending command pending, or says nothing heard it', () => {
+  const key = logic.pendingKey('livingroom', 'lamp', 'on');
+  let pending = logic.trackCommand({}, cmd({ id: null, seq: 1 }), 1000, 'sending');
+  assert.equal(logic.commandSent(pending, key, 1, { ok: true, id: 'abc', heard: true }), null);
+  assert.equal(pending[key].outcome, 'pending');
+  assert.equal(pending[key].id, 'abc');
+
+  pending = logic.trackCommand({}, cmd({ id: null, seq: 2 }), 1000, 'sending');
+  const unheard = logic.commandSent(pending, key, 2, { ok: true, id: 'abc', heard: false });
+  assert.equal(unheard.outcome, 'unheard');
+  assert.equal(pending[key], undefined);
+});
+
+test('a reply for a request since replaced is ignored', () => {
+  const key = logic.pendingKey('livingroom', 'lamp', 'on');
+  let pending = logic.trackCommand({}, cmd({ id: null, value: true, seq: 1 }), 1000, 'sending');
+  pending = logic.trackCommand(pending, cmd({ id: null, value: false }), 1100, 'draft');
+  assert.equal(logic.commandSent(pending, key, 1, { ok: true, id: 'old', heard: true }), null);
+  assert.equal(pending[key].outcome, 'draft');
+  assert.equal(pending[key].id, null);
+});
+
+test('on, off, on: the first reply does not claim the third request', () => {
+  // Matching replies by value would bind the entry to command 1, and an
+  // event ending command 3 would then find nothing.
+  const key = logic.pendingKey('livingroom', 'lamp', 'on');
+  let pending = logic.trackCommand({}, cmd({ id: null, value: true, seq: 1 }), 1000, 'sending');
+  pending = logic.trackCommand(pending, cmd({ id: null, value: false, seq: 2 }), 1050, 'sending');
+  pending = logic.trackCommand(pending, cmd({ id: null, value: true, seq: 3 }), 1100, 'sending');
+  logic.commandSent(pending, key, 1, { ok: true, id: 'id1', heard: true });
+  logic.commandSent(pending, key, 2, { ok: true, id: 'id2', heard: true });
+  assert.equal(pending[key].outcome, 'sending');
+  logic.commandSent(pending, key, 3, { ok: true, id: 'id3', heard: true });
+  assert.equal(pending[key].id, 'id3');
+  const done = logic.resolveFromEvent(pending, { kind: 'drop', reason: 'device-unavailable', cmd_id: 'id3' });
+  assert.equal(done.outcome, 'rejected');
+});
+
+test('a brightness readback one step off the scale is the asked value', () => {
+  // 127 is 50 %; a bulb reporting 128 has done what it was asked, and
+  // "settled on 50 % (asked 50 %)" would be nonsense.
+  const pending = logic.trackCommand({}, cmd({ aspect: 'brightness', value: 127, before: 40, tolerance: 254 / 200 }), 1000);
+  assert.equal(logic.resolveFromState(pending, 'home/state/livingroom/lamp/brightness', 128).outcome, 'confirmed');
+});
+
+test('on, then off: a republished old off is not an answer while the on may yet land', () => {
+  let pending = logic.trackCommand({}, cmd({ value: true, before: false }), 1000);
+  pending = logic.trackCommand(pending, cmd({ id: 'second', value: false }), 1100);
+  assert.equal(logic.resolveFromState(pending, 'home/state/livingroom/lamp/on', false), null);
+  // The on lands, then the off: now the off is an answer.
+  assert.equal(logic.resolveFromState(pending, 'home/state/livingroom/lamp/on', true), null);
+  assert.equal(logic.resolveFromState(pending, 'home/state/livingroom/lamp/on', false).outcome, 'confirmed');
+});
+
+test('on, then off, and the on never landed: after the wait it is where it was asked', () => {
+  let pending = logic.trackCommand({}, cmd({ value: true, before: false }), 1000);
+  pending = logic.trackCommand(pending, cmd({ id: 'second', value: false }), 1100);
+  logic.resolveFromState(pending, 'home/state/livingroom/lamp/on', false);
+  const expired = logic.expirePending(pending, 1100 + logic.COMMAND_TIMEOUT_MS.light + 1);
+  assert.equal(expired[0].outcome, 'confirmed');
 });
 
 test('an arbiter refusal is held, not failed, and names the band', () => {
@@ -673,6 +766,7 @@ test('an arbiter refusal is held, not failed, and names the band', () => {
   assert.equal(done.outcome, 'held');
   assert.equal(done.by, 'manual');
   assert.equal(done.actor, 'owner');
+  assert.equal(done.value, true);
   assert.equal(logic.pendingFor(pending, 'livingroom', 'lamp', 'on'), null);
 });
 
@@ -702,12 +796,15 @@ test('a second tap replaces the first, and the stale id no longer resolves', () 
 });
 
 test('nothing answering expires, and is not reported as success', () => {
-  const pending = logic.trackCommand({}, cmd(), 1000);
+  const pending = logic.trackCommand({}, cmd({ before: false }), 1000);
+  logic.resolveFromState(pending, 'home/state/livingroom/lamp/on', false);
   const timeout = logic.COMMAND_TIMEOUT_MS.light;
   assert.deepEqual(logic.expirePending(pending, 1000 + timeout), []);
   const expired = logic.expirePending(pending, 1000 + timeout + 1);
   assert.equal(expired.length, 1);
   assert.equal(expired[0].outcome, 'unconfirmed');
+  assert.equal(expired[0].value, true);
+  assert.equal(expired[0].seen, false, 'what the device still reports rides along');
   assert.equal(logic.pendingFor(pending, 'livingroom', 'lamp', 'on'), null);
 });
 
@@ -715,6 +812,26 @@ test('a slow device is not expired on a fast device timeout', () => {
   const pending = logic.trackCommand({}, cmd({ entity: 'burner', aspect: 'power_level', capability: 'burner' }), 1000);
   assert.deepEqual(logic.expirePending(pending, 1000 + logic.COMMAND_TIMEOUT_MS.light + 1), []);
   assert.equal(logic.expirePending(pending, 1000 + logic.COMMAND_TIMEOUT_MS.burner + 1).length, 1);
+});
+
+test('an outcome stays said for a while: a confirmation briefly, a problem longer', () => {
+  const recent = {};
+  logic.noteOutcome(recent, { key: 'a', outcome: 'confirmed', value: 1 }, 1000);
+  logic.noteOutcome(recent, { key: 'b', outcome: 'held', value: 1, by: 'family' }, 1000);
+  assert.equal(logic.recentFor(recent, 'a', 3000).outcome, 'confirmed');
+  assert.equal(logic.recentFor(recent, 'a', 6000), null);
+  assert.equal(logic.recentFor(recent, 'b', 6000).outcome, 'held');
+  assert.equal(logic.recentFor(recent, 'b', 30000), null);
+  assert.deepEqual(Object.keys(recent), []);
+});
+
+test('outcomes are pruned whether or not anything asks about them', () => {
+  const recent = {};
+  logic.noteOutcome(recent, { key: 'a', outcome: 'confirmed', value: 1 }, 1000);
+  logic.noteOutcome(recent, { key: 'b', outcome: 'held', value: 1 }, 1000);
+  assert.equal(logic.pruneRecent(recent, 2000), false, 'nothing due yet');
+  assert.equal(logic.pruneRecent(recent, 6000), true);
+  assert.deepEqual(Object.keys(recent), ['b']);
 });
 
 // ---- history shapes ----
@@ -1387,4 +1504,70 @@ test('a horizon summary describes what is still ahead', () => {
   assert.equal(logic.horizonSummary(f).max.v, 30.0);
   // Ahead of everything it says nothing rather than inventing a spread.
   assert.equal(logic.horizonSummary(f, Date.parse('2026-09-22T00:00:00+00:00')), null);
+});
+
+// ---- about ----
+
+test('about says the core release and its commit, linked, and the house commit', () => {
+  const lines = logic.aboutLines({
+    homeostat: { version: '0.17.0', commit: '0123456789abcdef' },
+    dashboard: { version: '0.17.0' },
+    house: { commit: 'fedcba9876543210-dirty' }
+  });
+  assert.deepEqual(lines.map((l) => l.label), ['homeostat', 'house']);
+  assert.match(lines[0].href, /\/releases\/tag\/v0\.17\.0$/);
+  assert.equal(lines[0].commit, '0123456');
+  assert.match(lines[0].commitHref, /\/commit\/0123456789abcdef$/);
+  assert.equal(lines[1].text, 'fedcba9 + uncommitted changes');
+});
+
+test('a dashboard from another release than the core is news; a prerelease spelled two ways is not', () => {
+  const differs = logic.aboutLines({ homeostat: { version: '0.17.0' }, dashboard: { version: '0.16.1' } });
+  assert.deepEqual(differs.map((l) => l.label), ['homeostat', 'dashboard']);
+  assert.ok(differs[1].note);
+  const same = logic.aboutLines({ homeostat: { version: '0.17.0-rc1' }, dashboard: { version: '0.17.0rc1' } });
+  assert.deepEqual(same.map((l) => l.label), ['homeostat']);
+});
+
+test('an older unit with no about still gets the links, and no lines', () => {
+  assert.deepEqual(logic.aboutLines(undefined), []);
+  assert.ok(logic.ABOUT_LINKS.length > 0);
+});
+
+// ---- the text behind a view ----
+
+test('a view reads back as the dashboard.toml block that made it', () => {
+  const model = {
+    views: [{
+      name: 'heating',
+      widgets: [
+        { kind: 'group', label: 'Heating', widgets: [
+          { kind: 'dial', entity: 'heat_pump' },
+          { hours: 24, aspect: 'temperature', entity: 'livingroom_temp', kind: 'chart' }
+        ] },
+        { kind: 'room', room: 'kitchen' }
+      ]
+    }, { name: 'rooms', label: 'All rooms', kind: 'rooms' }]
+  };
+  assert.equal(logic.viewText(model, 'heating'), [
+    '[[view]]',
+    'name = "heating"',
+    'widgets = [',
+    '  { kind = "group", label = "Heating", widgets = [',
+    '    { kind = "dial", entity = "heat_pump" },',
+    '    { kind = "chart", entity = "livingroom_temp", aspect = "temperature", hours = 24 },',
+    '  ] },',
+    '  { kind = "room", room = "kitchen" },',
+    ']',
+    ''
+  ].join('\n'));
+  assert.equal(logic.viewText(model, 'rooms'), '[[view]]\nname = "rooms"\nlabel = "All rooms"\nkind = "rooms"\n');
+  assert.equal(logic.viewText(model, 'health'), null, 'chrome is never a view');
+});
+
+test('without the file, a generated view says how to keep it', () => {
+  const text = logic.viewText({}, 'now');
+  assert.match(text, /no dashboard\.toml/);
+  assert.match(text, /\[\[view\]\]\nname = "now"\nkind = "now"\n$/);
+  assert.equal(logic.viewText({}, 'heating'), null);
 });

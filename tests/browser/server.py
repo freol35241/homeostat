@@ -52,6 +52,9 @@ class FakeHouse:
         self.snapshot = load("snapshot")
         # Every POST the page made, in order: what a test asserts a tap by.
         self.requests: list[dict] = []
+        # What /api/cmd says about the bus: False is a key nobody
+        # subscribes to (the owning adapter is down).
+        self.heard = True
         self.clients: list[web.WebSocketResponse] = []
         self.app = self._build()
         self.runner: web.AppRunner | None = None
@@ -228,7 +231,10 @@ class FakeHouse:
 
     async def api_cmd(self, request: web.Request) -> web.Response:
         await self._record(request)
-        return web.json_response({"ok": True, "id": "test0001"})
+        # One id per command, the way the unit mints them, so a test can
+        # end a chosen command with an event.
+        n = len(self.posted("/api/cmd"))
+        return web.json_response({"ok": True, "id": f"test{n:04d}", "heard": self.heard})
 
     async def api_param(self, request: web.Request) -> web.Response:
         body = await self._record(request)

@@ -73,8 +73,22 @@ async fn behavioral_change_restarts_exactly_that_unit() {
     );
     assert_eq!(
         meta_read(&observer, homeostat::bus::APPLIED_COMMIT_KEY).await,
-        Some(head),
+        Some(head.clone()),
         "applied_commit readable from the bus"
+    );
+    // The same facts as one document, for a surface that says where it is
+    // served from (the dashboard's footer, an agent).
+    let about: Value = serde_json::from_str(
+        &meta_read(&observer, homeostat::bus::ABOUT_KEY)
+            .await
+            .expect("about readable from the bus"),
+    )
+    .expect("about is JSON");
+    assert_eq!(about["house"]["commit"], json!(head), "{about}");
+    assert_eq!(
+        about["homeostat"]["version"],
+        json!(env!("CARGO_PKG_VERSION")),
+        "{about}"
     );
 
     sup.shutdown();

@@ -490,5 +490,17 @@
   "livingroom/livingroom_lamp/brightness": "manual",
   "livingroom/livingroom_lamp/on": "automation",
   "hallway/front_door/locked": "manual"
+ },
+ "about": {
+  "homeostat": {
+   "version": "0.16.1",
+   "commit": null
+  },
+  "house": {
+   "commit": "4f2a9c1e0b7d3a5f6e8c9d0a1b2c3d4e5f6a7b8c"
+  },
+  "dashboard": {
+   "version": "0.16.1"
+  }
  }
 }

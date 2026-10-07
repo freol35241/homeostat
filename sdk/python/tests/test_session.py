@@ -5,6 +5,7 @@ Run: uv run --no-project --with-editable sdk/python python -m unittest discover 
 """
 
 import json
+import threading
 import unittest
 
 from homeostat.session import UnitSession
@@ -13,9 +14,37 @@ from homeostat.session import UnitSession
 class FakeZenoh:
     def __init__(self):
         self.puts = []
+        self.options = []
+        self.alive = set()
+        self.declared = []
+        self.subscribed = set()
 
-    def put(self, key, payload):
+    def put(self, key, payload, **options):
         self.puts.append((key, json.loads(payload)))
+        self.options.append(options)
+
+    def liveliness(self):
+        alive = self.alive
+
+        class Liveliness:
+            def get(self, key, timeout=None):
+                return [type("Reply", (), {"ok": object()})()] if key in alive else []
+
+        return Liveliness()
+
+    def declare_publisher(self, key):
+        self.declared.append(key)
+        return FakePublisher(self, key)
+
+
+class FakePublisher:
+    def __init__(self, zenoh, key):
+        self._zenoh = zenoh
+        self._key = key
+
+    @property
+    def matching_status(self):
+        return type("Status", (), {"matching": self._key in self._zenoh.subscribed})()
 
 
 class FakeSample:
@@ -33,6 +62,7 @@ def stub_session():
     session.unit = "u"
     session._session = FakeZenoh()
     session._token = None
+    session._publishers = {}
     return session
 
 
@@ -114,3 +144,48 @@ class ParseCommandTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HasSubscriberTest(unittest.TestCase):
+    def test_answers_from_the_publishers_matching_status(self):
+        session = stub_session()
+        session._session.subscribed.add("home/cmd/r/lamp/on")
+        self.assertTrue(session.has_subscriber("home/cmd/r/lamp/on"))
+        self.assertFalse(session.has_subscriber("home/cmd/r/gone/on", wait_s=0.05))
+
+    def test_a_subscriber_that_arrives_during_the_wait_counts(self):
+        session = stub_session()
+        key = "home/cmd/r/lamp/on"
+        threading.Timer(0.05, lambda: session._session.subscribed.add(key)).start()
+        self.assertTrue(session.has_subscriber(key, wait_s=2))
+
+    def test_one_publisher_per_key(self):
+        session = stub_session()
+        for _ in range(3):
+            session.has_subscriber("home/cmd/r/gone/on", wait_s=0)
+        self.assertEqual(session._session.declared, ["home/cmd/r/gone/on"])
+
+
+class CommandPutTest(unittest.TestCase):
+    def test_commands_block_and_go_first_while_data_keeps_the_defaults(self):
+        # zenoh drops a put on a congested link by default: right for a
+        # reading, wrong for "unlock the door".
+        import zenoh
+
+        session = stub_session()
+        session.put_json("home/cmd/hall/door/locked", {"value": False})
+        session.put_json("home/arbiter/hall/door/locked", {"value": False})
+        session.put_json("home/state/hall/door/locked", True)
+        command = {
+            "congestion_control": zenoh.CongestionControl.BLOCK,
+            "priority": zenoh.Priority.INTERACTIVE_HIGH,
+        }
+        self.assertEqual(session._session.options, [command, command, {}])
+
+
+class IsAliveTest(unittest.TestCase):
+    def test_answers_from_the_units_liveliness_token(self):
+        session = stub_session()
+        session._session.alive.add("home/health/zigbee/alive")
+        self.assertTrue(session.is_alive("zigbee"))
+        self.assertFalse(session.is_alive("esphome"))

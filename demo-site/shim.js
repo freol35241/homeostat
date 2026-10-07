@@ -140,7 +140,7 @@
       }
     }, 350 + Math.random() * 400);
     commandIds += 1;
-    return { ok: true, id: 'demo' + commandIds };
+    return { ok: true, id: 'demo' + commandIds, heard: true };
   }
 
   function lightsOff() {

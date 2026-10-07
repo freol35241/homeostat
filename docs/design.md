@@ -275,6 +275,14 @@ is asymmetric: state reports are `LOCKED`/`UNLOCKED`, but set commands are
 `LOCK`/`UNLOCK`); any other aspect passes through as `{aspect: value}` to
 `zigbee2mqtt/{id}/set`.
 
+Both command classes travel as commands, not as data (added 2026-10-07).
+The SDK's `put_json` sends a `home/cmd` or `home/arbiter` put with
+congestion control BLOCK and priority interactive-high. zenoh's default
+for a put is DROP at DATA priority: a congested link sheds it silently,
+which is right for the next temperature reading and wrong for "unlock
+the door". Automations, the dashboard and the arbiter all send through
+it, so none of them has to remember.
+
 Locks are commandable only via the arbiter's output key: plan-time
 expansion gives the adapter's templated `home/cmd` subscription only its
 non-arbitrated bound entities, and its templated `home/arbiter` subscription
@@ -425,7 +433,10 @@ home/{class}/{room}/{entity}/{aspect}
 - Parameters live on the bus: `home/config/{unit}/{param}` backed by
   last-value storage. Units subscribe to their own config subtree. Parameter
   edits propagate live, no restart.
-- Meta: `home/meta/{unit}/manifest_hash`, `home/meta/system/applied_commit`.
+- Meta: `home/meta/{unit}/manifest_hash`, `home/meta/system/applied_commit`,
+  `home/meta/system/about` (the core's version and build commit plus the
+  applied commit, as one JSON document — what the dashboard's about
+  lines and an agent read; added 2026-10-07).
 ## History / recorder (settled in step 5a)
  
 The recorder is NOT a naive Zenoh storage mirror. It subscribes to
@@ -1467,6 +1478,58 @@ Decisions and why:
   freeze — a slider already moves under the finger, and taking it away
   mid-gesture is worse than the silence — but are still tracked, so a
   refusal or a timeout still says so.
+  Revised 2026-10-07, from living with it. Three things were wrong.
+  The control never said what had been asked: pending showed the old
+  value, dimmed. The freeze made several steps impossible, and it
+  existed only because each step was computed from the readback, so an
+  unfrozen second tap would have repeated the first. And "any readback
+  confirms" was false for a bridge that republishes on every poll: the
+  next poll, still carrying the old value, cleared the control before
+  the device had moved. Now:
+  - *The request is shown as a request.* The value slot shows what was
+    asked, in the accent. A toggle shows where it was asked to go,
+    outlined dashed. A line under the control names the stage ("asked
+    22.5° · still 21.0°"), then how it ended, and stays a few seconds
+    for a confirmation, longer for anything else. The toast is only for
+    an outcome whose control has left the screen. This is not the
+    optimistic painting rejected above: nothing claims the house holds
+    the value.
+  - *The freeze is gone.* A stepper's taps build on the request in
+    flight and settle for 600 ms before one command goes out for where
+    they ended. A toggle tapped again asks to go back. Each new request
+    replaces the last, as before.
+  - *Confirmation is the asked value coming back.* The value the device
+    held before the first tap, or one asked on the way, is progress and
+    not an answer. Any other value means the device settled elsewhere
+    (it clamped or rounded): **adjusted**, said with both numbers. Two
+    refinements, both from review. Tap on, then off: a republished old
+    "off" is not an answer while the "on" may yet land, so it waits for
+    the device to move or for the timeout, after which a device that
+    reported "off" throughout is where it was asked to be. And
+    brightness compares at the control's own grain (a percent of the
+    0–254 scale), so a bulb that rounds by one step is not "adjusted".
+    A POST's reply finds its request by a sequence number, never by
+    value: on, off, on are three requests, and the first reply must not
+    claim the third.
+  - *Two things are known before anything answers.* `/api/cmd` reports
+    whether the command can reach its device: the owning unit holds its
+    liveliness token, and something subscribes where that unit listens
+    (the arbiter's forward key for an arbitrated entity, the command key
+    otherwise; a zenoh publisher's matching status). A command that
+    reaches nobody was dropped silently, and the page could only find
+    out by waiting out its timeout. That is now **unheard**, at once.
+    Liveliness comes first because a match on the command key alone
+    proves little: the recorder subscribes to every command and the
+    arbiter to every one it arbitrates. And while a command waits, the
+    line says when the owning unit is not running or the device reports
+    itself unavailable.
+  Not done, and why. A positive "delivered to the device" event from
+  adapters would need every adapter to emit it; it is worth having for
+  slow devices but is its own change. Readbacks stay uncorrelated:
+  stamping a command id on state would change the state payload for
+  every consumer, for what the value match now mostly covers. The
+  per-capability timeouts stay the browser's guess until descriptors
+  can declare a device's readback time.
 - **Purely generated from manifests; layout state exists nowhere.**
   Grouping from the entity `room` field and `zones.toml`; entity
   widgets derived from `capability` + `features` (a light with
@@ -1600,6 +1663,25 @@ the exploration that produced it):
     generated views stand in unchanged. The alternative — custom views
     in front of the generated ones — was rejected as never letting a
     house say "these three views are the dashboard".
+    Amended 2026-10-07: on a phone the chrome left the bottom bar. Two
+    fixed tabs out of about five meant a house could name three views
+    before the bar scrolled. The bar now holds only the file's views,
+    and the chrome sits behind one status button in the top bar: the
+    worst unit's glyph and "n/m" running, opening a sheet with Health,
+    Not shown and the about lines. The rail is unchanged, apart from
+    those lines under it (the core's release and commit, the house
+    commit, a dashboard page from another release when it is one) and
+    becoming sticky so they stay in sight.
+  - *A view shows its text (added 2026-10-07).* Each view the nav names
+    has a **Text** button that opens the `[[view]]` block making it,
+    rendered from the parsed view `/api/model` carries, in the file's
+    own style. It is read-only: the dashboard never writes the house.
+    What it gives is a name for what someone points at, in the file's
+    own words, to say to a person or to an agent in the house repo.
+    `docs/widgets.md` is the same vocabulary with a picture per widget,
+    drawn by the real page from the browser fixtures
+    (`scripts/widget_gallery.py`); a test pins a section per kind the
+    parser accepts.
   - *The unit card is a pure function of the manifest and the grant
     table, and adapters still declare nothing.* A `unit` widget draws
     the unit's family setpoints, the entities it publishes

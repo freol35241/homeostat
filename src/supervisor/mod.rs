@@ -361,7 +361,7 @@ fn intersects(query: &zenoh::query::Query, key: &str) -> bool {
 }
 
 /// Serves the meta space to late joiners: manifest hashes and bytes per
-/// unit, the resolved grant table, and the applied commit. This is what
+/// unit, the resolved grant table, the applied commit, and `about`. This is what
 /// `homeostat plan --bus` reads as the world.
 async fn serve_meta(core: Arc<Core>) -> Result<(), String> {
     let queryable = core
@@ -399,6 +399,11 @@ async fn serve_meta(core: Arc<Core>) -> Result<(), String> {
                         commit.clone().into_bytes(),
                     ));
                 }
+                entries.push((
+                    bus::ABOUT_KEY.to_string(),
+                    serde_json::to_vec(&bus::about(world.applied_commit.as_deref()))
+                        .expect("about serializes"),
+                ));
                 entries
             };
             {

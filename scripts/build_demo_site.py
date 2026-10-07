@@ -20,10 +20,12 @@ Usage: scripts/build_demo_site.py [OUT]   (default: _site)
 """
 
 import json
+import os
 import pathlib
 import re
 import shutil
 import sys
+import tomllib
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 PAGE = ROOT / "adapters" / "dashboard.html"
@@ -89,6 +91,11 @@ def data() -> dict:
         state[f"home/state/person/{person}/lat"] = round(HOME[0] + offset[0], 6)
         state[f"home/state/person/{person}/lon"] = round(HOME[1] + offset[1], 6)
         state[f"home/state/person/{person}/accuracy"] = 15
+    # The page's about lines say what the demo was built from: this
+    # checkout's release, and its commit when CI says which it is. There is
+    # no house repo behind it, so no house commit.
+    version = tomllib.loads((ROOT / "Cargo.toml").read_text())["package"]["version"]
+    model["about"] = {"homeostat": {"version": version, "commit": os.environ.get("GITHUB_SHA")}}
     return {"model": model, "snapshot": snapshot}
 
 

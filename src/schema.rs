@@ -312,6 +312,25 @@ mod tests {
         );
     }
 
+    /// docs/widgets.md is the dashboard's vocabulary with pictures
+    /// (scripts/widget_gallery.py). Pixels are not pinned — they differ
+    /// by renderer — but its sections are: a widget kind the parser
+    /// accepts and the gallery does not show is a word nobody can look up.
+    #[test]
+    fn docs_widgets_md_shows_every_widget_kind() {
+        let gallery = include_str!("../docs/widgets.md");
+        let schema = json(File::Dashboard);
+        let kinds = enum_values(&schema["$defs"]["WidgetKind"]).expect("WidgetKind is an enum");
+        assert!(!kinds.is_empty());
+        for (kind, _) in kinds {
+            assert!(
+                gallery.contains(&format!("\n## `{kind}`\n")),
+                "docs/widgets.md has no section for `{kind}`: run \
+                 `uv run --script scripts/widget_gallery.py`"
+            );
+        }
+    }
+
     #[test]
     fn docs_manifest_md_is_current() {
         let checked_in = include_str!("../docs/manifest.md");

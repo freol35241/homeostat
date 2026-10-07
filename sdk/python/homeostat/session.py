@@ -9,12 +9,17 @@ process, is what "up" means to the supervisor.
 
 import json
 import os
+import time
 from collections.abc import Callable
 from typing import Any
 
 import zenoh
 
 from . import forecast, keys
+
+# The classes that carry commands: a wish (home/cmd) and the arbiter's
+# forward of it (home/arbiter). put_json sends both as commands.
+COMMAND_PREFIXES = ("home/cmd/", "home/arbiter/")
 
 
 def connect() -> "UnitSession":
@@ -48,6 +53,10 @@ class UnitSession:
         config.insert_json5("scouting/gossip/enabled", "false")
         self._session = zenoh.open(config)
         self._token = None
+        # key -> publisher, kept for has_subscriber: matching status is a
+        # publisher's, and a fresh one knows nothing until the router has
+        # told it, so each key's is declared once and reused.
+        self._publishers: dict[str, Any] = {}
 
     def ready(self) -> None:
         """Declares the liveliness token at home/health/{unit}/alive."""
@@ -67,6 +76,19 @@ class UnitSession:
             encoded = json.dumps(value, allow_nan=False)
         except ValueError:
             self.health_event("drop", reason="non-finite", key=key)
+            return
+        if key.startswith(COMMAND_PREFIXES):
+            # A command is somebody's intent, not a sample: zenoh's default
+            # for a put is to drop it when the link is congested, which is
+            # right for the next temperature reading and wrong for "unlock
+            # the door". Commands block for room instead, and go ahead of
+            # data in the queues.
+            self._session.put(
+                key,
+                encoded,
+                congestion_control=zenoh.CongestionControl.BLOCK,
+                priority=zenoh.Priority.INTERACTIVE_HIGH,
+            )
             return
         self._session.put(key, encoded)
 
@@ -124,6 +146,35 @@ class UnitSession:
             self.health_event("drop", reason="invalid-command", key=key, cmd_id=cmd_id)
             return None
         return aspect, value, cmd_id
+
+    def has_subscriber(self, key: str, *, wait_s: float = 0.5) -> bool:
+        """Whether anything on the bus subscribes to `key` — whether a put
+        there reaches anyone at all. A client session filters writes on
+        the publishing side, so a put nobody matches is dropped without a
+        trace; this is the one moment the publisher can know it.
+
+        Blocking for up to `wait_s`: a key asked about for the first time
+        gets a publisher that has not yet heard from the router, and an
+        immediate False from it would report a subscriber missing that is
+        not. Answering True ends the wait at once."""
+        publisher = self._publishers.get(key)
+        if publisher is None:
+            publisher = self._publishers[key] = self._session.declare_publisher(key)
+        deadline = time.monotonic() + wait_s
+        while not publisher.matching_status.matching:
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.02)
+        return True
+
+    def is_alive(self, unit: str, *, timeout_s: float = 2.0) -> bool:
+        """Whether `unit` holds its liveliness token (home/health/{unit}/
+        alive): the supervisor's own test for "up". It answers for the unit
+        itself, where a subscriber match on a key can be anyone's — the
+        recorder subscribes to every command, so a key's match says nothing
+        about the adapter that should act on it."""
+        replies = self._session.liveliness().get(keys.liveliness_key(unit), timeout=timeout_s)
+        return any(reply.ok is not None for reply in replies)
 
     def subscribe(self, keyexpr: str, callback: Callable[[zenoh.Sample], None]):
         return self._session.declare_subscriber(keyexpr, callback)
