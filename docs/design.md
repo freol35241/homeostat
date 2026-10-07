@@ -275,6 +275,14 @@ is asymmetric: state reports are `LOCKED`/`UNLOCKED`, but set commands are
 `LOCK`/`UNLOCK`); any other aspect passes through as `{aspect: value}` to
 `zigbee2mqtt/{id}/set`.
 
+Both command classes travel as commands, not as data (added 2026-10-07).
+The SDK's `put_json` sends a `home/cmd` or `home/arbiter` put with
+congestion control BLOCK and priority interactive-high. zenoh's default
+for a put is DROP at DATA priority: a congested link sheds it silently,
+which is right for the next temperature reading and wrong for "unlock
+the door". Automations, the dashboard and the arbiter all send through
+it, so none of them has to remember.
+
 Locks are commandable only via the arbiter's output key: plan-time
 expansion gives the adapter's templated `home/cmd` subscription only its
 non-arbitrated bound entities, and its templated `home/arbiter` subscription
@@ -1504,15 +1512,17 @@ Decisions and why:
     value: on, off, on are three requests, and the first reply must not
     claim the third.
   - *Two things are known before anything answers.* `/api/cmd` reports
-    whether anything subscribes to the command's key, from a zenoh
-    publisher's matching status. A client session filters writes on the
-    publishing side, so a command nobody matches was dropped silently,
-    and the page could only find out by waiting out its timeout. That
-    is now **unheard**, at once. For an arbitrated entity the arbiter
-    subscribes to every command, so the check also asks after the key
-    the arbiter forwards on, where the adapter listens. And while a
-    command waits, the line says when the owning unit is not running or
-    the device reports itself unavailable.
+    whether the command can reach its device: the owning unit holds its
+    liveliness token, and something subscribes where that unit listens
+    (the arbiter's forward key for an arbitrated entity, the command key
+    otherwise; a zenoh publisher's matching status). A command that
+    reaches nobody was dropped silently, and the page could only find
+    out by waiting out its timeout. That is now **unheard**, at once.
+    Liveliness comes first because a match on the command key alone
+    proves little: the recorder subscribes to every command and the
+    arbiter to every one it arbitrates. And while a command waits, the
+    line says when the owning unit is not running or the device reports
+    itself unavailable.
   Not done, and why. A positive "delivered to the device" event from
   adapters would need every adapter to emit it; it is worth having for
   slow devices but is its own change. Readbacks stay uncorrelated:

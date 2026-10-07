@@ -32,9 +32,9 @@ a small API generated entirely from the house's text:
                      vocabulary, or an aspect the entity's descriptor
                      declares a family-editable command, checked against
                      the descriptor's constraint. Answers the envelope's
-                     id, and `heard`: whether anything subscribes to the
-                     command's key — and, for an arbitrated entity, to the
-                     arbiter's forward key, where the adapter listens
+                     id, and `heard`: whether the owning unit is alive and
+                     subscribed where it listens (the arbiter's forward
+                     key for an arbitrated entity) — see `reachable`
   POST /api/param    a parameter write through the core's validating config
                      queryable ({unit, param, value})
   POST /api/lights/off  the whole-house darken: one manual-band off-command
@@ -478,6 +478,25 @@ def command_value_ok(command: dict, value) -> bool:
     return False
 
 
+def reachable(session, spec: dict, aspect: str) -> bool:
+    """Whether a command for `aspect` of the entity can reach its device:
+    the owning unit holds its liveliness token, and something subscribes
+    to the key that unit listens on — the arbiter's forward for an
+    arbitrated entity, the command key otherwise. A command that cannot
+    reach anyone is dropped without a trace, so without this the page
+    could only find out by waiting out its timeout.
+
+    Liveliness first, because a match on the command key alone proves
+    little: the recorder subscribes to every command, and the arbiter to
+    every one it arbitrates. Blocking; /api/cmd runs it off the loop."""
+    if not session.is_alive(spec["owner"]):
+        return False
+    room, entity = spec["room"], spec["name"]
+    if spec["write_mode"] == "arbitrated":
+        return session.has_subscriber(keys.arbiter_key(room, entity, aspect))
+    return session.has_subscriber(keys.cmd_key(room, entity, aspect))
+
+
 def valid_segment(name: str) -> bool:
     return SEGMENT.fullmatch(name) is not None and name not in (".", "..")
 
@@ -910,19 +929,9 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         # (units/dashboard.toml) — the family always wins over automations.
         envelope = keys.cmd_envelope(value, "manual", "dashboard")
         key = keys.cmd_key(room, entity, aspect)
-        # Whether the command can reach the device: something subscribes
-        # to its key and, for an arbitrated entity, to the key the arbiter
-        # forwards on as well — the arbiter subscribes to every command, so
-        # its presence alone says nothing about the adapter behind it. A
-        # put nobody matches goes nowhere and nothing ever reports it, so
-        # without this the page could only find out by waiting out its
-        # timeout.
-        loop = asyncio.get_running_loop()
-        heard = await loop.run_in_executor(None, hub.session.has_subscriber, key)
-        if heard and spec["write_mode"] == "arbitrated":
-            heard = await loop.run_in_executor(
-                None, hub.session.has_subscriber, keys.arbiter_key(room, entity, aspect)
-            )
+        heard = await asyncio.get_running_loop().run_in_executor(
+            None, reachable, hub.session, spec, aspect
+        )
         hub.session.put_json(key, envelope)
         # The id goes back to the browser so the control can show the command
         # as pending and then resolve it against whatever ends it — a

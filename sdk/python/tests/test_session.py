@@ -14,11 +14,23 @@ from homeostat.session import UnitSession
 class FakeZenoh:
     def __init__(self):
         self.puts = []
+        self.options = []
+        self.alive = set()
         self.declared = []
         self.subscribed = set()
 
-    def put(self, key, payload):
+    def put(self, key, payload, **options):
         self.puts.append((key, json.loads(payload)))
+        self.options.append(options)
+
+    def liveliness(self):
+        alive = self.alive
+
+        class Liveliness:
+            def get(self, key, timeout=None):
+                return [type("Reply", (), {"ok": object()})()] if key in alive else []
+
+        return Liveliness()
 
     def declare_publisher(self, key):
         self.declared.append(key)
@@ -152,3 +164,28 @@ class HasSubscriberTest(unittest.TestCase):
         for _ in range(3):
             session.has_subscriber("home/cmd/r/gone/on", wait_s=0)
         self.assertEqual(session._session.declared, ["home/cmd/r/gone/on"])
+
+
+class CommandPutTest(unittest.TestCase):
+    def test_commands_block_and_go_first_while_data_keeps_the_defaults(self):
+        # zenoh drops a put on a congested link by default: right for a
+        # reading, wrong for "unlock the door".
+        import zenoh
+
+        session = stub_session()
+        session.put_json("home/cmd/hall/door/locked", {"value": False})
+        session.put_json("home/arbiter/hall/door/locked", {"value": False})
+        session.put_json("home/state/hall/door/locked", True)
+        command = {
+            "congestion_control": zenoh.CongestionControl.BLOCK,
+            "priority": zenoh.Priority.INTERACTIVE_HIGH,
+        }
+        self.assertEqual(session._session.options, [command, command, {}])
+
+
+class IsAliveTest(unittest.TestCase):
+    def test_answers_from_the_units_liveliness_token(self):
+        session = stub_session()
+        session._session.alive.add("home/health/zigbee/alive")
+        self.assertTrue(session.is_alive("zigbee"))
+        self.assertFalse(session.is_alive("esphome"))

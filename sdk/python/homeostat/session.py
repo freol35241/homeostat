@@ -17,6 +17,10 @@ import zenoh
 
 from . import forecast, keys
 
+# The classes that carry commands: a wish (home/cmd) and the arbiter's
+# forward of it (home/arbiter). put_json sends both as commands.
+COMMAND_PREFIXES = ("home/cmd/", "home/arbiter/")
+
 
 def connect() -> "UnitSession":
     unit = os.environ[keys.ENV_UNIT]
@@ -72,6 +76,19 @@ class UnitSession:
             encoded = json.dumps(value, allow_nan=False)
         except ValueError:
             self.health_event("drop", reason="non-finite", key=key)
+            return
+        if key.startswith(COMMAND_PREFIXES):
+            # A command is somebody's intent, not a sample: zenoh's default
+            # for a put is to drop it when the link is congested, which is
+            # right for the next temperature reading and wrong for "unlock
+            # the door". Commands block for room instead, and go ahead of
+            # data in the queues.
+            self._session.put(
+                key,
+                encoded,
+                congestion_control=zenoh.CongestionControl.BLOCK,
+                priority=zenoh.Priority.INTERACTIVE_HIGH,
+            )
             return
         self._session.put(key, encoded)
 
@@ -149,6 +166,15 @@ class UnitSession:
                 return False
             time.sleep(0.02)
         return True
+
+    def is_alive(self, unit: str, *, timeout_s: float = 2.0) -> bool:
+        """Whether `unit` holds its liveliness token (home/health/{unit}/
+        alive): the supervisor's own test for "up". It answers for the unit
+        itself, where a subscriber match on a key can be anyone's — the
+        recorder subscribes to every command, so a key's match says nothing
+        about the adapter that should act on it."""
+        replies = self._session.liveliness().get(keys.liveliness_key(unit), timeout=timeout_s)
+        return any(reply.ok is not None for reply in replies)
 
     def subscribe(self, keyexpr: str, callback: Callable[[zenoh.Sample], None]):
         return self._session.declare_subscriber(keyexpr, callback)
