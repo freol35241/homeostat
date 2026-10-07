@@ -1710,6 +1710,51 @@ fn assert_tally_matches_rows(db: &Path) {
     assert_eq!(tally, truth, "series tally drifted from the rows it counts");
 }
 
+/// The archive directory beside a test's store (the shared temp dir), and
+/// the files this store sealed into it, removed when the test ends however
+/// it ends: they are read-only and would otherwise outlive a failed run.
+struct ArchiveFiles {
+    dir: PathBuf,
+    stem: String,
+}
+
+impl ArchiveFiles {
+    fn of(db: &Path) -> Self {
+        let files = Self {
+            dir: db.parent().expect("dir").join("archive"),
+            stem: db.file_stem().expect("stem").to_string_lossy().to_string(),
+        };
+        files.remove();
+        files
+    }
+
+    fn path(&self, label: &str) -> PathBuf {
+        self.dir.join(format!("{}-{label}.db", self.stem))
+    }
+
+    fn remove(&self) {
+        let Ok(entries) = std::fs::read_dir(&self.dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            if entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(&format!("{}-", self.stem))
+            {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+        let _ = std::fs::remove_dir(&self.dir); // only if nothing else is in it
+    }
+}
+
+impl Drop for ArchiveFiles {
+    fn drop(&mut self) {
+        self.remove();
+    }
+}
+
 fn count(db: &Path, sql: &str) -> i64 {
     match read_rows(db, sql).first().and_then(|row| row.first()) {
         Some(SqlValue::Integer(n)) => *n,
@@ -1728,16 +1773,10 @@ fn count(db: &Path, sql: &str) -> i64 {
 #[tokio::test(flavor = "multi_thread")]
 async fn closed_months_move_to_archives_and_the_last_word_stays() {
     let db = store_path("archive");
-    let stem = db.file_stem().expect("stem").to_string_lossy().to_string();
-    let archive_dir = db.parent().expect("dir").join("archive");
-    let archive = |label: &str| archive_dir.join(format!("{stem}-{label}.db"));
-    let clean = || {
-        for label in ["2026-01", "2026-01.2", "2026-02", "2026-02.2", "2026-03"] {
-            let _ = std::fs::remove_file(archive(label));
-            let _ = std::fs::remove_file(format!("{}.tmp", archive(label).display()));
-        }
-    };
-    clean();
+    let files = ArchiveFiles::of(&db);
+    let stem = files.stem.clone();
+    let archive_dir = files.dir.clone();
+    let archive = |label: &str| files.path(label);
     let (mut sup, observer) = setup(&db).await;
     let events = observer
         .declare_subscriber("home/health/recorder/event")
@@ -1916,8 +1955,10 @@ async fn closed_months_move_to_archives_and_the_last_word_stays() {
         "{sealed:?}"
     );
 
-    // A row that reaches a sealed month late goes into a second file, and
-    // the switch's February row, overtaken by a live one, leaves.
+    // Rows that reach a sealed month late go into a second file -- among
+    // them one stamped like an archived row but in another room, which is
+    // a different row and must not be taken as already held -- and the
+    // switch's February row, overtaken by a live one, leaves.
     let switch = matched_publisher(&observer, "home/state/attic/switch/on").await;
     put(&switch, json!(true)).await;
     rows_eventually(
@@ -1937,6 +1978,14 @@ async fn closed_months_move_to_archives_and_the_last_word_stays() {
             [jan + 24 * day],
         )
         .expect("late row");
+        conn.execute("INSERT INTO rooms (name) VALUES ('cellar')", [])
+            .expect("room");
+        conn.execute(
+            "INSERT INTO samples SELECT s.id, ?1, r.id, 1, 1.0 FROM series s, rooms r
+             WHERE s.entity = 'meter' AND r.name = 'cellar'",
+            [jan + 9 * day],
+        )
+        .expect("late row in another room");
     }
     config_write(
         &observer,
@@ -1953,7 +2002,17 @@ async fn closed_months_move_to_archives_and_the_last_word_stays() {
         json!(format!("{stem}-2026-01.2.db")),
         "{late}"
     );
-    assert_eq!(late["sealed"]["samples"], json!(1), "{late}");
+    assert_eq!(late["sealed"]["samples"], json!(2), "{late}");
+    assert_eq!(
+        read_rows(
+            &archive("2026-01.2"),
+            "SELECT room, value FROM history ORDER BY ts"
+        ),
+        vec![
+            vec![SqlValue::Text("cellar".into()), SqlValue::Real(1.0)],
+            vec![SqlValue::Text("attic".into()), SqlValue::Real(2.5)],
+        ],
+    );
     assert_eq!(overtaken["month"], json!("2026-02"), "{overtaken}");
     assert_eq!(
         overtaken["sealed"],
@@ -1976,5 +2035,43 @@ async fn closed_months_move_to_archives_and_the_last_word_stays() {
     assert_tally_matches_rows(&db);
 
     sup.shutdown();
-    clean();
+}
+
+/// An archive window no calendar can hold — a typo, say a million months
+/// — is reported, and the writer keeps writing: the date it computes is
+/// out of range, and an exception escaping the archive pass would end the
+/// writer thread while the unit still reported running.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_impossible_archive_window_fails_without_stopping_the_writer() {
+    let db = store_path("archive-absurd");
+    let _files = ArchiveFiles::of(&db);
+    let (mut sup, observer) = setup(&db).await;
+    let events = observer
+        .declare_subscriber("home/health/recorder/event")
+        .await
+        .expect("event subscriber");
+
+    config_write(
+        &observer,
+        "home/config/recorder/archive_after_months",
+        json!(1_000_000),
+    )
+    .await
+    .expect("in-constraint write accepted");
+    let failed = await_event(&events, Duration::from_secs(30), |e| {
+        e["kind"] == "archive-failed"
+    })
+    .await;
+    assert!(
+        failed["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("out of range")),
+        "{failed}"
+    );
+
+    let power = matched_publisher(&observer, "home/state/attic/meter/power").await;
+    put(&power, json!(1.5)).await;
+    rows_eventually(&db, "SELECT value FROM samples", 1, Duration::from_secs(20)).await;
+
+    sup.shutdown();
 }

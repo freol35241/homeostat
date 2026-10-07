@@ -749,7 +749,9 @@ bounds the file the recorder writes: a month that closed more than
   changes, so its checksum is the whole of a later check, and a backup's
   diff is the current window.
 - **Only what a sealed file holds leaves the store**, matched on the
-  whole row. **Each series' newest sample and newest forecast issue stay
+  whole row — series, stamps, room and value; an event has no key, so an
+  exact duplicate of one already archived (same microsecond, key and
+  payload) counts as held. **Each series' newest sample and newest forecast issue stay
   as well**: `ctx.restore`, the recorder's seed and every latest-value
   read find a series' last word in the store, and a latch decided months
   ago must still be found after a core restart (#83). It leaves on the

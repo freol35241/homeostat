@@ -140,9 +140,10 @@ BUFFER_LIMIT = 10_000
 # data/archive/history-YYYY-MM.db.
 ARCHIVE_DIR = "archive"
 # Archive files one month may have and still be read in one pass (SQLite
-# attaches at most ten databases; the store and a file being sealed take
-# two). A second file only exists for rows that reached a sealed month
-# late, so more than a couple is already a sign something is wrong.
+# attaches at most ten databases besides the store, and a file being
+# sealed takes one). A second file only exists for rows that reached a
+# sealed month late, so more than a couple is already a sign something is
+# wrong.
 MAX_PARTS = 8
 RETRY_S = 1.0
 PURGE_INTERVAL_S = 3600.0
@@ -337,24 +338,30 @@ class ArchiveError(Exception):
 # The rows of one table in one month: samples and events by their stamp,
 # forecasts by issue time (as retention measures them). Samples and
 # forecasts go through `series` so each range is a seek on a primary key
-# (series_id, ts...) rather than a scan; events have an index on ts. Ends
-# in a WHERE so callers can add conditions with AND.
+# (series_id, ts...) rather than a scan; events have an index on ts. CROSS
+# JOIN because SQLite takes it as the join order: the store is never
+# ANALYZEd, and with a plain JOIN the planner scans all of samples and
+# looks each row's series up instead -- 0.2 s a month at 3 M rows, on the
+# writer thread, for every month an idle latch keeps in the walk. Ends in
+# a WHERE so callers can add conditions with AND.
 MONTH_ROWS = {
-    "samples": "FROM main.series AS s JOIN main.samples AS r"
+    "samples": "FROM main.series AS s CROSS JOIN main.samples AS r"
     " ON r.series_id = s.id AND r.ts >= ? AND r.ts < ? WHERE 1",
-    "forecasts": "FROM main.series AS s JOIN main.forecasts AS r"
+    "forecasts": "FROM main.series AS s CROSS JOIN main.forecasts AS r"
     " ON r.series_id = s.id AND r.issued_ts >= ? AND r.issued_ts < ? WHERE 1",
     "events": "FROM main.events AS r WHERE r.ts >= ? AND r.ts < ?",
 }
 
 # A row `r` is held by an archive file when the file has the same row,
-# whole: same series, stamps and value. Events have no key, so all three
-# of their columns are the identity.
+# whole: same series, stamps, room and value. Events have no key, so all
+# three of their columns are the identity, and an exact duplicate of an
+# archived event (same microsecond, key and payload) counts as held.
 HELD = {
-    "samples": "x.series_id = r.series_id AND x.ts = r.ts"
+    "samples": "x.series_id = r.series_id AND x.ts = r.ts AND x.room_id = r.room_id"
     " AND x.kind = r.kind AND x.value IS r.value",
     "forecasts": "x.series_id = r.series_id AND x.issued_ts = r.issued_ts"
-    " AND x.valid_ts = r.valid_ts AND x.valid_end IS r.valid_end AND x.value IS r.value",
+    " AND x.valid_ts = r.valid_ts AND x.valid_end IS r.valid_end"
+    " AND x.room_id = r.room_id AND x.value IS r.value",
     "events": "x.ts = r.ts AND x.key = r.key AND x.payload = r.payload",
 }
 
@@ -799,43 +806,61 @@ class Writer:
         months = self.params.archive_after_months
         if months <= 0:
             return False
-        boundary = archive_boundary_us(now_us(), months)
         archive_dir = self.db_path.parent / ARCHIVE_DIR
-        month = None
+        # A failure is reported and the pass goes on: one unreadable file or
+        # one month that will not seal must not stop every other month from
+        # archiving. ValueError and OverflowError are a date out of range --
+        # an absurd archive_after_months, a row stamped in year 1 -- and
+        # must not escape either: the writer thread would die with them.
+        failures = (sqlite3.Error, OSError, ArchiveError, ValueError, OverflowError)
         try:
+            boundary = archive_boundary_us(now_us(), months)
             conn = sqlite3.connect(self.db_path, timeout=2.0)
+        except failures as err:
+            self.sess.health_event("archive-failed", month=None, error=str(err))
+            return False
+        try:
+            self._finish_interrupted(conn, archive_dir, failures)
             try:
-                self._finish_interrupted(conn, archive_dir)
-                for month in closed_months(conn, boundary):
+                months_due = list(closed_months(conn, boundary))
+            except failures as err:
+                self.sess.health_event("archive-failed", month=None, error=str(err))
+                return False
+            for month in months_due:
+                try:
                     if self._archive_month(conn, archive_dir, month):
                         return True
-                return False
-            finally:
-                conn.close()
-        except (sqlite3.Error, OSError, ArchiveError) as err:
-            self.sess.health_event(
-                "archive-failed",
-                month=month_label(month) if month else None,
-                error=str(err),
-            )
+                except failures as err:
+                    self.sess.health_event(
+                        "archive-failed", month=month_label(month), error=str(err)
+                    )
             return False
+        finally:
+            conn.close()
 
-    def _finish_interrupted(self, conn: sqlite3.Connection, archive_dir: Path) -> None:
+    def _finish_interrupted(
+        self, conn: sqlite3.Connection, archive_dir: Path, failures: tuple
+    ) -> None:
         """A 'sealing' row is a seal a crash interrupted. Its file only
         ever takes its final name after it verified, so a file under that
         name is complete and is recorded as sealed; without one, nothing
         was pruned against it yet, so the half-written attempt is
         discarded and the month is sealed again from the hot rows."""
-        for (name,) in conn.execute(
-            "SELECT file FROM archives WHERE state = 'sealing'"
+        for name, month in conn.execute(
+            "SELECT file, month FROM archives WHERE state = 'sealing'"
         ).fetchall():
             final = archive_dir / name
-            if final.exists():
-                self._record_sealed(conn, final)
-            else:
-                Path(f"{final}.tmp").unlink(missing_ok=True)
-                with conn:
-                    conn.execute("DELETE FROM archives WHERE file = ?", (name,))
+            try:
+                if final.exists():
+                    self._record_sealed(conn, final)
+                else:
+                    Path(f"{final}.tmp").unlink(missing_ok=True)
+                    with conn:
+                        conn.execute("DELETE FROM archives WHERE file = ?", (name,))
+            except failures as err:
+                # Left as it is: still 'sealing', so it is never pruned
+                # against, and its name is never reused.
+                self.sess.health_event("archive-failed", month=month, error=str(err))
 
     def _archive_month(self, conn: sqlite3.Connection, archive_dir: Path, month) -> bool:
         """Prunes what the month's sealed files already hold, seals what
@@ -1497,7 +1522,7 @@ def store_stats(conn: sqlite3.Connection) -> dict:
         }
         for name, month, samples, forecasts, events, size, digest, sealed in conn.execute(
             "SELECT file, month, samples, forecasts, events, bytes, sha256, sealed_ts"
-            " FROM archives WHERE state = 'sealed' ORDER BY month, file"
+            " FROM archives WHERE state = 'sealed' ORDER BY month, sealed_ts"
         )
     ]
     return {
