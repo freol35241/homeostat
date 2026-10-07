@@ -59,6 +59,16 @@ default = 0
 constraint = { min = 0 }
 editable_by = "owner"
 
+# Archives are kept forever unless this is set: then a whole archive file
+# goes once its month closed more than this many months ago. It never
+# touches the hot file, which the retain_*_days windows govern. 0 keeps
+# every archive.
+[params.retain_archives_months]
+type = "int"
+default = 0
+constraint = { min = 0 }
+editable_by = "owner"
+
 [bus.subscribes]
 state = "home/state/**"
 # A series' future, stored beside its past. Recording forecasts is a

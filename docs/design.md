@@ -769,9 +769,24 @@ bounds the file the recorder writes: a month that closed more than
   month that moved, with what was sealed and pruned; `archive-failed`
   otherwise, retried an hour later.
 
-Retention shorter than the archive window deletes rows before they are
-old enough to archive, so with both set, archiving only sees what
-retention keeps.
+**Archives are kept until asked otherwise.** `retain_archives_months`
+(owner, default 0 = forever) drops a whole archive file once its month
+closed more than that many months ago — whole files only, since a sealed
+file is never rewritten, so its granularity is a month. It is a setting
+of its own rather than the `retain_*_days` windows reaching into the
+archive: those were written for the store, and a house that set one
+before archiving existed must not find it deleting archives after. It
+runs whether or not archiving still does, so archives made earlier age
+out too, and deletes the file before its record, so a crash between the
+two leaves a record of a missing file that the next pass finishes. One
+`archive-dropped` event lists what went.
+
+Settings that undercut each other are said out loud, once per change, as
+`archive-misconfigured`: a `retain_*_days` window shorter than
+`archive_after_months` + 1 months deletes a month's first rows before
+they are old enough to archive, and archives kept no longer than
+archiving waits are dropped as soon as they are sealed. Both are allowed
+— the owner may mean them — but neither is silent.
 
 ### Integrity check (settled 2026-09-09, #27)
 
