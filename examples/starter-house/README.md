@@ -138,6 +138,8 @@ a name other than `homeostat`/`homeostat.lan`/`homeostat.local`.
 
 The surface is read-only: `read_state`, `read_history`, `read_logs`,
 `read_events`, plus `schema` and `explain` for the authoring contract.
+`AGENTS.md` (which `CLAUDE.md` points at) tells an agent working in the
+checkout how this house is laid out and where its authority ends.
 Changing the house is a repo edit like any other — an agent working in
 your house checkout (Claude Code, say) edits files and runs
 `homeostat plan`; you review and apply:
