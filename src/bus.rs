@@ -48,6 +48,26 @@ pub fn log_key(unit: &str) -> String {
 
 pub const GRANTS_KEY: &str = "home/meta/system/grants";
 pub const APPLIED_COMMIT_KEY: &str = "home/meta/system/applied_commit";
+/// What is running, as one JSON document: this binary's version and the
+/// commit it was built from (when the build was told), and the house
+/// commit last applied. For a surface that wants to say where it is served
+/// from — the dashboard's footer, an agent — without parsing the raw
+/// `applied_commit` bytes or shelling out to `homeostat --version`.
+pub const ABOUT_KEY: &str = "home/meta/system/about";
+
+/// The `about` document (see [`ABOUT_KEY`]). `HOMEOSTAT_COMMIT` is read at
+/// compile time: the image and release builds pass the commit they build,
+/// and a local `cargo build` that does not know it reports none rather
+/// than shelling out to git from a build script.
+pub fn about(applied_commit: Option<&str>) -> serde_json::Value {
+    serde_json::json!({
+        "homeostat": {
+            "version": env!("CARGO_PKG_VERSION"),
+            "commit": option_env!("HOMEOSTAT_COMMIT").filter(|c| !c.is_empty()),
+        },
+        "house": { "commit": applied_commit },
+    })
+}
 /// The apply control queryable: a GET with payload is an apply request
 /// (the same query-as-command pattern as config writes).
 pub const APPLY_KEY: &str = "home/meta/system/apply";

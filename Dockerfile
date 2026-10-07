@@ -32,6 +32,11 @@ ENV CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
 
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
+# The commit this image is built from, compiled into the binary's `about`
+# (home/meta/system/about; the dashboard's footer). The release workflow
+# passes it; a local build leaves it empty and reports the version alone.
+# Declared after the COPYs so that only the build step re-runs for it.
+ARG HOMEOSTAT_COMMIT=""
 RUN cargo build --release --locked --bin homeostat --target "$(cat /rust-target)" \
     && cp "target/$(cat /rust-target)/release/homeostat" /homeostat
 

@@ -31,7 +31,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # master
         with:
           toolchain: stable
+      # The commit lands in the binary's `about` (home/meta/system/about).
       - run: cargo build --release --locked --bin homeostat
+        env:
+          HOMEOSTAT_COMMIT: ${{ github.sha }}
       - name: Package
         run: |
           tar czf "homeostat-$GITHUB_REF_NAME-${{ matrix.target }}.tar.gz" \
@@ -91,6 +94,7 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: HOMEOSTAT_COMMIT=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
       # Attests the multi-arch index digest — the one `docker pull` by tag
