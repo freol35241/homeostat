@@ -1,0 +1,4 @@
+# Where the ESPHome adapter finds each device when mDNS cannot say: the
+# demo's porch switch is served by the simulator container.
+[porch]
+host = "simulator"

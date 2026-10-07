@@ -122,6 +122,9 @@ jobs:
           cache-to: type=gha,mode=max
       - run: scripts/smoke_image.sh homeostat:smoke
       - run: scripts/smoke_starter.sh homeostat:smoke
+      # The same house against its simulated devices (starter-house/demo):
+      # every device's state reaches the store, and a command round-trips.
+      - run: scripts/smoke_demo.sh homeostat:smoke
       # Both release architectures, so a cross-compile or an arm64-only
       # runtime-stage breakage fails here rather than on the release tag.
       # Nothing is pushed; the amd64 half comes from the cache above.
