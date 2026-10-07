@@ -2,10 +2,11 @@
 //! `homeostat` binary on a fixture house with an isolated bus endpoint, and
 //! opens an observer session to assert on bus traffic.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use homeostat::bus::{self, Health, HealthStatus};
@@ -207,12 +208,26 @@ pub async fn fixture_command(command: &str) -> (String, Vec<String>) {
     (program, parts.collect())
 }
 
+/// A free port no earlier call in this test process returned. The kernel
+/// readily hands a just-closed port out again, and a binary's tests run
+/// concurrently: two given the same port each start a broker or a
+/// supervisor on it, the loser's fails to bind, and its spawn — which only
+/// checks that something accepts on the port — carries on against the
+/// winner's, a test then asserting on another test's house. Unique within
+/// the process is enough: cargo runs test binaries one at a time.
 pub fn free_port() -> u16 {
-    TcpListener::bind("127.0.0.1:0")
-        .expect("bind ephemeral port")
-        .local_addr()
-        .expect("local addr")
-        .port()
+    static HANDED_OUT: Mutex<BTreeSet<u16>> = Mutex::new(BTreeSet::new());
+    let mut handed_out = HANDED_OUT.lock().unwrap_or_else(|e| e.into_inner());
+    loop {
+        let port = TcpListener::bind("127.0.0.1:0")
+            .expect("bind ephemeral port")
+            .local_addr()
+            .expect("local addr")
+            .port();
+        if handed_out.insert(port) {
+            return port;
+        }
+    }
 }
 
 /// True while a process exists and is not a zombie.
