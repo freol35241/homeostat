@@ -49,6 +49,7 @@ Units to create (11):
 + service recorder (units/recorder.toml)
     command: uv run units/recorder.py
     params:
+      archive_after_months  type=int  default=0  constraint={min=0}  editable_by=owner
       integrity_check_hours  type=float  default=24  constraint={min=0}  editable_by=owner
       retain_events_days  type=float  default=0  constraint={min=0}  editable_by=owner
       retain_forecasts_days  type=float  default=0  constraint={min=0}  editable_by=owner

@@ -46,6 +46,17 @@ default = 24
 constraint = { min = 0 }
 editable_by = "owner"
 
+# Archiving moves, retention deletes: a month that closed more than this
+# many months ago is sealed into archive/<store>-YYYY-MM.db beside the
+# store (a plain SQLite file with the store's schema) and leaves this
+# file, so the file the recorder writes stays one window deep and nothing
+# is lost. 0 never archives.
+[params.archive_after_months]
+type = "int"
+default = 0
+constraint = { min = 0 }
+editable_by = "owner"
+
 [bus.subscribes]
 state = "home/state/**"
 # A series' future, stored beside its past. Recording forecasts is a
