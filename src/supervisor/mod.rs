@@ -75,6 +75,11 @@ pub struct Core {
 /// Runs the supervisor until SIGTERM/SIGINT. Assumes the house already
 /// passed plan-time validation.
 pub async fn run(check: &CheckResult, root: &Path, listen: &str) -> Result<(), String> {
+    // Before anything that takes time: the bus socket accepts connections
+    // before `zenoh::open` returns, and a SIGTERM that lands while the core
+    // is still starting must take the graceful path below, not the default
+    // disposition that kills the process outright.
+    let stop = stop_signal();
     let session = zenoh::open(bus::listen_config(listen))
         .await
         .map_err(|e| format!("failed to open bus session on {listen}: {e}"))?;
@@ -133,7 +138,7 @@ pub async fn run(check: &CheckResult, root: &Path, listen: &str) -> Result<(), S
         core.launch(UnitSpec::from_loaded(unit, root, listen)).await;
     }
 
-    wait_for_signal().await;
+    stop.await;
     println!("[homeostat] shutting down");
     let handles: Vec<UnitHandle> = {
         let mut units = core.units.lock().await;
@@ -592,12 +597,16 @@ async fn mirror(session: &Session, keyexpr: &'static str) -> Result<(), String> 
     Ok(())
 }
 
-async fn wait_for_signal() {
+/// Installs the SIGTERM/SIGINT handlers now and returns the wait for
+/// either. A signal delivered between the two is held, not lost.
+fn stop_signal() -> impl std::future::Future<Output = ()> {
     use tokio::signal::unix::{signal, SignalKind};
     let mut term = signal(SignalKind::terminate()).expect("SIGTERM handler");
     let mut int = signal(SignalKind::interrupt()).expect("SIGINT handler");
-    tokio::select! {
-        _ = term.recv() => {}
-        _ = int.recv() => {}
+    async move {
+        tokio::select! {
+            _ = term.recv() => {}
+            _ = int.recv() => {}
+        }
     }
 }

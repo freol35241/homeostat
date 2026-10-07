@@ -195,6 +195,19 @@ async fn sigterm_shuts_down_gracefully_without_orphans() {
     );
 }
 
+/// SIGTERM the moment the bus accepts connections — while the core is
+/// still serving its queryables and launching units — must take the same
+/// graceful path. The socket listens before `zenoh::open` even returns,
+/// and a stop that lands in that window is what systemd or `docker stop`
+/// sends to a service stopped right after it started.
+#[tokio::test(flavor = "multi_thread")]
+async fn sigterm_during_startup_still_shuts_down_gracefully() {
+    let mut sup = Supervisor::spawn("tests/fixture_house");
+    sup.signal(libc::SIGTERM);
+    let code = sup.wait_exit(Duration::from_secs(10));
+    assert_eq!(code, Some(0), "supervisor exit code");
+}
+
 /// SIGKILL on the supervisor must still not leak the unit (pdeathsig).
 #[tokio::test(flavor = "multi_thread")]
 async fn sigkill_leaves_no_orphans() {
