@@ -376,6 +376,13 @@ COMMAND_TIER = {
     "outdoor_temperature_offset": "owner",
 }
 COMMAND_STEP = {"setpoint": 0.5}
+# How long a command takes to come back (docs/design.md, Aspect
+# descriptors: readback_s). The firmware stores a set value at once and
+# reports it in its controller state, published every
+# GENERAL_STATE_PUBLISH_INTERVAL (10 s in the firmware's own config
+# template): three cycles of that, so one dropped publish is not "no
+# answer".
+READBACK_S = 30
 
 
 def aspect_descriptor(entity) -> dict:
@@ -390,7 +397,7 @@ def aspect_descriptor(entity) -> dict:
         if aspect in COMMAND_STEP:
             command["step"] = COMMAND_STEP[aspect]
         fields[aspect]["command"] = command
-    return {"schema": 1, "groups": list(ASPECT_GROUPS), "fields": fields}
+    return {"schema": 1, "groups": list(ASPECT_GROUPS), "fields": fields, "readback_s": READBACK_S}
 
 
 def state_field(segments: list[str]) -> str:

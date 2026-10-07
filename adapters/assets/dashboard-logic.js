@@ -854,7 +854,28 @@
   };
   var DEFAULT_COMMAND_TIMEOUT_MS = 20000;
 
-  function commandTimeoutMs(capability) {
+  /* The adapter knows better than the capability (docs/design.md, Aspect
+   * descriptors): a descriptor may declare `readback_s`, the longest the
+   * device takes to report a command back, on one command or for the
+   * whole entity. The per-command figure wins, then the entity's, then
+   * the guess above. Anything not a positive number up to ten minutes is
+   * ignored rather than trusted: a command pending for an hour is worse
+   * than one judged on the guess. */
+  var MAX_DECLARED_READBACK_S = 600;
+
+  function declaredReadbackS(descriptor, aspect) {
+    var field = descriptor && descriptor.fields && descriptor.fields[aspect];
+    var candidates = [field && field.command && field.command.readback_s, descriptor && descriptor.readback_s];
+    for (var i = 0; i < candidates.length; i++) {
+      var s = candidates[i];
+      if (typeof s === 'number' && isFinite(s) && s > 0 && s <= MAX_DECLARED_READBACK_S) return s;
+    }
+    return null;
+  }
+
+  function commandTimeoutMs(capability, descriptor, aspect) {
+    var declared = declaredReadbackS(descriptor, aspect);
+    if (declared !== null) return declared * 1000;
     return COMMAND_TIMEOUT_MS[capability] || DEFAULT_COMMAND_TIMEOUT_MS;
   }
 
@@ -887,7 +908,7 @@
       moved: prev ? prev.moved : false,
       tolerance: cmd.tolerance || 0,
       at: nowMs,
-      timeoutMs: commandTimeoutMs(cmd.capability),
+      timeoutMs: commandTimeoutMs(cmd.capability, cmd.descriptor, cmd.aspect),
       outcome: stage || 'pending'
     };
     return pending;

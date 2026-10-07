@@ -168,7 +168,18 @@ ASPECT_FIELDS = {
     "state": {"label": "run state (state)", "kind": "number", "group": "status"},
     "substate": {"label": "run substate (substate)", "kind": "number", "group": "status"},
 }
-ASPECT_DESCRIPTOR = {"schema": 1, "groups": ASPECT_GROUPS, "fields": ASPECT_FIELDS}
+# How long a command takes to come back (docs/design.md, Aspect
+# descriptors: readback_s). The bridge polls every ADURO_POLL_INTERVAL
+# (30 s by default) and a command is read back on a poll after the burner
+# acted on it: two polls and some slack. A bridge configured to poll slower
+# outruns this, and the page then says "no answer" early.
+READBACK_S = 75
+ASPECT_DESCRIPTOR = {
+    "schema": 1,
+    "groups": ASPECT_GROUPS,
+    "fields": ASPECT_FIELDS,
+    "readback_s": READBACK_S,
+}
 
 
 def status_aspects(status: dict) -> tuple[dict, list[str]]:

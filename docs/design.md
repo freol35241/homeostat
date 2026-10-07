@@ -1525,11 +1525,12 @@ Decisions and why:
     itself unavailable.
   Not done, and why. A positive "delivered to the device" event from
   adapters would need every adapter to emit it; it is worth having for
-  slow devices but is its own change. Readbacks stay uncorrelated:
-  stamping a command id on state would change the state payload for
-  every consumer, for what the value match now mostly covers. The
-  per-capability timeouts stay the browser's guess until descriptors
-  can declare a device's readback time.
+  slow devices but is its own change. Readbacks stay uncorrelated for
+  now; the command id could ride a zenoh attachment on the state put,
+  which leaves the payload alone for every other consumer, but each
+  adapter must then decide which readback answers which command. Done
+  since: the wait is the adapter's to declare (`readback_s`, Aspect
+  descriptors); the per-capability table is the fallback.
 - **Purely generated from manifests; layout state exists nowhere.**
   Grouping from the entity `room` field and `zones.toml`; entity
   widgets derived from `capability` + `features` (a light with
@@ -2000,6 +2001,16 @@ adapters never do. The gap is metadata, so the fix is metadata.
   commands on — `command: {type, constraint, step?, editable_by}`, the
   ParamSpec fields verbatim. The firmware names never become schema;
   they get labels.
+  Added 2026-10-07: `readback_s`, the longest the device takes to report
+  a command back, on a command (`command.readback_s`) or for the whole
+  entity (top level, beside `fields`, so the base vocabulary's commands
+  that have no field are covered too). The dashboard waits that long
+  before saying "no answer"; without it, its per-capability guess. The
+  adapter is the one that knows: a bridge's poll interval, a firmware's
+  publish cadence. The guess was wrong in both directions. A heat pump
+  on a 10 s publish cycle was judged on 15 s, one late publish from a
+  false failure. A burner bridge polling every 30 s sat inside a 60 s
+  guess with no reason behind the figure.
 - **It rides the discovery record.** The descriptor is the `aspects`
   member of the entity's record at `home/discovery/{unit}`. Considered
   and rejected: a key under `home/meta/` (core-owned: the supervisor

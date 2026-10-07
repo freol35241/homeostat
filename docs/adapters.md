@@ -266,6 +266,15 @@ declares that key in `[bus.publishes]`. One record per device:
   adapter's own bounds. Undescribed aspects still render, in a
   diagnostics group. A fed input (§9) is described but carries no
   command.
+- `readback_s` (seconds, optional) is how long the device can take to
+  report a command back: on one command (`command.readback_s`) or for
+  the whole entity, at the descriptor's top level beside `fields`. The
+  dashboard waits that long before saying a command got no answer, and
+  otherwise falls back to a guess per capability. Declare it when your
+  protocol has a cadence you know: a bridge that polls (aduro: two polls
+  and some slack), a firmware that publishes on a timer (ivt490: three
+  cycles). Push protocols that answer at once (Zigbee2MQTT, ESPHome)
+  can leave it out.
 
 Generate the descriptor when the protocol already describes its devices:
 the Zigbee2MQTT adapter derives one from each device's `exposes` (unit →

@@ -179,6 +179,10 @@ async fn ivt490_state_translates_to_bus_state() {
         record["aspects"]["groups"],
         json!(["control", "readings", "status", "limits"])
     );
+    // How long a command takes to come back: the firmware's state cadence,
+    // which the adapter knows and the dashboard's per-capability guess
+    // does not.
+    assert_eq!(record["aspects"]["readback_s"], json!(30));
     assert_eq!(
         fields["setpoint"]["command"],
         json!({"type": "float", "editable_by": "family", "constraint": {"min": 10.0, "max": 30.0}, "step": 0.5})

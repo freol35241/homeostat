@@ -808,6 +808,19 @@ test('nothing answering expires, and is not reported as success', () => {
   assert.equal(logic.pendingFor(pending, 'livingroom', 'lamp', 'on'), null);
 });
 
+test('an adapter may declare its readback time, per command or per entity', () => {
+  const descriptor = { readback_s: 30, fields: { power_level: { command: { type: 'enum', readback_s: 90 } } } };
+  assert.equal(logic.commandTimeoutMs('burner', descriptor, 'power_level'), 90000, 'the command wins');
+  assert.equal(logic.commandTimeoutMs('burner', descriptor, 'on'), 30000, 'then the entity');
+  assert.equal(logic.commandTimeoutMs('burner', {}, 'on'), logic.COMMAND_TIMEOUT_MS.burner, 'then the guess');
+  for (const bad of [0, -5, '30', NaN, Infinity, 3600]) {
+    assert.equal(logic.commandTimeoutMs('light', { readback_s: bad }, 'on'), logic.COMMAND_TIMEOUT_MS.light, String(bad));
+  }
+  const pending = logic.trackCommand({}, cmd({ capability: 'climate', descriptor: { readback_s: 30 } }), 1000);
+  assert.deepEqual(logic.expirePending(pending, 1000 + logic.COMMAND_TIMEOUT_MS.climate + 1), [], 'not on the climate guess');
+  assert.equal(logic.expirePending(pending, 1000 + 30000 + 1).length, 1);
+});
+
 test('a slow device is not expired on a fast device timeout', () => {
   const pending = logic.trackCommand({}, cmd({ entity: 'burner', aspect: 'power_level', capability: 'burner' }), 1000);
   assert.deepEqual(logic.expirePending(pending, 1000 + logic.COMMAND_TIMEOUT_MS.light + 1), []);

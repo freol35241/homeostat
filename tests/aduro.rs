@@ -186,6 +186,9 @@ async fn status_translates_on_change_only() {
         record["aspects"]["groups"],
         json!(["control", "readings", "status"])
     );
+    // How long a command takes to come back: the bridge's poll, which the
+    // adapter knows and the dashboard's per-capability guess does not.
+    assert_eq!(record["aspects"]["readback_s"], json!(75));
     assert_eq!(
         fields["on"]["command"],
         json!({"type": "enum", "editable_by": "family"})
