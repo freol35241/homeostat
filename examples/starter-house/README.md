@@ -27,8 +27,12 @@ once, it is only a cache.)
 
 ## Try it without hardware
 
-Runs everything except the Zigbee coordinator; the adapter connects to
-mosquitto and idles:
+`demo/up.sh` runs the whole house against simulated devices — a lamp, a
+lock, a motion sensor, the heat pump, a phone and an ESPHome switch — and
+serves the dashboard at http://localhost:8600 (see `demo/README.md`).
+
+Or run everything except the Zigbee coordinator, with nothing on the far
+side; the adapter connects to mosquitto and idles:
 
 ```
 docker compose up -d mosquitto homeostat
