@@ -33,7 +33,7 @@ dependencies = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "eclipse-zenoh", specifier = "~=1.9" }]
+requires-dist = [{ name = "eclipse-zenoh", specifier = "~=1.10" }]
 
 [[package]]
 name = "paho-mqtt"
