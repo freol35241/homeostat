@@ -16,13 +16,10 @@ export HOMEOSTAT_IMAGE="$IMAGE"
 export DEMO_DIR="$WORK/house"
 UP="$REPO/examples/starter-house/demo/up.sh"
 
-compose() {
-  docker compose --project-directory "$DEMO_DIR" -p homeostat-demo \
-    -f "$DEMO_DIR/docker-compose.yml" -f "$DEMO_DIR/demo/docker-compose.demo.yml" "$@"
-}
-
+# up.sh with arguments is `docker compose` for the demo: the project and
+# files are named in one place.
 cleanup() {
-  Z2M_FRONTEND_TOKEN=x compose down -v --timeout 5 >/dev/null 2>&1 || true
+  "$UP" down -v --timeout 5 >/dev/null 2>&1 || true
   rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -30,7 +27,7 @@ trap cleanup EXIT
 fail() {
   echo "SMOKE FAIL: $1" >&2
   echo "--- compose logs ---" >&2
-  Z2M_FRONTEND_TOKEN=x compose logs >&2 || true
+  "$UP" logs >&2 || true
   exit 1
 }
 
@@ -58,7 +55,7 @@ for pair in livingroom_lamp:on front_door:locked hallway_motion:occupancy \
             heatpump:indoor_temperature heatpump:setpoint alice:lat porch_switch:on; do
   entity="${pair%%:*}" aspect="${pair##*:}"
   until [ -n "$(latest "$entity" "$aspect")" ]; do
-    [ -n "$(compose ps -q homeostat)" ] || fail "homeostat container exited"
+    [ -n "$("$UP" ps -q homeostat)" ] || fail "homeostat container exited"
     [ "$SECONDS" -lt "$deadline" ] || fail "no $entity/$aspect in the store"
     sleep 3
   done

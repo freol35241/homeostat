@@ -3,7 +3,12 @@
 # copies the house out to its own directory and git repo the way the
 # starter's README says, does the first-start steps, and brings up the
 # broker, homeostat and the simulator. Run it again to pick up where it
-# left off; `demo/up.sh down` stops it.
+# left off.
+#
+# With arguments, it is `docker compose` for the demo instead — the same
+# project, files and environment — so nothing else has to repeat them:
+#   demo/up.sh down             stop it (down -v also drops the uv cache)
+#   demo/up.sh logs -f homeostat
 #
 #   DEMO_DIR    where the copy lives (default ~/homeostat-demo)
 set -euo pipefail
@@ -21,9 +26,9 @@ compose() {
 export Z2M_FRONTEND_TOKEN="${Z2M_FRONTEND_TOKEN:-demo-not-used}"
 export HOMEOSTAT_UID="${HOMEOSTAT_UID:-$(id -u)}" HOMEOSTAT_GID="${HOMEOSTAT_GID:-$(id -g)}"
 
-if [ "${1:-up}" = "down" ]; then
-  compose down
-  exit 0
+if [ "$#" -gt 0 ]; then
+  compose "$@"
+  exit
 fi
 
 # In a fresh codespace the Docker daemon may still be starting.
@@ -46,6 +51,6 @@ compose up -d mosquitto homeostat simulator
 echo
 echo "The house is starting: units resolve their environments on the first"
 echo "boot, which takes a minute or two. Watch it with"
-echo "  docker compose -p homeostat-demo logs -f homeostat"
+echo "  $0 logs -f homeostat"
 echo
 echo "Dashboard: http://localhost:8600"

@@ -19,6 +19,7 @@ On your own machine, with Docker:
 ```
 examples/starter-house/demo/up.sh        # copies the house to ~/homeostat-demo and starts it
 open http://localhost:8600               # the dashboard
+examples/starter-house/demo/up.sh logs -f homeostat   # watch the units start
 examples/starter-house/demo/up.sh down   # stop it
 ```
 
