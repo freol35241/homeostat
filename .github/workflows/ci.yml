@@ -89,6 +89,9 @@ jobs:
       - name: Install Chromium
         run: scripts/install_browser.sh
       - run: uv run --script tests/browser/run.py
+      # The Pages demo builds from the same page and fixtures; its build
+      # refuses a page it would ship broken (demo-site/README.md).
+      - run: python3 scripts/build_demo_site.py "$RUNNER_TEMP/demo-site"
 
   # Known vulnerabilities in Cargo.lock, against the RustSec database.
   # Accepted transitive ones are listed, with reasons, in .cargo/audit.toml.

@@ -97,6 +97,8 @@ starts the [starter house](examples/starter-house/) against simulated
 devices and opens its dashboard in your browser, with nothing to install.
 With Docker on your own machine: `examples/starter-house/demo/up.sh`, then
 http://localhost:8600 ([what is simulated](examples/starter-house/demo/README.md)).
+Just the dashboard, in your browser:
+[freol35241.github.io/homeostat](https://freol35241.github.io/homeostat/).
 
 To build it yourself, you need a Rust toolchain, and
 [uv](https://docs.astral.sh/uv/) to run the Python units.
