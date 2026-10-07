@@ -450,10 +450,13 @@ dual path: the identical engine runs in both.
 What makes the backend swappable later is the read path: history reads go
 over the bus (below), so the store is recorder-private. Outgrowing SQLite
 means a behavioral change to one unit, not a structural change to the
-system. The designated growth path is tiering, not an engine swap: hot
-weeks stay in SQLite, closed months roll out to Parquet files, and DuckDB
-reads across both. Both engines stay embedded, there is still no server,
-and the tests still only ever touch SQLite. QuestDB was the earlier
+system. The growth path is archiving, not an engine swap: closed months
+move out of the store into one SQLite file each, and the store stays one
+window deep (see Archive below, #138). Tiering those months to Parquet
+with DuckDB reading across both was measured and is held in reserve —
+about 18× smaller at rest, for a ~50 MB native dependency and a second
+engine on the read path — for the day a house needs years of history
+queryable at speed on a disk that cannot hold it as SQLite. QuestDB was the earlier
 designation and is withdrawn: it is JVM-based, which is exactly what this
 section refuses. DuckDB was considered and rejected as the store —
 the recorder's workload is high-frequency tiny appends plus small indexed
@@ -584,7 +587,10 @@ collapsed on read.
 `{rows, oldest, newest, rows_per_day}` per series keyed by its history
 key (RFC3339, as the samples path; the rate is null for a series with no
 span to divide by), and `events: {rows, oldest, newest}` (integer µs,
-as the events path). It exists because choosing a retention window means
+as the events path), and `archives`: one `{file, month, samples,
+forecasts, events, bytes, sha256, sealed}` per month sealed out of the
+file (see Archive), read from the record kept as each was sealed rather
+than from the files. It exists because choosing a retention window means
 knowing what is in the file, the recorder is the only process that reads
 it, and a host may have no `sqlite3` binary (2026-09-09, #25). A wildcard
 over `home/history/**` fans out over series only; `stats` and `events`
@@ -710,6 +716,60 @@ pushes the fix back to the adapter.
   them could not be additive. No pluggable backend either: the moment
   `endpoint` accepts `postgresql://` the no-dual-path property dies and
   the tests hollow out.
+
+### Archive (settled 2026-10-07, #138)
+
+The store grows with every observation, and the two answers that were on
+the table both lose something: retention deletes history, and dropping
+repeats at write time deletes the record that a device asserted a value
+at a time (see the stats paragraph above). Archiving keeps everything and
+bounds the file the recorder writes: a month that closed more than
+`archive_after_months` months ago is moved into its own file.
+
+- **Moves, never deletes.** `archive_after_months` (owner, default 0 =
+  never) moves; `retain_*_days` deletes, and only from the store — an
+  archive is kept until somebody removes it. With archiving at 2 and
+  retention at 0, the store holds about two months and nothing is ever
+  lost: the configuration neither lever could give before.
+- **One plain SQLite file per month**, `archive/<store>-YYYY-MM.db`
+  beside the store, with the store's own schema and its series and room
+  ids, so `sqlite3` or a DuckDB `ATTACH` reads it exactly as it reads the
+  store. Samples and events go by their stamp, forecasts by issue time,
+  as retention measures them. Not compressed: an archive that has to be
+  decompressed before it can be opened is one nobody opens.
+- **Sealed once, never written again.** The pass records the file as
+  `sealing`, writes it under a temporary name, verifies it
+  (`integrity_check` and the row counts it inserted), takes its checksum,
+  renames it into place, records it `sealed` and makes it read-only, in
+  that order. A crash leaves a `sealing` record: with the file in place
+  it was verified and is recorded sealed; without it, nothing was pruned
+  yet, and the attempt is discarded. Rows that reach a sealed month later
+  (a seed of an old value, a clock that jumped) go into a further file,
+  `.2`, `.3`, so the backup and integrity wins hold: a sealed file never
+  changes, so its checksum is the whole of a later check, and a backup's
+  diff is the current window.
+- **Only what a sealed file holds leaves the store**, matched on the
+  whole row. **Each series' newest sample and newest forecast issue stay
+  as well**: `ctx.restore`, the recorder's seed and every latest-value
+  read find a series' last word in the store, and a latch decided months
+  ago must still be found after a core restart (#83). It leaves on the
+  next pass after a newer row overtakes it.
+- **`home/history/**` answers from the store alone.** An archive is for
+  people and tools; every query the system makes — the dashboard's
+  ranges, `restore`, forecast verification — is far inside a window of a
+  month or two, so the seam does not come up. If that changes, a read
+  across the seam is buildable on the same schema; deferring it costs
+  nothing.
+- **On the writer thread, after the hourly purge**, so it serialises
+  with flushes and with retention (a row past its window is deleted
+  rather than archived and deleted), and one month per pass, so a first
+  archive of years flushes between months. One `archive` health event per
+  month that moved, with what was sealed and pruned; `archive-failed`
+  otherwise, retried an hour later.
+
+Retention shorter than the archive window deletes rows before they are
+old enough to archive, so with both set, archiving only sees what
+retention keeps.
 
 ### Integrity check (settled 2026-09-09, #27)
 

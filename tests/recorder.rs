@@ -501,7 +501,8 @@ async fn stats_describe_the_store() {
     assert_eq!(replies.len(), 1);
     assert_eq!(replies[0].0, "home/history/stats");
     let stats = &replies[0].1;
-    assert_eq!(stats["store_version"], json!(5));
+    assert_eq!(stats["store_version"], json!(6));
+    assert_eq!(stats["archives"], json!([]), "nothing sealed: {stats}");
     let file_bytes = stats["file_bytes"].as_i64().expect("file size");
     assert!(file_bytes >= 4096, "page_count * page_size: {stats}");
     assert!(stats["freelist_bytes"].as_i64().expect("freelist") >= 0);
@@ -1138,7 +1139,7 @@ async fn v0_store_migrates_in_place() {
     );
     assert_eq!(
         read_rows(&db, "PRAGMA user_version"),
-        vec![vec![SqlValue::Integer(5)]],
+        vec![vec![SqlValue::Integer(6)]],
         "a v0 store arrives at the current layout in one start"
     );
     assert_eq!(
@@ -1205,7 +1206,7 @@ async fn v1_store_backfills_its_tally() {
 
     assert_eq!(
         read_rows(&db, "PRAGMA user_version"),
-        vec![vec![SqlValue::Integer(5)]]
+        vec![vec![SqlValue::Integer(6)]]
     );
     // Counted, not guessed: the oldest row of the first series was
     // inserted last, so a tally that took each series' first or last
@@ -1524,7 +1525,7 @@ async fn v4_store_names_the_sources_it_left_empty() {
 
     assert_eq!(
         read_rows(&db, "PRAGMA user_version"),
-        vec![vec![SqlValue::Integer(5)]],
+        vec![vec![SqlValue::Integer(6)]],
         "the store reports the layout it now has"
     );
     // Only forecast series are named: every other class has an empty
@@ -1600,7 +1601,7 @@ async fn v2_store_gains_the_forecast_table() {
 
     assert_eq!(
         read_rows(&db, "PRAGMA user_version"),
-        vec![vec![SqlValue::Integer(5)]],
+        vec![vec![SqlValue::Integer(6)]],
         "the store reports the layout it now has"
     );
     // The existing series is untouched — an upgrade is not a rewrite —
@@ -1675,4 +1676,305 @@ async fn v2_store_gains_the_forecast_table() {
     assert_eq!(issues[0]["points"][0]["v"], json!(21.0));
 
     sup.shutdown();
+}
+
+/// Microseconds since the epoch at midnight UTC on a civil date (Howard
+/// Hinnant's days-from-civil), for rows the archive tests date by hand.
+fn utc_us(year: i64, month: i64, day: i64) -> i64 {
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let doy = (153 * ((month + 9) % 12) + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    (era * 146_097 + doe - 719_468) * 86_400 * 1_000_000
+}
+
+/// The tally against both tables it describes: samples for state and cmd
+/// series, forecasts (by issue time) for forecast series.
+fn assert_tally_matches_rows(db: &Path) {
+    let tally = read_rows(
+        db,
+        "SELECT id, row_count, oldest_ts, newest_ts FROM series ORDER BY id",
+    );
+    let truth = read_rows(
+        db,
+        "SELECT series.id,
+           CASE class WHEN 'forecast' THEN (SELECT COUNT(*) FROM forecasts WHERE series_id = series.id)
+             ELSE (SELECT COUNT(*) FROM samples WHERE series_id = series.id) END,
+           CASE class WHEN 'forecast' THEN (SELECT MIN(issued_ts) FROM forecasts WHERE series_id = series.id)
+             ELSE (SELECT MIN(ts) FROM samples WHERE series_id = series.id) END,
+           CASE class WHEN 'forecast' THEN (SELECT MAX(issued_ts) FROM forecasts WHERE series_id = series.id)
+             ELSE (SELECT MAX(ts) FROM samples WHERE series_id = series.id) END
+         FROM series ORDER BY id",
+    );
+    assert_eq!(tally, truth, "series tally drifted from the rows it counts");
+}
+
+fn count(db: &Path, sql: &str) -> i64 {
+    match read_rows(db, sql).first().and_then(|row| row.first()) {
+        Some(SqlValue::Integer(n)) => *n,
+        other => panic!("{sql}: not a count: {other:?}"),
+    }
+}
+
+/// Archiving (#138): a month that closed more than `archive_after_months`
+/// ago is sealed into its own SQLite file beside the store and leaves the
+/// hot file — every row of it, and nothing the archive does not hold. A
+/// series' last word stays in the hot file as well, because `restore`
+/// and the seed read it there: an idle latch must survive its month being
+/// archived. A sealed file is never written again, so rows that reach its
+/// month later go into a second file; and a seal a crash interrupted is
+/// undone rather than trusted.
+#[tokio::test(flavor = "multi_thread")]
+async fn closed_months_move_to_archives_and_the_last_word_stays() {
+    let db = store_path("archive");
+    let stem = db.file_stem().expect("stem").to_string_lossy().to_string();
+    let archive_dir = db.parent().expect("dir").join("archive");
+    let archive = |label: &str| archive_dir.join(format!("{stem}-{label}.db"));
+    let clean = || {
+        for label in ["2026-01", "2026-01.2", "2026-02", "2026-02.2", "2026-03"] {
+            let _ = std::fs::remove_file(archive(label));
+            let _ = std::fs::remove_file(format!("{}.tmp", archive(label).display()));
+        }
+    };
+    clean();
+    let (mut sup, observer) = setup(&db).await;
+    let events = observer
+        .declare_subscriber("home/health/recorder/event")
+        .await
+        .expect("event subscriber");
+
+    // A live sample, so the busy series and the room exist with their ids.
+    let power = matched_publisher(&observer, "home/state/attic/meter/power").await;
+    put(&power, json!(9.5)).await;
+    rows_eventually(&db, "SELECT value FROM samples", 1, Duration::from_secs(20)).await;
+
+    // History from January and February, written straight into the store:
+    // the busy series has rows in both months and a live row now; the
+    // idle switch's last word is in February; a forecast series has an
+    // issue in each month; two events are January's.
+    let (jan, feb) = (utc_us(2026, 1, 1), utc_us(2026, 2, 1));
+    let day = 86_400 * 1_000_000_i64;
+    {
+        let conn = Connection::open(&db).expect("open store");
+        conn.busy_timeout(Duration::from_secs(5))
+            .expect("busy timeout");
+        conn.execute_batch(&format!(
+            "BEGIN;
+             INSERT INTO series (class, entity, aspect) VALUES ('state', 'switch', 'on');
+             INSERT INTO series (class, entity, aspect, source)
+               VALUES ('forecast', 'spot', 'price', 'nordpool');
+             INSERT INTO samples SELECT s.id, t.ts, r.id, 1, t.v
+               FROM series s, rooms r,
+                    (SELECT {a} AS ts, 1.0 AS v UNION ALL SELECT {b}, 2.0 UNION ALL SELECT {c}, 3.0
+                     UNION ALL SELECT {d}, 4.0 UNION ALL SELECT {e}, 5.0) t
+               WHERE s.entity = 'meter' AND r.name = 'attic';
+             INSERT INTO samples SELECT s.id, t.ts, r.id, 0, t.v
+               FROM series s, rooms r,
+                    (SELECT {f} AS ts, 1 AS v UNION ALL SELECT {g}, 0) t
+               WHERE s.entity = 'switch' AND r.name = 'attic';
+             INSERT INTO forecasts SELECT s.id, t.issued, t.valid, NULL, r.id, t.v
+               FROM series s, rooms r,
+                    (SELECT {h} AS issued, {i} AS valid, 0.5 AS v
+                     UNION ALL SELECT {j}, {k}, 0.6 UNION ALL SELECT {j}, {l}, 0.7) t
+               WHERE s.entity = 'spot' AND r.name = 'attic';
+             INSERT INTO events VALUES ({m}, 'home/health/x/event', '{{\"kind\":\"a\"}}');
+             INSERT INTO events VALUES ({n}, 'home/health/x/event', '{{\"kind\":\"b\"}}');
+             INSERT INTO archives (file, month, state) VALUES ('{stem}-2026-03.db', '2026-03', 'sealing');
+             COMMIT;",
+            a = jan + 9 * day,
+            b = jan + 19 * day,
+            c = jan + 29 * day,
+            d = feb + 4 * day,
+            e = feb + 14 * day,
+            f = jan + 4 * day,
+            g = feb + 2 * day,
+            h = jan + day,
+            i = jan + 2 * day,
+            j = feb + day,
+            k = feb + 2 * day,
+            l = feb + 3 * day,
+            m = jan + 6 * day,
+            n = jan + 7 * day,
+        ))
+        .expect("write history");
+    }
+    // What a crash mid-seal leaves: the record says 'sealing', and only
+    // the temporary file exists.
+    std::fs::create_dir_all(&archive_dir).expect("archive dir");
+    std::fs::write(format!("{}.tmp", archive("2026-03").display()), b"half").expect("tmp");
+
+    config_write(
+        &observer,
+        "home/config/recorder/archive_after_months",
+        json!(1),
+    )
+    .await
+    .expect("in-constraint write accepted");
+    let first = await_event(&events, Duration::from_secs(30), |e| e["kind"] == "archive").await;
+    let second = await_event(&events, Duration::from_secs(30), |e| e["kind"] == "archive").await;
+    assert_eq!(
+        first["month"],
+        json!("2026-01"),
+        "oldest month first: {first}"
+    );
+    assert_eq!(second["month"], json!("2026-02"), "{second}");
+    assert_eq!(first["sealed"]["samples"], json!(4), "{first}");
+    assert_eq!(first["sealed"]["forecasts"], json!(1), "{first}");
+    assert_eq!(first["sealed"]["events"], json!(2), "{first}");
+    assert_eq!(second["sealed"]["samples"], json!(3), "{second}");
+    assert_eq!(second["sealed"]["forecasts"], json!(2), "{second}");
+    // January leaves whole; February keeps the switch's last word and the
+    // forecast's newest issue, which the archive holds as well.
+    assert_eq!(first["pruned"], json!(7), "{first}");
+    assert_eq!(second["pruned"], json!(2), "{second}");
+
+    // Each archive is a whole, verified store of its month: the same
+    // schema, so the history view reads it like the store.
+    for (label, samples, forecasts, events) in [("2026-01", 4, 1, 2), ("2026-02", 3, 2, 0)] {
+        let file = archive(label);
+        assert_eq!(
+            read_rows(&file, "PRAGMA integrity_check"),
+            vec![vec![SqlValue::Text("ok".into())]]
+        );
+        assert_eq!(
+            count(&file, "SELECT COUNT(*) FROM history"),
+            samples,
+            "{label}"
+        );
+        assert_eq!(
+            count(&file, "SELECT COUNT(*) FROM forecasts"),
+            forecasts,
+            "{label}"
+        );
+        assert_eq!(
+            count(&file, "SELECT COUNT(*) FROM events"),
+            events,
+            "{label}"
+        );
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&file)
+            .expect("archive file")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o222, 0, "{label} is sealed read-only");
+    }
+    // The interrupted seal was undone, not trusted.
+    assert!(!archive("2026-03").exists());
+    assert!(!Path::new(&format!("{}.tmp", archive("2026-03").display())).exists());
+    assert_eq!(
+        count(&db, "SELECT COUNT(*) FROM archives WHERE state = 'sealing'"),
+        0
+    );
+
+    // The hot file: nothing of January, February's last words, today's row.
+    let before = utc_us(2026, 3, 1);
+    assert_eq!(
+        count(
+            &db,
+            &format!("SELECT COUNT(*) FROM events WHERE ts < {before}")
+        ),
+        0
+    );
+    assert_eq!(
+        read_rows(
+            &db,
+            &format!("SELECT entity, ts FROM history WHERE ts < {before}")
+        ),
+        vec![vec![
+            SqlValue::Text("switch".into()),
+            SqlValue::Integer(feb + 2 * day)
+        ]],
+    );
+    assert_eq!(
+        count(
+            &db,
+            &format!("SELECT COUNT(*) FROM forecasts WHERE issued_ts < {before}")
+        ),
+        2,
+        "the newest issue stays, all its points"
+    );
+    assert_tally_matches_rows(&db);
+
+    // What restore reads is still there.
+    let latest = history_get(&observer, "home/history/state/switch/on?limit=1").await;
+    assert_eq!(latest.len(), 1, "{latest:?}");
+    assert_eq!(latest[0].1[0]["value"], json!(false), "{latest:?}");
+
+    // Stats lists what was sealed, from the record rather than the files.
+    let stats = history_get(&observer, "home/history/stats").await;
+    let sealed = stats[0].1["archives"]
+        .as_array()
+        .expect("archives list")
+        .clone();
+    assert_eq!(sealed.len(), 2, "{sealed:?}");
+    assert_eq!(sealed[0]["month"], json!("2026-01"));
+    assert_eq!(sealed[0]["file"], json!(format!("{stem}-2026-01.db")));
+    assert_eq!(
+        sealed[0]["sha256"].as_str().map(str::len),
+        Some(64),
+        "{sealed:?}"
+    );
+
+    // A row that reaches a sealed month late goes into a second file, and
+    // the switch's February row, overtaken by a live one, leaves.
+    let switch = matched_publisher(&observer, "home/state/attic/switch/on").await;
+    put(&switch, json!(true)).await;
+    rows_eventually(
+        &db,
+        &format!("SELECT ts FROM history WHERE entity = 'switch' AND ts > {before}"),
+        1,
+        Duration::from_secs(20),
+    )
+    .await;
+    {
+        let conn = Connection::open(&db).expect("open store");
+        conn.busy_timeout(Duration::from_secs(5))
+            .expect("busy timeout");
+        conn.execute(
+            "INSERT INTO samples SELECT s.id, ?1, r.id, 1, 2.5 FROM series s, rooms r
+             WHERE s.entity = 'meter' AND r.name = 'attic'",
+            [jan + 24 * day],
+        )
+        .expect("late row");
+    }
+    config_write(
+        &observer,
+        "home/config/recorder/archive_after_months",
+        json!(2),
+    )
+    .await
+    .expect("in-constraint write accepted");
+    let late = await_event(&events, Duration::from_secs(30), |e| e["kind"] == "archive").await;
+    let overtaken = await_event(&events, Duration::from_secs(30), |e| e["kind"] == "archive").await;
+    assert_eq!(late["month"], json!("2026-01"), "{late}");
+    assert_eq!(
+        late["sealed"]["file"],
+        json!(format!("{stem}-2026-01.2.db")),
+        "{late}"
+    );
+    assert_eq!(late["sealed"]["samples"], json!(1), "{late}");
+    assert_eq!(overtaken["month"], json!("2026-02"), "{overtaken}");
+    assert_eq!(
+        overtaken["sealed"],
+        Value::Null,
+        "nothing new to seal: {overtaken}"
+    );
+    assert_eq!(overtaken["pruned"], json!(1), "{overtaken}");
+    assert_eq!(
+        count(&archive("2026-01"), "SELECT COUNT(*) FROM samples"),
+        4,
+        "never rewritten"
+    );
+    assert_eq!(
+        count(
+            &db,
+            &format!("SELECT COUNT(*) FROM samples WHERE ts < {before}")
+        ),
+        0
+    );
+    assert_tally_matches_rows(&db);
+
+    sup.shutdown();
+    clean();
 }
