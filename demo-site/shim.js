@@ -190,6 +190,10 @@
       setTimeout(function () { push({ type: 'config', key: key, value: body.value }); }, 250);
       return Promise.resolve(respond({ ok: true, value: body.value }));
     }
+    // Loudly: the page asked for something the dashboard unit answers and
+    // this stand-in does not. tests/browser/run.py (PagesDemo) fails on it,
+    // which is what keeps this file in step with the unit.
+    console.error('demo: no stand-in for ' + route);
     return Promise.resolve(respond({ error: 'not in the demo' }, 404));
   };
 

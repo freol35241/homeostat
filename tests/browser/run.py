@@ -30,9 +30,13 @@ wording), and chart path coordinates — geometry is asserted numerically in
 tests/js.
 """
 
+import functools
+import http.server
 import pathlib
 import subprocess
 import sys
+import tempfile
+import threading
 import unittest
 
 # server.py sits beside this file; `uv run --script` does not add that
@@ -331,6 +335,84 @@ class SmokePhone(Smoke):
         self.assertEqual(
             names, ["now", "heating", "downstairs", "everything", "health", "notshown"]
         )
+
+
+class PagesDemo(unittest.IsolatedAsyncioTestCase):
+    """The static demo on GitHub Pages (demo-site/README.md), as built and
+    as served: under /homeostat/, with demo-site/shim.js standing in for
+    the dashboard unit. The shim is a second fake of the unit's endpoints
+    beside server.py, so this is what keeps it honest — a page that starts
+    asking for something the shim does not answer faults here, or fails a
+    request, instead of breaking the published demo where nobody looks."""
+
+    viewport = DESKTOP
+
+    def setUp(self) -> None:
+        # Built and served before the event loop's half of the setup: the
+        # build is a blocking subprocess.
+        root = pathlib.Path(__file__).resolve().parents[2]
+        self.site = tempfile.TemporaryDirectory()
+        subprocess.run(
+            [sys.executable, str(root / "scripts" / "build_demo_site.py"),
+             str(pathlib.Path(self.site.name) / "homeostat")],
+            check=True, capture_output=True,
+        )
+        class Quiet(http.server.SimpleHTTPRequestHandler):
+            def log_message(self, *args) -> None:
+                pass
+
+        handler = functools.partial(Quiet, directory=self.site.name)
+        self.httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+
+    async def asyncSetUp(self) -> None:
+        self.pw = await async_playwright().start()
+        self.browser = await self.pw.chromium.launch()
+        context = await self.browser.new_context(
+            viewport=self.viewport, timezone_id="Europe/Stockholm", locale="en-GB"
+        )
+        self.page = await context.new_page()
+        self.faults: list[str] = []
+        self.page.on("pageerror", lambda e: self.faults.append(f"pageerror: {e}"))
+        self.page.on(
+            "console",
+            lambda m: self.faults.append(f"console: {m.text}") if m.type == "error" else None,
+        )
+        self.page.on("requestfailed", lambda r: self.faults.append(f"request failed: {r.url}"))
+        self.page.on(
+            "response",
+            lambda r: self.faults.append(f"HTTP {r.status}: {r.url}") if r.status >= 400 else None,
+        )
+        port = self.httpd.server_address[1]
+        await self.page.goto(f"http://127.0.0.1:{port}/homeostat/", wait_until="networkidle")
+        await self.page.wait_for_timeout(600)
+
+    async def asyncTearDown(self) -> None:
+        await self.browser.close()
+        await self.pw.stop()
+        self.httpd.shutdown()
+        self.site.cleanup()
+        self.assertEqual(self.faults, [], "the demo faulted")
+
+    async def view(self, name: str) -> None:
+        await self.page.click(f'button[data-view="{name}"]:visible')
+        await self.page.wait_for_timeout(500)
+
+    async def test_every_view_renders_something(self):
+        for name in ("now", "heating", "downstairs", "everything", "health", "notshown"):
+            await self.view(name)
+            body = (await self.page.locator("#view").inner_text()).strip()
+            self.assertTrue(body, f"view {name} rendered an empty body")
+            self.assertNotIn("undefined", body.lower(), f"view {name} rendered an undefined")
+            # Every chart the view draws got history from the shim.
+            await self.page.wait_for_timeout(300)
+
+    async def test_a_command_is_answered_by_the_shim(self):
+        await self.view("now")
+        self.assertIn("1 light on", await self.page.locator("#view").inner_text())
+        await self.page.click('[data-action="lights-off"]:visible')
+        await self.page.wait_for_timeout(1500)
+        self.assertNotIn("1 light on", await self.page.locator("#view").inner_text())
 
 
 def install_browser() -> int:
