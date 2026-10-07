@@ -870,15 +870,22 @@
    * `before` stays what the device reported before the first tap of the
    * sequence. `stage` is 'pending' (the id is known) unless said
    * otherwise: 'draft' while the taps continue, 'sending' while the POST
-   * is in flight. */
+   * is in flight. `seq` names the POST, so its reply finds the request it
+   * answers and no other (commandSent). `tolerance` is how far a readback
+   * may sit from the request and still be it — the brightness scale is
+   * finer than the percent the control shows, and a bulb that rounds by
+   * one step has done what it was asked. */
   function trackCommand(pending, cmd, nowMs, stage) {
     var key = pendingKey(cmd.room, cmd.entity, cmd.aspect);
     var prev = pending[key];
     pending[key] = {
       id: cmd.id || null,
+      seq: cmd.seq || null,
       value: cmd.value,
       before: prev ? prev.before : cmd.before,
       asked: prev ? prev.asked.concat([prev.value]) : [],
+      moved: prev ? prev.moved : false,
+      tolerance: cmd.tolerance || 0,
       at: nowMs,
       timeoutMs: commandTimeoutMs(cmd.capability),
       outcome: stage || 'pending'
@@ -898,9 +905,9 @@
     return entry ? entry.value : current;
   }
 
-  function sameValue(a, b) {
+  function sameValue(a, b, tolerance) {
     if (typeof a === 'number' && typeof b === 'number') {
-      return Math.abs(a - b) <= 1e-6 * Math.max(1, Math.abs(a));
+      return Math.abs(a - b) <= Math.max(tolerance || 0, 1e-6 * Math.max(1, Math.abs(a)));
     }
     return a === b;
   }
@@ -909,10 +916,11 @@
    * dashboard unit found nothing subscribed to its key, in which case it
    * went nowhere and waiting would only delay saying so. A reply for a
    * request the user has since replaced is ignored: the newer one has its
-   * own POST. */
-  function commandSent(pending, key, value, reply) {
+   * own POST. Matched by `seq`, never by value: on, off, on are three
+   * POSTs, and the first reply must not claim the third request. */
+  function commandSent(pending, key, seq, reply) {
     var entry = pending[key];
-    if (!entry || entry.outcome !== 'sending' || !sameValue(entry.value, value)) return null;
+    if (!entry || entry.outcome !== 'sending' || entry.seq !== seq) return null;
     if (!reply || !reply.id) {
       // An older dashboard unit that returns no id cannot be tracked, and
       // a pending state that can never resolve is worse than none.
@@ -930,7 +938,11 @@
 
   /* Stage 4: the device reported the commanded aspect. What it reported
    * decides what that means:
-   *   - the value asked for: confirmed;
+   *   - the value asked for: confirmed — unless it is also the value the
+   *     device held before the sequence and nothing has moved since. Tap
+   *     on, then off: a bridge republishing the old off is not an answer
+   *     to "off", because the "on" may yet land. The timeout settles it
+   *     (expirePending);
    *   - the value it held before, or one the user asked for on the way:
    *     not an answer — a bridge that republishes on every poll sends
    *     the old value until the device moves, and this used to count as
@@ -944,11 +956,14 @@
     var pk = pendingKey(parts[2], parts[3], parts[4]);
     var entry = pending[pk];
     if (!entry || (entry.outcome !== 'pending' && entry.outcome !== 'sending')) return null;
-    if (sameValue(entry.value, value)) {
+    var tol = entry.tolerance;
+    var stale = !entry.moved && entry.asked.length > 0 && sameValue(entry.before, value, tol);
+    if (sameValue(entry.value, value, tol) && !stale) {
       delete pending[pk];
       return { key: pk, outcome: 'confirmed', value: entry.value };
     }
-    var known = entry.asked.concat([entry.before]).some(function (v) { return sameValue(v, value); });
+    if (!sameValue(entry.before, value, tol)) entry.moved = true;
+    var known = entry.asked.concat([entry.before]).some(function (v) { return sameValue(v, value, tol); });
     if (known) {
       entry.seen = value;
       return null;
@@ -985,7 +1000,9 @@
 
   /* Nothing answered. Not the same as success: the outcome carries the
    * last value the device did report, if any, so the page can say "still
-   * reports 21.0" rather than only "no answer". */
+   * reports 21.0" rather than only "no answer". The one exception is a
+   * device that reported the asked value all along (on, then off, and the
+   * "on" never landed): after the wait it is where it was asked to be. */
   function expirePending(pending, nowMs) {
     var out = [];
     Object.keys(pending).forEach(function (k) {
@@ -993,7 +1010,11 @@
       if (entry && (entry.outcome === 'pending' || entry.outcome === 'sending') &&
           nowMs - entry.at > entry.timeoutMs) {
         delete pending[k];
-        out.push({ key: k, outcome: 'unconfirmed', value: entry.value, seen: entry.seen });
+        if (entry.seen !== undefined && sameValue(entry.value, entry.seen, entry.tolerance)) {
+          out.push({ key: k, outcome: 'confirmed', value: entry.value });
+        } else {
+          out.push({ key: k, outcome: 'unconfirmed', value: entry.value, seen: entry.seen });
+        }
       }
     });
     return out;
@@ -1009,6 +1030,17 @@
   function noteOutcome(recent, outcome, nowMs) {
     recent[outcome.key] = Object.assign({ at: nowMs }, outcome);
     return recent;
+  }
+
+  /* Drops every outcome whose time is up, whether or not its control is
+   * on screen (recentFor only prunes what it is asked about). Answers
+   * whether anything went, so the caller redraws only then. */
+  function pruneRecent(recent, nowMs) {
+    var gone = false;
+    Object.keys(recent).forEach(function (k) {
+      if (!recentFor(recent, k, nowMs)) gone = true;
+    });
+    return gone;
   }
 
   function recentFor(recent, key, nowMs) {
@@ -1515,6 +1547,7 @@
     resolveFromEvent: resolveFromEvent,
     expirePending: expirePending,
     noteOutcome: noteOutcome,
-    recentFor: recentFor
+    recentFor: recentFor,
+    pruneRecent: pruneRecent
   };
 });

@@ -1493,15 +1493,26 @@ Decisions and why:
   - *Confirmation is the asked value coming back.* The value the device
     held before the first tap, or one asked on the way, is progress and
     not an answer. Any other value means the device settled elsewhere
-    (it clamped or rounded): **adjusted**, said with both numbers.
+    (it clamped or rounded): **adjusted**, said with both numbers. Two
+    refinements, both from review. Tap on, then off: a republished old
+    "off" is not an answer while the "on" may yet land, so it waits for
+    the device to move or for the timeout, after which a device that
+    reported "off" throughout is where it was asked to be. And
+    brightness compares at the control's own grain (a percent of the
+    0–254 scale), so a bulb that rounds by one step is not "adjusted".
+    A POST's reply finds its request by a sequence number, never by
+    value: on, off, on are three requests, and the first reply must not
+    claim the third.
   - *Two things are known before anything answers.* `/api/cmd` reports
     whether anything subscribes to the command's key, from a zenoh
     publisher's matching status. A client session filters writes on the
     publishing side, so a command nobody matches was dropped silently,
     and the page could only find out by waiting out its timeout. That
-    is now **unheard**, at once. And while a command waits, the line
-    says when the owning unit is not running or the device reports
-    itself unavailable.
+    is now **unheard**, at once. For an arbitrated entity the arbiter
+    subscribes to every command, so the check also asks after the key
+    the arbiter forwards on, where the adapter listens. And while a
+    command waits, the line says when the owning unit is not running or
+    the device reports itself unavailable.
   Not done, and why. A positive "delivered to the device" event from
   adapters would need every adapter to emit it; it is worth having for
   slow devices but is its own change. Readbacks stay uncorrelated:

@@ -33,7 +33,8 @@ a small API generated entirely from the house's text:
                      declares a family-editable command, checked against
                      the descriptor's constraint. Answers the envelope's
                      id, and `heard`: whether anything subscribes to the
-                     command's key (the adapter, or the arbiter in front)
+                     command's key — and, for an arbitrated entity, to the
+                     arbiter's forward key, where the adapter listens
   POST /api/param    a parameter write through the core's validating config
                      queryable ({unit, param, value})
   POST /api/lights/off  the whole-house darken: one manual-band off-command
@@ -609,13 +610,13 @@ class Hub:
         restarts nothing here, so it is re-read rather than cached for the
         unit's life. A query that fails keeps the last answer."""
         if time.monotonic() - self._about_at >= MODEL_TTL_S:
-            self._about_at = time.monotonic()
-            try:
+            # A footer line is never worth failing /api/model over: a query
+            # error or a session in trouble keeps the last answer.
+            with contextlib.suppress(Exception):
                 for _key, value in self.session.get_json(ABOUT_KEY, timeout_s=2):
                     if isinstance(value, dict):
                         self._about = value
-            except QueryError:
-                pass
+            self._about_at = time.monotonic()
         return dict(self._about, dashboard={"version": DASHBOARD_VERSION})
 
     def relations(self, model: dict) -> dict[str, dict]:
@@ -909,13 +910,19 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         # (units/dashboard.toml) — the family always wins over automations.
         envelope = keys.cmd_envelope(value, "manual", "dashboard")
         key = keys.cmd_key(room, entity, aspect)
-        # Whether anything subscribes to the key — the owning adapter, or
-        # the arbiter in front of it. A put nobody matches goes nowhere and
-        # nothing ever reports it, so without this the page could only find
-        # out by waiting out its timeout.
-        heard = await asyncio.get_running_loop().run_in_executor(
-            None, hub.session.has_subscriber, key
-        )
+        # Whether the command can reach the device: something subscribes
+        # to its key and, for an arbitrated entity, to the key the arbiter
+        # forwards on as well — the arbiter subscribes to every command, so
+        # its presence alone says nothing about the adapter behind it. A
+        # put nobody matches goes nowhere and nothing ever reports it, so
+        # without this the page could only find out by waiting out its
+        # timeout.
+        loop = asyncio.get_running_loop()
+        heard = await loop.run_in_executor(None, hub.session.has_subscriber, key)
+        if heard and spec["write_mode"] == "arbitrated":
+            heard = await loop.run_in_executor(
+                None, hub.session.has_subscriber, keys.arbiter_key(room, entity, aspect)
+            )
         hub.session.put_json(key, envelope)
         # The id goes back to the browser so the control can show the command
         # as pending and then resolve it against whatever ends it — a

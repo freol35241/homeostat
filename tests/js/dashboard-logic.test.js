@@ -698,24 +698,64 @@ test('a draft is not sent, so nothing can answer it or time it out', () => {
 
 test('the POST reply makes a sending command pending, or says nothing heard it', () => {
   const key = logic.pendingKey('livingroom', 'lamp', 'on');
-  let pending = logic.trackCommand({}, cmd({ id: null }), 1000, 'sending');
-  assert.equal(logic.commandSent(pending, key, true, { ok: true, id: 'abc', heard: true }), null);
+  let pending = logic.trackCommand({}, cmd({ id: null, seq: 1 }), 1000, 'sending');
+  assert.equal(logic.commandSent(pending, key, 1, { ok: true, id: 'abc', heard: true }), null);
   assert.equal(pending[key].outcome, 'pending');
   assert.equal(pending[key].id, 'abc');
 
-  pending = logic.trackCommand({}, cmd({ id: null }), 1000, 'sending');
-  const unheard = logic.commandSent(pending, key, true, { ok: true, id: 'abc', heard: false });
+  pending = logic.trackCommand({}, cmd({ id: null, seq: 2 }), 1000, 'sending');
+  const unheard = logic.commandSent(pending, key, 2, { ok: true, id: 'abc', heard: false });
   assert.equal(unheard.outcome, 'unheard');
   assert.equal(pending[key], undefined);
 });
 
 test('a reply for a request since replaced is ignored', () => {
   const key = logic.pendingKey('livingroom', 'lamp', 'on');
-  let pending = logic.trackCommand({}, cmd({ id: null, value: true }), 1000, 'sending');
+  let pending = logic.trackCommand({}, cmd({ id: null, value: true, seq: 1 }), 1000, 'sending');
   pending = logic.trackCommand(pending, cmd({ id: null, value: false }), 1100, 'draft');
-  assert.equal(logic.commandSent(pending, key, true, { ok: true, id: 'old', heard: true }), null);
+  assert.equal(logic.commandSent(pending, key, 1, { ok: true, id: 'old', heard: true }), null);
   assert.equal(pending[key].outcome, 'draft');
   assert.equal(pending[key].id, null);
+});
+
+test('on, off, on: the first reply does not claim the third request', () => {
+  // Matching replies by value would bind the entry to command 1, and an
+  // event ending command 3 would then find nothing.
+  const key = logic.pendingKey('livingroom', 'lamp', 'on');
+  let pending = logic.trackCommand({}, cmd({ id: null, value: true, seq: 1 }), 1000, 'sending');
+  pending = logic.trackCommand(pending, cmd({ id: null, value: false, seq: 2 }), 1050, 'sending');
+  pending = logic.trackCommand(pending, cmd({ id: null, value: true, seq: 3 }), 1100, 'sending');
+  logic.commandSent(pending, key, 1, { ok: true, id: 'id1', heard: true });
+  logic.commandSent(pending, key, 2, { ok: true, id: 'id2', heard: true });
+  assert.equal(pending[key].outcome, 'sending');
+  logic.commandSent(pending, key, 3, { ok: true, id: 'id3', heard: true });
+  assert.equal(pending[key].id, 'id3');
+  const done = logic.resolveFromEvent(pending, { kind: 'drop', reason: 'device-unavailable', cmd_id: 'id3' });
+  assert.equal(done.outcome, 'rejected');
+});
+
+test('a brightness readback one step off the scale is the asked value', () => {
+  // 127 is 50 %; a bulb reporting 128 has done what it was asked, and
+  // "settled on 50 % (asked 50 %)" would be nonsense.
+  const pending = logic.trackCommand({}, cmd({ aspect: 'brightness', value: 127, before: 40, tolerance: 254 / 200 }), 1000);
+  assert.equal(logic.resolveFromState(pending, 'home/state/livingroom/lamp/brightness', 128).outcome, 'confirmed');
+});
+
+test('on, then off: a republished old off is not an answer while the on may yet land', () => {
+  let pending = logic.trackCommand({}, cmd({ value: true, before: false }), 1000);
+  pending = logic.trackCommand(pending, cmd({ id: 'second', value: false }), 1100);
+  assert.equal(logic.resolveFromState(pending, 'home/state/livingroom/lamp/on', false), null);
+  // The on lands, then the off: now the off is an answer.
+  assert.equal(logic.resolveFromState(pending, 'home/state/livingroom/lamp/on', true), null);
+  assert.equal(logic.resolveFromState(pending, 'home/state/livingroom/lamp/on', false).outcome, 'confirmed');
+});
+
+test('on, then off, and the on never landed: after the wait it is where it was asked', () => {
+  let pending = logic.trackCommand({}, cmd({ value: true, before: false }), 1000);
+  pending = logic.trackCommand(pending, cmd({ id: 'second', value: false }), 1100);
+  logic.resolveFromState(pending, 'home/state/livingroom/lamp/on', false);
+  const expired = logic.expirePending(pending, 1100 + logic.COMMAND_TIMEOUT_MS.light + 1);
+  assert.equal(expired[0].outcome, 'confirmed');
 });
 
 test('an arbiter refusal is held, not failed, and names the band', () => {
@@ -783,6 +823,15 @@ test('an outcome stays said for a while: a confirmation briefly, a problem longe
   assert.equal(logic.recentFor(recent, 'b', 6000).outcome, 'held');
   assert.equal(logic.recentFor(recent, 'b', 30000), null);
   assert.deepEqual(Object.keys(recent), []);
+});
+
+test('outcomes are pruned whether or not anything asks about them', () => {
+  const recent = {};
+  logic.noteOutcome(recent, { key: 'a', outcome: 'confirmed', value: 1 }, 1000);
+  logic.noteOutcome(recent, { key: 'b', outcome: 'held', value: 1 }, 1000);
+  assert.equal(logic.pruneRecent(recent, 2000), false, 'nothing due yet');
+  assert.equal(logic.pruneRecent(recent, 6000), true);
+  assert.deepEqual(Object.keys(recent), ['b']);
 });
 
 // ---- history shapes ----

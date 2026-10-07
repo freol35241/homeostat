@@ -72,7 +72,10 @@ def toml_widget(widget: dict, indent: str = "") -> str:
     "Text" overlay prints (dashboard-logic.js, viewText)."""
     fields = [
         f"{k} = {json.dumps(widget[k])}"
-        for k in sorted((k for k in widget if k != "widgets"), key=KEY_ORDER.index)
+        for k in sorted(
+            (k for k in widget if k != "widgets"),
+            key=lambda k: KEY_ORDER.index(k) if k in KEY_ORDER else len(KEY_ORDER),
+        )
     ]
     if "widgets" not in widget:
         return f"{indent}{{ {', '.join(fields)} }}"

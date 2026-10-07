@@ -563,7 +563,7 @@ video-rtc video { width: 100%; display: block; }
   </div>
 </div>
 <nav id="tabs"><div class="row" id="tabs-row"></div></nav>
-<div id="status-sheet" role="menu"></div>
+<div id="status-sheet" role="dialog" aria-label="Health, Not shown and about"></div>
 <div id="toast"></div>
 
 <div id="overlay-backdrop" data-action="overlay-close"></div>
@@ -856,6 +856,13 @@ var recent = {};
 // key -> timer: a stepper still being tapped (stepCmd)
 var drafts = {};
 var STEP_SETTLE_MS = 600;
+var cmdSeq = 0;
+
+// How far a readback may sit from the request and still be it: the
+// brightness scale (0–254) is finer than the percent its control shows.
+function cmdTolerance(aspect) {
+  return aspect === 'brightness' ? 254 / 200 : 0;
+}
 
 function sendCmd(room, entity, aspect, value) {
   var key = logic.pendingKey(room, entity, aspect);
@@ -863,8 +870,9 @@ function sendCmd(room, entity, aspect, value) {
   delete drafts[key];
   delete recent[key];
   var spec = entitySpec(room, entity);
+  var seq = ++cmdSeq;
   logic.trackCommand(pending, {
-    room: room, entity: entity, aspect: aspect, value: value,
+    room: room, entity: entity, aspect: aspect, value: value, seq: seq, tolerance: cmdTolerance(aspect),
     capability: spec ? spec.capability : null, before: stateValue(room, entity, aspect)
   }, Date.now(), 'sending');
   scheduleRender();
@@ -876,13 +884,13 @@ function sendCmd(room, entity, aspect, value) {
     if (!r.ok) return r.text().then(function (t) { throw new Error(t || ('HTTP ' + r.status)); });
     return r.json();
   }).then(function (body) {
-    var outcome = logic.commandSent(pending, key, value, body);
+    var outcome = logic.commandSent(pending, key, seq, body);
     if (outcome) announceOutcome(outcome);
     scheduleRender();
   }).catch(function (e) {
     // Refused before it ever reached the bus: nothing to wait for.
     var entry = pending[key];
-    if (entry && entry.outcome === 'sending') delete pending[key];
+    if (entry && entry.outcome === 'sending' && entry.seq === seq) delete pending[key];
     announceOutcome({ key: key, outcome: 'failed', value: value, reason: errText(e) });
     scheduleRender();
   });
@@ -897,7 +905,7 @@ function stepCmd(room, entity, aspect, value) {
   delete recent[key];
   var spec = entitySpec(room, entity);
   logic.trackCommand(pending, {
-    room: room, entity: entity, aspect: aspect, value: value,
+    room: room, entity: entity, aspect: aspect, value: value, tolerance: cmdTolerance(aspect),
     capability: spec ? spec.capability : null, before: stateValue(room, entity, aspect)
   }, Date.now(), 'draft');
   clearTimeout(drafts[key]);
@@ -1425,9 +1433,17 @@ document.addEventListener('click', function (e) {
     renderShell();
     return;
   }
-  if (statusSheetOpen && (!inSheet || e.target.closest('[data-view]'))) {
-    // a pick in the sheet, or a tap anywhere else, puts it away
+  if (statusSheetOpen && !inSheet) {
+    // A tap outside puts the sheet away and does nothing else: the
+    // finger was aiming at the sheet's edge, not at what lies under it.
     statusSheetOpen = false;
+    renderShell();
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    return;
+  }
+  if (statusSheetOpen && e.target.closest('[data-view]')) {
+    statusSheetOpen = false; // a pick in the sheet puts it away
     renderShell();
   }
   var btn = e.target.closest('[data-view]');
@@ -3097,6 +3113,11 @@ window.addEventListener('popstate', function (e) {
 
 document.addEventListener('keydown', function (e) {
   if (e.key === 'Escape' && overlay.open) closeOverlay();
+  else if (e.key === 'Escape' && statusSheetOpen) {
+    statusSheetOpen = false;
+    renderShell();
+    byId('topbar-status').focus();
+  }
 });
 
 // ---- detail overlay: open <type> ----
@@ -3197,6 +3218,9 @@ function renderOverlayContent() {
   mountCameraLive(r.camera);
   wireChartInteractions(byId('overlay-body'));
   wireSourceLegend(byId('overlay-body'));
+  // The overlay re-renders on its own (opening, a fetch landing, a group
+  // toggled), and its controls are as much the command's as the view's.
+  markPendingControls();
 }
 
 /* Which line is which, on demand: pointing at a source in the legend
@@ -3969,10 +3993,11 @@ setInterval(function () {
   expired.forEach(announceOutcome);
   if (expired.length) scheduleRender();
   // An ended command's line goes when its time is up, which no delta will
-  // prompt. Only the lines are redrawn: rebuilding the view every second
-  // would replace a button between a finger's press and its release, and
-  // the tap would be lost.
-  else if (Object.keys(recent).length) markPendingControls();
+  // prompt. Only the lines are redrawn, and only when one went: rebuilding
+  // the view would replace a button between a finger's press and its
+  // release, and the tap would be lost; redrawing them every second would
+  // have a screen reader re-announce each one.
+  else if (logic.pruneRecent(recent, Date.now())) markPendingControls();
 }, 1000);
 
 // ---- boot ----

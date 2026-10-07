@@ -314,6 +314,25 @@ class RulesAboutControls(PageTest):
         await self.page.wait_for_timeout(300)
         self.assertIn(f"✓ {before + 1.5:.1f}°", await status.text_content())
 
+    async def test_the_detail_overlay_shows_a_command_in_flight(self):
+        await self.view("downstairs")
+        await self.page.locator(
+            '[data-action="toggle-light"][data-entity="livingroom_lamp"]'
+        ).first.click()
+        await self.page.wait_for_timeout(300)
+        # Opening the overlay is a render of its own, with no delta behind
+        # it: the command must be said there too.
+        await self.page.locator(
+            '#view [data-action="entity-detail"][data-entity="livingroom_lamp"] .entity-name'
+        ).first.click()
+        await self.page.wait_for_timeout(400)
+        self.assertEqual(
+            await self.page.locator(
+                '#overlay-panel [data-cmd-status="livingroom/livingroom_lamp/on"]'
+            ).count(),
+            1,
+        )
+
     async def test_a_command_nothing_hears_says_so_at_once(self):
         self.house.heard = False
         await self.view("downstairs")
@@ -413,6 +432,13 @@ class SmokePhone(Smoke):
             ["health", "notshown"],
         )
         self.assertIn("homeostat 0.16.1", await sheet.inner_text())
+        # A tap outside puts it away and does nothing else.
+        await self.page.locator('#tabs button[data-view="heating"]').click()
+        self.assertFalse(await sheet.is_visible(), "a tap outside puts the sheet away")
+        self.assertEqual(
+            await self.page.locator('#tabs button.active').get_attribute("data-view"), "now"
+        )
+        await self.page.click("#topbar-status")
         await sheet.locator('[data-view="health"]').click()
         self.assertFalse(await sheet.is_visible(), "a pick puts the sheet away")
         self.assertEqual(await self.page.locator("#topbar-status.active").count(), 1)
