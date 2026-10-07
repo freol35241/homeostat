@@ -14,6 +14,7 @@ from pathlib import Path
 
 from homeostat.automation import Context, _expand, _house_has_recorder
 from homeostat.house import Entity
+from homeostat.session import QueryTimeout
 
 FIXTURES = Path(__file__).resolve().parents[3] / "tests"
 
@@ -187,6 +188,87 @@ class RecorderPresenceTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RestoreWaitTest(unittest.TestCase):
+    """How `restore` waits for the recorder (#121). The recorder answers
+    one query at a time, so a get that gives up and asks again queues a
+    second answer behind the first: once one answer takes longer than the
+    get, no asker is ever still there for a reply. `restore` must ask once
+    and wait, and say which of the two ways the recorder failed it."""
+
+    KEY = "home/state/global/night_mode/on"
+
+    def context(self, get_json):
+        ctx = Context.__new__(Context)
+        ctx.emitted = []
+        ctx.asked = []
+        ctx._concrete_key = lambda binding, **slots: self.KEY
+        ctx._has_recorder = lambda: True
+
+        def get(selector, timeout_s=None):
+            ctx.asked.append((selector, timeout_s))
+            return get_json(selector, timeout_s)
+
+        ctx._session = types.SimpleNamespace(
+            get_json=get,
+            health_event=lambda kind, **f: ctx.emitted.append((kind, f)),
+        )
+        return ctx
+
+    def test_a_slow_answer_is_waited_for_not_asked_again(self):
+        # A stats answer takes longer than the 2 s the old poll waited.
+        answer_s = 2.5
+
+        def recorder(selector, timeout_s):
+            if selector == "home/history/stats":
+                if timeout_s < answer_s:
+                    raise QueryTimeout("Timeout")
+                return [(selector, {})]
+            return [(selector, [{"ts": "2026-01-01T00:00:00+00:00", "value": True}])]
+
+        ctx = self.context(recorder)
+        restored = ctx.restore("state", timeout_s=30.0)
+        self.assertIsNotNone(restored)
+        self.assertIs(restored[0], True)
+        stats = [t for sel, t in ctx.asked if sel == "home/history/stats"]
+        self.assertEqual(len(stats), 1, "one question, not a queue of them")
+        self.assertEqual(ctx.emitted, [])
+
+    def test_nobody_answering_is_asked_again_until_the_deadline(self):
+        # No recorder up yet: a get nobody serves returns at once, empty.
+        ctx = self.context(lambda selector, timeout_s: [])
+        self.assertIsNone(ctx.restore("state", timeout_s=0.5))
+        self.assertGreater(len(ctx.asked), 1)
+        self.assertEqual(
+            ctx.emitted,
+            [
+                (
+                    "restore-failed",
+                    {"key": self.KEY, "reason": "no recorder answered within 0.5s"},
+                )
+            ],
+        )
+
+    def test_a_recorder_that_took_the_query_and_never_answered_is_named(self):
+        def silent(selector, timeout_s):
+            raise QueryTimeout("Timeout")
+
+        ctx = self.context(silent)
+        self.assertIsNone(ctx.restore("state", timeout_s=0.5))
+        self.assertEqual(len(ctx.asked), 1)
+        self.assertEqual(
+            ctx.emitted,
+            [
+                (
+                    "restore-failed",
+                    {
+                        "key": self.KEY,
+                        "reason": "recorder took the query but did not answer within 0.5s",
+                    },
+                )
+            ],
+        )
 
 
 class SourceUsedTest(unittest.TestCase):

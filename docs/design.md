@@ -2666,7 +2666,7 @@ one-way-sender settlement is the standing proof.
 - **It waits for the recorder, because there is no start order.** A start
   order was already considered and rejected for the recorder's own
   catch-up: it is the first dependency edge between units the manifest
-  rules refuse. So `restore` polls `home/history/stats` — the one
+  rules refuse. So `restore` asks `home/history/stats` — the one
   history selector that answers whatever the store holds — until the
   recorder answers or a timeout passes, and is called before `ready()`,
   where a unit not yet able to do its job is exactly what the supervisor
@@ -2674,6 +2674,17 @@ one-way-sender settlement is the standing proof.
   for the full timeout, because a series with no rows is not answered at
   all. A house with no recorder is read from the text (nobody publishes
   under `home/history/`) and never waits.
+- **One question at a time, waited out.** The recorder answers queries
+  one at a time (zenoh runs a queryable's callback serially), so a poll
+  that gives up on a short get and asks again leaves its question queued
+  behind it: once one answer takes longer than the poll, every later
+  answer reaches an asker that has already left, and `restore` never
+  hears a reply however long its deadline (#121, where a `stats` that
+  had grown to a full-table scan reset four latches on a core restart).
+  So the get waits out the rest of the deadline, and only a get nobody
+  serves — no recorder up yet, which returns at once — is asked again.
+  The two failures are told apart in the `restore-failed` reason: no
+  recorder answered, or one took the query and never replied.
 
 **Rejected**: persisting unit state across restarts, in the SDK or the
 supervisor — it is the same framework guess, and it gets `rf433` wrong by
