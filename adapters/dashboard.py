@@ -19,7 +19,10 @@ a small API generated entirely from the house's text:
                      marked commandable iff this unit's own manifest
                      grants its capability; each unit with the entities
                      it drives, from the grant table, and reads, from
-                     its subscriptions — the unit card's relations)
+                     its subscriptions — the unit card's relations; and
+                     `about`: the core's version and build commit, the
+                     house commit last applied, and this unit's SDK
+                     version, for the page's footer)
   GET  /ws           snapshot of state/forecasts/health/config plus every aspect
                      descriptor adapters publish in their discovery
                      records (docs/design.md, Aspect descriptors), then
@@ -28,7 +31,9 @@ a small API generated entirely from the house's text:
                      band ({room, entity, aspect, value}): the capability's
                      vocabulary, or an aspect the entity's descriptor
                      declares a family-editable command, checked against
-                     the descriptor's constraint
+                     the descriptor's constraint. Answers the envelope's
+                     id, and `heard`: whether anything subscribes to the
+                     command's key (the adapter, or the arbiter in front)
   POST /api/param    a parameter write through the core's validating config
                      queryable ({unit, param, value})
   POST /api/lights/off  the whole-house darken: one manual-band off-command
@@ -76,6 +81,7 @@ import argparse
 import asyncio
 import contextlib
 import datetime
+import importlib.metadata
 import ipaddress
 import json
 import math
@@ -100,6 +106,13 @@ ALLOWED_NAMES = {"localhost", "homeostat", "homeostat.lan", "homeostat.local"}
 WRITE_HEADER = "X-Homeostat"
 CLIENT_QUEUE = 256  # pending deltas per WebSocket client before it is dropped
 MODEL_TTL_S = 2.0  # a burst of page loads parses the house once
+ABOUT_KEY = "home/meta/system/about"
+# The SDK this unit runs against, which a house pins to the release its
+# copy of this file and dashboard.html came from (scripts/sync_starter.sh).
+try:
+    DASHBOARD_VERSION: str | None = importlib.metadata.version("homeostat")
+except importlib.metadata.PackageNotFoundError:
+    DASHBOARD_VERSION = None
 
 # Vendored assets served at /assets/{name} — allowlisted by filename so
 # the route can't become a path-traversal surface.
@@ -544,6 +557,8 @@ class Hub:
         # never a task per message per client.
         self.clients: dict[web.WebSocketResponse, asyncio.Queue] = {}
         self._subs = []
+        self._about: dict = {}
+        self._about_at = -MODEL_TTL_S
 
     def start(self, loop: asyncio.AbstractEventLoop) -> None:
         self.loop = loop
@@ -581,6 +596,27 @@ class Hub:
         for _key, value in self.session.get_json("home/meta/system/grants"):
             if isinstance(value, list):
                 self.grants = value
+
+    def about(self) -> dict:
+        """Where this page is served from: the core's `about` (its version
+        and build commit, the house commit last applied) plus this unit's
+        own SDK version, which is the release its dashboard.html was copied
+        from — a house pins the two together (scripts/sync_starter.sh), so
+        a core and a dashboard from different releases show as such.
+
+        Blocking (a bus query), so it runs off the event loop, and at most
+        once per MODEL_TTL_S: the house commit moves on an apply that
+        restarts nothing here, so it is re-read rather than cached for the
+        unit's life. A query that fails keeps the last answer."""
+        if time.monotonic() - self._about_at >= MODEL_TTL_S:
+            self._about_at = time.monotonic()
+            try:
+                for _key, value in self.session.get_json(ABOUT_KEY, timeout_s=2):
+                    if isinstance(value, dict):
+                        self._about = value
+            except QueryError:
+                pass
+        return dict(self._about, dashboard={"version": DASHBOARD_VERSION})
 
     def relations(self, model: dict) -> dict[str, dict]:
         with self.lock:
@@ -790,6 +826,7 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
 
     async def api_model(request: web.Request) -> web.Response:
         await model.refresh()
+        about = await asyncio.get_running_loop().run_in_executor(None, hub.about)
         relations = hub.relations(model.model)
         units = [dict(u, **relations[u["name"]]) for u in model.model["units"]]
         return web.json_response(
@@ -802,6 +839,7 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
                 # over from the heating" from "the family locked a door
                 # nothing automates" (docs/design.md, Arbitrated mode).
                 driven=hub.driven(model.model),
+                about=about,
             )
         )
 
@@ -870,11 +908,19 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         # priority "manual": matches this unit's [bus.publishes] declaration
         # (units/dashboard.toml) — the family always wins over automations.
         envelope = keys.cmd_envelope(value, "manual", "dashboard")
-        hub.session.put_json(keys.cmd_key(room, entity, aspect), envelope)
+        key = keys.cmd_key(room, entity, aspect)
+        # Whether anything subscribes to the key — the owning adapter, or
+        # the arbiter in front of it. A put nobody matches goes nowhere and
+        # nothing ever reports it, so without this the page could only find
+        # out by waiting out its timeout.
+        heard = await asyncio.get_running_loop().run_in_executor(
+            None, hub.session.has_subscriber, key
+        )
+        hub.session.put_json(key, envelope)
         # The id goes back to the browser so the control can show the command
         # as pending and then resolve it against whatever ends it — a
         # readback, an arbiter refusal, or an adapter's drop (issue #94).
-        return web.json_response({"ok": True, "id": envelope["id"]})
+        return web.json_response({"ok": True, "id": envelope["id"], "heard": heard})
 
     async def api_lights_off(request: web.Request) -> web.Response:
         # "Darken the whole house": family intent over a set of entities,

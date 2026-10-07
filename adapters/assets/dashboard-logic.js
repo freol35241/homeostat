@@ -708,6 +708,115 @@
     return rows;
   }
 
+  /* ---- the text behind a view ----
+   *
+   * A view is text in the house repo (dashboard.toml), and the page can
+   * show it: what someone points at on screen has a name they can say —
+   * to a person, or to an agent editing the repo — and the words are the
+   * file's own. Rendered from the parsed view /api/model carries, in the
+   * file's own style (one inline table per widget, a group's members
+   * indented under it), so comments and spacing are not reproduced; the
+   * content is. Read-only: the dashboard never writes the house. */
+  var WIDGET_KEY_ORDER = ['kind', 'entity', 'aspect', 'room', 'unit', 'label', 'hours'];
+
+  function tomlValue(v) {
+    // A JSON string literal is a valid TOML basic string.
+    if (typeof v === 'string') return JSON.stringify(v);
+    return String(v);
+  }
+
+  function orderedKeys(obj, first) {
+    var keys = Object.keys(obj).filter(function (k) { return k !== 'widgets' && obj[k] !== null && obj[k] !== undefined; });
+    return keys.sort(function (a, b) {
+      var ia = first.indexOf(a), ib = first.indexOf(b);
+      return (ia < 0 ? first.length : ia) - (ib < 0 ? first.length : ib) || (a < b ? -1 : a > b ? 1 : 0);
+    });
+  }
+
+  function widgetToml(w, indent) {
+    var fields = orderedKeys(w, WIDGET_KEY_ORDER).map(function (k) { return k + ' = ' + tomlValue(w[k]); });
+    if (!w.widgets) return indent + '{ ' + fields.join(', ') + ' }';
+    return indent + '{ ' + fields.concat(['widgets = [']).join(', ') + '\n' +
+      w.widgets.map(function (m) { return widgetToml(m, indent + '  ') + ',\n'; }).join('') +
+      indent + '] }';
+  }
+
+  /* The `[[view]]` block for `name`, or for a house without the file, the
+   * block that would keep a generated view as it is. Null for a name no
+   * view has (Health and Not shown are chrome, never views). */
+  function viewText(model, name) {
+    var views = model && model.views;
+    if (!views) {
+      if (DEFAULT_VIEWS.indexOf(name) === -1) return null;
+      return '# This house has no dashboard.toml: the dashboard draws its\n' +
+        '# generated views. To arrange them, create dashboard.toml at the\n' +
+        '# house root; this keeps this one as it is:\n\nschema = 1\n\n' +
+        '[[view]]\nname = ' + tomlValue(name) + '\nkind = ' + tomlValue(name) + '\n';
+    }
+    var view = views.filter(function (v) { return v.name === name; })[0];
+    if (!view) return null;
+    var lines = ['[[view]]'];
+    orderedKeys(view, ['name', 'label', 'kind']).forEach(function (k) {
+      lines.push(k + ' = ' + tomlValue(view[k]));
+    });
+    if (view.widgets) {
+      lines.push('widgets = [');
+      view.widgets.forEach(function (w) { lines.push(widgetToml(w, '  ') + ','); });
+      lines.push(']');
+    }
+    return lines.join('\n') + '\n';
+  }
+
+  /* ---- where the page is served from ----
+   *
+   * The dashboard unit's /api/model carries `about`: the core's version
+   * and the commit it was built from (when the build was told), the house
+   * commit last applied, and the dashboard's own SDK version — the release
+   * its copy of this page came from. The page says the first and last,
+   * links them to where they live, and mentions the dashboard's only when
+   * it differs from the core's, which is the one case it is news. */
+  var REPO_URL = 'https://github.com/freol35241/homeostat';
+  var ABOUT_LINKS = [
+    { label: 'Source', href: REPO_URL },
+    { label: 'Releases', href: REPO_URL + '/releases' },
+    { label: 'Docs', href: REPO_URL + '#readme' },
+    { label: 'Report an issue', href: REPO_URL + '/issues' }
+  ];
+
+  // Python spells a prerelease without the hyphen semver puts before it
+  // (0.14.0rc1, 0.14.0-rc1); the same release either way.
+  function sameRelease(a, b) {
+    var norm = function (v) { return String(v).replace(/-(a|b|rc|alpha|beta)/, '$1'); };
+    return norm(a) === norm(b);
+  }
+
+  function aboutLines(about) {
+    about = about || {};
+    var core = about.homeostat || {};
+    var lines = [];
+    if (core.version) {
+      var line = { label: 'homeostat', text: core.version, href: REPO_URL + '/releases/tag/v' + core.version };
+      if (core.commit) {
+        line.commit = String(core.commit).slice(0, 7);
+        line.commitHref = REPO_URL + '/commit/' + core.commit;
+      }
+      lines.push(line);
+    }
+    var page = (about.dashboard || {}).version;
+    if (page && !(core.version && sameRelease(page, core.version))) {
+      lines.push({
+        label: 'dashboard', text: page, href: REPO_URL + '/releases/tag/v' + page,
+        note: core.version ? 'not the core\'s release' : null
+      });
+    }
+    var house = (about.house || {}).commit;
+    if (house) {
+      var dirty = /-dirty$/.test(house);
+      lines.push({ label: 'house', text: house.replace(/-dirty$/, '').slice(0, 7) + (dirty ? ' + uncommitted changes' : '') });
+    }
+    return lines;
+  }
+
   /* ---- pending commands (issue #94) ----
    *
    * A command is a proposal, not a write. It passes through arbitration,
@@ -720,7 +829,14 @@
    * returns ok and is then dropped at stage 3, so the control would show
    * a value the house never took. Instead the stages are made visible,
    * and the envelope's correlation id is what ties an event back to the
-   * command it ended. */
+   * command it ended. What the page does show is the request, as a
+   * request: "asked 22.5", beside what the device still reports.
+   *
+   * An entry moves draft → sending → pending → (resolved). A draft is a
+   * stepper the user is still tapping: the page holds it for a moment
+   * and sends one command for where the taps ended, so three taps of +
+   * are one command for +1.5 rather than three commands each computed
+   * from a readback that has not moved yet. */
 
   /* How long to wait for a readback before calling it unconfirmed. There
    * is no readback cadence on the wire, and the capability is the only
@@ -746,15 +862,26 @@
     return room + '/' + entity + '/' + aspect;
   }
 
-  /* One in-flight command per (room, entity, aspect): a second tap on the
-   * same control replaces the first, which is what the user means by it. */
-  function trackCommand(pending, cmd, nowMs) {
-    pending[pendingKey(cmd.room, cmd.entity, cmd.aspect)] = {
-      id: cmd.id,
+  /* One command per (room, entity, aspect): a second tap on the same
+   * control replaces the first, which is what the user means by it. The
+   * replaced request is not forgotten, though. Its value joins `asked`,
+   * so the readback it earns on its way through is recognised as
+   * progress rather than as the device settling somewhere else, and
+   * `before` stays what the device reported before the first tap of the
+   * sequence. `stage` is 'pending' (the id is known) unless said
+   * otherwise: 'draft' while the taps continue, 'sending' while the POST
+   * is in flight. */
+  function trackCommand(pending, cmd, nowMs, stage) {
+    var key = pendingKey(cmd.room, cmd.entity, cmd.aspect);
+    var prev = pending[key];
+    pending[key] = {
+      id: cmd.id || null,
       value: cmd.value,
+      before: prev ? prev.before : cmd.before,
+      asked: prev ? prev.asked.concat([prev.value]) : [],
       at: nowMs,
       timeoutMs: commandTimeoutMs(cmd.capability),
-      outcome: 'pending'
+      outcome: stage || 'pending'
     };
     return pending;
   }
@@ -763,17 +890,71 @@
     return pending[pendingKey(room, entity, aspect)] || null;
   }
 
-  /* Stage 4. Any state update for the commanded aspect resolves it —
-   * including one whose value differs from what was asked, because a
-   * device that clamped the value has still answered. */
-  function resolveFromState(pending, key) {
+  /* Where the next step of a stepper starts: the request in flight when
+   * there is one, the device's report otherwise. Stepping from the report
+   * is what made a second tap repeat the first. */
+  function commandBase(pending, room, entity, aspect, current) {
+    var entry = pendingFor(pending, room, entity, aspect);
+    return entry ? entry.value : current;
+  }
+
+  function sameValue(a, b) {
+    if (typeof a === 'number' && typeof b === 'number') {
+      return Math.abs(a - b) <= 1e-6 * Math.max(1, Math.abs(a));
+    }
+    return a === b;
+  }
+
+  /* The POST came back. The request now waits on the bus — unless the
+   * dashboard unit found nothing subscribed to its key, in which case it
+   * went nowhere and waiting would only delay saying so. A reply for a
+   * request the user has since replaced is ignored: the newer one has its
+   * own POST. */
+  function commandSent(pending, key, value, reply) {
+    var entry = pending[key];
+    if (!entry || entry.outcome !== 'sending' || !sameValue(entry.value, value)) return null;
+    if (!reply || !reply.id) {
+      // An older dashboard unit that returns no id cannot be tracked, and
+      // a pending state that can never resolve is worse than none.
+      delete pending[key];
+      return null;
+    }
+    if (reply.heard === false) {
+      delete pending[key];
+      return { key: key, outcome: 'unheard', value: entry.value };
+    }
+    entry.id = reply.id;
+    entry.outcome = 'pending';
+    return null;
+  }
+
+  /* Stage 4: the device reported the commanded aspect. What it reported
+   * decides what that means:
+   *   - the value asked for: confirmed;
+   *   - the value it held before, or one the user asked for on the way:
+   *     not an answer — a bridge that republishes on every poll sends
+   *     the old value until the device moves, and this used to count as
+   *     confirmation, clearing the control before anything had happened;
+   *   - anything else: the device answered with a value of its own (it
+   *     clamped, or rounded to its resolution) — adjusted, and said so.
+   * A draft has not been sent, so nothing can answer it yet. */
+  function resolveFromState(pending, key, value) {
     var parts = String(key).split('/');
     if (parts[0] !== 'home' || parts[1] !== 'state' || parts.length < 5) return null;
     var pk = pendingKey(parts[2], parts[3], parts[4]);
     var entry = pending[pk];
-    if (!entry || entry.outcome !== 'pending') return null;
+    if (!entry || (entry.outcome !== 'pending' && entry.outcome !== 'sending')) return null;
+    if (sameValue(entry.value, value)) {
+      delete pending[pk];
+      return { key: pk, outcome: 'confirmed', value: entry.value };
+    }
+    var known = entry.asked.concat([entry.before]).some(function (v) { return sameValue(v, value); });
+    if (known) {
+      entry.seen = value;
+      return null;
+    }
     delete pending[pk];
-    return { key: pk, outcome: 'confirmed' };
+    return { key: pk, outcome: 'adjusted', value: entry.value, seen: value };
   }
 
   /* Stages 2 and 3, both carried by health events and both addressed by
@@ -792,27 +973,53 @@
         return {
           key: keys[i],
           outcome: 'held',
+          value: entry.value,
           by: event.holder_priority || 'another band',
           actor: event.holder_actor || null
         };
       }
-      return { key: keys[i], outcome: 'rejected', reason: event.reason || 'dropped' };
+      return { key: keys[i], outcome: 'rejected', value: entry.value, reason: event.reason || 'dropped' };
     }
     return null;
   }
 
-  /* Nothing answered. Not the same as success, and today the page cannot
-   * tell the two apart at all. */
+  /* Nothing answered. Not the same as success: the outcome carries the
+   * last value the device did report, if any, so the page can say "still
+   * reports 21.0" rather than only "no answer". */
   function expirePending(pending, nowMs) {
     var out = [];
     Object.keys(pending).forEach(function (k) {
       var entry = pending[k];
-      if (entry && entry.outcome === 'pending' && nowMs - entry.at > entry.timeoutMs) {
+      if (entry && (entry.outcome === 'pending' || entry.outcome === 'sending') &&
+          nowMs - entry.at > entry.timeoutMs) {
         delete pending[k];
-        out.push({ key: k, outcome: 'unconfirmed' });
+        out.push({ key: k, outcome: 'unconfirmed', value: entry.value, seen: entry.seen });
       }
     });
     return out;
+  }
+
+  /* How long an ended command stays said on its control. A confirmation
+   * is a glance; anything that did not go as asked stays until it has
+   * plausibly been read, or until the next tap on that control replaces
+   * it. */
+  var OUTCOME_SHOWN_MS = { confirmed: 4000 };
+  var DEFAULT_OUTCOME_SHOWN_MS = 15000;
+
+  function noteOutcome(recent, outcome, nowMs) {
+    recent[outcome.key] = Object.assign({ at: nowMs }, outcome);
+    return recent;
+  }
+
+  function recentFor(recent, key, nowMs) {
+    var entry = recent[key];
+    if (!entry) return null;
+    var shown = OUTCOME_SHOWN_MS[entry.outcome] || DEFAULT_OUTCOME_SHOWN_MS;
+    if (nowMs - entry.at > shown) {
+      delete recent[key];
+      return null;
+    }
+    return entry;
   }
 
   /* ---- forecasts (docs/design.md, Forecasts) ----
@@ -1296,11 +1503,18 @@
     COMMAND_TIMEOUT_MS: COMMAND_TIMEOUT_MS,
     DEFAULT_COMMAND_TIMEOUT_MS: DEFAULT_COMMAND_TIMEOUT_MS,
     commandTimeoutMs: commandTimeoutMs,
+    viewText: viewText,
+    ABOUT_LINKS: ABOUT_LINKS,
+    aboutLines: aboutLines,
     pendingKey: pendingKey,
     trackCommand: trackCommand,
     pendingFor: pendingFor,
+    commandBase: commandBase,
+    commandSent: commandSent,
     resolveFromState: resolveFromState,
     resolveFromEvent: resolveFromEvent,
-    expirePending: expirePending
+    expirePending: expirePending,
+    noteOutcome: noteOutcome,
+    recentFor: recentFor
   };
 });

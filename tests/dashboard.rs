@@ -323,6 +323,17 @@ async fn dashboard_serves_the_family_surface() {
     // 1. The model is the manifests, rendered.
     let (status, model) = http_request(&addr, "GET", "/api/model", &[], None);
     assert_eq!(status, 200, "{model}");
+    // Where the page is served from: the core's version off the bus, and
+    // the SDK this unit runs against (the release its page came from).
+    assert_eq!(
+        model["about"]["homeostat"]["version"],
+        json!(env!("CARGO_PKG_VERSION")),
+        "{model}"
+    );
+    assert!(
+        model["about"]["dashboard"]["version"].is_string(),
+        "{model}"
+    );
     let lamp = model["entities"]
         .as_array()
         .expect("entities")
@@ -489,7 +500,7 @@ async fn dashboard_serves_the_family_surface() {
     // the event that ends it (issue #94).
     assert_eq!(
         reply,
-        json!({"ok": true, "id": cmd_id}),
+        json!({"ok": true, "id": cmd_id, "heard": true}),
         "the id the caller is handed is the id that went on the bus"
     );
     let sample = tokio::time::timeout(Duration::from_secs(30), echo.recv_async())

@@ -83,6 +83,10 @@ class PageTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.faults, [], "the page faulted")
 
     async def view(self, name: str) -> None:
+        if not await self.page.locator(f'button[data-view="{name}"]:visible').count():
+            # On a phone, Health and Not shown are behind the top bar's
+            # status button.
+            await self.page.click("#topbar-status")
         await self.page.click(f'button[data-view="{name}"]:visible')
         await self.page.wait_for_timeout(500)
 
@@ -130,10 +134,14 @@ class Smoke(PageTest):
             "els => els.map(e => e.getAttribute('data-view'))"
         )
         self.assertEqual(names, ["now", "heating", "downstairs", "everything"])
-        pinned = await self.page.locator(".pin-btn[data-view]").evaluate_all(
+        pinned = await self.page.locator("#rail .pin-btn[data-view]").evaluate_all(
             "els => els.map(e => e.getAttribute('data-view'))"
         )
         self.assertEqual(pinned, ["health", "notshown"])
+        # Under them, where the page is served from.
+        about = await self.page.locator("#rail-about").inner_text()
+        self.assertIn("homeostat 0.16.1", about)
+        self.assertIn("house 4f2a9c1", about)
 
 
 class ChoiceSurvivesRerender(PageTest):
@@ -274,6 +282,68 @@ class RulesAboutControls(PageTest):
         self.assertEqual(await self.page.locator(".cmd-pending").count(), 0)
 
 
+    async def test_steps_add_up_to_one_command_for_where_they_end(self):
+        await self.view("downstairs")
+        key = "home/state/livingroom/heat_pump/setpoint"
+        before = self.house.snapshot["state"][key]
+        plus = self.page.locator(
+            '[data-action="aspect-step"][data-entity="heat_pump"][data-aspect="setpoint"][data-delta="0.5"]'
+        ).first
+        for _ in range(3):
+            await plus.click()
+        await self.page.wait_for_timeout(150)  # the render after the last tap; well inside the settle
+        status = self.page.locator('[data-cmd-status="livingroom/heat_pump/setpoint"]')
+        # The request is on the control at once, and nothing has gone out
+        # while the taps continue.
+        self.assertIn(f"Asked {before + 1.5:.1f}°", await status.text_content())
+        self.assertEqual(self.house.posted("/api/cmd"), [])
+        await self.page.wait_for_timeout(1000)
+        self.assertEqual(
+            self.house.posted("/api/cmd"),
+            [{"room": "livingroom", "entity": "heat_pump", "aspect": "setpoint", "value": before + 1.5}],
+            "three taps, one command, for where they ended",
+        )
+
+        # A bridge republishing the old value has not answered.
+        await self.house.push({"type": "state", "key": key, "value": before})
+        await self.page.wait_for_timeout(300)
+        self.assertIn(f"still {before:.1f}°", await status.text_content())
+
+        # The device takes it, and the control says so.
+        await self.house.push({"type": "state", "key": key, "value": before + 1.5})
+        await self.page.wait_for_timeout(300)
+        self.assertIn(f"✓ {before + 1.5:.1f}°", await status.text_content())
+
+    async def test_a_command_nothing_hears_says_so_at_once(self):
+        self.house.heard = False
+        await self.view("downstairs")
+        await self.page.locator(
+            '[data-action="toggle-light"][data-entity="livingroom_lamp"]'
+        ).first.click()
+        status = self.page.locator('[data-cmd-status="livingroom/livingroom_lamp/on"]')
+        await status.wait_for(timeout=2000)
+        await self.page.wait_for_timeout(300)
+        self.assertIn("Nothing is listening", await status.text_content())
+
+
+class ViewsAreText(PageTest):
+    """`docs/design.md`, Views are text: a view shows the dashboard.toml
+    block that makes it, so what is on screen has a name to say."""
+
+    async def test_a_view_shows_its_text(self):
+        await self.view("heating")
+        await self.page.click('[data-action="view-text"][data-view-name="heating"]')
+        await self.page.wait_for_timeout(400)
+        text = await self.page.locator("#overlay-panel pre.view-text").inner_text()
+        self.assertTrue(text.startswith('[[view]]\nname = "heating"\nwidgets = ['), text)
+        self.assertIn('{ kind = "burner", entity = "stove" },', text)
+        self.assertIn('    { kind = "dial", entity = "heat_pump" },', text)
+
+    async def test_chrome_has_no_text(self):
+        await self.view("health")
+        self.assertEqual(await self.page.locator('[data-action="view-text"]').count(), 0)
+
+
 class HoldsOnNow(PageTest):
     """`docs/design.md`, Arbitrated mode: a hold is a deviation when it
     displaced somebody, and possession shows on the control either way."""
@@ -327,14 +397,25 @@ class SmokePhone(Smoke):
     viewport = PHONE
 
     async def test_the_nav_is_the_file_and_the_chrome_is_the_rail(self):
-        # On a phone the same six live in the tab bar, the views scrolling
-        # and the chrome staying put (docs/design.md, Views are text).
+        # On a phone the bottom bar is the file's views and nothing else;
+        # Health and Not shown are behind the top bar's status button, with
+        # the about lines (docs/design.md, Views are text).
         names = await self.page.locator("button[data-view]:visible").evaluate_all(
             "els => els.map(e => e.getAttribute('data-view'))"
         )
+        self.assertEqual(names, ["now", "heating", "downstairs", "everything"])
+        await self.page.click("#topbar-status")
+        sheet = self.page.locator("#status-sheet")
         self.assertEqual(
-            names, ["now", "heating", "downstairs", "everything", "health", "notshown"]
+            await sheet.locator(".pin-btn[data-view]:visible").evaluate_all(
+                "els => els.map(e => e.getAttribute('data-view'))"
+            ),
+            ["health", "notshown"],
         )
+        self.assertIn("homeostat 0.16.1", await sheet.inner_text())
+        await sheet.locator('[data-view="health"]').click()
+        self.assertFalse(await sheet.is_visible(), "a pick puts the sheet away")
+        self.assertEqual(await self.page.locator("#topbar-status.active").count(), 1)
 
 
 class PagesDemo(unittest.IsolatedAsyncioTestCase):

@@ -355,16 +355,20 @@ HTML file) — an adapter for humans. Every element is generated from the
 manifests; which views exist is text too: `dashboard.toml` lists them,
 each a composition of widgets over things the house already has (a
 reading as a tile, a room's card, a unit's card with what it sets,
-publishes, drives and reads, a chart, the people, the deviations feed).
-Without the file the generated views stand in: **Now** shows the error
+publishes, drives and reads, a chart, the people, the deviations feed;
+[docs/widgets.md](docs/widgets.md) shows each one), and every view can
+show the text that makes it. Without the file the generated views stand in: **Now** shows the error
 signal (deviations from equilibrium: unhealthy units, lights left on,
 setpoints off their defaults) and stays deliberately empty when the house
 is nominal; **Setpoints** is every family-editable parameter as one flat
 list; **Rooms** is the spatial grid. **Health** and **Not shown** —
-everything no view places — are fixed chrome, never views. Clicking
+everything no view places — are fixed chrome, never views (on a phone,
+behind the top bar's status button, so the bottom bar is the house's
+views alone). Clicking
 through opens detail panels — history with ranges and a crosshair
 tooltip (a timeline for states), entity state, unit health. Commands leave at the
-manual band (the family always wins); parameter writes go through the
+manual band (the family always wins), and a control says what it asked
+for until the device answers, then how it ended; parameter writes go through the
 core's validating queryable; access is local-only by design (LAN /
 WireGuard, no accounts — and family-tier only: nothing structural is
 reachable from a browser). The map over person entities (OwnTracks,
