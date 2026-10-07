@@ -197,6 +197,22 @@ and the evening-lights automation, with a compose file for the full
 mosquitto + zigbee2mqtt + homeostat stack; copy it out and make it your
 own repo.
 
+**Run without Docker.** The image is the favored deployment: it is what
+the starter house and its compose file assume. Where a container runtime
+is too much (a small single-board computer), a release's tarball runs on
+the host directly. You need git and uv on `PATH`, plus the release's SDK
+wheel in a directory uv is told about. The house's units pin
+`homeostat==X.Y.Z`, and the SDK is on no package index:
+
+```
+UV_FIND_LINKS=/opt/homeostat-wheels homeostat up /path/to/house
+```
+
+Under systemd, use `KillMode=mixed`, so SIGTERM reaches only the
+supervisor, which then stops its units itself. Set
+`HOMEOSTAT_BUS=tcp/127.0.0.1:7447` in the shell you run `plan` and
+`apply` from.
+
 ## The pieces
 
 ### Adapters: devices onto the bus
@@ -386,7 +402,9 @@ three, so `cargo test` and `node --test tests/js/*.test.js` run the same
 suite CI does. CI also builds the container image and
 runs `scripts/smoke_image.sh` against it — a packaging test that boots a
 minimal house in the image and asserts a unit reaches `running`, the bus
-answers a second container, and SIGTERM shuts down cleanly.
+answers a second container, and SIGTERM shuts down cleanly —
+and `scripts/smoke_bare.sh`, the same checks for the binary and SDK wheel
+on a host without Docker.
 
 | Test | Pins |
 | --- | --- |
