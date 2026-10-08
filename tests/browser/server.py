@@ -223,7 +223,8 @@ class FakeHouse:
         return web.json_response({"events": []})
 
     async def api_logs(self, request: web.Request) -> web.Response:
-        return web.json_response({"lines": [{"stream": "stdout", "line": "staged"}]})
+        # The unit's shape: a list of the core's log entries.
+        return web.json_response([{"ts_us": 1_700_000_000_000_000, "stream": "stdout", "line": "staged"}])
 
     async def _record(self, request: web.Request) -> dict:
         body = await request.json()

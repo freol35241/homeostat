@@ -94,7 +94,7 @@ export function renderShell() {
 
   // The phone's bottom bar is the house's views and nothing else: every
   // slot there is one the file named. Health and Not shown are behind the
-  // top bar's status button instead (renderStatusSheet).
+  // top bar's status button instead (the status sheet, below).
   var tabs = byId('tabs-row');
   var tabHtml = views.map(function (v) {
     return html`<button data-view="${v.name}" class="${current === v.name ? 'active' : ''}">${TAB_ICONS[v.kind] || TAB_ICONS.view}<span class="tab-label">${v.label}</span></button>`;
