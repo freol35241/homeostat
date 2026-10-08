@@ -1,0 +1,9 @@
+schema = 1
+
+[unit]
+name = "nightmode"
+kind = "automation"
+
+[runtime]
+command = "uv run units/night_mode.py"
+restart = "on-failure"

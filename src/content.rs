@@ -4,8 +4,8 @@
 //! Two hashes decide "changed" cheaply before any semantic comparison:
 //! - `manifest_hash`: sha256 of the manifest file bytes.
 //! - `files_hash`: sha256 over the unit's non-manifest repo inputs — command
-//!   tokens that resolve to files (the `uv run units/foo.py` script), the
-//!   unit's bound entity files, and `zones.toml` when any of the unit's key
+//!   tokens that resolve to files (the `uv run units/foo.py` script) and
+//!   their `.lock` files, the unit's bound entity files, and `zones.toml` when any of the unit's key
 //!   expressions referenced a zone. A house-wide unit (`inputs = "house"`)
 //!   also takes every manifest, every entity file and `dashboard.toml`.
 
@@ -44,8 +44,9 @@ pub fn uses_zone(unit: &str, expanded: &[ExpandedKey]) -> bool {
 
 /// Hashes the unit's non-manifest inputs. Paths are house-root-relative and
 /// fed into the hash alongside the content, so a rename is a change even
-/// with identical bytes. A command token that does not resolve to a file
-/// (program names on PATH, flags) contributes nothing.
+/// with identical bytes. A command token that resolves to a file
+/// contributes it and its `{file}.lock`, when one exists; a token that
+/// does not (program names on PATH, flags) contributes nothing.
 pub fn files_hash(root: &Path, unit: &LoadedUnit, house: &House, unit_uses_zone: bool) -> String {
     let mut hasher = Sha256::new();
     let mut feed = |rel: &str| {
@@ -61,6 +62,9 @@ pub fn files_hash(root: &Path, unit: &LoadedUnit, house: &House, unit_uses_zone:
     for token in unit.manifest.runtime.command.split_whitespace() {
         if root.join(token).is_file() {
             feed(token);
+            // A script's lock pins the dependencies it runs against, so a
+            // lock-only bump is as much a change as an edit to the script.
+            feed(&format!("{token}.lock"));
         }
     }
     let name = &unit.manifest.unit.name;
@@ -222,6 +226,34 @@ mod tests {
             hash_of(&dir, "probe"),
             before,
             "its own entities still count"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_scripts_lock_is_one_of_its_inputs() {
+        let dir = house_dir("script-lock");
+        let probe = dir.join("units/probe.toml");
+        let manifest = fs::read_to_string(&probe).unwrap();
+        fs::write(
+            &probe,
+            manifest.replace(
+                "command = \"fake_adapter\"",
+                "command = \"uv run units/probe.py\"",
+            ),
+        )
+        .unwrap();
+        fs::write(dir.join("units/probe.py"), "print('probe')\n").unwrap();
+        let without_lock = hash_of(&dir, "probe");
+        let lock = dir.join("units/probe.py.lock");
+        fs::write(&lock, "version = 1\n").unwrap();
+        let with_lock = hash_of(&dir, "probe");
+        assert_ne!(with_lock, without_lock, "a new lock must reach it");
+        fs::write(&lock, "version = 1\n# bumped\n").unwrap();
+        assert_ne!(
+            hash_of(&dir, "probe"),
+            with_lock,
+            "a lock-only bump must reach it"
         );
         let _ = fs::remove_dir_all(&dir);
     }

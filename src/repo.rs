@@ -103,6 +103,18 @@ pub fn load(root: &Path) -> (House, Vec<ValidationError>) {
             continue;
         };
         check_schema_version(manifest.schema, &manifest.unit.name, &rel, &mut errors);
+        let stem = file.strip_suffix(".toml").unwrap_or(&file);
+        if stem != manifest.unit.name {
+            errors.push(ValidationError::new(
+                "unit-name-mismatch",
+                &manifest.unit.name,
+                format!(
+                    "manifest file is {rel} but [unit] name is \"{}\"; the SDK reads units/{}.toml",
+                    manifest.unit.name, manifest.unit.name
+                ),
+                Some(rel.clone()),
+            ));
+        }
         house.units.push(LoadedUnit {
             manifest,
             path: rel,

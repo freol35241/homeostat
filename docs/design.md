@@ -519,10 +519,12 @@ entity files for unconfigured devices, `homeostat plan`, owner applies.
 
 A unit reads its configuration from the files the core validated: the
 supervisor starts it at the house root with `HOMEOSTAT_UNIT` set, and it
-reads `units/{unit}.toml` and its entities dir. There is no core-to-unit
-configuration protocol. `[discovery] endpoint` may reference `${VAR}`,
-expanded by the adapter, because ports and credentials do not belong in
-the repo; an unset variable is a startup error.
+reads `units/{unit}.toml` and its entities dir, which is why a
+manifest's file stem must be its `[unit] name` (`unit-name-mismatch`).
+There is no core-to-unit configuration protocol. `[discovery] endpoint`
+may reference `${VAR}`, expanded by the adapter, because ports and
+credentials do not belong in the repo; an unset variable is a startup
+error.
 
 Adapters use `homeostat.house.load_adapter` and a `UnitSession`.
 Automations use the Context, `homeostat.automation.context()`, which
@@ -605,11 +607,10 @@ those aspects stale and says so in a health event.
 Every cmd publish leaves at a band declared per publish in the manifest
 and stamped by the SDK. Lowest to highest: `automation`, `agent`,
 `family`, and `manual` (the dashboard and voice). No unit publishes at
-`agent` or `family` today. `plan` reads a cmd publish with no
-`priority` as `automation`, but the SDK refuses to send one
-([Open questions](#open-questions)).
+`agent` or `family` today. A cmd publish without a `priority` is a
+plan error (`publish-missing-priority`): the SDK cannot send it.
 
-THE FAMILY ALWAYS WINS OVER AUTOMATIONS. Arbitration orders commands by
+**The family always wins over automations.** Arbitration orders commands by
 band, and the manual band is exempt from exclusive-write counting. An
 automation declaring `manual` plans with a warning.
 
@@ -673,13 +674,13 @@ The SDK only checks that a key is inside a declared expression, so the
 plan decides which classes a unit may declare at all
 (`reserved-class-publish`); otherwise an automation could declare
 `home/arbiter/**` and forge post-arbitration commands. `home/config/**`
-and `home/meta/**` are the core's. `home/health/{unit}/...` and
-`home/discovery/{unit}` sit under the publisher's own name.
+and `home/meta/**` are the core's. `home/health/{unit}/...`,
+`home/discovery/{unit}` and `home/hold/{unit}` sit under the
+publisher's own name.
 `home/arbiter/`, `home/clock/` and `home/history/` each belong to one
 service. A `home/state/` publish must name an entity the unit binds
 (`state-publish-unbound`); a `home/forecast/` one an entity that exists
-([Forecasts](#forecasts)). `home/hold/{unit}` is the arbiter's by
-convention and is not checked.
+([Forecasts](#forecasts)).
 
 ### Cmd envelopes
 
@@ -906,11 +907,12 @@ A unit is unchanged when two hashes match the world's:
 - **`manifest_hash`**: sha256 of the manifest file.
 - **`files_hash`**: sha256 over its other repo inputs: every token of
   its command that resolves to a file under the house root (`uv run
-  units/foo.py` hashes the script), its own entity files, and
-  `zones.toml` when one of its expressions expanded through a zone.
+  units/foo.py` hashes the script and its `{script}.py.lock`, so a
+  dependency bump in the lock alone is a change), its own entity files,
+  and `zones.toml` when one of its expressions expanded through a zone.
   Paths are hashed with content, so a rename is a change. Imports are
-  not followed, and the script's `{script}.py.lock` is not an input
-  ([Open questions](#open-questions)).
+  not followed: a module the script imports is an input only if the
+  command names it.
 
 **`[unit] inputs = "house"`** makes every manifest, entity file,
 `zones.toml` and `dashboard.toml` a unit's inputs. The dashboard is a
@@ -2419,12 +2421,6 @@ has not closed.
 - **Handing an arbiter hold back early.** Only expiry ends a hold;
   whether release belongs on the envelope or on an arbiter surface is
   open. See [Arbitrated mode](#arbitrated-mode).
-- **A cmd publish with no `priority`** is treated as `automation` by
-  `plan` but refused by the SDK. See [Priority bands](#priority-bands).
-- **Lockfiles are outside change detection.** `files_hash` does not
-  cover a script's `{script}.py.lock`, so a lock-only change neither
-  shows in `plan` nor restarts the unit. See
-  [Change detection](#change-detection).
 - **Forecast uncertainty and corrections to the past** have no
   representation: a point is one scalar, and `state` keeps no
   reanalysis. See [Forecasts](#forecasts).

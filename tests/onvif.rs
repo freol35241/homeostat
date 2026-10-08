@@ -14,7 +14,7 @@ use serde_json::{json, Value};
 use zenoh::sample::SampleKind;
 
 use common::{
-    await_mirror, cache_read, expect_drop_event, expect_state, fixture_command, free_port,
+    await_mirror, cache_read, expect_event_kind, expect_state, fixture_command, free_port,
     next_event, StateSub, Supervisor,
 };
 
@@ -255,7 +255,7 @@ async fn broken_subscription_resubscribes() {
     trigger_until_motion(&camera, &state_sub, &observer, true).await;
 
     camera.control("/control/break");
-    expect_drop_event(&event_sub, "event-stream-lost").await;
+    expect_event_kind(&event_sub, "event-stream-lost").await;
     trigger_until_motion(&camera, &state_sub, &observer, false).await;
 
     sup.shutdown();
@@ -431,10 +431,9 @@ async fn a_renew_fault_from_a_lost_subscription_is_still_a_loss() {
     let event = next_event(&event_sub).await;
     assert_eq!(
         event["kind"],
-        json!("drop"),
+        json!("event-stream-lost"),
         "a vanished subscription is a loss, not a firmware quirk: {event}"
     );
-    assert_eq!(event["reason"], json!("event-stream-lost"), "{event}");
 
     // ...and it recovers the ordinary way.
     trigger_until_motion(&camera, &state_sub, &observer, false).await;

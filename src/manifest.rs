@@ -337,7 +337,8 @@ pub struct PublishSpec {
     /// resolves onto bound entities of this capability that the key covers.
     /// Must be a known capability (`unknown-capability`).
     pub capability: Option<String>,
-    /// The band commands leave at. Automations publish at `automation`;
+    /// The band commands leave at. Required under `home/cmd/`
+    /// (`publish-missing-priority`). Automations publish at `automation`;
     /// the family's surfaces (dashboard, voice) at `manual`, which always
     /// wins in arbitration.
     pub priority: Option<Priority>,

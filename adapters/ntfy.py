@@ -198,7 +198,7 @@ def main():
             session.put_json(keys.state_key(entity.room, entity.name, "available"), value)
 
     # Sends serialised on one thread: (entity, aspect, key, text, title,
-    # enqueued at). Bounded so a dead server sheds load instead of
+    # cmd id, enqueued at). Bounded so a dead server sheds load instead of
     # queueing forever; an item that waited past MAX_QUEUE_AGE_S is stale
     # by the time the server recovers and is dropped rather than sent.
     outbox: queue.Queue = queue.Queue(maxsize=MAX_QUEUE_SIZE)
@@ -209,14 +209,16 @@ def main():
             item = outbox.get()
             if item is None:
                 return
-            entity, aspect, key, text, title, enqueued_at = item
+            entity, aspect, key, text, title, cmd_id, enqueued_at = item
             if time.monotonic() - enqueued_at > MAX_QUEUE_AGE_S:
-                session.health_event("drop", reason="stale", key=key)
+                session.health_event("drop", reason="stale", key=key, cmd_id=cmd_id)
                 continue
             try:
                 reply = publish(endpoint, token, entity.id, text, PRIORITIES[aspect], title)
             except (urllib.error.URLError, OSError, ValueError) as err:
-                session.health_event("drop", reason="delivery-failed", key=key, error=str(err))
+                session.health_event(
+                    "drop", reason="delivery-failed", key=key, cmd_id=cmd_id, error=str(err)
+                )
                 set_available(entity, False)
                 continue
             delivered = reply.get("time") if isinstance(reply, dict) else None
@@ -233,14 +235,20 @@ def main():
             except ValueError:
                 session.health_event("drop", reason="malformed-payload", key=key)
                 return
+            cmd_id = keys.cmd_envelope_id(payload)
             try:
                 value = keys.parse_cmd_envelope(payload)
             except ValueError:
-                session.health_event("drop", reason="invalid-command", key=key)
+                session.health_event("drop", reason="invalid-command", key=key, cmd_id=cmd_id)
                 return
             if aspect not in PRIORITIES or not isinstance(value, str) or not value.strip():
                 session.health_event(
-                    "drop", reason="invalid-command", key=key, aspect=aspect, value=value
+                    "drop",
+                    reason="invalid-command",
+                    key=key,
+                    cmd_id=cmd_id,
+                    aspect=aspect,
+                    value=value,
                 )
                 return
             if aspect != "alert":
@@ -251,7 +259,11 @@ def main():
                 last = last_attempt.get((entity.name, aspect))
                 if last is not None and now - last < params.min_interval_s:
                     session.health_event(
-                        "drop", reason="rate-limited", key=key, min_interval_s=params.min_interval_s
+                        "drop",
+                        reason="rate-limited",
+                        key=key,
+                        cmd_id=cmd_id,
+                        min_interval_s=params.min_interval_s,
                     )
                     return
                 last_attempt[(entity.name, aspect)] = now
@@ -266,9 +278,9 @@ def main():
                 else unit
             )
             try:
-                outbox.put_nowait((entity, aspect, key, value, title, time.monotonic()))
+                outbox.put_nowait((entity, aspect, key, value, title, cmd_id, time.monotonic()))
             except queue.Full:
-                session.health_event("drop", reason="queue-full", key=key)
+                session.health_event("drop", reason="queue-full", key=key, cmd_id=cmd_id)
 
         return handler
 

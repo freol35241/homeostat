@@ -1475,6 +1475,30 @@ async fn forecasts_keep_every_issue_and_answer_in_issues() {
         "a history wildcard must not mix in forecast issues: {replies:?}"
     );
 
+    // A second provider for the same aspect is a second series in stats,
+    // keyed by source as the read path is, not folded into the first.
+    let backup = matched_publisher(&observer, "home/forecast/global/spot/price/backup").await;
+    put(&backup, issue("2020-01-01T08:00:00+00:00", 20.0)).await;
+    rows_eventually(
+        &db,
+        "SELECT value FROM forecasts",
+        6,
+        Duration::from_secs(20),
+    )
+    .await;
+    let stats = history_get(&observer, "home/history/stats").await;
+    let series = stats[0].1["series"].as_object().expect("series map");
+    assert_eq!(
+        series["home/history/forecast/spot/price/nordpool"]["rows"],
+        json!(4),
+        "{series:?}"
+    );
+    assert_eq!(
+        series["home/history/forecast/spot/price/backup"]["rows"],
+        json!(2),
+        "{series:?}"
+    );
+
     sup.shutdown();
 }
 
