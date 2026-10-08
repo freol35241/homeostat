@@ -486,72 +486,95 @@ def commands_for(entity) -> dict:
     return {aspect: cmd for aspect, cmd in COMMANDS.items() if cmd[0] not in fed}
 
 
-def main():
-    unit = os.environ[keys.ENV_UNIT]
-    config = house.load_adapter(unit)
-    for entity in config.entities:
-        unknown = set(entity.inputs) - set(FEEDABLE)
-        if unknown:
-            raise SystemExit(
-                f"{entity.name}: unknown input(s) {sorted(unknown)}; "
-                f"this adapter feeds {sorted(FEEDABLE)}"
-            )
+def command_payload(entity, aspect: str, value):
+    """Return (set field, body, retain) for a command this entity takes, or None.
 
-    endpoint = mqtt.parse_endpoint(config.endpoint)
+    None for an aspect it takes no command for (including one it feeds),
+    and for a value outside the command's range: an int of OPERATING_MODES
+    for operating_mode, a number within bounds (never a bool) otherwise.
+    """
+    command = commands_for(entity).get(aspect)
+    if command is None:
+        return None
+    field, bounds, retain = command
+    if bounds is None:
+        if isinstance(value, bool) or not isinstance(value, int) or value not in OPERATING_MODES:
+            return None
+        return field, str(value), retain
+    lo, hi = bounds
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not lo <= value <= hi:
+        return None
+    return field, str(float(value)), retain
 
-    session = homeostat.connect()
-    params = Params(session, PARAM_DEFAULTS)
-    seen: set[str] = set()
 
-    # Receive-timer availability (see module docstring): last_rx is seeded
-    # now so a device that never speaks flips false after one timeout.
-    availability_lock = threading.Lock()
-    last_rx = {e.id: time.monotonic() for e in config.entities}
-    available: dict[str, bool] = {}
+class Pumps:
+    """The controller-to-bus direction: state subtopics in, aspects out.
 
-    def set_available(entity, value: bool) -> bool:
+    It tracks each controller's availability from when it last spoke (the
+    receive timer of the module docstring) and keeps discovery's `bound`
+    flag. `session` is anything with `put_json` and `health_event`; the
+    clock is injectable. paho delivers on one thread and the watchdog
+    sweeps on another, so availability is locked.
+    """
+
+    def __init__(self, session, unit: str, entities, clock=time.monotonic):
+        self.session = session
+        self.unit = unit
+        self.entities = list(entities)
+        self.clock = clock
+        self.seen: set[str] = set()
+        self.lock = threading.Lock()
+        # Seeded now, so a device that never speaks flips false after one
+        # timeout.
+        self.last_rx = {e.id: clock() for e in self.entities}
+        self.available: dict[str, bool] = {}
+
+    def set_available(self, entity, value: bool) -> bool:
         """Publish `available` on transition only; return True when it was one.
 
         The publish stays under the lock so the receive path and the
         watchdog cannot interleave decision and publication.
         """
-        with availability_lock:
-            if available.get(entity.name) == value:
+        with self.lock:
+            if self.available.get(entity.name) == value:
                 return False
-            available[entity.name] = value
-            session.put_json(keys.state_key(entity.room, entity.name, "available"), value)
+            self.available[entity.name] = value
+            self.session.put_json(keys.state_key(entity.room, entity.name, "available"), value)
         return True
 
-    def inventory():
+    def inventory(self) -> list[dict]:
+        """Return the discovery document: every configured controller."""
         return [
             {
                 "id": e.id,
                 "configured": True,
                 "entity": e.name,
-                "bound": e.id in seen,
+                "bound": e.id in self.seen,
                 "suggested": {"capability": "climate", "features": []},
                 "aspects": aspect_descriptor(e),
             }
-            for e in config.entities
+            for e in self.entities
         ]
 
-    def on_ivt_message(client, userdata, msg):
-        entity, rest = route(msg.topic, config.entities)
+    def on_message(self, topic: str, raw: bytes) -> None:
+        """Translate one message under a controller's base topic."""
+        session = self.session
+        entity, rest = route(topic, self.entities)
         if entity is None:
             return
 
-        last_rx[entity.id] = time.monotonic()
-        set_available(entity, True)
+        self.last_rx[entity.id] = self.clock()
+        self.set_available(entity, True)
 
-        if entity.id not in seen:
-            seen.add(entity.id)
-            session.put_json(keys.discovery_key(unit), inventory())
+        if entity.id not in self.seen:
+            self.seen.add(entity.id)
+            session.put_json(keys.discovery_key(self.unit), self.inventory())
 
         if len(rest) in (3, 4) and rest[0] == "ivt490" and rest[1] == "state":
             try:
-                value = json.loads(msg.payload)
+                value = json.loads(raw)
             except ValueError:
-                session.health_event("drop", reason="malformed-payload", topic=msg.topic)
+                session.health_event("drop", reason="malformed-payload", topic=topic)
                 return
             if isinstance(value, (dict, list)):
                 return  # a nested blob; its leaves arrive on deeper subtopics
@@ -559,9 +582,9 @@ def main():
             aspect = state_aspect("state", state_field(rest[2:]))
         elif len(rest) == 3 and rest[0] == "controller" and rest[1] == "state":
             try:
-                value, valid = field_value(msg.payload)
+                value, valid = field_value(raw)
             except (ValueError, KeyError):
-                session.health_event("drop", reason="malformed-payload", topic=msg.topic)
+                session.health_event("drop", reason="malformed-payload", topic=topic)
                 return
             aspect = state_aspect("controller", rest[2])
         else:
@@ -570,13 +593,13 @@ def main():
         if aspect is None:
             # A raw field naming the liveness signal or a normalized aspect
             # must not impersonate it.
-            session.health_event("drop", reason="reserved-aspect", topic=msg.topic)
+            session.health_event("drop", reason="reserved-aspect", topic=topic)
             return
         try:
             key = keys.state_key(entity.room, entity.name, aspect)
         except ValueError:
             # A topic segment the key schema refuses (empty, a wildcard).
-            session.health_event("drop", reason="malformed-payload", topic=msg.topic)
+            session.health_event("drop", reason="malformed-payload", topic=topic)
             return
         if valid is not None:
             # Ahead of the value, so a consumer reacting to the new value
@@ -592,9 +615,94 @@ def main():
             # a null on a key whose descriptor says number, and a
             # `subscribe` catch-up would replay it as the last known
             # value. The event keeps the burst visible.
-            session.health_event("drop", reason="null-value", topic=msg.topic)
+            session.health_event("drop", reason="null-value", topic=topic)
             return
         session.put_json(key, value)
+
+    def sweep(self, timeout_s: float) -> None:
+        """Mark a controller silent for `timeout_s` unavailable, one event per transition."""
+        now = self.clock()
+        for entity in self.entities:
+            if now - self.last_rx[entity.id] > timeout_s and self.set_available(entity, False):
+                # A degraded condition, not dropped input: its own event
+                # kind, never a `drop`.
+                self.session.health_event("device-silent", topic=entity.id)
+
+
+class Feed:
+    """One fed input: forward the source aspect while the source is available.
+
+    On loss, it clears the set topic's retained slot once. One subscriber
+    covers both the value and `available` keys: zenoh orders samples within
+    a subscriber, not across two, and a value arriving before the
+    `available = true` that precedes it must not be dropped. `publish` is
+    the MQTT client's publish(topic, payload, retain=...).
+    """
+
+    def __init__(self, session, publish, entity, input_name: str, source):
+        self.session = session
+        self.publish = publish
+        self.input_name = input_name
+        self.bounds = FEEDABLE[input_name]
+        self.topic = f"{entity.id}/controller/set/{input_name}"
+        self.value_key = keys.state_key(source.room, source.entity, source.aspect)
+        self.available_key = keys.state_key(source.room, source.entity, "available")
+        self.source_available = True
+        self.dropped = False
+
+    def on_sample(self, key: str, raw: bytes) -> None:
+        """Handle one sample from the source entity's state keys."""
+        session = self.session
+        if key not in (self.value_key, self.available_key):
+            return  # another aspect of the source entity
+        try:
+            payload = json.loads(raw)
+        except ValueError:
+            session.health_event("drop", reason="malformed-payload", key=key)
+            return
+        if key == self.available_key:
+            if payload is False and self.source_available:
+                self.source_available = False
+                self.publish(self.topic, b"", retain=True)
+                session.health_event("feed-source-lost", input=self.input_name, key=self.value_key)
+            elif payload is True:
+                self.source_available = True
+                self.dropped = False
+            return
+        if not self.source_available:
+            # Once per outage, not per sample: a trace that the source kept
+            # talking while marked unavailable.
+            if not self.dropped:
+                self.dropped = True
+                session.health_event(
+                    "drop", reason="feed-source-unavailable", input=self.input_name, key=key
+                )
+            return
+        lo, hi = self.bounds
+        if isinstance(payload, bool) or not isinstance(payload, (int, float)) or not lo <= payload <= hi:
+            session.health_event(
+                "drop", reason="invalid-feed", input=self.input_name, key=key, value=payload
+            )
+            return
+        self.publish(self.topic, str(float(payload)), retain=False)
+
+
+def main():
+    unit = os.environ[keys.ENV_UNIT]
+    config = house.load_adapter(unit)
+    for entity in config.entities:
+        unknown = set(entity.inputs) - set(FEEDABLE)
+        if unknown:
+            raise SystemExit(
+                f"{entity.name}: unknown input(s) {sorted(unknown)}; "
+                f"this adapter feeds {sorted(FEEDABLE)}"
+            )
+
+    endpoint = mqtt.parse_endpoint(config.endpoint)
+
+    session = homeostat.connect()
+    params = Params(session, PARAM_DEFAULTS)
+    pumps = Pumps(session, unit, config.entities)
 
     def cmd_handler(entity):
         def handler(sample):
@@ -602,51 +710,18 @@ def main():
             if parsed is None:
                 return
             aspect, value, cmd_id = parsed
-            key = str(sample.key_expr)
-
-            command = commands_for(entity).get(aspect)
+            command = command_payload(entity, aspect, value)
             if command is None:
                 session.health_event(
                     "drop",
                     reason="invalid-command",
-                    key=key,
+                    key=str(sample.key_expr),
                     aspect=aspect,
                     value=value,
                     cmd_id=cmd_id,
                 )
                 return
-            field, bounds, retain = command
-            if bounds is None:
-                if (
-                    isinstance(value, bool)
-                    or not isinstance(value, int)
-                    or value not in OPERATING_MODES
-                ):
-                    session.health_event(
-                        "drop",
-                        reason="invalid-command",
-                        key=key,
-                        aspect=aspect,
-                        value=value,
-                        cmd_id=cmd_id,
-                    )
-                    return
-                body = str(value)
-            else:
-                lo, hi = bounds
-                if isinstance(value, bool) or not isinstance(value, (int, float)) or not (
-                    lo <= value <= hi
-                ):
-                    session.health_event(
-                        "drop",
-                        reason="invalid-command",
-                        key=key,
-                        aspect=aspect,
-                        value=value,
-                        cmd_id=cmd_id,
-                    )
-                    return
-                body = str(float(value))
+            field, body, retain = command
             client.publish(f"{entity.id}/controller/set/{field}", body, retain=retain)
 
         return handler
@@ -660,7 +735,12 @@ def main():
             f"{e.id}/controller/state/+",
         )
     ]
-    client = mqtt.connect(endpoint, on_ivt_message, topics, health=session.health_event)
+    client = mqtt.connect(
+        endpoint,
+        lambda _client, _userdata, msg: pumps.on_message(msg.topic, msg.payload),
+        topics,
+        health=session.health_event,
+    )
 
     subscribers = [
         session.subscribe(expr, cmd_handler(e))
@@ -668,66 +748,19 @@ def main():
         for expr in keys.command_keyexprs(e)
     ]
 
-    def feed_handler(entity, input_name, source):
-        """Forward the source aspect while the source is available.
-
-        On loss, clears the set topic's retained slot once. One subscriber
-        covers both the value and `available` keys: zenoh orders samples
-        within a subscriber, not across two, and a value arriving before
-        the `available = true` that precedes it must not be dropped.
-        """
-        lo, hi = FEEDABLE[input_name]
-        topic = f"{entity.id}/controller/set/{input_name}"
-        state = {"available": True, "dropped": False}
-        value_key = keys.state_key(source.room, source.entity, source.aspect)
-        available_key = keys.state_key(source.room, source.entity, "available")
-
-        def handler(sample):
-            key = str(sample.key_expr)
-            if key not in (value_key, available_key):
-                return  # another aspect of the source entity
-            try:
-                payload = json.loads(sample.payload.to_bytes())
-            except ValueError:
-                session.health_event("drop", reason="malformed-payload", key=key)
-                return
-            if key == available_key:
-                if payload is False and state["available"]:
-                    state["available"] = False
-                    client.publish(topic, b"", retain=True)
-                    session.health_event("feed-source-lost", input=input_name, key=value_key)
-                elif payload is True:
-                    state["available"] = True
-                    state["dropped"] = False
-                return
-            if not state["available"]:
-                # Once per outage, not per sample: a trace that the source
-                # kept talking while marked unavailable.
-                if not state["dropped"]:
-                    state["dropped"] = True
-                    session.health_event(
-                        "drop", reason="feed-source-unavailable", input=input_name, key=key
-                    )
-                return
-            if isinstance(payload, bool) or not isinstance(payload, (int, float)) or not (
-                lo <= payload <= hi
-            ):
-                session.health_event(
-                    "drop", reason="invalid-feed", input=input_name, key=key, value=payload
-                )
-                return
-            client.publish(topic, str(float(payload)), retain=False)
-
-        return handler
-
     for e in config.entities:
         for input_name, source in e.inputs.items():
-            handler = feed_handler(e, input_name, source)
+            feed = Feed(session, client.publish, e, input_name, source)
             subscribers.append(
-                session.subscribe(keys.state_keyexpr(source.room, source.entity), handler)
+                session.subscribe(
+                    keys.state_keyexpr(source.room, source.entity),
+                    lambda sample, feed=feed: feed.on_sample(
+                        str(sample.key_expr), sample.payload.to_bytes()
+                    ),
+                )
             )
 
-    session.put_json(keys.discovery_key(unit), inventory())
+    session.put_json(keys.discovery_key(unit), pumps.inventory())
 
     stop = threading.Event()
 
@@ -736,12 +769,7 @@ def main():
             timeout = params.availability_timeout_s
             if stop.wait(min(1.0, timeout / 4)):
                 return
-            now = time.monotonic()
-            for entity in config.entities:
-                if now - last_rx[entity.id] > timeout and set_available(entity, False):
-                    # A degraded condition, not dropped input: its own
-                    # event kind, never a `drop`.
-                    session.health_event("device-silent", topic=entity.id)
+            pumps.sweep(timeout)
 
     watchdog_thread = threading.Thread(target=watchdog, daemon=True)
     watchdog_thread.start()
