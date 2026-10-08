@@ -1879,8 +1879,14 @@ async fn closed_months_move_to_archives_and_the_last_word_stays() {
     )
     .await
     .expect("in-constraint write accepted");
-    let first = await_event(&events, Duration::from_secs(30), |e| e["kind"] == "archive").await;
-    let second = await_event(&events, Duration::from_secs(30), |e| e["kind"] == "archive").await;
+    // A month that fails to seal is reported and skipped for this pass,
+    // so the order below only holds if none did; say which one did.
+    let sealed = |e: &Value| {
+        assert_ne!(e["kind"], "archive-failed", "a month failed to seal: {e}");
+        e["kind"] == "archive"
+    };
+    let first = await_event(&events, Duration::from_secs(30), sealed).await;
+    let second = await_event(&events, Duration::from_secs(30), sealed).await;
     assert_eq!(
         first["month"],
         json!("2026-01"),
