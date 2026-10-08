@@ -1735,8 +1735,9 @@ the exploration that produced it):
     ("drives 2 · reads 4"), because a unit card is read for its
     setpoints and what it publishes; its wiring is what one goes
     looking for.
-  - *`[dashboard] pin` is retired* (`entity-dashboard-retired`, naming
-    the `tile` widget that replaces it). One way to place a reading.
+  - *Placement is `dashboard.toml`'s alone*: an entity file carries no
+    `[dashboard]` table, and a reading is placed with a `tile` widget.
+    One way to place a reading.
 - **A reader's choices about a chart belong to the overlay, not to its
   DOM** (added 2026-09-24, from living with it). Live state re-renders the
   detail panel — a forecast re-issue is enough — which replaces its nodes
@@ -3723,7 +3724,8 @@ main thing the overlay is opened to find out.
   skills, an example house as documentation.
 - **Private (house repo):** all manifests, entity files, zones, automations,
   house-specific agent skills, pending plans, applied-commit metadata. Pins
-  a core version; CI runs `homeostat plan --check` on push.
+  a core version; CI runs `homeostat plan` on push (offline, against the
+  empty world, it exits non-zero on any validation error).
 - Boundary test: device address, family name, room name, or behavioral
   choice => private. Identical in a stranger's house => public.
 - Generic automations graduate from private to public SDK helpers/examples.

@@ -1,3 +1,5 @@
 /target
 __pycache__/
 _site/
+.claude/settings.local.json
+.coverage

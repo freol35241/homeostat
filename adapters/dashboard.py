@@ -69,9 +69,10 @@ a small API generated entirely from the house's text:
 
 Access is local-only by design (LAN / WireGuard); network reachability is
 the credential, so the gate is structural, not auth: every request's Host
-must resolve to a non-global address or an allowlisted name (DNS-rebinding
-defense), writes require the X-Homeostat header, and a WebSocket Origin, if
-present, is held to the same host rule. Extra hostnames (reverse-proxy
+must be a house-network address (private, loopback, link-local, IPv6
+unique-local) or an allowlisted name (DNS-rebinding defense), writes
+require the X-Homeostat header, and a WebSocket Origin, if present, is
+held to the same host rule. Extra hostnames (reverse-proxy
 setups) go in HOMEOSTAT_DASHBOARD_HOSTS, comma-separated — ports and names
 don't belong in the repo. HOMEOSTAT_DASHBOARD_TILES points at the house's
 self-hosted PMTiles region extract for the map widget (never in the repo);
@@ -87,7 +88,6 @@ import ipaddress
 import json
 import math
 import os
-import re
 import threading
 import time
 import traceback
@@ -104,6 +104,26 @@ ENV_TILES = "HOMEOSTAT_DASHBOARD_TILES"
 ENV_GO2RTC = "HOMEOSTAT_GO2RTC"
 DEFAULT_GO2RTC = "http://127.0.0.1:1984"
 ALLOWED_NAMES = {"localhost", "homeostat", "homeostat.lan", "homeostat.local"}
+# The addresses that count as the house's own network: private, loopback,
+# link-local and unspecified IPv4; loopback, unspecified, unique-local and
+# link-local IPv6. A LAN or a WireGuard tunnel lands here; a public or
+# special-purpose range does not. The MCP server holds the same rule, and
+# tests/fixtures/host_gate.json pins both.
+HOUSE_NETWORKS = tuple(
+    ipaddress.ip_network(network)
+    for network in (
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+        "127.0.0.0/8",
+        "169.254.0.0/16",
+        "0.0.0.0/32",
+        "::1/128",
+        "::/128",
+        "fc00::/7",
+        "fe80::/10",
+    )
+)
 WRITE_HEADER = "X-Homeostat"
 CLIENT_QUEUE = 256  # pending deltas per WebSocket client before it is dropped
 MODEL_TTL_S = 2.0  # a burst of page loads parses the house once
@@ -183,10 +203,6 @@ VOCABULARY_COMMANDS = {
 # Command bodies are four short fields; aiohttp's 1 MiB default is a
 # free memory sink for anything on the LAN.
 MAX_BODY_BYTES = 64 * 1024
-# The core's rule for one key segment (src/validate.rs): anything else is
-# a wildcard, a separator, or a zenoh operator — none of which a browser
-# may smuggle into a selector.
-SEGMENT = re.compile(r"[A-Za-z0-9_.-]+")
 HISTORY_LIMIT_MAX = 5000
 # How far BEFORE a drawn window to read source-participation events. A
 # source excluded before the window opened has no transition inside it,
@@ -497,25 +513,35 @@ def reachable(session, spec: dict, aspect: str) -> bool:
     return session.has_subscriber(keys.cmd_key(room, entity, aspect))
 
 
-def valid_segment(name: str) -> bool:
-    return SEGMENT.fullmatch(name) is not None and name not in (".", "..")
+def host_of(value: str) -> str:
+    """The host part of a Host header value.
+
+    A port is stripped only when it is all digits, and a bracketed IPv6
+    literal is unwrapped — the same parse as the MCP server's (src/mcp/http.rs).
+    """
+    if value.startswith("["):
+        return value[1:].split("]", 1)[0]
+    host, sep, port = value.rpartition(":")
+    return host if sep and all(c in "0123456789" for c in port) else value
 
 
 def host_allowed(host_header: str) -> bool:
-    """Host (and WS Origin host) must be a non-global address or a known
-    name. A rebound public domain arrives as its own name and is refused."""
-    host = host_header.rsplit(":", 1)[0] if not host_header.startswith("[") else (
-        host_header.split("]")[0].lstrip("[")
-    )
+    """Whether a Host (or WS Origin host) is one the house answers to.
+
+    That is a house-network address (HOUSE_NETWORKS) or a known name. A
+    rebound public domain arrives as its own name and is refused.
+    """
+    host = host_of(host_header)
     if host in ALLOWED_NAMES:
         return True
     extra = {h.strip() for h in os.environ.get(ENV_HOSTS, "").split(",") if h.strip()}
     if host in extra:
         return True
     try:
-        return not ipaddress.ip_address(host).is_global
+        address = ipaddress.ip_address(host)
     except ValueError:
         return False
+    return any(address in network for network in HOUSE_NETWORKS)
 
 
 def mse_request(text: str) -> bool:
@@ -987,7 +1013,7 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         # would raise inside the executor.
         if entity not in model.entities:
             return json_error(f"unknown entity {entity}")
-        if not valid_segment(aspect):
+        if not keys.valid_segment(aspect):
             return json_error("aspect must be a single key segment")
         now = datetime.datetime.now(datetime.timezone.utc)
         try:
@@ -1042,7 +1068,7 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
             return json_error("entity and aspect are required")
         if entity not in model.entities:
             return json_error(f"unknown entity {entity}")
-        if not valid_segment(aspect):
+        if not keys.valid_segment(aspect):
             return json_error("aspect must be a single key segment")
         now = datetime.datetime.now(datetime.timezone.utc)
         try:
@@ -1092,7 +1118,7 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         aspect = request.query.get("aspect", "")
         if entity not in model.entities:
             return json_error(f"unknown entity {entity}")
-        if not valid_segment(aspect):
+        if not keys.valid_segment(aspect):
             return json_error("aspect must be a single key segment")
         owner = model.entities[entity].get("owner")
         if not owner:

@@ -1,0 +1,33 @@
+{
+  "comment": "The Host values the dashboard and the MCP server must both admit or both refuse. Read by src/mcp/http.rs (unit test) and tests/dashboard.rs (against the running dashboard). A house-network address is private, loopback, link-local or unspecified IPv4, or loopback, unspecified, unique-local or link-local IPv6; a name must be one the house answers to.",
+  "allowed": [
+    "localhost",
+    "localhost:8080",
+    "homeostat",
+    "homeostat.lan:8080",
+    "homeostat.local",
+    "127.0.0.1:8642",
+    "10.8.0.1",
+    "10.8.0.1:8080",
+    "172.16.5.4",
+    "192.168.1.20:8080",
+    "169.254.10.1",
+    "0.0.0.0",
+    "[::1]:8080",
+    "[fd12:3456::1]:8080",
+    "[fe80::1]"
+  ],
+  "refused": [
+    "",
+    "dashboard.example.com",
+    "homeostat.example.com:8080",
+    "8.8.8.8",
+    "100.64.0.1",
+    "100.100.100.100:8080",
+    "198.18.0.1",
+    "192.0.2.1",
+    "203.0.113.5:8080",
+    "[2001:db8::1]:8080",
+    "[2606:4700::1]"
+  ]
+}

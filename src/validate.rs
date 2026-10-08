@@ -27,9 +27,13 @@ pub fn validate(house: &House) -> Vec<ValidationError> {
 /// Whether a name is usable as exactly one bus key segment. Anything else
 /// either breaks the fixed key schema (`/`), is meaningful to the bus
 /// (`*`, `$`, `?`, `#`), or invites whitespace/encoding surprises — and a
-/// bad unit name would panic the supervisor's liveliness subscriber.
+/// bad unit name would panic the supervisor's liveliness subscriber. `.`
+/// and `..` are refused as path-like; the SDK refuses them too, so a name
+/// that passes here is one every unit can build keys from.
 fn valid_segment(name: &str) -> bool {
     !name.is_empty()
+        && name != "."
+        && name != ".."
         && name
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'))
@@ -43,7 +47,7 @@ fn valid_segment(name: &str) -> bool {
 fn check_names(house: &House, errors: &mut Vec<ValidationError>) {
     let segment_message = |what: &str, name: &str| {
         format!(
-            "{what} \"{name}\" must be a single key segment (letters, digits, \"_\", \"-\", \".\")"
+            "{what} \"{name}\" must be a single key segment (letters, digits, \"_\", \"-\", \".\"; not \".\" or \"..\")"
         )
     };
     for unit in &house.units {
@@ -263,9 +267,9 @@ fn check_entities(house: &House, errors: &mut Vec<ValidationError>) {
         }
 
         // A write mode governs commands, so it means nothing on a
-        // capability that takes none — eight of the fourteen. It stays
-        // required where there IS something to govern, so a light or a
-        // lock never inherits a policy silently.
+        // capability without a base aspect. It is required where there IS
+        // something to govern, so a light or a lock never inherits a
+        // policy silently.
         if entity.file.write_policy.mode.is_none()
             && VOCABULARY
                 .iter()
@@ -545,23 +549,8 @@ pub(crate) fn parse_time(s: &str) -> Option<(u8, u8)> {
 
 /// `dashboard.toml`: each view is a generated one or a composition, never
 /// both; each widget carries exactly the fields its kind takes, and every
-/// reference resolves against the house. The `[dashboard]` table on an
-/// entity file is retired in favour of a `tile` widget here.
+/// reference resolves against the house.
 fn check_dashboard(house: &House, errors: &mut Vec<ValidationError>) {
-    for entity in &house.entities {
-        if entity.file.dashboard.is_some() {
-            errors.push(ValidationError::new(
-                "entity-dashboard-retired",
-                &entity.name,
-                format!(
-                    "[dashboard] on an entity is retired: place it with \
-                     {{ kind = \"tile\", entity = \"{}\" }} on a view in dashboard.toml",
-                    entity.name
-                ),
-                Some(entity.path.clone()),
-            ));
-        }
-    }
     let Some(dashboard) = &house.dashboard else {
         return;
     };

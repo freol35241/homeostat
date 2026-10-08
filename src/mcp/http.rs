@@ -7,15 +7,16 @@
 //! load profile.
 //!
 //! Reachability is the credential (docs/design.md, Local-only access), and
-//! the design draws the consequence: the browser is NOT local even when the
-//! house is, so a public page in a family browser can fire requests at LAN
-//! addresses. This surface writes and commits to the house repo, so it
-//! carries the same three gates the dashboard has had from day one —
-//! `Host` must be non-global or known, `Origin` must be absent (no browser
-//! sent it) or allowed, and every request must carry `X-Homeostat`. That
-//! header is what a cross-origin `fetch` cannot add without a preflight
-//! the 405 on OPTIONS refuses; without it a `text/plain` POST is a CORS
-//! "simple request" and lands as a blind write.
+//! the browser is NOT local even when the house is: a public page in a
+//! family browser can fire requests at LAN addresses. The surface only
+//! reads, but what it reads — state, history, logs, the audit trail — is
+//! the house's private record, so it carries the dashboard's three gates.
+//! `Host` must be a house-network address or a known name, which stops a
+//! DNS-rebound page from reading replies as same-origin. `Origin` must be
+//! absent (no browser sent it) or allowed. And every request must carry
+//! `X-Homeostat`, which a cross-origin `fetch` cannot add without a
+//! preflight the 405 on OPTIONS refuses, so no browser-initiated request is
+//! ever served.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -27,7 +28,8 @@ use serde_json::{json, Value};
 
 use super::{protocol, Server};
 
-/// Mirrors the dashboard's list (adapters/dashboard.py).
+/// The names the house answers to; the dashboard holds the same list, and
+/// tests/fixtures/host_gate.json pins both.
 const ALLOWED_NAMES: [&str; 4] = ["localhost", "homeostat", "homeostat.lan", "homeostat.local"];
 const WRITE_HEADER: &str = "x-homeostat";
 const ENV_HOSTS: &str = "HOMEOSTAT_MCP_HOSTS";
@@ -55,8 +57,8 @@ fn host_of(value: &str) -> &str {
     }
 }
 
-/// A non-global address, or a name the house answers to. A rebound public
-/// domain arrives as its own name and is refused.
+/// A house-network address, or a name the house answers to. A rebound
+/// public domain arrives as its own name and is refused.
 fn host_allowed(value: &str) -> bool {
     let host = host_of(value);
     if ALLOWED_NAMES.contains(&host) {
@@ -66,24 +68,27 @@ fn host_allowed(value: &str) -> bool {
         return true;
     }
     match host.parse::<std::net::IpAddr>() {
-        Ok(ip) => !ip_is_global(&ip),
+        Ok(ip) => on_house_network(&ip),
         Err(_) => false,
     }
 }
 
-/// `IpAddr::is_global` is unstable, and the question here is only whether
-/// the peer is plausibly on the house's own network.
-fn ip_is_global(ip: &std::net::IpAddr) -> bool {
+/// Whether an address is on the house's own network: private, loopback,
+/// link-local or unspecified IPv4; loopback, unspecified, unique-local
+/// (`fc00::/7`) or link-local (`fe80::/10`) IPv6. A LAN or a WireGuard
+/// tunnel lands here; a public or special-purpose range does not. The
+/// dashboard holds the same rule (`HOUSE_NETWORKS`).
+fn on_house_network(ip: &std::net::IpAddr) -> bool {
     match ip {
         std::net::IpAddr::V4(v4) => {
-            !(v4.is_private() || v4.is_loopback() || v4.is_link_local() || v4.is_unspecified())
+            v4.is_private() || v4.is_loopback() || v4.is_link_local() || v4.is_unspecified()
         }
         std::net::IpAddr::V6(v6) => {
             let seg = v6.segments()[0];
-            !(v6.is_loopback()
+            v6.is_loopback()
                 || v6.is_unspecified()
                 || seg & 0xfe00 == 0xfc00
-                || seg & 0xffc0 == 0xfe80)
+                || seg & 0xffc0 == 0xfe80
         }
     }
 }
@@ -277,4 +282,22 @@ fn respond(
     stream.write_all(out.as_bytes())?;
     stream.write_all(body)?;
     stream.flush()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn host_gate_matches_the_shared_table() {
+        let table: Value =
+            serde_json::from_str(include_str!("../../tests/fixtures/host_gate.json"))
+                .expect("host_gate.json is JSON");
+        for (list, want) in [("allowed", true), ("refused", false)] {
+            for host in table[list].as_array().expect("a list of hosts") {
+                let host = host.as_str().expect("a host string");
+                assert_eq!(host_allowed(host), want, "Host {host:?}");
+            }
+        }
+    }
 }

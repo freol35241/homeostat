@@ -897,14 +897,16 @@ async fn dashboard_serves_the_family_surface() {
         Some(&json!({"unit": "evening_lights", "param": "off_time", "value": "21:00"})),
     );
     assert_eq!(status, 403, "write without X-Homeostat must be refused");
-    let (status, _) = http_request(
-        &addr,
-        "GET",
-        "/api/model",
-        &[("Host", "dashboard.example.com")],
-        None,
-    );
-    assert_eq!(status, 403, "foreign Host must be refused");
+    // The Host rule is the MCP server's too: one table pins both.
+    let table: Value = serde_json::from_str(include_str!("fixtures/host_gate.json"))
+        .expect("host_gate.json is JSON");
+    for (list, want) in [("allowed", 200), ("refused", 403)] {
+        for host in table[list].as_array().expect("a list of hosts") {
+            let host = host.as_str().expect("a host string");
+            let (status, _) = http_request(&addr, "GET", "/", &[("Host", host)], None);
+            assert_eq!(status, want, "Host {host:?}");
+        }
+    }
 
     // 9. `/api/history` builds a recorder selector from browser input, so
     // the entity must be one the model knows and the aspect one key

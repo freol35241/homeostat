@@ -186,7 +186,8 @@ pub struct UnitManifest {
 #[serde(deny_unknown_fields)]
 pub struct UnitSection {
     /// Unique across the house; a bus key segment (`home/health/{unit}`,
-    /// `home/config/{unit}/*`), so letters, digits, `_`, `-`, `.` only.
+    /// `home/config/{unit}/*`), so letters, digits, `_`, `-`, `.` only,
+    /// and not `.` or `..`.
     /// `system` is reserved for the core.
     pub name: String,
     pub kind: UnitKind,
@@ -474,19 +475,6 @@ pub struct EntityFile {
     /// contract that does not apply here, and a wired input stops being a
     /// command aspect, which would collide on a commandable virtual entity.
     pub sources: Option<BTreeMap<String, SourceRef>>,
-    /// `[dashboard]`: retired (`entity-dashboard-retired`). Where a reading
-    /// appears is `dashboard.toml`'s say: `{ kind = "tile", entity = ... }`
-    /// on a view replaces `pin = true` here.
-    pub dashboard: Option<EntityDashboard>,
-}
-
-/// `[dashboard]` on an entity — retired; any table here is an error.
-#[derive(Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct EntityDashboard {
-    /// Retired: place the entity with a `tile` widget in `dashboard.toml`.
-    #[serde(default)]
-    pub pin: bool,
 }
 
 /// The source of a fed input: an entity and one of its aspects, i.e. the
@@ -581,14 +569,12 @@ pub struct EntityNaming {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct WritePolicy {
-    /// How commands are governed. Optional, and meaningful only on a
-    /// capability that takes commands at all: eight of the fourteen have
-    /// no command aspect (`sensor`, `camera`, `router`, …), and a mode on
-    /// one of those governs nothing. Required where the capability has a
-    /// base aspect (`write-mode-required`), so a light or a lock still
-    /// states its policy rather than inheriting one silently; absent, it
-    /// reads as `shared`. Use `WritePolicy::mode()` rather than this
-    /// field.
+    /// How commands are governed. Required on a capability that takes
+    /// commands — one with a base aspect, such as `light` or `lock`
+    /// (`write-mode-required`) — so its policy is always stated, never
+    /// inherited. Optional elsewhere (`sensor`, `camera`, `router`, …),
+    /// where a mode governs nothing; absent, it reads as `shared`.
+    // Read it through `WritePolicy::mode()`, which applies that default.
     #[serde(default)]
     pub mode: Option<WriteMode>,
     /// Exactly one unit binds each entity: an adapter, or an automation
