@@ -107,6 +107,18 @@ Edit the source, then regenerate. Tests refuse a stale copy.
 - **Present tense.** A comment says what the code does and why. History (what it used to do, when it changed, which issue prompted it) belongs in the commit message. Test: would the sentence still be true had the code been written this way from day one? If not, rewrite or delete it.
 - **Rationale stays.** "X, because Y" is a rule. So is "not X, because Y" when X is the alternative people keep proposing.
 - **No dates, issue numbers or "settled"/"precedent" wording** in code, comments or `design.md`.
+- **Plain prose.** Write like an engineer explaining the code to a colleague:
+  - Short sentences, one idea each.
+  - Comment the why and the non-obvious. Leave out what the next line already says.
+  - Avoid the habits that make text read as generated:
+    - aphorisms and slogans ("a job that cannot fail the build is one nobody repairs");
+    - "X, not Y" contrasts where nobody proposed Y;
+    - chains of em-dashes, colons and parentheticals;
+    - bold lead-ins on every bullet;
+    - groups of three for rhythm;
+    - intensifiers like "exactly", "deliberately", "never" and "by construction" where the plain verb says it.
+  - Prefer a commit message for the story and a link to `design.md` for the long argument.
+  - A module docstring says what the unit does and how to configure it. Rules that govern one function sit beside that function.
 - **Python docstrings follow the NumPy convention**: a one-line summary, a blank line, then the body. The SDK's public API also gets `Parameters`, `Returns` and `Raises` sections; adapter scripts do not need them.
 - **Rust**: every module opens with a `//!` doc saying what it is for, and every public type, function and constant has a doc comment. A field gets one when its name and type don't already say it. Doc comments on manifest structs become `docs/manifest.md`, which manifest authors read, so they describe the file format, not the Rust API.
 - **`docs/design.md` describes the system as it is.** When a change makes a sentence there untrue, the same change fixes the sentence.
