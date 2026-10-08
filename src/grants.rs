@@ -274,9 +274,29 @@ pub fn resolve(
     house: &House,
     expanded: &[ExpandedKey],
 ) -> (Vec<Grant>, Vec<String>, Vec<ValidationError>) {
-    let mut grants = Vec::new();
     let mut warnings = Vec::new();
     let mut errors = Vec::new();
+    let grants = build_grants(house, expanded, &mut warnings, &mut errors);
+    check_exclusive_writers(house, &grants, &mut errors);
+    check_arbitrated_coverage(house, expanded, &mut errors);
+    check_commanded_virtuals(house, expanded, &grants, &mut errors);
+    check_grant_cycle(&grants, &mut errors);
+    check_entity_keys_bound(house, expanded, &mut errors);
+    check_forecast_conflicts(expanded, &mut errors);
+    check_reserved_classes(house, expanded, &mut errors);
+    (grants, warnings, errors)
+}
+
+/// One grant per state and forecast publish (the entities its unit binds)
+/// and per non-adapter cmd publish (the entities its capability and keys
+/// reach), sorted by unit and binding.
+fn build_grants(
+    house: &House,
+    expanded: &[ExpandedKey],
+    warnings: &mut Vec<String>,
+    errors: &mut Vec<ValidationError>,
+) -> Vec<Grant> {
+    let mut grants = Vec::new();
 
     for key in expanded {
         if key.direction != Direction::Publishes {
@@ -404,13 +424,16 @@ pub fn resolve(
     }
 
     grants.sort_by(|a, b| (&a.unit, &a.publish).cmp(&(&b.unit, &b.publish)));
+    grants
+}
 
-    // Write-policy enforcement: two writers on an exclusive entity is an error.
-    // Exclusivity constrains the automation band only; manual-band units
-    // (dashboard, voice) sit above it by construction and never count. A
-    // writer is a unit, not a binding: authority is per process.
+/// Write-policy enforcement: two writers on an exclusive entity is an error.
+/// Exclusivity constrains the automation band only; manual-band units
+/// (dashboard, voice) sit above it by construction and never count. A
+/// writer is a unit, not a binding: authority is per process.
+fn check_exclusive_writers(house: &House, grants: &[Grant], errors: &mut Vec<ValidationError>) {
     let mut writers: BTreeMap<&str, BTreeMap<&str, Vec<String>>> = BTreeMap::new();
-    for grant in &grants {
+    for grant in grants {
         if matches!(grant.priority, None | Some(Priority::Manual)) {
             continue;
         }
@@ -443,12 +466,18 @@ pub fn resolve(
             }
         }
     }
+}
 
-    // Arbitration coverage: an arbitrated entity with no arbiter-class
-    // publish reaching it would silently never receive a write token — the
-    // arbiter service has no path to it. Mirrors the exclusive-write-conflict
-    // check above but over `expanded` directly, since arbiter-class publishes
-    // never form cmd-class grants.
+/// Arbitration coverage: an arbitrated entity with no arbiter-class
+/// publish reaching it would silently never receive a write token — the
+/// arbiter service has no path to it. Mirrors `check_exclusive_writers`
+/// but over `expanded` directly, since arbiter-class publishes never form
+/// cmd-class grants.
+fn check_arbitrated_coverage(
+    house: &House,
+    expanded: &[ExpandedKey],
+    errors: &mut Vec<ValidationError>,
+) {
     for entity in &house.entities {
         if entity.file.write_policy.mode() != WriteMode::Arbitrated {
             continue;
@@ -477,12 +506,20 @@ pub fn resolve(
             ));
         }
     }
+}
 
-    // A commandable virtual entity is a latch
-    // (docs/design.md#commandable-virtual-entities): its owning automation
-    // subscribes to the entity's cmd keys and sets its own state. A cmd-class grant onto an
-    // automation-owned entity nobody subscribes for would hand commands to
-    // a producer that never receives them, so it stays refused.
+/// A commandable virtual entity is a latch
+/// (docs/design.md#commandable-virtual-entities): its owning automation
+/// subscribes to the entity's cmd keys and sets its own state. A
+/// cmd-class grant onto an automation-owned entity nobody subscribes for
+/// would hand commands to a producer that never receives them, so it
+/// stays refused.
+fn check_commanded_virtuals(
+    house: &House,
+    expanded: &[ExpandedKey],
+    grants: &[Grant],
+    errors: &mut Vec<ValidationError>,
+) {
     for grant in grants.iter().filter(|g| g.is_cmd()) {
         for granted in &grant.entities {
             let name = &granted.name;
@@ -517,11 +554,13 @@ pub fn resolve(
             }
         }
     }
+}
 
-    // Grant edges run owner -> granting unit, and with automations as owners
-    // a cycle is possible: A commands an entity B binds while B commands one
-    // A binds. The apply walk needs an order, so refuse the house at plan
-    // time rather than start units in a silently arbitrary one.
+/// Grant edges run owner -> granting unit, and with automations as owners
+/// a cycle is possible: A commands an entity B binds while B commands one
+/// A binds. The apply walk needs an order, so refuse the house at plan
+/// time rather than start units in a silently arbitrary one.
+fn check_grant_cycle(grants: &[Grant], errors: &mut Vec<ValidationError>) {
     let edges: BTreeSet<(&str, &str)> = grants
         .iter()
         .flat_map(|g| {
@@ -554,13 +593,19 @@ pub fn resolve(
             None,
         ));
     }
+}
 
-    // An entity-addressed key belongs to a bound entity: a templated publish
-    // is bound by construction; a concrete one must name a bound entity's
-    // room and name literally. Closes the free-form-key hole that virtual
-    // sensors would otherwise ride through. `forecast` is held to the same
-    // rule as `state` for the same reason — it is the same series extended
-    // forward, so it is the same entity's key space.
+/// An entity-addressed key belongs to a bound entity: a templated publish
+/// is bound by construction; a concrete one must name a bound entity's
+/// room and name literally. Closes the free-form-key hole that virtual
+/// sensors would otherwise ride through. `forecast` is held to the same
+/// rule as `state` for the same reason — it is the same series extended
+/// forward, so it is the same entity's key space.
+fn check_entity_keys_bound(
+    house: &House,
+    expanded: &[ExpandedKey],
+    errors: &mut Vec<ValidationError>,
+) {
     for key in expanded {
         if key.direction != Direction::Publishes || key.templated {
             continue;
@@ -631,17 +676,19 @@ pub fn resolve(
             }
         }
     }
+}
 
-    // One forecast series, one publisher — where "series" includes the
-    // SOURCE. Several providers may speak about one aspect, which is what
-    // the source segment is for; what must not happen is two units writing
-    // the same source's key, because the mirror keeps only the last
-    // document per key, so the second overwrites rather than adds.
-    //
-    // A publish may wildcard its aspect or source slot, so entries are
-    // compared pairwise for compatibility rather than bucketed by an exact
-    // key: two publishes collide when, at every slot, they agree or one of
-    // them accepts anything.
+/// One forecast series, one publisher — where "series" includes the
+/// SOURCE. Several providers may speak about one aspect, which is what
+/// the source segment is for; what must not happen is two units writing
+/// the same source's key, because the mirror keeps only the last
+/// document per key, so the second overwrites rather than adds.
+///
+/// A publish may wildcard its aspect or source slot, so entries are
+/// compared pairwise for compatibility rather than bucketed by an exact
+/// key: two publishes collide when, at every slot, they agree or one of
+/// them accepts anything.
+fn check_forecast_conflicts(expanded: &[ExpandedKey], errors: &mut Vec<ValidationError>) {
     let slot = |expr: &KeyExpr, i: usize| -> Slot {
         // `**` anywhere from the aspect slot on stands for every slot
         // after it, so a key that has one accepts anything here.
@@ -701,15 +748,21 @@ pub fn resolve(
             ));
         }
     }
+}
 
-    // Reserved classes (docs/design.md#reserved-classes): `config` and
-    // `meta` are the core's alone; `health`, `discovery` and `hold` are per
-    // unit, under the publishing unit's own name; `arbiter`, `clock` and `history`
-    // are one service's output each. The SDK only checks that a published
-    // key is within a declared expression, so without this an automation
-    // could declare `home/arbiter/**` and forge post-arbitration commands,
-    // or another unit's discovery record or holds, with an empty grant
-    // table.
+/// Reserved classes (docs/design.md#reserved-classes): `config` and
+/// `meta` are the core's alone; `health`, `discovery` and `hold` are per
+/// unit, under the publishing unit's own name; `arbiter`, `clock` and
+/// `history` are one service's output each. The SDK only checks that a published
+/// key is within a declared expression, so without this an automation
+/// could declare `home/arbiter/**` and forge post-arbitration commands,
+/// or another unit's discovery record or holds, with an empty grant
+/// table.
+fn check_reserved_classes(
+    house: &House,
+    expanded: &[ExpandedKey],
+    errors: &mut Vec<ValidationError>,
+) {
     let publish_class = |key: &ExpandedKey| -> Option<(String, Option<String>)> {
         let mut segments = key.source.split('/').skip(1).map(str::to_string);
         Some((segments.next()?, segments.next()))
@@ -782,8 +835,6 @@ pub fn resolve(
             ));
         }
     }
-
-    (grants, warnings, errors)
 }
 
 #[cfg(test)]
