@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# Smoke test for running without Docker: the release binary plus the SDK
-# wheel on a plain host with git and uv. The counterpart of
-# smoke_image.sh — packaging, not logic. Asserts that the supervisor
-# boots, a real Python unit resolves the SDK from the wheel directory and
-# reaches `running`, `plan` finds the live house through HOMEOSTAT_BUS,
-# and SIGTERM shuts the house down cleanly.
+# Smoke test for running without Docker. It installs the release binary
+# and the SDK wheel on a plain host with git and uv. Like smoke_image.sh,
+# it tests packaging and leaves the logic to cargo test. It asserts that:
+#   - the supervisor boots;
+#   - a real Python unit resolves the SDK from the wheel directory and
+#     reaches `running`;
+#   - `plan` finds the live house through HOMEOSTAT_BUS;
+#   - SIGTERM shuts the house down cleanly.
 #
 # Usage: scripts/smoke_bare.sh <homeostat-binary> <wheel-dir>
 set -euo pipefail
@@ -36,9 +38,9 @@ ls "$WHEELS"/homeostat-"$SDK_VERSION"-*.whl >/dev/null 2>&1 \
 HOUSE="$WORK/house"
 "$REPO/scripts/smoke_house.sh" "$HOUSE" "$SDK_VERSION"
 
-# A fresh uv cache: the SDK is on no index, so the only place the unit can
-# resolve it from is the wheel directory — what the README tells a bare
-# host to point UV_FIND_LINKS at.
+# Use a fresh uv cache. The SDK is not on any package index, so the unit
+# can only resolve it from the wheel directory. The README tells a bare
+# host to point UV_FIND_LINKS at that directory.
 export UV_CACHE_DIR="$WORK/uv-cache"
 export UV_FIND_LINKS="$WHEELS"
 PORT="$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
@@ -58,15 +60,15 @@ until grep -q "\[homeostat\] clock: running" "$LOG"; do
 done
 echo "clock unit is running"
 
-# The operator's side: plan with no --bus, the endpoint from the
-# environment; a clean boot of an unchanged repo must plan to nothing.
+# Run plan as an operator would, with no --bus, so the endpoint comes from
+# the environment. A clean boot of an unchanged repo must plan no changes.
 plan_out="$("$BIN" plan "$HOUSE")"
 echo "$plan_out" | grep -q "No changes. The world matches the repo." \
   || fail "plan against the live house found a diff: $plan_out"
 echo "plan through HOMEOSTAT_BUS matches the repo"
 
-# SIGTERM to the supervisor alone — what systemd's KillMode=mixed sends —
-# must land as a clean shutdown of the units and then the supervisor.
+# Send SIGTERM to the supervisor alone, as systemd's KillMode=mixed does.
+# The units and then the supervisor must shut down cleanly.
 kill -TERM "$SUP_PID"
 exit_code=0
 wait "$SUP_PID" || exit_code=$?

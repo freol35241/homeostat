@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Prepare a release commit: bump every version string, relock, regenerate
-# the starter house.
+# Prepares a release commit. It bumps every version string, relocks the
+# scripts and regenerates the starter house.
 #
 #   scripts/release.sh 0.17.0
 #   scripts/release.sh 0.17.0-rc1
 #
 # It edits the working tree and stops there. Review the diff, commit it as
-# "Release X.Y.Z", merge, then tag the merge commit vX.Y.Z; the tag is what
+# "Release X.Y.Z", merge, then tag the merge commit vX.Y.Z. The tag
 # triggers the release workflow.
 set -euo pipefail
 

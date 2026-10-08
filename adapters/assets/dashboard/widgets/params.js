@@ -1,6 +1,6 @@
-/* A unit's parameters: one row each, with the control its type gets,
- * wired to /api/param; and the params widget, a unit's family-editable
- * ones as a card. */
+/* A unit's parameters, one row each, with the control for its type,
+ * sending to /api/param. Also the params widget, which shows a unit's
+ * family-editable parameters as a card. */
 import { byId, html } from '../html.js';
 import logic from '../logic.js';
 import { houseControls, localState, store, unitLabel } from '../store.js';
@@ -66,11 +66,11 @@ function renderParamControl(unitName, pname, p) {
   return html`<input type="text" id="${id}" value="${value === undefined ? '' : value}" data-action="param-text" data-unit="${unitName}" data-param="${pname}">`;
 }
 
-// What the manifest says this parameter is, so a value nudged off it can
-// be put back by reading rather than by remembering. A slider is easy to
-// move by accident and there is nothing to undo it with; the number it
-// came from is the next best thing, and it is house text the page already
-// has. A param with no default has nothing to say here.
+// The parameter's default from the manifest, so a value moved away from it
+// can be put back by reading it rather than remembering it. A slider is
+// easy to move by accident and has no undo. The default is the next best
+// thing, and the page already has it from the house text. A param with no
+// default shows nothing here.
 function paramDefaultCaption(p) {
   if (p.default === undefined || p.default === null) return '';
   return 'default ' + String(p.default);
@@ -78,9 +78,10 @@ function paramDefaultCaption(p) {
 
 export function familyEditable(p) { return p.editable_by === 'family'; }
 
-// shared by the Setpoints view and the unit-detail overlay. A param the
-// family cannot edit renders its live value against the manifest default
-// instead of a control: visible, not writable (/api/param is the gate).
+// Shared by the Setpoints view and the unit-detail overlay. A param the
+// family cannot edit shows its live value and the manifest default
+// instead of a control. It is visible but not writable, and /api/param
+// enforces that.
 export function renderParamRow(unitName, pname, p, bare) {
   var body;
   if (familyEditable(p)) {

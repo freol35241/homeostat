@@ -1,9 +1,9 @@
 /* The burner widget: the `burner` vocabulary as one card
- * (docs/design.md#burners-and-interlocks): its two commands, the family
- * lever `on` and the output `power_level`, over the two temperatures an
- * interlock reads, each with its day. Nothing dialectal: run-state codes
- * and a firmware's own readings stay in the entity's overlay, which the
- * card taps through to. */
+ * (docs/design.md#burners-and-interlocks). It shows the two commands, the
+ * family control `on` and the output `power_level`, above the two
+ * temperatures an interlock reads, each with its day. Device-specific
+ * values, such as run-state codes and the firmware's own readings, stay
+ * in the entity's overlay, which a tap on the card opens. */
 import { ensureHistory } from '../api.js';
 import { buildChart } from '../charts.js';
 import { html } from '../html.js';
@@ -11,9 +11,10 @@ import logic from '../logic.js';
 import { controlDisabled, houseControls, localState, store } from '../store.js';
 import { aspectValueSpan, renderAspectControl } from './controls.js';
 
-// A descriptor keeps the firmware's field name in parentheses — "flue
-// (smoke_temp)" — which the overlay shows and a card has no room for, the
-// same trim the room card makes (dashboard-logic.js, cardPlan).
+// A descriptor label keeps the firmware's field name in parentheses, as
+// in "flue (smoke_temp)". The overlay shows it, but a card has no room,
+// so it is trimmed here as on the room card (dashboard-logic.js,
+// cardPlan).
 function shortLabel(label) { return label.replace(/\s*\([^)]*\)$/, ''); }
 
 var BURNER_READINGS = ['flue_temperature', 'boiler_temperature'];
@@ -51,8 +52,9 @@ export function widgetBurner(entity) {
       ${spark}</div>`;
   });
 
-  // The head taps through to the entity: the run-state codes and the
-  // device's own readings live there, and the card does not repeat them.
+  // Tapping the head opens the entity. The run-state codes and the
+  // device's own readings are shown there, and the card does not repeat
+  // them.
   return html`<div class="card burner-card">
     <div class="burner-head row-clickable" data-action="entity-detail" data-room="${entity.room}" data-entity="${entity.name}">
     <div class="card-label" style="margin:0;" title="${entity.label}">${entity.label.toUpperCase()}</div>

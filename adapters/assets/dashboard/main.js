@@ -1,9 +1,10 @@
-/* The dashboard page's entry module, loaded by dashboard.html: the page's
- * render, the delegated taps, edits and drags (each handed to the module
- * that owns it), the timers, and the boot.
+/* The dashboard page's entry module, loaded by dashboard.html. It holds
+ * the page's render, the delegated taps, edits and drags (each passed to
+ * the module that owns it), the timers, and the startup.
  *
- * The page is client-rendered from the house's text and its live state;
- * docs/design.md#dashboard says why, and #the-page how it is tested. */
+ * The page is rendered in the browser from the house's text and its live
+ * state. docs/design.md#dashboard explains why, and #the-page how it is
+ * tested. */
 import { VideoRTC } from '../video-rtc.js';
 import { connectWs, loadModel } from './api.js';
 import { currentView, renderShell } from './chrome.js';
@@ -18,8 +19,9 @@ import { descriptorField, findEntity, localState, overlay, scheduleRender, setRe
 import { renderView } from './views/index.js';
 import { flashParamRow } from './widgets/params.js';
 
-// The vendored go2rtc player (assets/README.md). MSE only: WebRTC can't
-// ride the dashboard's /api/camera proxy (docs/design.md#cameras).
+// The vendored go2rtc player (assets/README.md). Only MSE is used, because
+// WebRTC can't go through the dashboard's /api/camera proxy
+// (docs/design.md#cameras).
 customElements.define('video-rtc', VideoRTC);
 
 function render() {
@@ -137,9 +139,9 @@ document.addEventListener('click', function (e) {
     openViewText(el.getAttribute('data-view-name'));
     return;
   }
-  // Deviation taps land on whichever view shows the thing
-  // (dashboard-logic.js, viewFor); with none, the unit overlay holds every
-  // param and Not shown holds every unplaced light.
+  // A deviation tap opens whichever view shows the item
+  // (dashboard-logic.js, viewFor). If no view does, the unit overlay has
+  // every param, and Not shown has every unplaced light.
   if (action === 'goto-rooms') {
     store.view = logic.viewFor({ type: 'rooms' }, logic.viewsOf(store.model)) || 'notshown';
     renderShell();
@@ -161,10 +163,10 @@ document.addEventListener('click', function (e) {
     return;
   }
   if (action === 'chart-layer') {
-    // Choosing one layer is what puts the other away: two sets of thin
-    // grey lines on one chart read as one set.
+    // Choosing one layer hides the other, because two sets of thin grey
+    // lines on one chart look like one set.
     overlay.layer = el.getAttribute('data-layer') || '';
-    // A pin belongs to a braid, or a legend, that may no longer be drawn.
+    // A pin belongs to a braid or a legend that may no longer be drawn.
     overlay.pinned = null;
     overlay.sourcePinned = null;
     if (overlay.layer === 'forecasts' && !overlay.issues.length && !overlay.issuesLoading) {
@@ -185,8 +187,8 @@ document.addEventListener('click', function (e) {
       fetchSources(overlay.entity, overlay.aspect, hrs);
       fetchSourceEvents(overlay.entity, overlay.aspect, hrs);
     }
-    // A different window is a different set of issues, and a pin on a
-    // forecast that is no longer drawn would be a highlight on nothing.
+    // A different window has a different set of issues, and a pin on a
+    // forecast that is no longer drawn would highlight nothing.
     if (overlay.layer === 'forecasts') {
       overlay.issues = [];
       overlay.pinned = null;
@@ -321,21 +323,21 @@ document.addEventListener('input', function (e) {
 
 // The relative-time ticker.
 setInterval(function () {
-  if (currentView() !== 'health') scheduleRender(); // relative times live on every other view
+  if (currentView() !== 'health') scheduleRender(); // every other view shows relative times
 }, 30000);
 
-/* Some commands are never answered by anything: the adapter is deaf, the
- * device is off. "No confirmation" is a real outcome, and the page must
- * not let it pass for success. */
+/* Some commands get no answer at all, for example when the adapter is not
+ * listening or the device is off. "No confirmation" is a real outcome,
+ * and the page must not show it as success. */
 setInterval(function () {
   var expired = logic.expirePending(pending, Date.now());
   expired.forEach(announceOutcome);
   if (expired.length) scheduleRender();
-  // An ended command's line goes when its time is up, which no delta will
-  // prompt. Only the lines are redrawn, and only when one went: rebuilding
-  // the view would replace a button between a finger's press and its
-  // release, and the tap would be lost; redrawing them every second would
-  // have a screen reader re-announce each one.
+  // An ended command's line is removed when its time is up, and no delta
+  // triggers that. Only the lines are redrawn, and only when one was
+  // removed. Rebuilding the view could replace a button between a press
+  // and its release, and the tap would be lost. Redrawing the lines every
+  // second would make a screen reader announce each one again.
   else if (logic.pruneRecent(recent, Date.now())) markPendingControls();
 }, 1000);
 

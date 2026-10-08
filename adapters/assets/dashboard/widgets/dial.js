@@ -5,9 +5,9 @@ import { controlDisabled, houseControls, store } from '../store.js';
 import { renderAspectControl } from './controls.js';
 import { widgetForClimate, widgetForEntity } from './entity.js';
 
-// A thermostat dial as a card: the described temperature command named
-// (or the first one), else the climate capability's own setpoint. An
-// entity with neither falls back to its own row.
+// A thermostat dial as a card. It uses the named described temperature
+// command (or the first one), and otherwise the climate capability's own
+// setpoint. An entity with neither falls back to its own row.
 export function widgetDial(entity, aspect) {
   var rows = [];
   logic.aspectPlan(entity, store.state, store.aspects[entity.name], !controlDisabled(entity), houseControls()).forEach(function (s) {

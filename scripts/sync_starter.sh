@@ -1,42 +1,43 @@
 #!/usr/bin/env bash
 # The starter house ships copies of the generic adapters, because a house
 # repo is self-contained (its README says `cp -r examples/starter-house
-# ~/house`). Hand-maintained copies drift silently from the release they
-# claim, so they are generated.
+# ~/house`). Copies kept by hand drift from the release they claim to be,
+# so this script generates them.
 #
 #   scripts/sync_starter.sh          rewrite the copies
 #   scripts/sync_starter.sh --check  fail if any copy is stale (CI)
 #
-# The one edit a copy needs is the SDK source: adapters/ pins the
-# working-tree SDK so the tests exercise it, a shipped house pins the
+# The only edit a copy needs is the SDK source. adapters/ pins the
+# working-tree SDK so the tests exercise it. A shipped house pins the
 # release (docs/design.md#sdk-distribution). The lockfile beside each
-# adapter travels with it and takes the same edit (pin_lock below), so a
-# shipped unit resolves exactly what the release's adapter was locked
-# against. Adapter and SDK must come from the SAME commit — an adapter from main against the previous tag's
-# SDK raises AttributeError on whatever the SDK grew since.
+# adapter is copied with it and gets the same edit (pin_lock below), so a
+# shipped unit resolves what the release's adapter was locked against.
+# Adapter and SDK must come from the same commit. An adapter from main
+# running against the previous tag's SDK raises AttributeError on anything
+# the SDK has added since.
 #
-# The starter is therefore a snapshot of SDK_TAG, not of main: --check
-# compares against adapters/ AS OF that tag, which is the invariant that
-# holds continuously on main. scripts/release.sh bumps SDK_TAG with the
-# other version strings and reruns this; tagging the result is the last
-# step. While the new tag does not exist yet the
-# check falls back to the working tree — that is the release commit
-# itself. (CI must check out with fetch-depth: 0 or the tag is never found.)
+# The starter is therefore a snapshot of SDK_TAG rather than of main.
+# --check compares against adapters/ as of that tag, which stays true on
+# every main commit. scripts/release.sh bumps SDK_TAG with the other
+# version strings and reruns this script. Tagging the result is the last
+# step. Until the new tag exists, the check falls back to the working
+# tree, which is the release commit itself. CI must check out with
+# fetch-depth: 0, or the tag is not found.
 set -euo pipefail
 
 # Bumped with the starter's compose image at each release.
 SDK_TAG="v0.16.1"
 
-# The tag's version, and that version as Python spells it. They differ for
-# a prerelease and only for a prerelease: semver puts a hyphen before the
-# label (0.14.0-rc1, which is what Cargo and the image tag take), PEP 440
-# canonically does not (0.14.0rc1, which is what uv builds the wheel as and
-# writes into a lock). Getting this wrong is not a cosmetic mismatch: a
-# wheel filename uses "-" to separate its fields, so
-# homeostat-0.14.0-rc1-py3-none-any.whl parses as version 0.14.0 with the
-# build tag "rc1" and uv refuses the lock outright, taking every unit in
-# the house down at start. PEP 440 normalisation drops the separator before
-# a prerelease label; the tags this project cuts only ever use one.
+# The tag's version, and the same version as Python spells it. They differ
+# only for a prerelease. Semver puts a hyphen before the label
+# (0.14.0-rc1), and Cargo and the image tag use that form. Canonical PEP 440
+# has no hyphen (0.14.0rc1), and uv uses that form for the wheel and in a
+# lock.
+# The difference matters. A wheel filename uses "-" to separate its fields,
+# so homeostat-0.14.0-rc1-py3-none-any.whl parses as version 0.14.0 with
+# build tag "rc1". uv then refuses the lock, and no unit in the house
+# starts. PEP 440 normalisation drops the separator before a prerelease
+# label. This project's tags use a hyphen as that separator.
 VERSION="${SDK_TAG#v}"
 PY_VERSION="$(printf '%s' "$VERSION" | sed -E 's/-(a|b|rc|alpha|beta)/\1/')"
 
@@ -44,9 +45,9 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 UNITS="$REPO/examples/starter-house/units"
 
 # adapters/ source -> starter unit name. Adapters the starter has no unit
-# for (go2rtc, onvif, openwrt) are absent by design; evening_lights.py is
-# the starter's own example automation and has no adapters/ source, so it
-# only takes the SDK pin.
+# for (go2rtc, onvif, openwrt) are left out. evening_lights.py is the
+# starter's own example automation. It has no adapters/ source, so it only
+# gets the SDK pin.
 FILES="
 zigbee2mqtt.py:zigbee.py
 esphome.py:esphome.py
@@ -66,20 +67,20 @@ assets/video-rtc.js:assets/video-rtc.js
 assets/homeostat-mark.svg:assets/homeostat-mark.svg
 "
 
-# A shipped unit names `homeostat==VERSION` and carries no
-# [tool.uv.sources] block at all: the image bundles the wheel and points
-# UV_FIND_LINKS at it. Idempotent, so --check compares like with like.
+# A shipped unit names `homeostat==VERSION` and has no [tool.uv.sources]
+# block. The image bundles the wheel and points UV_FIND_LINKS at it. The
+# rewrite is idempotent, so --check compares like with like.
 pin_sdk() {
-  # Matches an unpinned "homeostat", AND an already-pinned
-  # "homeostat==X.Y.Z", -- the starter-only units are rewritten in place,
-  # so a pattern that only matched the unpinned form would silently leave
-  # them on the previous release, and --check could not see it: the check
+  # Matches an unpinned "homeostat" and an already-pinned
+  # "homeostat==X.Y.Z". The starter-only units are rewritten in place. A
+  # pattern that only matched the unpinned form would leave them on the
+  # previous release, and --check would not notice, because the check
   # compares against this same transform.
   sed -e 's|^\(# *\)"homeostat[^"]*",|\1"homeostat=='"$PY_VERSION"'",|' \
       -e '/^# \[tool\.uv\.sources\]$/d' \
       -e '/^# homeostat = /d' \
     | awk '
-      # Drop the now-empty "#" separator that preceded the sources block:
+      # Drop the empty "#" separator that preceded the sources block, but
       # only when the next line closes the PEP 723 header.
       /^#$/ { held = 1; next }
       held && !/^# \/\/\/$/ { print "#" }
@@ -87,13 +88,14 @@ pin_sdk() {
     '
 }
 
-# The lock's SDK entry, rewritten from the path source the dev tree locks
-# against to the wheel the image bundles — byte for byte what `uv lock
-# --script` writes when it finds the wheel through UV_FIND_LINKS, so uv at
-# first boot sees a fresh lock and leaves it alone (smoke_starter.sh
-# asserts that). Everything else in the lock is untouched: the shipped
-# unit runs the release's resolution. WHEELS is the image's UV_FIND_LINKS
-# (Dockerfile); a path wheel carries no hash, the image is the trust root.
+# Rewrites the lock's SDK entry from the path source the dev tree locks
+# against to the wheel the image bundles. The output matches what `uv lock
+# --script` writes when it finds the wheel through UV_FIND_LINKS, byte for
+# byte. uv at first boot therefore sees a fresh lock and leaves it alone
+# (smoke_starter.sh asserts that). The rest of the lock is unchanged, so
+# the shipped unit runs the release's resolution. WHEELS is the image's
+# UV_FIND_LINKS (Dockerfile). A path wheel has no hash, so the image is
+# what the unit trusts for the SDK.
 WHEELS=/opt/homeostat-wheels
 pin_lock() {
   awk -v v="$PY_VERSION" -v w="$WHEELS" '
@@ -126,10 +128,11 @@ stale=""
 tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT
 
-# The release's adapters/ when the tag is in this clone, and the working
-# tree otherwise, which is right only while that release is being prepared.
-# A clone without the tag (a shallow checkout) compares against the working
-# tree without saying so, which is why CI fetches full history.
+# Read the release's adapters/ when the tag is in this clone, and the
+# working tree otherwise. The working tree is only correct while that
+# release is being prepared. A clone without the tag (a shallow checkout)
+# silently compares against the working tree, which is why CI fetches full
+# history.
 if git -C "$REPO" rev-parse -q --verify "$SDK_TAG^{commit}" >/dev/null; then
   at_tag=1
 else
@@ -142,8 +145,8 @@ source_at_tag() {
     cat "$REPO/adapters/$1"
   fi
 }
-# Whether the release has the file at all: a tag cut before lockfiles
-# existed ships without them.
+# Whether the release has the file at all. A tag cut before lockfiles
+# existed has none.
 have_at_tag() {
   if [ "$at_tag" = 1 ]; then
     git -C "$REPO" cat-file -e "$SDK_TAG:adapters/$1" 2>/dev/null
@@ -152,8 +155,8 @@ have_at_tag() {
   fi
 }
 
-# Generated content -> its place in the starter, or, under --check, a
-# note that the starter's copy differs.
+# Writes generated content to its place in the starter. Under --check, it
+# records that the starter's copy differs instead.
 place() {
   if [ "$check" = 1 ]; then
     cmp -s "$1" "$2" || stale="$stale $3"
@@ -167,11 +170,11 @@ for pair in $FILES; do
   src="${pair%%:*}"
   dst="$UNITS/${pair##*:}"
   [ -f "$REPO/adapters/$src" ] || { echo "missing adapters/$src" >&2; exit 1; }
-  # A file added since the release is not in the snapshot: it reaches the
+  # A file added since the release is not in the snapshot. It reaches the
   # starter at the next tag, together with the page that references it.
   have_at_tag "$src" || continue
   case "$src" in
-    # Only a unit script carries an SDK source line; assets copy verbatim.
+    # Only a unit script has an SDK source line. Assets are copied as-is.
     *.py) source_at_tag "$src" | pin_sdk > "$tmp" ;;
     *) source_at_tag "$src" > "$tmp" ;;
   esac
@@ -182,9 +185,10 @@ for pair in $FILES; do
   fi
 done
 
-# The dashboard page's modules: every file under assets/dashboard/ in the
-# release, rather than a line each above, so a module the page grows
-# cannot be left out of the starter. A release before them has none.
+# The dashboard page's modules. This copies every file under
+# assets/dashboard/ in the release instead of listing each one above, so a
+# new module cannot be left out of the starter. Older releases have no
+# modules.
 modules_at_tag() {
   if [ "$at_tag" = 1 ]; then
     git -C "$REPO" ls-tree -r --name-only "$SDK_TAG" -- adapters/assets/dashboard
@@ -198,7 +202,7 @@ for src in $(modules_at_tag); do
   place "$tmp" "$UNITS/$src" "$src"
 done
 
-# Starter-only units (evening_lights.py) take the pin and nothing else.
+# Starter-only units (evening_lights.py) get the pin and nothing else.
 for unit in "$UNITS"/*.py; do
   grep -q '^# *"homeostat' "$unit" || continue
   pin_sdk < "$unit" > "$tmp"
@@ -215,10 +219,9 @@ if [ -n "$stale" ]; then
   exit 1
 fi
 
-# The release version lives in four places and they must agree. It is
-# checked here rather than left to habit, because a missed bump makes every
-# published binary report the wrong version, and a version nobody can trust
-# is worse than no version at all.
+# The release version appears in four places, and they must agree. A
+# missed bump makes every published binary report the wrong version, so it
+# is checked here.
 bad=""
 check_version() {
   grep -qF "$2" "$REPO/$1" || bad="$bad\n  $1: expected $2"

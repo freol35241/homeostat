@@ -10,11 +10,12 @@ export function openViewText(name) {
   showOverlay();
 }
 
-/* The text behind a view: the dashboard.toml block that makes it, with
- * the widget kinds that name what is on screen. Read-only, deliberately —
- * the dashboard never writes the house (docs/design.md#views-are-text)
- * — but it gives what someone points at a name they can use, with a
- * person or with an agent working in the house repo. */
+/* The text behind a view: the dashboard.toml block that defines it, with
+ * the widget kinds that name what is on screen. It is read-only, because
+ * the dashboard does not write to the house
+ * (docs/design.md#views-are-text). It gives what someone points at a name
+ * they can use with a person, or with an agent working in the house
+ * repo. */
 export function renderViewTextBody() {
   var view = logic.viewsOf(store.model).filter(function (v) { return v.name === overlay.viewName; })[0];
   var text = logic.viewText(store.model, overlay.viewName) || '';

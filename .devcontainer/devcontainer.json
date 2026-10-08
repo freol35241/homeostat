@@ -6,18 +6,18 @@
 		"ghcr.io/devcontainers/features/python:1": {},
 		"ghcr.io/devcontainers-extra/features/claude-code:2": {},
 		"ghcr.io/devcontainers-extra/features/uv:1": {},
-		// tests/js runs on Node's built-in runner; gh works issues and PRs
-		// from inside the container.
+		// tests/js runs on Node's built-in runner. gh handles issues and
+		// PRs from inside the container.
 		"ghcr.io/devcontainers/features/node:2": {},
 		"ghcr.io/devcontainers/features/github-cli:1": {}
 	},
 
 	// The MQTT suites (ivt490, owntracks, z2m) spawn a real mosquitto per
-	// test, as CI does; there is no devcontainer feature for it. The tests
+	// test, as CI does. There is no devcontainer feature for it. The tests
 	// start their own broker on a free port, so the system service stays
 	// disabled.
-	// A browser for tests/browser, likewise: ~115 MB, so a failure here
-	// warns rather than failing the container — run
+	// The browser for tests/browser is also installed here. It is about
+	// 115 MB, so a failed download only prints a warning. Run
 	// scripts/install_browser.sh by hand afterwards.
 	"postCreateCommand": "sudo apt-get update && sudo apt-get install -y --no-install-recommends mosquitto && sudo service mosquitto stop; scripts/install_browser.sh || echo 'browser install failed; run scripts/install_browser.sh when online'"
 }

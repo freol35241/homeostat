@@ -3,8 +3,8 @@ import { html } from '../html.js';
 import logic from '../logic.js';
 import { scheduleRender, store } from '../store.js';
 
-// The next moment a drawn hold ends, as a single timer: the rows are
-// sorted by deadline, so the first is the only one that matters.
+// The next time a drawn hold ends, as a single timer. The rows are sorted
+// by deadline, so only the first one matters.
 var holdTimer = null;
 
 function scheduleHoldExpiry(deviations) {
@@ -20,16 +20,16 @@ function scheduleHoldExpiry(deviations) {
   }, Math.max(250, next - Date.now() + 250));
 }
 
-// Out of the ordinary — the rules live in dashboard-logic.js; here each
-// record's target maps onto the tap wiring.
+// What is out of the ordinary. The rules are in dashboard-logic.js. Here
+// each record's target is mapped to the tap handlers.
 export function widgetDeviations() {
   var deviations = logic.computeDeviations(
     store.model, store.state, store.health, store.config, store.aspects, store.holds
   );
-  // A hold ends on its own, and nothing arrives on the bus to say so — the
-  // arbiter republishes, but a browser that missed it (or a clock a second
-  // ahead) would leave the row standing. Re-render at the earliest
-  // deadline drawn, and the row simply is not there next time.
+  // A hold ends on its own, and nothing may arrive on the bus to say so.
+  // The arbiter republishes, but a browser that missed it, or whose clock
+  // is a second ahead, would keep showing the row. Re-render at the
+  // earliest drawn deadline, and the row is gone on the next render.
   scheduleHoldExpiry(deviations);
 
   function deviationAttrs(target) {

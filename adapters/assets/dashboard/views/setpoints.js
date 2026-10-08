@@ -3,8 +3,8 @@ import { byId, html } from '../html.js';
 import { store } from '../store.js';
 import { familyEditable, renderParamRow } from '../widgets/params.js';
 
-// Setpoints is the family's levers: family-editable params only. Owner
-// params show read-only in the unit overlay (Health -> unit).
+// Setpoints holds the family's settings: family-editable params only.
+// Owner params are shown read-only in the unit overlay (Health -> unit).
 export function renderSetpoints() {
   var rows = [];
   (store.model.units || []).forEach(function (u) {

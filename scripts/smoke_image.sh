@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Smoke test for the container image: verifies the packaging, not the
-# logic (cargo test covers that). Asserts that inside the image the
-# supervisor boots, a real Python unit resolves its uv environment and
-# reaches `running`, the bus is reachable from a second container, and
-# SIGTERM shuts the house down cleanly.
+# Smoke test for the container image. It checks the packaging; cargo test
+# covers the logic. It asserts that, inside the image:
+#   - the supervisor boots;
+#   - a real Python unit resolves its uv environment and reaches `running`;
+#   - the bus is reachable from a second container;
+#   - SIGTERM shuts the house down cleanly.
 #
 # Usage: scripts/smoke_image.sh <image>
 set -euo pipefail
@@ -28,8 +29,8 @@ fail() {
   exit 1
 }
 
-# The SDK version the image bundles as a wheel (sdk/python/pyproject.toml
-# and Cargo.toml agree, sync_starter.sh --check holds them there).
+# The SDK version the image bundles as a wheel. sdk/python/pyproject.toml
+# and Cargo.toml agree, and sync_starter.sh --check enforces that.
 SDK_VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' "$REPO/Cargo.toml" | head -1)"
 
 # A minimal house, its clock unit pinned to the bundled SDK wheel.
@@ -55,7 +56,7 @@ done
 echo "clock unit is running"
 
 # A second container reaches the bus over the container network and reads
-# the live world; a clean boot of an unchanged repo must plan to nothing.
+# the live world. A clean boot of an unchanged repo must plan no changes.
 plan_out="$(docker run --rm --network "$NET" -v "$HOUSE:/house" "$IMAGE" \
   plan /house --bus "tcp/$SUP:7447")"
 echo "$plan_out" | grep -q "No changes. The world matches the repo." \
@@ -66,8 +67,8 @@ echo "plan from a second container matches the repo"
 docker stop -t 20 "$SUP" >/dev/null
 exit_code="$(docker inspect -f '{{.State.ExitCode}}' "$SUP")"
 [ "$exit_code" = "0" ] || fail "supervisor exited $exit_code on SIGTERM"
-# The log driver can lag the exit by a moment: the final lines are not
-# always readable the instant `docker stop` returns, so poll briefly.
+# The log driver can lag the exit by a moment, so the final lines may not
+# be readable as soon as `docker stop` returns. Poll briefly.
 deadline=$((SECONDS + 10))
 until docker logs "$SUP" 2>&1 | grep -q "\[homeostat\] shutting down"; do
   if [ "$SECONDS" -ge "$deadline" ]; then

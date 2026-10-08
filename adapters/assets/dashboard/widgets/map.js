@@ -1,9 +1,9 @@
-/* The map widget. The map is a view over every person entity, not a
+/* The map widget. The map shows every person entity, rather than being a
  * per-entity row (see docs/design.md#map-and-people). Leaflet's map object
- * is stateful (pan/zoom, tile cache) and must not be recreated on every
- * state-delta render, so its container is a detached DOM node kept in
- * mapState and moved into a fresh slot each render, rather than rebuilt
- * from an HTML string like the rest of the view. */
+ * has state (pan/zoom, tile cache) and must not be recreated on every
+ * state-delta render. Its container is therefore a detached DOM node kept
+ * in mapState and moved into a new slot on each render, instead of being
+ * rebuilt from an HTML string like the rest of the view. */
 import { byId, html } from '../html.js';
 import { stateValue, store } from '../store.js';
 import { relTime } from './entity.js';
@@ -24,7 +24,7 @@ function mapThemeName() {
 function personDivIcon(entity) {
   return L.divIcon({
     className: 'person-marker',
-    // Leaflet takes a string here (and a popup's content below), not markup
+    // Leaflet takes a string here (and for a popup's content below), not a Markup
     html: String(html`<div class="person-marker-dot"></div><div class="person-marker-label">${entity.label}</div>`),
     iconSize: [12, 12],
     iconAnchor: [6, 6]
@@ -47,9 +47,9 @@ function ensureMap() {
     mapState.container.id = 'person-map';
     mapState.container.className = 'map-wrap';
   }
-  // No default setView: a center/zoom is set only once real fixes exist
-  // (updateMapMarkers), so no coordinate is ever hardcoded. Layers added
-  // before that point just wait for it (Leaflet defers via whenReady).
+  // No default setView. The center and zoom are set only once real fixes
+  // exist (updateMapMarkers), so no coordinate is hardcoded. Layers added
+  // before then wait for it (Leaflet defers them with whenReady).
   mapState.map = L.map(mapState.container);
   if (store.model.tiles) {
     mapState.tileLayer = protomapsL.leafletLayer({ url: '/tiles.pmtiles', theme: mapThemeName() }).addTo(mapState.map);
@@ -101,8 +101,8 @@ function updateMapMarkers(persons) {
     if (mapState.circles[key]) { map.removeLayer(mapState.circles[key]); delete mapState.circles[key]; }
   });
 
-  // Fit once, when fixes first appear — repeating this on every later
-  // delta would fight anyone panning the map.
+  // Fit once, when fixes first appear. Doing it on every later delta would
+  // undo the user's panning.
   if (bounds.length && !mapState.fitted) {
     if (bounds.length === 1) map.setView(bounds[0], 16);
     else map.fitBounds(bounds, { maxZoom: 16, padding: [24, 24] });

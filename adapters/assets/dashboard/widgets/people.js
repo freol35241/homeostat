@@ -4,9 +4,9 @@ import logic from '../logic.js';
 import { store } from '../store.js';
 import { relTime } from './entity.js';
 
-// People: the person entities, home or away from their presence aspect;
-// failing that, when they were last seen. Motion sensors are rooms'
-// business, not people.
+// People: the person entities, shown as home or away from their presence
+// aspect, or otherwise by when they were last seen. Motion sensors belong
+// to rooms, not to people.
 export function widgetPeople(persons) {
   if (persons.length === 0) return '';
   var pRows = persons.map(function (e) {

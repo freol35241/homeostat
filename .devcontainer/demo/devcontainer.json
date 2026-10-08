@@ -1,8 +1,8 @@
-// The starter house with simulated devices, one click from the README's
+// The starter house with simulated devices, opened by the README's
 // "Open in Codespaces" button (examples/starter-house/demo/README.md).
-// Nothing is built: it runs the released homeostat image beside a
+// Nothing is built. It runs the released homeostat image beside a
 // simulator under Docker, and opens the dashboard when its port forwards.
-// For working on homeostat itself, use the default container instead.
+// To work on homeostat itself, use the default container.
 {
 	"name": "homeostat demo",
 	"image": "mcr.microsoft.com/devcontainers/base:bookworm",
@@ -10,8 +10,8 @@
 		"ghcr.io/devcontainers/features/docker-in-docker:4": {}
 	},
 	"hostRequirements": { "cpus": 2, "memory": "4gb" },
-	// Every start, not just the first: up.sh reuses the house it copied
-	// out on a resumed codespace and only brings the containers back up.
+	// Runs on every start. On a resumed codespace, up.sh reuses the house
+	// it copied out earlier and only brings the containers back up.
 	"postStartCommand": "examples/starter-house/demo/up.sh",
 	"forwardPorts": [8600],
 	"portsAttributes": {

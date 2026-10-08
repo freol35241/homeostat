@@ -12,11 +12,12 @@ permissions:
   id-token: write
   attestations: write
 
-# Third-party actions are pinned to a commit; the comment is the tag that
-# commit carried when pinned, for dependabot and for humans.
+# Third-party actions are pinned to a commit. The trailing comment is the
+# tag that commit carried when it was pinned. Dependabot reads it, and so do
+# people.
 
 jobs:
-  # Native builds on both architectures — no cross toolchain, no QEMU.
+  # Native builds on both architectures, without a cross toolchain or QEMU.
   binaries:
     strategy:
       matrix:
@@ -48,10 +49,10 @@ jobs:
           name: binary-${{ matrix.target }}
           path: homeostat-*.tar.gz
 
-  # The SDK wheel the image bundles, published beside the tarballs so a
-  # host without Docker can point UV_FIND_LINKS at it (README, Run
-  # without Docker): a house unit pins `homeostat==X.Y.Z` and the SDK is
-  # on no index.
+  # The SDK wheel the image bundles. It is published beside the tarballs
+  # so a host without Docker can point UV_FIND_LINKS at it (README, "Run
+  # without Docker"). A house unit pins `homeostat==X.Y.Z`, and the SDK is
+  # not on any package index.
   wheel:
     runs-on: ubuntu-latest
     steps:
@@ -70,7 +71,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # QEMU only emulates the runtime stage's apt/uv steps; the Rust
+      # QEMU only emulates the runtime stage's apt and uv steps. The Rust
       # builder stage cross-compiles natively (see Dockerfile).
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
@@ -97,8 +98,8 @@ jobs:
           build-args: HOMEOSTAT_COMMIT=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-      # Attests the multi-arch index digest — the one `docker pull` by tag
-      # resolves to — and pushes the attestation to the registry next to it.
+      # Attest the multi-arch index digest, which is what `docker pull` by
+      # tag resolves to, and push the attestation to the registry next to it.
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ghcr.io/${{ github.repository }}
@@ -122,10 +123,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           # A semver prerelease (v0.14.0-rc1) must not become the repo's
-          # "Latest" release: that is what the front page offers and what a
-          # house reads when choosing a version to pin, and an rc is by
-          # definition not the thing to hand someone who asks for current.
-          # The hyphen is semver's own prerelease marker, so the tag says it.
+          # "Latest" release. The front page offers that release, and a house
+          # reads it when choosing a version to pin. A hyphen in the tag marks
+          # a semver prerelease.
           prerelease=""
           case "$GITHUB_REF_NAME" in *-*) prerelease="--prerelease" ;; esac
           gh release create "$GITHUB_REF_NAME" homeostat-*.tar.gz homeostat-*.whl SHA256SUMS \

@@ -7,16 +7,16 @@
 # ///
 """Write docs/widgets.md and its pictures.
 
-Every widget kind of dashboard.toml, with what it says, the line that
-places it, and what it looks like: the vocabulary a person (or an agent)
-uses to say how the dashboard should look.
+The page lists every widget kind of dashboard.toml with its description,
+the line that places it, and a picture. A person or an agent uses these
+kinds to say how the dashboard should look.
 
-The pictures are the real page drawing the browser tests' fixture house
-(tests/browser/fixtures, as the Pages demo edits it: people placed on the
-map), one view per widget, so they show the dashboard as it renders rather
-than a mock-up of it. The words come from docs/manifest.md, which is
-generated from the parser itself; this script adds no description of its
-own. src/schema.rs pins that every widget kind the parser accepts has a
+The pictures are screenshots of the real page drawing the browser tests'
+fixture house (tests/browser/fixtures), with the Pages demo's edits that
+place the people on the map. Each widget gets its own view. The
+descriptions come from docs/manifest.md, which is generated from the
+parser. This script adds no description of its own. A test in
+src/schema.rs checks that every widget kind the parser accepts has a
 section here, so a new kind cannot ship without its picture.
 
 Usage: uv run --script scripts/widget_gallery.py [--chromium PATH]
@@ -70,7 +70,7 @@ KEY_ORDER = ["kind", "entity", "aspect", "room", "unit", "label", "hours"]
 def toml_widget(widget: dict, indent: str = "") -> str:
     """Return the widget as dashboard.toml writes it.
 
-    The same shape the page's "Text" overlay prints (dashboard-logic.js,
+    This is the shape the page's "Text" overlay prints (dashboard-logic.js,
     viewText).
     """
     fields = [
@@ -98,8 +98,8 @@ def kinds_from_manifest() -> list[tuple[str, str]]:
 
 async def pictures(chromium: str | None) -> None:
     house = FakeHouse()
-    # The Pages demo's edit of the fixtures: the people placed on the map,
-    # no camera without a stream to show.
+    # Apply the Pages demo's edits to the fixtures: place the people on
+    # the map and drop the camera, which has no stream to show.
     demo = data()
     house.model, house.snapshot = demo["model"], demo["snapshot"]
     url = await house.start()

@@ -1,7 +1,7 @@
 /* The page's pure decision logic, ../dashboard-logic.js, under one name.
- * That file stays a classic script, loaded by dashboard.html ahead of
- * these modules (it defines window.HomeostatLogic), because
- * `node --test tests/js` require()s it as it is. */
+ * That file is a classic script, because `node --test tests/js` loads it
+ * with require(). dashboard.html loads it before these modules, and it
+ * defines window.HomeostatLogic. */
 var logic = window.HomeostatLogic;
 export default logic;
 

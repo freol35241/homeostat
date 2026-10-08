@@ -8,18 +8,20 @@ function esc(s) {
   });
 }
 
-/* Markup is written with the `html` tag, which escapes by default:
+/* Markup is written with the `html` tag, which escapes by default.
  * html`<b>${name}</b>` escapes every interpolated value unless it is
- * itself markup (another html`` result), and joins an array of either. A
- * forgotten escape is therefore not a way in for a label from the house.
+ * itself markup (another html`` result), and joins an array of either.
+ * A label from the house therefore cannot inject markup through a
+ * forgotten escape.
  * All five of & < > " ' are escaped, so a value is safe in text and in a
- * QUOTED attribute alike; an unquoted attribute is not, so every
- * attribute here is quoted. A line break in the template and the
- * indentation after it are dropped, so markup can be laid out over lines
- * without putting whitespace between elements. The result is a Markup,
- * which becomes its text wherever a string is wanted (innerHTML,
- * insertAdjacentHTML) — and is then an ordinary string, so markup is
- * composed by interpolating it, never with `+`. */
+ * quoted attribute. It is not safe in an unquoted attribute, so every
+ * attribute here is quoted.
+ * A line break in the template and the indentation after it are dropped,
+ * so markup can be laid out over several lines without adding whitespace
+ * between elements.
+ * The result is a Markup. It turns into its text wherever a string is
+ * expected (innerHTML, insertAdjacentHTML), and is then an ordinary
+ * string. Compose markup by interpolating it, not with `+`. */
 function Markup(text) { this.text = text; }
 
 Markup.prototype.toString = function () { return this.text; };

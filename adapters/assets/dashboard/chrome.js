@@ -72,8 +72,9 @@ export function fmtOrDash(v) {
   return (v === undefined || v === null) ? '—' : String(v);
 }
 
-// The nav is the file's views (dashboard-logic.js, viewsOf); Health and
-// Not shown are fixed chrome below it, never views the file can name.
+// The nav lists the file's views (dashboard-logic.js, viewsOf). Health
+// and Not shown are fixed entries below it, and the file cannot name
+// them as views.
 export function currentView() {
   var views = logic.viewsOf(store.model);
   if (store.view === 'health' || store.view === 'notshown') return store.view;
@@ -92,15 +93,16 @@ export function renderShell() {
     return html`<button data-view="${v.name}" class="${current === v.name ? 'active' : ''}">${v.label}</button>`;
   })}`;
 
-  // The phone's bottom bar is the house's views and nothing else: every
-  // slot there is one the file named. Health and Not shown are behind the
-  // top bar's status button instead (the status sheet, below).
+  // The phone's bottom bar holds only the house's views, each one named in
+  // the file. Health and Not shown are behind the top bar's status button
+  // instead (the status sheet, below).
   var tabs = byId('tabs-row');
   var tabHtml = views.map(function (v) {
     return html`<button data-view="${v.name}" class="${current === v.name ? 'active' : ''}">${TAB_ICONS[v.kind] || TAB_ICONS.view}<span class="tab-label">${v.label}</span></button>`;
   });
   // Rebuilding the scroller would reset its scroll position on every
-  // render; only the active marks change between renders of the same nav.
+  // render. Between renders of the same nav, only the active marks
+  // change.
   var viewsRow = tabs.querySelector('.tabs-views');
   var same = viewsRow && viewsRow.getAttribute('data-views') === views.map(function (v) { return v.name; }).join('\n');
   if (!same) {
@@ -136,8 +138,8 @@ export function renderShell() {
   var about = aboutHtml();
   byId('rail-about').innerHTML = about;
 
-  // The phone: one button in the top bar, the house's health at a glance,
-  // opening the same chrome and the same about lines as the rail.
+  // On the phone, one button in the top bar shows the house's health. It
+  // opens the same entries and about lines as the rail.
   var statusBtn = byId('topbar-status');
   var glyphStatus = hw.worst ? hw.worst.status : 'running';
   statusBtn.innerHTML = html`<span class="status-glyph status-${glyphStatus}">${statusGlyph(glyphStatus)}</span>
@@ -169,9 +171,9 @@ function aboutHtml() {
     <div class="about-links">${logic.ABOUT_LINKS.map(function (l) { return link(l.href, l.label); })}</div>`;
 }
 
-// Registered before main.js's delegated taps, because this module runs
-// before main.js, which imports it: a tap that only puts the sheet away
-// stops here and reaches nothing else.
+// This handler is registered before main.js's delegated taps, because
+// main.js imports this module and so runs after it. A tap that only
+// closes the sheet stops here and reaches nothing else.
 document.addEventListener('click', function (e) {
   var toggle = e.target.closest('[data-action="status-sheet"]');
   var inSheet = e.target.closest('#status-sheet');
@@ -181,8 +183,8 @@ document.addEventListener('click', function (e) {
     return;
   }
   if (statusSheetOpen && !inSheet) {
-    // A tap outside puts the sheet away and does nothing else: the
-    // finger was aiming at the sheet's edge, not at what lies under it.
+    // A tap outside closes the sheet and does nothing else. The finger was
+    // most likely aiming at the sheet's edge, not at what lies under it.
     statusSheetOpen = false;
     renderShell();
     e.preventDefault();
@@ -190,7 +192,7 @@ document.addEventListener('click', function (e) {
     return;
   }
   if (statusSheetOpen && e.target.closest('[data-view]')) {
-    statusSheetOpen = false; // a pick in the sheet puts it away
+    statusSheetOpen = false; // choosing an entry in the sheet closes it
     renderShell();
   }
   var btn = e.target.closest('[data-view]');

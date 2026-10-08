@@ -11,9 +11,9 @@ export function aspectValueSpan(r) {
 }
 
 // A thermostat dial: the target on a 240° arc from min to max, the
-// current reading beneath it when the entity has one, ± at the arc's
-// ends. The buttons carry the same action attributes as the compact
-// stepper, so the pending/held/timeout stages apply unchanged.
+// current reading below it when the entity has one, and ± at the arc's
+// ends. The buttons have the same action attributes as the compact
+// stepper, so the pending, held and timeout stages work the same.
 export function renderDial(action, attrs, o) {
   var span = (o.max - o.min) || 1;
   var f = typeof o.value === 'number' ? Math.max(0, Math.min(1, (o.value - o.min) / span)) : 0;
@@ -40,8 +40,8 @@ export function renderDial(action, attrs, o) {
     </div></div>`;
 }
 
-// The first temperature reading the entity has that is not itself the
-// commanded aspect — what the dial shows as "now".
+// The entity's first temperature reading that is not the commanded
+// aspect. The dial shows it as "now".
 function currentTemperatureOf(entity, except) {
   var rows = [];
   logic.aspectPlan(entity, store.state, store.aspects[entity.name], false, houseControls()).forEach(function (s) {
@@ -55,9 +55,10 @@ function currentTemperatureOf(entity, except) {
   return hit ? hit.display + ' now' : '';
 }
 
-// The control markup for a planned row with a control: the param-control
-// shapes wired to /api/cmd. `big` is the overlay and the dial widget; a
-// room card gets every control's compact form (a dial's is a stepper).
+// The control markup for a planned row with a control, in the
+// param-control shapes and sending to /api/cmd. `big` is for the overlay
+// and the dial widget. A room card gets every control's compact form,
+// which for a dial is a stepper.
 export function renderAspectControl(entity, r, big) {
   var attrs = html` data-room="${entity.room}" data-entity="${entity.name}" data-aspect="${r.aspect}"`;
   var value = aspectValueSpan(r);

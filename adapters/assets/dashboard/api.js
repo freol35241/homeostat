@@ -1,5 +1,6 @@
-/* Talking to the dashboard unit: the model, the WebSocket and what its
- * messages change, and the recorder's history behind every chart. */
+/* Communication with the dashboard unit: the model, the WebSocket and the
+ * changes its messages make, and the recorder's history behind every
+ * chart. */
 import { CHART_VBW } from './charts.js';
 import { updateBanner } from './chrome.js';
 import { announceOutcome, pending } from './commands.js';
@@ -69,8 +70,8 @@ function handleWsMessage(msg) {
   scheduleRender();
 }
 
-// key like home/state/{room}/{entity}/occupancy -> track lastSeen per
-// entity (both presence aspect spellings; see dashboard-logic.js).
+// For a key like home/state/{room}/{entity}/occupancy, track lastSeen per
+// entity (both presence aspect names; see dashboard-logic.js).
 function trackLastSeen(key) {
   var pe = logic.presenceEntityFromKey(key);
   if (pe) store.lastSeen[pe] = Date.now();
@@ -97,12 +98,13 @@ export function errText(e) {
   return msg;
 }
 
-// The recorder folds the window (docs/design.md#read-path): a line asks
-// for one bucket per drawn column, a timeline for the runs of the state.
-// The window travels with the points so the chart places them by time.
+// The recorder summarises the window (docs/design.md#read-path). A line
+// chart asks for one bucket per drawn column, and a timeline for the runs
+// of the state. The window is returned with the points so the chart can
+// place them by time.
 
 // `cls` is the recorder's series class: 'state' (the default) is what the
-// house did, 'cmd' what was asked of it.
+// house did, and 'cmd' is what was asked of it.
 export function fetchHistory(entity, aspect, hours, shape, cls) {
   var win = { from: Date.now() - hours * 3600e3, to: Date.now() };
   var url = '/api/history?entity=' + encodeURIComponent(entity) + '&aspect=' + encodeURIComponent(aspect) + '&hours=' + hours +

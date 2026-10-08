@@ -1,9 +1,10 @@
 name: Dashboard demo
 
-# The static dashboard demo (demo-site/README.md) on GitHub Pages: rebuilt
-# with each release, so the page it shows is the dashboard that shipped,
-# and by hand whenever it should be refreshed between releases. Needs the
-# repository's Pages source set to "GitHub Actions" (Settings > Pages).
+# Publishes the static dashboard demo (demo-site/README.md) to GitHub Pages.
+# It is rebuilt at each release, so it shows the dashboard that shipped. It
+# can also be run by hand to refresh the page between releases. The
+# repository's Pages source must be set to "GitHub Actions" (Settings >
+# Pages).
 on:
   push:
     tags: ["v*"]

@@ -1,10 +1,11 @@
 """Bus session for a supervised unit.
 
-`connect()` reads HOMEOSTAT_UNIT / HOMEOSTAT_BUS (handed down by the
-supervisor), opens a client session against the supervisor's router — no
-scouting, topology is explicit — and returns a UnitSession. Call `ready()`
-once the unit is actually able to do its job: the liveliness token, not the
-process, is what "up" means to the supervisor.
+`connect()` reads HOMEOSTAT_UNIT and HOMEOSTAT_BUS, which the supervisor
+sets. It opens a client session against the supervisor's router and
+returns a UnitSession. Scouting is off, because the topology is explicit.
+Call `ready()` once the unit can do its job. The supervisor treats a unit
+as up when its liveliness token is declared, not when its process
+starts.
 """
 
 import json
@@ -17,7 +18,7 @@ import zenoh
 
 from . import forecast, keys
 
-# The classes that carry commands: a wish (home/cmd) and the arbiter's
+# The classes that carry commands: a request (home/cmd) and the arbiter's
 # forward of it (home/arbiter). put_json sends both as commands.
 COMMAND_PREFIXES = ("home/cmd/", "home/arbiter/")
 
@@ -58,8 +59,8 @@ class QueryError(Exception):
 class QueryTimeout(QueryError):
     """A get ran out of time before every queryable had answered.
 
-    Zenoh delivers this as an error reply too, but it is the queryable not
-    answering yet, not the queryable saying no.
+    Zenoh delivers this as an error reply too. It means the queryable has
+    not answered yet, not that it refused.
     """
 
 
@@ -83,9 +84,10 @@ class UnitSession:
         config.insert_json5("scouting/gossip/enabled", "false")
         self._session = zenoh.open(config)
         self._token = None
-        # key -> publisher, kept for has_subscriber: matching status is a
-        # publisher's, and a fresh one knows nothing until the router has
-        # told it, so each key's is declared once and reused.
+        # key -> publisher, for has_subscriber. Matching status belongs to a
+        # publisher, and a new publisher knows nothing until the router has
+        # told it. Each key's publisher is therefore declared once and
+        # reused.
         self._publishers: dict[str, Any] = {}
 
     def ready(self) -> None:
@@ -97,11 +99,11 @@ class UnitSession:
     def put_json(self, key: str, value: Any) -> None:
         """Publish a JSON-encoded value.
 
-        A value carrying a non-finite float (NaN, Infinity — which Python's
-        json accepts and re-emits, but JSON has no spelling for) is dropped
-        with a "non-finite" health event instead: every consumer would
-        otherwise have to guard against it, and the recorder cannot store
-        it (docs/design.md#bus-payload-conventions).
+        A value containing a non-finite float (NaN, Infinity) is dropped
+        with a "non-finite" health event instead. Python's json accepts and
+        emits these, but JSON has no syntax for them. Every consumer would
+        otherwise have to guard against them, and the recorder cannot store
+        them (docs/design.md#bus-payload-conventions).
 
         Parameters
         ----------
@@ -117,11 +119,10 @@ class UnitSession:
             self.health_event("drop", reason="non-finite", key=key)
             return
         if key.startswith(COMMAND_PREFIXES):
-            # A command is somebody's intent, not a sample: zenoh's default
-            # for a put is to drop it when the link is congested, which is
-            # right for the next temperature reading and wrong for "unlock
-            # the door". Commands block for room instead, and go ahead of
-            # data in the queues.
+            # By default zenoh drops a put when the link is congested. That
+            # is fine for a temperature reading, which the next one
+            # replaces, but not for "unlock the door". Commands block until
+            # there is room instead, and go ahead of data in the queues.
             self._session.put(
                 key,
                 encoded,
@@ -134,13 +135,14 @@ class UnitSession:
     def put_forecast(self, key: str, issued, points) -> None:
         """Publish a forecast (docs/design.md#forecasts).
 
-        Retained like state, so a consumer restarting mid-horizon has its
-        inputs at once rather than waiting for the next issue. A payload
-        the SDK refuses — a naive timestamp, a non-finite value, two
-        points at one instant, more points than the guard — drops with an
-        "invalid-forecast" health event carrying the reason, the same
-        shape as every other producer-side refusal: the unit stays up and
-        the trace names what it published.
+        The forecast is retained like state, so a consumer that restarts
+        mid-horizon has its inputs at once instead of waiting for the next
+        issue. The SDK refuses a naive timestamp, a non-finite value, two
+        points at one instant, or more points than the limit. Such a
+        payload is dropped with an "invalid-forecast" health event that
+        carries the reason, as for every other refusal on the producer
+        side. The unit stays up, and the event says what it tried to
+        publish.
 
         Parameters
         ----------
@@ -161,10 +163,9 @@ class UnitSession:
     def parse_forecast(self, sample: zenoh.Sample):
         """Decode a subscribed forecast sample, or drop it with a health event.
 
-        Returns None after a "malformed-payload" drop event — the subscriber
-        prologue, matching `parse_command`. What the consumer does about
-        `issued` being old is its own policy, never the SDK's: see
-        homeostat.forecast.
+        Returns None after a "malformed-payload" drop event, as
+        `parse_command` does. What to do when `issued` is old is the
+        consumer's own policy, not the SDK's (see homeostat.forecast).
 
         Parameters
         ----------
@@ -187,13 +188,14 @@ class UnitSession:
         """Run the command prologue every adapter shares (docs/adapters.md, §4).
 
         The result is the aspect, the envelope's value and its correlation
-        id, or None after a drop event — "malformed-payload" for a payload
-        that is not JSON, "invalid-command" for one that is not an envelope.
+        id. It is None after a drop event: "malformed-payload" for a payload
+        that is not JSON, and "invalid-command" for one that is not an
+        envelope.
 
-        The id rides along because an adapter's own later validation (out of
-        range, no such command) ends the same command, and whoever published
-        it is waiting to hear which stage stopped it. A payload that never
-        parsed has no id to report.
+        The id is returned because the adapter's own later validation (out
+        of range, no such command) can end the same command. The publisher
+        is waiting to hear which stage stopped it. A payload that did not
+        parse has no id to report.
 
         Parameters
         ----------
@@ -224,14 +226,14 @@ class UnitSession:
         """Return whether anything on the bus subscribes to `key`.
 
         That is, whether a put there reaches anyone at all. A client session
-        filters writes on the publishing side, so a put nobody matches is
-        dropped without a trace; this is the one moment the publisher can
-        know it.
+        filters writes on the publishing side, so a put that matches no
+        subscriber is dropped silently. This method is the only way for the
+        publisher to find out.
 
-        Blocking for up to `wait_s`: a key asked about for the first time
-        gets a publisher that has not yet heard from the router, and an
-        immediate False from it would report a subscriber missing that is
-        not. Answering True ends the wait at once.
+        It blocks for up to `wait_s`. The first time a key is asked about,
+        its publisher has not yet heard from the router, and an immediate
+        False could report a missing subscriber that exists. The wait ends
+        as soon as the answer is True.
 
         Parameters
         ----------
@@ -260,9 +262,9 @@ class UnitSession:
         """Return whether `unit` holds its liveliness token (home/health/{unit}/alive).
 
         This is the supervisor's own test for "up". It answers for the unit
-        itself, where a subscriber match on a key can be anyone's — the
-        recorder subscribes to every command, so a key's match says nothing
-        about the adapter that should act on it.
+        itself. A subscriber match on a key could come from any unit. The
+        recorder subscribes to every command, for example, so a match on a
+        command key says nothing about the adapter that should act on it.
 
         Parameters
         ----------
@@ -349,11 +351,11 @@ class UnitSession:
     ) -> list[tuple[str, Any, float]]:
         """Query the bus, returning (key, decoded JSON, age in seconds) per ok reply.
 
-        The age is the reply's attachment as the core's last-value mirrors
-        write it; a reply without one is age zero. Non-JSON payloads are
-        ignored, as a subscriber ignores them. `timeout_s` bounds the wait
-        for replies (zenoh's default, 10 s, when None); running out raises
-        QueryTimeout.
+        The age is read from the reply's attachment, which the core's
+        last-value mirrors write. A reply without one has age zero. Non-JSON
+        payloads are ignored, as a subscriber ignores them. `timeout_s`
+        bounds the wait for replies, with zenoh's default of 10 s when None.
+        Running out raises QueryTimeout.
 
         Parameters
         ----------
@@ -378,12 +380,12 @@ class UnitSession:
         for reply in self._session.get(selector, timeout=timeout_s):
             sample = reply.ok
             if sample is None:
-                # An error reply is the queryable saying no; swallowing it
-                # would read as an empty result.
+                # An error reply means the queryable refused. Ignoring it
+                # would look like an empty result.
                 if (err := reply.err) is not None:
                     text = err.payload.to_bytes().decode(errors="replace")
                     # Zenoh reports its own timeout as an error reply with
-                    # this exact payload; there is no other signal for it.
+                    # this payload. There is no other signal for it.
                     if text == "Timeout":
                         raise QueryTimeout(text)
                     try:
@@ -406,10 +408,11 @@ class UnitSession:
     def write_config(self, unit: str, param: str, value: Any) -> Any:
         """Write a parameter through the core's validating config queryable.
 
-        A GET with payload against the concrete key: the core validates the
-        value against the manifest constraint, stores it, republishes it, and
-        replies the stored value. A rejected write raises ConfigWriteError
-        with the core's message; a plain put would bypass validation.
+        This sends a GET with a payload to the concrete key. The core
+        validates the value against the manifest constraint, stores it,
+        republishes it, and replies with the stored value. A rejected write
+        raises ConfigWriteError with the core's message. A plain put would
+        bypass validation.
 
         Parameters
         ----------

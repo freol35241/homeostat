@@ -2,19 +2,19 @@
 """Build the static dashboard demo (demo-site/README.md) for GitHub Pages.
 
 The output is a directory Pages can serve as it is. The page is the real
-adapters/dashboard.html with its real assets; the house behind it is the
-browser tests' fixture house (tests/browser/fixtures), answered in the
-page by demo-site/shim.js instead of by the dashboard unit. Three edits
-make that possible, and each is checked so a change to the page fails the
-build instead of shipping a broken demo:
+adapters/dashboard.html with its real assets. The house behind it is the
+browser tests' fixture house (tests/browser/fixtures). demo-site/shim.js
+answers the page's requests in place of the dashboard unit. The build
+makes the following edits, and checks each one, so a change to the page
+fails the build instead of shipping a broken demo:
 
-  - asset paths become relative, because Pages serves the site under
-    /<repo>/ and an absolute /assets/... would point outside it;
-  - demo/data.js and demo/shim.js load first in <head>, ahead of every
-    script that talks to the unit;
-  - the fixtures lose what a static page cannot show (the camera, which
-    needs a stream) and gain what makes a demo legible (positions for the
-    two people on the map, the hallway lamp reachable).
+  - Asset paths become relative. Pages serves the site under /<repo>/, and
+    an absolute /assets/... would point outside it.
+  - demo/data.js and demo/shim.js load first in <head>, before any script
+    that talks to the unit.
+  - The fixtures drop the camera, which needs a stream that a static page
+    cannot provide. They gain positions for the two people on the map, and
+    the hallway lamp is made available.
 
 Usage: scripts/build_demo_site.py [OUT]   (default: _site)
 """
@@ -43,9 +43,9 @@ def fail(message: str) -> None:
 
 def page() -> str:
     html = PAGE.read_text()
-    # "./": relative to the page, which Pages serves under /<repo>/. The
-    # modules under assets/dashboard/ import each other relatively, so
-    # they need no edit.
+    # "./" is relative to the page, which Pages serves under /<repo>/. The
+    # modules under assets/dashboard/ import each other by relative path,
+    # so they need no edit.
     for quote in ('"', "'"):
         html = html.replace(f"{quote}/assets/", f"{quote}./assets/")
     if re.search(r"""["'(]/assets/""", html):
@@ -93,8 +93,8 @@ def data() -> dict:
         state[f"home/state/person/{person}/lon"] = round(HOME[1] + offset[1], 6)
         state[f"home/state/person/{person}/accuracy"] = 15
     # The page's about lines say what the demo was built from: this
-    # checkout's release, and its commit when CI says which it is. There is
-    # no house repo behind it, so no house commit.
+    # checkout's release, and its commit when CI provides it. There is no
+    # house repo behind the demo, so there is no house commit.
     version = tomllib.loads((ROOT / "Cargo.toml").read_text())["package"]["version"]
     model["about"] = {"homeostat": {"version": version, "commit": os.environ.get("GITHUB_SHA")}}
     return {"model": model, "snapshot": snapshot}

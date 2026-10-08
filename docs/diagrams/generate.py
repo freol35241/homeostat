@@ -2,18 +2,20 @@
 """Generates the README schematics in this directory as draw.io-editable SVGs.
 
 Sheets:
-  concept      — the hypothesis: home automation is regulation (two loops,
-                 Ashby's ultrastability mapped onto homeostat vocabulary)
-  architecture — the software architecture: repo -> core -> bus -> units
+  concept       The hypothesis that home automation is regulation. Two
+                loops, with Ashby's ultrastability mapped onto homeostat
+                vocabulary.
+  architecture  The software architecture: repo -> core -> bus -> units.
 
-Each diagram is defined once (nodes, edges, texts, absolute geometry) and
-rendered twice from that single model: an <svg> body for GitHub, and an
-uncompressed mxGraphModel embedded in the SVG root's `content` attribute —
-the draw.io "editable SVG" format, so the same file opens in
+Each diagram is defined once as nodes, edges, texts and absolute geometry.
+That model is rendered twice: as an <svg> body for GitHub, and as an
+uncompressed mxGraphModel in the SVG root's `content` attribute. The
+second is draw.io's "editable SVG" format, so the same file opens in
 draw.io / diagrams.net for editing.
 
-Run from anywhere: python3 generate.py — output lands next to the script.
-Same discipline as docs/wireframes: grayscale, blue for annotations only.
+Run it from anywhere with `python3 generate.py`. The output is written
+next to the script. The style follows docs/wireframes: grayscale, with
+blue only for annotations.
 """
 
 import os
@@ -167,7 +169,7 @@ class Diagram:
     # -- draw.io (mxfile) rendering ----------------------------------------------
 
     def _mx_value(self, n):
-        # raw HTML; escaped exactly once by attr() at emission
+        # Raw HTML. attr() escapes it once when the cell is written.
         v = f"<b>{n['title']}</b>"
         for s in n["subs"]:
             v += f'<br/><font style="font-size: 10px" color="{SUB}">{s}</font>'

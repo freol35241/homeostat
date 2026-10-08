@@ -3,13 +3,12 @@
 Each such adapter bridges an external MQTT broker onto the bus (zigbee2mqtt,
 OwnTracks, ...).
 
-A helper, not a transport layer (docs/design.md#bus):
-adapters still own their connections — their own `on_message` logic, their
-own topics, their own health-event vocabulary. This module only covers the
-plumbing that is identical across all of them: endpoint parsing, client
-construction, connect-and-subscribe with a SUBACK wait, and the
-SIGTERM/SIGINT shutdown wait that runs alongside the zenoh session
-teardown.
+This module is a helper and not a transport layer (docs/design.md#bus).
+Adapters still own their connections, with their own `on_message` logic,
+topics and health-event vocabulary. This module covers only the code that
+is the same in all of them: endpoint parsing, client construction,
+connect-and-subscribe with a SUBACK wait, and the SIGTERM/SIGINT shutdown
+wait that runs alongside the zenoh session teardown.
 """
 
 import os
@@ -45,8 +44,8 @@ def parse_endpoint(endpoint: str) -> ParseResult:
     Raises
     ------
     ValueError
-        On any other scheme. The message is load-bearing: adapters surface
-        it as-is on a misconfigured unit.
+        On any other scheme. Adapters report the message unchanged for a
+        misconfigured unit, so its wording matters.
     """
     parsed = urlparse(endpoint)
     if parsed.scheme not in ("mqtt", "mqtts"):
@@ -57,11 +56,11 @@ def parse_endpoint(endpoint: str) -> ParseResult:
 def base_topic(endpoint: ParseResult, default: str) -> str:
     """Return the endpoint's path as a broker topic prefix, or `default` if it has none.
 
-    An estate that has run a non-default prefix for years cannot move it —
-    other consumers address it — so the prefix is a deployment fact of the
-    same kind as the host, and lives beside it:
-    `mqtt://broker:1883/VP52/zigbee2mqtt`. Not a secret, so the repo is
-    the right place for it (docs/design.md#local-only-access).
+    An installation that has used a non-default prefix for years cannot
+    change it, because other consumers use it. The prefix is therefore a
+    deployment detail like the host, and is written beside it:
+    `mqtt://broker:1883/VP52/zigbee2mqtt`. It is not a secret, so it
+    belongs in the repo (docs/design.md#local-only-access).
 
     Parameters
     ----------
@@ -81,18 +80,19 @@ def base_topic(endpoint: ParseResult, default: str) -> str:
 def credentials(endpoint: ParseResult) -> tuple[str | None, str | None]:
     """Return the username and password for `endpoint`.
 
-    Inline `mqtt://user:pass@host` when present, otherwise the
-    HOMEOSTAT_MQTT_CREDENTIALS TOML — a file OUTSIDE the repo, keyed by
-    broker hostname:
+    The credentials come from the endpoint (`mqtt://user:pass@host`) when
+    present. Otherwise they come from the TOML file named by
+    HOMEOSTAT_MQTT_CREDENTIALS. That file lives outside the repo and is
+    keyed by broker hostname:
 
         ["broker.example"]
         username = "homeostat"
         password = "..."
 
     A broker that needs auth must not force its password into a unit
-    manifest; the file mirrors HOMEOSTAT_ESPHOME_DEVICES
-    (docs/design.md#local-only-access). Unset env var or no entry for this
-    host: anonymous.
+    manifest. The file works like HOMEOSTAT_ESPHOME_DEVICES
+    (docs/design.md#local-only-access). If the variable is unset or the
+    file has no entry for this host, the connection is anonymous.
 
     Parameters
     ----------
@@ -123,19 +123,18 @@ def credentials(endpoint: ParseResult) -> tuple[str | None, str | None]:
 
 
 def guard(on_message, health=None):
-    """Wrap `on_message` in the two failures that would otherwise leave it deaf or silent.
+    """Wrap `on_message` to handle two failures that would otherwise stop or hide messages.
 
     A topic has to become a `str` to be routed, and paho decodes it
-    lazily — `msg.topic` is a property, so a topic that is not valid UTF-8
-    raises at the adapter's first *access* rather than at receive. Forcing
-    the decode here turns that into the same typed `drop` the adapters
-    already emit for a malformed payload, with the raw bytes attached, so
-    a broker feeding an adapter garbage is countable on home/health/{unit}
-    instead of archaeology in a container log.
+    lazily. `msg.topic` is a property, so a topic that is not valid UTF-8
+    raises when the adapter first reads it, not when the message arrives.
+    Decoding it here turns that into the same typed `drop` the adapters
+    already emit for a malformed payload, with the raw bytes attached. A
+    broker sending an adapter garbage then shows up as a count on
+    home/health/{unit}, instead of only in a container log.
 
-    `health` takes a Session's `health_event`. Without one the drop still
-    happens but only as a trace, which is what an adapter that never
-    passes it gets today.
+    `health` takes a Session's `health_event`. Without it the message is
+    still dropped, but only a traceback is printed.
 
     Parameters
     ----------
@@ -152,24 +151,25 @@ def guard(on_message, health=None):
 
     def guarded(client, userdata, msg):
         try:
-            _ = msg.topic  # force paho's lazy decode inside the guard
+            _ = msg.topic  # force paho's lazy decode inside the try
         except UnicodeDecodeError:
             if health is None:
                 traceback.print_exc()
             else:
-                # `_topic` is the undecoded bytes paho keeps; reading it is
-                # the only way to report what actually arrived, and this is
-                # the one place in the estate that touches it.
+                # `_topic` holds the undecoded bytes paho keeps. Reading it
+                # is the only way to report what arrived. No other code in
+                # the project touches it.
                 raw = getattr(msg, "_topic", b"")
                 health("drop", reason="malformed-topic", topic=repr(raw)[:120])
             return
         try:
             on_message(client, userdata, msg)
         except Exception:
-            # paho re-raises callback exceptions out of its network thread,
-            # which would leave the adapter deaf while its liveliness token
-            # still says running. Drop the message with a trace instead;
-            # the supervisor captures stderr at home/meta/{unit}/log.
+            # paho re-raises callback exceptions out of its network thread.
+            # The adapter would stop receiving messages while its
+            # liveliness token still says running. Drop the message with a
+            # traceback instead. The supervisor captures stderr at
+            # home/meta/{unit}/log.
             traceback.print_exc()
 
     return guarded
@@ -180,16 +180,17 @@ def connect(
 ) -> mqtt.Client:
     """Build a VERSION2 paho client, connect it to `endpoint` and subscribe `topics`.
 
-    The client is wired to `on_message` and (re)subscribes `topics` on
-    every connect, including reconnects. Blocks until the first SUBACK,
-    raising TimeoutError if the broker never acks within `timeout` seconds.
+    The client calls `on_message` and subscribes `topics` on every
+    connect, including reconnects. Blocks until the first SUBACK, and
+    raises TimeoutError if the broker does not ack within `timeout`
+    seconds.
 
     `health` is the Session's `health_event`, used to report a message
     dropped for an undecodable topic (see `guard`).
 
-    Starts the network loop in a background thread (`loop_start`); the
-    caller owns the connection from here and is responsible for
-    `client.loop_stop()` / `client.disconnect()` on shutdown.
+    Starts the network loop in a background thread (`loop_start`). The
+    caller then owns the connection and must call `client.loop_stop()` and
+    `client.disconnect()` on shutdown.
 
     Parameters
     ----------
@@ -216,7 +217,7 @@ def connect(
     ValueError
         If the endpoint names no host.
     TimeoutError
-        If the broker never acks a subscription within `timeout` seconds.
+        If the broker does not ack a subscription within `timeout` seconds.
     ConnectionError
         If, by then, the broker has refused the connection (e.g. bad
         credentials).
@@ -228,10 +229,10 @@ def connect(
     client = mqtt.Client(CallbackAPIVersion.VERSION2)
 
     def on_connect(client, userdata, flags, reason_code, properties=None):
-        # paho calls on_connect on a failed CONNACK too (bad credentials,
-        # broker refusal); subscribing then would either no-op or raise,
-        # and the SUBACK wait below would time out — misdiagnosing the
-        # refusal as "the broker never answered".
+        # paho also calls on_connect on a failed CONNACK (bad credentials,
+        # broker refusal). Subscribing then would do nothing or raise, and
+        # the SUBACK wait below would time out. The error would then wrongly
+        # say the broker never answered.
         if reason_code.is_failure:
             refused.append(reason_code)
             return
@@ -242,11 +243,11 @@ def connect(
     client.on_subscribe = lambda *_: subscribed.set()
     username, password = credentials(endpoint)
     if username:
-        # Silently dropping credentials misdiagnoses an auth-requiring
-        # broker as a SUBACK timeout.
+        # Without credentials, a broker that requires auth would show up as
+        # a SUBACK timeout.
         client.username_pw_set(username, password)
     if endpoint.scheme == "mqtts":
-        client.tls_set()  # system CA store; the broker's own if trusted there
+        client.tls_set()  # system CA store, which must trust the broker's CA
     if not endpoint.hostname:
         raise ValueError(f"endpoint names no host: {endpoint.geturl()}")
     default_port = 8883 if endpoint.scheme == "mqtts" else 1883

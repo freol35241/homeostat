@@ -3,7 +3,7 @@
 A runnable house-repo template: clock, recorder, a Zigbee2MQTT adapter,
 and the evening-lights automation, with a compose file for the whole
 stack. Units pin the Python SDK from a released tag, so this directory
-is self-contained — copy it out and make it your own repo:
+is self-contained. Copy it out and make it your own repo:
 
 ```
 cp -r examples/starter-house ~/house && cd ~/house
@@ -18,21 +18,21 @@ cp mosquitto.passwd.example mosquitto.passwd   # broker credentials, empty to be
 echo "Z2M_FRONTEND_TOKEN=$(openssl rand -hex 16)" > .env   # Zigbee2MQTT frontend login
 ```
 
-Both are gitignored. The homeostat container runs as uid 1000; if your
+Both are gitignored. The homeostat container runs as uid 1000. If your
 checkout is owned by another user, add `HOMEOSTAT_UID=$(id -u)` and
 `HOMEOSTAT_GID=$(id -g)` to `.env` so units can write `data/` and
-`plans/`. (Upgrading a house that ran an older, root image: the
-`uv-cache` volume is root-owned — `docker volume rm <project>_uv-cache`
-once, it is only a cache.)
+`plans/`. If you are upgrading a house that ran an older image as root,
+its `uv-cache` volume is owned by root. Remove it once with
+`docker volume rm <project>_uv-cache`; it is only a cache.
 
 ## Try it without hardware
 
-`demo/up.sh` runs the whole house against simulated devices — a lamp, a
-lock, a motion sensor, the heat pump, a phone and an ESPHome switch — and
+`demo/up.sh` runs the whole house against simulated devices: a lamp, a
+lock, a motion sensor, the heat pump, a phone and an ESPHome switch. It
 serves the dashboard at http://localhost:8600 (see `demo/README.md`).
 
-Or run everything except the Zigbee coordinator, with nothing on the far
-side; the adapter connects to mosquitto and idles:
+Or run everything except the Zigbee coordinator, with no devices. The
+adapter connects to mosquitto and idles:
 
 ```
 docker compose up -d mosquitto homeostat
@@ -51,10 +51,10 @@ You need a Zigbee coordinator stick (e.g. SLZB-06 or Sonoff ZBDongle-E).
    or from your laptop through `ssh -L 8080:127.0.0.1:8080 <host>`. It
    can pair, rename and reconfigure every device, which is why it is
    not on the LAN.
-3. For each device, write an entity file under `entities/zigbee/` —
-   `id` is the friendly name; the file stem is the entity name on the
-   bus. Add its room to `zones.toml` if new. The two entity files here
-   are examples: replace them with your devices.
+3. For each device, write an entity file under `entities/zigbee/`.
+   `id` is the friendly name, and the file stem is the entity name on the
+   bus. Add its room to `zones.toml` if it is new. The two entity files
+   here are examples. Replace them with your devices.
 4. Commit, then `docker compose restart homeostat` (structural changes
    need a fresh `up`; parameter and behavioral edits flow through
    `plan`/`apply` with no restart).
@@ -65,17 +65,17 @@ State appears at `home/state/{room}/{entity}/{aspect}`, history lands in
 
 ## The family dashboard
 
-`units/dashboard.toml` serves the web dashboard on `:8600` — generated
-entirely from the manifests. `dashboard.toml` at the house root says
-which views it has: here a "Now" of the indoor temperature, the people
-and what deviates from normal, a "Heating" view, and a "Downstairs" view
-led by the evening-lights automation's card. Delete the file and the
-generated views (Now, Setpoints, Rooms) come back; whatever the file
-says, Health and everything it does not place stay one tap away in the
-rail. `homeostat plan` refuses a view that names something the house
-does not have. Open `http://<host>:8600` from the LAN (or over
-WireGuard). Access is local-only by design: there are no accounts; the
-dashboard is family-tier, so nothing structural is reachable from it.
+`units/dashboard.toml` serves the web dashboard on `:8600`. The
+dashboard is generated from the manifests. `dashboard.toml` at the house
+root says which views it has. Here that is a "Now" view of the indoor
+temperature, the people and what deviates from normal, a "Heating" view,
+and a "Downstairs" view led by the evening-lights automation's card. If
+you delete the file, the generated views (Now, Setpoints, Rooms) come
+back. Health, and anything the file does not place, are always one tap
+away in the rail. `homeostat plan` refuses a view that names something
+the house does not have. Open `http://<host>:8600` from the LAN or over
+WireGuard. Access is local-only and there are no accounts. The dashboard
+is family-tier, so nothing structural is reachable from it.
 Serving it behind a hostname other than `homeostat.lan`/`.local`? List
 it in the `HOMEOSTAT_DASHBOARD_HOSTS` environment variable
 (comma-separated) on the homeostat service.
@@ -86,22 +86,21 @@ in `units/zigbee.toml` at your existing MQTT broker instead.
 
 ## Devices and phones on the LAN
 
-The broker has two listeners (`mosquitto.conf`): 1883 stays inside the
-compose network — anonymous, for zigbee2mqtt and the adapters — and
-1884 is published to the LAN for MQTT clients that live outside the
-stack: the IVT490 heat-pump interface (an ESP8266 can't join a VPN)
-and OwnTracks phones. 1884 requires credentials, and `mosquitto.acl`
-confines each one to its own topic tree, so a leaked device password
-can touch that device's dialect and nothing else — never
-`zigbee2mqtt/#`.
+The broker has two listeners (`mosquitto.conf`). 1883 stays inside the
+compose network and is anonymous, for zigbee2mqtt and the adapters. 1884
+is published to the LAN for MQTT clients outside the stack: the IVT490
+heat-pump interface (an ESP8266 can't join a VPN) and OwnTracks phones.
+1884 requires credentials, and `mosquitto.acl` confines each user to its
+own topic tree. A leaked device password can only reach that device's
+topics, and never `zigbee2mqtt/#`.
 
-The template ships `mosquitto.passwd.example` empty; your copy,
-`mosquitto.passwd` (see the top of this file), starts the same way —
-nobody can connect — and is gitignored: password hashes are credentials
-and never belong in the house repo, and the same goes for the `.env`
-that holds the Zigbee2MQTT frontend token. Add a user (a throwaway
-container, because the running broker mounts the file read-only), then
-restart the broker:
+The template ships `mosquitto.passwd.example` empty. Your copy,
+`mosquitto.passwd` (see the top of this file), starts empty too, so
+nobody can connect. It is gitignored, because password hashes are
+credentials and do not belong in the house repo. The same goes for the
+`.env` that holds the Zigbee2MQTT frontend token. Add a user with a
+throwaway container, because the running broker mounts the file
+read-only. Then restart the broker:
 
 ```
 docker run --rm -it -v ./mosquitto.passwd:/passwd eclipse-mosquitto:2 \
@@ -131,33 +130,35 @@ claude mcp add --transport http homeostat http://<host>:8642 \
 ```
 
 The header is required. Reachability is this surface's only credential,
-and it serves everything the house knows — without the header a web
-page open in a family browser could read it at your LAN address without
-ever seeing a reply. Set `HOMEOSTAT_MCP_HOSTS` if you reach the house by
-a name other than `homeostat`/`homeostat.lan`/`homeostat.local`.
+and it serves everything the house knows. Without the header check, a
+web page open in a family browser could send requests to it at your LAN
+address, even though the page could not read the replies. Set
+`HOMEOSTAT_MCP_HOSTS` if you reach the house by a name other than
+`homeostat`/`homeostat.lan`/`homeostat.local`.
 
 The surface is read-only: `read_state`, `read_history`, `read_logs`,
 `read_events`, plus `schema` and `explain` for the authoring contract.
 `AGENTS.md` (which `CLAUDE.md` points at) tells an agent working in the
 checkout how this house is laid out and where its authority ends.
-Changing the house is a repo edit like any other — an agent working in
+Changing the house is a repo edit like any other. An agent working in
 your house checkout (Claude Code, say) edits files and runs
-`homeostat plan`; you review and apply:
+`homeostat plan`. You review and apply:
 
 ```
 docker compose exec homeostat homeostat apply /house --bus tcp/127.0.0.1:7447
 ```
 
-Discovery closes the loop: the zigbee adapter republishes the bridge's
-device inventory at `home/discovery/zigbee` — every paired device with
-its binding `id`, whether an entity file claims it (`configured`), a
-suggested capability stanza mapped from the device's z2m `exposes`, and
-the raw definition. So the prompt an agent can act on end to end is:
+The zigbee adapter republishes the bridge's device inventory at
+`home/discovery/zigbee`. Each paired device is listed with its binding
+`id`, whether an entity file claims it (`configured`), a suggested
+capability stanza mapped from the device's z2m `exposes`, and the raw
+definition. An agent can therefore act on a prompt like this from start
+to finish:
 
 > Read `home/discovery/zigbee` and write entity files under
 > `entities/zigbee/` for every unconfigured device, using the suggested
 > capabilities. Ask me which room each device is in, then run
 > `homeostat plan`.
 
-Rooms are the one thing no protocol knows — expect the agent to ask,
+No protocol reports which room a device is in. Expect the agent to ask,
 or correct its guesses when you review the plan.

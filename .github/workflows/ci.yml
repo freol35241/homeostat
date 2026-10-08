@@ -5,8 +5,9 @@ on:
     branches: [main]
   pull_request:
 
-# Third-party actions are pinned to a commit; the comment is the tag that
-# commit carried when pinned, for dependabot and for humans.
+# Third-party actions are pinned to a commit. The trailing comment is the
+# tag that commit carried when it was pinned. Dependabot reads it, and so do
+# people.
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -14,10 +15,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # sync_starter.sh --check reads adapters/ at the tag the starter
-          # pins; a shallow checkout has no tags to read.
+          # pins. A shallow checkout has no tags.
           fetch-depth: 0
-      # `stable` is a moving branch of this action; pinning the commit means
-      # naming the toolchain explicitly instead (its README).
+      # `stable` is a moving branch of this action. With the commit pinned,
+      # the toolchain is named explicitly instead, as its README describes.
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # master
         with:
           toolchain: stable
@@ -34,10 +35,10 @@ jobs:
             tests/fixtures/house_*/units/*.py.lock
       - name: Install mosquitto
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends mosquitto
-      # First-run dependency resolution must not eat into test timeouts.
-      # --locked: the committed lockfile next to each script is the
-      # resolution the tests run against; a script edited past its lock
-      # fails here instead of silently re-resolving.
+      # Resolve dependencies up front so the first run does not eat into
+      # test timeouts. The tests run against the lockfile committed next to
+      # each script. With --locked, a script edited past its lock fails here
+      # instead of re-resolving.
       - name: Pre-warm the Python units' uv environments
         run: |
           for script in adapters/*.py tests/fake_*.py tests/fixtures/house_*/units/*.py; do
@@ -46,37 +47,36 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
-      # The SDK's bus-free helpers (sdk/python/tests): stdlib unittest.
-      # paho is not an SDK dependency — homeostat.mqtt is the optional half
-      # the MQTT adapters bring their own paho for — but its message guard
-      # is tested here, so the runner needs it.
+      # The SDK's bus-free helpers (sdk/python/tests), with stdlib unittest.
+      # paho is not an SDK dependency. homeostat.mqtt is an optional module,
+      # and the MQTT adapters bring their own paho for it. Its message guard
+      # is tested here, so the runner needs paho.
       - run: uv run --no-project --with-editable sdk/python --with 'paho-mqtt>=2,<3' python -m unittest discover sdk/python/tests
-      # The SDK ships py.typed, so units type-check against it; this keeps
-      # what it promises true.
+      # The SDK ships py.typed, so units type-check against it. This checks
+      # that its annotations hold.
       - run: uv run --no-project --with-editable sdk/python --with 'paho-mqtt>=2,<3' --with pyright==1.1.414 pyright sdk/python/homeostat
       # The adapters' logic, unit by unit, without a bus or a process.
       - run: uv run --no-project --with-editable sdk/python --with 'paho-mqtt>=2,<3' python -m unittest discover tests/adapters
       - run: uvx ruff@0.16.7 check adapters sdk scripts tests/adapters tests/browser
-      # The dashboard's extracted decision logic (adapters/assets/
-      # dashboard-logic.js) and its html tag: Node's built-in runner, no
-      # packages. The shell expands the glob — newer Node treats a bare
-      # directory argument as a module path and dies with MODULE_NOT_FOUND.
+      # The dashboard's decision logic (adapters/assets/dashboard-logic.js)
+      # and its html tag, with Node's built-in runner and no packages. The
+      # shell expands the glob, because newer Node treats a bare directory
+      # argument as a module path and fails with MODULE_NOT_FOUND.
       - run: node --test tests/js/*.test.js
-      # examples/starter-house ships generated copies of adapters/; this
-      # fails the build the moment one is edited by hand or a release
-      # forgets to regenerate them.
+      # examples/starter-house ships generated copies of adapters/. This
+      # fails when a copy is edited by hand or a release does not
+      # regenerate them.
       - run: scripts/sync_starter.sh --check
-      # Running without Docker: the binary and the SDK wheel on this bare
-      # runner, the way a release's tarball and wheel are installed. See
-      # scripts/smoke_bare.sh for what it asserts.
+      # Run without Docker: install the binary and the SDK wheel on this
+      # bare runner, the way a release's tarball and wheel are installed.
+      # scripts/smoke_bare.sh lists what it asserts.
       - run: uv build --wheel sdk/python -o "$RUNNER_TEMP/wheels"
       - run: cargo build --bin homeostat
       - run: scripts/smoke_bare.sh target/debug/homeostat "$RUNNER_TEMP/wheels"
 
-  # The dashboard page in a real browser against canned fixtures (see
-  # tests/browser/README.md). Its own job because it is the only thing here
-  # that needs a browser; blocking, because a job that cannot fail the
-  # build is one nobody repairs.
+  # The dashboard page in a real browser against canned fixtures
+  # (tests/browser/README.md). It is a separate job because it is the only
+  # one that needs a browser. A failure here fails the build.
   browser:
     runs-on: ubuntu-latest
     steps:
@@ -101,9 +101,9 @@ jobs:
       - run: cargo install cargo-audit --locked
       - run: cargo audit
 
-  # The container image is packaging, not logic: build it and smoke-test
-  # that the supervisor boots a real house inside it. See
-  # scripts/smoke_image.sh for what the smoke test asserts.
+  # Build the container image and check that the supervisor boots a real
+  # house inside it. scripts/smoke_image.sh lists what the smoke test
+  # asserts.
   image:
     runs-on: ubuntu-latest
     steps:
@@ -124,9 +124,10 @@ jobs:
       # The same house against its simulated devices (starter-house/demo):
       # every device's state reaches the store, and a command round-trips.
       - run: scripts/smoke_demo.sh homeostat:smoke
-      # Both release architectures, so a cross-compile or an arm64-only
-      # runtime-stage breakage fails here rather than on the release tag.
-      # Nothing is pushed; the amd64 half comes from the cache above.
+      # Build both release architectures, so a cross-compile failure or an
+      # arm64-only runtime-stage failure shows up here and not on the
+      # release tag. Nothing is pushed. The amd64 half comes from the cache
+      # above.
       - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .

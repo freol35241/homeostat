@@ -1,23 +1,23 @@
 """Bounded-age inputs for automations (docs/design.md#staleness).
 
-`available` is device liveness, not data freshness: a sensor can die
-mid-reading and its last value stays trusted until the bridge notices,
-which for a battery device can be hours. An automation that fuses several
-sources therefore keeps its own staleness policy — the cadence is house
-knowledge (a parameter), never a core TTL — and the bookkeeping behind
-that policy is what this helper is.
+`available` reports device liveness, not data freshness. A sensor can
+die mid-reading, and its last value stays trusted until the bridge
+notices. For a battery device that can take hours. An automation that
+combines several sources therefore keeps its own staleness policy. The
+cadence is house knowledge, so it comes from a parameter and not from a
+TTL in the core. This class does the bookkeeping for that policy.
 
-It is a map of the latest value and the monotonic time it was seen, per
-source, and "the fresh ones" at recompute time. The subtlety worth owning
-here rather than in every automation: a live sample that triggers a
-recompute was seen just now, so the fresh set is never empty and a mean
-over it never divides by zero. A catch-up delivery after a restart is the
-exception — it carries the mirror's age, and may already be stale — so a
-handler that can be triggered by one checks for an empty fresh set.
+It maps each source to its latest value and the monotonic time it was
+seen, and returns the fresh ones at recompute time. A live sample that
+triggers a recompute was seen just now, so the fresh set is not empty and
+a mean over it does not divide by zero. A catch-up delivery after a
+restart is different. It carries the mirror's age and may already be
+stale, so a handler that a catch-up delivery can trigger must check for
+an empty fresh set.
 
-No timer lives here. An automation that must react to silence — nothing
-arriving at all — subscribes to `home/clock/minute` and calls `fresh()`
-from that handler too.
+This class has no timer. An automation that must react when nothing
+arrives at all subscribes to `home/clock/minute` and also calls `fresh()`
+from that handler.
 """
 
 import time
@@ -59,8 +59,8 @@ class Freshness:
     def fresh(self, max_age_s: float) -> dict[str, Any]:
         """Return the latest value per source seen within the last `max_age_s` seconds.
 
-        A source last seen longer ago than that is left out; it returns the
-        moment it publishes again.
+        A source last seen longer ago than that is left out. It is included
+        again as soon as it publishes.
 
         Parameters
         ----------
