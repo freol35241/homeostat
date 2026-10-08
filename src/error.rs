@@ -79,7 +79,8 @@ pub const CODES: &[(&str, &str)] = &[
         "invalid-name",
         "Unit, parameter, entity, room and zone names become bus key segments \
          (`home/state/{room}/{entity}/...`, `home/config/{unit}/{param}`), so \
-         each must be non-empty ASCII letters, digits, `_`, `-` or `.`.",
+         each must be non-empty ASCII letters, digits, `_`, `-` or `.`, and \
+         not `.` or `..`.",
     ),
     (
         "reserved-unit-name",
@@ -291,13 +292,6 @@ pub const CODES: &[(&str, &str)] = &[
          SDK only checks a published key against the declared expression, so \
          this is where a forged post-arbitration command, a forged discovery \
          record or a second clock is refused.",
-    ),
-    (
-        "entity-dashboard-retired",
-        "An entity file carries a `[dashboard]` table. `pin = true` was the \
-         first placement hint and is retired: where a reading appears is \
-         `dashboard.toml`'s say, so place the entity with \
-         `{ kind = \"tile\", entity = \"<name>\" }` on a view there.",
     ),
     (
         "dashboard-duplicate-view",

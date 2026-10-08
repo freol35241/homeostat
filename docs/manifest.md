@@ -96,7 +96,7 @@ outside the constraint is refused with the old value still in force.
 | `description` | string | no |  |
 | `inputs` | [UnitInputs](#unitinputs) | no | Which repo files are this unit's inputs. Absent means `own` — the unit's command, its own entity files, its zone if it uses one. |
 | `kind` | [UnitKind](#unitkind) | yes |  |
-| `name` | string | yes | Unique across the house; a bus key segment (`home/health/{unit}`, `home/config/{unit}/*`), so letters, digits, `_`, `-`, `.` only. `system` is reserved for the core. |
+| `name` | string | yes | Unique across the house; a bus key segment (`home/health/{unit}`, `home/config/{unit}/*`), so letters, digits, `_`, `-`, `.` only, and not `.` or `..`. `system` is reserved for the core. |
 
 ### PublishSpec
 
@@ -177,21 +177,12 @@ a key segment (`invalid-name`).
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `dashboard` | [EntityDashboard](#entitydashboard) | no | `[dashboard]`: retired (`entity-dashboard-retired`). Where a reading appears is `dashboard.toml`'s say: `{ kind = "tile", entity = ... }` on a view replaces `pin = true` here. |
 | `entity` | [EntitySection](#entitysection) | yes |  |
 | `inputs` | table of name → [InputSource](#inputsource) | no | `[inputs]`: device inputs fed from one source each, keyed by the adapter's own input name (e.g. `indoor_temperature_actual`). A fed input is a continuous signal with one master, not a command: it stops being a command aspect for this entity, never rides the arbiter, and staleness is the device's own validity window. Only a device entity can be fed (`virtual-entity-fed`); the adapter is the authority on which input names exist. |
 | `naming` | [EntityNaming](#entitynaming) | no |  |
 | `schema` | integer | yes | Contract version. Must be 1. |
 | `sources` | table of name → [SourceRef](#sourceref) | no | `[sources]`: the readings this entity's value is DERIVED from, keyed by a short name for each contributor. Declared, not inferred — a unit subscribes many things for many reasons and nothing in its subscriptions says which feed which published aspect. It is what the history overlay draws beside the computed value (docs/design.md, Sources), and it is not `[inputs]`: a device feed carries a runtime contract that does not apply here, and a wired input stops being a command aspect, which would collide on a commandable virtual entity. |
 | `write_policy` | [WritePolicy](#writepolicy) | yes |  |
-
-### EntityDashboard
-
-`[dashboard]` on an entity — retired; any table here is an error.
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `pin` | boolean | no | Retired: place the entity with a `tile` widget in `dashboard.toml`. |
 
 ### EntitySection
 
@@ -245,7 +236,7 @@ identity layer between a unit and a bus key is the same one
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `mode` | [WriteMode](#writemode) | no | How commands are governed. Optional, and meaningful only on a capability that takes commands at all: eight of the fourteen have no command aspect (`sensor`, `camera`, `router`, …), and a mode on one of those governs nothing. Required where the capability has a base aspect (`write-mode-required`), so a light or a lock still states its policy rather than inheriting one silently; absent, it reads as `shared`. Use `WritePolicy::mode()` rather than this field. |
+| `mode` | [WriteMode](#writemode) | no | How commands are governed. Required on a capability that takes commands — one with a base aspect, such as `light` or `lock` (`write-mode-required`) — so its policy is always stated, never inherited. Optional elsewhere (`sensor`, `camera`, `router`, …), where a mode governs nothing; absent, it reads as `shared`. |
 | `owner` | string | yes | Exactly one unit binds each entity: an adapter, or an automation for virtual entities. Must exist (`missing-owner-unit`) and be the unit whose entities dir holds this file (`owner-mismatch`). |
 
 ### WriteMode

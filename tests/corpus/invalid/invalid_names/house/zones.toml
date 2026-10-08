@@ -2,3 +2,4 @@ schema = 1
 
 [zones]
 "bad/zone" = ["attic"]
+".." = ["attic"]

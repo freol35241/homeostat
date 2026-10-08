@@ -828,7 +828,6 @@ mod tests {
                 },
                 inputs: None,
                 sources: None,
-                dashboard: None,
             },
             path: format!("entities/{adapter}/{name}.toml"),
             owner: adapter.to_string(),
