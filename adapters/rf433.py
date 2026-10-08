@@ -175,41 +175,51 @@ def code_from(payload: bytes):
         return None
 
 
-def main():
-    unit = os.environ[keys.ENV_UNIT]
-    config = house.load_adapter(unit)
-    endpoint = mqtt.parse_endpoint(config.endpoint)
-    base = mqtt.base_topic(endpoint, DEFAULT_BASE)
+class Radio:
+    """The bridge-to-bus direction: codes heard, held states, discovery.
 
-    session = homeostat.connect()
-    params = Params(session, PARAM_DEFAULTS)
+    A bound code drives its entity's aspect true and holds it for
+    `hold_for(aspect)` seconds from the latest burst; `expire` sends it
+    false once the hold has passed. One lock guards the deadlines AND the
+    publishes that follow from them: a burst and an expiry for the same
+    entity may land on different threads within the same tick, and a
+    `false` published after the lock is dropped could overtake the burst's
+    `true`, leaving the entity reading `false` for a whole hold while its
+    deadline stands. A code heard for the first time is reported through
+    `on_new_code`, called outside the lock. `session` is anything with
+    `put_json` and `health_event`; the clock is injectable.
+    """
 
-    by_code = {e.id: e for e in config.entities}
-    aspects = {e.name: aspect_for(e) for e in config.entities}
-    sighted: set[str] = set()  # bound codes heard
-    unbound: dict[str, None] = {}  # codes bound to nothing, oldest first
+    def __init__(self, session, base: str, entities, hold_for, on_new_code, clock=time.monotonic):
+        self.session = session
+        self.base = base
+        self.entities = list(entities)
+        self.hold_for = hold_for
+        self.on_new_code = on_new_code
+        self.clock = clock
+        self.by_code = {e.id: e for e in self.entities}
+        self.by_name = {e.name: e for e in self.entities}
+        self.aspects = {e.name: aspect_for(e) for e in self.entities}
+        self.lock = threading.Lock()
+        self.sighted: set[str] = set()  # bound codes heard
+        self.unbound: dict[str, None] = {}  # codes bound to nothing, oldest first
+        self.deadline: dict[str, float] = {}  # entity name -> expiry on the clock
 
-    # Guards `deadline` AND the publishes that follow from it. A burst and an
-    # expiry for the same entity may land on different threads within the
-    # same tick; if the sweeper's `false` were published after the lock is
-    # dropped it could overtake the burst's `true`, leaving the entity
-    # reading `false` for a whole hold while its deadline stands.
-    lock = threading.Lock()
-    deadline: dict[str, float] = {}  # entity name -> monotonic expiry
-    discovery_timer: list[threading.Timer | None] = [None]
+    def publish(self, entity, value: bool) -> None:
+        """Publish an entity's one aspect."""
+        key = keys.state_key(entity.room, entity.name, self.aspects[entity.name])
+        self.session.put_json(key, value)
 
-    def publish(entity, value: bool) -> None:
-        session.put_json(keys.state_key(entity.room, entity.name, aspects[entity.name]), value)
-
-    def descriptor(entity) -> dict:
-        aspect = aspects[entity.name]
+    def descriptor(self, entity) -> dict:
+        """Return the aspect descriptor of a bound entity: its one boolean."""
+        aspect = self.aspects[entity.name]
         field = {"label": aspect.replace("_", " "), "kind": "boolean", "group": "readings"}
         if aspect in NOTABLE:
             field["notable"] = True
         return {"schema": 1, "groups": ["readings"], "fields": {aspect: field}}
 
-    def inventory() -> list[dict]:
-        """Bound entities, then codes heard but bound to nothing.
+    def inventory(self) -> list[dict]:
+        """Return the discovery document: bound entities, then codes bound to nothing.
 
         Bound entities are listed whether or not they have ever
         transmitted, because their descriptors are what the dashboard
@@ -224,109 +234,140 @@ def main():
         transmitted. Only the MAX_UNBOUND most recently first-heard are
         kept (see note()).
         """
-        records = []
-        for entity in config.entities:
-            record = {
-                "id": entity.id,
-                "configured": True,
-                "entity": entity.name,
-                "heard": entity.id in sighted,
-                "suggested": {
-                    "capability": entity.capability,
-                    "features": list(entity.features),
-                },
-            }
-            if aspects[entity.name] is not None:
-                record["aspects"] = descriptor(entity)
-            records.append(record)
-        for code in sorted(unbound):
-            records.append({
-                "id": code,
-                "configured": False,
-                "entity": None,
-                "heard": True,
-                "suggested": {"capability": "binary_sensor", "features": []},
-            })
-        return records
+        with self.lock:
+            records = []
+            for entity in self.entities:
+                record = {
+                    "id": entity.id,
+                    "configured": True,
+                    "entity": entity.name,
+                    "heard": entity.id in self.sighted,
+                    "suggested": {
+                        "capability": entity.capability,
+                        "features": list(entity.features),
+                    },
+                }
+                if self.aspects[entity.name] is not None:
+                    record["aspects"] = self.descriptor(entity)
+                records.append(record)
+            for code in sorted(self.unbound):
+                records.append({
+                    "id": code,
+                    "configured": False,
+                    "entity": None,
+                    "heard": True,
+                    "suggested": {"capability": "binary_sensor", "features": []},
+                })
+            return records
+
+    def note(self, code: str) -> bool:
+        """Record a code as heard; True the first time, when discovery has news."""
+        with self.lock:
+            if code in self.by_code:
+                if code in self.sighted:
+                    return False
+                self.sighted.add(code)
+            else:
+                if code in self.unbound:
+                    return False
+                self.unbound[code] = None
+                if len(self.unbound) > MAX_UNBOUND:
+                    del self.unbound[next(iter(self.unbound))]
+            return True
+
+    def start(self) -> None:
+        """Publish every bound entity's honest state at startup: false.
+
+        An entity whose file names no aspect is reported once here, not
+        per burst.
+        """
+        for entity in self.entities:
+            if self.aspects[entity.name] is None:
+                self.session.health_event(
+                    "misconfigured", reason="no-aspect", entity=entity.name,
+                    hint="a binary_sensor needs exactly one feature naming its aspect",
+                )
+                continue
+            self.publish(entity, False)
+
+    def on_message(self, topic: str, raw: bytes) -> None:
+        """Translate one bridge message: its LWT, or a code heard."""
+        if topic == f"{self.base}/{LWT_SUFFIX}":
+            online = raw.decode("utf-8", "replace").strip().lower() == ONLINE
+            for entity in self.entities:
+                self.session.put_json(keys.state_key(entity.room, entity.name, "available"), online)
+            return
+
+        code = code_from(raw)
+        if code is None:
+            self.session.health_event("drop", reason="malformed-payload", topic=topic)
+            return
+
+        if self.note(code):
+            self.on_new_code()
+        entity = self.by_code.get(code)
+        if entity is None:
+            return  # an unbound code; discovery carries it, the log does not
+        aspect = self.aspects[entity.name]
+        if aspect is None:
+            return  # misconfigured; reported once at startup, not per burst
+
+        with self.lock:
+            fresh = entity.name not in self.deadline
+            self.deadline[entity.name] = self.clock() + self.hold_for(aspect)
+            if fresh:
+                self.publish(entity, True)  # transitions only: a repeat burst just extends
+
+    def expire(self) -> None:
+        """Send false for every hold that has passed."""
+        now = self.clock()
+        with self.lock:
+            expired = [name for name, when in self.deadline.items() if when <= now]
+            for name in expired:
+                del self.deadline[name]
+                self.publish(self.by_name[name], False)
+
+
+def main():
+    unit = os.environ[keys.ENV_UNIT]
+    config = house.load_adapter(unit)
+    endpoint = mqtt.parse_endpoint(config.endpoint)
+    base = mqtt.base_topic(endpoint, DEFAULT_BASE)
+
+    session = homeostat.connect()
+    params = Params(session, PARAM_DEFAULTS)
+
+    # New codes are published together: one timer pending at a time.
+    timer_lock = threading.Lock()
+    discovery_timer: list[threading.Timer | None] = [None]
 
     def publish_discovery() -> None:
-        with lock:
+        with timer_lock:
             discovery_timer[0] = None
-            records = inventory()
-        session.put_json(keys.discovery_key(unit), records)
+        session.put_json(keys.discovery_key(unit), radio.inventory())
 
-    def note(code: str) -> None:
-        """Schedule a discovery republish when a code is heard for the first time.
-
-        Coalesced, so a burst of new codes is one publish.
-        """
-        with lock:
-            if code in by_code:
-                if code in sighted:
-                    return
-                sighted.add(code)
-            else:
-                if code in unbound:
-                    return
-                unbound[code] = None
-                if len(unbound) > MAX_UNBOUND:
-                    del unbound[next(iter(unbound))]
+    def schedule_discovery() -> None:
+        with timer_lock:
             if discovery_timer[0] is None:
                 discovery_timer[0] = threading.Timer(DISCOVERY_COALESCE_S, publish_discovery)
                 discovery_timer[0].daemon = True
                 discovery_timer[0].start()
 
-    def on_message(client, userdata, msg):
-        if msg.topic == f"{base}/{LWT_SUFFIX}":
-            online = msg.payload.decode("utf-8", "replace").strip().lower() == ONLINE
-            for entity in config.entities:
-                session.put_json(keys.state_key(entity.room, entity.name, "available"), online)
-            return
-
-        code = code_from(msg.payload)
-        if code is None:
-            session.health_event("drop", reason="malformed-payload", topic=msg.topic)
-            return
-
-        note(code)
-        entity = by_code.get(code)
-        if entity is None:
-            return  # an unbound code; discovery carries it, the log does not
-        if aspects[entity.name] is None:
-            return  # misconfigured; reported once at startup, not per burst
-
-        with lock:
-            fresh = entity.name not in deadline
-            deadline[entity.name] = time.monotonic() + params.hold_for(aspects[entity.name])
-            if fresh:
-                publish(entity, True)   # transitions only: a repeat burst just extends
+    radio = Radio(session, base, config.entities, params.hold_for, schedule_discovery)
+    stop = threading.Event()
 
     def sweeper():
         while not stop.wait(TICK_S):
-            now = time.monotonic()
-            with lock:
-                expired = [name for name, when in deadline.items() if when <= now]
-                for name in expired:
-                    del deadline[name]
-                    publish(by_name[name], False)
-
-    by_name = {e.name: e for e in config.entities}
-    stop = threading.Event()
+            radio.expire()
 
     client = mqtt.connect(
-        endpoint, on_message,
+        endpoint,
+        lambda _client, _userdata, msg: radio.on_message(msg.topic, msg.payload),
         [(f"{base}/{EVENTS_SUFFIX}", 0), (f"{base}/{LWT_SUFFIX}", 0)],
     )
 
-    for entity in config.entities:
-        if aspects[entity.name] is None:
-            session.health_event(
-                "misconfigured", reason="no-aspect", entity=entity.name,
-                hint="a binary_sensor needs exactly one feature naming its aspect",
-            )
-            continue
-        publish(entity, False)          # rule 2: the honest state at startup
-    session.put_json(keys.discovery_key(unit), inventory())
+    radio.start()  # rule 2: the honest state at startup
+    session.put_json(keys.discovery_key(unit), radio.inventory())
 
     threading.Thread(target=sweeper, daemon=True, name="rf433-sweeper").start()
 
@@ -339,7 +380,7 @@ def main():
     # would otherwise put on a closed zenoh session.
     client.loop_stop()
     client.disconnect()
-    with lock:
+    with timer_lock:
         if discovery_timer[0] is not None:
             discovery_timer[0].cancel()
     session.close()
