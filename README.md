@@ -432,6 +432,11 @@ container image and runs `scripts/smoke_image.sh`, `smoke_starter.sh` and
 `smoke_demo.sh` against it, and `scripts/smoke_bare.sh` checks the binary
 and SDK wheel on a host without Docker.
 
+To cut a release, run `scripts/release.sh X.Y.Z` on a clean tree. It bumps
+the version everywhere, relocks the unit scripts and regenerates the starter
+house. Commit that, merge it, and tag the merge commit `vX.Y.Z`; the tag
+builds the binaries, the wheel and the image.
+
 ## License
 
 [Apache-2.0](LICENSE)

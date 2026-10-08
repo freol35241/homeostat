@@ -2402,9 +2402,9 @@ takes each from `adapters/` at the release tag the starter pins
 and the lockfile's SDK entry to the bundled wheel. So the starter is a
 snapshot of a release, not of `main`, and CI's `sync_starter.sh
 --check` fails when any copy differs from what that release generates.
-A release bumps `SDK_TAG` with the other version strings; until the
-tag exists the check compares against the working tree, the release
-commit itself. CI checks out full history, or the tag is never found.
+`scripts/release.sh X.Y.Z` bumps `SDK_TAG` with the other version
+strings, relocks and regenerates the starter; until the tag exists the
+check compares against the working tree, the release commit itself. CI checks out full history, or the tag is never found.
 
 ## Open questions
 

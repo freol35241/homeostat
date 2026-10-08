@@ -99,7 +99,7 @@ Edit the source, then regenerate. Tests refuse a stale copy.
 |---|---|
 | `docs/manifest.md` | `cargo run -- schema --markdown > docs/manifest.md` |
 | `docs/widgets.md` and `docs/widgets/*.png` | `uv run --script scripts/widget_gallery.py` |
-| `examples/starter-house/units/` | `scripts/sync_starter.sh` (at a release) |
+| `examples/starter-house/units/` | `scripts/release.sh X.Y.Z`, which runs `scripts/sync_starter.sh` |
 | `*.py.lock` beside a unit script | `uv lock --script <script>` |
 
 ### Writing comments and docs
