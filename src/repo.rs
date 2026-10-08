@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
-use crate::error::ValidationError;
+use crate::error::{Code, ValidationError};
 use crate::manifest::{
     DashboardFile, EntityFile, UnitKind, UnitManifest, ZonesFile, SUPPORTED_SCHEMA,
 };
@@ -89,7 +89,7 @@ pub fn load(root: &Path) -> (House, Vec<ValidationError>) {
     let units_dir = root.join("units");
     if !units_dir.is_dir() {
         errors.push(ValidationError::new(
-            "missing-units-dir",
+            Code::MissingUnitsDir,
             "units",
             "directory not found",
             None,
@@ -106,7 +106,7 @@ pub fn load(root: &Path) -> (House, Vec<ValidationError>) {
         let stem = file.strip_suffix(".toml").unwrap_or(&file);
         if stem != manifest.unit.name {
             errors.push(ValidationError::new(
-                "unit-name-mismatch",
+                Code::UnitNameMismatch,
                 &manifest.unit.name,
                 format!(
                     "manifest file is {rel} but [unit] name is \"{}\"; the SDK reads units/{}.toml",
@@ -138,7 +138,7 @@ pub fn load(root: &Path) -> (House, Vec<ValidationError>) {
         let dir_abs = root.join(&dir_rel);
         if !dir_abs.is_dir() {
             errors.push(ValidationError::new(
-                "missing-entities-dir",
+                Code::MissingEntitiesDir,
                 &owner,
                 format!("entities dir \"{dir}\" not found"),
                 None,
@@ -189,7 +189,7 @@ fn read_toml<T: serde::de::DeserializeOwned>(
         Ok(text) => text,
         Err(err) => {
             errors.push(ValidationError::new(
-                "parse-error",
+                Code::ParseError,
                 rel,
                 err.to_string(),
                 None,
@@ -201,7 +201,7 @@ fn read_toml<T: serde::de::DeserializeOwned>(
         Ok(value) => Some(value),
         Err(err) => {
             errors.push(ValidationError::new(
-                "parse-error",
+                Code::ParseError,
                 rel,
                 err.message().to_string(),
                 None,
@@ -214,7 +214,7 @@ fn read_toml<T: serde::de::DeserializeOwned>(
 fn check_schema_version(schema: u32, subject: &str, rel: &str, errors: &mut Vec<ValidationError>) {
     if schema != SUPPORTED_SCHEMA {
         errors.push(ValidationError::new(
-            "unsupported-schema",
+            Code::UnsupportedSchema,
             subject,
             format!("schema {schema} is not supported (expected {SUPPORTED_SCHEMA})"),
             Some(rel.to_string()),

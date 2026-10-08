@@ -156,6 +156,19 @@ pub struct Health {
     pub last_exit_code: Option<i32>,
 }
 
+impl Health {
+    /// `status` for a unit with no live process and no backoff pending.
+    pub fn idle(status: HealthStatus, restarts: u32, last_exit_code: Option<i32>) -> Self {
+        Self {
+            status,
+            pid: None,
+            restarts,
+            backoff_ms: None,
+            last_exit_code,
+        }
+    }
+}
+
 /// One captured line from a unit's stdout or stderr, held in the per-unit
 /// ring buffer and served as JSON at `home/meta/{unit}/log`. Operational
 /// exhaust, not the durable trail: bounded memory, gone on supervisor

@@ -436,10 +436,11 @@ Schema, also the MCP `schema` tool), `homeostat schema --markdown`
 the [vocabulary table](#the-capability-vocabulary).
 
 Every rule beyond the shape has a stable error code
-(`error[<code>] <subject>: <message> (<file>)`). `CODES` in
+(`error[<code>] <subject>: <message> (<file>)`). The `Code` enum in
 `src/error.rs` gives each a paragraph on what the rule is and why,
 read by `homeostat explain`, the MCP `explain` tool and every refused
-plan; a test ties emitted codes and entries one to one. One source,
+plan. An error can only be raised with a registered code, and a test
+refuses a code nothing raises. One source,
 because a person or an agent must learn the contract without reading
 Rust, and a second description would drift.
 

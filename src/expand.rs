@@ -4,7 +4,7 @@
 //! performs the same expansion at runtime, so what a unit subscribes to is
 //! what `plan` printed for it.
 
-use crate::error::ValidationError;
+use crate::error::{Code, ValidationError};
 use crate::keyspace::{KeyExpr, Segment};
 use crate::manifest::{UnitKind, WriteMode};
 use crate::repo::House;
@@ -72,7 +72,7 @@ pub fn expand(house: &House) -> (Vec<ExpandedKey>, Vec<String>, Vec<ValidationEr
                 Ok(expr) => expr,
                 Err(message) => {
                     errors.push(ValidationError::new(
-                        "key-outside-schema",
+                        Code::KeyOutsideSchema,
                         subject,
                         message,
                         Some(unit.path.clone()),
@@ -89,7 +89,7 @@ pub fn expand(house: &House) -> (Vec<ExpandedKey>, Vec<String>, Vec<ValidationEr
                     UnitKind::Adapter | UnitKind::Automation
                 ) {
                     errors.push(ValidationError::new(
-                        "template-outside-binding-unit",
+                        Code::TemplateOutsideBindingUnit,
                         subject,
                         format!("\"{raw}\" uses {{room}}/{{entity}} templates, which only entity-binding units (adapters and automations) may use"),
                         Some(unit.path.clone()),
@@ -147,7 +147,7 @@ pub fn expand(house: &House) -> (Vec<ExpandedKey>, Vec<String>, Vec<ValidationEr
                     // yields nothing is a house being built up, so it warns.
                     if unit.manifest.entities.is_none() {
                         errors.push(ValidationError::new(
-                            "template-without-entities",
+                            Code::TemplateWithoutEntities,
                             subject,
                             format!(
                                 "\"{raw}\" uses {{room}}/{{entity}} templates but the unit has no [entities] table, so it expands to nothing"
@@ -345,7 +345,7 @@ mod tests {
 
         let (_expanded, warnings, errors) = expand(&house);
         assert_eq!(errors.len(), 1, "{errors:?}");
-        assert_eq!(errors[0].code, "template-without-entities");
+        assert_eq!(errors[0].code, Code::TemplateWithoutEntities);
         assert_eq!(errors[0].subject, "latches.commands");
         assert!(warnings.is_empty(), "{warnings:?}");
     }

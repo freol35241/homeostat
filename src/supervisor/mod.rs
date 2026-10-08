@@ -344,13 +344,7 @@ impl Core {
 }
 
 fn initial_health() -> Health {
-    Health {
-        status: HealthStatus::Starting,
-        pid: None,
-        restarts: 0,
-        backoff_ms: None,
-        last_exit_code: None,
-    }
+    Health::idle(HealthStatus::Starting, 0, None)
 }
 
 /// Whether a query's selector covers a concrete key.
