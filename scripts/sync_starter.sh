@@ -17,9 +17,9 @@
 #
 # The starter is therefore a snapshot of SDK_TAG, not of main: --check
 # compares against adapters/ AS OF that tag, which is the invariant that
-# holds continuously on main. Cutting a release means bumping SDK_TAG,
-# Cargo.toml, sdk/python/pyproject.toml and the compose image, rerunning
-# this, and tagging the result. While the new tag does not exist yet the
+# holds continuously on main. scripts/release.sh bumps SDK_TAG with the
+# other version strings and reruns this; tagging the result is the last
+# step. While the new tag does not exist yet the
 # check falls back to the working tree — that is the release commit
 # itself. (CI must check out with fetch-depth: 0 or the tag is never found.)
 set -euo pipefail
@@ -228,6 +228,6 @@ check_version sdk/python/pyproject.toml "version = \"$PY_VERSION\""
 check_version examples/starter-house/docker-compose.yml "homeostat:$VERSION}"
 if [ -n "$bad" ]; then
   echo "version drift against SDK_TAG=$SDK_TAG:$(printf '%b' "$bad")" >&2
-  echo "cutting a release bumps all four together" >&2
+  echo "scripts/release.sh bumps all four together" >&2
   exit 1
 fi
