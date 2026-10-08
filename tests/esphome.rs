@@ -89,9 +89,9 @@ impl Drop for FakeEsphome {
     }
 }
 
-/// Writes a `HOMEOSTAT_ESPHOME_DEVICES` file (outside the repo, per the
-/// settlement) giving the fixture's "shed" device a host override at the
-/// fake device's port.
+/// Writes a `HOMEOSTAT_ESPHOME_DEVICES` file (outside the repo, where
+/// device addresses and keys live) giving the fixture's "shed" device a
+/// host override at the fake device's port.
 fn devices_file(port: u16) -> PathBuf {
     let path = std::env::temp_dir().join(format!("homeostat-esphome-devices-{port}.toml"));
     std::fs::write(&path, format!("[shed]\nhost = \"127.0.0.1:{port}\"\n"))

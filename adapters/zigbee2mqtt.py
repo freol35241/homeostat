@@ -76,12 +76,12 @@ scalar expose becomes a labelled field — z2m's unit picks the kind
 its category picks the group (diagnostic → diagnostics, config → config,
 else readings; z2m before 1.34 has no category at all, so the diagnostics
 it would categorise — linkquality, a battery voltage in mV — are known
-by property), battery is a reading but ordered last so it never
-headlines the room card (#53), a settable config expose becomes an owner-tier command
-with z2m's own value bounds, and the alarm-shaped binaries (water leak,
-smoke, ...) are notable. The capability's own vocabulary (on, locked,
-brightness, color_temp) is described as readings only: its controls are
-the dashboard's bespoke widget, not a descriptor command.
+by property), battery is a reading but ordered last so it never headlines
+the room card, a settable config expose becomes an owner-tier command with
+z2m's own value bounds, and the alarm-shaped binaries (water leak, smoke,
+...) are notable. The capability's own vocabulary (on, locked, brightness,
+color_temp) is described as readings only: its controls are the
+dashboard's bespoke widget, not a descriptor command.
 """
 
 import json
@@ -167,8 +167,8 @@ NOTABLE_BINARY = frozenset(
 KIND_BY_UNIT = {"°C": "temperature", "%": "percent"}
 # Exposes older z2m (< 1.34, no `category` field) leaves uncategorised that
 # newer z2m files under diagnostic — by property, the way battery is
-# promoted by property (#53). Voltage is only diagnostic as a battery
-# voltage (mV); a plug's mains voltage (V) is a reading.
+# promoted by property. Voltage is only diagnostic as a battery voltage
+# (mV); a plug's mains voltage (V) is a reading.
 DIAGNOSTIC_PROPERTIES = frozenset({"linkquality"})
 # The capability vocabulary the dashboard's own widgets command: described
 # as readings, never as descriptor commands.
@@ -259,7 +259,7 @@ def describe(capability: str, exposes) -> dict | None:
         return None
     if "battery" in fields:
         # Watched, never the headline: z2m lists battery first, and field
-        # order is what the room card reads as priority (#53).
+        # order is what the room card reads as priority.
         fields["battery"] = fields.pop("battery")
     return {"schema": 1, "groups": ["readings", "config", "diagnostics"], "fields": fields}
 
@@ -399,7 +399,7 @@ def main():
                 return
             online = state == "online"
             if not online and bridge["online"] is not False:
-                # One event per down transition, the ivt490 precedent.
+                # One event per down transition.
                 session.health_event("bridge-silent", base_topic=base, state="offline")
             bridge["online"] = online
             return
@@ -498,8 +498,8 @@ def main():
         while time.monotonic() < deadline:
             if inventory_seen.wait(min(0.25, timeout)) or stop.is_set():
                 return
-        # A degraded condition, not dropped input: the ivt490
-        # device-silent precedent.
+        # A degraded condition, not dropped input: its own event kind,
+        # never a `drop`.
         session.health_event("bridge-silent", base_topic=base, timeout_s=timeout)
 
     watchdog = threading.Thread(target=bridge_watchdog, daemon=True)

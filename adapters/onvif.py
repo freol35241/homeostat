@@ -26,8 +26,8 @@ camera-account credentials created in the vendor app. Addresses and
 passwords never enter the repo. A camera with no entry drops with a health
 event and is skipped; the other cameras are unaffected.
 
-The SOAP layer is hand-rolled (the MCP precedent: an ONVIF/WS-* client
-library would be the largest dependency in the tree for four calls):
+The SOAP layer is hand-rolled (an ONVIF/WS-* client library would be the
+largest dependency in the tree for four calls):
 CreatePullPointSubscription, PullMessages (a long poll), Renew, and a
 WS-Security UsernameToken digest header on each. Tapo firmware has broken
 pull-point subscriptions before (the 1.3.6 regression), so ANY fault on
@@ -50,10 +50,10 @@ drops with a "malformed-payload" health event and the stream continues.
 `motion` is published on CHANGE, not per notification. A notification is
 not a transition: a Tapo C200 sends MotionAlarm on every evaluation tick,
 so one real episode against VP52's cameras arrived as 417 identical `true`s
-in 56 seconds — 456 recorded rows for what is semantically two edges. The
-adapter therefore compares against the last value it published and stays
-silent otherwise, which is also what makes it behave like the other
-event-driven adapters, where the device itself speaks only on change.
+in 56 seconds, for what is semantically two edges. The adapter therefore
+compares against the last value it published and stays silent otherwise,
+which is also what makes it behave like the other event-driven adapters,
+where the device itself speaks only on change.
 
 The same transitions carry the availability signal (docs/design.md,
 "Sensor dropout and availability"): a working pull-point subscription
@@ -234,10 +234,10 @@ async def soap_call(
             # whatever is buffered, up to n -- for a chunked reply that is
             # the FIRST CHUNK, so a single read truncates mid-document and
             # every parse fails with "unclosed token". Cameras stream their
-            # replies; aiohttp's own test responses do not, which is why a
-            # one-shot read looked correct. The cap is still enforced, now
-            # after each chunk, which is also where it belongs -- it must
-            # not depend on how the body happens to be framed.
+            # replies; aiohttp's own test responses do not, so a one-shot
+            # read passes a test and fails against a camera. The cap is
+            # enforced after each chunk, which is also where it belongs --
+            # it must not depend on how the body happens to be framed.
             raw = bytearray()
             async for chunk in response.content.iter_chunked(RESPONSE_CHUNK_BYTES):
                 raw += chunk

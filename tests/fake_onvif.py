@@ -113,9 +113,9 @@ class FakeCamera:
         self.password = password
         self.subscriptions: dict[str, asyncio.Queue] = {}
         self.ids = itertools.count()
-        # VP52's shape: the subscribe is accepted and the long poll runs,
-        # then Renew is refused. A bare status code cannot tell that apart
-        # from a refused subscribe.
+        # A camera that accepts the subscribe and runs the long poll, then
+        # refuses Renew. A bare status code cannot tell that apart from a
+        # refused subscribe.
         self.reject_renew = False
         self.break_on_renew = False
         self.created = 0
@@ -177,8 +177,8 @@ class FakeCamera:
             return fault()
         if root.find(f".//{{{WSNT_NS}}}Renew") is not None:
             if self.break_on_renew:
-                # The race CI caught: the subscription really is gone, and
-                # Renew is the call that discovers it. The next pull must
+                # The race: the subscription really is gone, and Renew is
+                # the call that discovers it. The next pull must
                 # fail too, which is how the adapter tells this apart from
                 # firmware that simply has no SubscriptionManager.
                 self.subscriptions.clear()

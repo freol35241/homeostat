@@ -80,8 +80,8 @@ class CorrelationIdTest(unittest.TestCase):
         self.assertEqual(envelope["id"], "c0ffee01")
 
     def test_an_envelope_without_one_reads_as_none(self):
-        # The id is optional on the wire: a hand-rolled publisher, or an
-        # envelope minted before ids existed, is still a valid command.
+        # The id is optional on the wire: an envelope from a publisher that
+        # stamps none is still a valid command.
         self.assertIsNone(keys.cmd_envelope_id({"value": 1, "priority": "manual"}))
         self.assertEqual(keys.parse_cmd_envelope({"value": 1, "priority": "manual"}), 1)
 

@@ -1,5 +1,5 @@
 //! `ctx.restore`: a unit reading its own last published value back from
-//! the recorder (#83, docs/design.md, Restoring a unit's own last value).
+//! the recorder (docs/design.md, Restoring a unit's own last value).
 //!
 //! The core's state mirror is in-memory, so a core restart — every version
 //! upgrade is one — empties it and `subscribe`'s catch-up has nothing to
@@ -82,9 +82,8 @@ async fn await_recorded(session: &zenoh::Session, expected: &Value) {
     }
 }
 
-/// The incident from #83, reproduced: a latch commanded on, the core
-/// restarted, and the decision still standing afterwards — where before it
-/// fell to the code default and stayed there.
+/// A latch commanded on, the core restarted, and the decision still
+/// standing afterwards rather than falling to the code default.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_latch_restores_its_decision_across_a_core_restart() {
     let db = store_path("decision");
@@ -115,15 +114,14 @@ async fn a_latch_restores_its_decision_across_a_core_restart() {
     let _ = std::fs::remove_file(&db);
 }
 
-/// The incidents from #102 and #121, reproduced: the recorder is up but
-/// slow to answer, and `restore` must wait for it. The stand-in recorder
-/// takes 12 s over every `stats` answer — past zenoh's 10 s default get
-/// timeout — and answers one query at a time, as the real one does. A
-/// `restore` that gives up on a timeout (#102), or that abandons a short
-/// get and asks again, queueing a fresh 12 s answer behind the one it left
-/// (#121), never hears back: it publishes the code default (false) and the
-/// row (true) never reaches the mirror. One that asks once and waits out
-/// its own deadline restores it.
+/// The recorder is up but slow to answer, and `restore` must wait for it.
+/// The stand-in recorder takes 12 s over every `stats` answer — past
+/// zenoh's 10 s default get timeout — and answers one query at a time, as
+/// the real one does. A `restore` that gives up on a timeout, or that
+/// abandons a short get and asks again, queueing a fresh 12 s answer
+/// behind the one it left, never hears back: it publishes the code default
+/// (false) and the row (true) never reaches the mirror. One that asks once
+/// and waits out its own deadline restores it.
 #[tokio::test(flavor = "multi_thread")]
 async fn restore_waits_out_a_recorder_that_is_slow_to_answer() {
     let mut sup = Supervisor::spawn("tests/fixture_house_restore_slow");

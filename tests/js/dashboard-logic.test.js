@@ -564,7 +564,7 @@ test('the card plan never reaches into diagnostics and skips owner-tier commands
   assert.deepEqual(plan.controls.map((r) => r.aspect), ['setpoint', 'operating_mode'], 'feed target is owner-tier');
 });
 
-// ---- sensor card rows (#56) ----
+// ---- sensor card rows ----
 
 const THERMOMETER = { name: 'snzb_02', room: 'bedroom', capability: 'sensor', label: 'Bedroom thermometer' };
 
@@ -617,7 +617,7 @@ test('a sensor card keeps a stale reading, flagged, and never a foreign entity',
   assert.ok(!rows.some((r) => r.aspect === 'indoor_temperature'));
 });
 
-// ---- pending commands (issue #94) ----
+// ---- pending commands ----
 
 function cmd(overrides) {
   return Object.assign(
@@ -627,7 +627,7 @@ function cmd(overrides) {
 }
 
 test('the timeout is scaled to the capability, not one global constant', () => {
-  // The spread the issue measured: a z2m lamp answers in about a second,
+  // The spread real devices show: a z2m lamp answers in about a second,
   // a burner behind a polling bridge can take half a minute.
   assert.ok(logic.commandTimeoutMs('burner') > logic.commandTimeoutMs('light'));
   assert.equal(logic.commandTimeoutMs('climate'), logic.COMMAND_TIMEOUT_MS.climate);
@@ -659,8 +659,8 @@ test('a readback for another aspect leaves it pending', () => {
 
 test('a bridge republishing the old value is not an answer', () => {
   // ivt490's bridge sends the setpoint on every poll. Counting any
-  // readback as confirmation cleared the control on the next poll — the
-  // old value — before the pump had done anything.
+  // readback as confirmation would clear the control on the next poll —
+  // the old value — before the pump had done anything.
   const pending = logic.trackCommand({}, cmd({ aspect: 'setpoint', value: 22.5, before: 21, capability: 'climate' }), 1000);
   assert.equal(logic.resolveFromState(pending, 'home/state/livingroom/lamp/setpoint', 21), null);
   const entry = logic.pendingFor(pending, 'livingroom', 'lamp', 'setpoint');
@@ -1432,8 +1432,8 @@ test('an entity that declares no sources contributes nothing to draw', () => {
 });
 
 test('several providers claim one future, each under its own source', () => {
-  // The whole point of the source segment: before it, the second
-  // provider overwrote the first at the same key.
+  // The whole point of the source segment: without it, the second
+  // provider would overwrite the first at the same key.
   const forecasts = {
     'home/forecast/global/spot/price/yr': {
       schema: 1,

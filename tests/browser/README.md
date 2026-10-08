@@ -14,11 +14,11 @@ lines of JSON here.
 
 ## What this suite is, and is not
 
-It is **not** the discovery mechanism. Every rendering bug this project has
-had — the legend pin dying on a re-render, `&MIDDOT;` in an upper-cased
-label, a spent forecast blanking a tile's caption, three key rebuilds that
-dropped a segment — was found by a person opening a browser. That habit is
-what finds the next one. Browser-verify your dashboard change.
+It is **not** the discovery mechanism. Rendering bugs — the legend pin
+dying on a re-render, `&MIDDOT;` in an upper-cased label, a spent forecast
+blanking a tile's caption, a key rebuild that drops a segment — are found
+by a person opening a browser, and that habit is what finds the next one.
+Browser-verify your dashboard change.
 
 What this carries is the boring half:
 
@@ -50,15 +50,17 @@ chart geometry is asserted numerically in `tests/js`.
 
 ## Fixtures
 
-`fixtures/model.json` and `fixtures/snapshot.json` were captured from a
-real supervised house and then extended to cover every widget kind. Their
+`fixtures/model.json` and `fixtures/snapshot.json` are a real supervised
+house's model and snapshot, extended to cover every widget kind. Their
 time-bearing parts are re-stamped per request by `server.py`, because a
 forecast frozen into a file is a spent one by tomorrow. A test that wants a
 spent forecast or a lapsed hold pushes its own document with explicit
 timestamps.
 
-Fixtures drift. The canary test — a real house, booted once — is what
-catches them ceasing to resemble what the unit actually emits.
+Fixtures drift. The canary test — a real house, booted once — checks that
+`model.json` carries the same fields as the real unit's `/api/model`.
+Nothing checks `snapshot.json` that way, so keep it to shapes the unit
+emits.
 
 ## Checking the net itself
 

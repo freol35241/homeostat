@@ -10,17 +10,15 @@
 <style>
 /* The palette is the mark's (docs/brand/README.md): house green is the
  * accent — interaction ink and data ink alike — and the set point's amber
- * is the one warm colour. The page shipped in a sky blue the brand
- * explicitly is not ("deliberately not the sky blue of the category's
- * largest project"), which is what this corrects.
+ * is the one warm colour. No sky blue: the brand is explicitly
+ * "deliberately not the sky blue of the category's largest project".
  *
  * `--accent` on dark is lifted past the brand's own #2A7A61. That token
  * lifts the silhouette so a SHAPE holds on dark; the accent also carries
  * text (an active rail entry, a segmented label), and #2A7A61 reads 3.3:1
- * on the card — under AA for text, where the blue it replaces was 4.7:1.
- * Same hue (160°), same saturation, lifted until the text passes: 5.0:1.
- * No theme knob: the dashboard owns its rendering, and light/dark already
- * follows the system. */
+ * on the card — under AA for text. Same hue (160°), same saturation,
+ * lifted until the text passes: 5.0:1. No theme knob: the dashboard owns
+ * its rendering, and light/dark already follows the system. */
 :root {
   --bg: #f6f6f7; --card: #ffffff; --border: #e4e4e7; --ink: #18181b;
   --secondary: #52525b; --muted: #a1a1aa; --accent: #1f5e4a; --accent-tint: rgba(31,94,74,.10);
@@ -128,7 +126,7 @@ pre.view-text { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, mono
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
   padding: 6px 4px; min-height: 44px; cursor: pointer; }
 #tabs .tabs-views button:only-child, #tabs .tabs-views button:nth-last-child(-n+4):first-child ~ button,
-#tabs .tabs-views button:nth-last-child(-n+4):first-child { flex: 1 1 0; max-width: none; } /* up to four views: fill the row as before */
+#tabs .tabs-views button:nth-last-child(-n+4):first-child { flex: 1 1 0; max-width: none; } /* up to four views: fill the row */
 #tabs button .tab-label { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #tabs button svg { display: block; }
 #tabs button .tab-label { font-size: 10px; }
@@ -147,10 +145,10 @@ pre.view-text { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, mono
   pointer-events: none; transition: opacity 140ms ease; max-width: 90vw; z-index: 20; }
 #toast.show { opacity: 1; }
 
-/* a command in flight (issue #94): the request is shown as a request —
- * the asked-for value in the accent, a toggle where it was asked to go
- * but outlined dashed — and a line under the control says which stage
- * it is in, then how it ended. The control keeps taking taps. */
+/* a command in flight: the request is shown as a request — the
+ * asked-for value in the accent, a toggle where it was asked to go but
+ * outlined dashed — and a line under the control says which stage it is
+ * in, then how it ended. The control keeps taking taps. */
 .cmd-pending { outline: 1.5px dashed var(--accent); outline-offset: 2px; }
 .stepper-value.cmd-target, .dial-target.cmd-target, .sval.cmd-target { color: var(--accent); font-weight: 600; }
 .cmd-status { font-size: 11.5px; line-height: 1.4; padding: 2px 4px 6px; color: var(--secondary); }
@@ -219,8 +217,8 @@ pre.view-text { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, mono
 
 /* charts (sparklines + detail chart) */
 /* No chart is worth selecting as text, and a press on one that becomes a
-   selection after half a second is what made a phone unable to read a
-   value off a plot at all. */
+   selection after half a second leaves a phone unable to read a value off
+   a plot at all. */
 .chart-wrap { position: relative; width: 100%;
   -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 /* Set by wireChartInteractions on the charts it lets a finger scrub: a
@@ -342,8 +340,8 @@ pre.view-text { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, mono
 
 /* map (person entities) */
 /* `isolation` keeps Leaflet's own z-indexes (panes at 400, controls at
-   1000) inside the map: without it its zoom buttons and marker labels sat
-   above the phone's tab bar and took its taps */
+   1000) inside the map: without it its zoom buttons and marker labels sit
+   above the phone's tab bar and take its taps */
 .map-wrap { height: 320px; border-radius: 8px; overflow: hidden; background: var(--bg); isolation: isolate; }
 .map-hint { font-size: 12px; color: var(--muted); margin-top: 8px; }
 .map-nofix { font-size: 12px; color: var(--secondary); margin-top: 8px; }
@@ -613,11 +611,11 @@ var TAB_ICONS = {
   rooms: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><rect x="3.5" y="3.5" width="7.5" height="7.5" rx="1.4"/><rect x="13" y="3.5" width="7.5" height="7.5" rx="1.4"/><rect x="3.5" y="13" width="7.5" height="7.5" rx="1.4"/><rect x="13" y="13" width="7.5" height="7.5" rx="1.4"/></svg>'
 };
 var RANGE_PRESETS = [{ label: '1h', hours: 1 }, { label: '6h', hours: 6 }, { label: '24h', hours: 24 }, { label: '7d', hours: 168 }];
-var CHART_VBW = 400;
+var CHART_VBW = 400; // internal viewBox width used for coordinate math; visual width is CSS 100%
 // The newest issues a braid draws. Past this the lines stop being
 // separable and the fetch stops being small; the page says how many it
 // drew rather than letting the window quietly mean different things.
-var BRAID_ISSUES = 40; // internal viewBox width used for coordinate math; visual width is CSS 100%
+var BRAID_ISSUES = 40;
 
 var store = {
   model: { zones: {}, entities: [], units: [] },
@@ -634,10 +632,10 @@ var store = {
   roomsFilter: 'all'
 };
 
-/* In-flight commands, keyed room/entity/aspect (issue #94). Deliberately
- * outside `store`: the store is the house's state as the bus reports it,
- * and a pending command is this browser's private business — nothing on
- * the bus knows this tab tapped a button. */
+/* In-flight commands, keyed room/entity/aspect. Deliberately outside
+ * `store`: the store is the house's state as the bus reports it, and a
+ * pending command is this browser's private business — nothing on the
+ * bus knows this tab tapped a button. */
 var pending = {};
 
 var localState = {
@@ -844,10 +842,10 @@ function appendSparklinePoint(key, value) {
 // ---- commands ----
 
 /* A command is a proposal passing through stages, and the page shows
- * which one it is in (issue #94): asked from the tap, then confirmed by
- * readback, adjusted when the device settled elsewhere, held by the
- * arbiter, rejected by the adapter, unheard when nothing subscribes to
- * its key, or unconfirmed when nothing answers. The envelope's id, handed
+ * which one it is in: asked from the tap, then confirmed by readback,
+ * adjusted when the device settled elsewhere, held by the arbiter,
+ * rejected by the adapter, unheard when nothing subscribes to its key,
+ * or unconfirmed when nothing answers. The envelope's id, handed
  * back by /api/cmd, is what ties an event to the command it ended. The
  * stage is said on the control itself (markPendingControls) and stays
  * said for a while after it ends (`recent`); the toast is only for an
@@ -1239,11 +1237,11 @@ function fetchIssues(entityName, aspect, hours) {
 
 /* What was asked of this aspect, beside what it did. The recorder types
  * every cmd envelope into its own series (docs/design.md, History), and
- * until now nothing could read it back — the audit existed and had no
- * viewer. Always fetched rather than gated on whether the page thinks the
- * aspect is commandable: recorded commands are the honest test, and the
- * rules for who may command what live on the server. The strip renders
- * only when the window actually holds commands. */
+ * this is where that audit is read. Always fetched rather than gated on
+ * whether the page thinks the aspect is commandable: recorded commands
+ * are the honest test, and the rules for who may command what live on
+ * the server. The strip renders only when the window actually holds
+ * commands. */
 function fetchCommandRange(entityName, aspect, hours) {
   var cd = overlay.cmdData[hours];
   if (cd && (cd.loaded || cd.loading)) return;
@@ -1470,10 +1468,6 @@ function formatChartValue(aspect, v) {
   return logic.formatAspect(aspect || '', null, v);
 }
 
-// A reading's time, at the precision the window justifies: on an hour of
-// history the recorder's buckets are seconds wide, so minutes alone hide
-// the thing the reader opened the chart to see. `spanMs` is the charted
-// window; without one the old day-and-minute form stands.
 // A stored issue's stroke: paler the older it is, within the accent's
 // own hue so the braid still reads as one series' future.
 function issueInk(age) {
@@ -1485,13 +1479,13 @@ function issueInk(age) {
   return 'rgb(' + c.join(',') + ')';
 }
 
-// Every live claim about one aspect's future, one per source.
 // dashboard.toml's [[control]] entries, or none. The house's say over a
 // control's grain, applied wherever that control is drawn.
 function houseControls() {
   return (store.model && store.model.controls) || [];
 }
 
+// Every live claim about one aspect's future, one per source.
 function forecastsOf(entity, aspect) {
   return logic.forecastsFor(store.forecasts, entity.room, entity.name, aspect);
 }
@@ -1533,6 +1527,10 @@ function horizonCaption(aspect, field, forecast, fromTs) {
     logic.formatAspect(aspect, field, point.v) + ' at ' + formatChartClock(point.t);
 }
 
+// A reading's time, at the precision the window justifies: on an hour of
+// history the recorder's buckets are seconds wide, so minutes alone hide
+// the thing the reader opened the chart to see. `spanMs` is the charted
+// window; without one the time is the day and the minute.
 function formatChartTime(ts, spanMs) {
   var d = new Date(ts);
   if (isNaN(d.getTime())) return '';
@@ -1739,9 +1737,9 @@ function wireChartInteractions(root) {
       var down = null;
       wrap.addEventListener('pointerdown', function (ev) {
         // A touch has no position until it moves, so the press itself has
-        // to read: a tap showed nothing before this, and only a drag
-        // worked. Capture keeps a finger that wanders off a 64px strip
-        // scrubbing instead of dropping the gesture mid-read.
+        // to read, or a tap would show nothing and only a drag would work.
+        // Capture keeps a finger that wanders off a 64px strip scrubbing
+        // instead of dropping the gesture mid-read.
         if (wrap.setPointerCapture) wrap.setPointerCapture(ev.pointerId);
         down = { x: ev.clientX, y: ev.clientY };
         onMove(wrap, reg, ev);
@@ -1774,11 +1772,10 @@ function wireChartInteractions(root) {
   });
 }
 
-/* Which drawn issue the pointer is nearest, in BOTH dimensions.
- * Scrubbing has always found the nearest point by x alone, which is
- * right for one series and meaningless for a braid: x alone picks
- * whichever line happens to have a sample closest horizontally, ignoring
- * that the pointer may be nowhere near it. */
+/* Which drawn issue the pointer is nearest, in BOTH dimensions. The
+ * nearest point by x alone is right for one series and meaningless for a
+ * braid: x alone picks whichever line happens to have a sample closest
+ * horizontally, ignoring that the pointer may be nowhere near it. */
 function nearestIssue(reg, rect, tx, ty) {
   if (!reg.issues || !reg.issues.length) return null;
   // Distance is measured in SCREEN pixels, not viewBox units. The
@@ -2055,7 +2052,7 @@ function widgetForClimate(entity, big) {
 
 // A sensor's card: one sparkline row per reading, each tapping through to
 // that aspect's history. Which readings, in what order, is the descriptor's
-// say (dashboard-logic.js, sensorCardPlan, #56): a thermometer lists
+// say (dashboard-logic.js, sensorCardPlan): a thermometer lists
 // temperature and humidity, not its link quality. A multi-aspect sensor
 // gets a head row with the entity name that opens the entity detail — the
 // aspect rows are the only other affordance, and they lead to a chart. The
@@ -2103,12 +2100,11 @@ function widgetGeneric(entity) {
 function widgetForCamera(entity) {
   // No poster: a still frame means transcoding H.264 to JPEG, which is a
   // transcoder in the image for a thumbnail (docs/design.md, Cameras —
-  // the plane split is a pure remux). The failing <img> rendered as a
-  // black rectangle indistinguishable from a dark room, which is worse
-  // than saying plainly the picture is a tap away. Motion still reads
-  // here, from the event plane, which is the part that matters at a
-  // glance. The live view opens in the detail overlay — never N always-on
-  // streams.
+  // the plane split is a pure remux). A failing <img> renders as a black
+  // rectangle indistinguishable from a dark room, which is worse than
+  // saying plainly the picture is a tap away. Motion still reads here,
+  // from the event plane, which is the part that matters at a glance. The
+  // live view opens in the detail overlay — never N always-on streams.
   var motion = stateValue(entity.room, entity.name, 'motion');
   var badge = motion === true ? '<span class="badge-motion">MOTION</span>' : '';
   return '<div class="entity-row row-clickable" data-action="entity-detail" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '" style="flex-direction:column;align-items:stretch;gap:6px;">' +
@@ -2119,10 +2115,10 @@ function widgetForCamera(entity) {
 }
 
 // The room-card row for an entity whose adapter published an aspect
-// descriptor (#32): name and the first family control on one line, the
-// headline readings underneath — never the readout-wrapped-around-a-
-// stepper row the undescribed climate widget degrades to in a narrow
-// column. Which readings are headline is dashboard-logic.js's cardPlan.
+// descriptor: name and the first family control on one line, the headline
+// readings underneath — never the readout-wrapped-around-a-stepper row
+// the undescribed climate widget degrades to in a narrow column. Which
+// readings are headline is dashboard-logic.js's cardPlan.
 function widgetForDescribed(entity) {
   var plan = logic.cardPlan(entity, store.state, store.aspects[entity.name], !controlDisabled(entity), houseControls());
   var badge = entity.write_mode === 'arbitrated' ? '<span class="badge-arbitrated">ARBITRATED</span>' : '';
@@ -2341,7 +2337,7 @@ function widgetTiles(entity, aspect) {
       ? [ahead, issuedCaption(forecast[0].forecast)].filter(Boolean).join(' \u00b7 ')
       : '';
     // With no belief to draw — or several, which a tile has no room to
-    // tell apart — the caption is today's range, as it always was.
+    // tell apart — the caption is today's range.
     if (!caption && s && s.loaded) caption = minMaxCaption(s.points);
     // The separator is the character, not the entity: the whole label is
     // upper-cased below, and "&MIDDOT;" is not one.
@@ -2950,9 +2946,8 @@ function render() {
   markPendingControls();
 }
 
-/* The aspect a control commands. Most carry it explicitly; the three
- * single-aspect actions imply it, and their markup predates this. The
- * light sliders name theirs `data-kind`. */
+/* The aspect a control commands. Most carry it explicitly; these actions
+ * imply it. The light sliders name theirs `data-kind`. */
 var CONTROL_ASPECTS = {
   'toggle-light': 'on',
   'toggle-lock': 'locked',
@@ -2984,7 +2979,7 @@ var COMMAND_ACTIONS = {
  * asked to go, outlined dashed), and a line under it saying which stage
  * the command is in. It keeps taking taps — a toggle tapped again asks to
  * go back, a stepper tapped again steps on from the request — because
- * freezing it until the device answered is what made several steps
+ * freezing it until the device answers would make several steps
  * impossible. The line stays a while after the command ends, saying how
  * it ended. */
 function markPendingControls() {
@@ -3236,10 +3231,10 @@ function wireSourceLegend(root) {
   if (!entries.length) return;
   // The pin belongs to the overlay, not to this wiring. Live state
   // re-renders the panel — a forecast re-issue is enough — which throws
-  // away these nodes and every class on them, and the fresh closure then
-  // took its highlight from whatever the pointer happened to be over: a
-  // pin that quietly moved to another source, or vanished, while the
-  // reader was still reading. Same reason the braid's pin lives in
+  // away these nodes and every class on them, and a fresh closure would
+  // take its highlight from whatever the pointer happens to be over: a
+  // pin that quietly moves to another source, or vanishes, while the
+  // reader is still reading. Same reason the braid's pin lives in
   // `overlay.pinned`.
   var sticky = overlay.sourcePinned || null;
   var marks = scope.querySelectorAll('.chart-contributor, .source-legend span');
@@ -3323,7 +3318,7 @@ function renderHistoryDetailBody() {
   // a family wants the temperature, not which sensor read low — and only
   // one can be drawn at a time, so they are one control and not two
   // (docs/design.md, Sources). A chip appears only where the house has
-  // the thing it names, so an ordinary sensor's overlay is unchanged.
+  // the thing it names, so an ordinary sensor's overlay has no such row.
   var layers = [{ id: '', label: 'value' }];
   if (overlay.shape !== 'timeline' && contributorsOf(entity, aspect).length) {
     layers.push({ id: 'sources', label: 'sources' });
@@ -3498,9 +3493,9 @@ function renderAspectRow(entity, r) {
   }
   // The label taps through to history even though the row carries a
   // control. A commanded aspect is exactly the one whose past a reader
-  // wants — and until now it was the one aspect with no way to reach it,
-  // because the row's click belongs to the control. The control's own
-  // buttons still win: closest('[data-action]') takes the innermost.
+  // wants, and the row's click belongs to the control, so the label is
+  // the only way to reach it. The control's own buttons still win:
+  // closest('[data-action]') takes the innermost.
   var dial = r.control.kind === 'dial';
   return '<div class="aspect-row described' + (dial ? ' dial-row' : '') + '">' +
     '<span class="aspect-label linked" data-action="history-detail"' + attrs + '>' + esc(r.label) + heldMark + '</span>' +
@@ -3515,7 +3510,7 @@ function aspectValueSpan(r) {
 // A thermostat dial: the target on a 240° arc from min to max, the
 // current reading beneath it when the entity has one, ± at the arc's
 // ends. The buttons carry the same action attributes as the compact
-// stepper, so the pending/held/timeout stages (#94) apply unchanged.
+// stepper, so the pending/held/timeout stages apply unchanged.
 function renderDial(action, attrs, o) {
   var span = (o.max - o.min) || 1;
   var f = typeof o.value === 'number' ? Math.max(0, Math.min(1, (o.value - o.min) / span)) : 0;
@@ -3799,9 +3794,9 @@ document.addEventListener('click', function (e) {
     openViewText(el.getAttribute('data-view-name'));
     return;
   }
-  // Deviation taps land on whichever view shows the thing now that the
-  // nav is the file's (dashboard-logic.js, viewFor); with none, the unit
-  // overlay holds every param and Not shown holds every unplaced light.
+  // Deviation taps land on whichever view shows the thing
+  // (dashboard-logic.js, viewFor); with none, the unit overlay holds every
+  // param and Not shown holds every unplaced light.
   if (action === 'goto-rooms') {
     store.view = logic.viewFor({ type: 'rooms' }, logic.viewsOf(store.model)) || 'notshown';
     renderShell();
@@ -3988,8 +3983,8 @@ setInterval(function () {
 }, 30000);
 
 /* Some commands are never answered by anything: the adapter is deaf, the
- * device is off. "No confirmation" is a real outcome and the page used to
- * be unable to distinguish it from success. */
+ * device is off. "No confirmation" is a real outcome, and the page must
+ * not let it pass for success. */
 setInterval(function () {
   var expired = logic.expirePending(pending, Date.now());
   expired.forEach(announceOutcome);

@@ -28,7 +28,7 @@ const PASSWORD: &str = "secret123";
 
 /// A fake ubus endpoint (`tests/fake_openwrt.py`) on a free port, killed on
 /// drop. Spawned the same way the units themselves are: out of the
-/// script's own uv environment, exec'd directly (`fixture_command`, #140),
+/// script's own uv environment, exec'd directly (`fixture_command`),
 /// so the handle held here is the interpreter's and not uv's.
 struct FakeOpenwrt {
     child: Child,
@@ -91,7 +91,7 @@ impl Drop for FakeOpenwrt {
     }
 }
 
-/// Writes a `HOMEOSTAT_OPENWRT` file (outside the repo, per the settlement)
+/// Writes a `HOMEOSTAT_OPENWRT` file (outside the repo: it holds credentials)
 /// giving each named router a fake endpoint's host and the read-only rpcd
 /// credentials. The fixture binds entities on "gw"; any further router is
 /// configured but unbound, which is all a second AP needs to be polled.
@@ -204,8 +204,8 @@ async fn wifi_association_drives_presence() {
 }
 
 /// (b) Connectivity state: WAN down is a `wan = false` transition, and
-/// back up again. Tunnels left with the `vpn` capability (design.md,
-/// amended 2026-09-23): this adapter reports presence and WAN.
+/// back up again. Tunnels are not this adapter's (design.md,
+/// amended 2026-09-23): it reports presence and WAN.
 #[tokio::test(flavor = "multi_thread")]
 async fn connectivity_state_translates_to_bus() {
     let (router, _routers_path, mut sup, observer) = setup().await;
@@ -251,11 +251,10 @@ async fn unreachable_router_drops_once_and_recovers() {
 /// (e) A router whose replies stream is read whole. aiohttp's
 /// `content.read(n)` hands back only what is buffered — the first chunk of
 /// a chunked reply — so a single read truncates the JSON and every decode
-/// fails. rpcd itself answers with Content-Length, which is why this has
-/// never bitten in production here; the identical read in the onvif
-/// adapter faced firmware that does stream, and took both of VP52's
-/// cameras down on v0.12.0. The fix belongs to both call sites, so the
-/// test does too.
+/// fails. rpcd itself answers with Content-Length, so stock rpcd never
+/// shows this; the onvif adapter makes the identical read against
+/// firmware that does stream. The whole-body read belongs to both call
+/// sites, so the test does too.
 ///
 /// Chunking is switched on mid-run, after presence has already been proved
 /// to work, so the assertion is about the framing and nothing else.
@@ -281,10 +280,10 @@ async fn a_chunked_ubus_reply_is_read_whole() {
 /// (f) Partial blindness is not absence. Two routers configured, the phone
 /// associated only to the AP: when the AP goes silent the phone must hold
 /// stale, because the union of the routers that *did* answer says nothing
-/// about a device that lives on the one that did not — VP52 published
-/// `presence = false` for 37 hours with the family at home (#144). The
-/// blind spot is announced, and absence becomes assertable again once
-/// every router answers.
+/// about a device that lives on the one that did not — reading it as
+/// absence publishes `presence = false` with the family at home for as
+/// long as the AP stays silent. The blind spot is announced, and absence
+/// becomes assertable again once every router answers.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_silent_router_cannot_assert_absence() {
     let gw = FakeOpenwrt::spawn().await;

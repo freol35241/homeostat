@@ -1,8 +1,7 @@
 //! The agent surface (docs/design.md, "Agent surface (MCP)"): an MCP
-//! server through which an agent observes the house. Read-only since
-//! 2026-09-12: the write tools (`propose`, `apply`, `plan`) were removed
-//! until a consumer exists — an agent with a filesystem edits the house
-//! repo and runs the CLI, the same plan/apply path as every other actor.
+//! server through which an agent observes the house. Read-only: an agent
+//! with a filesystem changes the house by editing the house repo and
+//! running the CLI, the same plan/apply path as every other actor.
 //!
 //! Six tools. `read_state` and `read_history` read the live bus (the
 //! core's last-value caches, the recorder's history queryable); `read_logs`
@@ -137,7 +136,7 @@ impl Server {
                 .ok_or("\"limit\" must be a positive integer")?;
             params.push(format!("limit={value}"));
         }
-        // The recorder's two chart shapes (#107). Mutually exclusive there,
+        // The recorder's two chart shapes. Mutually exclusive there,
         // so the refusal is here rather than as an error reply from a
         // selector that carries both.
         let bucket = args.get("bucket");

@@ -320,8 +320,8 @@ mod tests {
         assert!(cmd.exprs.is_empty());
     }
 
-    /// A templated key in a unit that binds nothing is #68's silence in the
-    /// core: it plans clean, applies clean, and the unit is deaf. The
+    /// A templated key in a unit that binds nothing fails silently: it
+    /// plans clean, applies clean, and the unit is deaf. The
     /// `[entities]` table is the tell — forgotten outright is a mistake,
     /// present but empty is a house part-way built.
     #[test]

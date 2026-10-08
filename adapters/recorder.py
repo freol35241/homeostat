@@ -95,27 +95,26 @@ a window changes, then returns the freed pages to the filesystem
 and leaves one `purge` health event per purge that deleted anything.
 Retention is the only destructive operation in the store.
 
-Archiving (#138) is the opposite of retention: it moves, never deletes.
-With archive_after_months above 0 (0, the default, never archives), a
-month that closed more than that many months ago is sealed into
+Archiving is the opposite of retention: it moves, never deletes. With
+archive_after_months above 0 (0, the default, never archives), a month
+that closed more than that many months ago is sealed into
 archive/<store>-YYYY-MM.db beside the store — the store's own schema, a
 plain SQLite file — and its rows leave the hot file, so the file the
-recorder writes stays one window deep while every observation is kept.
-A sealed file is verified (integrity_check and row counts) before it
-takes its name, checksummed, recorded in `archives` and made read-only;
-it is never written again, and rows that reach a sealed month late go
-into a further file (.2, .3...). Only rows a sealed file holds, whole,
-leave the hot file, and each series' newest sample and newest forecast
-issue stay behind as well, because restore, the seed and latest-value
-reads find a series' last word in the hot file. home/history/** answers
-from the hot file alone: an archive is for people and tools (sqlite3,
-DuckDB ATTACH), and home/history/stats lists what has been sealed.
-Archives are kept forever unless retain_archives_months is set (opt-in,
-0 by default): then a whole file goes once its month closed more than
-that many months ago. Settings that undercut each other — a retention
-window that deletes rows before they are old enough to archive, or
-archives kept no longer than archiving waits — leave one
-`archive-misconfigured` event per change.
+recorder writes stays one window deep while every observation is kept. A
+sealed file is verified (integrity_check and row counts) before it takes
+its name, checksummed, recorded in `archives` and made read-only; it is
+never written again, and rows that reach a sealed month late go into a
+further file (.2, .3...). Only rows a sealed file holds, whole, leave the
+hot file, and each series' newest sample and newest forecast issue stay
+behind as well, because restore, the seed and latest-value reads find a
+series' last word in the hot file. home/history/** answers from the hot
+file alone: an archive is for people and tools (sqlite3, DuckDB ATTACH),
+and home/history/stats lists what has been sealed. Archives are kept
+forever unless retain_archives_months is set (opt-in, 0 by default): then
+a whole file goes once its month closed more than that many months ago.
+Settings that undercut each other — a retention window that deletes rows
+before they are old enough to archive, or archives kept no longer than
+archiving waits — leave one `archive-misconfigured` event per change.
 
 SQLite has no page checksums, so a disk returning corrupt data is silent
 until a read happens to hit it. Every integrity_check_hours (default
@@ -1145,8 +1144,8 @@ class Writer:
         and newest forecast issue: those stay in the hot file as well,
         because restore, the seed and every latest-value read find a series'
         last word there, and a latch decided months ago must still be found
-        after a core restart (#83). Per series, as the purge, so each delete
-        is a range on the primary key and the tally is kept in the same
+        after a core restart. Per series, as the purge, so each delete is a
+        range on the primary key and the tally is kept in the same
         transaction.
         """
         if not aliases:
@@ -1255,7 +1254,7 @@ class Recorder:
             self.writer.enqueue("events", (ts, key, payload))
 
     def seed(self, exprs: list[str]) -> None:
-        """Catch up from the core's state mirror (#60).
+        """Catch up from the core's state mirror.
 
         Whatever was published before this incarnation subscribed — a
         unit's start publish, a transition during a restart — is otherwise
@@ -1324,7 +1323,7 @@ class Recorder:
         row = (ts, parts[1], parts[2], parts[3], "/".join(parts[4:]), KINDS.index(kind), stored)
         self.writer.enqueue("samples", row)
         if parts[1] == "cmd":
-            # The "who" audit design.md anticipated: the full envelope
+            # The "who" audit: the full envelope
             # (value, priority, actor) lands in events alongside the
             # unwrapped value in samples.
             raw = sample.payload.to_bytes().decode("utf-8", errors="replace")
@@ -1628,9 +1627,8 @@ def store_stats(conn: sqlite3.Connection) -> dict:
 
     Sizes from the pager, one aggregate per series and one for the events
     table. The per-series aggregates are read off `series`, where the
-    insert trigger and _purge maintain them; `row_count > 0` keeps the
-    reply what the old aggregate query made it, a series that has no rows
-    right now having no entry.
+    insert trigger and _purge maintain them; a series with no rows right
+    now (`row_count` 0) has no entry.
     """
     page_size = conn.execute("PRAGMA page_size").fetchone()[0]
     page_count = conn.execute("PRAGMA page_count").fetchone()[0]
@@ -2000,15 +1998,11 @@ def migrate_v4(conn: sqlite3.Connection) -> None:
     The forecast series migrate_v3 left with an empty source get the
     reserved name instead (LEGACY_SOURCE).
 
-    migrate_v3 said those rows "stay readable under that empty source",
-    and they do not: the source is a segment of the reply key, and an
-    empty segment makes a key expression SQLite is happy to store and
-    zenoh refuses to parse. The read path walks every forecast series to
-    decide which ones the query asked for, so one such row raised before
-    the loop reached any other series — and a query that dies inside its
-    callback sends no reply at all, which a caller cannot tell from "no
-    data". Found on an upgraded house, where one legacy row hid every
-    correctly-sourced forecast in the store behind it.
+    An empty source is not addressable: the source is a segment of the
+    reply key, and an empty segment makes a key expression SQLite is happy
+    to store and zenoh refuses to parse. The read path therefore skips a
+    series with an empty source, so its rows can never be read; under the
+    reserved name they can.
 
     Only forecast series are touched: every other class has an empty
     source by definition, and none of them puts it in a key.
@@ -2041,9 +2035,10 @@ def migrate_v3(conn: sqlite3.Connection) -> None:
 
     Existing forecast rows keep source '' — the store they came from did
     not record one, and inventing a provider name for them would be
-    fabricating provenance. They stay readable under that empty source; a
-    producer republishing under a real one starts a new series beside them
-    rather than appending to them.
+    fabricating provenance; migrate_v4 then gives them the reserved name
+    LEGACY_SOURCE, since an empty source is not addressable. A producer
+    republishing under a real one starts a new series beside them rather
+    than appending to them.
     """
     columns = {row[1] for row in conn.execute("PRAGMA table_info(series)")}
     if "source" in columns:
@@ -2098,10 +2093,9 @@ def migrate_v1(conn: sqlite3.Connection) -> None:
     primary key rather than one GROUP BY over the table: the counts walk
     each series' key range, the bounds are seeks to its ends, and nothing
     depends on a SQLite newer than the schema already does (measured on a
-    synthetic 4.8 M-row store: 0.13 s, against 0.62 s for the aggregate
-    query this replaces). A store migrating straight from version 0
-    already has the columns — they are in SCHEMA, which built its new
-    tables — and only needs the count.
+    synthetic 4.8 M-row store: 0.13 s, against 0.62 s for the GROUP BY). A
+    store migrating straight from version 0 already has the columns — they
+    are in SCHEMA, which built its new tables — and only needs the count.
     """
     columns = {row[1] for row in conn.execute("PRAGMA table_info(series)")}
     if "row_count" not in columns:

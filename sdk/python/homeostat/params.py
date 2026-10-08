@@ -5,8 +5,8 @@ subscription already delivered wins over the seed — the served reply may
 predate a write that raced startup. Adapter-side defaults let a manifest
 omit any parameter; non-numeric (and non-finite) values are ignored.
 
-Graduated from the ivt490/openwrt adapters, which carried identical
-copies; adapters subclass with typed properties over `get`.
+Owned here once rather than copied into each adapter; adapters subclass
+it with typed properties over `get`.
 """
 
 import json

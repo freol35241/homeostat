@@ -298,10 +298,10 @@ pub fn resolve(
         // it embodies, so a change to any bound entity is a grant delta.
         // Forecast counts for the same reason state does — it is the same
         // series extended forward, onto the same entity — and leaving it
-        // out was not merely cosmetic: a unit publishing ONLY a forecast
-        // onto an entity it owns would produce no row at all, so a change
-        // to that entity would not read as a grant delta and apply would
-        // not see it.
+        // out would not be merely cosmetic: a unit publishing ONLY a
+        // forecast onto an entity it owns would produce no row at all, so
+        // a change to that entity would not read as a grant delta and
+        // apply would not see it.
         if class == "state" || class == "forecast" {
             let mut bound: Vec<GrantEntity> = house
                 .entities
@@ -624,7 +624,7 @@ pub fn resolve(
         }
     }
 
-    // One forecast series, one publisher — where "series" now includes the
+    // One forecast series, one publisher — where "series" includes the
     // SOURCE. Several providers may speak about one aspect, which is what
     // the source segment is for; what must not happen is two units writing
     // the same source's key, because the mirror keeps only the last
@@ -1172,8 +1172,7 @@ mod tests {
     }
 
     /// The point of the segment: two providers, one aspect, no conflict.
-    /// This is what the per-entity check refused before a forecast key
-    /// carried its source.
+    /// Without the source in the key, the two would write one key.
     #[test]
     fn two_providers_may_forecast_one_aspect_under_their_own_sources() {
         let house = house_forecasting(
@@ -1273,8 +1272,8 @@ mod tests {
         assert!(errors.is_empty(), "{errors:?}");
     }
 
-    /// The entity must still EXIST. Dropping the ownership requirement
-    /// does not open the free-form-key hole: a forecast under a name no
+    /// The entity must still EXIST. Not requiring ownership does not
+    /// open the free-form-key hole: a forecast under a name no
     /// entity describes would be recorded and invisible to every
     /// generated surface.
     #[test]
@@ -1292,12 +1291,12 @@ mod tests {
         );
     }
 
-    /// One source, one publisher. Ownership used to guarantee this
-    /// structurally — one binder per entity — so relaxing it has to put
-    /// the property back directly: the mirror keeps only the last
-    /// document per key, so a second publisher on the SAME source
-    /// overwrites rather than adds. Two providers under their own source
-    /// segments are the case this exists to permit, covered below.
+    /// One source, one publisher. Ownership would guarantee this
+    /// structurally — one binder per entity — but a forecast does not
+    /// require it, so the property is checked directly: the mirror keeps
+    /// only the last document per key, so a second publisher on the SAME
+    /// source overwrites rather than adds. Two providers under their own
+    /// source segments are the case this exists to permit, covered below.
     #[test]
     fn two_units_may_not_publish_one_forecast_source() {
         let house = house_forecasting(

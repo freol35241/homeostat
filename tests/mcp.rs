@@ -165,7 +165,7 @@ async fn reads_serve_live_state_and_history() {
     );
     assert!(is_error, "{text}");
 
-    // The recorder's chart shapes reach the agent (#110): bucket= folds
+    // The recorder's chart shapes reach the agent: bucket= folds
     // the window into points, changes=1 keeps only the moves. Asserted
     // against the real recorder, so these are its own folds rather than a
     // selector that merely looks right.
@@ -233,10 +233,10 @@ async fn reads_serve_live_state_and_history() {
 
 /// (a'') `read_logs` reads a unit's captured stdout/stderr, tail-truncated
 /// with `lines`, as text. `read_events` is exercised at the protocol level
-/// against a stand-in queryable: the recorder side of the contract
-/// (`home/history/events`) is a parallel, in-flight change, so this proves
-/// the tool is listed, builds the documented selector, and degrades
-/// gracefully with nothing answering — not the recorder's own behavior.
+/// against a stand-in queryable, so this proves the tool is listed, builds
+/// the documented selector, and degrades gracefully with nothing
+/// answering — not the recorder's own behavior, which recorder.rs covers
+/// at `home/history/events`.
 #[tokio::test(flavor = "multi_thread")]
 async fn read_logs_and_events_over_mcp() {
     let sup = Supervisor::spawn("tests/fixture_house_logs");

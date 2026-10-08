@@ -1,7 +1,7 @@
 //! The manifest contract as data: JSON Schema derived from the structs in
 //! manifest.rs (which `deny_unknown_fields` makes complete), and a Markdown
 //! rendering of it for docs/manifest.md. One source; a test pins the
-//! checked-in document to the rendering so it cannot drift (#4).
+//! checked-in document to the rendering so it cannot drift.
 
 use schemars::schema_for;
 use serde_json::{json, Value};

@@ -1,6 +1,6 @@
 /* Dashboard decision logic: the pure functions behind the Now view and the
- * WebSocket store — extracted from dashboard.html so `node --test
- * tests/js` can pin them (the DOM wiring stays in the page). Functions in,
+ * WebSocket store — kept out of dashboard.html so `node --test tests/js`
+ * can pin them (the DOM wiring stays in the page). Functions in,
  * functions out: no DOM, no fetch, no globals.
  *
  * Loaded two ways: as a plain script by dashboard.html (defines
@@ -512,15 +512,6 @@
   // An enum with more choices than fit on one segmented row.
   var SELECT_ABOVE = 4;
 
-  // The control a described command renders as — the param-control
-  // shapes: an enum is a segmented control (a select past SELECT_ABOVE
-  // values), a temperature with a step is a dial (the page draws its
-  // compact form, a stepper, where a card has no room), any other float
-  // with a step a stepper, any other number a slider carrying a coarse
-  // step for its ± buttons. A command the family may not edit reads its
-  // value with a tier badge instead. `commandable` is the dashboard's own
-  // grant on the capability: without it the control is inert, as for
-  // every other widget.
   /* ---- declared control grain (docs/design.md, Dashboard) ----
    *
    * `dashboard.toml`'s `[[control]]` entries say how coarse a control is,
@@ -540,6 +531,15 @@
     return match ? match.step : null;
   }
 
+  // The control a described command renders as — the param-control
+  // shapes: an enum is a segmented control (a select past SELECT_ABOVE
+  // values), a temperature with a step is a dial (the page draws its
+  // compact form, a stepper, where a card has no room), any other float
+  // with a step a stepper, any other number a slider carrying a coarse
+  // step for its ± buttons. A command the family may not edit reads its
+  // value with a tier badge instead. `commandable` is the dashboard's own
+  // grant on the capability: without it the control is inert, as for
+  // every other widget.
   function controlFor(field, commandable, step) {
     var cmd = field && field.command;
     if (!cmd) return null;
@@ -592,9 +592,9 @@
   /* Sections of rows for an entity's detail, in render order: the
    * descriptor's groups as listed, then diagnostics for every present
    * aspect it does not describe (an undescribed entity is one 'state'
-   * section — exactly today's flat list). A described field's `valid`
-   * pointer names the boolean aspect that marks the value stale; that
-   * aspect is consumed into the row's `stale` flag rather than listed.
+   * section, a flat list). A described field's `valid` pointer names the
+   * boolean aspect that marks the value stale; that aspect is consumed
+   * into the row's `stale` flag rather than listed.
    * Two aspects are schema vocabulary and need no descriptor: `available`
    * (device liveness, docs/design.md, Availability) renders as a boolean
    * in the descriptor's `status` group when it has one, and any
@@ -662,7 +662,7 @@
     });
   }
 
-  /* The room-card row for a described entity (#32): at most two headline
+  /* The room-card row for a described entity: at most two headline
    * readings and the family-editable controls. Headline is a convention,
    * not vocabulary — the first two control-less rows of the first group
    * that has any, so the adapter's own ordering decides — revisited if an
@@ -690,13 +690,12 @@
     return { readings: readings, controls: controls };
   }
 
-  /* The sparkline rows of a sensor's room card (#56): every numeric,
-   * control-less row outside diagnostics, in the descriptor's order — so
-   * a thermometer's card lists temperature and humidity and not its link
+  /* The sparkline rows of a sensor's room card: every numeric,
+   * control-less row outside diagnostics, in the descriptor's order — so a
+   * thermometer's card lists temperature and humidity and not its link
    * quality, and the sensor widget keeps its sparklines instead of being
-   * routed to the described card. An undescribed sensor is its flat
-   * state list, sorted. Same rows as the overlay, minus the collapsed
-   * group. */
+   * routed to the described card. An undescribed sensor is its flat state
+   * list, sorted. Same rows as the overlay, minus the collapsed group. */
   function sensorCardPlan(entity, state, descriptor) {
     var rows = [];
     aspectPlan(entity, state, descriptor, false).forEach(function (s) {
@@ -817,15 +816,15 @@
     return lines;
   }
 
-  /* ---- pending commands (issue #94) ----
+  /* ---- pending commands ----
    *
    * A command is a proposal, not a write. It passes through arbitration,
    * the adapter's validation and finally the device's own readback, and
-   * each of those can end it. The page used to show nothing at all
-   * between the tap and stage 4, so a slow device looked like a dead
-   * button and the natural response was to tap again.
+   * each of those can end it. A page that shows nothing between the tap
+   * and stage 4 makes a slow device look like a dead button, and the
+   * natural response is to tap again.
    *
-   * Optimistic painting is not the fix: posting an out-of-range value
+   * Optimistic painting is not the answer: posting an out-of-range value
    * returns ok and is then dropped at stage 3, so the control would show
    * a value the house never took. Instead the stages are made visible,
    * and the envelope's correlation id is what ties an event back to the
@@ -842,9 +841,9 @@
    * is no readback cadence on the wire, and the capability is the only
    * thing the browser knows about a device's class, so it is what the
    * wait is scaled to: a z2m lamp answers in about a second, a lock waits
-   * on a motor, a burner behind a polling bridge can take half a minute
-   * (issue #94). Generous on purpose — a timeout that fires early reports
-   * a failure that did not happen. */
+   * on a motor, a burner behind a polling bridge can take half a minute.
+   * Generous on purpose — a timeout that fires early reports a failure
+   * that did not happen. */
   var COMMAND_TIMEOUT_MS = {
     light: 8000,
     switch: 8000,
@@ -919,8 +918,8 @@
   }
 
   /* Where the next step of a stepper starts: the request in flight when
-   * there is one, the device's report otherwise. Stepping from the report
-   * is what made a second tap repeat the first. */
+   * there is one, the device's report otherwise. Stepping from a report
+   * that has not moved yet would make a second tap repeat the first. */
   function commandBase(pending, room, entity, aspect, current) {
     var entry = pendingFor(pending, room, entity, aspect);
     return entry ? entry.value : current;
@@ -966,8 +965,8 @@
    *     (expirePending);
    *   - the value it held before, or one the user asked for on the way:
    *     not an answer — a bridge that republishes on every poll sends
-   *     the old value until the device moves, and this used to count as
-   *     confirmation, clearing the control before anything had happened;
+   *     the old value until the device moves, and counting that as
+   *     confirmation would clear the control before anything happened;
    *   - anything else: the device answered with a value of its own (it
    *     clamped, or rounded to its resolution) — adjusted, and said so.
    * A draft has not been sent, so nothing can answer it yet. */
@@ -1081,9 +1080,7 @@
    * its present. The wire shape is {schema, issued, points:[{t, v, d?}]};
    * `d` is a point's extent in seconds, absent for an instant. */
 
-  // The decoded forecast for one aspect, or null. Points become
-  // millisecond timestamps here so the chart can place them on the same
-  // axis as recorded history without every caller re-parsing.
+  // The key prefix every source's forecast for one aspect sits under.
   function forecastPrefix(room, entity, aspect) {
     return 'home/forecast/' + room + '/' + entity + '/' + aspect + '/';
   }
@@ -1113,10 +1110,10 @@
     );
   }
 
-  // Every live claim about one aspect's future, decoded, newest source
-  // order stable. A line each and never an envelope over them, for the
-  // reason the braid gives: an envelope's edge belongs at each instant
-  // to whichever source happened to be highest, a path none predicted.
+  // Every live claim about one aspect's future, decoded, in source order.
+  // A line each and never an envelope over them, for the reason the braid
+  // gives: an envelope's edge belongs at each instant to whichever source
+  // happened to be highest, a path none predicted.
   function forecastsFor(forecasts, room, entity, aspect) {
     var out = [];
     forecastSourcesFor(forecasts, room, entity, aspect).forEach(function (source) {
@@ -1128,7 +1125,9 @@
 
   // One forecast document, live off the bus or stored by the recorder —
   // the same shape either way, which is why the store replies in the
-  // wire's spelling rather than a second one.
+  // wire's spelling rather than a second one. Points become millisecond
+  // timestamps here so the chart can place them on the same axis as
+  // recorded history without every caller re-parsing.
   function decodeForecast(doc) {
     if (!doc || !doc.points || !doc.points.length) return null;
     var issued = Date.parse(doc.issued);
@@ -1489,11 +1488,10 @@
     };
   }
 
-  /* Where a deviation's tap should land now that the nav is the file's:
-   * a setpoint goes to the first view carrying its unit's params (or a
-   * generated Setpoints), the lights-on deviation to a generated Rooms.
-   * null means no view shows it — the page falls back to an overlay or to
-   * Not shown. */
+  /* Which of the nav's views a deviation's tap should land on: a setpoint
+   * goes to the first view carrying its unit's params (or a generated
+   * Setpoints), the lights-on deviation to a generated Rooms. null means
+   * no view shows it — the page falls back to an overlay or to Not shown. */
   function viewFor(target, views) {
     var found = null;
     views.forEach(function (v) {

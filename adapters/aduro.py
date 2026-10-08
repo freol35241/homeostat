@@ -28,16 +28,16 @@ per burner.
 What becomes state, and how much. Republish-on-poll means an adapter
 forwarding each message would record every field 2,700 times a day
 whether or not it ever moved — the status topic alone is two and a half
-times the reporting house's entire heat-pump adapter (#37). So the
-adapter subscribes exactly {base}/status and {base}/operating, and
-publishes a field ONLY WHEN ITS VALUE CHANGES (plus once, on the first
-poll after start; late joiners read the core's state mirror). Settings
-are configuration, not samples; consumption, advanced and logs are the
-long tail — none are subscribed. Status fields publish under their
-firmware names (dots included: `regulation.fixed_power` is a legal key
-segment); operating fields publish as `operating_{field}`, the prefix
-keeping the two NBE namespaces apart without a table of one to check
-the other against.
+times the reporting house's entire heat-pump adapter. So the adapter
+subscribes exactly {base}/status and {base}/operating, and publishes a
+field ONLY WHEN ITS VALUE CHANGES (plus once, on the first poll after
+start; late joiners read the core's state mirror). Settings are
+configuration, not samples; consumption, advanced and logs are the long
+tail — none are subscribed. Status fields publish under their firmware
+names (dots included: `regulation.fixed_power` is a legal key segment);
+operating fields publish as `operating_{field}`, the prefix keeping the
+two NBE namespaces apart without a table of one to check the other
+against.
 
 Four normalizations carry the `burner` vocabulary:
 
@@ -45,10 +45,10 @@ Four normalizations carry the `burner` vocabulary:
   is on unless `state` is one of OFF_STATES. Start and stop are momentary
   writes in this dialect (misc.start / misc.stop), so `on` can only ever
   be the device's own readback, never an echo of a command. OFF_STATES
-  holds the single code observed so far — 14, the burner idle and unlit
-  through the survey that settled #37 — and grows as the heating season
-  produces codes; `state` and `substate` pass through raw beside it for
-  exactly that purpose. A code not in OFF_STATES reads as on.
+  holds the single code observed so far — 14, the burner idle and unlit —
+  and grows as the heating season produces codes; `state` and `substate`
+  pass through raw beside it for exactly that purpose. A code not in
+  OFF_STATES reads as on.
 - `power_level` (feature) is status `regulation.fixed_power`, the fixed
   output setting, 10 / 50 / 100 on this device — published as an int
   when integral so the enum matches.

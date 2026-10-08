@@ -38,8 +38,8 @@ class TemplateTest(unittest.TestCase):
         )
 
     def test_a_subscribe_expression_keeps_its_wildcard_tail(self):
-        """The half that failed silently: zenoh takes `{room}` as a literal
-        chunk, so the unexpanded expression matches no key that exists."""
+        """Unexpanded, this fails silently: zenoh takes `{room}` as a
+        literal chunk, so the expression matches no key that exists."""
         self.assertEqual(
             _expand("home/cmd/{room}/{entity}/**", ZONES, LATCHES),
             ["home/cmd/global/night_mode/**", "home/cmd/hallway/motion_lighting/**"],
@@ -88,10 +88,9 @@ class ZoneTest(unittest.TestCase):
 
     def test_forecast_expands_like_state(self):
         # A forecast is the same series extended forward, so it is
-        # addressed per entity and expands per entity. It did not, while
-        # the core did: the mirror of the core's rule had been left behind
-        # when the class was added, and a templated forecast publish that
-        # `plan` accepted was unaddressable at runtime.
+        # addressed per entity and expands per entity, as the core does: a
+        # templated forecast publish that `plan` accepts must be
+        # addressable at runtime.
         self.assertEqual(
             _expand("home/forecast/{room}/{entity}/price", ZONES, LATCHES),
             [
@@ -120,10 +119,10 @@ def bare_context(publishes, zones=None, entities=None):
 
 class ConcreteKeyTest(unittest.TestCase):
     """The manifest is the authority on what a unit publishes, so a
-    binding must resolve to one key — for a forecast as for state. It did
-    not: a forecast fell through to the branch that returns the expression
-    verbatim and refuses slots, so a templated publish `plan` had accepted
-    could not be addressed at all."""
+    binding must resolve to one key — for a forecast as for state. A
+    forecast that fell through to the branch that returns the expression
+    verbatim and refuses slots would leave a templated publish `plan` had
+    accepted unaddressable."""
 
     def test_a_literal_forecast_binding_resolves_to_its_key(self):
         ctx = bare_context(
@@ -191,11 +190,11 @@ if __name__ == "__main__":
 
 
 class RestoreWaitTest(unittest.TestCase):
-    """How `restore` waits for the recorder (#121). The recorder answers
-    one query at a time, so a get that gives up and asks again queues a
-    second answer behind the first: once one answer takes longer than the
-    get, no asker is ever still there for a reply. `restore` must ask once
-    and wait, and say which of the two ways the recorder failed it."""
+    """How `restore` waits for the recorder. The recorder answers one
+    query at a time, so a get that gives up and asks again queues a second
+    answer behind the first: once one answer takes longer than the get, no
+    asker is ever still there for a reply. `restore` must ask once and
+    wait, and say which of the two ways the recorder failed it."""
 
     KEY = "home/state/global/night_mode/on"
 
@@ -217,7 +216,7 @@ class RestoreWaitTest(unittest.TestCase):
         return ctx
 
     def test_a_slow_answer_is_waited_for_not_asked_again(self):
-        # A stats answer takes longer than the 2 s the old poll waited.
+        # A stats answer slower than a short 2 s get would wait for.
         answer_s = 2.5
 
         def recorder(selector, timeout_s):

@@ -494,7 +494,7 @@ async fn fed_input_follows_its_source_and_stops_on_loss() {
     );
 
     // One master: a command naming the fed input drops with invalid-command
-    // and nothing reaches MQTT. (indoor_temperature_actual was never a
+    // and nothing reaches MQTT. (indoor_temperature_actual is not a
     // command aspect; outdoor_temperature_offset would be, and is wired
     // the same way at the reporting house.)
     let wish = json!({"value": 20.0, "priority": "manual", "actor": "test"});
@@ -553,18 +553,17 @@ async fn out_of_range_setpoint_drops_with_invalid_command_event() {
     sup.shutdown();
 }
 
-/// (c1) The outdoor offset's bound is +/-50 K, not the +/-10 K it was
-/// through 0.12.0. The firmware has no range check of its own -- it adds the
-/// offset to the outdoor reading and the NTC emulator saturates at the ends
-/// of its digipot -- so the adapter's bound is the only refusal in the chain
-/// and it has to admit what the firmware can act on. The reporting house's
-/// automation writes flue/15 + 15*fraction, unclamped; its replaced flow was
-/// read back by the pump at +20.7, and under +/-10 the port lost every such
-/// write.
+/// (c1) The outdoor offset's bound is +/-50 K. The firmware has no range
+/// check of its own -- it adds the offset to the outdoor reading and the
+/// NTC emulator saturates at the ends of its digipot -- so the adapter's
+/// bound is the only refusal in the chain and it has to admit what the
+/// firmware can act on. The reporting house's automation writes flue/15 +
+/// 15*fraction, unclamped; the flow it replaces was read back by the pump
+/// at +20.7, and a +/-10 K bound would lose every such write.
 ///
-/// +16.0 is the value that matters: refused by the old bound, routine for
-/// the flow, and here the positive control -- it must reach MQTT in the same
-/// run that +60.0 is refused, or the refusal proves nothing.
+/// +16.0 is the value that matters: outside +/-10 K, routine for the flow,
+/// and here the positive control -- it must reach MQTT in the same run
+/// that +60.0 is refused, or the refusal proves nothing.
 #[tokio::test(flavor = "multi_thread")]
 async fn offset_bound_admits_the_flow_and_refuses_nonsense() {
     let (mosquitto, mut sup, observer) = setup().await;
@@ -581,7 +580,7 @@ async fn offset_bound_admits_the_flow_and_refuses_nonsense() {
     let mut mqtt = Mqtt::connect(mosquitto.port, "test-offset-bound").await;
     mqtt.subscribe(OFFSET_SET_TOPIC).await;
 
-    // The control: a burner-and-price push the old bound refused.
+    // The control: a burner-and-price push a +/-10 K bound would refuse.
     let wish = json!({"value": 16.0, "priority": "manual", "actor": "test"});
     observer
         .put(OFFSET_CMD_KEY, wish.to_string())

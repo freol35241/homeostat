@@ -12,7 +12,7 @@
 See docs/design.md, "Notifications (settled 2026-09-09, #31)" and "The ntfy
 adapter".
 
-The first delivery dialect for the `notifier` capability. An ntfy server
+A delivery dialect for the `notifier` capability. An ntfy server
 (self-hosted, a compose sidecar beside the MQTT broker — the phones
 connect to IT, so it is not a unit) takes one HTTP POST per message on
 `{endpoint}/{topic}`; the family's phones subscribe to topics in the ntfy
@@ -25,8 +25,7 @@ startup error.
 
 Startup GETs `{endpoint}/v1/health` and refuses to declare ready until the
 server answers healthy — a dead server or a wrong URL is the supervisor's
-backoff, not a notifier that silently drops everything (the SMTP relay
-that returned 250 OK for two weeks, #31).
+backoff, not a notifier that silently drops everything.
 
 Commands (the two commandable aspects of the vocabulary; every channel is
 `shared`, so they arrive on home/cmd/{room}/{entity}/{aspect}):
@@ -50,9 +49,9 @@ window, since one channel's traffic must never delay the other's; a
 "rate-limited". `alert` is exempt from the floor entirely (docs/design.md,
 Notifications: quiet hours and rate limits withhold `message`, never
 `alert` — the severity split is a delivery-path property, not a courtesy
-this adapter may override). This is defense in depth (the ivt490 bounds
-argument): the cooldown that is house policy lives in the automation as
-a family-editable parameter on the SDK's Cooldown.
+this adapter may override). This floor is defense in depth, kept whatever
+the callers do: the cooldown that is house policy lives in the automation
+as a family-editable parameter on the SDK's Cooldown.
 
 Delivery: sends are serialised on one worker thread so a slow server
 never stalls the bus callback. The server's JSON reply carries the

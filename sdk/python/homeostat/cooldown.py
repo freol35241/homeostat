@@ -1,12 +1,12 @@
 """Per-key cooldowns for automations that reach people (docs/design.md, Notifications).
 
 A notification per event is a notification 417 times when a motion
-episode arrives as 417 samples (#3), so the live estate's alarm flow
-limits itself to one message per ten minutes and that limiter is
-load-bearing. The window is house policy — a family-editable parameter —
-and this is the bookkeeping behind it, owned once rather than hand-rolled
-per unit: the monotonic time each key last fired, and whether a key may
-fire again now.
+episode arrives as 417 samples, so the live estate's alarm flow limits
+itself to one message per ten minutes and that limiter is load-bearing.
+The window is house policy — a family-editable parameter — and this is
+the bookkeeping behind it, owned once rather than hand-rolled per unit:
+the monotonic time each key last fired, and whether a key may fire again
+now.
 
 `ready(key, window_s)` answers and, when true, records the firing, so the
 call site is one `if`. A key that has never fired is ready. The adapter

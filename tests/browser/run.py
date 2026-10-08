@@ -17,12 +17,12 @@ DOM and the network only — the page's script is an IIFE, so there are no
 internals to reach, which keeps every assertion to something a person or
 another process could observe.
 
-What these tests are for (docs/design.md, Dashboard; issue #181): locking
-in rules we have already learned, and one broad net — no page errors, every
-view renders, every widget kind draws. They are NOT the discovery
-mechanism. Every rendering bug this project has had was found by a person
-opening a browser, and that habit is the thing to keep; this suite carries
-the boring half so nobody re-runs twenty checks by hand.
+What these tests are for (docs/design.md, Dashboard): locking in rules we
+have already learned, and one broad net — no page errors, every view
+renders, every widget kind draws. They are NOT the discovery mechanism.
+Rendering bugs are found by a person opening a browser, and that habit is
+the thing to keep; this suite carries the boring half so nobody re-runs
+twenty checks by hand.
 
 Deliberately not asserted: pixels, screenshots, whole-HTML snapshots, CSS
 beyond the handful that is behaviour, exact copy (match a shape, not a
@@ -149,9 +149,9 @@ class ChoiceSurvivesRerender(PageTest):
     re-render only if it is held outside the markup.
 
     Live state re-renders the panel and replaces its nodes; the rule has
-    five instances and one of them (the source legend's pin) shipped
-    broken because nobody re-checked the others. One test each, so the
-    insight stays a checklist item.
+    five instances, and a change to one ships the others broken unless
+    each is re-checked. One test each, so the insight stays a checklist
+    item.
     """
 
     async def rerender(self) -> None:

@@ -90,8 +90,8 @@ async fn cache_read_eventually(session: &zenoh::Session, key: &str, timeout: Dur
 
 /// Expects the lamp-off command within the timeout: a cmd envelope whose
 /// value is `false`, priority and actor stamped from the automation's own
-/// manifest declaration (docs/design.md, Arbitrated mode) — no automation
-/// code change needed for this, it's the SDK's Context.publish.
+/// manifest declaration (docs/design.md, Arbitrated mode) — the SDK's
+/// Context.publish does this, not the automation's code.
 async fn expect_lamp_off(sub: &Sub, timeout: Duration) {
     let sample = tokio::time::timeout(timeout, sub.recv_async())
         .await
@@ -288,7 +288,7 @@ async fn off_time_edit_applies_live_and_survives_restart() {
     .await;
     assert!(restarted.pid.is_some());
 
-    // The fresh incarnation caught up from the core mirror (#36): it
+    // The fresh incarnation caught up from the core mirror: it
     // already knows it is 23:30, nobody is present and the lamp is off
     // (the reflector applied the command), so it has nothing to do — and
     // staging the lamp on now would rightly be answered with lights-off.

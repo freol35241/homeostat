@@ -7,7 +7,7 @@
 # [tool.uv.sources]
 # homeostat = { path = "../sdk/python", editable = true }
 # ///
-"""go2rtc shim: the first foreign binary as a unit.
+"""go2rtc shim: a foreign binary as a unit.
 
 See docs/design.md, "Cameras (settled 2026-07-19)".
 
@@ -31,8 +31,8 @@ Camera entries: `host` (bare, or host:port — the ONVIF port, which is NOT
 the RTSP port; RTSP rides 554), `username`, `password`, and optionally
 `stream`, a full RTSP URL overriding the default
 rtsp://user:pass@host:554/stream1 (Tapo's HD main stream) for cameras
-with a different path. go2rtc's own stdout/stderr ride this unit's — the
-supervisor tags them, per the peripheral-logs settlement.
+with a different path. go2rtc's own stdout/stderr ride this unit's, and
+the supervisor tags them (docs/design.md, Logs and the audit trail).
 """
 
 import json

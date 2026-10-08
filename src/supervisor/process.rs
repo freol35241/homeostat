@@ -33,7 +33,7 @@ pub const LOG_CAPACITY: usize = 500;
 ///
 /// Best effort: if uv cannot resolve the script (no PEP 723 block, a broken
 /// dependency, no network) the original `uv run` command is returned, so
-/// the failure is reported exactly where and how it was before.
+/// the failure surfaces from `uv run` itself.
 pub async fn resolve(command: &str, cwd: &Path) -> String {
     let Some((script, args)) = uv_script(command) else {
         return command.to_string();
@@ -166,8 +166,8 @@ pub fn spawn(
 
 /// Takes a freshly spawned unit's stdout/stderr pipes and starts capturing
 /// them: each line is re-emitted on the supervisor's own matching stream,
-/// tagged `[{unit}] ` — `docker logs` stays the raw stream, now
-/// attributable — and appended to the unit's ring buffer. Two reader tasks
+/// tagged `[{unit}] ` — `docker logs` stays the raw stream, attributable
+/// per unit — and appended to the unit's ring buffer. Two reader tasks
 /// run independently until their pipe closes (the unit exits); this touches
 /// only the child's stdout/stderr handles, never its pid or process group,
 /// so it does not interact with termination or reaping.

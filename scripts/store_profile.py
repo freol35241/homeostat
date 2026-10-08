@@ -12,15 +12,12 @@ reply carries one entry per series, and on a house with a few hundred of
 them the shape of the file -- which device is filling it, how many
 retention rules it would take to control it, whether write rates separate
 into "chatty" and "normal" at all -- is arithmetic nobody does by hand.
-It was done by hand once (#123, where a heat pump turned out to be 89 %
-of the rows) and that is the reason this exists.
 
 Reads only: one get on home/history/stats. Nothing is written to the bus
 or the store, so it is safe against a live house.
 
 The rate it prints is computed here rather than read from the reply, so
-this works against a store predating the recorder's own rows_per_day
-(#137).
+this works against a recorder whose reply carries no rows_per_day.
 """
 
 import argparse
