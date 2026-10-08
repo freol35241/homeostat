@@ -134,13 +134,7 @@ pub async fn supervise(
             .await
             .expect("liveliness subscriber");
         health
-            .set(Health {
-                status: HealthStatus::Starting,
-                pid: None,
-                restarts,
-                backoff_ms: None,
-                last_exit_code: None,
-            })
+            .set(Health::idle(HealthStatus::Starting, restarts, None))
             .await;
 
         let env = [
@@ -155,38 +149,20 @@ pub async fn supervise(
             Ok(child) => child,
             Err(err) => {
                 eprintln!("[homeostat] {}: spawn failed: {err}", spec.name);
-                match breaker.on_exit(started.elapsed()) {
-                    Decision::Open => {
-                        health
-                            .set(Health {
-                                status: HealthStatus::Open,
-                                pid: None,
-                                restarts,
-                                backoff_ms: None,
-                                last_exit_code: None,
-                            })
-                            .await;
-                        break;
-                    }
-                    Decision::Restart { delay } => {
-                        restarts += 1;
-                        if wait_backoff(&mut health, restarts, delay, &mut shutdown).await {
-                            // Shutdown during the backoff: report stopped,
-                            // as the exit-path backoff below does.
-                            health
-                                .set(Health {
-                                    status: HealthStatus::Stopped,
-                                    pid: None,
-                                    restarts,
-                                    backoff_ms: None,
-                                    last_exit_code: None,
-                                })
-                                .await;
-                            break;
-                        }
-                        continue;
-                    }
+                let ran_for = started.elapsed();
+                if back_off_or_open(
+                    &mut health,
+                    &mut breaker,
+                    &mut restarts,
+                    ran_for,
+                    None,
+                    &mut shutdown,
+                )
+                .await
+                {
+                    continue;
                 }
+                break;
             }
         };
         process::capture(&mut child, &spec.name, &log);
@@ -212,11 +188,8 @@ pub async fn supervise(
                             SampleKind::Delete => HealthStatus::Starting,
                         };
                         health.set(Health {
-                            status,
                             pid,
-                            restarts,
-                            backoff_ms: None,
-                            last_exit_code: None,
+                            ..Health::idle(status, restarts, None)
                         }).await;
                     }
                 }
@@ -232,13 +205,7 @@ pub async fn supervise(
         let code = match outcome {
             RunOutcome::Shutdown => {
                 health
-                    .set(Health {
-                        status: HealthStatus::Stopped,
-                        pid: None,
-                        restarts,
-                        backoff_ms: None,
-                        last_exit_code: None,
-                    })
+                    .set(Health::idle(HealthStatus::Stopped, restarts, None))
                     .await;
                 break;
             }
@@ -252,54 +219,23 @@ pub async fn supervise(
         };
         if done {
             health
-                .set(Health {
-                    status: HealthStatus::Stopped,
-                    pid: None,
-                    restarts,
-                    backoff_ms: None,
-                    last_exit_code: code,
-                })
+                .set(Health::idle(HealthStatus::Stopped, restarts, code))
                 .await;
             break;
         }
 
-        match breaker.on_exit(started.elapsed()) {
-            Decision::Open => {
-                health
-                    .set(Health {
-                        status: HealthStatus::Open,
-                        pid: None,
-                        restarts,
-                        backoff_ms: None,
-                        last_exit_code: code,
-                    })
-                    .await;
-                break;
-            }
-            Decision::Restart { delay } => {
-                restarts += 1;
-                health
-                    .set(Health {
-                        status: HealthStatus::Backoff,
-                        pid: None,
-                        restarts,
-                        backoff_ms: Some(delay.as_millis() as u64),
-                        last_exit_code: code,
-                    })
-                    .await;
-                if backoff_interrupted(delay, &mut shutdown).await {
-                    health
-                        .set(Health {
-                            status: HealthStatus::Stopped,
-                            pid: None,
-                            restarts,
-                            backoff_ms: None,
-                            last_exit_code: code,
-                        })
-                        .await;
-                    break;
-                }
-            }
+        let ran_for = started.elapsed();
+        if !back_off_or_open(
+            &mut health,
+            &mut breaker,
+            &mut restarts,
+            ran_for,
+            code,
+            &mut shutdown,
+        )
+        .await
+        {
+            break;
         }
     }
 
@@ -307,23 +243,42 @@ pub async fn supervise(
     // visible through the supervisor's health queryable; nothing left to do.
 }
 
-/// Publishes backoff health and sleeps; returns true if shutdown arrived.
-async fn wait_backoff(
+/// The breaker's step after an incarnation ends with a restart due: open
+/// the breaker, or count the restart, report the backoff and sleep it
+/// out. False when the unit is done: the breaker opened, or shutdown
+/// arrived during the backoff.
+async fn back_off_or_open(
     health: &mut HealthPublisher,
-    restarts: u32,
-    delay: Duration,
+    breaker: &mut Breaker,
+    restarts: &mut u32,
+    ran_for: Duration,
+    code: Option<i32>,
     shutdown: &mut watch::Receiver<bool>,
 ) -> bool {
-    health
-        .set(Health {
-            status: HealthStatus::Backoff,
-            pid: None,
-            restarts,
-            backoff_ms: Some(delay.as_millis() as u64),
-            last_exit_code: None,
-        })
-        .await;
-    backoff_interrupted(delay, shutdown).await
+    match breaker.on_exit(ran_for) {
+        Decision::Open => {
+            health
+                .set(Health::idle(HealthStatus::Open, *restarts, code))
+                .await;
+            false
+        }
+        Decision::Restart { delay } => {
+            *restarts += 1;
+            health
+                .set(Health {
+                    backoff_ms: Some(delay.as_millis() as u64),
+                    ..Health::idle(HealthStatus::Backoff, *restarts, code)
+                })
+                .await;
+            if backoff_interrupted(delay, shutdown).await {
+                health
+                    .set(Health::idle(HealthStatus::Stopped, *restarts, code))
+                    .await;
+                return false;
+            }
+            true
+        }
+    }
 }
 
 /// Sleeps for `delay`; returns true if shutdown arrived first.
