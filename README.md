@@ -2,49 +2,48 @@
 
 # Homeostat
 
-**A household regulator, not an assistant.** Text-first home automation:
-your home's entire configuration lives in a git repo, a small Rust core
-supervises plain OS processes over a [Zenoh](https://zenoh.io/) bus, and
-every change — a family member nudging a setpoint, you rewriting an
-automation, an AI agent proposing one — goes through the same
-`plan` / `apply` discipline.
+Homeostat is home automation configured as text. The whole configuration
+of a house lives in a git repo. A small Rust core runs each device adapter
+and automation as a plain OS process, and they talk over a
+[Zenoh](https://zenoh.io/) bus. Changes to the house go through
+`homeostat plan` and `homeostat apply`, whether you make them by hand or an
+AI agent proposes them.
 
-Named after W. Ross Ashby's 1948 machine. The system maintains the home in
-equilibrium; the family adjusts setpoints; the owner governs structure.
-[docs/design.md](docs/design.md) is the full design record and the
-authority on architecture.
+The name comes from W. Ross Ashby's 1948 machine. The idea is the same: the
+system keeps the house at its setpoints, the family adjusts those setpoints,
+and the owner changes how the system works.
+[docs/design.md](docs/design.md) is the full design record.
 
-![The concept: an inner control loop regulates the house against family-owned setpoints; an outer loop — the owner or an AI agent, through git and plan/apply — rewires the regulator itself](docs/diagrams/concept.drawio.svg)
+![Concept: an inner loop regulates the house against the family's setpoints; an outer loop, the owner or an agent working through git, changes the regulator](docs/diagrams/concept.drawio.svg)
 
 ## Why
 
-Homeostat is built as a Home Assistant replacement around a few firm
-opinions:
+I wrote Homeostat to replace Home Assistant in my own house. It is built
+on a few choices:
 
-- **The repo is the single source of truth.** No hidden state mutated by a
-  UI. Desired state is text in git; actual state is read live from the
-  bus; there is no state file, so drift is impossible by construction.
-- **Automations are pure code.** Python scripts with a small SDK — no YAML
-  DSL ceiling. A unit gets exactly the bus surface its manifest declares,
-  nothing more.
-- **Changes are reviewed, not clicked.** `homeostat plan` shows exactly
-  what would change and derives how disruptive it is — parameter-only,
-  behavioral, or structural — mechanically from the diff, never from a
-  declaration. `homeostat apply` walks the difference unit by unit,
-  rolling, halting visibly on failure. Rollback is `git checkout` and
-  apply again.
-- **Agent-native.** An MCP server lets an agent read state, history,
-  logs and the audit trail, and serves the authoring contract. Changes
-  go through the repo: an agent edits text and runs `plan`, and the
-  owner applies — the same discipline as every other actor.
-- **Small core, real processes.** Every running thing is a supervised OS
-  process with liveliness tokens, exponential restart backoff, and a
-  circuit breaker visible on the bus — Erlang lineage, not containers or
-  plugins.
+- The repo is the only source of truth. Nothing is configured through a
+  UI. What the house should be is text in git, what it is gets read live
+  from the bus, and there is no separate state file to drift.
+- Automations are Python scripts on a small SDK, with no YAML language to
+  outgrow. A unit can only use the bus keys its manifest declares.
+- Changes are reviewed before they run. `homeostat plan` shows what would
+  change and works out from the diff how disruptive it is: parameter-only,
+  behavioral or structural. `homeostat apply` then rolls the change out one
+  unit at a time and stops at the first failure. To roll back, check out
+  the old commit and apply again.
+- An AI agent can help. The MCP server lets an agent read state, history,
+  logs and the audit trail, and look up the rules a manifest must follow.
+  To change anything, the agent edits the repo and runs `plan`, and you
+  apply it, the same as for any other change.
+- Everything that runs is a supervised OS process. The core restarts a
+  crashed unit with exponential backoff and gives up after five quick
+  exits in a row, until an apply or a supervisor restart starts it fresh.
+  All of this is reported on the bus. The model is Erlang's
+  supervisor trees rather than containers or plugins.
 
-It is early software (see [Status](#status)) and currently targets its
-author's device inventory: Zigbee2MQTT, ESPHome, MQTT. There is no Home
-Assistant bridge.
+It is early software (see [Status](#status)) and supports the devices I
+have: Zigbee2MQTT, ESPHome and plain MQTT, plus the adapters listed under
+Status. There is no Home Assistant bridge.
 
 ## How it works
 
@@ -63,9 +62,9 @@ house/
       kitchen_ceiling.toml   # one file per device; file stem = entity name
 ```
 
-The entity file is the sole authority on write policy (`shared`,
-`exclusive`, `arbitrated`); its `room` field is the single source of
-spatial truth. `examples/house/` is a complete, documented example.
+An entity file sets the device's write policy (`shared`, `exclusive` or
+`arbitrated`) and its `room`; nothing else does. `examples/house/` is a
+complete, commented example.
 
 `homeostat up` validates the repo, then runs every unit as a supervised
 process, all talking over a well-defined key space on the bus:
@@ -78,26 +77,30 @@ home/health/{unit}                    supervision status, health events
 home/history/**                       recorded history, served over the bus
 ```
 
-Authority is tiered along the same lines as the plan tiers: parameters are
-family-editable live on the bus (validated against manifest constraints);
-structure — units, grants, code — changes only through the repo and
-plan/apply.
+Who can change what follows the plan tiers. Parameters can be changed
+live on the bus, within the limits each manifest sets, and the dashboard
+lets the family edit the ones marked as theirs. Units, grants and code
+change only through the repo and plan/apply.
 
-![Architecture: the house repo feeds the Rust core, which supervises the unit processes — adapters, automations, services — that all meet on the Zenoh bus; MQTT radios, the SQLite store, family browsers and the AI agent hang off their units](docs/diagrams/architecture.drawio.svg)
+![Architecture: the house repo feeds the Rust core, which supervises adapters, automations and services on the Zenoh bus](docs/diagrams/architecture.drawio.svg)
 
-Both schematics are draw.io-editable SVGs — the diagram model is embedded
-in the file, so they open in [diagrams.net](https://app.diagrams.net/) —
-generated by [`docs/diagrams/generate.py`](docs/diagrams/generate.py).
+Both diagrams are generated by
+[`docs/diagrams/generate.py`](docs/diagrams/generate.py). The SVGs embed
+their draw.io model, so you can also open and edit them in
+[diagrams.net](https://app.diagrams.net/).
 
 ## Quick start
 
-**See it run first.**
+**Try the demo.** The Codespaces button starts the
+[starter house](examples/starter-house/) against simulated devices and
+opens its dashboard, with nothing to install:
+
 [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/freol35241/homeostat?devcontainer_path=.devcontainer/demo/devcontainer.json)
-starts the [starter house](examples/starter-house/) against simulated
-devices and opens its dashboard in your browser, with nothing to install.
-With Docker on your own machine: `examples/starter-house/demo/up.sh`, then
-http://localhost:8600 ([what is simulated](examples/starter-house/demo/README.md)).
-Just the dashboard, in your browser:
+
+With Docker on your own machine, run `examples/starter-house/demo/up.sh`
+and open http://localhost:8600
+([what is simulated](examples/starter-house/demo/README.md)). A static copy
+of the dashboard is also at
 [freol35241.github.io/homeostat](https://freol35241.github.io/homeostat/).
 
 To build it yourself, you need a Rust toolchain, and
@@ -110,9 +113,9 @@ git clone https://github.com/freol35241/homeostat && cd homeostat
 cargo run -- plan examples/house
 ```
 
-On a valid repo this prints every unit to create, the expanded key
-space, and the resolved grant table; on an invalid repo, the complete
-error list and a non-zero exit — a house repo's CI in one command:
+On a valid repo this prints every unit to create, the expanded key space
+and the grant table. On an invalid repo it prints every error and exits
+non-zero, so the same command works as a house repo's CI check:
 
 ```
 Homeostat plan
@@ -136,8 +139,8 @@ Grant table:
 Plan tier: structural (4 units created, 1 grant added)
 ```
 
-**Run a live house.** The integration-test fixtures double as demos; this
-one runs a clock, a reflector adapter (echoes commands back as state), and
+**Run a live house.** The integration-test fixtures work as small demos.
+This one runs a clock, an adapter that echoes commands back as state, and
 the `evening_lights` automation:
 
 ```
@@ -145,20 +148,21 @@ cargo build
 PATH="$PWD/target/debug:$PATH" cargo run -- up tests/fixtures/house_evening
 ```
 
-(The `PATH` prefix is only for fixtures, whose adapters are test binaries
-built by this crate; real houses use commands that resolve on their own,
-like `uv run units/...`.)
+The `PATH` prefix is only needed for fixtures, whose adapters are test
+binaries built by this crate. A real house uses commands like
+`uv run units/...`.
 
-The supervisor opens a router-mode Zenoh session on `tcp/127.0.0.1:7447`
-(override with `--listen`), spawns each unit, and logs health transitions
-(`starting` → `running`). Any Zenoh client can now watch
-`home/state/**`, publish commands, or edit a setpoint live: a zenoh GET on
-`home/config/evening_lights/off_time` with payload `"21:30"` changes the
-running automation on the next minute — and payload `"03:00"` is rejected
-against the manifest constraint with the old value still in force.
+The supervisor listens on `tcp/127.0.0.1:7447` (change it with
+`--listen`), starts each unit and logs its health as it goes from
+`starting` to `running`. Any Zenoh client can now watch `home/state/**`,
+send commands or change a setpoint. For example, a GET on
+`home/config/evening_lights/off_time` with the payload `"21:30"` changes
+the running automation from the next minute. The payload `"03:00"` is
+outside the manifest's constraint, so it is refused and the old value
+stays.
 
-**Make a change through plan/apply.** With a house running, edit the repo
-and let the engine work out what it means:
+**Change it with plan/apply.** With the house running, edit the repo and
+let `plan` work out what the edit means:
 
 ```
 PATH="$PWD/target/debug:$PATH" target/debug/homeostat up tests/fixtures/house_apply &
@@ -169,14 +173,13 @@ target/debug/homeostat apply tests/fixtures/house_apply --bus tcp/127.0.0.1:7447
 # -> Plan tier: parameter-only (1 parameter change) ... Applied.
 ```
 
-The running unit picks up the new value with zero restarts. Edit its
-`probe.py` instead and the same command plans behavioral and restarts
-exactly that unit.
+The running unit picks up the new value without a restart. If you edit
+`probe.py` instead, the plan is behavioral and apply restarts that one
+unit.
 
-**Run with Docker.** Each release publishes a container image for
-linux/amd64 and linux/arm64 alongside prebuilt binaries. The image
-carries everything a deployed house needs — the `homeostat` binary, git,
-uv, and a pre-installed Python:
+**Run with Docker.** Each release publishes prebuilt binaries and a
+container image for linux/amd64 and linux/arm64. The image has what a
+deployed house needs: the `homeostat` binary, git, uv and Python.
 
 ```
 docker run -d --name homeostat \
@@ -185,50 +188,50 @@ docker run -d --name homeostat \
   ghcr.io/freol35241/homeostat
 ```
 
-The default command is `up /house --listen tcp/0.0.0.0:7447`. The bus is
-deliberately not published: anything that can reach 7447 has full
-authority over the house, and `127.0.0.1:7447:7447` is no boundary
-either — a `network_mode: host` container shares the host's loopback.
-The other subcommands run inside the container instead, where the image
-already points `HOMEOSTAT_BUS` at the supervisor's loopback:
+The default command is `up /house --listen tcp/0.0.0.0:7447`. Don't
+publish port 7447: anything that can reach the bus has full control of the
+house. Publishing it on `127.0.0.1` doesn't help either, because any
+container with `network_mode: host` shares the host's loopback. Run the
+other subcommands inside the container instead, where `HOMEOSTAT_BUS`
+already points at the supervisor:
 
 ```
 docker exec homeostat homeostat plan /house
 ```
 
-The container runs as uid 1000; if your house checkout is owned by
-another user, add `--user "$(id -u):$(id -g)"` so units can write to it.
-The uv cache volume is optional but keeps unit environments across
-container replacements.
-[`examples/starter-house`](examples/starter-house/) is a runnable
-template for that mounted house — clock, recorder, Zigbee2MQTT adapter,
-and the evening-lights automation, with a compose file for the full
-mosquitto + zigbee2mqtt + homeostat stack; copy it out and make it your
-own repo.
+The container runs as uid 1000. If another user owns your house
+checkout, add `--user "$(id -u):$(id -g)"` so units can write to it. The
+uv cache volume is optional; it keeps unit environments when the container
+is replaced.
 
-**Run without Docker.** The image is the favored deployment: it is what
-the starter house and its compose file assume. Where a container runtime
-is too much (a small single-board computer), a release's tarball runs on
-the host directly. You need git and uv on `PATH`, plus the release's SDK
-wheel in a directory uv is told about. The house's units pin
-`homeostat==X.Y.Z`, and the SDK is on no package index:
+[`examples/starter-house`](examples/starter-house/) is a house you can
+copy and make your own. It has a clock, the recorder, the Zigbee2MQTT
+adapter and the evening-lights automation, and a compose file for
+mosquitto, zigbee2mqtt and homeostat together.
+
+**Run without Docker.** The starter house assumes the image, and it is
+the easier route. On a small single-board computer where a container
+runtime is too heavy, the release tarball runs directly on the host. You
+need git and uv on `PATH`, and the release's SDK wheel in a directory uv
+knows about, because the units pin `homeostat==X.Y.Z` and the SDK is not on
+any package index:
 
 ```
 UV_FIND_LINKS=/opt/homeostat-wheels homeostat up /path/to/house
 ```
 
-Under systemd, use `KillMode=mixed`, so SIGTERM reaches only the
-supervisor, which then stops its units itself. Set
-`HOMEOSTAT_BUS=tcp/127.0.0.1:7447` in the shell you run `plan` and
-`apply` from.
+Under systemd, set `KillMode=mixed` so that SIGTERM goes only to the
+supervisor, which then stops its units. Set
+`HOMEOSTAT_BUS=tcp/127.0.0.1:7447` in the shell you run `plan` and `apply`
+from.
 
 ## The pieces
 
 ### Adapters: devices onto the bus
 
-`adapters/zigbee2mqtt.py` is the reference adapter — a translating
-subscriber that fans Zigbee2MQTT state out to per-aspect keys and
-translates commands back:
+`adapters/zigbee2mqtt.py` is the reference adapter. It splits each
+Zigbee2MQTT state message into one key per aspect and translates commands
+back:
 
 ```
 zigbee2mqtt/lamp_kitchen_1  {"state":"ON","brightness":128}
@@ -239,22 +242,22 @@ home/cmd/kitchen/kitchen_lamp/on  true
   -> zigbee2mqtt/lamp_kitchen_1/set  {"state":"ON"}
 ```
 
-Unknown devices and malformed payloads are dropped with a health event at
-`home/health/{unit}/event`, never a crash. The full contract an adapter
-must honour — files, lifecycle, state and command rules, health
-vocabulary, discovery, testing, and the reasons for each rule — is
-[docs/adapters.md](docs/adapters.md).
+Messages from unknown devices, and malformed payloads, are dropped and
+reported as a health event on `home/health/{unit}/event`; the adapter keeps
+running. [docs/adapters.md](docs/adapters.md) is the full adapter contract,
+with the reasoning behind each rule.
 
-Adapters that can enumerate their periphery also publish a discovery
-document at `home/discovery/{unit}` — every paired device with its
-binding id, whether an entity file claims it yet, and a suggested
-capability stanza — which is how an agent constructs entity files for
-unconfigured devices ([design record §Discovery](docs/design.md#discovery)).
+An adapter that can list its devices also publishes a discovery document on
+`home/discovery/{unit}`. It lists every paired device with its binding id,
+whether an entity file already claims it, and a suggested capability. An
+agent uses it to write entity files for new devices
+([design record: Discovery](docs/design.md#discovery)).
 
-### Automations: regulators, not schedulers
+### Automations
 
 Automations are Python scripts built on the SDK in `sdk/python/`. A unit
-declares it in its PEP 723 header, pinned to the release the house runs:
+declares the SDK in its PEP 723 header, pinned to the release the house
+runs:
 
 ```python
 # /// script
@@ -263,14 +266,14 @@ declares it in its PEP 723 header, pinned to the release the house runs:
 # ///
 ```
 
-The container image bundles that release's SDK wheel, so the pin resolves
-locally, with no network. Because the pin lives in the script itself — a
-file plan/apply hashes — an SDK upgrade is a visible behavioral change:
-`plan` flags it, `apply` restarts exactly the units that bumped. (Units
-inside this repo use a relative `path` source instead, so tests exercise
-the working-tree SDK.)
+The container image includes that release's SDK wheel, so the pin
+resolves without network access. The pin is part of the script, and plan
+hashes the script, so an SDK upgrade shows up as a behavioral change:
+`plan` lists it and `apply` restarts the units whose pin changed. Units in
+this repo use a relative `path` source instead, so the tests run against
+the working-tree SDK.
 
-The automation context gives a unit exactly the surface its manifest declares:
+The automation context only exposes what the unit's manifest declares:
 
 ```python
 from homeostat import automation
@@ -283,33 +286,35 @@ ctx.publish("lights", False, room="livingroom", entity="lamp")
 ctx.ready(); ctx.run()                  # liveliness token, block until SIGTERM
 ```
 
-Parameters live at `home/config/{unit}/{param}`, seeded from manifest
-defaults, validated against constraints (min/max, after/before with
-midnight spanning, enum) on every write, and delivered to running units
-live — no restart. Committing a new default to the repo is what makes a
-live edit durable. A `clock` service owns civil time at
-`home/clock/minute` and `home/clock/date`.
+Parameters live at `home/config/{unit}/{param}`. They start at the
+manifest default, every write is checked against the constraint (min/max,
+an after/before time window that may span midnight, or an enum), and
+running units see new values without a restart. A live edit lasts until
+the next apply; to keep it, commit it as the new default. A `clock`
+service publishes local time on `home/clock/minute` and
+`home/clock/date`.
 
-### The recorder: history as a service
+### The recorder
 
-`adapters/recorder.py` writes state and commands to SQLite as typed
-samples — entity is the series identity, room is a tag, so moving a device
-between rooms continues one series — plus an audit trail of health events
-and accepted config edits. Reads go over the bus, keeping the store
-private and swappable:
+`adapters/recorder.py` stores state and commands in SQLite as typed
+samples. A series is keyed by entity, with the room as a tag, so a device
+that moves to another room keeps one series. It also keeps an audit trail
+of health events and accepted config edits. Everything reads history over
+the bus, so the store stays private to the recorder and could be
+replaced:
 
 ```
 zenoh get 'home/history/state/lamp/on?from=2026-07-01T00:00:00+02:00;limit=100'
 ```
 
-A backend outage (full disk, dying SD card) buffers samples in memory with
-their original timestamps and reports itself as health events; recovery
-flushes the buffer. Details:
-[design record §History](docs/design.md#history-and-the-recorder).
+If the database can't be written (a full disk, a failing SD card), the
+recorder buffers samples in memory with their original timestamps, reports
+the problem as health events, and writes the buffer out once it recovers.
+See [History and the recorder](docs/design.md#history-and-the-recorder).
 
-To see what is filling the store, `scripts/store_profile.py` ranks
-entities by rows and series by write rate from `home/history/stats`. The
-image ships it, already pointed at the house's bus:
+To find out what is filling the store, `scripts/store_profile.py` reads
+`home/history/stats` and ranks entities by rows and series by write rate.
+The image includes it, already pointed at the house's bus:
 
 ```
 docker exec <container> uv run /opt/homeostat/store_profile.py
@@ -317,91 +322,88 @@ docker exec <container> uv run /opt/homeostat/store_profile.py
 
 ### Plan / apply
 
-`homeostat plan --bus <endpoint>` reads the live world through the core's
-queryables and diffs it against the repo. The tier is derived, never
-declared:
+`homeostat plan --bus <endpoint>` asks the running core for the live
+state and diffs it against the repo. The plan's tier comes from the diff:
 
-- **parameter-only** — setpoint differences; applies with zero restarts.
-- **behavioral** — a unit's manifest or code changed; restarts exactly
-  that unit.
-- **structural** — units created/destroyed or any grant-table delta; the
-  plan renders the grant diff.
+- parameter-only: only setpoints differ. Applying restarts nothing.
+- behavioral: a unit's manifest or code changed. Applying restarts that
+  unit.
+- structural: units are created or removed, or the grant table changes.
+  The plan shows the grant diff.
 
-`homeostat apply` commands the running supervisor to walk the difference —
-per-unit, rolling, in grant order, awaiting health after each — and halts
-in place on failure with the position printed; re-running plans exactly
-the remaining work. `plan --save` writes a pending plan file, reviewable
-on a phone, that auto-invalidates when the repo moves.
+`homeostat apply` has the supervisor work through the changes one unit at
+a time, in grant order, waiting for each unit to report healthy. On a
+failure it stops and prints where; running it again plans only what is
+left. `plan --save` writes the plan to a file you can review on a phone.
+The file is invalid once the repo changes.
 
 ### The agent surface: MCP
 
-`homeostat mcp` serves the tools `read_state`, `read_history`, `read_logs`,
-`read_events`, `explain` and `schema` over stdio, or over HTTP as a
-supervised service unit in a deployed house. The surface is read-only: a
-pure bus client that needs no house root. An agent changes the house the
-way every other actor does — it edits the repo and runs `homeostat plan`,
-and the owner applies. (Write tools — `propose`, `apply`, `plan` — were
-removed on 2026-09-12 until an agent without a filesystem exists to use
-them; [the design record](docs/design.md#agent-surface-mcp) states the
-conditions of their return.) A refused plan names each failure by code
-and carries the rule behind every code inline; `explain` (and
-`homeostat explain <code>` on the CLI) serves the same paragraphs on
-demand, so the authoring contract's rules are readable in-band rather
-than from the validator's source. The manifest contract itself is
-served the same way: `schema` (and `homeostat schema` on the CLI) returns
-JSON Schema derived from the core's own parser, and
-[docs/manifest.md](docs/manifest.md) is that schema rendered, generated
-and pinned by a test. Details:
-[design record §Agent surface](docs/design.md#agent-surface-mcp).
+`homeostat mcp` serves the tools `read_state`, `read_history`,
+`read_logs`, `read_events`, `explain` and `schema`, over stdio or, in a
+deployed house, over HTTP as a supervised service. It is read-only and only
+talks to the bus, so it needs no access to the house repo. An agent changes
+the house the same way you do: it edits the repo and runs `homeostat plan`,
+and you apply. The [design record](docs/design.md#agent-surface-mcp)
+explains why there are no write tools.
 
-### The dashboard: the family surface
+When a plan is refused, each error has a code and the rule behind it.
+`explain` (or `homeostat explain <code>`) returns the same text on demand,
+so an agent can look up a rule without reading the validator. `schema` (or
+`homeostat schema`) returns the manifest format as JSON Schema, generated
+from the parser. [docs/manifest.md](docs/manifest.md) is the same schema as
+a readable page, and a test keeps it current.
 
-A supervised web unit (`adapters/dashboard.py` + one hand-editable page
-and its assets, no build step) — an adapter for humans. Every element is generated from the
-manifests; which views exist is text too: `dashboard.toml` lists them,
-each a composition of widgets over things the house already has (a
-reading as a tile, a room's card, a unit's card with what it sets,
-publishes, drives and reads, a chart, the people, the deviations feed;
-[docs/widgets.md](docs/widgets.md) shows each one), and every view can
-show the text that makes it. Without the file the generated views stand in: **Now** shows the error
-signal (deviations from equilibrium: unhealthy units, lights left on,
-setpoints off their defaults) and stays deliberately empty when the house
-is nominal; **Setpoints** is every family-editable parameter as one flat
-list; **Rooms** is the spatial grid. **Health** and **Not shown** —
-everything no view places — are fixed chrome, never views (on a phone,
-behind the top bar's status button, so the bottom bar is the house's
-views alone). Clicking
-through opens detail panels — history with ranges and a crosshair
-tooltip (a timeline for states), entity state, unit health. Commands leave at the
-manual band (the family always wins), and a control says what it asked
-for until the device answers, then how it ended; parameter writes go through the
-core's validating queryable; access is local-only by design (LAN /
-WireGuard, no accounts — and family-tier only: nothing structural is
-reachable from a browser). The map over person entities (OwnTracks,
-self-hosted tiles) is settled design, not yet built. Details:
-[design record §Dashboard](docs/design.md#dashboard).
+### The dashboard
 
-![The dashboard on a desktop and a phone: a "Downstairs" view composed in dashboard.toml — a spot-price chart whose recorded day runs into a dashed forecast past the now-rule, captioned with when that forecast was issued; a heat-pump dial grouped with the room's temperature trace; the living-room card; and the evening-lights automation's card with its setpoint and its wiring behind one line — and the phone's "Now" with the price tile, people, and four rows out of the ordinary](docs/screenshots/dashboard.png)
+The dashboard is the family's view of the house. It is a supervised unit,
+`adapters/dashboard.py`, serving one page and its assets with no build step.
+Everything on it is generated from the house's text.
 
-*Every pixel above is generated from the house's text: the views from
-`dashboard.toml`, the cards from manifests and entity files, the
-automation's Drives/From — one row per field — from the grant table and
-its subscriptions.*
+`dashboard.toml` lists the views. Each view is a set of widgets over things
+the house already has: a reading as a tile, a room card, a unit card, a
+chart, the people on a map, or the list of deviations.
+[docs/widgets.md](docs/widgets.md) shows each widget, and every view can
+show the text it was built from.
+
+Without a `dashboard.toml`, three generated views are used:
+
+- Now lists what is out of the ordinary: unhealthy units, lights left on,
+  setpoints away from their defaults. When everything is normal it is
+  empty.
+- Setpoints lists every parameter the family may edit.
+- Rooms shows the house room by room.
+
+Two pages sit outside the views and are always there: Health, and Not
+shown, which lists everything no view places. Clicking an item opens its
+history, state or health.
+
+Commands from the dashboard are sent at the manual priority band, so the
+family's choice wins over automations. A control shows what it asked for
+until the device confirms, then the outcome. Parameter edits go through the
+core, which checks them against the manifest. Nothing structural can be
+changed from a browser. There are no accounts: the dashboard is meant to be
+reached only on the LAN or over WireGuard (see
+[Security model](docs/design.md#security-model)). More in
+[the design record](docs/design.md#dashboard).
+
+![The dashboard on a desktop and a phone](docs/screenshots/dashboard.png)
 
 ## Status
 
-Pre-1.0. Running today: the validator and `homeostat plan`/`apply`, the
-supervisor, the Python SDK, the recorder with history, forecasts and
-archives, the arbiter, the dashboard, the read-only MCP surface, and
-adapters for Zigbee2MQTT, ESPHome, OwnTracks, an IVT490 heat pump, Aduro
-burners, ONVIF cameras with go2rtc, OpenWrt routers, 433 MHz senders and
-ntfy notifications. Voice is planned
-([docs/design.md#voice](docs/design.md#voice)).
+Pre-1.0. What works today: the validator, `homeostat plan` and `apply`,
+the supervisor, the Python SDK, the recorder (history, forecasts and
+archives), the arbiter, the dashboard and the read-only MCP server.
+There are adapters for Zigbee2MQTT, ESPHome, OwnTracks, an IVT490 heat
+pump, Aduro pellet burners, ONVIF cameras through go2rtc, OpenWrt routers,
+433 MHz transmitters and ntfy notifications. Voice control is planned
+([design record](docs/design.md#voice)).
 
 ## Development
 
-What CI runs, in order (the devcontainer has everything they need:
-`mosquitto`, `uv`, `node`, and a browser via `scripts/install_browser.sh`):
+CI runs these, in this order. The devcontainer has everything they need:
+`mosquitto`, `uv`, `node`, and a browser from
+`scripts/install_browser.sh`.
 
 ```
 cargo fmt --check
@@ -416,18 +418,16 @@ scripts/sync_starter.sh --check
 uv run --script tests/browser/run.py
 ```
 
-Writing a unit? The field-level contract is [docs/manifest.md](docs/manifest.md)
-(generated from the parser's structs; `homeostat schema` serves the same as
-JSON), the validator's rules are `homeostat explain`, and
+If you are writing a unit, [docs/manifest.md](docs/manifest.md) describes
+every manifest field, `homeostat explain` gives the validator's rules, and
 [docs/adapters.md](docs/adapters.md) is the adapter contract.
 
-Integration tests run the real binary against real infrastructure — a live
-supervisor, a real mosquitto broker on a free port, a real SQLite store,
-and fake device servers that speak each protocol — never mocks. Every
-adapter has its own suite in `tests/<adapter>.rs`. The invalid-manifest
-corpus in `tests/corpus/invalid/` pairs each broken house with its
-complete expected error list, and `tests/browser/` drives the dashboard
-page in a real browser against canned fixtures. CI also builds the
+The integration tests run the real binary against a live supervisor, a
+real mosquitto broker on a free port, a real SQLite store, and fake device
+servers that speak each device's protocol. Each adapter has its own suite
+in `tests/<adapter>.rs`. `tests/corpus/invalid/` pairs broken houses with
+the exact list of errors each should produce, and `tests/browser/` runs
+the dashboard in a real browser against canned data. CI also builds the
 container image and runs `scripts/smoke_image.sh`, `smoke_starter.sh` and
 `smoke_demo.sh` against it, and `scripts/smoke_bare.sh` checks the binary
 and SDK wheel on a host without Docker.
