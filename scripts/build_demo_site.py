@@ -43,8 +43,9 @@ def fail(message: str) -> None:
 
 def page() -> str:
     html = PAGE.read_text()
-    # "./", not a bare "assets/": the page imports one asset as an ES
-    # module, and a module specifier must start with "./" or "/".
+    # "./": relative to the page, which Pages serves under /<repo>/. The
+    # modules under assets/dashboard/ import each other relatively, so
+    # they need no edit.
     for quote in ('"', "'"):
         html = html.replace(f"{quote}/assets/", f"{quote}./assets/")
     if re.search(r"""["'(]/assets/""", html):

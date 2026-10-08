@@ -95,7 +95,7 @@ class FakeHouse:
         # the console error a refused connection would log — which the
         # smoke test would otherwise read as a page fault.
         app.router.add_get("/api/camera/{entity}/live", self.api_camera)
-        app.router.add_get("/assets/{name}", self.api_asset)
+        app.router.add_get("/assets/{name:.+}", self.api_asset)
         app.router.add_get("/tiles.pmtiles", self.api_tiles)
         return app
 

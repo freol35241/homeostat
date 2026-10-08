@@ -11,9 +11,9 @@
 """Dashboard service: the family's web surface (see docs/design.md#dashboard).
 
 An adapter for humans: HTTP + WebSocket toward browsers, the SDK toward the
-bus. Serves dashboard.html (next to this script, with its stylesheet and
-logic under assets/) and a small API generated entirely from the house's
-text:
+bus. Serves dashboard.html (next to this script, with its stylesheet,
+logic and modules under assets/) and a small API generated entirely from
+the house's text:
 
   GET  /api/model    manifests rendered for the browser (zones, entities,
                      units, the views of dashboard.toml; each entity
@@ -63,9 +63,10 @@ text:
                      snapshot proxy: a still frame needs a transcode
                      (go2rtc's frame.jpeg shells out to ffmpeg for an
                      H.264 source) and the media plane is a pure remux
-  GET  /assets/*     the page's stylesheet and logic, and vendored libraries
-                     (Leaflet, protomaps-leaflet, the go2rtc player),
-                     allowlisted by filename
+  GET  /assets/*     the page's stylesheet, logic and modules, and vendored
+                     libraries (Leaflet, protomaps-leaflet, the go2rtc
+                     player): allowlisted by filename, modules by a path
+                     that resolves inside assets/dashboard/
   GET  /tiles.pmtiles  self-hosted PMTiles region extract for the map
                      widget, from HOMEOSTAT_DASHBOARD_TILES; 404 if unset
 
@@ -137,11 +138,12 @@ try:
 except importlib.metadata.PackageNotFoundError:
     DASHBOARD_VERSION = None
 
-# Vendored assets served at /assets/{name} — allowlisted by filename so
-# the route can't become a path-traversal surface.
-# The page and its assets are ONE artifact: dashboard.html, dashboard.css and
-# dashboard-logic.js are written against each other and change together at
-# an upgrade. aiohttp's FileResponse sets ETag and Last-Modified but no
+# Assets served at /assets/{name}: the files below by name, and the page's
+# modules under assets/dashboard/ (MODULES), so the route can't become a
+# path-traversal surface.
+# The page and its assets are ONE artifact: dashboard.html, dashboard.css,
+# dashboard-logic.js and the modules are written against each other and
+# change together at an upgrade. aiohttp's FileResponse sets ETag and Last-Modified but no
 # Cache-Control, which leaves a browser on heuristic freshness — commonly a
 # tenth of the file's age — so a file untouched for a fortnight earns about
 # a day during which it is not revalidated at all. Upgrade inside that
@@ -154,7 +156,7 @@ except importlib.metadata.PackageNotFoundError:
 # `no-cache` is "cache it, but revalidate before use": the ETag makes the
 # revalidation a 304 on a LAN or a tunnel, and the heuristic is gone. The
 # alternative — versioned asset URLs, cached hard — is not used: the
-# version would have to reach three `src` attributes in a file the design
+# version would have to reach every `src` and `import` in files the design
 # keeps hand-editable, either by a serve-time rewrite or by hand at every
 # release, and a hand-edited version is the drift that sync_starter.sh
 # exists to prevent.
@@ -169,6 +171,10 @@ ASSETS = {
     "dashboard.css": "text/css",
     "homeostat-mark.svg": "image/svg+xml",
 }
+# The page's ES modules: any .js file under this directory of assets/, by
+# a path that resolves inside it once `..` and symlinks are followed. A
+# browser runs a module only when it is served as JavaScript.
+MODULES = "dashboard"
 
 # Commandable aspects per capability: the capability's base aspect plus
 # whatever features the entity declares. A lock wish still just goes to
@@ -928,11 +934,17 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
     async def api_asset(request: web.Request) -> web.StreamResponse:
         name = request.match_info["name"]
         content_type = ASSETS.get(name)
+        path = assets_dir / name
+        if content_type is None and name.endswith(".js"):
+            modules = (assets_dir / MODULES).resolve()
+            # A NUL in the path cannot name a file: not found, like any other.
+            with contextlib.suppress(ValueError):
+                path = path.resolve()
+                if modules in path.parents and path.is_file():
+                    content_type = "text/javascript"
         if content_type is None:
             raise web.HTTPNotFound()
-        return web.FileResponse(
-            assets_dir / name, headers={"Content-Type": content_type, **REVALIDATE}
-        )
+        return web.FileResponse(path, headers={"Content-Type": content_type, **REVALIDATE})
 
     async def api_tiles(request: web.Request) -> web.StreamResponse:
         path = tiles_path()
@@ -1298,7 +1310,7 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
     app.router.add_get("/api/source-events", api_source_events)
     app.router.add_get("/api/logs", api_logs)
     app.router.add_get("/api/camera/{entity}/live", api_camera_live)
-    app.router.add_get("/assets/{name}", api_asset)
+    app.router.add_get("/assets/{name:.+}", api_asset)
     app.router.add_get("/tiles.pmtiles", api_tiles)
     return app
 

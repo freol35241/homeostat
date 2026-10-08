@@ -18,7 +18,8 @@
 //!    and changes nothing.
 //! 4. The local-only gate holds: a write without the X-Homeostat header
 //!    and any request with a foreign Host are both refused.
-//! 5. The map surface: vendored assets are served allowlisted, person
+//! 5. The map surface: vendored assets are served allowlisted (the page's
+//!    modules by a path inside `assets/dashboard/`, nothing outside), person
 //!    entities render in `/api/model` but are never commandable, and
 //!    `/tiles.pmtiles` 404s without `HOMEOSTAT_DASHBOARD_TILES` and serves
 //!    Range requests when it is set (docs/design.md#map-and-people).
@@ -460,6 +461,33 @@ async fn dashboard_serves_the_family_surface() {
     }
     let (status, _) = http_request(&addr, "GET", "/assets/dashboard.py", &[], None);
     assert_eq!(status, 404, "unlisted asset must 404");
+
+    // The page's modules are served from assets/dashboard/, nested too, as
+    // JavaScript (a browser refuses to run a module served as anything
+    // else) and revalidated like the rest of the page.
+    for path in [
+        "/assets/dashboard/main.js",
+        "/assets/dashboard/widgets/entity.js",
+    ] {
+        revalidates(path);
+        let (_, headers, _) = http_request_bytes(&addr, path, &[]);
+        let content_type = headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case("content-type"))
+            .map(|(_, value)| value.as_str());
+        assert_eq!(content_type, Some("text/javascript"), "{path}");
+    }
+    // ...and nothing outside it: demo-site/shim.js is a real script in the
+    // repo, three directories up from the modules.
+    for path in [
+        "/assets/dashboard/../../../demo-site/shim.js",
+        "/assets/dashboard/%2e%2e/%2e%2e/%2e%2e/demo-site/shim.js",
+        "/assets/dashboard/nope.js",
+        "/assets/dashboard/%00.js",
+    ] {
+        let (status, _, _) = http_request_bytes(&addr, path, &[]);
+        assert_eq!(status, 404, "{path} must 404");
+    }
 
     // No tiles configured: the endpoint 404s rather than pretending.
     let (status, _) = http_request(&addr, "GET", "/tiles.pmtiles", &[], None);
