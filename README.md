@@ -142,7 +142,7 @@ the `evening_lights` automation:
 
 ```
 cargo build
-PATH="$PWD/target/debug:$PATH" cargo run -- up tests/fixture_house_evening
+PATH="$PWD/target/debug:$PATH" cargo run -- up tests/fixtures/house_evening
 ```
 
 (The `PATH` prefix is only for fixtures, whose adapters are test binaries
@@ -161,11 +161,11 @@ against the manifest constraint with the old value still in force.
 and let the engine work out what it means:
 
 ```
-PATH="$PWD/target/debug:$PATH" target/debug/homeostat up tests/fixture_house_apply &
-target/debug/homeostat plan tests/fixture_house_apply --bus tcp/127.0.0.1:7447
+PATH="$PWD/target/debug:$PATH" target/debug/homeostat up tests/fixtures/house_apply &
+target/debug/homeostat plan tests/fixtures/house_apply --bus tcp/127.0.0.1:7447
 # -> No changes. The world matches the repo.
-sed -i 's/default = 1/default = 5/' tests/fixture_house_apply/units/probe.toml
-target/debug/homeostat apply tests/fixture_house_apply --bus tcp/127.0.0.1:7447
+sed -i 's/default = 1/default = 5/' tests/fixtures/house_apply/units/probe.toml
+target/debug/homeostat apply tests/fixtures/house_apply --bus tcp/127.0.0.1:7447
 # -> Plan tier: parameter-only (1 parameter change) ... Applied.
 ```
 

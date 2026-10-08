@@ -1,5 +1,5 @@
 //! Step-5b integration tests: plan/apply against a live world, on temp-dir
-//! copies of `tests/fixture_house_apply`/ that each scenario edits between
+//! copies of `tests/fixtures/house_apply`/ that each scenario edits between
 //! plan and apply. Scenarios that need `applied_commit` or pending-plan
 //! staleness git-init their copy: the checked-in fixture is a nested
 //! directory of this repo and must not inherit its HEAD (see
@@ -21,7 +21,7 @@ use common::{
     git_init_commit, meta_read, running_pid, stderr, stdout, temp_house, Supervisor,
 };
 
-const FIXTURE: &str = "tests/fixture_house_apply";
+const FIXTURE: &str = "tests/fixtures/house_apply";
 
 /// Replaces `from` with `to` in a house file; the pattern must be present.
 fn edit(house: &Path, rel: &str, from: &str, to: &str) {

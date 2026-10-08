@@ -16,7 +16,7 @@ use zenoh::sample::SampleKind;
 
 use common::{expect_event_kind, expect_state, fixture_command, free_port, Supervisor};
 
-const FIXTURE: &str = "tests/fixture_house_openwrt";
+const FIXTURE: &str = "tests/fixtures/house_openwrt";
 const ROUTERS_ENV: &str = "HOMEOSTAT_OPENWRT";
 const EVENT_KEY: &str = "home/health/openwrt/event";
 const WAN_KEY: &str = "home/state/hallway/gateway/wan";

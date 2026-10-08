@@ -64,7 +64,7 @@ fn running(h: &Health) -> bool {
 /// (a) Spawn: the unit's liveliness token appears and fake state flows.
 #[tokio::test(flavor = "multi_thread")]
 async fn spawn_shows_liveliness_and_state_flows() {
-    let mut sup = Supervisor::spawn("tests/fixture_house");
+    let mut sup = Supervisor::spawn("tests/fixtures/house");
     let observer = sup.observer().await;
 
     let token_sub = observer
@@ -101,7 +101,7 @@ async fn spawn_shows_liveliness_and_state_flows() {
 /// (b) Induced crash: restart, with observable exponential backoff.
 #[tokio::test(flavor = "multi_thread")]
 async fn crash_restarts_with_exponential_backoff() {
-    let mut sup = Supervisor::spawn("tests/fixture_house");
+    let mut sup = Supervisor::spawn("tests/fixtures/house");
     let observer = sup.observer().await;
     let mut watch = health_watch(&observer, "fake").await;
 
@@ -153,7 +153,7 @@ async fn crash_restarts_with_exponential_backoff() {
 /// (c) Crash loop: the circuit breaker opens at home/health/{unit}.
 #[tokio::test(flavor = "multi_thread")]
 async fn crash_loop_opens_circuit_breaker() {
-    let mut sup = Supervisor::spawn("tests/fixture_house_crashloop");
+    let mut sup = Supervisor::spawn("tests/fixtures/house_crashloop");
     let observer = sup.observer().await;
     let mut watch = health_watch(&observer, "crasher").await;
 
@@ -177,7 +177,7 @@ async fn crash_loop_opens_circuit_breaker() {
 /// (d) SIGTERM: graceful shutdown within grace, leaving no orphans.
 #[tokio::test(flavor = "multi_thread")]
 async fn sigterm_shuts_down_gracefully_without_orphans() {
-    let mut sup = Supervisor::spawn("tests/fixture_house");
+    let mut sup = Supervisor::spawn("tests/fixtures/house");
     let observer = sup.observer().await;
     let mut watch = health_watch(&observer, "fake").await;
     let health = await_health(&mut watch, Duration::from_secs(10), running).await;
@@ -202,7 +202,7 @@ async fn sigterm_shuts_down_gracefully_without_orphans() {
 /// sends to a service stopped right after it started.
 #[tokio::test(flavor = "multi_thread")]
 async fn sigterm_during_startup_still_shuts_down_gracefully() {
-    let mut sup = Supervisor::spawn("tests/fixture_house");
+    let mut sup = Supervisor::spawn("tests/fixtures/house");
     sup.signal(libc::SIGTERM);
     let code = sup.wait_exit(Duration::from_secs(10));
     assert_eq!(code, Some(0), "supervisor exit code");
@@ -211,7 +211,7 @@ async fn sigterm_during_startup_still_shuts_down_gracefully() {
 /// SIGKILL on the supervisor must still not leak the unit (pdeathsig).
 #[tokio::test(flavor = "multi_thread")]
 async fn sigkill_leaves_no_orphans() {
-    let mut sup = Supervisor::spawn("tests/fixture_house");
+    let mut sup = Supervisor::spawn("tests/fixtures/house");
     let observer = sup.observer().await;
     let mut watch = health_watch(&observer, "fake").await;
     let health = await_health(&mut watch, Duration::from_secs(10), running).await;
@@ -233,7 +233,7 @@ async fn sigkill_leaves_no_orphans() {
 /// within each stream, and truncatable from the tail via `?lines=N`.
 #[tokio::test(flavor = "multi_thread")]
 async fn log_capture_tags_and_orders_by_stream() {
-    let mut sup = Supervisor::spawn("tests/fixture_house_logs");
+    let mut sup = Supervisor::spawn("tests/fixtures/house_logs");
     let observer = sup.observer().await;
     let mut watch = health_watch(&observer, "logger").await;
     await_health(&mut watch, Duration::from_secs(10), running).await;
@@ -295,7 +295,7 @@ async fn log_capture_tags_and_orders_by_stream() {
 /// oldest lines, keeping exactly the most recent 500.
 #[tokio::test(flavor = "multi_thread")]
 async fn log_capture_evicts_oldest_past_capacity() {
-    let mut sup = Supervisor::spawn("tests/fixture_house_logs");
+    let mut sup = Supervisor::spawn("tests/fixtures/house_logs");
     let observer = sup.observer().await;
     let mut watch = health_watch(&observer, "flooder").await;
     await_health(&mut watch, Duration::from_secs(10), running).await;
@@ -333,7 +333,7 @@ async fn log_capture_evicts_oldest_past_capacity() {
 /// at `stopped` with the exit code recorded, and neither restarts.
 #[tokio::test(flavor = "multi_thread")]
 async fn restart_policy_terminal_states_read_stopped() {
-    let mut sup = Supervisor::spawn("tests/fixture_house_policy");
+    let mut sup = Supervisor::spawn("tests/fixtures/house_policy");
     let observer = sup.observer().await;
 
     let mut oneshot = health_watch(&observer, "oneshot").await;
@@ -366,7 +366,7 @@ async fn restart_policy_terminal_states_read_stopped() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_unit_sees_only_the_environment_its_manifest_declares() {
     let mut sup = Supervisor::spawn_with_env(
-        "tests/fixture_house_env",
+        "tests/fixtures/house_env",
         &[
             ("HOMEOSTAT_TEST_DECLARED", "visible"),
             ("HOMEOSTAT_TEST_UNDECLARED", "withheld"),

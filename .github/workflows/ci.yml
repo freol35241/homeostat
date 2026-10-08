@@ -31,7 +31,7 @@ jobs:
             adapters/*.py
             adapters/*.py.lock
             tests/*.py.lock
-            tests/fixture_house_*/units/*.py.lock
+            tests/fixtures/house_*/units/*.py.lock
       - name: Install mosquitto
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends mosquitto
       # First-run dependency resolution must not eat into test timeouts.
@@ -40,7 +40,7 @@ jobs:
       # fails here instead of silently re-resolving.
       - name: Pre-warm the Python units' uv environments
         run: |
-          for script in adapters/*.py tests/fake_*.py tests/fixture_house_*/units/*.py; do
+          for script in adapters/*.py tests/fake_*.py tests/fixtures/house_*/units/*.py; do
             uv sync --locked --script "$script"
           done
       - run: cargo fmt --check

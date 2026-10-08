@@ -23,7 +23,7 @@ use common::{
     running_pid, temp_house, Supervisor,
 };
 
-const FIXTURE: &str = "tests/fixture_house_apply";
+const FIXTURE: &str = "tests/fixtures/house_apply";
 
 /// An MCP client over the server's stdio transport: `homeostat mcp` as a
 /// child process, one JSON-RPC line per request. `connect` performs the
@@ -107,7 +107,7 @@ async fn reads_serve_live_state_and_history() {
     let db = std::env::temp_dir().join(format!("homeostat-mcp-history-{}.db", std::process::id()));
     let _ = std::fs::remove_file(&db);
     let sup = Supervisor::spawn_with_env(
-        "tests/fixture_house_recorder",
+        "tests/fixtures/house_recorder",
         &[("RECORDER_DB", db.to_str().expect("utf-8 path"))],
     );
     let observer = sup.observer().await;
@@ -239,7 +239,7 @@ async fn reads_serve_live_state_and_history() {
 /// at `home/history/events`.
 #[tokio::test(flavor = "multi_thread")]
 async fn read_logs_and_events_over_mcp() {
-    let sup = Supervisor::spawn("tests/fixture_house_logs");
+    let sup = Supervisor::spawn("tests/fixtures/house_logs");
     let observer = sup.observer().await;
     let mut watch = health_watch(&observer, "logger").await;
     await_health(&mut watch, Duration::from_secs(10), |h| {

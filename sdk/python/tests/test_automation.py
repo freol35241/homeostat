@@ -16,7 +16,7 @@ from homeostat.automation import Context, _expand, _house_has_recorder
 from homeostat.house import Entity
 from homeostat.session import QueryTimeout
 
-FIXTURES = Path(__file__).resolve().parents[3] / "tests"
+FIXTURES = Path(__file__).resolve().parents[3] / "tests" / "fixtures"
 
 ZONES = {"downstairs": ["livingroom", "hallway"]}
 
@@ -179,10 +179,10 @@ class RecorderPresenceTest(unittest.TestCase):
     house must start on its defaults at once, not after the timeout."""
 
     def test_a_house_running_a_recorder_is_recognised(self):
-        self.assertTrue(_house_has_recorder(FIXTURES / "fixture_house_restore"))
+        self.assertTrue(_house_has_recorder(FIXTURES / "house_restore"))
 
     def test_a_house_without_one_is_too(self):
-        self.assertFalse(_house_has_recorder(FIXTURES / "fixture_house_templates"))
+        self.assertFalse(_house_has_recorder(FIXTURES / "house_templates"))
 
 
 class RestoreWaitTest(unittest.TestCase):

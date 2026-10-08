@@ -30,7 +30,7 @@ use common::{
     Supervisor,
 };
 
-const FIXTURE: &str = "tests/fixture_house_recorder";
+const FIXTURE: &str = "tests/fixtures/house_recorder";
 
 type Sub = Subscriber<FifoChannelHandler<Sample>>;
 

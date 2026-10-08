@@ -30,7 +30,7 @@ use common::{
     Publisher, Supervisor,
 };
 
-const SIM_FIXTURE: &str = "tests/fixture_house_evening_sim";
+const SIM_FIXTURE: &str = "tests/fixtures/house_evening_sim";
 const OFF_TIME_KEY: &str = "home/config/evening_lights/off_time";
 const LAMP_CMD: &str = "home/cmd/livingroom/lamp/on";
 const LAMP_STATE: &str = "home/state/livingroom/lamp/on";
@@ -150,7 +150,7 @@ async fn await_echo_off(state_sub: &Sub) {
 /// served to late joiners by the core clock cache (no wall-clock wait).
 #[tokio::test(flavor = "multi_thread")]
 async fn clock_payloads_match_schema() {
-    let mut sup = Supervisor::spawn("tests/fixture_house_evening");
+    let mut sup = Supervisor::spawn("tests/fixtures/house_evening");
     let observer = sup.observer().await;
 
     let minute =

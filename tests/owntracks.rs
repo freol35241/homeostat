@@ -13,7 +13,7 @@ use common::{
     assert_unit_contract, expect_drop_event, expect_states, next_event, Mosquitto, Mqtt, Supervisor,
 };
 
-const FIXTURE: &str = "tests/fixture_house_owntracks";
+const FIXTURE: &str = "tests/fixtures/house_owntracks";
 const PORT_ENV: &str = "HOMEOSTAT_TEST_MQTT_PORT";
 const EVENT_KEY: &str = "home/health/owntracks/event";
 

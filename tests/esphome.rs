@@ -18,7 +18,7 @@ use common::{
     expect_states, free_port, Supervisor,
 };
 
-const FIXTURE: &str = "tests/fixture_house_esphome";
+const FIXTURE: &str = "tests/fixtures/house_esphome";
 const DEVICES_ENV: &str = "HOMEOSTAT_ESPHOME_DEVICES";
 const EVENT_KEY: &str = "home/health/esphome/event";
 const RELAY_STATE_KEY: &str = "home/state/shed/relay/on";

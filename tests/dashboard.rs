@@ -1,5 +1,5 @@
 //! Dashboard service integration: the family's web surface against a live
-//! supervised house (`tests/fixture_house_dashboard`).
+//! supervised house (`tests/fixtures/house_dashboard`).
 //!
 //! Success criteria (docs/design.md#dashboard):
 //! 1. `/api/model` renders the manifests: entities with capability,
@@ -43,7 +43,7 @@ use serde_json::{json, Value};
 
 use common::{await_health, health_watch, startup_permit, Supervisor};
 
-const FIXTURE: &str = "tests/fixture_house_dashboard";
+const FIXTURE: &str = "tests/fixtures/house_dashboard";
 const LAMP_CMD: &str = "home/cmd/livingroom/lamp/on";
 const LAMP_STATE: &str = "home/state/livingroom/lamp/on";
 const OFF_TIME_KEY: &str = "home/config/evening_lights/off_time";

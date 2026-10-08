@@ -22,7 +22,7 @@ use serde_json::Value;
 
 use common::{await_health, health_watch, matched_publisher, Supervisor};
 
-const FIXTURE: &str = "tests/fixture_house_forecast";
+const FIXTURE: &str = "tests/fixtures/house_forecast";
 const FORECAST_KEY: &str = "home/forecast/global/spot_price/price/nordpool";
 
 /// Queries a key and returns the first ok reply's payload, retrying until

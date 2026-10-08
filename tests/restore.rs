@@ -22,7 +22,7 @@ use serde_json::{json, Value};
 
 use common::{await_health, await_mirror, health_watch, matched_publisher, Supervisor};
 
-const FIXTURE: &str = "tests/fixture_house_restore";
+const FIXTURE: &str = "tests/fixtures/house_restore";
 const LATCH: &str = "home/state/global/night_mode/on";
 
 fn store_path(test: &str) -> PathBuf {
@@ -124,7 +124,7 @@ async fn a_latch_restores_its_decision_across_a_core_restart() {
 /// and waits out its own deadline restores it.
 #[tokio::test(flavor = "multi_thread")]
 async fn restore_waits_out_a_recorder_that_is_slow_to_answer() {
-    let mut sup = Supervisor::spawn("tests/fixture_house_restore_slow");
+    let mut sup = Supervisor::spawn("tests/fixtures/house_restore_slow");
     let observer = sup.observer().await;
 
     await_mirror(&observer, LATCH, &json!(true)).await;
