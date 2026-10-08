@@ -1,9 +1,10 @@
 # The family surface's views (docs/design.md#views-are-text).
-# Each [[view]] is a nav entry, in this order; a widget places something
-# the house already has — the dashboard owns every rendering. Without this
-# file the dashboard renders its generated views (Now, Setpoints, Rooms).
-# Health and "Not shown" — everything no view here places — stay reachable
-# from the rail whatever is written here. `homeostat plan` refuses a typo.
+# Each [[view]] is a nav entry, in this order. A widget places something
+# the house already has, and the dashboard decides how to draw it. Without
+# this file the dashboard renders its generated views (Now, Setpoints,
+# Rooms). Health and "Not shown" (everything no view places) stay
+# reachable from the rail whatever this file says. `homeostat plan`
+# refuses a typo.
 schema = 1
 
 [[view]]
@@ -32,10 +33,10 @@ widgets = [
   { kind = "room", room = "porch" },
 ]
 
-# The grain a control moves in, keyed by what it controls — so a brightness
-# slider is as coarse on the room card as in the detail overlay. Without an
-# entry the dashboard derives one from the range. `homeostat plan` refuses
-# a control that names nothing.
+# The step a control moves in. It is keyed by what the control sets, so a
+# brightness slider moves in the same steps on the room card and in the
+# detail overlay. Without an entry the dashboard derives one from the
+# range. `homeostat plan` refuses a control that names nothing.
 [[control]]
 entity = "livingroom_lamp"
 aspect = "brightness"

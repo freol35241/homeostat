@@ -44,8 +44,8 @@ working around the check.
 
 - `homeostat schema` (or `schema dashboard`, `schema unit`, …; run it
   like `plan`, through `docker compose exec`) prints the JSON Schema of
-  every file above; it is generated from the parser, so it
-  is the whole truth. The same, rendered:
+  every file above. It is generated from the parser, so it is complete.
+  The same, rendered:
   <https://github.com/freol35241/homeostat/blob/main/docs/manifest.md>.
 - The dashboard's widgets, with a picture of each:
   <https://github.com/freol35241/homeostat/blob/main/docs/widgets.md>.
@@ -66,10 +66,10 @@ unit is restarting.
 
 ## Rules of thumb
 
-- Rooms are the one thing no protocol knows. Ask which room a device is
-  in rather than guessing.
-- Prefer a parameter to new code: a parameter the family can tune from
-  the dashboard is a change nobody has to plan.
+- No protocol reports which room a device is in. Ask rather than
+  guessing.
+- Prefer a parameter to new code. The family can tune a parameter from
+  the dashboard, and that change needs no plan.
 - Keep a change to what was asked. A plan that is larger than the
   request is harder to review, and the owner reviews every line.
 - Never put a secret, a password hash or a token in the repo.

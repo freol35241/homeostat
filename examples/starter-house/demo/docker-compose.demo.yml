@@ -1,14 +1,14 @@
-# The starter house with simulated devices in place of the hardware — see
-# demo/README.md. Layered over the house's own compose file:
+# The starter house with simulated devices in place of the hardware (see
+# demo/README.md). It is layered over the house's own compose file:
 #
 #   docker compose -f docker-compose.yml -f demo/docker-compose.demo.yml up -d
 #
-# (demo/up.sh does exactly that.) Every homeostat adapter runs unchanged;
-# only what is on the far side of them is simulated.
+# demo/up.sh runs that command. Every homeostat adapter runs unchanged;
+# only the devices on the far side of them are simulated.
 services:
-  # No coordinator stick in a demo: zigbee2mqtt only starts when the
-  # `hardware` profile is asked for. The simulator plays its part on the
-  # broker instead — the bridge inventory, the devices and their commands.
+  # A demo has no coordinator stick, so zigbee2mqtt starts only under the
+  # `hardware` profile. The simulator takes its place on the broker: it
+  # publishes the bridge inventory and the devices, and obeys commands.
   zigbee2mqtt:
     profiles: ["hardware"]
 
@@ -23,7 +23,7 @@ services:
 
   homeostat:
     environment:
-      # The porch switch is an ESPHome device the simulator serves; an mDNS
-      # name would not cross the compose network, so the adapter is told
-      # its address (units/esphome.toml, HOMEOSTAT_ESPHOME_DEVICES).
+      # The simulator serves the porch switch as an ESPHome device. An mDNS
+      # name does not resolve across the compose network, so the adapter
+      # is given its address (units/esphome.toml, HOMEOSTAT_ESPHOME_DEVICES).
       HOMEOSTAT_ESPHOME_DEVICES: /house/demo/esphome-devices.toml

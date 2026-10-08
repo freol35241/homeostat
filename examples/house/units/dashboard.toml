@@ -3,7 +3,7 @@ schema = 1
 [unit]
 name = "dashboard"
 kind = "service"
-# The model is a view over the WHOLE house, so any entity or manifest
+# The model is a view over the whole house, so any entity or manifest
 # change is a change to this unit (docs/design.md#change-detection).
 watches = "house"
 description = "Family web dashboard: generated views over state, setpoints and health"

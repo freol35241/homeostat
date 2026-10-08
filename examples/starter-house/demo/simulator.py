@@ -5,31 +5,35 @@
 #     "aioesphomeapi>=45,<46",
 # ]
 # ///
-"""Simulated devices for the starter house's demo: the far side of every
-protocol the house speaks, so the real adapters run unchanged against
-something that behaves like a home.
+"""Simulated devices for the starter house's demo.
+
+The simulator plays the device side of every protocol the house speaks,
+so the real adapters run unchanged against something that behaves like a
+home.
 
   - Zigbee2MQTT (base topic `zigbee2mqtt`): the retained bridge inventory
     and bridge state, a dimmable living-room lamp, the front-door lock and
     the hallway motion sensor. Commands on `{name}/set` are obeyed as z2m
-    obeys them; states are retained, as a z2m device with `retain: true`.
+    obeys them. States are retained, as for a z2m device with
+    `retain: true`.
   - The IVT490 heat-pump board (base topic `ivt490`): outdoor temperature
     on a daily curve, a feed temperature that follows the heating demand,
-    and an indoor temperature that drifts toward the setpoint — so turning
-    the dial shows a response within minutes.
+    and an indoor temperature that drifts toward the setpoint. Turning the
+    dial shows a response within minutes.
   - OwnTracks (`owntracks/alice/phone`): Alice is home, then takes a walk
     around the block, then comes home again, on a short cycle so the map
     moves while someone is watching.
   - ESPHome (native API on port 6053, device `porch`): the porch switch.
 
-A household lives in it too: someone walks through the hallway every few
+A household lives in it too. Someone walks through the hallway every few
 minutes, turns the living-room lamp on now and then, and unlocks the front
-door for a minute. The house's own automations answer as they would.
+door for a minute. The house's own automations respond as they would to
+real devices.
 
-Nothing here is part of homeostat: it stands where the hardware would.
+Nothing here is part of homeostat; it stands in for the hardware.
 SIM_MQTT_HOST/SIM_MQTT_PORT name the broker (default mosquitto:1883, the
-compose network's anonymous listener), SIM_HOME="lat,lon" where the house
-is, SIM_SEED a fixed random seed.
+compose network's anonymous listener). SIM_HOME="lat,lon" sets where the
+house is, and SIM_SEED fixes the random seed.
 """
 
 import asyncio
@@ -181,8 +185,10 @@ class House:
             self.publish(f"{Z2M}/{LOCK}", self.lock)
 
     async def heat_pump(self):
-        """The board republishes every field every cycle, changed or not,
-        as the real one does (every ~32 s)."""
+        """Republish every field each cycle, changed or not.
+
+        The real board does the same, about every 32 s.
+        """
         last = time.monotonic()
         while True:
             now = time.monotonic()
@@ -227,9 +233,9 @@ class House:
 
 
 # ---- ESPHome native API: the porch switch ----
-# The plaintext frame (a zero byte, varint length, varint message type,
-# protobuf body), as in tests/fake_esphome.py, for the one entity the
-# starter house binds: switch `relay` on device `porch`.
+# The plaintext framing (a zero byte, varint length, varint message type,
+# protobuf body), as in tests/fake_esphome.py. It serves the one entity
+# the starter house binds: switch `relay` on device `porch`.
 
 HELLO_REQUEST, HELLO_RESPONSE = 1, 2
 DISCONNECT_REQUEST, DISCONNECT_RESPONSE = 5, 6
