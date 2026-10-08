@@ -7,84 +7,43 @@
 # [tool.uv.sources]
 # homeostat = { path = "../sdk/python", editable = true }
 # ///
-"""ntfy notifier adapter.
+"""ntfy adapter: delivers `notifier` messages through an ntfy server.
 
-See docs/design.md#notifications.
+See docs/design.md#notifications. ntfy is a small self-hostable push
+server with an Android app. It needs no account and no phone number
+(Signal and WhatsApp both need a phone number as the house's identity),
+it is reached over the LAN or WireGuard like the dashboard, and it speaks
+UnifiedPush, the transport a homeostat app would use.
 
-A delivery dialect for the `notifier` capability. An ntfy server
-(self-hosted, a compose sidecar beside the MQTT broker — the phones
-connect to IT, so it is not a unit) takes one HTTP POST per message on
-`{endpoint}/{topic}`; the family's phones subscribe to topics in the ntfy
-app. The entity file's `id` is the topic; the file stem is the entity
-name; one entity per addressee — a person's phone in the pseudo-room
-`person`, a group topic in `global`. The manifest's `[discovery].endpoint`
-is the server URL (compose-internal, not a secret). The publisher token is
-HOMEOSTAT_NTFY_TOKEN in the environment, never in the repo; unset is a
-startup error. Redirects are refused, because following one would replay
-the token at whatever host the reply names.
+The server is a compose sidecar beside the MQTT broker, not a unit,
+because the phones connect to it. ntfy 2.12 and later provisions users,
+access rules and tokens from its config on every start
+(examples/house/ntfy/server.yml). The publisher may only write; each
+person reads only their own topic and the group's. That access list
+repeats the entity files by hand: rendering it from them would make ntfy
+a unit, and the sidecar must not restart when a unit does. A phone
+fetches what it missed on reconnect, back to the server's cache-duration,
+so it needs a route to the server from anywhere (WireGuard always on).
 
-Why ntfy: a small self-hostable push server with an Android app; no
-account, no phone number and, self-hosted, no third party; reached over
-the LAN or WireGuard like the dashboard. It speaks UnifiedPush, the
-transport a homeostat app would use. Not Signal or WhatsApp: both need a
-phone number as the house's identity.
+Binding: an entity file's `id` is the ntfy topic, and the file stem is
+the entity name. One entity per addressee: a person's phone in the
+pseudo-room `person`, a group topic in `global`.
 
-The server's users, access rules and tokens are text too: ntfy (>= 2.12)
-provisions them from its config on every start (examples/house/ntfy/
-server.yml). The publisher may only write; each person reads only their
-own topic and the group's. That access list repeats the entity files by
-hand on purpose: rendering it from them would make ntfy a unit, and the
-sidecar's lifetime must not follow a unit restart. A phone fetches what
-it missed on reconnect, back to the server's cache-duration; older is
-lost, so a phone must be able to reach the server from wherever it is
-(WireGuard always on) for an alert sent to an empty house to arrive.
+Configuration: [discovery].endpoint is the server URL (compose-internal,
+not a secret). HOMEOSTAT_NTFY_TOKEN is the publisher token, kept out of
+the repo; startup fails if it is unset. The live parameter min_interval_s
+(owner-editable, default 5 s) is the rate floor for `message` (see `Gate`).
 
-Startup GETs `{endpoint}/v1/health` and refuses to declare ready until the
-server answers healthy — a dead server or a wrong URL is the supervisor's
-backoff, not a notifier that silently drops everything.
+Commands: `message` and `alert`, each a non-empty string, sent at ntfy
+priority 3 and 5 (see PRIORITIES). Channels are `shared`, so commands
+arrive on home/cmd/{room}/{entity}/{aspect}.
 
-Commands (the two commandable aspects of the vocabulary; every channel is
-`shared`, so they arrive on home/cmd/{room}/{entity}/{aspect}):
+State: `delivered`, the server's time for the last delivered message in
+epoch seconds, and `available` (see `main`).
 
-- `message`: a non-empty string -> POST at ntfy priority 3 (default).
-- `alert`: a non-empty string -> POST at ntfy priority 5 (max), which the
-  Android app treats as urgent: it overrides Do Not Disturb and plays a
-  continuous alarm tone. The severity split of the vocabulary is
-  therefore enforced by the phone itself.
-
-The envelope's `actor` (the sending unit) becomes the notification's
-Title, so the phone says who spoke; an actor that is not printable ASCII
-(a CR/LF would be header injection) falls back to this unit's name.
-Anything else — a wrong type, an empty string, an unknown aspect, a
-malformed or envelope-less payload — DROPS with "invalid-command" (or
-"malformed-payload") and never reaches the server.
-
-Rate floor: `min_interval_s` (parameter, owner-editable, default 5 s) per
-(entity, aspect) — `message` and `alert` on the same entity never share a
-window, since one channel's traffic must never delay the other's; a
-`message` inside the window since the last SEND ATTEMPT drops with reason
-"rate-limited". `alert` is exempt from the floor entirely
-(docs/design.md#notifications: quiet hours and rate limits withhold
-`message`, never `alert` — the severity split is a delivery-path property,
-not a courtesy this adapter may override). This floor is defense in depth,
-kept whatever the callers do: the cooldown that is house policy lives in
-the automation as a family-editable parameter on the SDK's Cooldown.
-
-Delivery: sends are serialised on one worker thread so a slow server
-never stalls the bus callback. The server's JSON reply carries the
-message's server time; it publishes as `delivered` (epoch seconds, the
-`fixed_at` shape) — the delivery service's acknowledgment, never a
-human's. A non-2xx reply or a connection error drops the message with
-reason "delivery-failed" (the error text in the event) and flips
-home/state/{room}/{entity}/available to false; the next successful send
-flips it back. Stale, never false: `delivered` stands across an outage.
-
-Health events: drop/malformed-payload, drop/invalid-command,
-drop/rate-limited, drop/delivery-failed, drop/queue-full (the outbox holds
-at most 1000 sends — a dead server sheds load rather than queueing
-forever), drop/stale (a send that waited more than 15 minutes: long enough
-to survive a server restart, short enough to still be timely). Discovery
-is the static one-record-per-entity document with the aspect descriptor.
+Health events: `drop` with reason malformed-payload, invalid-command,
+rate-limited, delivery-failed, queue-full or stale. Discovery is one
+static record per entity, with the aspect descriptor.
 """
 
 import json
@@ -104,14 +63,16 @@ from homeostat.params import LiveParams
 ENV_TOKEN = "HOMEOSTAT_NTFY_TOKEN"
 PARAM_DEFAULTS = {"min_interval_s": 5.0}
 HTTP_TIMEOUT_S = 10.0
-# A dead server sheds load past this many queued sends...
+# Sends queued beyond this drop with `queue-full`, so a dead server sheds
+# load instead of queueing forever.
 MAX_QUEUE_SIZE = 1000
-# ...and a send that waited longer than this is stale by the time the
-# server recovers: 15 minutes, long enough to survive a restart, short
-# enough that a notification is still timely.
+# A send that waited longer than this drops with `stale`. Fifteen minutes
+# covers a server restart and is still timely for a notification.
 MAX_QUEUE_AGE_S = 15 * 60
 
-# Commandable aspect -> ntfy priority (1 min .. 5 max).
+# Commandable aspect -> ntfy priority (1 min .. 5 max). The Android app
+# treats 5 as urgent: it overrides Do Not Disturb and plays a continuous
+# alarm tone, so the phone itself enforces the message/alert split.
 PRIORITIES = {"message": 3, "alert": 5}
 
 ASPECT_DESCRIPTOR = {
@@ -157,9 +118,9 @@ def check_health(endpoint: str) -> None:
 def publish(endpoint: str, token: str, topic: str, text: str, priority: int, title: str) -> dict:
     """Send one POST to the topic and return the server's reply document.
 
-    Raises urllib.error.URLError (HTTPError included) on failure — a
-    redirect included, since the token must reach only the configured
-    endpoint.
+    Raises urllib.error.URLError (HTTPError included) on failure,
+    including on a redirect, since the token must reach only the
+    configured endpoint.
     """
     request = urllib.request.Request(
         f"{endpoint}/{topic}",
@@ -189,12 +150,21 @@ class Send:
 class Gate:
     """Which wishes become sends.
 
-    The envelope must parse, the aspect be `message` or `alert`, the text a
-    non-blank string; a `message` inside `min_interval_s` of the last one
-    to the same entity is rate-limited, an `alert` never is (quiet hours
-    and rate limits withhold message, never alert;
-    docs/design.md#notifications). No bus, and the clock is injectable, so
-    tests drive it directly.
+    The envelope must parse, the aspect must be `message` or `alert`, and
+    the text a non-blank string; otherwise the wish drops with
+    `malformed-payload` or `invalid-command` and does not reach the
+    server. The envelope's `actor` becomes the notification's title, so
+    the phone says who sent it.
+
+    Rate floor: a `message` within `min_interval_s` of the last send
+    attempt to the same entity drops with `rate-limited`. The window is
+    per (entity, aspect), so one aspect's traffic does not delay the
+    other's. `alert` is exempt: quiet hours and rate limits may withhold
+    `message` but not `alert` (docs/design.md#notifications). This floor
+    is a safety net. The cooldown that is house policy lives in the
+    automation, as a family-editable parameter on the SDK's Cooldown.
+
+    No bus, and the clock is injectable, so tests drive it directly.
     """
 
     def __init__(self, unit: str, min_interval_s, clock=time.monotonic):
@@ -231,10 +201,10 @@ class Gate:
                 return {"reason": "rate-limited", "key": key, "cmd_id": cmd_id, "min_interval_s": floor}
             self.last_attempt[(entity_name, aspect)] = now
         actor = payload.get("actor")
-        # A control character (CR/LF especially — header injection) or a
+        # A control character (CR/LF would be header injection) or a
         # non-Latin-1 actor would make the HTTP client raise inside
-        # publish(), misreporting a bad actor string as a dead server; fall
-        # back to the unit name instead of ever reaching that.
+        # publish(), which would report a bad actor string as a dead
+        # server. Use the unit name instead.
         title = (
             actor
             if isinstance(actor, str) and actor and actor.isprintable() and actor.isascii()
@@ -250,6 +220,9 @@ def main():
     token = os.environ.get(ENV_TOKEN)
     if not token:
         raise RuntimeError(f"{ENV_TOKEN} is not set")
+    # Not ready until the server answers healthy, so a dead server or a
+    # wrong URL shows as supervisor backoff instead of a notifier that
+    # drops everything.
     check_health(endpoint)
 
     session = homeostat.connect()
@@ -258,6 +231,9 @@ def main():
     available_lock = threading.Lock()
     available: dict[str, bool] = {}
 
+    # A failed send sets the entity's `available` to false, and the next
+    # successful send sets it back. `delivered` keeps its last value
+    # through an outage.
     def set_available(entity, value: bool) -> None:
         with available_lock:
             if available.get(entity.name) == value:
@@ -265,10 +241,9 @@ def main():
             available[entity.name] = value
             session.put_json(keys.state_key(entity.room, entity.name, "available"), value)
 
-    # Sends serialised on one thread: (entity, aspect, key, text, title,
-    # cmd id, enqueued at). Bounded so a dead server sheds load instead of
-    # queueing forever; an item that waited past MAX_QUEUE_AGE_S is stale
-    # by the time the server recovers and is dropped rather than sent.
+    # Sends run one at a time on the sender thread, so a slow server does
+    # not stall the bus callback. Items are (entity, aspect, key, text,
+    # title, cmd id, enqueued at).
     outbox: queue.Queue = queue.Queue(maxsize=MAX_QUEUE_SIZE)
 
     def sender():
@@ -288,6 +263,8 @@ def main():
                 )
                 set_available(entity, False)
                 continue
+            # The server's time for the message: the delivery service's
+            # acknowledgment, not a person reading it.
             delivered = reply.get("time") if isinstance(reply, dict) else None
             if isinstance(delivered, (int, float)) and not isinstance(delivered, bool):
                 session.put_json(keys.state_key(entity.room, entity.name, "delivered"), delivered)

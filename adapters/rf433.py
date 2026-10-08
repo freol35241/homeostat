@@ -8,76 +8,38 @@
 # [tool.uv.sources]
 # homeostat = { path = "../sdk/python", editable = true }
 # ///
-"""RF433 adapter: one-way senders behind an OpenMQTTGateway bridge.
+"""RF433 adapter: one-way 433 MHz senders behind an OpenMQTTGateway bridge.
 
 A sub-GHz PIR, door contact or smoke detector transmits when something
-happens and never transmits again — there is no "clear". The bridge
-(OpenMQTTGateway on a Sonoff RF Bridge, or any gateway publishing the same
-shape) republishes each burst on ONE topic, {base}/SRFBtoMQTT, and the only
-thing distinguishing one device from another is the decimal code in the
-payload. So the entity file's `id` is that code, and the file stem is the
-entity name — the same addressing every adapter uses, with the device's
-"address" being what it transmits. The wire's code is normalized through
-int, so the id is written as a plain decimal, without padding or leading
-zeros.
+happens and never sends a "clear". The bridge (OpenMQTTGateway on a Sonoff
+RF Bridge, or any gateway publishing the same shape) republishes each
+burst on one topic, {base}/SRFBtoMQTT, and only the decimal code in the
+payload tells devices apart. The adapter synthesizes the missing `false`
+with a hold, following docs/adapters.md#one-way-senders and
+docs/design.md#one-way-senders (`Radio`).
 
-THE DECAY IS THIS ADAPTER'S (docs/design.md#one-way-senders). The radio's
-lack of an off is a protocol fact, so synthesizing one is dialect knowledge
-and belongs in the membrane; it is never a core TTL. Three rules:
+Binding: an entity file's `id` is the code, written as a plain decimal
+without padding or leading zeros (`code_from`). A PIR binds `presence` and
+publishes `occupancy`. A contact or detector binds `binary_sensor` and
+publishes the aspect its single feature names (`contact`, `smoke`, ...),
+because the radio cannot say what it is (`aspect_for`).
 
-  1. TRANSITIONS ONLY. `true` on the first assertion, `false` when the hold
-     expires. A repeat burst inside the hold extends the deadline and
-     publishes nothing — 433 MHz senders repeat each burst several times by
-     design, so publishing per burst would be a per-motion flood.
-  2. `false` FOR EVERY BOUND ENTITY AT STARTUP. A held `true` is this
-     adapter's own construct, not a device reading, so after a restart
-     "nothing has asserted within the hold" is the honest state rather than
-     an invented one. It is also what stops a crash-looping adapter from
-     leaving a motion sensor stuck on: every restart self-clears. Only a
-     permanently dead adapter (breaker open) leaves a `true` standing, and
-     its unit health shows it. Restoring the last published value would
-     be wrong here: it resurrects an assertion whose hold has expired.
-  3. THE HOLD IS A PARAMETER, PER ASPECT, not per entity. A contact, a PIR
-     and a smoke detector want different holds (seconds, a minute, ten
-     minutes) but every contact wants the same one, so the entity's
-     capability and features pick the parameter and the house tunes three
-     numbers rather than one per device: occupancy_hold_s (default 15 s),
-     contact_hold_s (60 s), smoke_hold_s (600 s), and hold_s (60 s) for
-     any other aspect, so a sensor class nobody anticipated still decays.
+Configuration: the base topic is the endpoint's path, default
+`home/OpenMQTTGateway`. Broker credentials are inline in the endpoint or
+in HOMEOSTAT_MQTT_CREDENTIALS. Live parameters (owner-editable):
+occupancy_hold_s (default 15 s), contact_hold_s (60 s), smoke_hold_s
+(600 s), and hold_s (60 s) for any other aspect.
 
-Not consumer-side debouncing: every consumer would reimplement it,
-they would disagree, and the recorder could not reconstruct what was true
-when.
+Availability: the bridge's LWT sets `available` for every bound entity.
+A receive timer would not work, since silence is a 433 MHz sender's
+normal state and says nothing about the gateway.
 
-Capabilities: a PIR binds `presence` and publishes `occupancy`; a contact
-or a detector binds `binary_sensor` and publishes the aspect its `features`
-name (`contact`, `smoke`, ...), because the radio cannot say what it is and
-the entity file is where that knowledge lives. A smoke detector's field
-carries `notable` so a detector firing reaches Now as a deviation. A
-binary_sensor without exactly one feature has no aspect: it emits one
-"misconfigured" health event (reason "no-aspect") at startup and its
-bursts are ignored. A payload with no decodable code drops with
-"malformed-payload".
+Discovery: every bound entity with a `heard` flag, then the unbound codes
+heard (`Radio.inventory`).
 
-Discovery lists every bound entity, heard or not (its descriptor is what
-the dashboard renders), with a `heard` flag, then every unbound code
-heard. Unbound codes are the normal state of a 433 MHz estate
-(neighbours' remotes, car keys), and discovery is how a device gets
-identified at all: press it, watch its code appear, write the entity
-file. They emit no health event. Because they are wire-controlled, only
-the MAX_UNBOUND most recently first-heard are kept, and the document is
-republished at most once per DISCOVERY_COALESCE_S.
-
-Availability is the bridge's own LWT, not a receive timer: silence from a
-433 MHz sender is its normal state and says nothing about the gateway.
-
-⚠️ TWO PAYLOAD SHAPES, ONE OF THEM UNTESTED. Older gateway firmware
-publishes a bare decimal string ("13951014"); current firmware publishes
-JSON ({"raw": ..., "value": 13951014, "delay": ...}). Both are accepted,
-the JSON path reading `value`. The bare-decimal path is the one exercised
-against real hardware (a bridge reporting version 0.5); THE JSON PATH IS
-WRITTEN TO THE DOCUMENTED SHAPE AND HAS NOT BEEN SEEN ON A WIRE — if you
-run current firmware, that is the path worth confirming.
+Health events: `misconfigured` (reason no-aspect) once at startup for a
+binary_sensor without exactly one feature, and `drop` (malformed-payload)
+for a payload with no decodable code.
 """
 
 import json
@@ -106,16 +68,19 @@ PARAM_DEFAULTS = {
 # seconds.
 TICK_S = 0.25
 
-# Unbound codes are wire-controlled: anything transmitting nearby lands in
+# Unbound codes come from the wire: anything transmitting nearby lands in
 # discovery. Keep the most recent MAX_UNBOUND (evicting the oldest by
 # first sighting) and republish at most once per DISCOVERY_COALESCE_S, so
-# a chatty neighbourhood can neither grow the document without bound nor
+# a busy neighbourhood can neither grow the document without bound nor
 # republish it per burst.
 MAX_UNBOUND = 200
 DISCOVERY_COALESCE_S = 5.0
 
-# Aspect -> the parameter that holds it. Anything else falls back to
-# `hold_s`, so a sensor class nobody anticipated still decays.
+# Aspect -> the parameter that holds it. The hold is per aspect, not per
+# entity: a contact, a PIR and a smoke detector want different holds, but
+# every contact wants the same one, so the house tunes a few numbers
+# instead of one per device. Anything else falls back to `hold_s`, so an
+# unexpected sensor class still decays.
 HOLD_PARAM = {
     "occupancy": "occupancy_hold_s",
     "presence": "occupancy_hold_s",
@@ -139,10 +104,11 @@ class Params(LiveParams):
 def aspect_for(entity) -> str | None:
     """Return the aspect a bound entity publishes, or None when the file cannot say.
 
-    `presence` has one in the vocabulary; `binary_sensor` is "a boolean
-    under its native name" and the radio cannot say which name, so the
-    entity file's single feature is it. Two features would be two aspects
-    for a sender that transmits one thing, so that is misconfigured too.
+    `presence` has one in the vocabulary. `binary_sensor` is "a boolean
+    under its native name", and the radio cannot say which name, so the
+    entity file's single feature names it. Two features would be two
+    aspects for a sender that transmits one thing, so that is
+    misconfigured too.
     """
     if entity.capability == "presence":
         return entity.features[0] if entity.features else "occupancy"
@@ -152,9 +118,16 @@ def aspect_for(entity) -> str | None:
 def code_from(payload: bytes):
     """Return the decimal code in a bridge payload, as a string, or None.
 
-    Two firmware generations: a bare decimal, and JSON carrying `value`.
-    Normalized through int so "13951014", " 13951014 " and 13951014 are one
-    code — the entity file writes it one way and the wire may not.
+    Two firmware generations: older firmware publishes a bare decimal
+    string ("13951014"), current firmware JSON ({"raw": ..., "value":
+    13951014, "delay": ...}), read through `value`. Only the bare-decimal
+    path has been tested against real hardware (a bridge reporting version
+    0.5). The JSON path follows the documented shape and has not been seen
+    on a wire, so confirm it if you run current firmware.
+
+    The code is normalized through int, so "13951014", " 13951014 " and
+    13951014 are one code: the entity file writes it one way and the wire
+    may not.
     """
     text = payload.decode("utf-8", "replace").strip()
     if not text:
@@ -180,14 +153,18 @@ class Radio:
 
     A bound code drives its entity's aspect true and holds it for
     `hold_for(aspect)` seconds from the latest burst; `expire` sends it
-    false once the hold has passed. One lock guards the deadlines AND the
-    publishes that follow from them: a burst and an expiry for the same
-    entity may land on different threads within the same tick, and a
-    `false` published after the lock is dropped could overtake the burst's
-    `true`, leaving the entity reading `false` for a whole hold while its
-    deadline stands. A code heard for the first time is reported through
+    false once the hold has passed. One lock guards the deadlines and the
+    publishes that follow from them. A burst and an expiry for the same
+    entity may run on different threads in the same tick, and a `false`
+    published after the lock is released could overtake the burst's
+    `true`, leaving the entity `false` for a whole hold while its deadline
+    stands. A code heard for the first time is reported through
     `on_new_code`, called outside the lock. `session` is anything with
     `put_json` and `health_event`; the clock is injectable.
+
+    The hold is this adapter's job and not consumer-side debouncing,
+    because every consumer would reimplement it differently, and the
+    recorder could not reconstruct what was true when.
     """
 
     def __init__(self, session, base: str, entities, hold_for, on_new_code, clock=time.monotonic):
@@ -221,18 +198,18 @@ class Radio:
     def inventory(self) -> list[dict]:
         """Return the discovery document: bound entities, then codes bound to nothing.
 
-        Bound entities are listed whether or not they have ever
-        transmitted, because their descriptors are what the dashboard
-        renders from and a door that nobody opened today still has a card.
-        `heard` says whether this adapter has actually heard the code.
+        Bound entities are listed whether or not they have transmitted,
+        because the dashboard renders from their descriptors, and a door
+        nobody opened today still has a card. `heard` says whether this
+        adapter has heard the code. A smoke detector's field is `notable`,
+        so a detector firing shows on Now as a deviation.
 
-        Unbound codes are the other half, and they are the normal state of
-        a 433 MHz estate -- neighbours' remotes, a car key, the doorbell.
-        Discovery is how a device gets identified at all: press it, watch
-        the code appear, write the entity file. Their suggestion is
-        deliberately weak, because the radio says nothing about what
-        transmitted. Only the MAX_UNBOUND most recently first-heard are
-        kept (see note()).
+        Unbound codes are normal on 433 MHz: neighbours' remotes, a car
+        key, the doorbell. Discovery is how a device gets identified: press
+        it, watch the code appear, write the entity file. Unbound codes
+        therefore get no health event. Their suggestion is generic,
+        because the radio says nothing about what transmitted. Only the
+        MAX_UNBOUND most recently first-heard are kept (see note()).
         """
         with self.lock:
             records = []
@@ -276,7 +253,15 @@ class Radio:
             return True
 
     def start(self) -> None:
-        """Publish every bound entity's honest state at startup: false.
+        """Publish false for every bound entity at startup.
+
+        A held `true` is this adapter's own construct, not a device
+        reading, so after a restart "nothing has asserted within the hold"
+        is the correct state. It also means a crash-looping adapter cannot
+        leave a motion sensor stuck on, since every restart clears it. Only
+        an adapter whose breaker is open leaves a `true` standing, and its
+        unit health shows that. Restoring the last published value would be
+        wrong: it would bring back an assertion whose hold has expired.
 
         An entity whose file names no aspect is reported once here, not
         per burst.
@@ -316,7 +301,10 @@ class Radio:
             fresh = entity.name not in self.deadline
             self.deadline[entity.name] = self.clock() + self.hold_for(aspect)
             if fresh:
-                self.publish(entity, True)  # transitions only: a repeat burst just extends
+                # Transitions only. 433 MHz senders repeat each burst
+                # several times, so a repeat inside the hold only extends
+                # the deadline.
+                self.publish(entity, True)
 
     def expire(self) -> None:
         """Send false for every hold that has passed."""
@@ -366,7 +354,7 @@ def main():
         [(f"{base}/{EVENTS_SUFFIX}", 0), (f"{base}/{LWT_SUFFIX}", 0)],
     )
 
-    radio.start()  # rule 2: the honest state at startup
+    radio.start()
     session.put_json(keys.discovery_key(unit), radio.inventory())
 
     threading.Thread(target=sweeper, daemon=True, name="rf433-sweeper").start()
@@ -376,8 +364,8 @@ def main():
     mqtt.wait_for_shutdown()
 
     stop.set()
-    # The MQTT loop stops first: an in-flight on_message during teardown
-    # would otherwise put on a closed zenoh session.
+    # Stop the MQTT loop first, or an in-flight on_message could put on
+    # a closed zenoh session.
     client.loop_stop()
     client.disconnect()
     with timer_lock:

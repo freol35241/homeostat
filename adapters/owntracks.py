@@ -8,43 +8,40 @@
 # [tool.uv.sources]
 # homeostat = { path = "../sdk/python", editable = true }
 # ///
-"""OwnTracks adapter: a translating subscriber, same shape as Zigbee2MQTT.
+"""OwnTracks adapter: phone locations on the bus from OwnTracks over MQTT.
 
-Phones reach the house over MQTT through the existing broker, not
-OwnTracks' HTTP mode: the broker's retained message is each phone's
-last-known position across restarts, and the house gains no second
-ingress surface. The topic prefix is fixed at `owntracks`.
+Phones publish to the house's existing MQTT broker, not to OwnTracks'
+HTTP mode. The broker's retained message keeps each phone's last
+position across restarts, and the house gains no second way in. The
+topic prefix is fixed at `owntracks`.
 
-Phone location published as JSON on owntracks/{user}/{device} fans out to
-per-aspect keys home/state/person/{entity}/{aspect}: lat, lon, accuracy
-(from `acc`), battery (from `batt`) and fixed_at (from `tst`) — scalar
-aspects, not one composite fix, so the recorder gives position trails for
-free (docs/design.md#map-and-people). accuracy/battery/fixed_at
-are omitted when the fix does not carry them. The entity file's `id` is
-the two OwnTracks topic segments ("{user}/{device}"); the file stem is the
-entity name; person entities bind capability = "person", room = "person"
-(the reserved pseudo-room — persons move, so they are never a physical
-room). Non-location `_type` payloads (transition, lwt, waypoint, cmd, ...)
-are normal OwnTracks traffic and are ignored. Persons are read-only: there
-is no command subscription. Anything unusable — malformed JSON, or a
-location payload missing lat/lon — drops with "malformed-payload" at
-home/health/{unit}/event instead of crashing. A location from an unbound
-pair drops with "unknown-device" on first sight only: discovery already
-carries it, and a phone nobody has bound yet publishes forever.
+Binding: an entity file's `id` is the two OwnTracks topic segments,
+`{user}/{device}`, and the file stem is the entity name. Person entities
+bind capability `person` in the reserved pseudo-room `person`, since
+people move between rooms.
 
-There is no `available` aspect. A retained position has no liveness
-semantics, so the protocol offers no real loss signal and the adapter
-does not fake one; an old fix shows its age through fixed_at.
+State: a location on owntracks/{user}/{device} fans out to
+home/state/person/{entity}/{aspect} as lat, lon, accuracy (from `acc`),
+battery (from `batt`) and fixed_at (from `tst`) (`Tracker.on_message`).
+These are separate scalar aspects so the recorder keeps position trails
+(docs/design.md#map-and-people). accuracy, battery and fixed_at are
+omitted when the fix lacks them. Persons are read-only: there is no
+command subscription.
 
-Unlike z2m there is no retained bridge inventory to mirror: every
-user/device pair seen on the broker, bound or not, is tracked incrementally
-as traffic arrives and the complete inventory is republished at
-home/discovery/{unit} when a new device appears — coalesced to at most one
-publish per DISCOVERY_COALESCE_S, and holding only the MAX_UNBOUND most
-recently first-seen unbound pairs (the oldest evicted), since the pairs
-are whatever the broker carries — each record carrying the entity-file
-binding `id`, whether an entity file already binds it, and a suggested
-capability/features stanza (capability "person", features []).
+There is no `available` aspect. A retained position says nothing about
+whether the phone is alive, so there is no real loss signal; an old fix
+shows its age through fixed_at.
+
+Discovery: every user/device pair seen on the broker, bound or not, with
+a suggested `person` stanza. There is no retained inventory to mirror,
+so pairs are added as traffic arrives. The document is republished at
+most once per DISCOVERY_COALESCE_S, and only the MAX_UNBOUND most
+recently first-seen unbound pairs are kept, since the pairs are whatever
+the broker carries.
+
+Health events: `drop` with malformed-payload (bad JSON, or a location
+without lat/lon) or unknown-device (a location from an unbound pair,
+first sight only).
 """
 
 import json
@@ -112,18 +109,17 @@ class Tracker:
             session.health_event("drop", reason="malformed-payload", topic=topic)
             return
         if payload.get("_type") != "location":
-            return  # transition, lwt, waypoint, cmd, ... — normal OwnTracks traffic
+            return  # transition, lwt, waypoint, cmd, ...: normal OwnTracks traffic
         if "lat" not in payload or "lon" not in payload:
             session.health_event("drop", reason="malformed-payload", topic=topic)
             return
 
         entity = self.by_id.get(dev_id)
         if entity is None:
-            # Once, on first sight. A phone nobody has bound yet keeps
-            # publishing forever, and discovery already carries it with
-            # configured=false — repeating the event per fix would bury
-            # the health feed during exactly the discovery-first pass the
-            # design asks for.
+            # Once, on first sight. A phone nobody has bound keeps
+            # publishing, and discovery already carries it with
+            # configured=false. An event per fix would bury the health feed
+            # while devices are being discovered and bound.
             if first_sight:
                 session.health_event("drop", reason="unknown-device", topic=topic)
             return
@@ -165,13 +161,13 @@ def main():
         f"{BASE_TOPIC}/+/+",
     )
 
-    # Persons are read-only: no command subscription, unlike z2m's lights.
+    # Persons are read-only, so there is no command subscription.
     session.ready()
 
     mqtt.wait_for_shutdown()
 
-    # The MQTT loop stops first: an in-flight on_message during teardown
-    # would otherwise put on a closed zenoh session.
+    # Stop the MQTT loop first, or an in-flight on_message could put on
+    # a closed zenoh session.
     client.loop_stop()
     client.disconnect()
     with timer_lock:

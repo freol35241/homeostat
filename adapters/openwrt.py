@@ -8,65 +8,41 @@
 # [tool.uv.sources]
 # homeostat = { path = "../sdk/python", editable = true }
 # ///
-"""OpenWrt network adapter.
+"""OpenWrt adapter: router WAN state and WiFi presence over ubus JSON-RPC.
 
-See docs/design.md#the-capability-vocabulary.
+See docs/design.md#the-capability-vocabulary. The adapter speaks ubus
+JSON-RPC over HTTP (uhttpd-mod-ubus, rpcd session auth) and polls each
+configured router (`poll_router`). It is read-only and takes no commands.
 
-Named for the dialect it speaks: ubus JSON-RPC over HTTP (uhttpd-mod-ubus,
-rpcd session auth). It polls: each cycle logs in fresh (rpcd expires idle
-sessions; nothing to renew) and asks every configured router two
-questions: `network.interface dump` for WAN state and `get_clients` on
-every hostapd BSS for WiFi sightings. Scope is presence and WAN state
-only; network metrics and tunnel reachability are the monitoring stack's
-job, deliberately. There is no tunnel state: a wireguard interface's up
-flag is true whether or not any peer can be reached, which is a false
-assurance, and per-peer state would publish each peer's endpoint, a
-movement trace of whoever carries the device.
+Scope is WAN state and presence. Network metrics and tunnel reachability
+belong to the monitoring stack. There is no tunnel state: a wireguard
+interface's up flag is true whether or not a peer can be reached, and
+per-peer state would publish each peer's endpoint, a movement trace of
+whoever carries the device. Combining WiFi sightings with location into
+"someone is home" is an ordinary automation, because which MAC is whose
+is house knowledge, and this adapter cannot write onto person entities.
 
-Combining WiFi sightings with location into "someone is home" is not this
-adapter's job either: which MAC is whose is house knowledge, and exactly
-one adapter binds each entity, so this one cannot write onto person
-entities. That fusion is an ordinary automation over both.
+Binding: a `router` entity's `id` is its name in the credentials file,
+with aspect `wan`. A `presence` entity's `id` is the device MAC in
+lowercase, with aspect `presence` (`Adapter.cycle`). `classify` drops
+other bindings with a health event.
 
-The manifest's [discovery].endpoint is the HOMEOSTAT_OPENWRT credentials
-file itself: an out-of-repo TOML keyed by router name with `host`
-(optionally `host:port`), `username`, `password` — a dedicated read-only
-rpcd ACL login per router, never root; the ACL needs only
-`network.interface` and `hostapd.*`. The login travels over plain HTTP to
-uhttpd's /ubus, so redirects are refused (one would replay the password
-at whatever host the reply names) and a reply larger than 1 MiB is a
-failure, not a memory bill. Entity binding: a `router` entity's
-id is its name in that file (aspect `wan`); a `presence` entity's id is the device MAC,
-lowercase (aspect `presence` — sighted on any BSS of any router, absent
-only after away_delay_s of continuous non-sighting, which also absorbs AP
-reboots, and only while every configured router polled: a silent router is
-a blind spot, not an empty one). A presence id that is not lowercase
-drops at startup with "malformed-id" (sightings are lowercased, so it
-would read absent forever), a router id missing from the file with
-"router-unconfigured", any other capability with
-"unsupported-capability".
+Configuration: [discovery].endpoint is the path of the credentials file,
+normally `${HOMEOSTAT_OPENWRT}`: a TOML file outside the repo keyed by
+router name, with `host` (optionally `host:port`), `username` and
+`password`. Use a dedicated read-only rpcd ACL login per router, not
+root; the ACL needs only `network.interface` and `hostapd.*`. Live
+parameters: poll_interval_s (default 30) and away_delay_s (default 180).
 
-Aspects publish on transition only, plus each entity's current value after
-its first successful poll; a poll is a read, not an event, so the recorder
-stores exactly the transitions. Failure policy: an unreachable router
-emits one "router-unreachable" health event per down transition
-("router-poll-failed" when it answers with something that does not parse)
-and its aspects go stale rather than false. With every router silent
-nothing publishes; with some silent, a sighting still publishes present
-(evidence is evidence) but an unsighted device holds stale, and each
-change in which routers are silent emits one "presence-partial" event
-naming them, so a long blind spot stays visible after "router-unreachable"
-has latched. A router whose dump has no interface named `wan` emits
-"unknown-interface" once, until one reappears. Read-only by design: no cmd
-surface until a command is actually wanted.
+Aspects publish on change, plus each entity's value after its first
+successful poll, so the recorder stores only transitions.
 
-Discovery is built from data the cycle already fetched, republished only
-when it changes: every configured router (with whether it answered) and
-every station seen this cycle as a bare MAC, suggested `presence`, with
-the routers that saw it. A bound entity's discovery record carries its
-aspect descriptor (docs/design.md#aspect-descriptors): one boolean per
-capability, with value labels ("up"/"down", "present"/"away") — the whole
-of what this adapter speaks, so a static table, not a generated one.
+Discovery: every configured router with whether it answered, and every
+station seen this cycle (`Adapter.publish_discovery`).
+
+Health events: `drop` (malformed-id, router-unconfigured,
+unsupported-capability), router-unreachable, router-poll-failed,
+presence-partial and unknown-interface.
 """
 
 import asyncio
@@ -97,8 +73,8 @@ class UbusError(Exception):
     """
 
 
-# A ubus reply is a small JSON document; a compromised or misbehaving
-# router must not pin the unit's memory on an oversized one.
+# A ubus reply is a small JSON document. A larger reply is a failure, so a
+# compromised or misbehaving router cannot make the unit buffer it.
 MAX_RESPONSE_BYTES = 1024 * 1024
 # How much of the body one read takes. Only a buffer size: the cap above
 # is what bounds memory, and it is checked after every chunk.
@@ -110,19 +86,19 @@ async def ubus_rpc(http: aiohttp.ClientSession, url: str, method: str, params: l
     try:
         async with http.post(
             url, json=payload, timeout=aiohttp.ClientTimeout(total=HTTP_TIMEOUT_S),
-            # A redirect would replay the login call (the plaintext rpcd
-            # password included) at whatever host the reply names.
+            # The login travels over plain HTTP to uhttpd's /ubus. A
+            # redirect would replay it, password included, at whatever
+            # host the reply names.
             allow_redirects=False,
         ) as response:
             if response.status != 200:
                 raise UbusError(f"HTTP {response.status}")
-            # ⚠️ READ UNTIL EOF, NOT ONCE. `content.read(n)` returns whatever
-            # is buffered, up to n -- for a chunked reply that is the FIRST
-            # CHUNK, so a single read truncates the document and every decode
-            # fails. rpcd here does answer chunked (OpenWrt 23.x, bodies of
-            # 1.4-5.7 kB), so this is load-bearing, not insurance. The cap is
-            # enforced after each chunk, which is also where it belongs -- it
-            # must not depend on how the body happens to be framed.
+            # Read until EOF. `content.read(n)` returns whatever is
+            # buffered, up to n, which for a chunked reply is the first
+            # chunk, so a single read truncates the document. rpcd answers
+            # chunked (OpenWrt 23.x, bodies of 1.4-5.7 kB). The size cap is
+            # checked after each chunk, so it does not depend on how the
+            # body is framed.
             raw = bytearray()
             async for chunk in response.content.iter_chunked(RESPONSE_CHUNK_BYTES):
                 raw += chunk
@@ -148,7 +124,7 @@ async def ubus_call(http, url: str, sid: str, obj: str, method: str, args: dict)
 
 
 async def ubus_list(http, url: str, sid: str, pattern: str) -> list[str]:
-    """Object names matching a pattern (hostapd.* — one per BSS)."""
+    """Return the object names matching a pattern (hostapd.*, one per BSS)."""
     result = await ubus_rpc(http, url, "list", [sid, pattern])
     if isinstance(result, dict):
         return sorted(result)
@@ -193,8 +169,10 @@ def load_routers(endpoint: str | None) -> dict:
 def classify(entities, routers, session):
     """Split bound entities by capability, dropping unusable bindings.
 
-    Each dropped binding gets a health event — one bad entity never takes
-    the unit down.
+    Each dropped binding gets a health event, and the unit keeps running.
+    A presence id that is not lowercase drops with `malformed-id`, a router
+    id missing from the credentials file with `router-unconfigured`, and
+    any other capability with `unsupported-capability`.
     """
     router_entities, trackers = [], []
     for entity in entities:
@@ -205,8 +183,8 @@ def classify(entities, routers, session):
             router_entities.append(entity)
         elif entity.capability == "presence":
             if entity.id != entity.id.lower():
-                # Sightings are lowercased; an uppercase MAC would just
-                # read absent forever with no trace.
+                # Sightings are lowercased, so an uppercase MAC would read
+                # absent forever with no trace.
                 session.health_event(
                     "drop", reason="malformed-id", entity=entity.name,
                     error="device MAC must be lowercase",
@@ -224,7 +202,10 @@ def classify(entities, routers, session):
 async def poll_router(http, name: str, conf: dict):
     """One router, one cycle: fresh login, interface dump, station union.
 
-    Any failure marks the router unreachable.
+    Each cycle logs in again, because rpcd expires idle sessions. It asks
+    `network.interface dump` for WAN state and `get_clients` on every
+    hostapd BSS for WiFi sightings. Any failure marks the router
+    unreachable.
     """
     url = f"http://{conf['host']}/ubus"
     sid = await login(http, url, conf["username"], conf["password"])
@@ -263,8 +244,8 @@ class Adapter:
     def note(self, key: tuple, kind: str, **fields) -> None:
         """One health event per down transition of a degraded condition.
 
-        Degraded conditions publish under their own event kind, never as
-        a `drop` — nothing was dropped.
+        Degraded conditions get their own event kind, not `drop`, since
+        nothing was dropped.
         """
         if key not in self.noted:
             self.session.health_event(kind, **fields)
@@ -279,6 +260,18 @@ class Adapter:
             self.published[key] = value
 
     async def cycle(self, http) -> None:
+        """Poll every router once and publish what changed.
+
+        An unreachable router reports one `router-unreachable` per down
+        transition (`router-poll-failed` when it answers with something
+        that does not parse), and its aspects keep their last values. With
+        every router silent nothing publishes. A router whose dump has no
+        interface named `wan` reports `unknown-interface` once, until one
+        reappears.
+
+        A presence entity is present when any BSS of any router sighted it
+        within away_delay_s. The delay also covers access point reboots.
+        """
         interfaces: dict[str, dict] = {}
         sightings: dict[str, list[str]] = {}  # mac -> routers that saw it
         polled_ok: set[str] = set()
@@ -294,10 +287,10 @@ class Adapter:
                 self.reachable[name] = False
                 continue
             except Exception as err:
-                # A payload shape this build did not anticipate (hostapd
-                # clients as a list, an interface dump that is not one, ...): the
-                # router answered, the answer just did not parse. Stale, not
-                # a crash loop — one bad router never takes the unit down.
+                # A payload shape this code does not expect (hostapd clients
+                # as a list, an interface dump that is not one, ...). The
+                # router answered but the answer did not parse. Its aspects
+                # go stale and the unit keeps running.
                 if self.reachable.get(name, True):
                     self.session.health_event(
                         "router-poll-failed", router=name, error=str(err)
@@ -311,7 +304,7 @@ class Adapter:
                 sightings.setdefault(mac, []).append(name)
 
         if not polled_ok:
-            return  # total blindness: everything stays stale
+            return  # no router answered: everything keeps its last value
 
         now_mono = time.monotonic()
         for mac in sightings:
@@ -327,13 +320,12 @@ class Adapter:
             self.clear(("iface", entity.name))
             self.publish(keys.state_key(entity.room, entity.name, "wan"), bool(wan.get("up")))
 
-        # Partial blindness. A sighting is evidence whoever else failed,
-        # but absence is the union of all routers seeing nothing -- with
-        # one silent, a device that lives on it would read away. Hold
-        # those stale, exactly as the total-blindness branch does, and
-        # announce the blind spot per change of which routers are silent
-        # (router-unreachable is latched once and says nothing about how
-        # long the outage runs).
+        # Some routers silent. A sighting still counts, but absence needs
+        # every router to see nothing: with one silent, a device on it
+        # would read away. Unsighted devices keep their last value, as
+        # when no router answers. Report the blind spot each time the set
+        # of silent routers changes; router-unreachable is reported once
+        # and says nothing about how long the outage lasts.
         blind = frozenset(self.routers) - polled_ok
         if self.trackers and blind != self.blind and blind:
             self.session.health_event("presence-partial", routers=sorted(blind))
@@ -351,8 +343,9 @@ class Adapter:
 
         self.publish_discovery(sightings)
 
-    # A class-level constant, shared read-only across instances — never
-    # mutated per router.
+    # A class-level constant, shared read-only across instances. One
+    # boolean per capability: everything this adapter publishes, so a
+    # static table.
     ASPECT_DESCRIPTORS: ClassVar[dict] = {
         "router": {
             "schema": 1,
@@ -379,8 +372,10 @@ class Adapter:
     def publish_discovery(self, sightings) -> None:
         """Publish the complete current view of the periphery (docs/design.md#discovery).
 
-        Built from data the cycle already fetched; republished only when it
-        changes.
+        Built from data the cycle already fetched, and republished only when
+        it changes: every configured router with whether it answered, and
+        every station seen this cycle as a bare MAC, suggested `presence`,
+        with the routers that saw it.
         """
         bound = {e.id: e.name for e in self.router_entities + self.trackers}
 
@@ -423,8 +418,8 @@ async def serve(session, routers, config) -> None:
         while not stop.is_set():
             await adapter.cycle(http)
             if first:
-                # The first cycle has run (reachable or not — its own loop
-                # keeps trying); the unit is wired up.
+                # The first cycle has run, whether or not the routers
+                # answered; later cycles keep trying.
                 session.ready()
                 first = False
             with contextlib.suppress(asyncio.TimeoutError):

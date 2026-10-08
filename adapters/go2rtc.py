@@ -7,43 +7,36 @@
 # [tool.uv.sources]
 # homeostat = { path = "../sdk/python", editable = true }
 # ///
-"""go2rtc shim: a foreign binary as a unit.
+"""go2rtc shim: runs the go2rtc binary as a unit.
 
-See docs/design.md#cameras.
-
-The unit contract demands a liveliness token a Go binary cannot declare,
-so this thin shim owns it: render the go2rtc config from HOMEOSTAT_CAMERAS
-(one stream per camera, named by entity id — the dashboard derives its
-proxy targets from that convention), spawn the `go2rtc` binary from PATH
-(image-build provisioning, never repo content), poll its API until it
-answers, and only then declare ready. Child death means shim exit means
-supervisor backoff; the process-group sweep guarantees no orphan.
-
-The config binds go2rtc's API to localhost (HOMEOSTAT_GO2RTC_LISTEN,
-default 127.0.0.1:1984 — browsers never speak go2rtc; the dashboard
-mediates) and disables its other listeners (its own RTSP re-server,
-WebRTC, SRTP): MSE over the dashboard proxy is the only consumer, and an
-unauthenticated API with `exec:` sources must not face the LAN. The
-rendered file carries camera credentials, so it lives outside the repo in
-a 0600 temp file, deleted on exit.
+See docs/design.md#cameras. The unit contract needs a liveliness token,
+which a Go binary cannot declare, so this shim holds it. It renders the
+go2rtc config from HOMEOSTAT_CAMERAS (`render_config`), spawns `go2rtc`
+from PATH, polls its API until it answers, and then declares ready. When
+the child exits the shim exits, so the supervisor's backoff and
+process-group sweep apply. The binary comes with the image, not the repo.
 
 go2rtc holds one upstream RTSP session per camera however many browsers
 watch, which matters because a Tapo admits only about two concurrent RTSP
-clients. Restreaming is a pure remux: the image carries no ffmpeg, so
-anything of go2rtc's that transcodes (its frame.jpeg snapshot of an H.264
+clients. Restreaming is a remux only: the image has no ffmpeg, so
+anything in go2rtc that transcodes (its frame.jpeg snapshot of an H.264
 source) does not work, and nothing here relies on it. Recording, motion
-detection and frame storage are refused, not missing: they are mature
-tools' territory, and the event plane is adapters/onvif.py's.
+detection and frame storage are out of scope: mature tools do them, and
+events come from adapters/onvif.py.
 
-Camera entries: `host` (bare, or host:port — the ONVIF port, which is NOT
-the RTSP port; RTSP rides 554), `username`, `password`, and optionally
-`stream`, a full RTSP URL overriding the default
-rtsp://user:pass@host:554/stream1 (Tapo's HD main stream) for cameras with
-a different path. The default URL percent-encodes the username and
-password: a vendor-account password with "/", "?", "#" or "@" in it is
-ordinary and would otherwise break the URL go2rtc parses. go2rtc's own
-stdout/stderr ride this unit's, and the supervisor tags them
-(docs/design.md#logs-and-the-audit-trail).
+Configuration:
+
+- HOMEOSTAT_CAMERAS: the TOML camera file shared with the onvif adapter.
+  Per camera: `host` (bare, or host:port where the port is the ONVIF
+  port, not RTSP, which uses 554), `username`, `password`, and optionally
+  `stream`, a full RTSP URL that replaces the default
+  rtsp://user:pass@host:554/stream1 (Tapo's HD main stream). Each stream
+  is named by the camera's entity id, which is how the dashboard
+  addresses it.
+- HOMEOSTAT_GO2RTC_LISTEN: the API address, default 127.0.0.1:1984.
+
+go2rtc's stdout and stderr go to this unit's, and the supervisor tags
+them (docs/design.md#logs-and-the-audit-trail).
 """
 
 import json
@@ -82,9 +75,9 @@ def stream_url(conf: dict) -> str:
     host = conf["host"]
     if ":" in host:
         host = host.rpartition(":")[0]
-    # A camera-account password with "/", "?", "#", "@" or a space is
-    # ordinary (it is the camera vendor's account, not this house's own
-    # naming), but unescaped it truncates or breaks the URL go2rtc parses.
+    # Percent-encode the credentials. A vendor-account password with "/",
+    # "?", "#", "@" or a space is normal, and unescaped it truncates or
+    # breaks the URL go2rtc parses.
     user = urllib.parse.quote(conf["username"], safe="")
     password = urllib.parse.quote(conf["password"], safe="")
     return f"rtsp://{user}:{password}@{host}:{RTSP_PORT}/stream1"
@@ -93,7 +86,14 @@ def stream_url(conf: dict) -> str:
 def render_config(cameras: dict, listen: str) -> dict:
     """Return the go2rtc config as JSON (a YAML subset go2rtc accepts).
 
-    API on localhost, every other listener off, one stream per camera.
+    The API listens on localhost and every other listener (go2rtc's own
+    RTSP server, WebRTC, SRTP) is off. MSE through the dashboard proxy is
+    the only consumer, so browsers never talk to go2rtc, and an
+    unauthenticated API with `exec:` sources must not face the LAN. One
+    stream per camera.
+
+    The rendered file contains camera credentials, so main writes it to a
+    0600 temp file outside the repo and deletes it on exit.
     """
     return {
         "api": {"listen": listen},
@@ -107,9 +107,9 @@ def render_config(cameras: dict, listen: str) -> dict:
 def await_api(listen: str, child: subprocess.Popen, stopping: threading.Event) -> None:
     """Poll /api/streams until go2rtc answers.
 
-    A child that dies first, or never answers, is a startup error (visible
-    through the supervisor's backoff) — unless the supervisor itself
-    commanded the stop.
+    A child that dies first, or never answers, is a startup error, visible
+    through the supervisor's backoff. The exception is a stop the
+    supervisor asked for.
     """
     deadline = time.monotonic() + READY_TIMEOUT_S
     while time.monotonic() < deadline:
@@ -129,9 +129,9 @@ def main() -> None:
     cameras = load_cameras(os.environ.get(ENV_CAMERAS))
     listen = os.environ.get(ENV_LISTEN, DEFAULT_LISTEN)
 
-    # Outlives this function's own scope (go2rtc reads the path for as
-    # long as it runs) and is unlinked explicitly in the finally block
-    # below — a `with` here would delete it the moment this block ends.
+    # go2rtc reads this file for as long as it runs, so it is unlinked in
+    # the finally block below. A `with` would delete it when the block
+    # ends.
     config_file = tempfile.NamedTemporaryFile(  # noqa: SIM115
         mode="w", suffix=".json", prefix="go2rtc-", delete=False
     )
@@ -158,8 +158,8 @@ def main() -> None:
             code = child.wait()
         finally:
             session.close()
-        # A child that dies on its own is a unit failure, whatever its
-        # exit code claims — go2rtc has no business exiting.
+        # go2rtc should not exit on its own, so that is a unit failure
+        # whatever its exit code says.
         sys.exit(0 if stopping.is_set() else 1 if code == 0 else code)
     finally:
         os.unlink(config_file.name)
