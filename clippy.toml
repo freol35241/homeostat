@@ -1,0 +1,3 @@
+# Product and protocol names that read as words in prose, not as code.
+# ".." keeps clippy's own list (GitHub, JavaScript, ...).
+doc-valid-idents = ["ESPHome", "OpenWrt", "OwnTracks", "QoS", "SQLite", "WireGuard", "Zigbee2MQTT", ".."]

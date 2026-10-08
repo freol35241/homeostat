@@ -36,7 +36,7 @@ pub type LogMap = Arc<Mutex<BTreeMap<String, VecDeque<LogEntry>>>>;
 
 /// How long an apply step waits for a (re)started unit to reach `running`
 /// before halting the walk. Breaker-open and stopped halt sooner.
-const READY_DEADLINE: Duration = Duration::from_secs(60);
+const READY_DEADLINE: Duration = Duration::from_mins(1);
 
 /// What the supervisor knows to be applied: the world it serves at
 /// `home/meta/**`. Unit entries update only when a unit reaches `running`
@@ -356,8 +356,7 @@ fn initial_health() -> Health {
 /// Whether a query's selector covers a concrete key.
 fn intersects(query: &zenoh::query::Query, key: &str) -> bool {
     zenoh::key_expr::KeyExpr::try_from(key.to_string())
-        .map(|k| query.key_expr().intersects(&k))
-        .unwrap_or(false)
+        .is_ok_and(|k| query.key_expr().intersects(&k))
 }
 
 /// Serves the meta space to late joiners: manifest hashes and bytes per
@@ -475,12 +474,11 @@ async fn handle_config_query(store: &ConfigStore, session: &Session, query: zeno
             return;
         }
     };
-    let value: serde_json::Value = match serde_json::from_slice(&payload.to_bytes()) {
-        Ok(value) => value,
-        Err(_) => {
-            reply_config_err(&query, "payload is not JSON").await;
-            return;
-        }
+    let value: serde_json::Value = if let Ok(value) = serde_json::from_slice(&payload.to_bytes()) {
+        value
+    } else {
+        reply_config_err(&query, "payload is not JSON").await;
+        return;
     };
     // Store mutation and bus put as one ordered unit (see write_lock).
     let guard = store.write_lock().await;
@@ -533,7 +531,7 @@ async fn serve_health(session: &Session, health: HealthMap) -> Result<(), String
 /// Mirrors a published key space into a last-value cache served by a
 /// queryable. Clock: a late joiner sees the current minute/date instead of
 /// waiting out the next boundary. State: a late joiner (or a bus read, e.g.
-/// the MCP surface's read_state) sees every entity's current value without
+/// the MCP surface's `read_state`) sees every entity's current value without
 /// waiting for the next publish. Forecast: the same, for a class whose
 /// publishes can be a day apart.
 ///

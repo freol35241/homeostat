@@ -33,7 +33,7 @@ async fn setup() -> (Mosquitto, Supervisor, zenoh::Session) {
         .history(true)
         .await
         .expect("liveliness subscriber");
-    let token = tokio::time::timeout(Duration::from_secs(60), token_sub.recv_async())
+    let token = tokio::time::timeout(Duration::from_mins(1), token_sub.recv_async())
         .await
         .expect("adapter liveliness token within 60s")
         .expect("liveliness stream open");
@@ -193,7 +193,7 @@ async fn non_finite_field_drops_without_publishing_or_killing_the_message() {
 
 /// (c3) H5: a device-chosen field name that is not a legal key segment
 /// (here "**", which would put on a wildcard and fan out to every aspect
-/// subscriber if it reached keys.state_key unvalidated) drops with
+/// subscriber if it reached `keys.state_key` unvalidated) drops with
 /// "malformed-payload" and names the offending field; a legal field in
 /// the same payload still publishes.
 #[tokio::test(flavor = "multi_thread")]
@@ -559,7 +559,7 @@ async fn envelope_less_command_drops_with_health_event() {
 }
 
 /// (g) Arbitrated lock command, end to end (docs/design.md, Arbitrated
-/// mode): the fixture's front_door lock is arbitrated and the house runs
+/// mode): the fixture's `front_door` lock is arbitrated and the house runs
 /// an arbiter unit. A manual-band wish on home/cmd forwards through the
 /// arbiter to home/arbiter, which z2m now subscribes to and translates
 /// into z2m's LOCK/UNLOCK set vocabulary. While that manual lease holds, a
@@ -572,7 +572,7 @@ async fn envelope_less_command_drops_with_health_event() {
 async fn manual_lock_command_reaches_mqtt_via_arbiter() {
     let (mosquitto, mut sup, observer) = setup().await;
     let mut arbiter_watch = health_watch(&observer, "arbiter").await;
-    await_health(&mut arbiter_watch, Duration::from_secs(60), |h| {
+    await_health(&mut arbiter_watch, Duration::from_mins(1), |h| {
         h.status == HealthStatus::Running
     })
     .await;
@@ -661,7 +661,7 @@ async fn await_alive(observer: &zenoh::Session) {
         .history(true)
         .await
         .expect("liveliness subscriber");
-    let token = tokio::time::timeout(Duration::from_secs(60), token_sub.recv_async())
+    let token = tokio::time::timeout(Duration::from_mins(1), token_sub.recv_async())
         .await
         .expect("adapter liveliness token within 60s")
         .expect("liveliness stream open");
@@ -790,9 +790,9 @@ async fn a_base_topic_that_matches_nothing_reports_bridge_silent() {
 }
 
 /// (j) A broker that requires auth: the password reaches the adapter from
-/// HOMEOSTAT_MQTT_CREDENTIALS, a file outside the repo. The manifest keeps
+/// `HOMEOSTAT_MQTT_CREDENTIALS`, a file outside the repo. The manifest keeps
 /// no secret, and the password is one URL parsing would mangle — `@` and
-/// `/` in an inline mqtt://user:pass@host silently reparse the host.
+/// `/` in an inline <mqtt://user:pass@host> silently reparse the host.
 #[tokio::test(flavor = "multi_thread")]
 async fn broker_credentials_come_from_a_file_outside_the_repo() {
     const USER: &str = "homeostat";
@@ -821,7 +821,7 @@ async fn broker_credentials_come_from_a_file_outside_the_repo() {
         .history(true)
         .await
         .expect("liveliness subscriber");
-    let token = tokio::time::timeout(Duration::from_secs(60), token_sub.recv_async())
+    let token = tokio::time::timeout(Duration::from_mins(1), token_sub.recv_async())
         .await
         .expect("adapter connects to the authenticated broker within 60s")
         .expect("liveliness stream open");

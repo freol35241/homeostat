@@ -39,7 +39,10 @@ impl fmt::Display for ValidationError {
 
 /// Deterministic rendering used by the CLI and the corpus tests.
 pub fn render_sorted(errors: &[ValidationError]) -> Vec<String> {
-    let mut lines: Vec<String> = errors.iter().map(|e| e.to_string()).collect();
+    let mut lines: Vec<String> = errors
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect();
     lines.sort();
     lines.dedup();
     lines
@@ -444,7 +447,7 @@ pub fn explain(code: &str) -> Option<&'static str> {
 /// the rule next to the failure.
 pub fn explanations(errors: &[ValidationError]) -> Vec<String> {
     let mut codes: Vec<&str> = errors.iter().map(|e| e.code).collect();
-    codes.sort();
+    codes.sort_unstable();
     codes.dedup();
     codes
         .into_iter()
@@ -493,7 +496,7 @@ mod tests {
     fn every_emitted_code_is_explained_and_vice_versa() {
         let emitted = emitted_codes();
         let mut registered: Vec<&str> = CODES.iter().map(|(c, _)| *c).collect();
-        registered.sort();
+        registered.sort_unstable();
         let unexplained: Vec<&String> = emitted.iter().filter(|c| explain(c).is_none()).collect();
         assert!(
             unexplained.is_empty(),

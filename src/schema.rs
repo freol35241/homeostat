@@ -105,10 +105,7 @@ fn render_vocabulary(out: &mut String) {
     );
     out.push_str("| Capability | Base aspect | Other named aspects | Notable | Notes |\n|---|---|---|---|---|\n");
     for c in crate::manifest::VOCABULARY {
-        let base = c
-            .base
-            .map(|b| format!("`{b}`"))
-            .unwrap_or_else(|| "—".into());
+        let base = c.base.map_or_else(|| "—".into(), |b| format!("`{b}`"));
         let aspects = if c.aspects.is_empty() {
             "—".to_string()
         } else {
@@ -118,10 +115,7 @@ fn render_vocabulary(out: &mut String) {
                 .collect::<Vec<_>>()
                 .join(", ")
         };
-        let notable = c
-            .notable
-            .map(|n| format!("`{n}`"))
-            .unwrap_or_else(|| "—".into());
+        let notable = c.notable.map_or_else(|| "—".into(), |n| format!("`{n}`"));
         out.push_str(&format!(
             "| `{}` | {base} | {aspects} | {notable} | {} |\n",
             c.name,
@@ -146,7 +140,7 @@ fn render_file(schema: &Value, out: &mut String) {
             out.push_str(&format!("### {name}\n\n"));
         }
         if let Some(desc) = node.get("description").and_then(Value::as_str) {
-            out.push_str(&format!("{}\n\n", desc));
+            out.push_str(&format!("{desc}\n\n"));
         }
         if let Some(values) = enum_values(&node) {
             for (value, desc) in values {
@@ -263,10 +257,7 @@ fn type_name(spec: &Value) -> (String, Vec<String>) {
     };
     match ty.as_str() {
         "array" => {
-            let (inner, refs) = spec
-                .get("items")
-                .map(type_name)
-                .unwrap_or(("any".into(), vec![]));
+            let (inner, refs) = spec.get("items").map_or(("any".into(), vec![]), type_name);
             (format!("list of {inner}"), refs)
         }
         "object" => match spec.get("additionalProperties") {
@@ -313,7 +304,7 @@ mod tests {
     }
 
     /// docs/widgets.md is the dashboard's vocabulary with pictures
-    /// (scripts/widget_gallery.py). Pixels are not pinned — they differ
+    /// (`scripts/widget_gallery.py`). Pixels are not pinned — they differ
     /// by renderer — but its sections are: a widget kind the parser
     /// accepts and the gallery does not show is a word nobody can look up.
     #[test]

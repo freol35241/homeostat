@@ -100,8 +100,8 @@ impl Drop for Mcp {
     }
 }
 
-/// (a) read_state serves live values through the core cache and
-/// read_history returns what the recorder wrote, over the bus end to end.
+/// (a) `read_state` serves live values through the core cache and
+/// `read_history` returns what the recorder wrote, over the bus end to end.
 #[tokio::test(flavor = "multi_thread")]
 async fn reads_serve_live_state_and_history() {
     let db = std::env::temp_dir().join(format!("homeostat-mcp-history-{}.db", std::process::id()));
@@ -112,7 +112,7 @@ async fn reads_serve_live_state_and_history() {
     );
     let observer = sup.observer().await;
     let mut recorder = health_watch(&observer, "recorder").await;
-    await_health(&mut recorder, Duration::from_secs(120), |h| {
+    await_health(&mut recorder, Duration::from_mins(2), |h| {
         h.status == HealthStatus::Running
     })
     .await;
@@ -252,7 +252,7 @@ async fn read_logs_and_events_over_mcp() {
     loop {
         let n = cache_read(&observer, &homeostat::bus::log_key("logger"))
             .await
-            .and_then(|v| v.as_array().map(|a| a.len()))
+            .and_then(|v| v.as_array().map(std::vec::Vec::len))
             .unwrap_or(0);
         if n >= 8 {
             break;
@@ -447,7 +447,7 @@ async fn http_transport_runs_as_supervised_unit() {
     let observer = sup.observer().await;
     await_base_units(&observer).await;
     let mut mcp_health = health_watch(&observer, "mcp").await;
-    await_health(&mut mcp_health, Duration::from_secs(60), |h| {
+    await_health(&mut mcp_health, Duration::from_mins(1), |h| {
         h.status == HealthStatus::Running
     })
     .await;
@@ -524,7 +524,7 @@ async fn the_http_surface_refuses_what_a_browser_can_send() {
 
     // Wait for the unit, using a request that IS allowed.
     let ping = json!({"jsonrpc": "2.0", "id": 0, "method": "tools/list"});
-    let (status, _) = http_post_retry(&addr, &ping, Duration::from_secs(60));
+    let (status, _) = http_post_retry(&addr, &ping, Duration::from_mins(1));
     assert_eq!(status, 200, "the surface is up");
 
     // The CSRF shape: a simple cross-origin POST carries no X-Homeostat.
@@ -591,7 +591,7 @@ async fn the_http_surface_bounds_what_a_peer_can_make_it_read() {
     await_base_units(&observer).await;
 
     let ping = json!({"jsonrpc": "2.0", "id": 0, "method": "tools/list"});
-    let (status, _) = http_post_retry(&addr, &ping, Duration::from_secs(60));
+    let (status, _) = http_post_retry(&addr, &ping, Duration::from_mins(1));
     assert_eq!(status, 200, "the surface is up");
     let mcp_pid = running_pid(&observer, "mcp").await;
 
@@ -674,7 +674,11 @@ fn http_post_declaring(
     stream
         .set_read_timeout(Some(Duration::from_secs(30)))
         .map_err(|e| e.to_string())?;
-    let extra: String = extra.iter().map(|(n, v)| format!("{n}: {v}\r\n")).collect();
+    let extra = extra
+        .iter()
+        .map(|(n, v)| format!("{n}: {v}\r\n"))
+        .collect::<Vec<_>>()
+        .concat();
     let request = format!(
         "POST /mcp HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\n\
          Accept: application/json, text/event-stream\r\nConnection: close\r\n\
@@ -694,10 +698,7 @@ fn http_post_declaring(
         .nth(1)
         .and_then(|s| s.parse().ok())
         .ok_or_else(|| format!("no status line in {response:?}"))?;
-    let body = response
-        .split_once("\r\n\r\n")
-        .map(|(_, body)| body)
-        .unwrap_or("");
+    let body = response.split_once("\r\n\r\n").map_or("", |(_, body)| body);
     // A refusal answers in plain text on purpose — nothing about the
     // house is echoed to a caller that failed the gate.
     let value = if body.is_empty() || status == 403 || status == 413 {

@@ -53,7 +53,7 @@ async fn setup() -> (Mosquitto, Supervisor, zenoh::Session) {
         .history(true)
         .await
         .expect("liveliness subscriber");
-    let token = tokio::time::timeout(Duration::from_secs(60), token_sub.recv_async())
+    let token = tokio::time::timeout(Duration::from_mins(1), token_sub.recv_async())
         .await
         .expect("adapter liveliness token within 60s")
         .expect("liveliness stream open");
@@ -65,7 +65,7 @@ async fn setup() -> (Mosquitto, Supervisor, zenoh::Session) {
 /// only reach the adapter through it.
 async fn await_arbiter(observer: &zenoh::Session) {
     let mut watch = health_watch(observer, "arbiter").await;
-    await_health(&mut watch, Duration::from_secs(60), |h| {
+    await_health(&mut watch, Duration::from_mins(1), |h| {
         h.status == HealthStatus::Running
     })
     .await;
@@ -214,7 +214,7 @@ async fn status_translates_on_change_only() {
 }
 
 /// (a2) Receive-timer availability: a status message flips available =
-/// true, availability_timeout_s (5 s in the fixture) of silence flips it
+/// true, `availability_timeout_s` (5 s in the fixture) of silence flips it
 /// false with a "device-silent" health event, the next message flips it
 /// back.
 #[tokio::test(flavor = "multi_thread")]

@@ -85,8 +85,7 @@ pub fn resolve_feeds(house: &House, expanded: &[ExpandedKey]) -> (Vec<Feed>, Vec
         let file = Some(entity.path.clone());
         let owner_is_automation = house
             .unit(&entity.owner)
-            .map(|u| u.manifest.unit.kind == UnitKind::Automation)
-            .unwrap_or(false);
+            .is_some_and(|u| u.manifest.unit.kind == UnitKind::Automation);
         if owner_is_automation {
             errors.push(ValidationError::new(
                 "virtual-entity-fed",
@@ -113,8 +112,7 @@ pub fn resolve_feeds(house: &House, expanded: &[ExpandedKey]) -> (Vec<Feed>, Vec
             );
             let src_is_automation = house
                 .unit(&src.owner)
-                .map(|u| u.manifest.unit.kind == UnitKind::Automation)
-                .unwrap_or(false);
+                .is_some_and(|u| u.manifest.unit.kind == UnitKind::Automation);
             if src_is_automation {
                 let published = expanded.iter().any(|k| {
                     k.unit == src.owner
@@ -201,8 +199,7 @@ pub fn resolve_sources(
             let segments: Vec<&str> = key.split('/').collect();
             let src_is_automation = house
                 .unit(&src.owner)
-                .map(|u| u.manifest.unit.kind == UnitKind::Automation)
-                .unwrap_or(false);
+                .is_some_and(|u| u.manifest.unit.kind == UnitKind::Automation);
             if src_is_automation {
                 let published = expanded.iter().any(|k| {
                     k.unit == src.owner
@@ -245,6 +242,24 @@ pub fn resolve_sources(
         }
     }
     (sources, warnings, errors)
+}
+
+/// One slot of a forecast publish (aspect or source): a literal, or
+/// anything at all when the expression wildcards it.
+#[derive(PartialEq)]
+enum Slot {
+    Exact(String),
+    Any,
+}
+
+impl Slot {
+    /// Whether two publishes can land on the same key at this slot.
+    fn compatible(&self, other: &Slot) -> bool {
+        match (self, other) {
+            (Slot::Exact(a), Slot::Exact(b)) => a == b,
+            _ => true,
+        }
+    }
 }
 
 /// Resolves the grant table and enforces write policy.
@@ -536,9 +551,8 @@ pub fn resolve(
             continue;
         }
         for expr in &key.exprs {
-            let class = match expr.class() {
-                Some(c @ ("state" | "forecast")) => c,
-                _ => continue,
+            let Some(class @ ("state" | "forecast")) = expr.class() else {
+                continue;
             };
             // The two pushes below name their code literally rather than
             // through `class`: src/error.rs scans this crate for the
@@ -613,19 +627,6 @@ pub fn resolve(
     // compared pairwise for compatibility rather than bucketed by an exact
     // key: two publishes collide when, at every slot, they agree or one of
     // them accepts anything.
-    #[derive(PartialEq)]
-    enum Slot {
-        Exact(String),
-        Any,
-    }
-    impl Slot {
-        fn compatible(&self, other: &Slot) -> bool {
-            match (self, other) {
-                (Slot::Exact(a), Slot::Exact(b)) => a == b,
-                _ => true,
-            }
-        }
-    }
     let slot = |expr: &KeyExpr, i: usize| -> Slot {
         // `**` anywhere from the aspect slot on stands for every slot
         // after it, so a key that has one accepts anything here.

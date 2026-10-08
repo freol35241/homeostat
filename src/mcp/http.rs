@@ -29,7 +29,7 @@ use serde_json::{json, Value};
 use super::{protocol, Server};
 
 /// The names the house answers to; the dashboard holds the same list, and
-/// tests/fixtures/host_gate.json pins both.
+/// `tests/fixtures/host_gate.json` pins both.
 const ALLOWED_NAMES: [&str; 4] = ["localhost", "homeostat", "homeostat.lan", "homeostat.local"];
 const WRITE_HEADER: &str = "x-homeostat";
 const ENV_HOSTS: &str = "HOMEOSTAT_MCP_HOSTS";
@@ -98,9 +98,8 @@ pub fn serve(server: Arc<Server>, addr: &str) -> Result<(), String> {
     eprintln!("[homeostat] mcp listening on http://{addr}");
     let active = Arc::new(AtomicUsize::new(0));
     loop {
-        let (mut stream, _) = match listener.accept() {
-            Ok(accepted) => accepted,
-            Err(_) => continue,
+        let Ok((mut stream, _)) = listener.accept() else {
+            continue;
         };
         if active.fetch_add(1, Ordering::SeqCst) >= MAX_CONNECTIONS {
             active.fetch_sub(1, Ordering::SeqCst);

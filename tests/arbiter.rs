@@ -28,7 +28,7 @@ async fn setup() -> (Supervisor, zenoh::Session) {
     let sup = Supervisor::spawn(FIXTURE);
     let observer = sup.observer().await;
     let mut watch = health_watch(&observer, "arbiter").await;
-    await_health(&mut watch, Duration::from_secs(60), |h| {
+    await_health(&mut watch, Duration::from_mins(1), |h| {
         h.status == HealthStatus::Running
     })
     .await;
@@ -123,7 +123,7 @@ async fn holds_are_published_as_state() {
         let Some(doc) = next_json(&hold_sub, Duration::from_secs(10)).await else {
             break;
         };
-        if doc["holds"].as_array().is_some_and(|h| h.is_empty()) {
+        if doc["holds"].as_array().is_some_and(std::vec::Vec::is_empty) {
             emptied = true;
             break;
         }
@@ -175,7 +175,7 @@ async fn a_hold_counts_what_it_refuses() {
 /// (a)(b)(c)(d) The full lease lifecycle on one arbitrated entity: an
 /// automation wish forwards and takes the lease; a manual wish preempts it
 /// (event fired) and forwards; a subsequent automation wish is refused (no
-/// forward, event fired); shrinking hold_minutes to a sub-second value and
+/// forward, event fired); shrinking `hold_minutes` to a sub-second value and
 /// waiting it out reopens the entity, so automation wishes flow again.
 #[tokio::test(flavor = "multi_thread")]
 async fn forward_preempt_refuse_and_expiry() {

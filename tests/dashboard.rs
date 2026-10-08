@@ -1,12 +1,12 @@
 //! Dashboard service integration: the family's web surface against a live
-//! supervised house (tests/fixture_house_dashboard).
+//! supervised house (`tests/fixture_house_dashboard`).
 //!
 //! Success criteria (docs/design.md, Dashboard):
 //! 1. `/api/model` renders the manifests: entities with capability,
 //!    features and naming; units with every param and its `editable_by`,
 //!    of which only family ones are writable.
 //! 2. The WebSocket snapshot carries current bus state, and a command
-//!    POSTed with the write header is published at the concrete cmd key —
+//!    posted with the write header is published at the concrete cmd key —
 //!    observed via the reflector echoing it back as state. A command for a
 //!    capability the dashboard's own manifest does not grant is refused
 //!    before the bus, and the model marks the entity not commandable. An
@@ -20,7 +20,7 @@
 //!    and any request with a foreign Host are both refused.
 //! 5. The map surface: vendored assets are served allowlisted, person
 //!    entities render in `/api/model` but are never commandable, and
-//!    `/tiles.pmtiles` 404s without HOMEOSTAT_DASHBOARD_TILES and serves
+//!    `/tiles.pmtiles` 404s without `HOMEOSTAT_DASHBOARD_TILES` and serves
 //!    Range requests when it is set (docs/design.md, "Map and person
 //!    entities").
 //! 6. `/api/logs` proxies a unit's captured stdout/stderr tail (docs/design.md,
@@ -56,7 +56,9 @@ fn http_request(
     headers: &[(&str, &str)],
     body: Option<&Value>,
 ) -> (u16, Value) {
-    let payload = body.map(|b| b.to_string()).unwrap_or_default();
+    let payload = body
+        .map(std::string::ToString::to_string)
+        .unwrap_or_default();
     let mut request = format!("{method} {path} HTTP/1.1\r\nConnection: close\r\n");
     let mut has_host = false;
     for (name, value) in headers {
@@ -88,10 +90,7 @@ fn http_request(
         .nth(1)
         .and_then(|s| s.parse().ok())
         .unwrap_or_else(|| panic!("no status line in {response:?}"));
-    let body = response
-        .split_once("\r\n\r\n")
-        .map(|(_, b)| b)
-        .unwrap_or("");
+    let body = response.split_once("\r\n\r\n").map_or("", |(_, b)| b);
     let value = if body.trim().is_empty() {
         Value::Null
     } else {
@@ -184,11 +183,11 @@ fn ws_read_message(stream: &mut TcpStream) -> Value {
     let mut prefix = [0u8; 2];
     stream.read_exact(&mut prefix).expect("frame header");
     assert_eq!(prefix[0] & 0x0f, 0x1, "expected a text frame");
-    let mut len = (prefix[1] & 0x7f) as u64;
+    let mut len = u64::from(prefix[1] & 0x7f);
     if len == 126 {
         let mut ext = [0u8; 2];
         stream.read_exact(&mut ext).expect("extended len");
-        len = u16::from_be_bytes(ext) as u64;
+        len = u64::from(u16::from_be_bytes(ext));
     } else if len == 127 {
         let mut ext = [0u8; 8];
         stream.read_exact(&mut ext).expect("extended len");
@@ -230,7 +229,7 @@ async fn browser_fixtures_still_look_like_the_real_model() {
         Supervisor::spawn_with_env(FIXTURE, &[("HOMEOSTAT_DASHBOARD_PORT", &port.to_string())]);
     let observer = sup.observer().await;
     let mut dash = health_watch(&observer, "dashboard").await;
-    await_health(&mut dash, Duration::from_secs(180), |h| {
+    await_health(&mut dash, Duration::from_mins(3), |h| {
         h.status == HealthStatus::Running
     })
     .await;
@@ -242,13 +241,8 @@ async fn browser_fixtures_still_look_like_the_real_model() {
     let fixture: Value = serde_json::from_str(include_str!("browser/fixtures/model.json"))
         .expect("browser fixture model is JSON");
 
-    let names = |v: &Value| -> Vec<String> {
-        v.as_object()
-            .expect("an object")
-            .keys()
-            .map(|k| k.to_string())
-            .collect()
-    };
+    let names =
+        |v: &Value| -> Vec<String> { v.as_object().expect("an object").keys().cloned().collect() };
     let missing = |real: &Value, canned: &Value, what: &str| {
         let canned_names = names(canned);
         for field in names(real) {
@@ -309,7 +303,7 @@ async fn dashboard_serves_the_family_surface() {
 
     // First run resolves the dashboard's uv environment (aiohttp): generous.
     let mut dash = health_watch(&observer, "dashboard").await;
-    await_health(&mut dash, Duration::from_secs(180), |h| {
+    await_health(&mut dash, Duration::from_mins(3), |h| {
         h.status == HealthStatus::Running
     })
     .await;
@@ -440,8 +434,10 @@ async fn dashboard_serves_the_family_surface() {
         let cache_control = headers
             .iter()
             .find(|(name, _)| name.eq_ignore_ascii_case("cache-control"))
-            .map(|(_, value)| value.to_ascii_lowercase())
-            .unwrap_or_else(|| panic!("{path} served without Cache-Control"));
+            .map_or_else(
+                || panic!("{path} served without Cache-Control"),
+                |(_, value)| value.to_ascii_lowercase(),
+            );
         assert!(
             cache_control.contains("no-cache"),
             "{path}: Cache-Control {cache_control:?} lets a browser skip revalidation"
@@ -952,7 +948,7 @@ async fn dashboard_serves_the_family_surface() {
     sup.shutdown();
 }
 
-/// 5. With HOMEOSTAT_DASHBOARD_TILES set, /tiles.pmtiles serves the file —
+/// 5. With `HOMEOSTAT_DASHBOARD_TILES` set, /tiles.pmtiles serves the file —
 /// in full, and as a Range-respecting partial response — and /api/model
 /// says so.
 #[tokio::test(flavor = "multi_thread")]
@@ -976,7 +972,7 @@ async fn dashboard_serves_configured_tiles() {
     );
     let observer = sup.observer().await;
     let mut dash = health_watch(&observer, "dashboard").await;
-    await_health(&mut dash, Duration::from_secs(180), |h| {
+    await_health(&mut dash, Duration::from_mins(3), |h| {
         h.status == HealthStatus::Running
     })
     .await;
@@ -1012,7 +1008,7 @@ async fn dashboard_serves_configured_tiles() {
 }
 
 /// 6. `/api/logs` proxies the supervisor's `home/meta/{unit}/log` queryable:
-/// the `logger` fixture unit (fake_adapter --print-stdout/--print-stderr)
+/// the `logger` fixture unit (`fake_adapter` --print-stdout/--print-stderr)
 /// prints known lines at startup, stream-tagged and truncatable via
 /// `lines=N`; an unknown unit 404s.
 #[tokio::test(flavor = "multi_thread")]
@@ -1025,7 +1021,7 @@ async fn dashboard_serves_unit_logs() {
     let observer = sup.observer().await;
 
     let mut dash = health_watch(&observer, "dashboard").await;
-    await_health(&mut dash, Duration::from_secs(180), |h| {
+    await_health(&mut dash, Duration::from_mins(3), |h| {
         h.status == HealthStatus::Running
     })
     .await;
@@ -1041,7 +1037,7 @@ async fn dashboard_serves_unit_logs() {
     loop {
         let n = cache_read(&observer, &bus::log_key("logger"))
             .await
-            .and_then(|v| v.as_array().map(|a| a.len()))
+            .and_then(|v| v.as_array().map(std::vec::Vec::len))
             .unwrap_or(0);
         if n >= 8 {
             break;
@@ -1083,8 +1079,8 @@ async fn dashboard_serves_unit_logs() {
     sup.shutdown();
 }
 
-/// A fake go2rtc (tests/fake_go2rtc.py) spawned directly on a free port —
-/// the dashboard proxies reach it via HOMEOSTAT_GO2RTC, exactly as they
+/// A fake go2rtc (`tests/fake_go2rtc.py`) spawned directly on a free port —
+/// the dashboard proxies reach it via `HOMEOSTAT_GO2RTC`, exactly as they
 /// would reach the shim-supervised real one on localhost.
 struct FakeGo2rtc {
     child: std::process::Child,
@@ -1107,7 +1103,7 @@ impl FakeGo2rtc {
             .stderr(std::process::Stdio::null())
             .spawn()
             .expect("spawn fake go2rtc (is uv installed?)");
-        let deadline = Instant::now() + Duration::from_secs(60);
+        let deadline = Instant::now() + Duration::from_mins(1);
         while TcpStream::connect(("127.0.0.1", port)).is_err() {
             assert!(
                 Instant::now() < deadline,
@@ -1140,11 +1136,11 @@ fn ws_send_text(stream: &mut TcpStream, payload: &str) {
 fn ws_read_frame(stream: &mut TcpStream) -> (u8, Vec<u8>) {
     let mut prefix = [0u8; 2];
     stream.read_exact(&mut prefix).expect("frame header");
-    let mut len = (prefix[1] & 0x7f) as u64;
+    let mut len = u64::from(prefix[1] & 0x7f);
     if len == 126 {
         let mut ext = [0u8; 2];
         stream.read_exact(&mut ext).expect("extended len");
-        len = u16::from_be_bytes(ext) as u64;
+        len = u64::from(u16::from_be_bytes(ext));
     } else if len == 127 {
         let mut ext = [0u8; 8];
         stream.read_exact(&mut ext).expect("extended len");
@@ -1173,7 +1169,7 @@ async fn dashboard_proxies_camera_media() {
     );
     let observer = sup.observer().await;
     let mut dash = health_watch(&observer, "dashboard").await;
-    await_health(&mut dash, Duration::from_secs(180), |h| {
+    await_health(&mut dash, Duration::from_mins(3), |h| {
         h.status == HealthStatus::Running
     })
     .await;
@@ -1245,7 +1241,7 @@ async fn dashboard_darkens_the_house() {
         .expect("cmd subscriber");
 
     let mut dash = health_watch(&observer, "dashboard").await;
-    await_health(&mut dash, Duration::from_secs(180), |h| {
+    await_health(&mut dash, Duration::from_mins(3), |h| {
         h.status == HealthStatus::Running
     })
     .await;

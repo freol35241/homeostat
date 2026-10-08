@@ -74,7 +74,7 @@ fn utc_now() -> (String, String) {
         .as_secs();
     let (days, rem) = (secs / 86_400, secs % 86_400);
     let (h, m, s) = (rem / 3600, (rem % 3600) / 60, rem % 60);
-    let (year, month, day) = civil_from_days(days as i64);
+    let (year, month, day) = civil_from_days(i64::try_from(days).expect("days since 1970 fit i64"));
     (
         format!("{year:04}-{month:02}-{day:02}T{h:02}:{m:02}:{s:02}Z"),
         format!("{year:04}{month:02}{day:02}T{h:02}{m:02}{s:02}Z"),
@@ -82,7 +82,7 @@ fn utc_now() -> (String, String) {
 }
 
 /// Days since 1970-01-01 to (year, month, day). Howard Hinnant's
-/// civil_from_days algorithm.
+/// `civil_from_days` algorithm.
 fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let z = z + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;

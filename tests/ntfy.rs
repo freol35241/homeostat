@@ -1,5 +1,5 @@
 //! ntfy notifier adapter integration tests: each scenario spawns a fake
-//! ntfy server (tests/fake_ntfy.py — the real publish shape, bearer-token
+//! ntfy server (`tests/fake_ntfy.py` — the real publish shape, bearer-token
 //! checking, a controllable outage) on a free port plus the real
 //! supervisor on the ntfy fixture house, and asserts on the bus.
 
@@ -49,7 +49,7 @@ impl FakeNtfy {
             .stderr(Stdio::null())
             .spawn()
             .expect("spawn fake ntfy (is uv installed?)");
-        let deadline = Instant::now() + Duration::from_secs(60);
+        let deadline = Instant::now() + Duration::from_mins(1);
         while std::net::TcpStream::connect(("127.0.0.1", port)).is_err() {
             assert!(
                 Instant::now() < deadline,
@@ -128,7 +128,7 @@ async fn setup() -> (FakeNtfy, Supervisor, zenoh::Session) {
     let sup = Supervisor::spawn_with_env(FIXTURE, &[(PORT_ENV, &port), (TOKEN_ENV, TOKEN)]);
     let observer = sup.observer().await;
     let mut watch = health_watch(&observer, "ntfy").await;
-    await_health(&mut watch, Duration::from_secs(120), |h| {
+    await_health(&mut watch, Duration::from_mins(2), |h| {
         h.status == HealthStatus::Running
     })
     .await;
@@ -313,7 +313,7 @@ async fn bad_credentials_and_dead_server_are_visible() {
     let sup = Supervisor::spawn_with_env(FIXTURE, &[(PORT_ENV, &port), (TOKEN_ENV, "tk_wrong")]);
     let observer = sup.observer().await;
     let mut watch = health_watch(&observer, "ntfy").await;
-    await_health(&mut watch, Duration::from_secs(120), |h| {
+    await_health(&mut watch, Duration::from_mins(2), |h| {
         h.status == HealthStatus::Running
     })
     .await;
@@ -335,7 +335,7 @@ async fn bad_credentials_and_dead_server_are_visible() {
     let sup = Supervisor::spawn_with_env(FIXTURE, &[(PORT_ENV, &port)]);
     let observer = sup.observer().await;
     let mut watch = health_watch(&observer, "ntfy").await;
-    await_health(&mut watch, Duration::from_secs(120), |h| {
+    await_health(&mut watch, Duration::from_mins(2), |h| {
         h.status == HealthStatus::Backoff
     })
     .await;
@@ -346,7 +346,7 @@ async fn bad_credentials_and_dead_server_are_visible() {
     let sup = Supervisor::spawn_with_env(FIXTURE, &[(PORT_ENV, &dead), (TOKEN_ENV, TOKEN)]);
     let observer = sup.observer().await;
     let mut watch = health_watch(&observer, "ntfy").await;
-    await_health(&mut watch, Duration::from_secs(120), |h| {
+    await_health(&mut watch, Duration::from_mins(2), |h| {
         h.status == HealthStatus::Backoff
     })
     .await;

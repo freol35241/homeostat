@@ -10,7 +10,7 @@
 //! The fixture reproduces exactly that sequence — command the latch, take
 //! the core down, bring it back on the same store — and asserts the
 //! decision survives. The store outlives the supervisor because it is a
-//! file named by RECORDER_DB, as in recorder.rs.
+//! file named by `RECORDER_DB`, as in recorder.rs.
 
 mod common;
 
@@ -43,7 +43,7 @@ async fn setup(db: &Path) -> (Supervisor, zenoh::Session) {
     let observer = sup.observer().await;
     for unit in ["recorder", "latches"] {
         let mut health = health_watch(&observer, unit).await;
-        await_health(&mut health, Duration::from_secs(120), |h| {
+        await_health(&mut health, Duration::from_mins(2), |h| {
             h.status == HealthStatus::Running
         })
         .await;

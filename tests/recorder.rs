@@ -1,18 +1,19 @@
 //! Step-5a integration tests: the recorder, end to end, on a real
-//! supervisor running the step-4 units (clock, evening_lights, reflector)
+//! supervisor running the step-4 units (clock, `evening_lights`, reflector)
 //! plus the recorder. Assertions run against both the bus and the store
 //! (rusqlite opens the same SQLite file the recorder writes).
 //!
-//! Each test gets its own store via the RECORDER_DB environment variable,
+//! Each test gets its own store via the `RECORDER_DB` environment variable,
 //! expanded by the recorder from its manifest's [discovery] endpoint —
 //! no fixed paths, like no fixed ports.
 //!
 //! The tests publish state under rooms outside the `downstairs` zone
-//! (attic, cellar), so the evening_lights automation running on the real
+//! (attic, cellar), so the `evening_lights` automation running on the real
 //! clock never reacts to them.
 
 mod common;
 
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
@@ -51,7 +52,7 @@ async fn setup(db: &Path) -> (Supervisor, zenoh::Session) {
     );
     let observer = sup.observer().await;
     let mut recorder = health_watch(&observer, "recorder").await;
-    await_health(&mut recorder, Duration::from_secs(60), |h| {
+    await_health(&mut recorder, Duration::from_mins(1), |h| {
         h.status == HealthStatus::Running
     })
     .await;
@@ -409,7 +410,6 @@ async fn backend_outage_buffers_and_flushes() {
     .await;
 
     // Kill the backend: the store file becomes unwritable.
-    use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o444))
         .expect("chmod store read-only");
 
@@ -763,7 +763,7 @@ async fn read_path_returns_history() {
         );
     }
     let mut sorted = timestamps.clone();
-    sorted.sort();
+    sorted.sort_unstable();
     assert_eq!(timestamps, sorted, "rows are ascending");
 
     // limit keeps the most recent rows in range.
@@ -1074,7 +1074,7 @@ async fn read_path_folds_buckets_and_changes() {
     sup.shutdown();
 }
 
-/// (e) A version-0 store (one wide samples table, no auto_vacuum) is
+/// (e) A version-0 store (one wide samples table, no `auto_vacuum`) is
 /// migrated in place on startup: the rows survive with their series
 /// identity and room tags, the file is stamped, and the recorder keeps
 /// writing into it.
@@ -1278,7 +1278,7 @@ async fn restart_seeds_missed_state_from_the_mirror() {
     // Kill the recorder; the supervisor restarts it after its backoff.
     let pid = running.pid.expect("a running recorder has a pid");
     assert_eq!(
-        unsafe { libc::kill(pid as i32, libc::SIGKILL) },
+        unsafe { libc::kill(i32::try_from(pid).expect("a pid fits i32"), libc::SIGKILL) },
         0,
         "kill recorder"
     );
@@ -1293,7 +1293,7 @@ async fn restart_seeds_missed_state_from_the_mirror() {
     put(&flag, json!(true)).await;
     await_mirror(&observer, "home/state/cellar/tank/available", &json!(true)).await;
     let after_put = now_us();
-    await_health(&mut recorder, Duration::from_secs(60), |h| {
+    await_health(&mut recorder, Duration::from_mins(1), |h| {
         h.status == HealthStatus::Running
     })
     .await;
@@ -1891,7 +1891,6 @@ async fn closed_months_move_to_archives_and_the_last_word_stays() {
             events,
             "{label}"
         );
-        use std::os::unix::fs::PermissionsExt;
         let mode = std::fs::metadata(&file)
             .expect("archive file")
             .permissions()
@@ -2076,7 +2075,7 @@ async fn an_impossible_archive_window_fails_without_stopping_the_writer() {
     sup.shutdown();
 }
 
-/// Archive retention is opt-in and whole-file: with retain_archives_months
+/// Archive retention is opt-in and whole-file: with `retain_archives_months`
 /// set, an archive whose month closed more than that long ago is deleted,
 /// file and record, and nothing else is. Settings that undercut each other
 /// are named once per change: a retention window that deletes rows before

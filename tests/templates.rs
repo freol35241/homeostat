@@ -36,7 +36,7 @@ async fn templated_binding_reaches_every_bound_entity() {
     let observer = sup.observer().await;
 
     let mut latches = health_watch(&observer, "latches").await;
-    await_health(&mut latches, Duration::from_secs(120), |h| {
+    await_health(&mut latches, Duration::from_mins(2), |h| {
         h.status == HealthStatus::Running
     })
     .await;

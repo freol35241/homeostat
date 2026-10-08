@@ -1,5 +1,5 @@
 //! Process spawn and termination. Every unit runs in its own process group
-//! so termination can reach descendants; on Linux, PR_SET_PDEATHSIG makes
+//! so termination can reach descendants; on Linux, `PR_SET_PDEATHSIG` makes
 //! the kernel kill the child if the supervisor dies without cleaning up.
 
 use std::io;
@@ -260,7 +260,7 @@ pub async fn terminate(child: &mut Child, grace: Duration) {
 
 /// Whether any member of the process group still exists.
 fn group_alive(pgid: u32) -> bool {
-    unsafe { libc::kill(-(pgid as i32), 0) == 0 }
+    unsafe { libc::kill(-pid_t(pgid), 0) == 0 }
 }
 
 /// Sweeps a unit's process group after its leader exited on its own. A
@@ -272,8 +272,14 @@ pub fn sweep_group(pid: u32) {
 
 fn signal_group(pid: u32, signal: i32) {
     unsafe {
-        libc::kill(-(pid as i32), signal);
+        libc::kill(-pid_t(pid), signal);
     }
+}
+
+/// A child's id as the kernel's `pid_t`. `Child::id` is a `u32` but the
+/// kernel never hands out a pid above `i32::MAX`.
+fn pid_t(pid: u32) -> libc::pid_t {
+    libc::pid_t::try_from(pid).expect("a pid fits pid_t")
 }
 
 #[cfg(test)]

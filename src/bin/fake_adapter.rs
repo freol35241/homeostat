@@ -1,7 +1,7 @@
 //! The fake adapter: a minimal unit obeying the supervision contract, used
 //! by the fixture house and the supervision integration tests.
 //!
-//! Contract behavior: connects to HOMEOSTAT_BUS, declares its liveliness
+//! Contract behavior: connects to `HOMEOSTAT_BUS`, declares its liveliness
 //! token at `home/health/{unit}/alive`, publishes a heartbeat counter as
 //! state, and exits cleanly on SIGTERM. Test hooks: `--crash-after-ms` exits
 //! nonzero after a delay (0 = before even touching the bus, for crash-loop
@@ -96,8 +96,8 @@ async fn main() {
                 counter += 1;
             }
             _ = crash_sub.recv_async() => std::process::exit(1),
-            _ = &mut crash_deadline, if args.crash_after_ms.is_some() => std::process::exit(1),
-            _ = &mut exit_deadline, if args.exit_after_ms.is_some() => break,
+            () = &mut crash_deadline, if args.crash_after_ms.is_some() => std::process::exit(1),
+            () = &mut exit_deadline, if args.exit_after_ms.is_some() => break,
             _ = term.recv() => break,
         }
     }

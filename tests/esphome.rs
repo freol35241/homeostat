@@ -1,5 +1,5 @@
 //! ESPHome adapter integration tests: each scenario spawns a real fake
-//! ESPHome device (tests/fake_esphome.py, the real plaintext wire protocol
+//! ESPHome device (`tests/fake_esphome.py`, the real plaintext wire protocol
 //! over aioesphomeapi's bundled protobuf messages) on a free port plus the
 //! real supervisor on the esphome fixture house, and asserts on both buses.
 
@@ -24,7 +24,7 @@ const EVENT_KEY: &str = "home/health/esphome/event";
 const RELAY_STATE_KEY: &str = "home/state/shed/relay/on";
 const RELAY_CMD_KEY: &str = "home/cmd/shed/relay/on";
 
-/// A fake ESPHome device (tests/fake_esphome.py) on a free port, killed on
+/// A fake ESPHome device (`tests/fake_esphome.py`) on a free port, killed on
 /// drop. Spawned the same way the units themselves are: `uv run`.
 struct FakeEsphome {
     child: Child,
@@ -59,7 +59,7 @@ impl FakeEsphome {
             .spawn()
             .expect("spawn fake esphome device (is uv installed?)");
         // First run resolves the fake device's own uv env: generous.
-        let deadline = Instant::now() + Duration::from_secs(60);
+        let deadline = Instant::now() + Duration::from_mins(1);
         while std::net::TcpStream::connect(("127.0.0.1", port)).is_err() {
             assert!(
                 Instant::now() < deadline,
@@ -73,7 +73,12 @@ impl FakeEsphome {
     /// Kills the fake device and everything under it (the `uv` wrapper's
     /// process group), reaping the wrapper.
     fn kill(&mut self) {
-        unsafe { libc::kill(-(self.child.id() as i32), libc::SIGKILL) };
+        unsafe {
+            libc::kill(
+                -i32::try_from(self.child.id()).expect("a pid fits i32"),
+                libc::SIGKILL,
+            )
+        };
         let _ = self.child.wait();
     }
 }
@@ -84,7 +89,7 @@ impl Drop for FakeEsphome {
     }
 }
 
-/// Writes a HOMEOSTAT_ESPHOME_DEVICES file (outside the repo, per the
+/// Writes a `HOMEOSTAT_ESPHOME_DEVICES` file (outside the repo, per the
 /// settlement) giving the fixture's "shed" device a host override at the
 /// fake device's port.
 fn devices_file(port: u16) -> PathBuf {
@@ -124,8 +129,8 @@ async fn setup_with(device_args: &[&str]) -> (FakeEsphome, PathBuf, Supervisor, 
 }
 
 /// (a) The fake device's initial states translate to the correct home/state
-/// keys: switch -> "on" (bool), sensor -> its device_class aspect, motion
-/// binary_sensor -> presence capability's "occupancy" aspect.
+/// keys: switch -> "on" (bool), sensor -> its `device_class` aspect, motion
+/// `binary_sensor` -> presence capability's "occupancy" aspect.
 #[tokio::test(flavor = "multi_thread")]
 async fn device_state_translates_to_bus_state() {
     let (_device, _devices_path, mut sup, observer) = setup().await;
@@ -206,7 +211,7 @@ async fn device_dropout_flips_available() {
     sup.shutdown();
 }
 
-/// (a3) An ESPHome entity whose object_id would mint the reserved
+/// (a3) An ESPHome entity whose `object_id` would mint the reserved
 /// `available` aspect drops with a health event while its siblings still
 /// translate — the z2m twin of this rule has its own test in z2m.rs.
 #[tokio::test(flavor = "multi_thread")]
@@ -239,7 +244,7 @@ async fn reserved_aspect_field_drops_with_health_event() {
 }
 
 /// (b) A manual-band cmd envelope on the switch reaches the fake device as
-/// a SwitchCommandRequest, which echoes the new state back — landing on
+/// a `SwitchCommandRequest`, which echoes the new state back — landing on
 /// the bus as the same translated state key.
 #[tokio::test(flavor = "multi_thread")]
 async fn cmd_envelope_reaches_fake_device_and_echoes_back() {
@@ -302,7 +307,7 @@ async fn bound_device_entities_published_as_discovery() {
     // Published on connect, which races the liveliness token setup waited
     // for: read it the way every late joiner does, from the core mirror.
     let doc = await_discovery(&observer, "esphome", |doc| {
-        doc.as_array().map(|r| r.len() == 3).unwrap_or(false)
+        doc.as_array().is_some_and(|r| r.len() == 3)
     })
     .await;
     let records = doc.as_array().expect("discovery is an array");

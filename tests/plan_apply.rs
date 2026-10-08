@@ -1,6 +1,6 @@
 //! Step-5b integration tests: plan/apply against a live world, on temp-dir
-//! copies of tests/fixture_house_apply/ that each scenario edits between
-//! plan and apply. Scenarios that need applied_commit or pending-plan
+//! copies of `tests/fixture_house_apply`/ that each scenario edits between
+//! plan and apply. Scenarios that need `applied_commit` or pending-plan
 //! staleness git-init their copy: the checked-in fixture is a nested
 //! directory of this repo and must not inherit its HEAD (see docs/design.md).
 //!
@@ -32,7 +32,7 @@ fn edit(house: &Path, rel: &str, from: &str, to: &str) {
 
 /// (a) A behavioral change — the automation's code edited — plans as
 /// behavioral and apply restarts exactly that unit: the adapter's pid
-/// survives, and applied_commit updates to the repo's HEAD.
+/// survives, and `applied_commit` updates to the repo's HEAD.
 #[tokio::test(flavor = "multi_thread")]
 async fn behavioral_change_restarts_exactly_that_unit() {
     let house = temp_house(FIXTURE, "apply-behavioral");
@@ -405,7 +405,7 @@ async fn entity_move_plans_as_structural() {
 /// (c3) Moving an entity nobody is granted onto is structural too: the
 /// owner's state row records every bound entity, so the move is a grant
 /// delta rendered with the entity's old and new facts — not a bare
-/// adapter restart on a files_hash change (docs/design.md, Plan/apply
+/// adapter restart on a `files_hash` change (docs/design.md, Plan/apply
 /// mechanics: entity moves are structural).
 #[tokio::test(flavor = "multi_thread")]
 async fn ungranted_entity_move_plans_as_structural() {
