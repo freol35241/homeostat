@@ -1,3 +1,8 @@
+//! Loading a house repo from disk into a [`House`]: every unit manifest,
+//! the entity files each binding unit points at, `zones.toml` and
+//! `dashboard.toml`. A file that fails to parse is reported and skipped, so
+//! one bad file never hides the errors in the others.
+
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
@@ -7,6 +12,7 @@ use crate::manifest::{
     DashboardFile, EntityFile, UnitKind, UnitManifest, ZonesFile, SUPPORTED_SCHEMA,
 };
 
+/// A unit manifest and where it was read from.
 #[derive(Debug)]
 pub struct LoadedUnit {
     pub manifest: UnitManifest,
@@ -14,6 +20,7 @@ pub struct LoadedUnit {
     pub path: String,
 }
 
+/// An entity file, its name, and the unit that binds it.
 #[derive(Debug)]
 pub struct LoadedEntity {
     /// The globally unique entity name: the file stem of the entity file.
@@ -26,6 +33,7 @@ pub struct LoadedEntity {
     pub owner: String,
 }
 
+/// A house repo as loaded: units, entities, zones and the dashboard file.
 #[derive(Debug, Default)]
 pub struct House {
     pub units: Vec<LoadedUnit>,
@@ -36,6 +44,7 @@ pub struct House {
 }
 
 impl House {
+    /// The unit named `name`, if the house has one.
     pub fn unit(&self, name: &str) -> Option<&LoadedUnit> {
         self.units.iter().find(|u| u.manifest.unit.name == name)
     }

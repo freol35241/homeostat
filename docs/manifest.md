@@ -164,10 +164,10 @@ ordered in an apply walk.
 
 Command priority bands, lowest to highest.
 
-- `automation`
-- `agent`
-- `family`
-- `manual`
+- `automation` — Automations. The lowest band.
+- `agent` — Above `automation`.
+- `family` — Above `agent`.
+- `manual` — The family's own surfaces (dashboard, voice). The highest band, and exempt from exclusive-write checks.
 
 ## Entity file (`<entities dir>/<name>.toml`)
 

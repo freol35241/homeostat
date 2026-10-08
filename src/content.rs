@@ -17,6 +17,7 @@ use sha2::{Digest, Sha256};
 use crate::expand::ExpandedKey;
 use crate::repo::{House, LoadedUnit};
 
+/// Lowercase hex sha256 of `bytes`.
 pub fn sha256_hex(bytes: &[u8]) -> String {
     hex(&Sha256::digest(bytes))
 }
@@ -30,6 +31,7 @@ fn hex(bytes: &[u8]) -> String {
         })
 }
 
+/// The hash that decides whether a unit's manifest changed.
 pub fn manifest_hash(manifest_bytes: &[u8]) -> String {
     sha256_hex(manifest_bytes)
 }

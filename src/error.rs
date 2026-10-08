@@ -1,3 +1,7 @@
+//! Validation errors: one rendering for the CLI, the corpus tests and the
+//! MCP server, and the registry of every error code with the rule behind
+//! it (`homeostat explain`).
+
 use std::fmt;
 
 /// A single validation failure with a stable, machine-comparable rendering:
@@ -12,6 +16,7 @@ pub struct ValidationError {
 }
 
 impl ValidationError {
+    /// An error with `code`, a key in [`CODES`], about `subject`.
     pub fn new(
         code: &'static str,
         subject: impl Into<String>,

@@ -62,6 +62,8 @@ pub struct World {
 }
 
 impl World {
+    /// The world before anything was applied: no units, no grants. `plan`
+    /// without a bus diffs against it.
     pub fn empty() -> World {
         World {
             label: "empty".to_string(),
@@ -87,6 +89,7 @@ pub fn world_unit_from_repo(
     }
 }
 
+/// A unit the apply restarts, and why.
 #[derive(Debug)]
 pub struct Restart {
     pub name: String,
@@ -96,6 +99,7 @@ pub struct Restart {
     pub manifest_changed: bool,
 }
 
+/// A parameter whose live value differs from its repo default.
 #[derive(Debug)]
 pub struct ParamChange {
     pub unit: String,
@@ -115,6 +119,7 @@ pub struct Refresh {
     pub changes: Vec<String>,
 }
 
+/// Everything an apply would change: the repo against the world.
 #[derive(Debug, Default)]
 pub struct Diff {
     pub creates: Vec<String>,
@@ -127,6 +132,7 @@ pub struct Diff {
 }
 
 impl Diff {
+    /// Whether the world already matches the repo.
     pub fn is_empty(&self) -> bool {
         self.creates.is_empty()
             && self.destroys.is_empty()
@@ -138,6 +144,8 @@ impl Diff {
     }
 }
 
+/// The plan's tier: structural with any create, destroy or grant change,
+/// behavioral with any restart, parameter-only otherwise.
 pub fn derive_tier(diff: &Diff) -> Tier {
     if !diff.creates.is_empty()
         || !diff.destroys.is_empty()
@@ -335,6 +343,7 @@ impl fmt::Display for StepAction {
     }
 }
 
+/// One unit step of the apply walk.
 #[derive(Debug, Clone)]
 pub struct Step {
     pub unit: String,

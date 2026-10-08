@@ -68,6 +68,8 @@ impl Constraint {
     }
 }
 
+/// The live parameter values by unit and name, each with the type and
+/// constraint its manifest declares.
 pub struct ConfigStore {
     params: Mutex<BTreeMap<(String, String), StoredParam>>,
     /// Serializes every {store mutation + its bus put} pair. Without it a
@@ -79,6 +81,7 @@ pub struct ConfigStore {
 }
 
 impl ConfigStore {
+    /// A store holding every parameter's manifest default.
     pub fn from_house(house: &House) -> ConfigStore {
         ConfigStore {
             params: Mutex::new(build(house)),
@@ -177,6 +180,7 @@ pub fn default_within_constraint(spec: &ParamSpec) -> Result<(), String> {
     )
 }
 
+/// A parameter's manifest default as the JSON value the bus carries.
 pub fn default_value(spec: &ParamSpec) -> Value {
     match &spec.default {
         toml::Value::Boolean(b) => Value::from(*b),

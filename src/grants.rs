@@ -1,3 +1,10 @@
+//! The grant table and the checks that need it. A grant is a unit's
+//! publish resolved against the entities it reaches; the table is both the
+//! permission record that `plan` shows and the dependency graph that orders
+//! an apply. Device feeds (`[inputs]`) and declared sources (`[sources]`)
+//! resolve here too, since they ask the same question: which unit
+//! publishes the key an entity names.
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};

@@ -16,8 +16,10 @@ pub enum File {
 }
 
 impl File {
+    /// Every file kind, in the order `homeostat schema` prints them.
     pub const ALL: [File; 4] = [File::Unit, File::Entity, File::Zones, File::Dashboard];
 
+    /// The file kind a `homeostat schema` argument names.
     pub fn parse(name: &str) -> Option<File> {
         match name {
             "unit" => Some(File::Unit),
@@ -28,6 +30,7 @@ impl File {
         }
     }
 
+    /// The name `homeostat schema` takes for this kind.
     pub fn name(self) -> &'static str {
         match self {
             File::Unit => "unit",

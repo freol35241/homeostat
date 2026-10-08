@@ -9,6 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
 
+/// A saved pending plan, as a `plans/pending/{id}.plan` file holds it.
 #[derive(Debug, Deserialize)]
 pub struct PendingPlan {
     pub schema: u32,
@@ -59,6 +60,7 @@ pub fn save(
     Ok(path)
 }
 
+/// Reads a pending plan file.
 pub fn load(path: &Path) -> Result<PendingPlan, String> {
     let text =
         fs::read_to_string(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;

@@ -1,8 +1,15 @@
+//! Plan-time key expansion: every `[bus]` expression of every unit, with
+//! `{room}`/`{entity}` templates substituted per bound entity and a zone in
+//! the room slot expanded to one expression per member room. The SDK
+//! performs the same expansion at runtime, so what a unit subscribes to is
+//! what `plan` printed for it.
+
 use crate::error::ValidationError;
 use crate::keyspace::{KeyExpr, Segment};
 use crate::manifest::{UnitKind, WriteMode};
 use crate::repo::House;
 
+/// Whether a `[bus]` entry is a publish or a subscribe.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Direction {
     Publishes,
@@ -10,6 +17,7 @@ pub enum Direction {
 }
 
 impl Direction {
+    /// The verb plan output uses for this direction.
     pub fn verb(&self) -> &'static str {
         match self {
             Direction::Publishes => "publishes",
