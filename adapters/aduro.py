@@ -8,8 +8,9 @@
 # [tool.uv.sources]
 # homeostat = { path = "../sdk/python", editable = true }
 # ///
-"""Aduro pellet-burner adapter (docs/design.md, "Burners and interlocks
-(settled 2026-09-09, #37, #38)").
+"""Aduro pellet-burner adapter.
+
+See docs/design.md, "Burners and interlocks (settled 2026-09-09, #37, #38)".
 
 The burner speaks the NBE UDP protocol; github.com/freol35241/aduro2mqtt
 bridges it to MQTT. The bridge polls on a fixed interval
@@ -183,10 +184,13 @@ ASPECT_DESCRIPTOR = {
 
 
 def status_aspects(status: dict) -> tuple[dict, list[str]]:
-    """One status document to the bus aspects it yields: the normalized
-    names, the derived `on`, and every other field under its firmware
-    name — plus the raw fields dropped for naming a reserved aspect.
-    `power_level` is an int when the wire float is integral."""
+    """Map one status document to the bus aspects it yields.
+
+    The aspects are the normalized names, the derived `on`, and every other
+    field under its firmware name — plus the raw fields dropped for naming
+    a reserved aspect. `power_level` is an int when the wire float is
+    integral.
+    """
     aspects = {}
     reserved = []
     for field, value in status.items():
@@ -204,9 +208,11 @@ def status_aspects(status: dict) -> tuple[dict, list[str]]:
 
 
 def command_body(aspect: str, value):
-    """The {base}/set payload for a validated command, or None when the
-    value is not one this aspect takes (a bool for `on`, one of
-    POWER_LEVELS — an int, never a bool — for `power_level`)."""
+    """Return the {base}/set payload for a validated command, or None.
+
+    None when the value is not one this aspect takes (a bool for `on`, one
+    of POWER_LEVELS — an int, never a bool — for `power_level`).
+    """
     if aspect == "on":
         if not isinstance(value, bool):
             return None
@@ -219,8 +225,10 @@ def command_body(aspect: str, value):
 
 
 def route(topic: str, entities):
-    """The bound entity and the topic's segments past its base-topic
-    prefix, or (None, None)."""
+    """Return the bound entity and the topic's segments past its base-topic prefix.
+
+    (None, None) when the topic is under no bound entity's base topic.
+    """
     for entity in entities:
         prefix = f"{entity.id}/"
         if topic.startswith(prefix):

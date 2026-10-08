@@ -1,5 +1,4 @@
-"""Per-key cooldowns for automations that reach people (docs/design.md,
-Notifications).
+"""Per-key cooldowns for automations that reach people (docs/design.md, Notifications).
 
 A notification per event is a notification 417 times when a motion
 episode arrives as 417 samples (#3), so the live estate's alarm flow
@@ -20,14 +19,37 @@ from collections.abc import Callable
 
 
 class Cooldown:
+    """The monotonic time each key last fired, and whether it may fire again.
+
+    Parameters
+    ----------
+    clock : Callable[[], float], optional
+        Monotonic time source in seconds; `time.monotonic` by default.
+    """
+
     def __init__(self, clock: Callable[[], float] = time.monotonic):
         self._clock = clock
         self._fired: dict[str, float] = {}
 
     def ready(self, key: str, window_s: float) -> bool:
-        """True, and the key marked as fired now, when at least `window_s`
+        """Return whether `key` may fire now, marking it as fired if so.
+
+        True, and the key marked as fired now, when at least `window_s`
         seconds have passed since the key last fired (or it never has);
-        False otherwise, leaving the record untouched."""
+        False otherwise, leaving the record untouched.
+
+        Parameters
+        ----------
+        key : str
+            The key to check and, when ready, mark as fired.
+        window_s : float
+            Minimum seconds between two firings of `key`.
+
+        Returns
+        -------
+        bool
+            True if the key fired now, False if its window has not passed.
+        """
         now = self._clock()
         last = self._fired.get(key)
         if last is not None and now - last < window_s:
@@ -36,7 +58,14 @@ class Cooldown:
         return True
 
     def reset(self, key: str) -> None:
-        """Forgets a key, so its next `ready` is True — e.g. when the
-        condition that fired it has cleared and the next occurrence is a
-        new episode, not a repeat."""
+        """Forget `key`, so its next `ready` is True.
+
+        For example when the condition that fired it has cleared and the
+        next occurrence is a new episode, not a repeat.
+
+        Parameters
+        ----------
+        key : str
+            The key to forget; a key never fired is left as it is.
+        """
         self._fired.pop(key, None)

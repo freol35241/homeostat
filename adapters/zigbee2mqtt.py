@@ -108,9 +108,12 @@ class Params(LiveParams):
 
 
 def availability_state(payload: bytes):
-    """`online`/`offline` from an availability-shaped payload — the
-    {"state": ...} object or the legacy bare string — or None if it is
-    neither. Shared by device availability and the bridge's own state."""
+    """Return `online`/`offline` from an availability-shaped payload, or None.
+
+    The payload is the {"state": ...} object or the legacy bare string;
+    None if it is neither. Shared by device availability and the bridge's
+    own state.
+    """
     raw = payload.decode(errors="replace").strip()
     try:
         parsed = json.loads(raw)
@@ -121,7 +124,7 @@ def availability_state(payload: bytes):
 
 
 def state_aspect(capability: str, z2m_field: str, value):
-    """Maps one z2m JSON field to a (bus aspect, JSON value) pair."""
+    """Map one z2m JSON field to a (bus aspect, JSON value) pair."""
     if z2m_field == "state":
         if capability == "lock":
             return "locked", value == "LOCKED"
@@ -130,9 +133,11 @@ def state_aspect(capability: str, z2m_field: str, value):
 
 
 def suggest(exposes):
-    """Best-effort entity-file stanza from a z2m exposes descriptor, or
-    None when no confident mapping exists — the raw definition rides
-    along in the record either way, so nothing becomes invisible."""
+    """Suggest a best-effort entity-file stanza from a z2m exposes descriptor.
+
+    None when no confident mapping exists — the raw definition rides along
+    in the record either way, so nothing becomes invisible.
+    """
     for exp in exposes:
         if not isinstance(exp, dict):
             continue
@@ -176,8 +181,11 @@ SPECIFIC_TYPES = ("light", "switch", "lock", "cover", "climate", "fan")
 
 
 def describe(capability: str, exposes) -> dict | None:
-    """The entity's aspect descriptor from its z2m exposes, or None when
-    nothing scalar is exposed (docs/design.md, Aspect descriptors)."""
+    """Return the entity's aspect descriptor from its z2m exposes.
+
+    None when nothing scalar is exposed (docs/design.md, Aspect
+    descriptors).
+    """
     fields: dict[str, dict] = {}
 
     def add(exp) -> None:
@@ -257,7 +265,7 @@ def describe(capability: str, exposes) -> dict | None:
 
 
 def inventory(devices, by_id):
-    """The complete discovery document from one bridge/devices payload."""
+    """Build the complete discovery document from one bridge/devices payload."""
     records = []
     for dev in devices:
         # Structurally malformed entries skip like id-less ones below: a
@@ -295,11 +303,14 @@ def inventory(devices, by_id):
 
 
 def command_body(entity, aspect: str, value, fields: dict) -> dict | None:
-    """The {base}/{id}/set payload for a command this entity takes — its
-    capability's base aspect (a bool), a declared vocabulary feature (a
-    number) or a command its exposes-derived descriptor `fields` carry (a
-    float, or one of the enum's values) — or None for anything else: an
-    unknown aspect or a value of the wrong type never reaches the device."""
+    """Return the {base}/{id}/set payload for a command this entity takes, or None.
+
+    A command this entity takes is its capability's base aspect (a bool), a
+    declared vocabulary feature (a number) or a command its exposes-derived
+    descriptor `fields` carry (a float, or one of the enum's values). None
+    for anything else: an unknown aspect or a value of the wrong type never
+    reaches the device.
+    """
     if aspect == BASE_ASPECT.get(entity.capability):
         if not isinstance(value, bool):
             return None
@@ -345,11 +356,14 @@ def main():
     descriptor_fields: dict[str, dict] = {}
 
     def unbound(topic: str, dev_id: str) -> None:
-        """A device the BRIDGE knows but no entity file binds is a steady
+        """Report a message for an unbound device only when the bridge does not know it.
+
+        A device the BRIDGE knows but no entity file binds is a steady
         state, not a dropped message — discovery already reports it with
         configured=false, and the discovery-first workflow guarantees a
         period where every device is in exactly this state. Only a device
-        absent from the inventory entirely is an anomaly worth an event."""
+        absent from the inventory entirely is an anomaly worth an event.
+        """
         if dev_id not in known:
             session.health_event("drop", reason="unknown-device", topic=topic)
 

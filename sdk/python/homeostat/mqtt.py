@@ -1,5 +1,7 @@
-"""Shared paho-mqtt plumbing for dialect adapters that bridge an external
-MQTT broker onto the bus (zigbee2mqtt, OwnTracks, ...).
+"""Shared paho-mqtt plumbing for dialect adapters that bridge MQTT onto the bus.
+
+Each such adapter bridges an external MQTT broker onto the bus (zigbee2mqtt,
+OwnTracks, ...).
 
 A helper, not a transport layer (docs/design.md, IVT490 heat-pump adapter):
 adapters still own their connections — their own `on_message` logic, their
@@ -24,10 +26,27 @@ ENV_CREDENTIALS = "HOMEOSTAT_MQTT_CREDENTIALS"
 
 
 def parse_endpoint(endpoint: str) -> ParseResult:
-    """Validates an `mqtt://host[:port][/base/topic]` (or `mqtts://` for
-    TLS, default certificate verification) endpoint, raising ValueError on
-    any other scheme — the message is load-bearing, adapters surface it
-    as-is on a misconfigured unit."""
+    """Validate and parse an MQTT endpoint.
+
+    Accepts `mqtt://host[:port][/base/topic]`, or `mqtts://` for TLS with
+    default certificate verification.
+
+    Parameters
+    ----------
+    endpoint : str
+        The endpoint URL, as the unit's manifest gives it.
+
+    Returns
+    -------
+    ParseResult
+        The parsed endpoint.
+
+    Raises
+    ------
+    ValueError
+        On any other scheme. The message is load-bearing: adapters surface
+        it as-is on a misconfigured unit.
+    """
     parsed = urlparse(endpoint)
     if parsed.scheme not in ("mqtt", "mqtts"):
         raise ValueError(f"unsupported endpoint scheme: {endpoint}")
@@ -35,19 +54,35 @@ def parse_endpoint(endpoint: str) -> ParseResult:
 
 
 def base_topic(endpoint: ParseResult, default: str) -> str:
-    """The endpoint's path as a broker topic prefix, or `default` when it
-    carries none. An estate that has run a non-default prefix for years
-    cannot move it — other consumers address it — so the prefix is a
-    deployment fact of the same kind as the host, and lives beside it:
+    """Return the endpoint's path as a broker topic prefix, or `default` if it has none.
+
+    An estate that has run a non-default prefix for years cannot move it —
+    other consumers address it — so the prefix is a deployment fact of the
+    same kind as the host, and lives beside it:
     `mqtt://broker:1883/VP52/zigbee2mqtt`. Not a secret, so the repo is
-    the right place for it (docs/design.md, the boundary test)."""
+    the right place for it (docs/design.md, the boundary test).
+
+    Parameters
+    ----------
+    endpoint : ParseResult
+        The endpoint, as `parse_endpoint` returns it.
+    default : str
+        The prefix to use when the endpoint carries no path.
+
+    Returns
+    -------
+    str
+        The topic prefix, without leading or trailing "/".
+    """
     return endpoint.path.strip("/") or default
 
 
 def credentials(endpoint: ParseResult) -> tuple[str | None, str | None]:
-    """Username/password for `endpoint`: inline `mqtt://user:pass@host`
-    when present, otherwise the HOMEOSTAT_MQTT_CREDENTIALS TOML — a file
-    OUTSIDE the repo, keyed by broker hostname:
+    """Return the username and password for `endpoint`.
+
+    Inline `mqtt://user:pass@host` when present, otherwise the
+    HOMEOSTAT_MQTT_CREDENTIALS TOML — a file OUTSIDE the repo, keyed by
+    broker hostname:
 
         ["broker.example"]
         username = "homeostat"
@@ -56,6 +91,23 @@ def credentials(endpoint: ParseResult) -> tuple[str | None, str | None]:
     A broker that needs auth must not force its password into a unit
     manifest; the file mirrors HOMEOSTAT_ESPHOME_DEVICES (docs/design.md,
     the boundary test). Unset env var or no entry for this host: anonymous.
+
+    Parameters
+    ----------
+    endpoint : ParseResult
+        The endpoint, as `parse_endpoint` returns it.
+
+    Returns
+    -------
+    tuple of (str or None, str or None)
+        ``(username, password)``; ``(None, None)`` for anonymous.
+
+    Raises
+    ------
+    OSError
+        If HOMEOSTAT_MQTT_CREDENTIALS names a file that cannot be read.
+    tomllib.TOMLDecodeError
+        If that file is not valid TOML.
     """
     if endpoint.username:
         return unquote(endpoint.username), (
@@ -69,8 +121,7 @@ def credentials(endpoint: ParseResult) -> tuple[str | None, str | None]:
 
 
 def guard(on_message, health=None):
-    """Wraps an adapter's `on_message` in the two failures that would
-    otherwise leave it deaf or silent.
+    """Wrap `on_message` in the two failures that would otherwise leave it deaf or silent.
 
     A topic has to become a `str` to be routed, and paho decodes it
     lazily — `msg.topic` is a property, so a topic that is not valid UTF-8
@@ -83,6 +134,18 @@ def guard(on_message, health=None):
     `health` takes a Session's `health_event`. Without one the drop still
     happens but only as a trace, which is what an adapter that never
     passes it gets today.
+
+    Parameters
+    ----------
+    on_message : callable
+        The adapter's paho `on_message(client, userdata, msg)` callback.
+    health : callable or None, optional
+        A Session's `health_event`, or None.
+
+    Returns
+    -------
+    callable
+        A paho `on_message` callback that runs `on_message` inside the guard.
     """
 
     def guarded(client, userdata, msg):
@@ -113,11 +176,11 @@ def guard(on_message, health=None):
 def connect(
     endpoint: ParseResult, on_message, topics, *, timeout: float = 30, health=None
 ) -> mqtt.Client:
-    """Builds a VERSION2 paho client wired to `on_message`, connects to
-    `endpoint`, and (re)subscribes `topics` — anything `Client.subscribe`
-    accepts, a topic string or a list of (topic, qos) tuples — on every
-    connect, including reconnects. Blocks until the first SUBACK, raising
-    TimeoutError if the broker never acks within `timeout` seconds.
+    """Build a VERSION2 paho client, connect it to `endpoint` and subscribe `topics`.
+
+    The client is wired to `on_message` and (re)subscribes `topics` on
+    every connect, including reconnects. Blocks until the first SUBACK,
+    raising TimeoutError if the broker never acks within `timeout` seconds.
 
     `health` is the Session's `health_event`, used to report a message
     dropped for an undecodable topic (see `guard`).
@@ -125,6 +188,36 @@ def connect(
     Starts the network loop in a background thread (`loop_start`); the
     caller owns the connection from here and is responsible for
     `client.loop_stop()` / `client.disconnect()` on shutdown.
+
+    Parameters
+    ----------
+    endpoint : ParseResult
+        The broker, as `parse_endpoint` returns it.
+    on_message : callable
+        The adapter's paho `on_message(client, userdata, msg)`; it runs
+        inside `guard`.
+    topics : str or list of tuple of (str, int)
+        Anything `Client.subscribe` accepts: a topic string or a list of
+        (topic, qos) tuples.
+    timeout : float, optional
+        Seconds to wait for the first SUBACK.
+    health : callable or None, optional
+        The Session's `health_event`, or None.
+
+    Returns
+    -------
+    paho.mqtt.client.Client
+        The connected client, its network loop running.
+
+    Raises
+    ------
+    TimeoutError
+        If the broker never acks a subscription within `timeout` seconds.
+    ConnectionError
+        If, by then, the broker has refused the connection (e.g. bad
+        credentials).
+    OSError
+        If the broker cannot be reached at all.
     """
     subscribed = threading.Event()
     refused: list = []  # a failed CONNACK's reason code, if one arrives
@@ -161,9 +254,11 @@ def connect(
 
 
 def wait_for_shutdown() -> None:
-    """Blocks until SIGTERM or SIGINT — the supervisor's stop signal —
-    the shutdown wait every adapter observes alongside its zenoh session
-    teardown."""
+    """Block until SIGTERM or SIGINT, the supervisor's stop signal.
+
+    This is the shutdown wait every adapter observes alongside its zenoh
+    session teardown.
+    """
     stop = threading.Event()
     signal.signal(signal.SIGTERM, lambda *_: stop.set())
     signal.signal(signal.SIGINT, lambda *_: stop.set())

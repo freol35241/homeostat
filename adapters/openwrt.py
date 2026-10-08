@@ -8,8 +8,9 @@
 # [tool.uv.sources]
 # homeostat = { path = "../sdk/python", editable = true }
 # ///
-"""OpenWrt network adapter (see docs/design.md, "Network presence and
-connectivity (settled 2026-07-25)").
+"""OpenWrt network adapter.
+
+See docs/design.md, "Network presence and connectivity (settled 2026-07-25)".
 
 Named for the dialect it speaks: ubus JSON-RPC over HTTP (uhttpd-mod-ubus,
 rpcd session auth). The first polling adapter — each cycle logs in fresh
@@ -62,8 +63,11 @@ PARAM_DEFAULTS = {"poll_interval_s": 30, "away_delay_s": 180}
 
 
 class UbusError(Exception):
-    """Any failure of a ubus round trip: HTTP status, JSON-RPC error,
-    non-zero ubus status code, unparseable body."""
+    """Any failure of a ubus round trip.
+
+    HTTP status, JSON-RPC error, non-zero ubus status code, unparseable
+    body.
+    """
 
 
 # A ubus reply is a small JSON document; a compromised or misbehaving
@@ -151,17 +155,22 @@ class Params(LiveParams):
 
 
 def load_routers(endpoint: str | None) -> dict:
-    """The HOMEOSTAT_OPENWRT TOML behind [discovery].endpoint: per-router
-    host/username/password keyed by router name. Missing or unreadable is
-    a startup error (visible via the supervisor's backoff)."""
+    """Load the HOMEOSTAT_OPENWRT TOML behind [discovery].endpoint.
+
+    Per-router host/username/password keyed by router name. Missing or
+    unreadable is a startup error (visible via the supervisor's backoff).
+    """
     if not endpoint:
         raise ValueError("openwrt adapter requires [discovery].endpoint")
     return tomllib.loads(Path(endpoint).read_text())
 
 
 def classify(entities, routers, session):
-    """Splits bound entities by capability, dropping unusable bindings
-    with a health event each — one bad entity never takes the unit down."""
+    """Split bound entities by capability, dropping unusable bindings.
+
+    Each dropped binding gets a health event — one bad entity never takes
+    the unit down.
+    """
     router_entities, trackers = [], []
     for entity in entities:
         if entity.capability == "router":
@@ -189,7 +198,9 @@ def classify(entities, routers, session):
 
 async def poll_router(http, name: str, conf: dict):
     """One router, one cycle: fresh login, interface dump, station union.
-    Any failure marks the router unreachable."""
+
+    Any failure marks the router unreachable.
+    """
     url = f"http://{conf['host']}/ubus"
     sid = await login(http, url, conf["username"], conf["password"])
 
@@ -209,6 +220,8 @@ async def poll_router(http, name: str, conf: dict):
 
 
 class Adapter:
+    """Router WAN and device presence state, carried across poll cycles and published on change."""
+
     def __init__(self, session, routers, router_entities, trackers):
         self.session = session
         self.routers = routers
@@ -224,8 +237,10 @@ class Adapter:
 
     def note(self, key: tuple, kind: str, **fields) -> None:
         """One health event per down transition of a degraded condition.
+
         Degraded conditions publish kind = condition (the recorder's
-        backend-outage precedent) — nothing was dropped."""
+        backend-outage precedent) — nothing was dropped.
+        """
         if key not in self.noted:
             self.session.health_event(kind, **fields)
             self.noted.add(key)
@@ -337,9 +352,11 @@ class Adapter:
     }
 
     def publish_discovery(self, sightings) -> None:
-        """The complete current view of the periphery (docs/design.md,
-        Discovery), from data the cycle already fetched; republished only
-        when it changes."""
+        """Publish the complete current view of the periphery (docs/design.md, Discovery).
+
+        Built from data the cycle already fetched; republished only when it
+        changes.
+        """
         bound = {e.id: e.name for e in self.router_entities + self.trackers}
 
         def record(rid: str, capability: str, description: dict) -> dict:

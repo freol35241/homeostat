@@ -8,8 +8,9 @@
 # [tool.uv.sources]
 # homeostat = { path = "../sdk/python", editable = true }
 # ///
-"""IVT490 heat-pump adapter (docs/design.md, "IVT490 heat-pump adapter
-(settled 2026-07-18)").
+"""IVT490 heat-pump adapter.
+
+See docs/design.md, "IVT490 heat-pump adapter (settled 2026-07-18)".
 
 The bespoke ESP8266 interface board (github.com/freol35241/IVT490-interface-
 esp8266, tracked firmware ref: the GT3_2_boiler_emulation branch) speaks
@@ -386,9 +387,11 @@ READBACK_S = 30
 
 
 def aspect_descriptor(entity) -> dict:
-    """ASPECT_FIELDS plus a `command` on each aspect this entity takes
-    commands for (commands_for: a fed input has one master, so it is
-    described but not commandable)."""
+    """Return ASPECT_FIELDS plus a `command` on each aspect this entity takes commands for.
+
+    See commands_for: a fed input has one master, so it is described but
+    not commandable.
+    """
     fields = {aspect: dict(field) for aspect, field in ASPECT_FIELDS.items()}
     for aspect, (_field, bounds, _retain) in commands_for(entity).items():
         command = {"type": "enum" if bounds is None else "float", "editable_by": COMMAND_TIER[aspect]}
@@ -401,10 +404,12 @@ def aspect_descriptor(entity) -> dict:
 
 
 def state_field(segments: list[str]) -> str:
-    """Flattened subtopic path under {base}/ivt490/state to a firmware
-    field name: the "serial" wrapper object is stripped (a serialization
-    artifact, not device vocabulary), any other nested path joins with
-    underscores so the aspect stays a single key segment."""
+    """Map a flattened subtopic path under {base}/ivt490/state to a firmware field name.
+
+    The "serial" wrapper object is stripped (a serialization artifact, not
+    device vocabulary); any other nested path joins with underscores so the
+    aspect stays a single key segment.
+    """
     if segments and segments[0] == "serial":
         segments = segments[1:]
     return "_".join(segments)
@@ -416,11 +421,14 @@ RESERVED_ASPECTS = frozenset({"available", *ASPECT_OVERRIDES.values()})
 
 
 def state_aspect(source: str, field: str) -> str | None:
-    """Maps one firmware field (`source` "state" or "controller") to a bus
-    aspect name — the three settled normalizations, or the firmware name
-    passed through, prefixed `controller_` on a name collision between the
-    two namespaces (see module docstring) — or None for a raw field that
-    would mint a reserved name (callers drop it with "reserved-aspect")."""
+    """Map one firmware field (`source` "state" or "controller") to a bus aspect name.
+
+    The name is one of the three settled normalizations, or the firmware
+    name passed through, prefixed `controller_` on a name collision between
+    the two namespaces (see module docstring) — or None for a raw field
+    that would mint a reserved name (callers drop it with
+    "reserved-aspect").
+    """
     override = ASPECT_OVERRIDES.get((source, field))
     if override is not None:
         return override
@@ -432,12 +440,14 @@ def state_aspect(source: str, field: str) -> str | None:
 
 
 def field_value(payload: bytes):
-    """Unwraps a controller per-field payload into (value, valid): a plain
-    JSON scalar passes through as (scalar, None), a nested
+    """Unwrap a controller per-field payload into (value, valid).
+
+    A plain JSON scalar passes through as (scalar, None); a nested
     {"value": ...[, "valid": ...]} object (the controller's tracked fields)
     yields its "value" member and its "valid" flag, None when the field
     carries none. Raises ValueError/KeyError on anything else — callers
-    drop these with a "malformed-payload" health event."""
+    drop these with a "malformed-payload" health event.
+    """
     parsed = json.loads(payload)
     if isinstance(parsed, dict):
         return parsed["value"], parsed.get("valid")
@@ -445,10 +455,13 @@ def field_value(payload: bytes):
 
 
 def route(topic: str, entities):
-    """The bound entity and the topic's segments past its base-topic
-    prefix, or (None, None). Defensive only: the adapter subscribes
-    exactly `{entity.id}/...` per entity, so paho never calls back with a
-    topic that fails to resolve here."""
+    """Return the bound entity and the topic's segments past its base-topic prefix.
+
+    (None, None) when the topic is under no bound entity's base topic.
+    Defensive only: the adapter subscribes exactly `{entity.id}/...` per
+    entity, so paho never calls back with a topic that fails to resolve
+    here.
+    """
     for entity in entities:
         prefix = f"{entity.id}/"
         if topic.startswith(prefix):
@@ -457,8 +470,10 @@ def route(topic: str, entities):
 
 
 def commands_for(entity) -> dict:
-    """COMMANDS minus any aspect whose set field this entity feeds: a fed
-    input has one master."""
+    """Return COMMANDS minus any aspect whose set field this entity feeds.
+
+    A fed input has one master.
+    """
     fed = set(entity.inputs)
     return {aspect: cmd for aspect, cmd in COMMANDS.items() if cmd[0] not in fed}
 
@@ -487,9 +502,11 @@ def main():
     available: dict[str, bool] = {}
 
     def set_available(entity, value: bool) -> bool:
-        """Publishes on transition only; returns True when it was one. The
-        publish stays under the lock so the receive path and the watchdog
-        cannot interleave decision and publication."""
+        """Publish `available` on transition only; return True when it was one.
+
+        The publish stays under the lock so the receive path and the
+        watchdog cannot interleave decision and publication.
+        """
         with availability_lock:
             if available.get(entity.name) == value:
                 return False
@@ -644,11 +661,13 @@ def main():
     ]
 
     def feed_handler(entity, input_name, source):
-        """Forwards the source aspect while the source is available; on
-        loss, clears the set topic's retained slot once. One subscriber
+        """Forward the source aspect while the source is available.
+
+        On loss, clears the set topic's retained slot once. One subscriber
         covers both the value and `available` keys: zenoh orders samples
         within a subscriber, not across two, and a value arriving before
-        the `available = true` that precedes it must not be dropped."""
+        the `available = true` that precedes it must not be dropped.
+        """
         lo, hi = FEEDABLE[input_name]
         topic = f"{entity.id}/controller/set/{input_name}"
         state = {"available": True, "dropped": False}

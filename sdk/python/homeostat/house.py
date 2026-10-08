@@ -18,10 +18,21 @@ import tomllib
 
 @dataclass
 class InputSource:
-    """Where a fed device input reads from: one aspect of one entity, i.e.
-    the state key home/state/{room}/{entity}/{aspect}. The room is resolved
-    from the source entity's file; the entity file names only entity and
-    aspect (docs/design.md, Device feeds)."""
+    """Where a fed device input reads from: one aspect of one entity.
+
+    That is the state key home/state/{room}/{entity}/{aspect}. The room is
+    resolved from the source entity's file; the entity file names only
+    entity and aspect (docs/design.md, Device feeds).
+
+    Attributes
+    ----------
+    room : str
+        The source entity's room.
+    entity : str
+        The source entity's name.
+    aspect : str
+        The source aspect.
+    """
 
     room: str
     entity: str
@@ -30,9 +41,22 @@ class InputSource:
 
 @dataclass
 class SourceRef:
-    """One `[sources]` entry: a reading a computed value is derived from,
-    with the caveat that belongs to THIS contributor rather than to the
-    aspect (docs/design.md, Sources)."""
+    """One `[sources]` entry: a reading a computed value is derived from.
+
+    It carries the caveat that belongs to THIS contributor rather than to
+    the aspect (docs/design.md, Sources).
+
+    Attributes
+    ----------
+    entity : str
+        The contributing entity's name.
+    aspect : str
+        The contributing aspect.
+    note : str or None
+        This contributor's caveat in words, if any.
+    precision : float or None
+        This contributor's precision, if declared.
+    """
 
     entity: str
     aspect: str
@@ -42,6 +66,32 @@ class SourceRef:
 
 @dataclass
 class Entity:
+    """One entity, as its entity file declares it.
+
+    Attributes
+    ----------
+    name : str
+        The file stem: the globally unique entity name.
+    id : str
+        The adapter-native address; empty on an automation-owned entity.
+    capability : str
+        The entity's capability.
+    room : str
+        The room the entity is in.
+    features : list of str
+        The entity's declared features.
+    write_mode : str
+        The write policy's `mode`; "shared" when the file omits it.
+    owner : str
+        The unit that owns the entity; the declaring unit when not named.
+    naming : dict
+        The entity file's `[naming]` table.
+    inputs : dict of str to InputSource
+        `[inputs]`, resolved; filled in by `load_adapter` only.
+    sources : dict of str to SourceRef
+        `[sources]`: contributor name to the reading the value derives from.
+    """
+
     name: str  # file stem: the globally unique entity name
     # Adapter-native address (for z2m: the topic segment). Empty on an
     # automation-owned entity, which has no periphery to address.
@@ -61,14 +111,49 @@ class Entity:
 
 @dataclass
 class AdapterConfig:
+    """An adapter's bindings: its unit, its discovery endpoint and its entities.
+
+    Attributes
+    ----------
+    unit : str
+        The adapter unit's name.
+    endpoint : str or None
+        The expanded `[discovery].endpoint`, or None for an adapter that
+        declares none (e.g. one that discovers its devices over mDNS).
+    entities : list of Entity
+        The entities in the adapter's entities dir, with inputs resolved.
+    """
+
     unit: str
     endpoint: str | None
     entities: list[Entity]
 
 
 def load_endpoint(unit: str, root: str | Path = ".") -> str:
-    """The unit's [discovery] endpoint with ${VAR} expansion. An unset
-    variable is a startup error (visible via the supervisor's backoff)."""
+    """Return the unit's [discovery] endpoint with ${VAR} expansion.
+
+    An unset variable is a startup error (visible via the supervisor's
+    backoff).
+
+    Parameters
+    ----------
+    unit : str
+        The unit whose manifest to read.
+    root : str or Path, optional
+        The house root.
+
+    Returns
+    -------
+    str
+        The endpoint, variables expanded.
+
+    Raises
+    ------
+    ValueError
+        If the endpoint references an unset variable.
+    KeyError
+        If the manifest declares no `[discovery].endpoint`.
+    """
     manifest = tomllib.loads((Path(root) / "units" / f"{unit}.toml").read_text())
     return _expand_endpoint(manifest)
 
@@ -107,6 +192,26 @@ def _entity_from(path: Path, data: dict, default_owner: str) -> Entity:
 
 @dataclass
 class UnitInfo:
+    """One unit manifest, as declared.
+
+    Attributes
+    ----------
+    name : str
+        The unit's name.
+    kind : str
+        The unit's kind.
+    description : str
+        The manifest's description; empty when it has none.
+    naming : dict
+        The manifest's `[naming]` table.
+    params : dict
+        `[params]`, as declared.
+    publishes : dict
+        `[bus.publishes]`, as declared.
+    subscribes : dict
+        `[bus.subscribes]`, as declared.
+    """
+
     name: str
     kind: str
     description: str = ""
@@ -118,6 +223,23 @@ class UnitInfo:
 
 @dataclass
 class HouseModel:
+    """The whole house as validated text, as `load_house` reads it.
+
+    Attributes
+    ----------
+    zones : dict of str to list of str
+        Zone name to member rooms.
+    units : list of UnitInfo
+        Every unit manifest.
+    entities : list of Entity
+        Every entity of every unit that declares an entities dir.
+    views : list of dict or None
+        dashboard.toml's `[[view]]` list as written; None without the file.
+    controls : list of dict
+        dashboard.toml's `[[control]]` list as written; empty without the
+        file.
+    """
+
     zones: dict[str, list[str]]  # zone name -> member rooms
     units: list[UnitInfo]
     entities: list[Entity]
@@ -130,10 +252,22 @@ class HouseModel:
 
 
 def load_house(root: str | Path = ".") -> HouseModel:
-    """The whole house as validated text: every unit manifest, every
-    adapter's entity files, the zones, the dashboard's views. Read-only
-    rendering data for consumers like the dashboard; the core remains the
-    validator."""
+    """Return the whole house as validated text.
+
+    Every unit manifest, every adapter's entity files, the zones, the
+    dashboard's views. Read-only rendering data for consumers like the
+    dashboard; the core remains the validator.
+
+    Parameters
+    ----------
+    root : str or Path, optional
+        The house root.
+
+    Returns
+    -------
+    HouseModel
+        The house as its files declare it.
+    """
     root = Path(root)
 
     zones: dict[str, list[str]] = {}
@@ -176,6 +310,30 @@ def load_house(root: str | Path = ".") -> HouseModel:
 
 
 def load_adapter(unit: str, root: str | Path = ".") -> AdapterConfig:
+    """Return an adapter's bindings, read from its manifest and entity files.
+
+    Each entity's `[inputs]` are resolved to their source's room, read from
+    the whole house's entity files.
+
+    Parameters
+    ----------
+    unit : str
+        The adapter unit's name.
+    root : str or Path, optional
+        The house root.
+
+    Returns
+    -------
+    AdapterConfig
+        The adapter's endpoint and entities.
+
+    Raises
+    ------
+    ValueError
+        If the discovery endpoint references an unset variable.
+    KeyError
+        If the manifest declares no `[entities].dir`.
+    """
     root = Path(root)
     manifest_path = root / "units" / f"{unit}.toml"
     manifest = tomllib.loads(manifest_path.read_text())

@@ -1,4 +1,6 @@
 [lint]
+# pydocstyle (NumPy convention), bugbear, pyupgrade, simplify, return.
+extend-select = ["D", "B", "UP", "SIM", "RET"]
 ignore = [
     # A unit's callbacks run on a foreign library's thread (paho-mqtt,
     # aioesphomeapi, zenoh) or off untrusted device/network input; the
@@ -13,3 +15,14 @@ ignore = [
     # of those call sites.
     "TRY004",
 ]
+
+[lint.pydocstyle]
+convention = "numpy"
+
+[lint.per-file-ignores]
+# Adapters are scripts: their contract is the module docstring, and their
+# functions and methods are documented where a reader needs it, not by rule.
+"adapters/*.py" = ["D102", "D103", "D107"]
+# A test's name says what it pins.
+"sdk/python/tests/**" = ["D"]
+"tests/**" = ["D"]
