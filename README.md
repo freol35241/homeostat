@@ -356,8 +356,8 @@ and pinned by a test. Details:
 
 ### The dashboard: the family surface
 
-A supervised web unit (`adapters/dashboard.py` + one self-contained
-HTML file) — an adapter for humans. Every element is generated from the
+A supervised web unit (`adapters/dashboard.py` + one hand-editable page
+and its assets, no build step) — an adapter for humans. Every element is generated from the
 manifests; which views exist is text too: `dashboard.toml` lists them,
 each a composition of widgets over things the house already has (a
 reading as a tile, a room's card, a unit's card with what it sets,

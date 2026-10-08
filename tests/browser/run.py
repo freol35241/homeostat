@@ -444,6 +444,19 @@ class SmokePhone(Smoke):
         self.assertEqual(await self.page.locator("#topbar-status.active").count(), 1)
 
 
+class UnitOverlay(PageTest):
+    """A unit's overlay lists its captured log, read in the shape the unit
+    serves: a list of the core's log entries."""
+
+    async def test_a_units_log_is_listed(self):
+        await self.view("health")
+        await self.page.locator('[data-action="unit-detail"]:visible').first.click()
+        await self.page.wait_for_timeout(400)
+        lines = self.page.locator("#overlay-panel .log-feed .log-line")
+        self.assertEqual(await lines.count(), 1)
+        self.assertIn("staged", await lines.first.inner_text())
+
+
 class PagesDemo(unittest.IsolatedAsyncioTestCase):
     """The static demo on GitHub Pages (demo-site/README.md), as built and
     as served: under /homeostat/, with demo-site/shim.js standing in for

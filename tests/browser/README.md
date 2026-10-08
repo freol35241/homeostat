@@ -32,9 +32,9 @@ What this carries is the boring half:
 
 ## House rules for assertions
 
-Assert through the **DOM** and the **network** only. The page's script is an
-IIFE, so there are no internals to reach — which is the right discipline
-anyway: everything asserted is something a person or another process could
+Assert through the **DOM** and the **network** only. The page's scripts are
+ES modules that put nothing on `window`, so there are no internals to
+reach — which is the right discipline anyway: everything asserted is something a person or another process could
 observe.
 
 - Prefer the attributes the event delegation already needs: `data-action`,

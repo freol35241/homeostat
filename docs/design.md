@@ -1834,8 +1834,10 @@ The dashboard is an adapter for humans: HTTP and a WebSocket toward
 browsers on one side, the bus through the SDK on the other. Browsers
 never speak Zenoh. `adapters/dashboard.py` is a `service` unit
 (aiohttp) serving one hand-editable page, `dashboard.html`, its
-decision logic `assets/dashboard-logic.js` and a few vendored libraries
-from an allowlist of filenames, with no build step. The page is
+stylesheet `assets/dashboard.css`, its decision logic
+`assets/dashboard-logic.js`, its ES modules under `assets/dashboard/`
+(entry `main.js`) and a few vendored libraries, from an allowlist of
+filenames and that one directory, with no build step. The page is
 client-rendered because live state push is the dashboard's whole job.
 
 - **Mediated, not raw bus.** Not Zenoh's remote-api plugin in the
@@ -1993,14 +1995,17 @@ wrapper by percentage.
 
 #### The page
 
-`dashboard.html` and `dashboard-logic.js` are one artifact, served
+`dashboard.html` and its own assets are one artifact, served
 `Cache-Control: no-cache`, because heuristic freshness would pair a new
 page with old cached logic after an upgrade: a page that renders empty
 over a healthy backend. Not versioned asset URLs: the version would
 have to be rewritten into a hand-edited file.
 
 Pure decisions (arithmetic and selection, never markup) live in
-`dashboard-logic.js`, pinned by `node --test tests/js`.
+`dashboard-logic.js`, pinned by `node --test tests/js`. Markup is
+written with the `html` tag (`assets/dashboard/html.js`), which escapes
+every interpolated value unless it is markup itself, so a label from the
+house cannot become markup by a forgotten escape.
 `tests/browser` drives the real page against canned fixtures, whose
 field names a canary in `tests/dashboard.rs` checks against a real
 `/api/model`; it is a broad net, not a substitute for opening a

@@ -69,6 +69,7 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 | `src/` | The Rust core: manifest parsing and validation, plan/apply, the supervisor, the MCP server. |
 | `sdk/python/` | The Python SDK every unit is built on. |
 | `adapters/` | The generic units (adapters and services), one script each, with a lockfile beside it. |
+| `adapters/assets/` | What the dashboard serves beside `dashboard.html`: its stylesheet, its pure logic (`dashboard-logic.js`, tested by `tests/js`), its ES modules (`dashboard/`, entry `main.js`) and vendored libraries (see its README). |
 | `examples/starter-house/` | A house to copy. The adapters in its `units/` are **generated** copies of `adapters/` at the release tag: never edit them by hand. `evening_lights.py` is the house's own. |
 | `tests/` | Rust integration tests against real processes, a real broker and a real SQLite store. `tests/fixtures/` holds the houses they run; `tests/corpus/` pairs broken houses with their exact error lists; `tests/adapters/` unit-tests adapter logic in Python, without a bus. |
 | `docs/` | `design.md` (how the system works and why), `adapters.md` (the adapter contract), and two generated files. |

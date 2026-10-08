@@ -1,7 +1,8 @@
 // Tests for the dashboard's extracted decision logic
 // (adapters/assets/dashboard-logic.js), run by `node --test tests/js` —
-// Node's built-in runner, no packages. The DOM wiring in dashboard.html
-// stays covered by the server-side suite (tests/dashboard.rs) plus hands.
+// Node's built-in runner, no packages. The DOM wiring
+// (adapters/assets/dashboard/) stays covered by the browser suite
+// (tests/browser) and the server-side one (tests/dashboard.rs) plus hands.
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');

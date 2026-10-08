@@ -28,7 +28,7 @@ entity the house already bound): switch -> capability "switch", aspect
 "color_temp" when the device's supported_color_modes carry them. ESPHome's
 native brightness is a 0.0-1.0 float and color_temperature a float mired;
 z2m's `brightness` aspect is the raw Zigbee 0-254 integer scale (see
-zigbee2mqtt.py, and dashboard.html's `b / 254`), so brightness is rescaled
+zigbee2mqtt.py, and the dashboard's `b / 254`), so brightness is rescaled
 both ways (native * 254 in, /254.0 out) to match that scale exactly;
 color_temp is already mireds on both sides and only rounded to an int.
 sensor -> "sensor", aspect = the ESPHome device_class if the entity has
@@ -111,7 +111,7 @@ ENV_DEVICES = "HOMEOSTAT_ESPHOME_DEVICES"
 MDNS_SERVICE = "_esphomelib._tcp.local."
 DEFAULT_PORT = 6053
 PRESENCE_DEVICE_CLASSES = {"motion", "occupancy", "presence"}
-BRIGHTNESS_SCALE = 254  # z2m's raw Zigbee scale (see zigbee2mqtt.py / dashboard.html)
+BRIGHTNESS_SCALE = 254  # z2m's raw Zigbee scale (see zigbee2mqtt.py / the dashboard)
 
 
 def load_devices(path: str | None) -> dict:

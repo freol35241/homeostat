@@ -95,7 +95,7 @@ class FakeHouse:
         # the console error a refused connection would log — which the
         # smoke test would otherwise read as a page fault.
         app.router.add_get("/api/camera/{entity}/live", self.api_camera)
-        app.router.add_get("/assets/{name}", self.api_asset)
+        app.router.add_get("/assets/{name:.+}", self.api_asset)
         app.router.add_get("/tiles.pmtiles", self.api_tiles)
         return app
 
@@ -223,7 +223,8 @@ class FakeHouse:
         return web.json_response({"events": []})
 
     async def api_logs(self, request: web.Request) -> web.Response:
-        return web.json_response({"lines": [{"stream": "stdout", "line": "staged"}]})
+        # The unit's shape: a list of the core's log entries.
+        return web.json_response([{"ts_us": 1_700_000_000_000_000, "stream": "stdout", "line": "staged"}])
 
     async def _record(self, request: web.Request) -> dict:
         body = await request.json()

@@ -61,6 +61,7 @@ assets/leaflet.css:assets/leaflet.css
 assets/leaflet.js:assets/leaflet.js
 assets/protomaps-leaflet.js:assets/protomaps-leaflet.js
 assets/dashboard-logic.js:assets/dashboard-logic.js
+assets/dashboard.css:assets/dashboard.css
 assets/video-rtc.js:assets/video-rtc.js
 assets/homeostat-mark.svg:assets/homeostat-mark.svg
 "
@@ -179,6 +180,22 @@ for pair in $FILES; do
     source_at_tag "$src.lock" | pin_lock > "$tmp"
     place "$tmp" "$dst.lock" "${pair##*:}.lock"
   fi
+done
+
+# The dashboard page's modules: every file under assets/dashboard/ in the
+# release, rather than a line each above, so a module the page grows
+# cannot be left out of the starter. A release before them has none.
+modules_at_tag() {
+  if [ "$at_tag" = 1 ]; then
+    git -C "$REPO" ls-tree -r --name-only "$SDK_TAG" -- adapters/assets/dashboard
+  elif [ -d "$REPO/adapters/assets/dashboard" ]; then
+    (cd "$REPO" && find adapters/assets/dashboard -type f | sort)
+  fi
+}
+for src in $(modules_at_tag); do
+  src="${src#adapters/}"
+  source_at_tag "$src" > "$tmp"
+  place "$tmp" "$UNITS/$src" "$src"
 done
 
 # Starter-only units (evening_lights.py) take the pin and nothing else.

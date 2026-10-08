@@ -1,7 +1,7 @@
 /* Dashboard decision logic: the pure functions behind the Now view and the
- * WebSocket store — kept out of dashboard.html so `node --test tests/js`
- * can pin them (the DOM wiring stays in the page). Functions in,
- * functions out: no DOM, no fetch, no globals.
+ * WebSocket store — kept apart from the page so `node --test tests/js`
+ * can pin them (the DOM wiring is the page's modules, assets/dashboard/).
+ * Functions in, functions out: no DOM, no fetch, no globals.
  *
  * Loaded two ways: as a plain script by dashboard.html (defines
  * window.HomeostatLogic) and via require() by the node test runner.
