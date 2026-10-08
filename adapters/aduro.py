@@ -248,6 +248,98 @@ def route(topic: str, entities):
     return None, None
 
 
+class Stoves:
+    """The stove-to-bus direction: status and operating documents in, aspects out.
+
+    It publishes on change (a poll that repeats the last value is not a
+    sample), tracks each stove's availability from when it last spoke, and
+    keeps discovery's `bound` flag: whether a stove has been heard at all.
+    `session` is anything with `put_json` and `health_event`; the clock is
+    injectable. paho delivers messages on one thread and the watchdog
+    sweeps on another, so availability is locked.
+    """
+
+    def __init__(self, session, unit: str, entities, clock=time.monotonic):
+        self.session = session
+        self.unit = unit
+        self.entities = list(entities)
+        self.clock = clock
+        self.seen: set[str] = set()
+        # Publish-on-change: the last value put on the bus per (entity, aspect).
+        self.last: dict[tuple[str, str], object] = {}
+        self.lock = threading.Lock()
+        self.last_rx = {e.id: clock() for e in self.entities}
+        self.available: dict[str, bool] = {}
+
+    def set_available(self, entity, value: bool) -> bool:
+        """Publish an availability change; True when it was one."""
+        with self.lock:
+            if self.available.get(entity.name) == value:
+                return False
+            self.available[entity.name] = value
+            self.session.put_json(keys.state_key(entity.room, entity.name, "available"), value)
+        return True
+
+    def inventory(self) -> list[dict]:
+        """Return the discovery document: every configured stove."""
+        return [
+            {
+                "id": e.id,
+                "configured": True,
+                "entity": e.name,
+                "bound": e.id in self.seen,
+                "suggested": {"capability": "burner", "features": ["power_level"]},
+                "aspects": ASPECT_DESCRIPTOR,
+            }
+            for e in self.entities
+        ]
+
+    def on_message(self, topic: str, raw: bytes) -> None:
+        """Translate one {id}/status or {id}/operating document."""
+        session = self.session
+        entity, rest = route(topic, self.entities)
+        if entity is None or len(rest) != 1 or rest[0] not in ("status", "operating"):
+            return
+
+        self.last_rx[entity.id] = self.clock()
+        self.set_available(entity, True)
+        if entity.id not in self.seen:
+            self.seen.add(entity.id)
+            session.put_json(keys.discovery_key(self.unit), self.inventory())
+
+        try:
+            document = json.loads(raw)
+            if not isinstance(document, dict):
+                raise ValueError("not an object")
+        except ValueError:
+            session.health_event("drop", reason="malformed-payload", topic=topic)
+            return
+
+        if rest[0] == "status":
+            aspects, reserved = status_aspects(document)
+            for field in reserved:
+                session.health_event("drop", reason="reserved-aspect", topic=topic, field=field)
+        else:
+            aspects = {f"operating_{field}": value for field, value in document.items()}
+        for aspect, value in aspects.items():
+            try:
+                key = keys.state_key(entity.room, entity.name, aspect)
+            except ValueError:
+                session.health_event("drop", reason="malformed-payload", topic=topic, field=aspect)
+                continue
+            if self.last.get((entity.name, aspect), _UNSET) == value:
+                continue  # unchanged since the last poll: not a sample
+            self.last[(entity.name, aspect)] = value
+            session.put_json(key, value)
+
+    def sweep(self, timeout_s: float) -> None:
+        """Mark a stove silent for `timeout_s` unavailable, one event per transition."""
+        now = self.clock()
+        for entity in self.entities:
+            if now - self.last_rx[entity.id] > timeout_s and self.set_available(entity, False):
+                self.session.health_event("device-silent", topic=entity.id)
+
+
 def main():
     unit = os.environ[keys.ENV_UNIT]
     config = house.load_adapter(unit)
@@ -255,73 +347,7 @@ def main():
 
     session = homeostat.connect()
     params = Params(session, PARAM_DEFAULTS)
-    seen: set[str] = set()
-
-    # Publish-on-change: the last value put on the bus per (entity, aspect).
-    last: dict[tuple[str, str], object] = {}
-
-    availability_lock = threading.Lock()
-    last_rx = {e.id: time.monotonic() for e in config.entities}
-    available: dict[str, bool] = {}
-
-    def set_available(entity, value: bool) -> bool:
-        with availability_lock:
-            if available.get(entity.name) == value:
-                return False
-            available[entity.name] = value
-            session.put_json(keys.state_key(entity.room, entity.name, "available"), value)
-        return True
-
-    def inventory():
-        return [
-            {
-                "id": e.id,
-                "configured": True,
-                "entity": e.name,
-                "bound": e.id in seen,
-                "suggested": {"capability": "burner", "features": ["power_level"]},
-                "aspects": ASPECT_DESCRIPTOR,
-            }
-            for e in config.entities
-        ]
-
-    def on_aduro_message(client, userdata, msg):
-        entity, rest = route(msg.topic, config.entities)
-        if entity is None or len(rest) != 1 or rest[0] not in ("status", "operating"):
-            return
-
-        last_rx[entity.id] = time.monotonic()
-        set_available(entity, True)
-        if entity.id not in seen:
-            seen.add(entity.id)
-            session.put_json(keys.discovery_key(unit), inventory())
-
-        try:
-            document = json.loads(msg.payload)
-            if not isinstance(document, dict):
-                raise ValueError("not an object")
-        except ValueError:
-            session.health_event("drop", reason="malformed-payload", topic=msg.topic)
-            return
-
-        if rest[0] == "status":
-            aspects, reserved = status_aspects(document)
-            for field in reserved:
-                session.health_event("drop", reason="reserved-aspect", topic=msg.topic, field=field)
-        else:
-            aspects = {f"operating_{field}": value for field, value in document.items()}
-        for aspect, value in aspects.items():
-            try:
-                key = keys.state_key(entity.room, entity.name, aspect)
-            except ValueError:
-                session.health_event(
-                    "drop", reason="malformed-payload", topic=msg.topic, field=aspect
-                )
-                continue
-            if last.get((entity.name, aspect), _UNSET) == value:
-                continue  # unchanged since the last poll: not a sample
-            last[(entity.name, aspect)] = value
-            session.put_json(key, value)
+    stoves = Stoves(session, unit, config.entities)
 
     def cmd_handler(entity):
         def handler(sample):
@@ -349,7 +375,12 @@ def main():
         for e in config.entities
         for topic in (f"{e.id}/status", f"{e.id}/operating")
     ]
-    client = mqtt.connect(endpoint, on_aduro_message, topics, health=session.health_event)
+    client = mqtt.connect(
+        endpoint,
+        lambda _client, _userdata, msg: stoves.on_message(msg.topic, msg.payload),
+        topics,
+        health=session.health_event,
+    )
 
     subscribers = [
         session.subscribe(expr, cmd_handler(e))
@@ -357,7 +388,7 @@ def main():
         for expr in keys.command_keyexprs(e)
     ]
 
-    session.put_json(keys.discovery_key(unit), inventory())
+    session.put_json(keys.discovery_key(unit), stoves.inventory())
 
     stop = threading.Event()
 
@@ -366,10 +397,7 @@ def main():
             timeout = params.availability_timeout_s
             if stop.wait(min(1.0, timeout / 4)):
                 return
-            now = time.monotonic()
-            for entity in config.entities:
-                if now - last_rx[entity.id] > timeout and set_available(entity, False):
-                    session.health_event("device-silent", topic=entity.id)
+            stoves.sweep(timeout)
 
     watchdog_thread = threading.Thread(target=watchdog, daemon=True)
     watchdog_thread.start()
