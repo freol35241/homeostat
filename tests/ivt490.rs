@@ -56,7 +56,7 @@ async fn setup() -> (Mosquitto, Supervisor, zenoh::Session) {
 /// passthrough bus aspects: the "serial" wrapper level is stripped, the
 /// sensor-object leaves join with underscores, a controller field's
 /// `valid` predicate becomes its own {aspect}_valid boolean, and nested
-/// blob topics and the raw serial line produce nothing — not even a
+/// blob topics and the raw serial line produce nothing, not even a
 /// health event.
 #[tokio::test(flavor = "multi_thread")]
 async fn ivt490_state_translates_to_bus_state() {
@@ -95,16 +95,16 @@ async fn ivt490_state_translates_to_bus_state() {
         r#"{"value":20.30,"valid":true}"#,
     )
     .await;
-    // A field the device has stopped believing still publishes its value —
-    // stale and absent must stay distinguishable — with the flag false.
+    // A field the device has stopped believing still publishes its value,
+    // with the flag false, so stale and absent stay distinguishable.
     mqtt.publish(
         &format!("{BASE}/controller/state/outdoor_temperature_offset"),
         r#"{"value":-2.50,"valid":false}"#,
     )
     .await;
-    // The controller's indoor_temperature_target normalizes to setpoint —
-    // the device's own readback ({value}-nested on the wire), not a
-    // command echo.
+    // The controller's indoor_temperature_target normalizes to setpoint.
+    // This is the device's own readback ({value}-nested on the wire), not
+    // a command echo.
     mqtt.publish(
         &format!("{BASE}/controller/state/indoor_temperature_target"),
         r#"{"value":21.00}"#,
@@ -153,13 +153,12 @@ async fn ivt490_state_translates_to_bus_state() {
 
     // The discovery record carries the entity's aspect descriptor
     // (docs/design.md#aspect-descriptors): the dashboard's vocabulary for
-    // the aspects above, with command bounds straight from the adapter's
-    // own COMMANDS table — the family tier gets the setpoint alone (mode
-    // is automation-driven at the reporting house), the owner-tier knobs
-    // are described but not family-writable, and the
-    // input this fixture feeds (indoor_temperature_actual is not a
-    // command; outdoor_temperature_offset is not fed here) keeps its
-    // command.
+    // the aspects above, with command bounds taken from the adapter's own
+    // COMMANDS table. The family tier gets only the setpoint (mode is
+    // automation-driven at the reporting house). The owner-tier knobs are
+    // described but not family-writable. The fed input costs no command
+    // here: indoor_temperature_actual is not a command, and
+    // outdoor_temperature_offset is not fed in this fixture.
     let replies = observer
         .get("home/discovery/ivt490")
         .await
@@ -227,12 +226,12 @@ async fn ivt490_state_translates_to_bus_state() {
     sup.shutdown();
 }
 
-/// (a1) A controller field whose `value` is null is "no reading", not a
-/// reading of null: the `valid` flag beside it still publishes, the value
-/// does not — the last real reading stands on the bus, as it does for any
-/// other aspect the device stops speaking about — and the field drops
-/// with a "null-value" health event. The board republishes its tracked
-/// fields this way for a minute or two after its daily reboot.
+/// (a1) A controller field whose `value` is null means "no reading"
+/// rather than a reading of null. The `valid` flag beside it still
+/// publishes and the value does not, so the last real reading stands on
+/// the bus, as it does for any other aspect the device stops reporting.
+/// The field drops with a "null-value" health event. The board republishes
+/// its tracked fields this way for a minute or two after its daily reboot.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_null_controller_value_is_absent_not_a_sample() {
     let (mosquitto, mut sup, observer) = setup().await;
@@ -306,8 +305,8 @@ async fn silence_flips_available() {
 /// (b)+(f) An arbitrated manual-band setpoint wish forwards through the
 /// arbiter and reaches MQTT as a stringified float; while that manual
 /// lease holds, a direct automation-band wish on the same key is refused
-/// upstream and never reaches MQTT — the same structural proof as z2m's
-/// lock test that this adapter has no home/cmd path of its own.
+/// upstream and does not reach MQTT. As in z2m's lock test, that shows
+/// this adapter has no home/cmd path of its own.
 #[tokio::test(flavor = "multi_thread")]
 async fn manual_setpoint_reaches_mqtt_via_arbiter_then_automation_refused() {
     let (mosquitto, mut sup, observer) = setup().await;
@@ -351,15 +350,15 @@ async fn manual_setpoint_reaches_mqtt_via_arbiter_then_automation_refused() {
 /// (b1) The retain flag is per aspect, and the two directions are asserted
 /// in one run against one broker so neither can pass for the other.
 ///
-/// The setpoint is RETAINED: the firmware gives `indoor_temperature_target` no
-/// validity predicate and defaults it to 20 degC on reboot, so the retained
-/// slot is what restores a deliberate setting after the board restarts or
+/// The setpoint is retained: the firmware gives `indoor_temperature_target`
+/// no validity predicate and defaults it to 20 degC on reboot, so the
+/// retained slot restores a chosen setting after the board restarts or
 /// after a write is lost. A late subscriber must therefore be handed it.
 ///
-/// The outdoor offset is NOT retained, and that is the load-bearing half: it
-/// expires by design, so a writer that deliberately goes quiet lets the pump
-/// fall back to curve control. A retained copy would be re-applied on the
-/// next reconnect and turn that designed failure into a stuck value. The same
+/// The outdoor offset is not retained, and that half matters more. It is
+/// meant to expire, so a writer that goes quiet lets the pump fall back
+/// to curve control. A retained copy would be re-applied on the next
+/// reconnect and turn that planned fallback into a stuck value. The same
 /// late subscriber must see nothing for it.
 #[tokio::test(flavor = "multi_thread")]
 async fn setpoint_is_retained_and_the_expiring_offset_is_not() {
@@ -383,8 +382,8 @@ async fn setpoint_is_retained_and_the_expiring_offset_is_not() {
             .expect("command reached its set topic");
     }
 
-    // ONE late subscriber for both topics: if it receives nothing at all the
-    // probe proved nothing, so the setpoint it must receive is this run's own
+    // One late subscriber for both topics. If it receives nothing at all the
+    // probe proved nothing, so the setpoint it must receive is this run's
     // positive control.
     let mut late = Mqtt::connect(mosquitto.port, "test-retain-late").await;
     late.subscribe(&format!("{BASE}/controller/set/+")).await;
@@ -554,15 +553,15 @@ async fn out_of_range_setpoint_drops_with_invalid_command_event() {
 }
 
 /// (c1) The outdoor offset's bound is +/-50 K. The firmware has no range
-/// check of its own -- it adds the offset to the outdoor reading and the
-/// NTC emulator saturates at the ends of its digipot -- so the adapter's
-/// bound is the only refusal in the chain and it has to admit what the
+/// check of its own: it adds the offset to the outdoor reading, and the
+/// NTC emulator saturates at the ends of its digipot. So the adapter's
+/// bound is the only refusal in the chain, and it has to admit what the
 /// firmware can act on. The reporting house's automation writes flue/15 +
 /// 15*fraction, unclamped; the flow it replaces was read back by the pump
 /// at +20.7, and a +/-10 K bound would lose every such write.
 ///
-/// +16.0 is the value that matters: outside +/-10 K, routine for the flow,
-/// and here the positive control -- it must reach MQTT in the same run
+/// +16.0 is the value that matters. It is outside +/-10 K, routine for the
+/// flow, and here the positive control: it must reach MQTT in the same run
 /// that +60.0 is refused, or the refusal proves nothing.
 #[tokio::test(flavor = "multi_thread")]
 async fn offset_bound_admits_the_flow_and_refuses_nonsense() {
@@ -613,10 +612,10 @@ async fn offset_bound_admits_the_flow_and_refuses_nonsense() {
     sup.shutdown();
 }
 
-/// (c') `operating_mode` is strictly the integer 1, 2 or 3: a valid mode
-/// rides the arbiter to MQTT as an integer string, an out-of-enum integer
-/// and a non-integer both drop with the invalid-command event and never
-/// reach MQTT. (Manual band throughout: equal bands pass the arbiter, so
+/// (c') `operating_mode` must be the integer 1, 2 or 3. A valid mode rides
+/// the arbiter to MQTT as an integer string. An out-of-enum integer and a
+/// non-integer both drop with the invalid-command event and do not reach
+/// MQTT. (Manual band throughout: equal bands pass the arbiter, so
 /// the drops observed are the adapter's own validation, not refusals.)
 #[tokio::test(flavor = "multi_thread")]
 async fn operating_mode_enum_enforced() {
@@ -682,9 +681,9 @@ async fn operating_mode_enum_enforced() {
     sup.shutdown();
 }
 
-/// (d) THE CONTRACT: every arbiter-forwarded payload is an envelope
+/// (d) The cmd contract: every arbiter-forwarded payload is an envelope
 /// `{value, priority, actor}`. A bare value with no envelope, published
-/// directly on the arbiter-class key the adapter actually subscribes to
+/// directly on the arbiter-class key the adapter subscribes to
 /// (this entity is arbitrated: it has no home/cmd path of its own), is
 /// dropped with a health event instead of reaching MQTT; a properly
 /// enveloped command on the same key still works afterwards.
@@ -724,7 +723,7 @@ async fn envelope_less_command_drops_with_health_event() {
     sup.shutdown();
 }
 
-/// (e) The adapter honors the step-2 unit contract: liveliness token when
+/// (e) The adapter honors the unit contract: liveliness token when
 /// ready, clean SIGTERM shutdown within the grace, no orphans.
 #[tokio::test(flavor = "multi_thread")]
 async fn adapter_honors_unit_contract() {

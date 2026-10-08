@@ -1,8 +1,9 @@
 //! OpenWrt adapter integration tests: each scenario spawns a fake ubus
-//! endpoint (`tests/fake_openwrt.py` — real JSON-RPC shapes, real session-id
-//! enforcement) on a free port plus the real supervisor on the openwrt
-//! fixture house, and asserts on the bus. The fixture polls every second
-//! with a 2s presence away-delay, so transitions land within the timeouts.
+//! endpoint (`tests/fake_openwrt.py`, with real JSON-RPC shapes and
+//! session-id enforcement) on a free port plus the real supervisor on the
+//! openwrt fixture house, and asserts on the bus. The fixture polls every
+//! second with a 2s presence away-delay, so transitions land within the
+//! timeouts.
 
 mod common;
 
@@ -144,8 +145,8 @@ async fn start(routers_path: &std::path::Path) -> (Supervisor, zenoh::Session) {
 }
 
 /// (a) A phone associating to an AP becomes `presence = true` on the bus;
-/// dropping off flips it back after the away delay — and the discovery
-/// feed shows the sighted station bound to its entity.
+/// dropping off flips it back after the away delay. The discovery feed
+/// shows the sighted station bound to its entity.
 #[tokio::test(flavor = "multi_thread")]
 async fn wifi_association_drives_presence() {
     let (router, _routers_path, mut sup, observer) = setup().await;
@@ -249,10 +250,10 @@ async fn unreachable_router_drops_once_and_recovers() {
 }
 
 /// (e) A router whose replies stream is read whole. aiohttp's
-/// `content.read(n)` hands back only what is buffered — the first chunk of
-/// a chunked reply — so a single read truncates the JSON and every decode
-/// fails. rpcd itself answers with Content-Length, so stock rpcd never
-/// shows this; the onvif adapter makes the identical read against
+/// `content.read(n)` hands back only what is buffered (the first chunk of
+/// a chunked reply), so a single read truncates the JSON and every decode
+/// fails. rpcd itself answers with Content-Length, so stock rpcd does not
+/// show this; the onvif adapter makes the same read against
 /// firmware that does stream. The whole-body read belongs to both call
 /// sites, so the test does too.
 ///
@@ -277,13 +278,13 @@ async fn a_chunked_ubus_reply_is_read_whole() {
     sup.shutdown();
 }
 
-/// (f) Partial blindness is not absence. Two routers configured, the phone
-/// associated only to the AP: when the AP goes silent the phone must hold
-/// stale, because the union of the routers that *did* answer says nothing
-/// about a device that lives on the one that did not — reading it as
-/// absence publishes `presence = false` with the family at home for as
-/// long as the AP stays silent. The blind spot is announced, and absence
-/// becomes assertable again once every router answers.
+/// (f) A silent router does not make its stations absent. Two routers are
+/// configured and the phone is associated only to the AP. When the AP
+/// goes silent the phone must hold stale, because the routers that did
+/// answer say nothing about a device on the one that did not. Reading it
+/// as absence would publish `presence = false` with the family at home for
+/// as long as the AP stays silent. The blind spot is announced, and
+/// absence becomes assertable again once every router answers.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_silent_router_cannot_assert_absence() {
     let gw = FakeOpenwrt::spawn().await;

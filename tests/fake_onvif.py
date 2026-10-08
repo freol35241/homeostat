@@ -4,18 +4,17 @@
 #     "aiohttp>=3.9,<4",
 # ]
 # ///
-"""A minimal, honest ONVIF Profile S pull-point event service, for the
-onvif adapter's integration tests (tests/onvif.rs; see
-docs/design.md#cameras).
+"""A minimal ONVIF Profile S pull-point event service for tests/onvif.rs.
 
-Speaks the real SOAP shapes the adapter sends: CreatePullPointSubscription
-(returning a SubscriptionReference address — deliberately with a WRONG,
-unroutable host, the Tapo/NAT quirk the adapter must survive by keeping
-the configured netloc), PullMessages (a genuine long poll against a
-per-subscription queue), and Renew. Every SOAP request must carry a valid
-WS-Security UsernameToken PasswordDigest (Base64(SHA1(nonce + created +
-password))) — a bad or missing digest gets 401, which is how the tests
-know the adapter authenticates.
+See docs/design.md#cameras. It speaks the real SOAP shapes the adapter
+sends: CreatePullPointSubscription, PullMessages (a long poll against a
+per-subscription queue) and Renew. CreatePullPointSubscription returns a
+SubscriptionReference address with a wrong, unroutable host, as Tapo
+cameras behind NAT do; the adapter must survive it by keeping the
+configured netloc. Every SOAP request must carry a valid WS-Security
+UsernameToken PasswordDigest (Base64(SHA1(nonce + created + password))).
+A bad or missing digest gets 401, which is how the tests know the adapter
+authenticates.
 
 Test control rides plain HTTP on the same port, out of the SOAP path:
 
@@ -28,7 +27,7 @@ Test control rides plain HTTP on the same port, out of the SOAP path:
   POST /control/chunked -> send every later SOAP reply with
        Transfer-Encoding: chunked, split across two TCP writes. Real
        cameras stream their replies; aiohttp's `web.Response` does not,
-       so without this the adapter is only ever tested against a body
+       so without this the adapter would only be tested against a body
        that arrives in one piece.
 """
 
@@ -62,18 +61,19 @@ def soap(body: str) -> web.Response:
 
 # Where the chunked reply below is cut. Anywhere inside the document does;
 # this lands in the opening tag, so a client that stops at the first chunk
-# fails to parse rather than quietly getting a shorter document.
+# fails to parse instead of getting a shorter document without an error.
 CHUNK_AT = 24
 
 
 async def soap_chunked(request: web.Request, body: str) -> web.StreamResponse:
-    """The same envelope, chunked across two TCP writes with a pause
-    between them — what a camera's own HTTP stack does, and what
-    `web.Response` cannot express. A client reading "up to n bytes" once
-    sees only the first chunk."""
+    """The same envelope, chunked across two TCP writes with a pause between.
+
+    A camera's own HTTP stack does this, and `web.Response` cannot express
+    it. A client reading "up to n bytes" once sees only the first chunk.
+    """
     # charset included, as web.Response(text=...) does it: the client reads
-    # the encoding off this header, and omitting it changes more than the
-    # framing, which is the one thing this is meant to vary.
+    # the encoding off this header, and omitting it would change more than
+    # the framing, which is all this is meant to vary.
     response = web.StreamResponse(
         headers={"Content-Type": "application/soap+xml; charset=utf-8"}
     )
@@ -155,7 +155,7 @@ class FakeCamera:
         sub_id = f"sub_{next(self.ids)}"
         self.subscriptions[sub_id] = asyncio.Queue()
         self.created += 1
-        # A deliberately unroutable netloc: the adapter must keep the
+        # An unroutable netloc: the adapter must keep the
         # configured host and trust only the path.
         return await self.reply(
             request,
@@ -177,10 +177,10 @@ class FakeCamera:
             return fault()
         if root.find(f".//{{{WSNT_NS}}}Renew") is not None:
             if self.break_on_renew:
-                # The race: the subscription really is gone, and Renew is
-                # the call that discovers it. The next pull must
-                # fail too, which is how the adapter tells this apart from
-                # firmware that simply has no SubscriptionManager.
+                # The race: the subscription is gone, and Renew is the call
+                # that discovers it. The next pull must fail too, which is
+                # how the adapter tells this apart from firmware that has no
+                # SubscriptionManager.
                 self.subscriptions.clear()
                 return fault()
             if self.reject_renew:

@@ -2,9 +2,9 @@
 //! broker on a free port plus the real supervisor on the rf433 fixture
 //! house, and asserts on both buses.
 //!
-//! The thing under test is mostly the DECAY. A one-way sender asserts and
-//! never retracts, so every assertion here is really about when `false`
-//! appears and when it does not.
+//! Most of what is under test is the decay. A one-way sender asserts and
+//! does not retract, so the assertions here are about when `false` appears
+//! and when it does not.
 
 mod common;
 
@@ -53,16 +53,16 @@ async fn setup() -> (Mosquitto, Supervisor, zenoh::Session) {
 
 /// (a) Every bound entity is `false` at startup, before any traffic. The
 /// held value is the adapter's construct rather than a device reading, so
-/// "nothing has asserted" is the honest state after a start — and it is
-/// what makes a crash-looping adapter self-clear instead of leaving a
-/// motion sensor stuck on.
+/// "nothing has asserted" is the correct state after a start. It also
+/// makes a crash-looping adapter clear itself instead of leaving a motion
+/// sensor stuck on.
 #[tokio::test(flavor = "multi_thread")]
 async fn every_bound_entity_starts_false() {
     let (_mosquitto, mut sup, observer) = setup().await;
 
-    // The mirror, not a subscriber: these publishes happen before the
-    // adapter is ready, so a test's subscriber never sees them. That is
-    // also how a late-joining consumer sees them, which is the point.
+    // Read from the mirror rather than a subscriber: these publishes happen
+    // before the adapter is ready, so a test's subscriber does not see them.
+    // A late-joining consumer reads them the same way.
     await_mirror(&observer, PIR_KEY, &json!(false)).await;
     await_mirror(&observer, DOOR_KEY, &json!(false)).await;
     await_mirror(&observer, SMOKE_KEY, &json!(false)).await;
@@ -109,12 +109,11 @@ async fn codes_address_their_own_entity() {
 
     // The PIR's 1 s hold expires while the door's much longer one stands.
     //
-    // Note which instrument answers which question, because the adapter is
-    // built on exactly this distinction: the PIR's release is an EVENT and
-    // arrives on the subscriber, while "the door is still held" is STATE
-    // and is read from the mirror. Waiting on a subscriber for the door
-    // would wait forever — a held value is not republished, which is the
-    // whole point of transitions-only.
+    // The two answers come from different places, and the adapter is built
+    // on that distinction. The PIR's release is an event and arrives on the
+    // subscriber. "The door is still held" is state and is read from the
+    // mirror. Waiting on a subscriber for the door would not end, because a
+    // held value is not republished: the adapter publishes transitions only.
     expect_states(&state_sub, &[(PIR_KEY, json!(false))]).await;
     await_mirror(&observer, DOOR_KEY, &json!(true)).await;
 
@@ -124,10 +123,10 @@ async fn codes_address_their_own_entity() {
 /// (d) The JSON payload current gateway firmware publishes carries the
 /// same code under `value`.
 ///
-/// ⚠️ This is the shape the adapter was written to from documentation, not
-/// from a wire — the hardware available to its author speaks the legacy
-/// bare-decimal form. The test pins the documented shape so a firmware that
-/// disagrees fails here rather than in a house.
+/// This shape comes from the gateway's documentation rather than from
+/// captured traffic: the hardware available to the adapter's author speaks
+/// the legacy bare-decimal form. The test pins the documented shape so a
+/// firmware that disagrees fails here rather than in a house.
 #[tokio::test(flavor = "multi_thread")]
 async fn json_payloads_carry_the_code_in_value() {
     let (mosquitto, mut sup, observer) = setup().await;
@@ -182,8 +181,8 @@ async fn unbound_codes_reach_discovery_not_the_health_feed() {
     sup.shutdown();
 }
 
-/// (e2) An estate hears neighbours' remotes and RF noise all day —
-/// unbound is unbounded traffic, not a fixed handful. Only the most
+/// (e2) An estate hears neighbours' remotes and RF noise all day, so
+/// unbound codes have no fixed count. Only the most
 /// recently first-heard `MAX_UNBOUND=200` stay in discovery; the oldest is
 /// evicted, and the flood coalesces into the one publish this test reads
 /// (the adapter debounces republish for `DISCOVERY_COALESCE_S=5s`).
@@ -197,12 +196,12 @@ async fn unbound_discovery_stays_capped_at_two_hundred() {
     let mut mqtt = Mqtt::connect(mosquitto.port, "test-cap").await;
 
     // 201 distinct unbound codes, first-heard in order 90000000..90000200.
-    // One over the cap, so exactly the oldest (90000000) must be evicted.
+    // One over the cap, so the oldest (90000000) and only it must be evicted.
     for code in 90_000_000..=90_000_200i64 {
         mqtt.publish(EVENTS, &code.to_string()).await;
     }
 
-    // The debounce means only the FINAL state after the flood settles is
+    // The debounce means only the final state after the flood settles is
     // worth reading; poll until a record for the last code appears, which
     // can only happen once every code has been processed.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
@@ -246,8 +245,8 @@ async fn unbound_discovery_stays_capped_at_two_hundred() {
 }
 
 /// (f) A bound entity's descriptor reaches discovery, and a detector's
-/// field is notable — a smoke alarm firing has to land on Now as a
-/// deviation, which is a descriptor fact rather than a state one.
+/// field is notable: a smoke alarm firing has to land on Now as a
+/// deviation, and that is a descriptor fact rather than a state one.
 #[tokio::test(flavor = "multi_thread")]
 async fn descriptors_mark_a_detector_notable() {
     let (_mosquitto, mut sup, observer) = setup().await;

@@ -6,13 +6,14 @@
 //!    features and naming; units with every param and its `editable_by`,
 //!    of which only family ones are writable.
 //! 2. The WebSocket snapshot carries current bus state, and a command
-//!    posted with the write header is published at the concrete cmd key —
-//!    observed via the reflector echoing it back as state. A command for a
-//!    capability the dashboard's own manifest does not grant is refused
-//!    before the bus, and the model marks the entity not commandable. An
-//!    aspect descriptor in the owning adapter's discovery record admits
-//!    the family-editable commands it declares, within their constraints,
-//!    and rides the snapshot (docs/design.md#aspect-descriptors).
+//!    posted with the write header is published at the concrete cmd key.
+//!    The test sees it through the reflector echoing it back as state. A
+//!    command for a capability the dashboard's own manifest does not grant
+//!    is refused before the bus, and the model marks the entity not
+//!    commandable. An aspect descriptor in the owning adapter's discovery
+//!    record admits the family-editable commands it declares, within their
+//!    constraints, and rides the snapshot
+//!    (docs/design.md#aspect-descriptors).
 //! 3. A parameter write within constraints persists through the core's
 //!    validating config queryable; an out-of-constraint write is refused
 //!    and changes nothing.
@@ -20,16 +21,16 @@
 //!    and any request with a foreign Host are both refused.
 //! 5. The map surface: vendored assets are served allowlisted (the page's
 //!    modules by a path inside `assets/dashboard/`, nothing outside), person
-//!    entities render in `/api/model` but are never commandable, and
+//!    entities render in `/api/model` but are not commandable, and
 //!    `/tiles.pmtiles` 404s without `HOMEOSTAT_DASHBOARD_TILES` and serves
 //!    Range requests when it is set (docs/design.md#map-and-people).
 //! 6. `/api/logs` proxies a unit's captured stdout/stderr tail
 //!    (docs/design.md#logs-and-the-audit-trail): known lines come back
 //!    stream-tagged, `lines=N` truncates, and an unknown unit 404s.
-//! 7. The camera media plane (docs/design.md#cameras): browsers never
-//!    speak go2rtc — `/api/camera/{entity}/live` relays the MSE WebSocket
-//!    byte-for-byte, addressing the stream by the camera's entity id (how
-//!    the shim names it) rather than its entity name, and an unknown or
+//! 7. The camera media plane (docs/design.md#cameras). Browsers do not
+//!    speak go2rtc. `/api/camera/{entity}/live` relays the MSE WebSocket
+//!    byte for byte and addresses the stream by the camera's entity id
+//!    (how the shim names it) rather than its entity name. An unknown or
 //!    non-camera entity 404s. There is no snapshot route: a still frame
 //!    needs a transcode the media plane does not carry.
 
@@ -100,8 +101,8 @@ fn http_request(
 }
 
 /// Like `http_request`, but keeps raw headers and body bytes instead of
-/// parsing the body as JSON — needed to assert on Range/Content-Range for
-/// the binary /tiles.pmtiles response.
+/// parsing the body as JSON. The Range/Content-Range assertions on the
+/// binary /tiles.pmtiles response need them.
 fn http_request_bytes(
     addr: &str,
     path: &str,
@@ -211,15 +212,14 @@ async fn cache_read(session: &zenoh::Session, key: &str) -> Option<Value> {
 }
 
 /// The browser suite (tests/browser) runs the real page against canned
-/// fixtures, which is what makes it fast and deterministic — and what
-/// makes it able to drift: hand-maintained JSON can quietly stop looking
-/// like what this unit actually emits, and every test above it would go on
-/// passing. This is the canary. It compares the field names of a REAL
-/// `/api/model` against the fixture's, and fails when the real one grows a
-/// field the fixture has never heard of.
+/// fixtures. That makes it fast and deterministic, and also lets it drift:
+/// hand-maintained JSON can stop looking like what this unit emits while
+/// every test above keeps passing. This test compares the field names of a
+/// real `/api/model` against the fixture's, and fails when the real one
+/// has a field the fixture lacks.
 ///
-/// Names only, never values: the fixture house is a different house, and
-/// the point is the shape.
+/// It compares names and not values, because the fixture house is a
+/// different house and only the shape has to match.
 #[tokio::test(flavor = "multi_thread")]
 async fn browser_fixtures_still_look_like_the_real_model() {
     let port = common::free_port();
@@ -270,12 +270,12 @@ async fn dashboard_serves_the_family_surface() {
         Supervisor::spawn_with_env(FIXTURE, &[("HOMEOSTAT_DASHBOARD_PORT", &port.to_string())]);
     let observer = sup.observer().await;
 
-    // All bus subscribers are declared up front, before the health waits —
-    // never right before the POST that exercises them: a subscriber's
+    // All bus subscribers are declared up front, before the health waits,
+    // rather than right before the POST that exercises them. A subscriber's
     // interest needs to propagate through the router to the publishing
-    // session, and a put racing that propagation is silently dropped
-    // (routinely, under CI load). The multi-second startup below is the
-    // settle window.
+    // session, and a put racing that propagation is dropped without notice
+    // (often, under CI load). The multi-second startup below gives it time
+    // to settle.
     let cmd_sub = observer
         .declare_subscriber(LAMP_CMD)
         .await
@@ -356,8 +356,8 @@ async fn dashboard_serves_the_family_surface() {
     assert_eq!(evening["params"]["grace_minutes"]["default"], json!(5));
     assert_eq!(evening["params"]["grace_minutes"]["editable_by"], "owner");
 
-    // A person entity is just another entity in the model, on the
-    // reserved "person" pseudo-room — never commandable (checked below).
+    // A person entity is an ordinary entity in the model, on the reserved
+    // "person" pseudo-room. It is not commandable (checked below).
     let person = model["entities"]
         .as_array()
         .expect("entities")
@@ -406,8 +406,9 @@ async fn dashboard_serves_the_family_surface() {
             .expect("evening_lights in model")
             .clone();
         // The zone-keyed subscription reaches the livingroom sensor once
-        // its key is on the bus (the lamp's `on`, subscribed too, is not
-        // published yet at this point — a source is a key, not a binding).
+        // its key is on the bus. The lamp's `on` is subscribed too but not
+        // published yet at this point, and a source is a live key rather than
+        // a subscription.
         if evening["sources"] == json!([{"entity": "presence_sensor", "aspect": "presence"}]) {
             break;
         }
@@ -424,10 +425,10 @@ async fn dashboard_serves_the_family_surface() {
     assert_eq!(status, 200);
 
     // ...and tells the browser to revalidate it. The page and its logic
-    // asset are one artifact written against each other; without this the
-    // browser is on heuristic freshness and an upgrade can pair the new
-    // page with the cached old logic — an empty page that takes no taps,
-    // with a healthy backend behind it (docs/design.md#the-page).
+    // asset are written against each other. Without revalidation the
+    // browser uses heuristic freshness, and an upgrade can pair the new page
+    // with the cached old logic. The result is an empty page that takes no
+    // taps, with a healthy backend behind it (docs/design.md#the-page).
     let revalidates = |path: &str| {
         let (status, headers, _) = http_request_bytes(&addr, path, &[]);
         assert_eq!(status, 200, "{path}");
@@ -489,7 +490,7 @@ async fn dashboard_serves_the_family_surface() {
         assert_eq!(status, 404, "{path} must 404");
     }
 
-    // No tiles configured: the endpoint 404s rather than pretending.
+    // No tiles configured: the endpoint 404s.
     let (status, _) = http_request(&addr, "GET", "/tiles.pmtiles", &[], None);
     assert_eq!(
         status, 404,
@@ -519,9 +520,8 @@ async fn dashboard_serves_the_family_surface() {
         json!({"value": true, "priority": "manual", "actor": "dashboard", "id": cmd_id}),
         "the dashboard stamps its own manifest priority and unit name"
     );
-    // The browser gets that same id back, which is the whole point of it:
-    // the control can show the command pending and then resolve it against
-    // the event that ends it.
+    // The browser gets that same id back, so the control can show the
+    // command pending and then resolve it against the event that ends it.
     assert_eq!(
         reply,
         json!({"ok": true, "id": cmd_id, "heard": true}),
@@ -536,8 +536,8 @@ async fn dashboard_serves_the_family_surface() {
 
     // A fresh WebSocket snapshot now carries the lamp state. The echo we
     // observed above proves the reflector published it, but router fan-out
-    // to the dashboard's own subscriber is unordered with respect to ours —
-    // reconnect until the dashboard's cache has caught up.
+    // to the dashboard's own subscriber is unordered with respect to ours.
+    // The test reconnects until the dashboard's cache has caught up.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     let (mut ws, snapshot) = loop {
         let mut ws = ws_connect(&addr, "/ws");
@@ -583,7 +583,7 @@ async fn dashboard_serves_the_family_surface() {
     );
     assert_eq!(status, 400, "{reply}");
 
-    // A person entity is never commandable: not in COMMANDABLE at all.
+    // A person entity is not commandable: it is not in COMMANDABLE.
     let (status, reply) = http_request(
         &addr,
         "POST",
@@ -594,8 +594,8 @@ async fn dashboard_serves_the_family_surface() {
     assert_eq!(status, 400, "person entity must refuse commands: {reply}");
 
     // A vocabulary aspect is type-checked before the bus: a lock takes a
-    // bool, not a string, an object, or NaN — and a body past the 64 KiB
-    // cap never reaches the handler at all (aiohttp answers 413).
+    // bool, and a string, an object or NaN is refused. A body past the
+    // 64 KiB cap does not reach the handler (aiohttp answers 413).
     let (status, reply) = http_request(
         &addr,
         "POST",
@@ -646,10 +646,10 @@ async fn dashboard_serves_the_family_surface() {
     );
 
     // A lock command is accepted: COMMANDABLE maps lock -> {"locked"}.
-    // The wish still just goes to home/cmd at manual band, stamped the same
-    // way as any other command — for a real arbitrated entity, the arbiter
-    // (not exercised by this fixture) is what enforces the family always
-    // winning over automations (docs/design.md#commanding).
+    // The wish goes to home/cmd at manual band, stamped like any other
+    // command. For a real arbitrated entity, the arbiter (not exercised by
+    // this fixture) makes the family win over automations
+    // (docs/design.md#commanding).
     let (status, reply) = http_request(
         &addr,
         "POST",
@@ -676,9 +676,9 @@ async fn dashboard_serves_the_family_surface() {
 
     // A switch command is refused: the capability is in COMMANDABLE, but
     // this dashboard's manifest (units/dashboard.toml) grants light, lock
-    // and climate and NOT switch — the grant table `plan` prints is what
-    // the unit honours. The model says so too, so the page renders
-    // the relay read-only rather than as a toggle that silently works.
+    // and climate and not switch. The unit honours the grant table `plan`
+    // prints. The model says so too, so the page renders the relay
+    // read-only rather than as a toggle that does nothing.
     let (status, model) = http_request(&addr, "GET", "/api/model", &[], None);
     assert_eq!(status, 200, "{model}");
     let commandable = |name: &str| {
@@ -715,8 +715,8 @@ async fn dashboard_serves_the_family_surface() {
 
     // A climate command is accepted: COMMANDABLE maps climate ->
     // {"setpoint"}, the family-facing base aspect
-    // (docs/design.md#the-capability-vocabulary). Setpoint is a float — the
-    // envelope must carry it through unmodified, same as any other value.
+    // (docs/design.md#the-capability-vocabulary). Setpoint is a float, and
+    // the envelope must carry it through unmodified like any other value.
     let (status, reply) = http_request(
         &addr,
         "POST",
@@ -934,7 +934,7 @@ async fn dashboard_serves_the_family_surface() {
 
     // 9. `/api/history` builds a recorder selector from browser input, so
     // the entity must be one the model knows and the aspect one key
-    // segment — a wildcard would fan the per-series limit out over the
+    // segment. A wildcard would fan the per-series limit out over the
     // whole store, and `/`, `#`, `$` would raise inside the executor.
     // No recorder in this fixture: a valid pair answers an empty series
     // list, which is the 200 that matters here.
@@ -976,8 +976,8 @@ async fn dashboard_serves_the_family_surface() {
     sup.shutdown();
 }
 
-/// 5. With `HOMEOSTAT_DASHBOARD_TILES` set, /tiles.pmtiles serves the file —
-/// in full, and as a Range-respecting partial response — and /api/model
+/// 5. With `HOMEOSTAT_DASHBOARD_TILES` set, /tiles.pmtiles serves the file
+/// in full and as a Range-respecting partial response, and /api/model
 /// says so.
 #[tokio::test(flavor = "multi_thread")]
 async fn dashboard_serves_configured_tiles() {
@@ -1107,8 +1107,8 @@ async fn dashboard_serves_unit_logs() {
     sup.shutdown();
 }
 
-/// A fake go2rtc (`tests/fake_go2rtc.py`) spawned directly on a free port —
-/// the dashboard proxies reach it via `HOMEOSTAT_GO2RTC`, exactly as they
+/// A fake go2rtc (`tests/fake_go2rtc.py`) spawned directly on a free port.
+/// The dashboard proxies reach it through `HOMEOSTAT_GO2RTC`, as they
 /// would reach the shim-supervised real one on localhost.
 struct FakeGo2rtc {
     child: std::process::Child,
@@ -1181,7 +1181,7 @@ fn ws_read_frame(stream: &mut TcpStream) -> (u8, Vec<u8>) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn dashboard_proxies_camera_media() {
-    // The fake serves only the stream go2rtc would really have: named by
+    // The fake serves only the stream go2rtc would have: named by
     // the entity's id, which the fixture keeps distinct from its name.
     let go2rtc = FakeGo2rtc::spawn("porch_cam_native").await;
     let port = common::free_port();
@@ -1219,12 +1219,13 @@ async fn dashboard_proxies_camera_media() {
     );
 
     // No snapshot route: go2rtc can only make a JPEG of an H.264 source by
-    // transcoding, and the media plane is a pure remux, so the room card
-    // says "tap to view" rather than showing a frame that never arrives.
+    // transcoding, and the media plane only remuxes, so the room card says
+    // "tap to view" rather than waiting on a frame that would not arrive.
     let (status, _) = http_request(&addr, "GET", "/api/camera/porch_cam/snapshot", &[], None);
     assert_eq!(status, 404, "there is no snapshot proxy");
 
-    // Unknown and non-camera entities 404 — the live proxy is model-gated.
+    // Unknown and non-camera entities 404, because the live proxy is
+    // model-gated.
     let (status, _) = http_request(&addr, "GET", "/api/camera/no_such_cam/live", &[], None);
     assert_eq!(status, 404);
     let (status, _) = http_request(&addr, "GET", "/api/camera/lamp/live", &[], None);
@@ -1248,9 +1249,9 @@ async fn dashboard_proxies_camera_media() {
 }
 
 /// 8. The whole-house darken (docs/design.md#commanding, "Group actions fan
-/// out at the manual edge"): POST /api/lights/off publishes one
-/// manual-band off-command per bound light — and only lights — behind the
-/// same write gate as every other command.
+/// out at the manual edge"). POST /api/lights/off publishes one
+/// manual-band off-command per bound light, and nothing for other
+/// entities, behind the same write gate as every other command.
 #[tokio::test(flavor = "multi_thread")]
 async fn dashboard_darkens_the_house() {
     let port = common::free_port();
@@ -1309,8 +1310,8 @@ async fn dashboard_darkens_the_house() {
     );
 
     // Only lights: the switch, lock, climate and camera entities get
-    // nothing. Same-session FIFO — anything else the fan-out had published
-    // would arrive before this window closes.
+    // nothing. The session delivers in order, so anything else the fan-out
+    // had published would arrive before this window closes.
     if let Ok(Ok(extra)) = tokio::time::timeout(Duration::from_secs(2), cmd_sub.recv_async()).await
     {
         panic!(

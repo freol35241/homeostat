@@ -2,15 +2,15 @@
 """Generates the dashboard wireframe SVGs in this directory.
 
 Sheets:
-  A — concept: spatial-first room grid (exploration)
-  B — concept: regulator view, signals + setpoints first (exploration)
-  V — widget vocabulary: the manifest -> widget generation function
-  H — the direction of record: deviation-first "Now" (embedded in the
-      README; map and person entities are settled design, not yet built)
+  A: concept, a spatial-first room grid (exploration)
+  B: concept, a regulator view with signals and setpoints first (exploration)
+  V: widget vocabulary, the manifest -> widget generation function
+  H: the direction of record, a deviation-first "Now" (embedded in the
+     README; map and person entities are designed but not yet built)
 
-Run from anywhere: python3 generate.py — output lands next to the script.
-Wireframe discipline: grayscale UI, blue reserved for annotations only,
-health states carried by shape + word (never color alone).
+Run from anywhere with `python3 generate.py`; the output lands next to the
+script. Wireframe rules: grayscale UI, blue only for annotations, and
+health states carried by shape and word rather than color alone.
 """
 
 import math
@@ -227,7 +227,7 @@ def entity_row(s, x, y, w, name, kind="toggle", on=True, value=None, seed=1):
 
 
 # ==============================================================================
-# Sheet A — room grid
+# Sheet A: room grid
 # ==============================================================================
 
 def sheet_a(path):
@@ -389,7 +389,7 @@ def sheet_a(path):
 
 
 # ==============================================================================
-# Sheet B — regulator view
+# Sheet B: regulator view
 # ==============================================================================
 
 def sheet_b(path):
@@ -556,7 +556,7 @@ def sheet_b(path):
 
 
 # ==============================================================================
-# Sheet V — widget vocabulary
+# Sheet V: widget vocabulary
 # ==============================================================================
 
 def sheet_v(path):
@@ -692,7 +692,7 @@ def sheet_v(path):
 
 
 # ==============================================================================
-# Sheet H — hybrid: B's shell, deviation-first "Now"
+# Sheet H: hybrid of B's shell and a deviation-first "Now"
 # ==============================================================================
 
 def sheet_h(path):

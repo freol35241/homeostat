@@ -1,14 +1,14 @@
-//! Virtual sensor integration test (docs/design.md#virtual-sensors): an
-//! automation binds an entity and publishes derived state onto it, proving
-//! the plan accepts automation-bound entities end to end and the derived
-//! reading behaves like any other state — mirrored by the core, published
-//! on transition only.
+//! Virtual sensor integration test (docs/design.md#virtual-sensors). An
+//! automation binds an entity and publishes derived state onto it. The
+//! test shows the plan accepts automation-bound entities end to end, and
+//! that the derived reading behaves like any other state: mirrored by the
+//! core and published on transition only.
 //!
 //! Determinism: source puts go through publishers that have awaited a
 //! matching subscriber (the evening.rs pattern), and the fused key is read
-//! both live and through the core's state mirror — the mirror subscribes
-//! `home/state/**` from supervisor start, so the automation's put is never
-//! writer-side filtered.
+//! both live and through the core's state mirror. The mirror subscribes
+//! `home/state/**` from supervisor start, so the writer does not filter
+//! out the automation's put.
 
 mod common;
 
@@ -64,7 +64,7 @@ async fn mirror_read_eventually(session: &zenoh::Session, key: &str, expected: &
 
 /// The fused downstairs temperature: derived state lands on the virtual
 /// entity's key, reaches the core mirror like any adapter's state, and is
-/// republished only when the fusion actually moves.
+/// republished only when the fusion moves.
 #[tokio::test(flavor = "multi_thread")]
 async fn virtual_sensor_publishes_fused_state() {
     let mut sup = Supervisor::spawn(FIXTURE);
@@ -91,10 +91,10 @@ async fn virtual_sensor_publishes_fused_state() {
     );
     mirror_read_eventually(&observer, FUSED_STATE, &json!(20.0)).await;
 
-    // A second source at the same value does not move the mean: publish on
-    // transition only. Then a real move publishes exactly once — the next
-    // live sample being 21.0 (same-session FIFO) proves no duplicate 20.0
-    // was ever published in between.
+    // A second source at the same value does not move the mean, so nothing
+    // publishes. Then a real move publishes once. One session's samples
+    // arrive in order, so a next live sample of 21.0 shows no duplicate
+    // 20.0 was published in between.
     office.put(json!(20.0).to_string()).await.expect("put");
     office.put(json!(22.0).to_string()).await.expect("put");
     assert_eq!(
@@ -176,7 +176,7 @@ async fn restarted_automation_catches_up_from_the_mirror() {
     assert!((0.0..60.0).contains(&age), "age {age} s");
 
     // Restart with both sources within policy: the fusion is republished
-    // from the catch-up alone — no source publishes. Catch-up arrives one
+    // from the catch-up alone, with no source publishing. Catch-up arrives one
     // key at a time and the unit recomputes on each, as on first start.
     let restarted = restart_automation(&observer, running.pid.expect("pid")).await;
     assert_eq!(

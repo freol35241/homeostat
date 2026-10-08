@@ -1,11 +1,11 @@
-//! Step-6 integration tests: the MCP agent surface against the real server
+//! Integration tests for the MCP agent surface against the real server
 //! and a live supervised house. The stdio scenarios drive `homeostat mcp`
-//! as a child process speaking newline-delimited JSON-RPC — the shape a
-//! local MCP client launches; the HTTP scenarios run the server as a
-//! supervised service unit, the deployed shape.
+//! as a child process speaking newline-delimited JSON-RPC, the way a
+//! local MCP client launches it. The HTTP scenarios run the server as a
+//! supervised service unit, as it is deployed.
 //!
-//! No fixed ports, no wall-clock sleeps: every wait polls an observable
-//! condition within a deadline.
+//! Every wait polls an observable condition within a deadline. No test
+//! uses a fixed port or a wall-clock sleep.
 
 mod common;
 
@@ -118,7 +118,7 @@ async fn reads_serve_live_state_and_history() {
     .await;
 
     // Publish once a subscriber (the core state mirror, the recorder)
-    // matches, so the put is never write-side filtered.
+    // matches, so the writer does not filter out the put.
     let publisher = matched_publisher(&observer, "home/state/attic/mcp_probe/level").await;
     publisher.put("7").await.expect("state put");
 
@@ -166,14 +166,14 @@ async fn reads_serve_live_state_and_history() {
     assert!(is_error, "{text}");
 
     // The recorder's chart shapes reach the agent: bucket= folds
-    // the window into points, changes=1 keeps only the moves. Asserted
-    // against the real recorder, so these are its own folds rather than a
-    // selector that merely looks right.
+    // the window into points, changes=1 keeps only the moves. These run
+    // against the real recorder, so they check its own folds and not only
+    // that the selector looks right.
     //
     // The window starts at the row's own stamp: the bucket count is capped
     // against the window, and the default window reaches back to the
-    // epoch — an hour bucket over that is refused, which is the guard
-    // doing its job rather than a shape this tool should dodge.
+    // epoch. The recorder refuses an hour bucket over that, and the tool
+    // leaves that guard in place.
     let from = row["ts"].as_str().expect("row ts is RFC3339");
     let (text, is_error) = mcp.call(
         "read_history",
@@ -235,8 +235,8 @@ async fn reads_serve_live_state_and_history() {
 /// with `lines`, as text. `read_events` is exercised at the protocol level
 /// against a stand-in queryable, so this proves the tool is listed, builds
 /// the documented selector, and degrades gracefully with nothing
-/// answering — not the recorder's own behavior, which recorder.rs covers
-/// at `home/history/events`.
+/// answering. The recorder's own behavior is covered in recorder.rs at
+/// `home/history/events`.
 #[tokio::test(flavor = "multi_thread")]
 async fn read_logs_and_events_over_mcp() {
     let sup = Supervisor::spawn("tests/fixtures/house_logs");
@@ -364,8 +364,8 @@ async fn read_logs_and_events_over_mcp() {
 
     let deadline = Instant::now() + Duration::from_secs(10);
     let text = loop {
-        // from/to are integer µs UTC — the recorder's native convention and
-        // the reply ts's own unit, deliberately not read_history's RFC3339.
+        // from/to are integer µs UTC: the recorder's native convention and the
+        // unit of the reply's ts. read_history takes RFC3339 instead.
         let (text, is_error) = mcp.call(
             "read_events",
             json!({
@@ -426,7 +426,7 @@ async fn read_logs_and_events_over_mcp() {
 }
 
 /// (a') The deployed shape: the server runs as a supervised service unit
-/// over HTTP — it declares the unit liveliness token (health `running`)
+/// over HTTP. It declares the unit liveliness token (health `running`)
 /// and answers MCP over POST.
 #[tokio::test(flavor = "multi_thread")]
 async fn http_transport_runs_as_supervised_unit() {
@@ -492,13 +492,11 @@ async fn http_transport_runs_as_supervised_unit() {
     let _ = std::fs::remove_dir_all(&house);
 }
 
-/// One HTTP POST: connect, send, read the full response. Retries while the
-/// server's listener may still be coming up.
 /// The agent surface serves the whole house state, and reachability is
 /// its only credential (docs/design.md#local-only-access). A page in a
 /// family browser can reach a LAN address, so the three dashboard gates
-/// apply here too — and the header is the one a cross-origin `fetch`
-/// cannot add without a preflight this server refuses.
+/// apply here too. The header is one a cross-origin `fetch` cannot add
+/// without a preflight, which this server refuses.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_http_surface_refuses_what_a_browser_can_send() {
     let house = temp_house(FIXTURE, "mcp-gate");
@@ -522,7 +520,7 @@ async fn the_http_surface_refuses_what_a_browser_can_send() {
         "params": {"name": "read_state", "arguments": {"key": "home/**"}}
     });
 
-    // Wait for the unit, using a request that IS allowed.
+    // Wait for the unit, using a request that is allowed.
     let ping = json!({"jsonrpc": "2.0", "id": 0, "method": "tools/list"});
     let (status, _) = http_post_retry(&addr, &ping, Duration::from_mins(1));
     assert_eq!(status, 200, "the surface is up");
@@ -569,7 +567,7 @@ async fn the_http_surface_refuses_what_a_browser_can_send() {
 /// A LAN peer cannot make the server allocate or wait on its say-so: a
 /// declared body past the cap is refused before allocation, and a
 /// request that fails the gate is answered without the body being read
-/// at all — a huge declared length with nothing behind it gets its 403
+/// at all. A huge declared length with nothing behind it gets its 403
 /// promptly instead of holding a thread until the read times out. The
 /// unit stays `running` throughout.
 #[tokio::test(flavor = "multi_thread")]
@@ -611,7 +609,7 @@ async fn the_http_surface_bounds_what_a_peer_can_make_it_read() {
     );
 
     // No X-Homeostat and a huge declared length: the 403 arrives without
-    // the body ever being awaited.
+    // the server waiting for the body.
     let started = Instant::now();
     let (status, body) =
         http_post_declaring(&addr, &ping, &[], Some(1_000_000_000_000_000)).expect("request sent");
@@ -635,6 +633,8 @@ async fn the_http_surface_bounds_what_a_peer_can_make_it_read() {
     let _ = std::fs::remove_dir_all(&house);
 }
 
+/// One HTTP POST: connect, send, read the full response. Retries while the
+/// server's listener may still be coming up.
 fn http_post_retry(addr: &str, message: &Value, timeout: Duration) -> (u16, Value) {
     let deadline = Instant::now() + timeout;
     loop {
@@ -652,7 +652,7 @@ fn http_post(addr: &str, message: &Value) -> Result<(u16, Value), String> {
     http_post_with(addr, message, &[("X-Homeostat", "1")])
 }
 
-/// A raw POST with exactly the given extra headers, for the gate tests.
+/// A raw POST with only the given extra headers, for the gate tests.
 fn http_post_with(
     addr: &str,
     message: &Value,
@@ -662,7 +662,7 @@ fn http_post_with(
 }
 
 /// Like `http_post_with`, declaring `content_length` instead of the
-/// body's real length when given — the body sent is still the message.
+/// body's real length when given. The body sent is still the message.
 fn http_post_declaring(
     addr: &str,
     message: &Value,
@@ -699,8 +699,8 @@ fn http_post_declaring(
         .and_then(|s| s.parse().ok())
         .ok_or_else(|| format!("no status line in {response:?}"))?;
     let body = response.split_once("\r\n\r\n").map_or("", |(_, body)| body);
-    // A refusal answers in plain text on purpose — nothing about the
-    // house is echoed to a caller that failed the gate.
+    // A refusal answers in plain text, so nothing about the house is
+    // echoed to a caller that failed the gate.
     let value = if body.is_empty() || status == 403 || status == 413 {
         Value::Null
     } else {

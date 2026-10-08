@@ -1,7 +1,8 @@
-//! ESPHome adapter integration tests: each scenario spawns a real fake
-//! ESPHome device (`tests/fake_esphome.py`, the real plaintext wire protocol
-//! over aioesphomeapi's bundled protobuf messages) on a free port plus the
-//! real supervisor on the esphome fixture house, and asserts on both buses.
+//! ESPHome adapter integration tests: each scenario spawns a fake ESPHome
+//! device (`tests/fake_esphome.py`, which speaks the real plaintext wire
+//! protocol over aioesphomeapi's bundled protobuf messages) on a free port
+//! plus the real supervisor on the esphome fixture house, and asserts on
+//! both buses.
 
 mod common;
 
@@ -39,9 +40,9 @@ impl FakeEsphome {
 
     fn spawn_with_args(extra: &[&str]) -> Self {
         let port = free_port();
-        // Own process group: `uv run` wraps the actual python fake, and
-        // killing only the wrapper leaves the device alive — kill() must
-        // take the whole group for a dropout to actually happen.
+        // Own process group: `uv run` wraps the python fake, and killing only
+        // the wrapper leaves the device alive. kill() takes the whole group so
+        // that the dropout happens.
         let child = Command::new("uv")
             .args([
                 "run",
@@ -194,7 +195,7 @@ async fn device_dropout_flips_available() {
     .await;
 
     // A command at the dead device drops with device-unavailable
-    // (docs/design.md#availability) instead of silently vanishing.
+    // (docs/design.md#availability) instead of disappearing without a trace.
     let event_sub = observer
         .declare_subscriber(EVENT_KEY)
         .await
@@ -213,7 +214,7 @@ async fn device_dropout_flips_available() {
 
 /// (a3) An ESPHome entity whose `object_id` would mint the reserved
 /// `available` aspect drops with a health event while its siblings still
-/// translate — the z2m twin of this rule has its own test in z2m.rs.
+/// translate. z2m.rs tests the same rule for Zigbee.
 #[tokio::test(flavor = "multi_thread")]
 async fn reserved_aspect_field_drops_with_health_event() {
     let (_device, _devices_path, mut sup, observer) = setup_with(&["--reserved-sensor"]).await;
@@ -244,8 +245,8 @@ async fn reserved_aspect_field_drops_with_health_event() {
 }
 
 /// (b) A manual-band cmd envelope on the switch reaches the fake device as
-/// a `SwitchCommandRequest`, which echoes the new state back — landing on
-/// the bus as the same translated state key.
+/// a `SwitchCommandRequest`, which echoes the new state back. The echo
+/// lands on the bus as the same translated state key.
 #[tokio::test(flavor = "multi_thread")]
 async fn cmd_envelope_reaches_fake_device_and_echoes_back() {
     let (_device, _devices_path, mut sup, observer) = setup().await;
@@ -360,7 +361,7 @@ async fn bound_device_entities_published_as_discovery() {
     sup.shutdown();
 }
 
-/// (e) The adapter honors the step-2 unit contract: liveliness token when
+/// (e) The adapter honors the unit contract: liveliness token when
 /// ready, clean SIGTERM shutdown within the grace, no orphans.
 #[tokio::test(flavor = "multi_thread")]
 async fn adapter_honors_unit_contract() {

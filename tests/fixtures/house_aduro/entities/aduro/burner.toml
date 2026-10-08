@@ -1,7 +1,7 @@
 schema = 1
 
 [entity]
-# id is the bridge's MQTT_BASE_TOPIC; deliberately not the entity name, so
+# id is the bridge's MQTT_BASE_TOPIC. It differs from the entity name, so
 # the tests prove binding goes through the id.
 id = "aduro2mqtt"
 capability = "burner"

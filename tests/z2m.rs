@@ -154,11 +154,11 @@ async fn bad_input_drops_with_health_event() {
     sup.shutdown();
 }
 
-/// (c2) A non-finite field (NaN — which Python's json.loads accepts,
-/// though JSON has no literal for it) drops with a "non-finite" event
-/// instead of publishing; a finite field in the SAME payload still
-/// publishes normally, proving the adapter processes fields independently
-/// rather than dropping the whole message.
+/// (c2) A non-finite field (NaN, which Python's json.loads accepts though
+/// JSON has no literal for it) drops with a "non-finite" event instead of
+/// publishing. A finite field in the same payload still publishes, so the
+/// adapter handles fields independently rather than dropping the whole
+/// message.
 #[tokio::test(flavor = "multi_thread")]
 async fn non_finite_field_drops_without_publishing_or_killing_the_message() {
     let (mosquitto, mut sup, observer) = setup().await;
@@ -229,11 +229,11 @@ async fn malformed_field_name_drops_without_killing_the_message() {
     sup.shutdown();
 }
 
-/// (c1b) Structurally malformed bridge/devices entries — non-dict rows, a
-/// non-string id, a string definition, a non-list features — skip like
-/// id-less ones instead of raising out of paho's network thread (which
-/// would leave the adapter deaf but "running"); well-formed rows still
-/// publish and translation keeps working afterwards.
+/// (c1b) Structurally malformed bridge/devices entries (non-dict rows, a
+/// non-string id, a string definition, a non-list features) are skipped
+/// like id-less ones instead of raising out of paho's network thread,
+/// which would leave the adapter deaf but "running". Well-formed rows
+/// still publish and translation keeps working afterwards.
 #[tokio::test(flavor = "multi_thread")]
 async fn malformed_inventory_entries_do_not_kill_the_translator() {
     let (mosquitto, mut sup, observer) = setup().await;
@@ -288,8 +288,8 @@ async fn malformed_inventory_entries_do_not_kill_the_translator() {
 }
 
 /// (c2) The bridge's availability feature maps to the reserved `available`
-/// aspect — both the {"state": ...} payload and the legacy bare string —
-/// and a native device field that would mint the reserved aspect drops
+/// aspect, from both the {"state": ...} payload and the legacy bare
+/// string, and a native device field that would mint the reserved aspect drops
 /// with a health event while its siblings still translate.
 #[tokio::test(flavor = "multi_thread")]
 async fn availability_maps_to_reserved_aspect() {
@@ -338,7 +338,7 @@ async fn availability_maps_to_reserved_aspect() {
     sup.shutdown();
 }
 
-/// (d) The adapter honors the step-2 unit contract: liveliness token when
+/// (d) The adapter honors the unit contract: liveliness token when
 /// ready, clean SIGTERM shutdown within the grace, no orphans.
 #[tokio::test(flavor = "multi_thread")]
 async fn adapter_honors_unit_contract() {
@@ -347,8 +347,8 @@ async fn adapter_honors_unit_contract() {
 }
 
 /// (e) Discovery: a bridge/devices inventory lands on the bus as one JSON
-/// document at home/discovery/zigbee — binding ids, configured flags,
-/// best-effort suggestions, raw definitions; the coordinator is omitted.
+/// document at home/discovery/zigbee, with binding ids, configured flags,
+/// best-effort suggestions and raw definitions. The coordinator is omitted.
 /// A bound device's record also carries the aspect descriptor generated
 /// from its exposes (docs/design.md#aspect-descriptors); an unbound one
 /// does not.
@@ -416,7 +416,7 @@ async fn bridge_inventory_published_as_discovery() {
         lamp["aspects"]["groups"],
         json!(["readings", "config", "diagnostics"])
     );
-    // the capability's own vocabulary is described as readings, never commanded here
+    // the capability's own vocabulary is described as readings, not commands
     assert_eq!(
         fields["on"],
         json!({"label": "state", "kind": "boolean", "group": "readings"})
@@ -513,7 +513,7 @@ async fn bridge_inventory_published_as_discovery() {
     sup.shutdown();
 }
 
-/// (f) The cmd contract, THE CONTRACT: every home/cmd/** payload is an
+/// (f) The cmd contract: every home/cmd/** payload is an
 /// envelope `{value, priority, actor}`. A bare value with no envelope is
 /// dropped with a health event (reason "invalid-command") instead of
 /// reaching MQTT, and the adapter keeps translating afterwards.
@@ -559,14 +559,14 @@ async fn envelope_less_command_drops_with_health_event() {
 }
 
 /// (g) Arbitrated lock command, end to end
-/// (docs/design.md#arbitrated-mode): the fixture's `front_door` lock is
-/// arbitrated and the house runs an arbiter unit. A manual-band wish on home/cmd forwards through the
-/// arbiter to home/arbiter, which z2m subscribes to and translates
-/// into z2m's LOCK/UNLOCK set vocabulary. While that manual lease holds, a
-/// direct automation-band wish on the same home/cmd key is refused
-/// upstream and never reaches MQTT — which is also the structural proof
-/// that z2m itself has no home/cmd subscription for the lock: if it did,
-/// the refused wish would still leak through to MQTT regardless of the
+/// (docs/design.md#arbitrated-mode). The fixture's `front_door` lock is
+/// arbitrated and the house runs an arbiter unit. A manual-band wish on
+/// home/cmd forwards through the arbiter to home/arbiter, which z2m
+/// subscribes to and translates into z2m's LOCK/UNLOCK set vocabulary.
+/// While that manual lease holds, a direct automation-band wish on the
+/// same home/cmd key is refused upstream and does not reach MQTT. That
+/// also shows z2m has no home/cmd subscription for the lock: if it did,
+/// the refused wish would leak through to MQTT regardless of the
 /// arbiter's decision.
 #[tokio::test(flavor = "multi_thread")]
 async fn manual_lock_command_reaches_mqtt_via_arbiter() {
@@ -670,8 +670,8 @@ async fn await_alive(observer: &zenoh::Session) {
 
 /// (h) A non-default, multi-segment base topic works in every direction.
 /// The prefix comes from the endpoint path, and every topic the adapter
-/// parses is relative to it — splitting at a fixed segment would break the
-/// moment the prefix carries its own slash.
+/// parses is relative to it. Splitting at a fixed segment would break as
+/// soon as the prefix contains a slash.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_non_default_base_topic_translates_both_directions() {
     let house = house_with_base("z2m-prefixed", "VP52/zigbee2mqtt", None);
@@ -753,9 +753,9 @@ async fn a_non_default_base_topic_translates_both_directions() {
     let _ = std::fs::remove_dir_all(&house);
 }
 
-/// (i) A base topic that matches nothing subscribes SUCCESSFULLY and then
-/// hears nothing — no SUBACK timeout, no error. The adapter must say so
-/// rather than sit there healthy and permanently deaf.
+/// (i) A base topic that matches nothing subscribes successfully and then
+/// hears nothing, with no SUBACK timeout and no error. The adapter must
+/// report it rather than stay healthy and deaf.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_base_topic_that_matches_nothing_reports_bridge_silent() {
     let house = house_with_base("z2m-deaf", "wrong/prefix", Some(1.0));
@@ -791,8 +791,9 @@ async fn a_base_topic_that_matches_nothing_reports_bridge_silent() {
 
 /// (j) A broker that requires auth: the password reaches the adapter from
 /// `HOMEOSTAT_MQTT_CREDENTIALS`, a file outside the repo. The manifest keeps
-/// no secret, and the password is one URL parsing would mangle — `@` and
-/// `/` in an inline <mqtt://user:pass@host> silently reparse the host.
+/// no secret, and the password is one URL parsing would mangle: `@` and
+/// `/` in an inline <mqtt://user:pass@host> change which part parses as
+/// the host, without an error.
 #[tokio::test(flavor = "multi_thread")]
 async fn broker_credentials_come_from_a_file_outside_the_repo() {
     const USER: &str = "homeostat";
@@ -827,7 +828,7 @@ async fn broker_credentials_come_from_a_file_outside_the_repo() {
         .expect("liveliness stream open");
     assert_eq!(token.kind(), SampleKind::Put);
 
-    // Proof it is really talking to the broker, not merely alive.
+    // This shows it is talking to the broker and not only alive.
     let state_sub = observer
         .declare_subscriber("home/state/**")
         .await
@@ -858,9 +859,9 @@ async fn broker_credentials_come_from_a_file_outside_the_repo() {
 }
 
 /// (k) A device the bridge knows but no entity file binds is a steady
-/// state, not a dropped message: it must not emit an event per publish.
-/// The discovery-first workflow makes that the NORMAL condition, so the
-/// event would run forever on a house mid-configuration.
+/// state rather than a dropped message, so it must not emit an event per
+/// publish. The discovery-first workflow makes that the normal condition,
+/// and the events would not stop on a house mid-configuration.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_known_but_unbound_device_does_not_report_every_message() {
     let (mosquitto, mut sup, observer) = setup().await;
@@ -889,8 +890,8 @@ async fn a_known_but_unbound_device_does_not_report_every_message() {
         mqtt.publish("zigbee2mqtt/snzb_03_01", r#"{"occupancy":true}"#)
             .await;
     }
-    // A sentinel the adapter definitely reports, published last. The
-    // assertion is strict on the NEXT event: any unknown-device emitted
+    // A sentinel the adapter reports, published last. The assertion is
+    // strict on the next event: any unknown-device emitted
     // for snzb_03_01 would arrive ahead of it.
     mqtt.publish("zigbee2mqtt/lamp_kitchen_1", "certainly not json")
         .await;
@@ -900,7 +901,7 @@ async fn a_known_but_unbound_device_does_not_report_every_message() {
         "a known-but-unbound device must not report each publish"
     );
 
-    // ...whereas a device the bridge has never mentioned still reports.
+    // ...whereas a device the bridge has not mentioned still reports.
     mqtt.publish("zigbee2mqtt/ghost_device", r#"{"state":"ON"}"#)
         .await;
     assert_eq!(
@@ -913,9 +914,9 @@ async fn a_known_but_unbound_device_does_not_report_every_message() {
 }
 
 /// (l) Mid-run bridge liveness. The boot watchdog is one-shot and cannot
-/// see a bridge that dies later; the bridge's own retained state can, and
-/// the inventory cannot — z2m republishes it only on change, so its
-/// silence never distinguishes a dead bridge from a stable estate.
+/// see a bridge that dies later. The bridge's own retained state can. The
+/// inventory cannot, because z2m republishes it only on change, so its
+/// silence does not tell a dead bridge from a stable estate.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_bridge_going_offline_mid_run_reports_once_per_transition() {
     let (mosquitto, mut sup, observer) = setup().await;

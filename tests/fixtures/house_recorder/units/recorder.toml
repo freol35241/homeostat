@@ -16,8 +16,8 @@ mode = "static"
 endpoint = "sqlite:${RECORDER_DB}"
 
 # Retention: rows older than the window are purged hourly; 0 keeps them
-# forever. Events are the audit trail — the smaller table and the one
-# worth keeping longest — so the two windows are separate.
+# forever. The two windows are separate because events are the audit
+# trail: the smaller table, and the one worth keeping longest.
 [params.retain_samples_days]
 type = "float"
 default = 0
@@ -25,8 +25,8 @@ constraint = { min = 0 }
 editable_by = "owner"
 
 # Superseded issues are what grows: every re-issue of a horizon is kept
-# so a forecast can be checked against what actually happened, which is
-# the whole reason to store one. Measured on issue time.
+# so a forecast can be checked against what happened, which is the
+# reason to store one. Measured on issue time.
 [params.retain_forecasts_days]
 type = "float"
 default = 0
@@ -52,7 +52,7 @@ editable_by = "owner"
 # many months ago is sealed into archive/<store>-YYYY-MM.db beside the
 # store (a plain SQLite file with the store's schema) and leaves this
 # file, so the file the recorder writes stays one window deep and nothing
-# is lost. 0 never archives.
+# is lost. 0 disables archiving.
 [params.archive_after_months]
 type = "int"
 default = 0
@@ -60,7 +60,7 @@ constraint = { min = 0 }
 editable_by = "owner"
 
 # Archives are kept forever unless this is set: then a whole archive file
-# goes once its month closed more than this many months ago. It never
+# goes once its month closed more than this many months ago. It does not
 # touches the hot file, which the retain_*_days windows govern. 0 keeps
 # every archive.
 [params.retain_archives_months]
@@ -72,7 +72,7 @@ editable_by = "owner"
 [bus.subscribes]
 state = "home/state/**"
 # A series' future, stored beside its past. Recording forecasts is a
-# house's choice — drop this line and the class is simply not kept.
+# house's choice: drop this line and the class is not kept.
 forecast = "home/forecast/**"
 cmd = "home/cmd/**"
 health = "home/health/**"

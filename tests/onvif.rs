@@ -1,7 +1,7 @@
-//! ONVIF adapter integration tests: each scenario spawns a fake ONVIF
-//! pull-point event service (`tests/fake_onvif.py` — real SOAP shapes, real
-//! WS-Security digest checking, a genuine long poll) on a free port plus
-//! the real supervisor on the onvif fixture house, and asserts on the bus.
+//! ONVIF adapter integration tests. Each scenario spawns a fake ONVIF
+//! pull-point event service (`tests/fake_onvif.py`, with real SOAP shapes,
+//! WS-Security digest checking and a long poll) on a free port plus the
+//! real supervisor on the onvif fixture house, and asserts on the bus.
 
 mod common;
 
@@ -83,8 +83,8 @@ impl FakeOnvif {
         );
     }
 
-    /// How many subscriptions the camera has handed out, from its own
-    /// count — the only way to see a rotation from outside the adapter.
+    /// How many subscriptions the camera has handed out, from its own count.
+    /// Outside the adapter, this is the only way to see a rotation.
     fn created(&self) -> u64 {
         let mut stream = std::net::TcpStream::connect(("127.0.0.1", self.port))
             .expect("connect to fake camera control");
@@ -149,7 +149,7 @@ async fn setup() -> (FakeOnvif, PathBuf, Supervisor, zenoh::Session) {
         .expect("adapter liveliness token within 90s")
         .expect("liveliness stream open");
     assert_eq!(token.kind(), SampleKind::Put);
-    // Ready fires with the subscription attempt merely in flight; a trigger
+    // Ready fires while the subscription attempt is still in flight; a trigger
     // before the pull-point subscription exists lands in zero queues and is
     // lost (a real camera's events during an outage are too). available =
     // true is the adapter's own signal that the subscription is up.
@@ -158,20 +158,19 @@ async fn setup() -> (FakeOnvif, PathBuf, Supervisor, zenoh::Session) {
 }
 
 /// Triggers repeatedly until the motion key carries `expected`. Triggers
-/// are lossy by design: one fans out only to the subscriptions existing
-/// at that instant, and the adapter abandons its subscription on any
-/// fault (a trigger stranded in an abandoned queue is a real camera's
-/// event during an outage) — so every test drives triggers through a
-/// retry, never one-shot.
+/// are lossy: one fans out only to the subscriptions existing at that
+/// instant, and the adapter abandons its subscription on any fault (a
+/// trigger stranded in an abandoned queue is a real camera's event during
+/// an outage). So every test drives triggers through a retry.
 ///
 /// The retry alone is not enough, because `motion` publishes on change. A
 /// subscription propagates to the publishing peer asynchronously after
 /// `declare_subscriber().await` returns locally, so a sample published
-/// inside that window is simply gone — and re-triggering the same value
-/// cannot produce another, because the adapter has already published it.
-/// So each miss also asks the core's last-value mirror (`home/state/**`),
-/// which is request/response and immune to the race: it answers whether
-/// the edge happened at all.
+/// inside that window is lost. Re-triggering the same value cannot
+/// produce another, because the adapter has already published it. So each
+/// miss also asks the core's last-value mirror (`home/state/**`), which is
+/// request/response and not subject to the race: it answers whether the
+/// edge happened at all.
 async fn trigger_until_motion(
     camera: &FakeOnvif,
     sub: &StateSub,
@@ -221,8 +220,8 @@ async fn trigger_until_event(camera: &FakeOnvif, sub: &StateSub, value: &str, re
 }
 
 /// (a) On-camera motion events translate to the camera entity's `motion`
-/// aspect — the event plane in one assertion: pixels stay off the bus,
-/// detections ride it as ordinary scalar state.
+/// aspect. This is the event plane in one assertion: pixels stay off the
+/// bus, and detections ride it as ordinary scalar state.
 #[tokio::test(flavor = "multi_thread")]
 async fn motion_events_translate_to_bus_state() {
     let (camera, _cameras_path, mut sup, observer) = setup().await;
@@ -239,7 +238,7 @@ async fn motion_events_translate_to_bus_state() {
 
 /// (b) The broken-subscription contract: a broken subscription (every pull
 /// faults) emits one "event-stream-lost" health event and the adapter
-/// resubscribes from scratch — events flow again without a restart.
+/// resubscribes from scratch, so events flow again without a restart.
 #[tokio::test(flavor = "multi_thread")]
 async fn broken_subscription_resubscribes() {
     let (camera, _cameras_path, mut sup, observer) = setup().await;
@@ -263,8 +262,8 @@ async fn broken_subscription_resubscribes() {
 
 /// (b2) Availability rides the subscription: losing it publishes
 /// available = false alongside the health event, and the recreated
-/// subscription publishes available = true again — while `motion` stands
-/// untouched through the outage (stale, never false).
+/// subscription publishes available = true again. `motion` stays
+/// untouched through the outage: stale, but not false.
 #[tokio::test(flavor = "multi_thread")]
 async fn subscription_loss_flips_available() {
     let (camera, _cameras_path, mut sup, observer) = setup().await;
@@ -287,7 +286,7 @@ async fn subscription_loss_flips_available() {
 }
 
 /// (c) A notification that parses but carries an unusable value drops
-/// with a "malformed-payload" health event — and the stream survives it.
+/// with a "malformed-payload" health event, and the stream survives it.
 #[tokio::test(flavor = "multi_thread")]
 async fn malformed_motion_value_drops_with_health_event() {
     let (camera, _cameras_path, mut sup, observer) = setup().await;
@@ -307,12 +306,12 @@ async fn malformed_motion_value_drops_with_health_event() {
     sup.shutdown();
 }
 
-/// (d) The VP52 shape, diagnosed on real hardware: a Tapo answers
-/// `CreatePullPointSubscription` and `PullMessages` with 200 and Renew with
-/// 400, because it implements no WS-BaseNotification `SubscriptionManager`.
-/// The pull stream is FINE, so this must not read as a stream loss —
-/// treating it as one tears the subscription down and flaps `available`
-/// roughly every 17 s, indefinitely, against a live camera.
+/// (d) A real Tapo camera answers `CreatePullPointSubscription` and
+/// `PullMessages` with 200 and Renew with 400, because it implements no
+/// WS-BaseNotification `SubscriptionManager`. The pull stream is fine, so
+/// this must not read as a stream loss. Treating it as one tears the
+/// subscription down and flaps `available` roughly every 17 s against a
+/// live camera.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_camera_without_a_subscription_manager_keeps_streaming() {
     let (camera, _cameras_path, mut sup, observer) = setup().await;
@@ -330,13 +329,13 @@ async fn a_camera_without_a_subscription_manager_keeps_streaming() {
         .expect("event subscriber");
 
     // available = true is published once, at the first subscription, which
-    // is before this subscriber exists — so the assertion below is that
-    // NOTHING arrives on it, i.e. no transition at all.
+    // is before this subscriber exists. So the assertion below is that
+    // nothing arrives on it: no transition at all.
     trigger_until_motion(&camera, &state_sub, &observer, true).await;
     camera.control("/control/reject-renew");
 
-    // The refusal is reported once, naming the call — and as its own kind,
-    // not as a dropped message.
+    // The refusal is reported once, naming the call, under its own kind
+    // rather than as a dropped message.
     let event = next_event(&event_sub).await;
     assert_eq!(event["kind"], json!("renew-unsupported"), "{event}");
     let error = event["error"].as_str().expect("error is a string");
@@ -361,10 +360,10 @@ async fn a_camera_without_a_subscription_manager_keeps_streaming() {
     );
 }
 
-/// (e) ...and the subscription is ROTATED before it expires, which is what
-/// keeps such a camera working past `InitialTerminationTime`. Without a
-/// working Renew the stream would otherwise simply stop after PT60S.
-/// Slow by nature: the rotation is a real wall-clock interval.
+/// (e) ...and the subscription is rotated before it expires, which keeps
+/// such a camera working past `InitialTerminationTime`. Without a working
+/// Renew the stream would stop after PT60S. The test is slow because the
+/// rotation is a real wall-clock interval.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_camera_without_a_subscription_manager_rotates_its_subscription() {
     let (camera, _cameras_path, mut sup, observer) = setup().await;
@@ -395,7 +394,7 @@ async fn a_camera_without_a_subscription_manager_rotates_its_subscription() {
     }
 
     // The rotation is invisible from the bus: motion keeps flowing and
-    // availability never moves, because nothing was ever lost.
+    // availability does not move, because nothing was lost.
     trigger_until_motion(&camera, &state_sub, &observer, false).await;
     assert!(
         avail_sub
@@ -409,10 +408,10 @@ async fn a_camera_without_a_subscription_manager_rotates_its_subscription() {
 }
 
 /// (f) The other cause of a Renew fault, which races with the first:
-/// the subscription is genuinely GONE, and Renew is merely the call that
-/// discovers it. Concluding "no `SubscriptionManager`" from the fault alone
-/// would mark a perfectly capable camera as renew-less forever. The next
-/// pull disambiguates — here it fails, so this is an ordinary loss.
+/// the subscription is gone, and Renew is the call that discovers it.
+/// Concluding "no `SubscriptionManager`" from the fault alone would mark a
+/// capable camera as renew-less for good. The next pull tells the two
+/// apart. Here it fails, so this is an ordinary loss.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_renew_fault_from_a_lost_subscription_is_still_a_loss() {
     let (camera, _cameras_path, mut sup, observer) = setup().await;
@@ -441,11 +440,10 @@ async fn a_renew_fault_from_a_lost_subscription_is_still_a_loss() {
     sup.shutdown();
 }
 
-/// (g) A notification is not a transition. A Tapo C200 re-asserts motion on
-/// every evaluation tick — one real episode against VP52's cameras arrived
-/// as 417 identical `true`s in 56 seconds for two edges —
-/// so `motion` publishes on CHANGE and the next sample on the key is always
-/// the next edge.
+/// (g) Repeated notifications of one value publish once. A Tapo C200
+/// re-asserts motion on every evaluation tick: one real episode sent 417
+/// identical `true`s in 56 seconds for two edges. So `motion` publishes on
+/// change, and the next sample on the key is the next edge.
 #[tokio::test(flavor = "multi_thread")]
 async fn repeated_notifications_publish_one_transition() {
     let (camera, _cameras_path, mut sup, observer) = setup().await;
@@ -472,9 +470,9 @@ async fn repeated_notifications_publish_one_transition() {
             .map(std::borrow::Cow::into_owned)))
     );
 
-    // ...and a real edge still gets through. Asserting on the VALUE rather
-    // than retrying until false is the point: a duplicate arriving here
-    // must fail the test, not be waited past.
+    // ...and a real edge still gets through. The test asserts on the next
+    // sample's value instead of retrying until false, so a duplicate
+    // arriving here fails the test.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
         camera.control("/control/trigger?value=false");
@@ -500,11 +498,11 @@ async fn repeated_notifications_publish_one_transition() {
 
 /// (i) A camera that streams its SOAP replies is read whole. Real ONVIF
 /// firmware answers with `Transfer-Encoding: chunked`, and aiohttp's
-/// `content.read(n)` hands back only what is buffered — the first chunk —
+/// `content.read(n)` hands back only what is buffered (the first chunk),
 /// so a single read truncates the envelope mid-document and every reply
 /// fails to parse ("unparseable response: unclosed token: line 2, column
 /// 0"). Every other test here passes against a body that arrives in one
-/// piece, so a one-shot read would pass them all; this one does not.
+/// piece, so a one-shot read would pass them all. This one catches it.
 ///
 /// The chunking is switched on mid-run, after motion has already been
 /// proved to work, so the assertion is about the framing and nothing else.

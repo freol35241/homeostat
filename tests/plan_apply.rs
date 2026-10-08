@@ -1,13 +1,12 @@
-//! Step-5b integration tests: plan/apply against a live world, on temp-dir
-//! copies of `tests/fixtures/house_apply`/ that each scenario edits between
+//! Integration tests for plan/apply against a live world, on temp-dir
+//! copies of `tests/fixtures/house_apply/` that each scenario edits between
 //! plan and apply. Scenarios that need `applied_commit` or pending-plan
 //! staleness git-init their copy: the checked-in fixture is a nested
 //! directory of this repo and must not inherit its HEAD (see
 //! docs/design.md#the-apply-walk).
 //!
-//! No fixed ports (each supervisor gets a fresh ephemeral endpoint), no
-//! wall-clock sleeps (every wait polls a bus-observable condition within a
-//! deadline).
+//! Each supervisor gets a fresh ephemeral endpoint, and every wait polls a
+//! bus-observable condition within a deadline instead of sleeping.
 
 mod common;
 
@@ -31,8 +30,8 @@ fn edit(house: &Path, rel: &str, from: &str, to: &str) {
     std::fs::write(&path, text.replace(from, to)).expect("write house file");
 }
 
-/// (a) A behavioral change — the automation's code edited — plans as
-/// behavioral and apply restarts exactly that unit: the adapter's pid
+/// (a) A behavioral change (the automation's code edited) plans as
+/// behavioral and apply restarts only that unit: the adapter's pid
 /// survives, and `applied_commit` updates to the repo's HEAD.
 #[tokio::test(flavor = "multi_thread")]
 async fn behavioral_change_restarts_exactly_that_unit() {
@@ -300,8 +299,8 @@ fn add_watcher_pair(house: &Path, adapter: &str, room: &str, entity: &str, autom
     .expect("write automation manifest");
 }
 
-/// (c) A structural change — a new adapter plus a new automation granted
-/// onto its entity — plans as structural with the grant diff rendered, and
+/// (c) A structural change (a new adapter plus a new automation granted
+/// onto its entity) plans as structural with the grant diff rendered, and
 /// apply starts units in grant order: the adapter before the dependent
 /// automation. Untouched units keep their pids.
 #[tokio::test(flavor = "multi_thread")]
@@ -312,7 +311,7 @@ async fn structural_change_starts_units_in_grant_order() {
     let (probe_pid, reflector_pid) = await_base_units(&observer).await;
 
     add_watcher_pair(&house, "beacon", "den", "beacon_lamp", "watcher");
-    // The beacon must actually come up for the walk to proceed.
+    // The beacon must come up for the walk to proceed.
     edit(
         &house,
         "units/beacon.toml",
@@ -405,7 +404,7 @@ async fn entity_move_plans_as_structural() {
 
 /// (c3) Moving an entity nobody is granted onto is structural too: the
 /// owner's state row records every bound entity, so the move is a grant
-/// delta rendered with the entity's old and new facts — not a bare
+/// delta rendered with the entity's old and new facts rather than a bare
 /// adapter restart on a `files_hash` change (docs/design.md#tiers: entity
 /// moves are structural).
 #[tokio::test(flavor = "multi_thread")]
@@ -447,7 +446,7 @@ async fn ungranted_entity_move_plans_as_structural() {
 
 /// (d) A unit that fails to become ready mid-walk halts the apply in
 /// place and reports position: earlier units keep running, later units
-/// are never started, and a re-plan shows exactly the remaining work.
+/// are not started, and a re-plan shows only the remaining work.
 #[tokio::test(flavor = "multi_thread")]
 async fn failing_unit_halts_walk_in_place() {
     let house = temp_house(FIXTURE, "apply-halt");
@@ -490,7 +489,7 @@ async fn failing_unit_halts_walk_in_place() {
         "applied_commit does not advance on a halted walk"
     );
 
-    // A re-plan shows exactly the remaining work.
+    // A re-plan shows only the remaining work.
     let plan = cli(&["plan", house_arg, "--bus", &sup.endpoint]);
     assert_cli_ok(&plan);
     let text = stdout(&plan);

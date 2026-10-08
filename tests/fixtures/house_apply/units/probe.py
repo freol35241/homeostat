@@ -8,9 +8,9 @@
 
 Echoes its live `level` parameter to `home/state/den/probe_echo/level` on
 every config update, so a test observes a parameter change reaching a
-running unit with no restart. Deliberately SDK-free (zenoh only): the
-fixture is copied into temp dirs where a path-sourced SDK would not
-resolve.
+running unit with no restart. It uses zenoh directly rather than the SDK,
+because the fixture is copied into temp dirs where a path-sourced SDK
+would not resolve.
 """
 # MARKER v1
 

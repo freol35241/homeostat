@@ -1,16 +1,16 @@
 //! `ctx.restore`: a unit reading its own last published value back from
 //! the recorder (docs/design.md#restoring-a-units-own-last-value).
 //!
-//! The core's state mirror is in-memory, so a core restart — every version
-//! upgrade is one — empties it and `subscribe`'s catch-up has nothing to
-//! replay. A latch is the case where that matters: nothing can recompute a
-//! decision somebody made, so without this the mode falls to its code
-//! default and silently disagrees with the house until a human notices.
+//! The core's state mirror is in-memory, so a core restart empties it
+//! (every version upgrade is one) and `subscribe`'s catch-up has nothing
+//! to replay. A latch is the case where that matters: nothing can
+//! recompute a decision somebody made, so without this the mode falls to
+//! its code default and disagrees with the house until a human notices.
 //!
-//! The fixture reproduces exactly that sequence — command the latch, take
-//! the core down, bring it back on the same store — and asserts the
-//! decision survives. The store outlives the supervisor because it is a
-//! file named by `RECORDER_DB`, as in recorder.rs.
+//! The fixture reproduces that sequence (command the latch, take the core
+//! down, bring it back on the same store) and asserts the decision
+//! survives. The store outlives the supervisor because it is a file named
+//! by `RECORDER_DB`, as in recorder.rs.
 
 mod common;
 
@@ -52,7 +52,7 @@ async fn setup(db: &Path) -> (Supervisor, zenoh::Session) {
 }
 
 /// Polls the recorder until the latch's history holds `expected` as its
-/// newest row — the row `restore` will read after the restart.
+/// newest row. That is the row `restore` reads after the restart.
 async fn await_recorded(session: &zenoh::Session, expected: &Value) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
@@ -115,13 +115,13 @@ async fn a_latch_restores_its_decision_across_a_core_restart() {
 }
 
 /// The recorder is up but slow to answer, and `restore` must wait for it.
-/// The stand-in recorder takes 12 s over every `stats` answer — past
-/// zenoh's 10 s default get timeout — and answers one query at a time, as
-/// the real one does. A `restore` that gives up on a timeout, or that
+/// The stand-in recorder takes 12 s over every `stats` answer, which is
+/// past zenoh's 10 s default get timeout, and answers one query at a time,
+/// as the real one does. A `restore` that gives up on a timeout, or that
 /// abandons a short get and asks again, queueing a fresh 12 s answer
-/// behind the one it left, never hears back: it publishes the code default
-/// (false) and the row (true) never reaches the mirror. One that asks once
-/// and waits out its own deadline restores it.
+/// behind the one it left, does not hear back: it publishes the code
+/// default (false) and the row (true) does not reach the mirror. One that
+/// asks once and waits out its own deadline restores it.
 #[tokio::test(flavor = "multi_thread")]
 async fn restore_waits_out_a_recorder_that_is_slow_to_answer() {
     let mut sup = Supervisor::spawn("tests/fixtures/house_restore_slow");

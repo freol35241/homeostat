@@ -7,18 +7,18 @@
 # [tool.uv.sources]
 # homeostat = { path = "../../../../sdk/python", editable = true }
 # ///
-"""Fused temperature: the first virtual sensor
-(docs/design.md#virtual-sensors).
+"""Fused temperature: the first virtual sensor.
 
-Publishes the mean of its fresh source temperatures onto the entity it
-binds, on transition only — an input update that does not move the mean
-publishes nothing. A source silent for longer than `source_max_age_s`
-leaves the mean until it publishes again: `available` is device liveness,
-not data freshness, so the staleness policy is the automation's own.
+See docs/design.md#virtual-sensors. It publishes the mean of its fresh
+source temperatures onto the entity it binds, on transition only: an
+input update that does not move the mean publishes nothing. A source
+silent for longer than `source_max_age_s` leaves the mean until it
+publishes again. `available` is device liveness rather than data
+freshness, so the staleness policy is the automation's own.
 
 After a restart the SDK delivers each source's mirrored value with its
-age, so the first mean is computed at once — and a source whose mirrored
-value is already older than `source_max_age_s` is left out of it.
+age, so the first mean is computed at once. A source whose mirrored value
+is already older than `source_max_age_s` is left out of it.
 """
 
 import threading

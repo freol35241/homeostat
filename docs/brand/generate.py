@@ -1,9 +1,9 @@
 """The Homeostat mark: a pine house, the step response cut into it, the amber set point.
 
-One geometry, three SVGs. The monochrome mark is a real cutout — the
-response curve's stroke outline as a polygon, even-odd filled — so it is one
-path, which is what favicons, themed icons and the app's notification glyph
-need (the app generates its vector drawables from the same numbers).
+One geometry, three SVGs. The monochrome mark is a real cutout: the
+response curve's stroke outline as a polygon, filled even-odd. That makes it
+one path, which is what favicons, themed icons and the app's notification
+glyph need (the app generates its vector drawables from the same numbers).
 
     python3 docs/brand/generate.py docs/brand
 """
@@ -138,7 +138,8 @@ if __name__ == "__main__":
     open(f"{out}/homeostat-mark-dark.svg", "w").write(svg_colour(PINE_DARK))
     open(f"{out}/homeostat-mark-mono.svg", "w").write(svg_mono())
     # Further directories take the colour mark alone: the dashboard serves
-    # a copy from adapters/assets, and a copy is only ever generated.
+    # a copy from adapters/assets, and that copy is generated rather than
+    # edited by hand.
     for extra in sys.argv[2:]:
         open(f"{extra}/homeostat-mark.svg", "w").write(svg_colour(PINE))
     print("ok")

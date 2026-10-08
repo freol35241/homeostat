@@ -23,8 +23,8 @@ discovery = { key = "home/discovery/ivt490" }
 commands = "home/cmd/{room}/{entity}/**"
 arbiter_commands = "home/arbiter/{room}/{entity}/**"
 
-# Short receive-timer so the silence transition happens inside a test run
-# — but longer than any test's "no health event" listening window; the
+# Short receive-timer so the silence transition happens inside a test run,
+# but longer than any test's "no health event" listening window. The
 # adapter-side default (300 s) covers a manifest without it.
 [params.availability_timeout_s]
 type = "float"

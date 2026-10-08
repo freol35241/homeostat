@@ -1,15 +1,15 @@
-//! Step-5a integration tests: the recorder, end to end, on a real
-//! supervisor running the step-4 units (clock, `evening_lights`, reflector)
-//! plus the recorder. Assertions run against both the bus and the store
-//! (rusqlite opens the same SQLite file the recorder writes).
+//! Integration tests for the recorder, end to end, on a real supervisor
+//! running the clock, `evening_lights` and reflector units plus the
+//! recorder. Assertions run against both the bus and the store (rusqlite
+//! opens the same SQLite file the recorder writes).
 //!
-//! Each test gets its own store via the `RECORDER_DB` environment variable,
-//! expanded by the recorder from its manifest's [discovery] endpoint —
-//! no fixed paths, like no fixed ports.
+//! Each test gets its own store through the `RECORDER_DB` environment
+//! variable, which the recorder expands from its manifest's [discovery]
+//! endpoint. No path is fixed, in the same way no port is.
 //!
 //! The tests publish state under rooms outside the `downstairs` zone
 //! (attic, cellar), so the `evening_lights` automation running on the real
-//! clock never reacts to them.
+//! clock does not react to them.
 
 mod common;
 
@@ -82,11 +82,10 @@ fn read_rows(db: &Path, sql: &str) -> Vec<Vec<SqlValue>> {
     }
 }
 
-/// The per-series tally on `series` must say exactly what an aggregate
-/// over `samples` says. It is maintained incrementally — by a trigger on
-/// insert, by `_purge` on delete — so drift is the one failure mode a
-/// denormalized count has, and every test that writes or purges checks
-/// for it here rather than trusting the stats read that depends on it.
+/// The per-series tally on `series` must agree with an aggregate over
+/// `samples`. A trigger maintains it on insert and `_purge` on delete, so
+/// it can drift. Every test that writes or purges checks it here instead
+/// of trusting the stats read that depends on it.
 fn assert_tally_matches_samples(db: &Path) {
     let tally = read_rows(
         db,
@@ -165,7 +164,7 @@ fn now_us() -> i64 {
 /// (a) State published on the bus lands in the store with entity, room,
 /// aspect, and correctly typed value; commands and accepted config edits
 /// land too (the audit trail); non-scalar payloads leave a health event
-/// and never a row.
+/// and no row.
 #[tokio::test(flavor = "multi_thread")]
 async fn state_lands_typed_in_store() {
     let db = store_path("typed");
@@ -211,10 +210,10 @@ async fn state_lands_typed_in_store() {
         .await
         .expect("event subscriber");
 
-    // Commands are recorded in the same table under class 'cmd' — the
-    // envelope's value unwrapped into samples, the full envelope into
-    // events: the "who" audit, since priority and actor travel with every
-    // command.
+    // Commands are recorded in the same table under class 'cmd'. The
+    // envelope's value is unwrapped into samples, and the full envelope
+    // goes into events as the audit of who acted: priority and actor travel
+    // with every command.
     let cmd = matched_publisher(&observer, "home/cmd/attic/probe/on").await;
     put(
         &cmd,
@@ -249,8 +248,8 @@ async fn state_lands_typed_in_store() {
         "the full envelope lands in events, not just the unwrapped value"
     );
 
-    // An envelope-less cmd payload (a bare value) is invalid traffic:
-    // dropped with a health event, never a samples row.
+    // An envelope-less cmd payload (a bare value) is invalid traffic. It
+    // is dropped with a health event and writes no samples row.
     let bad_cmd = matched_publisher(&observer, "home/cmd/attic/probe/brightness").await;
     put(&bad_cmd, json!(42)).await;
     let event = await_event(&events, Duration::from_secs(10), |e| {
@@ -263,8 +262,8 @@ async fn state_lands_typed_in_store() {
         "envelope-less cmd payload became a row"
     );
 
-    // An accepted config edit lands in the events audit table (rejects
-    // never reach the bus, so they can't land — pinned in step 4).
+    // An accepted config edit lands in the events audit table. Rejected
+    // edits do not reach the bus, so they cannot land.
     config_write(
         &observer,
         "home/config/evening_lights/off_time",
@@ -291,7 +290,7 @@ async fn state_lands_typed_in_store() {
     )
     .await;
 
-    // A non-scalar payload is dropped with a health event, never a row.
+    // A non-scalar payload is dropped with a health event and writes no row.
     let color = matched_publisher(&observer, "home/state/attic/probe/color").await;
     put(&color, json!({"r": 255, "g": 0, "b": 0})).await;
     let event = await_event(&events, Duration::from_secs(10), |e| e["kind"] == "drop").await;
@@ -302,12 +301,11 @@ async fn state_lands_typed_in_store() {
         "non-scalar payload became a row"
     );
 
-    // Defense in depth: a raw NaN on the bus (serde_json::Value can't
-    // hold it, so this publishes the literal bytes directly — the shape a
-    // publisher that skips the SDK's put_json guard, or a future one,
-    // could still produce) is dropped as "non-finite", never a row — and
-    // the writer keeps working afterward rather than mistaking a refused
-    // row for a dead backend and stalling on it.
+    // A raw NaN on the bus is dropped as "non-finite" and writes no row.
+    // serde_json::Value can't hold NaN, so this publishes the literal
+    // bytes, as a publisher that skips the SDK's put_json guard could.
+    // The writer keeps working afterward: it does not mistake a refused
+    // row for a dead backend and stall on it.
     let gauge = matched_publisher(&observer, "home/state/attic/probe/gauge").await;
     gauge.put("NaN").await.expect("raw NaN put");
     let event = await_event(&events, Duration::from_secs(10), |e| e["kind"] == "drop").await;
@@ -329,8 +327,9 @@ async fn state_lands_typed_in_store() {
     sup.shutdown();
 }
 
-/// (b) The same entity publishing under a new room continues ONE series
-/// with a tag transition — what an entity move looks like from the bus.
+/// (b) The same entity publishing under a new room continues one series
+/// with a tag transition. This is what an entity move looks like from the
+/// bus.
 #[tokio::test(flavor = "multi_thread")]
 async fn entity_move_is_a_tag_transition() {
     let db = store_path("move");
@@ -370,7 +369,7 @@ async fn entity_move_is_a_tag_transition() {
     };
     assert_eq!(rows, vec![series("attic", 1), series("cellar", 0)]);
 
-    // Over the bus: one reply — one series, never two.
+    // Over the bus: one reply, because there is one series.
     let replies = history_get(&observer, "home/history/state/rover/on").await;
     assert_eq!(replies.len(), 1, "a move must not split the series");
     let (key, rows) = &replies[0];
@@ -386,10 +385,11 @@ async fn entity_move_is_a_tag_transition() {
     sup.shutdown();
 }
 
-/// (c) The backend-outage policy is observable: make the store refuse
-/// writes (what "the backend is down" means for an embedded engine), publish
-/// state, restore it — samples buffer with their receive-time timestamps,
-/// health events mark the outage and the recovery, nothing is lost.
+/// (c) The backend-outage policy is observable. The test makes the store
+/// refuse writes (what "the backend is down" means for an embedded engine),
+/// publishes state, then restores the store. Samples buffer with their
+/// receive-time timestamps, health events mark the outage and the
+/// recovery, and nothing is lost.
 #[tokio::test(flavor = "multi_thread")]
 async fn backend_outage_buffers_and_flushes() {
     let db = store_path("outage");
@@ -455,7 +455,7 @@ async fn backend_outage_buffers_and_flushes() {
     );
 
     // The buffer flushed in order, and the buffered samples carry their
-    // receive-time timestamps — the outage is invisible in the data.
+    // receive-time timestamps, so the outage does not show in the data.
     let rows = rows_eventually(
         &db,
         "SELECT value, ts FROM history WHERE entity = 'gauge' ORDER BY ts",
@@ -483,10 +483,11 @@ async fn backend_outage_buffers_and_flushes() {
     sup.shutdown();
 }
 
-/// The store is legible over the bus: home/history/stats replies one
-/// message with the file's size, one aggregate per series keyed by its
-/// history key, and the events table's count and bounds — what choosing a
-/// retention window needs, on a host that may have no sqlite3 binary.
+/// The store is legible over the bus. home/history/stats replies with one
+/// message holding the file's size, one aggregate per series keyed by its
+/// history key, and the events table's count and bounds. That is what
+/// choosing a retention window needs, on a host that may have no sqlite3
+/// binary.
 #[tokio::test(flavor = "multi_thread")]
 async fn stats_describe_the_store() {
     let db = store_path("stats");
@@ -521,8 +522,8 @@ async fn stats_describe_the_store() {
     let newest = power["newest"].as_str().expect("RFC3339 newest");
     assert!(oldest.ends_with("+00:00") && oldest <= newest, "{power}");
 
-    // Those aggregates are read off `series`, not computed over the rows:
-    // the reply is only as true as the tally behind it.
+    // Those aggregates are read off `series` rather than computed over the
+    // rows, so the reply is only right if the tally is.
     assert_tally_matches_samples(&db);
 
     // The rate the owner reads to see which series is filling the file.
@@ -552,8 +553,8 @@ async fn stats_describe_the_store() {
         "events bounds are recent: {events}"
     );
 
-    // A wildcard over history fans out over series and never includes the
-    // stats reply, so a samples reader never sees a foreign payload.
+    // A wildcard over history fans out over series and leaves out the
+    // stats reply, so a samples reader does not see a foreign payload.
     let replies = history_get(&observer, "home/history/**").await;
     assert_eq!(replies.len(), 2, "series only: {replies:?}");
     assert!(replies
@@ -631,7 +632,8 @@ async fn retention_purges_old_rows() {
         replies[0].1
     );
 
-    // New samples land as before: retention deletes, it never stops writing.
+    // New samples land as before: retention deletes rows and does not stop
+    // writing.
     put(&power, json!(4.5)).await;
     rows_eventually(&db, "SELECT value FROM samples", 1, Duration::from_secs(20)).await;
     assert_tally_matches_samples(&db);
@@ -639,10 +641,10 @@ async fn retention_purges_old_rows() {
     sup.shutdown();
 }
 
-/// The scheduled integrity check: a healthy store reports `integrity-ok`
-/// with its duration; a store whose pages are corrupted on disk — the
-/// failure SQLite itself never notices — reports `integrity-failed` with
-/// what the check found. The schedule is a parameter and applies live.
+/// The scheduled integrity check. A healthy store reports `integrity-ok`
+/// with its duration. A store whose pages are corrupted on disk reports
+/// `integrity-failed` with what the check found; SQLite does not notice
+/// that failure on its own. The schedule is a parameter and applies live.
 #[tokio::test(flavor = "multi_thread")]
 async fn integrity_check_reports_corruption() {
     let db = store_path("integrity");
@@ -686,8 +688,8 @@ async fn integrity_check_reports_corruption() {
             })
             .expect("checkpoint");
         assert_eq!(busy, 0, "checkpoint completed");
-        // i64, not u64: SQLite has one integer type and rusqlite 0.40
-        // dropped the lossy u64 conversion. The offset is cast once, here.
+        // i64 because SQLite has one integer type and rusqlite has no lossy
+        // u64 conversion. The offset is cast once, here.
         let page_size: i64 = conn
             .query_row("PRAGMA page_size", [], |r| r.get(0))
             .expect("page size");
@@ -720,12 +722,12 @@ async fn integrity_check_reports_corruption() {
     sup.shutdown();
 }
 
-/// (d) The read path returns what was written: a get on
-/// home/history/state/{entity}/{aspect} replies the typed rows with
-/// timestamps, honoring from/to/limit (zenoh's `;`-separated selector
-/// parameters) — limit keeps the newest rows, with or without an explicit
-/// window; wildcards fan out to concrete series keys; a malformed
-/// selector is an error reply. The events table gets the same query
+/// (d) The read path returns what was written. A get on
+/// home/history/state/{entity}/{aspect} replies with the typed rows and
+/// their timestamps, honoring from/to/limit (zenoh's `;`-separated
+/// selector parameters). limit keeps the newest rows, with or without an
+/// explicit window. Wildcards fan out to concrete series keys, and a
+/// malformed selector gets an error reply. The events table has the same query
 /// surface at home/history/events: key wildcards filter recorded event
 /// keys, from/to (here raw microseconds, not RFC3339) window the range,
 /// limit truncates keeping the newest, and cmd envelopes carry their
@@ -783,7 +785,7 @@ async fn read_path_returns_history() {
     assert_eq!(values, vec![&json!(2.5), &json!(3.5)]);
 
     // ...including inside an explicit from/to window: the newest in the
-    // window, never its far end. A small limit is how a caller asks "what
+    // window, not its far end. A small limit is how a caller asks "what
     // has this been doing lately", and answering with the oldest rows makes
     // a live series look dead.
     let selector = format!(
@@ -964,12 +966,13 @@ async fn read_path_returns_history() {
     sup.shutdown();
 }
 
-/// The two chart shapes of the samples path: `bucket=<seconds>` folds a
-/// window into one point per bucket (mean with min/max for numbers, the
-/// last value for anything else, ts the bucket's start), and `changes=1`
-/// keeps only the rows at which the value changed — a state's runs. Both
-/// fold the whole window before `limit` keeps the newest, which is what
-/// lets a chatty series fill a week instead of showing its last hour.
+/// The two chart shapes of the samples path. `bucket=<seconds>` folds a
+/// window into one point per bucket: mean with min/max for numbers, the
+/// last value for anything else, and the bucket's start as ts.
+/// `changes=1` keeps only the rows at which the value changed, which are
+/// a state's runs. Both fold the whole window before `limit` keeps the
+/// newest, so a chatty series can fill a week instead of showing only its
+/// last hour.
 #[tokio::test(flavor = "multi_thread")]
 async fn read_path_folds_buckets_and_changes() {
     let db = store_path("fold");
@@ -992,8 +995,8 @@ async fn read_path_folds_buckets_and_changes() {
     .await;
 
     // A bucket wider than the test's lifetime folds the series into one
-    // point: the mean, its extremes, and the bucket's start — an aligned
-    // instant, not any sample's own timestamp.
+    // point: the mean, its extremes, and the bucket's start. The start is
+    // an aligned instant rather than any sample's own timestamp.
     let year = 365 * 24 * 3600;
     // A window is needed for a fold: without `from` it starts at the epoch
     // and would make more buckets than a reply carries.
@@ -1064,7 +1067,7 @@ async fn read_path_folds_buckets_and_changes() {
             "exclusive",
         ),
         ("home/history/state/meter/power?changes=yes", "changes"),
-        // a fold finer than any reply carries is a scan nobody asked for
+        // a fold into more buckets than a reply carries is refused
         ("home/history/state/meter/power?bucket=1", "buckets"),
     ] {
         let replies = observer.get(selector).await.expect("history query");
@@ -1177,10 +1180,10 @@ async fn v0_store_migrates_in_place() {
     sup.shutdown();
 }
 
-/// (e2) A version-1 store — the layout before the per-series tally — is
-/// counted once on startup and answers stats from `series` afterwards.
-/// The backfill is the scan version 2 exists to stop doing, paid once
-/// where nothing waits on a query timeout.
+/// (e2) A version-1 store has no per-series tally. It is counted once on
+/// startup and answers stats from `series` afterwards. Version 2 exists to
+/// avoid that scan; the backfill pays for it once, at startup, where no
+/// query is waiting on a timeout.
 #[tokio::test(flavor = "multi_thread")]
 async fn v1_store_backfills_its_tally() {
     let db = store_path("migrate-v1");
@@ -1213,8 +1216,8 @@ async fn v1_store_backfills_its_tally() {
         read_rows(&db, "PRAGMA user_version"),
         vec![vec![SqlValue::Integer(6)]]
     );
-    // Counted, not guessed: the oldest row of the first series was
-    // inserted last, so a tally that took each series' first or last
+    // The bounds come from the rows. The oldest row of the first series
+    // was inserted last, so a tally that took each series' first or last
     // insert for its bounds would be wrong here.
     assert_eq!(
         read_rows(
@@ -1257,8 +1260,8 @@ async fn v1_store_backfills_its_tally() {
 /// series the previous incarnation recorded live is not duplicated. The
 /// publish races the restart; when the fresh incarnation subscribes
 /// first the row is recorded live with the same stamp and the assertions
-/// hold either way — the seed path is the one that runs in practice, a
-/// Python unit taking longer to come up than the put takes to land.
+/// hold either way. In practice the seed path runs, because a Python unit
+/// takes longer to come up than the put takes to land.
 #[tokio::test(flavor = "multi_thread")]
 async fn restart_seeds_missed_state_from_the_mirror() {
     let db = store_path("seed");
@@ -1336,18 +1339,17 @@ async fn restart_seeds_missed_state_from_the_mirror() {
 
 /// (l) Forecasts are the one class that does not ride `samples`
 /// (docs/design.md#forecasts). Two issues about the same future instant
-/// both survive — which is the whole reason the table exists — a point's
-/// declared extent is stored rather than inferred from succession, and
-/// the two verification read shapes answer in issues.
+/// both survive, which is the reason the table exists. A point's declared
+/// extent is stored rather than inferred from succession, and the two
+/// verification read shapes answer in issues.
 #[tokio::test(flavor = "multi_thread")]
 async fn forecasts_keep_every_issue_and_answer_in_issues() {
     let db = store_path("forecast");
     let (mut sup, observer) = setup(&db).await;
 
-    // Fixed instants, and deliberately in the past: verification reads
-    // forecasts whose valid time has already come, and a test that
-    // leans on "now" would answer differently depending on the hour it
-    // runs at.
+    // Fixed instants in the past: verification reads forecasts whose
+    // valid time has already come, and a test that leans on "now" would
+    // answer differently depending on the hour it runs at.
     let noon = "2020-01-01T12:00:00+00:00";
     let one = "2020-01-01T13:00:00+00:00";
     let issue = |issued: &str, noon_value: f64| {
@@ -1405,7 +1407,7 @@ async fn forecasts_keep_every_issue_and_answer_in_issues() {
     assert_eq!(series[0][4], SqlValue::Integer(4), "{series:?}");
 
     // `at`: the forecast as it stood. Before the second issue existed,
-    // the answer is the first one — which is what verification means.
+    // the answer is the first one. Verification depends on that.
     let replies = history_get(
         &observer,
         "home/history/forecast/spot/price/nordpool?at=2020-01-01T08:30:00+00:00",
@@ -1461,7 +1463,7 @@ async fn forecasts_keep_every_issue_and_answer_in_issues() {
         );
     }
 
-    // The two shapes are exclusive rather than quietly one winning.
+    // Asking for both shapes is refused, so neither wins silently.
     let replies = observer
         .get("home/history/forecast/spot/price/nordpool?at=2020-01-01T08:00:00+00:00;valid_from=2020-01-01T12:00:00+00:00")
         .await
@@ -1473,7 +1475,7 @@ async fn forecasts_keep_every_issue_and_answer_in_issues() {
     );
 
     // A wildcard over history keeps fanning out over sample series alone,
-    // so the two reply shapes never arrive mixed.
+    // so the two reply shapes do not arrive mixed.
     let replies = history_get(&observer, "home/history/**").await;
     assert!(
         replies.iter().all(|(key, _)| !key.contains("/forecast/")),
@@ -1510,11 +1512,10 @@ async fn forecasts_keep_every_issue_and_answer_in_issues() {
 /// (e4) A version-4 store carries forecast series with no source: the
 /// segment did not exist when they were recorded, and that migration left
 /// them empty. Empty is not a key segment, so building the reply key for
-/// one would raise inside the query callback — which sends no reply at
-/// all, and the caller reads that as "no data". The `SELECT` is
-/// unfiltered, so one legacy series would take down the answer for every
-/// OTHER forecast series in the store, including correctly-sourced ones
-/// with rows.
+/// one would raise inside the query callback. That sends no reply at all,
+/// and the caller reads it as "no data". The `SELECT` is unfiltered, so
+/// one legacy series would take down the answer for every other forecast
+/// series in the store, including correctly-sourced ones with rows.
 #[tokio::test(flavor = "multi_thread")]
 async fn v4_store_names_the_sources_it_left_empty() {
     let db = store_path("migrate-v4");
@@ -1558,7 +1559,7 @@ async fn v4_store_names_the_sources_it_left_empty() {
         "the store reports the layout it now has"
     );
     // Only forecast series are named: every other class has an empty
-    // source by definition and never puts it in a key.
+    // source and does not put it in a key.
     assert_eq!(
         read_rows(&db, "SELECT source FROM series ORDER BY id"),
         vec![
@@ -1581,8 +1582,8 @@ async fn v4_store_names_the_sources_it_left_empty() {
     assert_eq!(issues.len(), 1, "{issues:?}");
     assert_eq!(issues[0]["points"][0]["v"], json!(21.0));
 
-    // And the legacy rows are readable rather than merely inert — which
-    // is the whole reason for a reserved name over skipping them.
+    // The legacy rows are also readable. That is why they get a reserved
+    // name instead of being skipped.
     let replies = history_get(
         &observer,
         "home/history/forecast/outdoor/air_temperature/_unknown?at=2020-01-01T09:00:00+00:00",
@@ -1594,13 +1595,12 @@ async fn v4_store_names_the_sources_it_left_empty() {
     sup.shutdown();
 }
 
-/// (e3) A version-2 store — the layout before forecasts — gains the new
-/// table AND the series `source` on the next start. The table is additive
-/// and needs no backfill; the source is not, because its uniqueness moved
-/// and a table-level UNIQUE cannot be dropped in place. The path every
-/// existing house takes on this upgrade, and the one where "additive"
-/// quietly meaning "unreachable" would not show up until a producer
-/// published.
+/// (e3) A version-2 store has no forecasts table. On the next start it
+/// gains the table and the series `source`. The table is additive and
+/// needs no backfill. The source needs a rebuild, because its uniqueness
+/// moved and a table-level UNIQUE cannot be dropped in place. Every
+/// existing house takes this path on upgrade, and a table that was added
+/// but unreachable would not show up until a producer published.
 #[tokio::test(flavor = "multi_thread")]
 async fn v2_store_gains_the_forecast_table() {
     let db = store_path("migrate-v2");
@@ -1633,8 +1633,8 @@ async fn v2_store_gains_the_forecast_table() {
         vec![vec![SqlValue::Integer(6)]],
         "the store reports the layout it now has"
     );
-    // The existing series is untouched — an upgrade is not a rewrite —
-    // and it carries the empty source every non-forecast series has.
+    // The existing series is untouched, and it carries the empty source
+    // every non-forecast series has.
     assert_eq!(
         read_rows(
             &db,
@@ -1643,11 +1643,11 @@ async fn v2_store_gains_the_forecast_table() {
         vec![vec![SqlValue::Integer(1), SqlValue::Text(String::new())]],
         "an existing tally survives, with an empty source"
     );
-    // The migration writes its own CREATE TABLE, so drift from SCHEMA is
-    // the failure mode. Pinned as a literal rather than compared against
-    // a second live store: spawning one inside this test contends with
-    // the supervisor already running here, and the columns are the thing
-    // worth pinning anyway.
+    // The migration writes its own CREATE TABLE, so it can drift from
+    // SCHEMA. The columns are pinned as a literal rather than compared
+    // against a second live store: spawning one inside this test contends
+    // with the supervisor already running here, and the columns are what
+    // matters.
     assert_eq!(
         read_rows(&db, "SELECT name FROM pragma_table_info('series')"),
         [
@@ -1665,7 +1665,7 @@ async fn v2_store_gains_the_forecast_table() {
         .collect::<Vec<_>>(),
         "a migrated series must be shaped like a fresh one"
     );
-    // And the moved uniqueness actually took: two sources, one aspect.
+    // The moved uniqueness holds: two sources, one aspect.
     assert!(
         Connection::open(&db)
             .expect("open migrated store")
@@ -1678,9 +1678,8 @@ async fn v2_store_gains_the_forecast_table() {
         "two providers for one aspect are two series, not a conflict"
     );
 
-    // And the new table is not merely present but written and read: a
-    // published forecast lands, and the series is tallied beside the
-    // state one it has never met.
+    // The new table is written and read: a published forecast lands, and
+    // the series is tallied beside the existing state series.
     let key = "home/forecast/global/spot/price/nordpool";
     let pub_ = matched_publisher(&observer, key).await;
     put(
@@ -1791,14 +1790,14 @@ fn count(db: &Path, sql: &str) -> i64 {
     }
 }
 
-/// Archiving: a month that closed more than `archive_after_months`
-/// ago is sealed into its own SQLite file beside the store and leaves the
-/// hot file — every row of it, and nothing the archive does not hold. A
-/// series' last word stays in the hot file as well, because `restore`
-/// and the seed read it there: an idle latch must survive its month being
-/// archived. A sealed file is never written again, so rows that reach its
-/// month later go into a second file; and a seal a crash interrupted is
-/// undone rather than trusted.
+/// Archiving. A month that closed more than `archive_after_months` ago is
+/// sealed into its own SQLite file beside the store, and its rows leave
+/// the hot file. Every row of the month leaves, and only rows the archive
+/// holds. A series' last word also stays in the hot file, because
+/// `restore` and the seed read it there: an idle latch must survive its
+/// month being archived. A sealed file is not written again, so rows that
+/// reach its month later go into a second file. A seal that a crash
+/// interrupted is undone rather than trusted.
 #[tokio::test(flavor = "multi_thread")]
 async fn closed_months_move_to_archives_and_the_last_word_stays() {
     let db = store_path("archive");
@@ -1932,7 +1931,7 @@ async fn closed_months_move_to_archives_and_the_last_word_stays() {
             .mode();
         assert_eq!(mode & 0o222, 0, "{label} is sealed read-only");
     }
-    // The interrupted seal was undone, not trusted.
+    // The interrupted seal was undone.
     assert!(!archive("2026-03").exists());
     assert!(!Path::new(&format!("{}.tmp", archive("2026-03").display())).exists());
     assert_eq!(
@@ -1989,10 +1988,10 @@ async fn closed_months_move_to_archives_and_the_last_word_stays() {
         "{sealed:?}"
     );
 
-    // Rows that reach a sealed month late go into a second file -- among
-    // them one stamped like an archived row but in another room, which is
-    // a different row and must not be taken as already held -- and the
-    // switch's February row, overtaken by a live one, leaves.
+    // Rows that reach a sealed month late go into a second file. One of
+    // them is stamped like an archived row but in another room: it is a
+    // different row and must not be taken as already held. The switch's
+    // February row, overtaken by a live one, leaves.
     let switch = matched_publisher(&observer, "home/state/attic/switch/on").await;
     put(&switch, json!(true)).await;
     rows_eventually(
@@ -2071,9 +2070,9 @@ async fn closed_months_move_to_archives_and_the_last_word_stays() {
     sup.shutdown();
 }
 
-/// An archive window no calendar can hold — a typo, say a million months
-/// — is reported, and the writer keeps writing: the date it computes is
-/// out of range, and an exception escaping the archive pass would end the
+/// An archive window no calendar can hold (a typo, say a million months)
+/// is reported, and the writer keeps writing. The date it computes is out
+/// of range, and an exception escaping the archive pass would end the
 /// writer thread while the unit still reported running.
 #[tokio::test(flavor = "multi_thread")]
 async fn an_impossible_archive_window_fails_without_stopping_the_writer() {
@@ -2196,7 +2195,7 @@ async fn old_archives_are_dropped_when_asked_and_bad_settings_are_named() {
     );
     let stats = history_get(&observer, "home/history/stats").await;
     assert_eq!(stats[0].1["archives"], json!([]), "{}", stats[0].1);
-    // The hot file is retention's, not archive retention's: today's row stays.
+    // Archive retention leaves the hot file alone: today's row stays.
     assert_eq!(count(&db, "SELECT COUNT(*) FROM samples"), 1);
 
     sup.shutdown();

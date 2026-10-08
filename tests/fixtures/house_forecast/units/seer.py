@@ -7,15 +7,14 @@
 # [tool.uv.sources]
 # homeostat = { path = "../../../../sdk/python", editable = true }
 # ///
-"""A forecast producer, standing in for a house's own
-(docs/design.md#forecasts).
+"""A forecast producer standing in for a house's own.
 
-Deliberately not an adapter for any real source: which prices, and what to
-do about them, are house content by the boundary test
-(docs/design.md#repo-split). This exists so the bus class, the SDK codec,
-the manifest binding and the core's mirror are exercised end to end by
-something shaped like the real thing — an irregular horizon whose points
-declare the window they hold for, published through this unit's own
+See docs/design.md#forecasts. It is not an adapter for any real source:
+which prices to use, and what to do about them, are house content by the
+boundary test (docs/design.md#repo-split). It exists so the bus class, the
+SDK codec, the manifest binding and the core's mirror are exercised end to
+end by something shaped like the real thing: an irregular horizon whose
+points declare the window they hold for, published through this unit's own
 `[bus.publishes]` entries rather than around them.
 """
 
@@ -25,7 +24,7 @@ from homeostat import automation
 
 # Hourly, then three-hourly: the irregular shape real sources publish, and
 # the one a regular grid could not have carried. Each point declares the
-# window it holds for, as a tariff-like series does — so the last one is
+# window it holds for, as a tariff-like series does, so the last one is
 # readable to its end rather than only at its start.
 WINDOWS_H = [(0, 1), (1, 1), (2, 1), (3, 3), (6, 3), (9, 3)]
 VALUES = [1.20, 1.45, 1.10, 0.85, 0.40, 0.95]
