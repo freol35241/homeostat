@@ -346,6 +346,125 @@ def command_body(entity, aspect: str, value, fields: dict) -> dict | None:
     return {aspect: value}
 
 
+class Bridge:
+    """The z2m-to-bus direction: one `on_message` per MQTT message.
+
+    It owns what the messages build up: the device ids the bridge has
+    reported (bound or not), the bridge's last known liveness and, per
+    bound entity, the descriptor fields its exposes yielded (the commands
+    beyond the base vocabulary it takes, for command_body). `session` is
+    anything with `put_json` and `health_event`; paho calls `on_message`
+    from its one network thread, so nothing here is locked.
+    """
+
+    def __init__(self, session, unit: str, base: str, by_id: dict):
+        self.session = session
+        self.unit = unit
+        self.base = base
+        self.by_id = by_id
+        self.inventory_seen = threading.Event()
+        self.known: set[str] = set()
+        # Unknown at boot, so a bridge already offline reports on its first
+        # state message.
+        self.online: bool | None = None
+        self.descriptor_fields: dict[str, dict] = {}
+
+    def unbound(self, topic: str, dev_id: str) -> None:
+        """Report a message for an unbound device only when the bridge does not know it.
+
+        A device the BRIDGE knows but no entity file binds is a steady
+        state, not a dropped message — discovery already reports it with
+        configured=false, and the discovery-first workflow guarantees a
+        period where every device is in exactly this state. Only a device
+        absent from the inventory entirely is an anomaly worth an event.
+        """
+        if dev_id not in self.known:
+            self.session.health_event("drop", reason="unknown-device", topic=topic)
+
+    def on_message(self, topic: str, raw: bytes) -> None:
+        """Translate one message under the base topic onto the bus."""
+        session = self.session
+        # Everything routed here matched a {base}/... subscription, so the
+        # remainder is the device part. Splitting at a fixed position would
+        # break the moment the base topic carries its own slashes.
+        rest = topic[len(self.base) + 1 :]
+        if rest == "bridge/devices":
+            self.inventory_seen.set()
+            try:
+                devices = json.loads(raw)
+            except ValueError:
+                devices = None
+            if not isinstance(devices, list):
+                session.health_event("drop", reason="malformed-payload", topic=topic)
+                return
+            records = inventory(devices, self.by_id)
+            self.known = {record["id"] for record in records}
+            for record in records:
+                if record["configured"]:
+                    fields = record.get("aspects", {}).get("fields", {})
+                    self.descriptor_fields[record["entity"]] = fields
+            session.put_json(keys.discovery_key(self.unit), records)
+            return
+        if rest == "bridge/state":
+            # The bridge's own liveness. The inventory cannot carry this:
+            # z2m republishes bridge/devices only on CHANGE, so its silence
+            # never distinguishes a dead bridge from a stable estate.
+            state = availability_state(raw)
+            if state is None:
+                session.health_event("drop", reason="malformed-payload", topic=topic)
+                return
+            online = state == "online"
+            if not online and self.online is not False:
+                # One event per down transition.
+                session.health_event("bridge-silent", base_topic=self.base, state="offline")
+            self.online = online
+            return
+        # Exactly {base}/{id}/availability — two segments would be a device
+        # whose friendly name is literally "availability".
+        if rest.endswith("/availability") and rest.count("/") == 1:
+            dev_id = rest.split("/")[0]
+            entity = self.by_id.get(dev_id)
+            if entity is None:
+                self.unbound(topic, dev_id)
+                return
+            state = availability_state(raw)
+            if state is None:
+                session.health_event("drop", reason="malformed-payload", topic=topic)
+                return
+            session.put_json(
+                keys.state_key(entity.room, entity.name, "available"), state == "online"
+            )
+            return
+        entity = self.by_id.get(rest)
+        if entity is None:
+            self.unbound(topic, rest)
+            return
+        try:
+            payload = json.loads(raw)
+        except ValueError:
+            payload = None
+        if not isinstance(payload, dict):
+            session.health_event("drop", reason="malformed-payload", topic=topic)
+            return
+        for z2m_field, value in payload.items():
+            if isinstance(value, (dict, list)):
+                continue  # composite fields (color, ...) deferred
+            aspect, value = state_aspect(entity.capability, z2m_field, value)
+            if aspect == "available":
+                # Reserved for the adapter's own liveness signal — a device
+                # field must not impersonate it.
+                session.health_event("drop", reason="reserved-aspect", topic=topic)
+                continue
+            try:
+                key = keys.state_key(entity.room, entity.name, aspect)
+            except ValueError:
+                # A field name the key schema refuses; the rest of the
+                # payload is still good.
+                session.health_event("drop", reason="malformed-payload", topic=topic, field=z2m_field)
+                continue
+            session.put_json(key, value)
+
+
 def main():
     unit = os.environ[keys.ENV_UNIT]
     config = house.load_adapter(unit)
@@ -356,111 +475,7 @@ def main():
 
     session = homeostat.connect()
     params = Params(session, PARAM_DEFAULTS)
-    inventory_seen = threading.Event()
-    # Device ids the bridge has told us about, bound or not, and the
-    # bridge's last known liveness. Mutated and read on the paho callback
-    # thread only. `online` starts unknown, so a bridge already offline at
-    # boot reports on its first state message.
-    known: set[str] = set()
-    bridge = {"online": None}
-    # Per bound entity, the descriptor fields its exposes yielded: the
-    # commands beyond the base vocabulary an entity takes (command_body).
-    descriptor_fields: dict[str, dict] = {}
-
-    def unbound(topic: str, dev_id: str) -> None:
-        """Report a message for an unbound device only when the bridge does not know it.
-
-        A device the BRIDGE knows but no entity file binds is a steady
-        state, not a dropped message — discovery already reports it with
-        configured=false, and the discovery-first workflow guarantees a
-        period where every device is in exactly this state. Only a device
-        absent from the inventory entirely is an anomaly worth an event.
-        """
-        if dev_id not in known:
-            session.health_event("drop", reason="unknown-device", topic=topic)
-
-    def on_z2m_message(client, userdata, msg):
-        # Everything routed here matched a {base}/... subscription, so the
-        # remainder is the device part. Splitting at a fixed position would
-        # break the moment the base topic carries its own slashes.
-        rest = msg.topic[len(base) + 1 :]
-        if rest == "bridge/devices":
-            inventory_seen.set()
-            try:
-                devices = json.loads(msg.payload)
-            except ValueError:
-                devices = None
-            if not isinstance(devices, list):
-                session.health_event("drop", reason="malformed-payload", topic=msg.topic)
-                return
-            records = inventory(devices, by_id)
-            known.clear()
-            known.update(record["id"] for record in records)
-            for record in records:
-                if record["configured"]:
-                    descriptor_fields[record["entity"]] = record.get("aspects", {}).get("fields", {})
-            session.put_json(keys.discovery_key(unit), records)
-            return
-        if rest == "bridge/state":
-            # The bridge's own liveness. The inventory cannot carry this:
-            # z2m republishes bridge/devices only on CHANGE, so its silence
-            # never distinguishes a dead bridge from a stable estate.
-            state = availability_state(msg.payload)
-            if state is None:
-                session.health_event("drop", reason="malformed-payload", topic=msg.topic)
-                return
-            online = state == "online"
-            if not online and bridge["online"] is not False:
-                # One event per down transition.
-                session.health_event("bridge-silent", base_topic=base, state="offline")
-            bridge["online"] = online
-            return
-        # Exactly {base}/{id}/availability — two segments would be a device
-        # whose friendly name is literally "availability".
-        if rest.endswith("/availability") and rest.count("/") == 1:
-            dev_id = rest.split("/")[0]
-            entity = by_id.get(dev_id)
-            if entity is None:
-                unbound(msg.topic, dev_id)
-                return
-            state = availability_state(msg.payload)
-            if state is None:
-                session.health_event("drop", reason="malformed-payload", topic=msg.topic)
-                return
-            session.put_json(
-                keys.state_key(entity.room, entity.name, "available"), state == "online"
-            )
-            return
-        entity = by_id.get(rest)
-        if entity is None:
-            unbound(msg.topic, rest)
-            return
-        try:
-            payload = json.loads(msg.payload)
-        except ValueError:
-            payload = None
-        if not isinstance(payload, dict):
-            session.health_event("drop", reason="malformed-payload", topic=msg.topic)
-            return
-        for z2m_field, value in payload.items():
-            if isinstance(value, (dict, list)):
-                continue  # composite fields (color, ...) deferred
-            aspect, value = state_aspect(entity.capability, z2m_field, value)
-            if aspect == "available":
-                # Reserved for the adapter's own liveness signal — a device
-                # field must not impersonate it.
-                session.health_event("drop", reason="reserved-aspect", topic=msg.topic)
-                continue
-            try:
-                key = keys.state_key(entity.room, entity.name, aspect)
-            except ValueError:
-                # A field name the key schema refuses; the rest of the
-                # payload is still good.
-                session.health_event(
-                    "drop", reason="malformed-payload", topic=msg.topic, field=z2m_field
-                )
-                continue
-            session.put_json(key, value)
+    bridge = Bridge(session, unit, base, by_id)
 
     def cmd_handler(entity):
         def handler(sample):
@@ -468,7 +483,7 @@ def main():
             if parsed is None:
                 return
             aspect, value, cmd_id = parsed
-            body = command_body(entity, aspect, value, descriptor_fields.get(entity.name, {}))
+            body = command_body(entity, aspect, value, bridge.descriptor_fields.get(entity.name, {}))
             if body is None:
                 session.health_event(
                     "drop", reason="invalid-command", key=str(sample.key_expr), cmd_id=cmd_id
@@ -480,7 +495,7 @@ def main():
 
     client = mqtt.connect(
         endpoint,
-        on_z2m_message,
+        lambda _client, _userdata, msg: bridge.on_message(msg.topic, msg.payload),
         [
             (f"{base}/+", 0),
             (f"{base}/+/availability", 0),
@@ -508,7 +523,7 @@ def main():
         timeout = params.inventory_timeout_s
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            if inventory_seen.wait(min(0.25, timeout)) or stop.is_set():
+            if bridge.inventory_seen.wait(min(0.25, timeout)) or stop.is_set():
                 return
         # A degraded condition, not dropped input: its own event kind,
         # never a `drop`.
