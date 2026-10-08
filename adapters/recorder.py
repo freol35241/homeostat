@@ -1634,11 +1634,15 @@ def store_stats(conn: sqlite3.Connection) -> dict:
     page_count = conn.execute("PRAGMA page_count").fetchone()[0]
     freelist = conn.execute("PRAGMA freelist_count").fetchone()[0]
     series = {}
-    for space, entity, aspect, rows, oldest, newest in conn.execute(
-        "SELECT class, entity, aspect, row_count, oldest_ts, newest_ts FROM series"
-        " WHERE row_count > 0 ORDER BY class, entity, aspect"
+    for space, entity, aspect, source, rows, oldest, newest in conn.execute(
+        "SELECT class, entity, aspect, source, row_count, oldest_ts, newest_ts FROM series"
+        " WHERE row_count > 0 ORDER BY class, entity, aspect, source"
     ):
-        series[f"home/history/{space}/{entity}/{aspect}"] = {
+        # A forecast series is one source's, keyed as its read path is.
+        key = f"home/history/{space}/{entity}/{aspect}"
+        if source:
+            key = f"{key}/{source}"
+        series[key] = {
             "rows": rows,
             "oldest": iso_utc(oldest),
             "newest": iso_utc(newest),

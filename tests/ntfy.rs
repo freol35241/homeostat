@@ -234,12 +234,12 @@ async fn invalid_and_flooding_commands_drop() {
         .put(wish(json!("first"), "x").to_string())
         .await
         .expect("put");
-    message
-        .put(wish(json!("second, inside the floor"), "x").to_string())
-        .await
-        .expect("put");
+    let mut second = wish(json!("second, inside the floor"), "x");
+    second["id"] = json!("c0ffee01");
+    message.put(second.to_string()).await.expect("put");
     let event = expect_drop_event(&events, "rate-limited").await;
     assert_eq!(event["key"], ALICE_MESSAGE);
+    assert_eq!(event["cmd_id"], "c0ffee01", "the drop names its command");
     let received = server.await_received(1);
     assert_eq!(
         received.len(),

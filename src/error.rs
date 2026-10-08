@@ -133,6 +133,12 @@ pub const CODES: &[(&str, &str)] = &[
          in the supervisor, so it must be unique across the house.",
     ),
     (
+        "unit-name-mismatch",
+        "A manifest's file stem differs from its `[unit] name`. A running unit \
+         finds its own manifest at `units/{unit}.toml` by name, so the file \
+         must be named after the unit it declares.",
+    ),
+    (
         "duplicate-entity-name",
         "Two entity files, possibly under different adapters, share a file \
          stem. Entity names are house-global (`home/state/{room}/{entity}/...` \
@@ -247,6 +253,13 @@ pub const CODES: &[(&str, &str)] = &[
          key concretely.",
     ),
     (
+        "publish-missing-priority",
+        "A publish under `home/cmd/` must declare `priority`, the band its \
+         commands leave at. The SDK stamps it into every envelope and refuses \
+         to send without one, so a plan that assumed a band would describe \
+         commands the unit can never send.",
+    ),
+    (
         "publish-missing-capability",
         "A publish under `home/cmd/` must declare `capability`. The grant table \
          resolves a cmd publish onto the entities of that capability its key \
@@ -291,15 +304,15 @@ pub const CODES: &[(&str, &str)] = &[
     (
         "reserved-class-publish",
         "A `[bus.publishes]` key sits in a class the unit may not write. \
-         `home/config/` and `home/meta/` are the core's alone. `home/health/` \
-         and `home/discovery/` are per unit: a publish there must sit under \
-         the publishing unit's own name (`home/health/{unit}/...`, \
-         `home/discovery/{unit}`). `home/arbiter/`, `home/clock/` and \
+         `home/config/` and `home/meta/` are the core's alone. `home/health/`, \
+         `home/discovery/` and `home/hold/` are per unit: a publish there must \
+         sit under the publishing unit's own name (`home/health/{unit}/...`, \
+         `home/discovery/{unit}`, `home/hold/{unit}`). `home/arbiter/`, `home/clock/` and \
          `home/history/` are each one service's output: only a `kind = \
          \"service\"` unit may publish them, and at most one per class. The \
          SDK only checks a published key against the declared expression, so \
          this is where a forged post-arbitration command, a forged discovery \
-         record or a second clock is refused.",
+         record or hold, or a second clock is refused.",
     ),
     (
         "dashboard-duplicate-view",

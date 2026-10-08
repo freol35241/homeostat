@@ -452,8 +452,7 @@ async def run_camera(entity, conf: dict, session, http: aiohttp.ClientSession, s
             failures += 1
             if up is not False:
                 session.health_event(
-                    "drop",
-                    reason="event-stream-lost",
+                    "event-stream-lost",
                     camera=entity.name,
                     error=str(err),
                     consecutive_failures=failures,

@@ -352,6 +352,15 @@ pub fn resolve(
             ));
             continue;
         }
+        let Some(priority) = spec.priority else {
+            errors.push(ValidationError::new(
+                "publish-missing-priority",
+                subject,
+                format!("cmd publish \"{}\" must declare a priority", key.source),
+                Some(unit.path.clone()),
+            ));
+            continue;
+        };
 
         let mut granted: Vec<GrantEntity> = house
             .entities
@@ -378,7 +387,6 @@ pub fn resolve(
         // The manual band is the family's (dashboard, voice) and is exempt
         // from exclusive-write checks; an automation claiming it is worth a
         // look in the plan, though nothing forbids it.
-        let priority = spec.priority.unwrap_or(Priority::Automation);
         if priority == Priority::Manual && unit.manifest.unit.kind != UnitKind::Service {
             warnings.push(format!(
                 "publish {subject} declares priority \"manual\" on {} \"{}\"; the manual band is the family's and is exempt from exclusive-write checks",
@@ -695,12 +703,13 @@ pub fn resolve(
     }
 
     // Reserved classes (docs/design.md#reserved-classes): `config` and
-    // `meta` are the core's alone; `health` and `discovery` are per unit,
-    // under the publishing unit's own name; `arbiter`, `clock` and `history`
+    // `meta` are the core's alone; `health`, `discovery` and `hold` are per
+    // unit, under the publishing unit's own name; `arbiter`, `clock` and `history`
     // are one service's output each. The SDK only checks that a published
     // key is within a declared expression, so without this an automation
     // could declare `home/arbiter/**` and forge post-arbitration commands,
-    // or another unit's discovery record, with an empty grant table.
+    // or another unit's discovery record or holds, with an empty grant
+    // table.
     let publish_class = |key: &ExpandedKey| -> Option<(String, Option<String>)> {
         let mut segments = key.source.split('/').skip(1).map(str::to_string);
         Some((segments.next()?, segments.next()))
@@ -734,10 +743,12 @@ pub fn resolve(
                 "\"{}\" publishes under home/{class}/, which only the core writes",
                 key.source
             )),
-            "health" | "discovery" if next.as_deref() != Some(key.unit.as_str()) => Some(format!(
-                "\"{}\" must sit under this unit's own name: home/{class}/{}/...",
-                key.source, key.unit
-            )),
+            "health" | "discovery" | "hold" if next.as_deref() != Some(key.unit.as_str()) => {
+                Some(format!(
+                    "\"{}\" must sit under this unit's own name: home/{class}/{}/...",
+                    key.source, key.unit
+                ))
+            }
             "arbiter" | "clock" | "history" => {
                 let publishers = &singleton_publishers[&class];
                 if unit.manifest.unit.kind != UnitKind::Service {

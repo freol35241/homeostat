@@ -13,3 +13,5 @@ own_events = { key = "home/health/impostor/event" }
 events = { key = "home/health/zigbee/event" }
 all_health = { key = "home/health/**" }
 discovery = { key = "home/discovery/zigbee" }
+own_holds = { key = "home/hold/impostor" }
+holds = { key = "home/hold/arbiter" }

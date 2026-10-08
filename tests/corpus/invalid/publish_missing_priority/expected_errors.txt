@@ -1,0 +1,1 @@
+error[publish-missing-priority] night_mode.lights: cmd publish "home/cmd/bedroom/bedroom_lamp/light" must declare a priority (units/night_mode.toml)
