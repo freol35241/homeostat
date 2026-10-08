@@ -1834,8 +1834,9 @@ The dashboard is an adapter for humans: HTTP and a WebSocket toward
 browsers on one side, the bus through the SDK on the other. Browsers
 never speak Zenoh. `adapters/dashboard.py` is a `service` unit
 (aiohttp) serving one hand-editable page, `dashboard.html`, its
-decision logic `assets/dashboard-logic.js` and a few vendored libraries
-from an allowlist of filenames, with no build step. The page is
+stylesheet `assets/dashboard.css`, its decision logic
+`assets/dashboard-logic.js` and a few vendored libraries from an
+allowlist of filenames, with no build step. The page is
 client-rendered because live state push is the dashboard's whole job.
 
 - **Mediated, not raw bus.** Not Zenoh's remote-api plugin in the
@@ -1993,7 +1994,7 @@ wrapper by percentage.
 
 #### The page
 
-`dashboard.html` and `dashboard-logic.js` are one artifact, served
+`dashboard.html` and its own assets are one artifact, served
 `Cache-Control: no-cache`, because heuristic freshness would pair a new
 page with old cached logic after an upgrade: a page that renders empty
 over a healthy backend. Not versioned asset URLs: the version would

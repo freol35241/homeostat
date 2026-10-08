@@ -21,6 +21,7 @@ this directory as a second argument) and served here so the page's favicon
 and wordmark fetch nothing external. Edit the numbers there, never this
 copy.
 
-`dashboard-logic.js` is NOT vendored — it is this repo's own code, the
-dashboard page's pure decision logic extracted from dashboard.html so
-`node --test tests/js` can pin it. Edit it like any source file.
+`dashboard-logic.js` and `dashboard.css` are NOT vendored — they are this
+repo's own code: the dashboard page's pure decision logic, kept apart from
+dashboard.html so `node --test tests/js` can pin it, and the page's
+stylesheet. Edit them like any source file.

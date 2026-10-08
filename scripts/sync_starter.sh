@@ -61,6 +61,7 @@ assets/leaflet.css:assets/leaflet.css
 assets/leaflet.js:assets/leaflet.js
 assets/protomaps-leaflet.js:assets/protomaps-leaflet.js
 assets/dashboard-logic.js:assets/dashboard-logic.js
+assets/dashboard.css:assets/dashboard.css
 assets/video-rtc.js:assets/video-rtc.js
 assets/homeostat-mark.svg:assets/homeostat-mark.svg
 "

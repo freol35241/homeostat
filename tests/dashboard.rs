@@ -445,13 +445,14 @@ async fn dashboard_serves_the_family_surface() {
     revalidates("/");
     revalidates("/assets/dashboard-logic.js");
 
-    // Vendored map assets and the extracted page logic are served,
-    // allowlisted by filename.
+    // Vendored map assets and the page's own logic and stylesheet are
+    // served, allowlisted by filename.
     for name in [
         "leaflet.js",
         "leaflet.css",
         "protomaps-leaflet.js",
         "dashboard-logic.js",
+        "dashboard.css",
         "homeostat-mark.svg",
     ] {
         let (status, _) = http_request(&addr, "GET", &format!("/assets/{name}"), &[], None);

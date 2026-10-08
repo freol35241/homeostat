@@ -11,8 +11,9 @@
 """Dashboard service: the family's web surface (see docs/design.md#dashboard).
 
 An adapter for humans: HTTP + WebSocket toward browsers, the SDK toward the
-bus. Serves dashboard.html (one self-contained file next to this script) and
-a small API generated entirely from the house's text:
+bus. Serves dashboard.html (next to this script, with its stylesheet and
+logic under assets/) and a small API generated entirely from the house's
+text:
 
   GET  /api/model    manifests rendered for the browser (zones, entities,
                      units, the views of dashboard.toml; each entity
@@ -62,8 +63,9 @@ a small API generated entirely from the house's text:
                      snapshot proxy: a still frame needs a transcode
                      (go2rtc's frame.jpeg shells out to ffmpeg for an
                      H.264 source) and the media plane is a pure remux
-  GET  /assets/*     vendored libraries (Leaflet, protomaps-leaflet, the
-                     go2rtc player), allowlisted by filename
+  GET  /assets/*     the page's stylesheet and logic, and vendored libraries
+                     (Leaflet, protomaps-leaflet, the go2rtc player),
+                     allowlisted by filename
   GET  /tiles.pmtiles  self-hosted PMTiles region extract for the map
                      widget, from HOMEOSTAT_DASHBOARD_TILES; 404 if unset
 
@@ -137,7 +139,7 @@ except importlib.metadata.PackageNotFoundError:
 
 # Vendored assets served at /assets/{name} — allowlisted by filename so
 # the route can't become a path-traversal surface.
-# The page and its assets are ONE artifact: dashboard.html and
+# The page and its assets are ONE artifact: dashboard.html, dashboard.css and
 # dashboard-logic.js are written against each other and change together at
 # an upgrade. aiohttp's FileResponse sets ETag and Last-Modified but no
 # Cache-Control, which leaves a browser on heuristic freshness — commonly a
@@ -164,6 +166,7 @@ ASSETS = {
     "protomaps-leaflet.js": "text/javascript",
     "video-rtc.js": "text/javascript",
     "dashboard-logic.js": "text/javascript",
+    "dashboard.css": "text/css",
     "homeostat-mark.svg": "image/svg+xml",
 }
 

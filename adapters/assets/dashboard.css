@@ -1,0 +1,535 @@
+/* The palette is the mark's (docs/brand/README.md): house green is the
+ * accent — interaction ink and data ink alike — and the set point's amber
+ * is the one warm colour. No sky blue: the brand is explicitly
+ * "deliberately not the sky blue of the category's largest project".
+ *
+ * `--accent` on dark is lifted past the brand's own #2A7A61. That token
+ * lifts the silhouette so a SHAPE holds on dark; the accent also carries
+ * text (an active rail entry, a segmented label), and #2A7A61 reads 3.3:1
+ * on the card — under AA for text. Same hue (160°), same saturation,
+ * lifted until the text passes: 5.0:1. No theme knob: the dashboard owns
+ * its rendering, and light/dark already follows the system. */
+:root {
+  --bg: #f6f6f7; --card: #ffffff; --border: #e4e4e7; --ink: #18181b;
+  --secondary: #52525b; --muted: #a1a1aa; --accent: #1f5e4a; --accent-tint: rgba(31,94,74,.10);
+  /* A pinned forecast, against the accent the outcome wears. Validated
+     as a pair in both modes: the dark step is darker than the obvious
+     choice because the light one sits outside dark mode's lightness
+     band, where it glares rather than reads. */
+  --issue-pin: #c7761a;
+  --good: #0ca30c; --warning: #e8a33d; --serious: #ec835a; --critical: #d03b3b;
+  /* the warning hue as text: the fill above is 2.2:1 on the card */
+  --warning-ink: #9a5b0a;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #101012; --card: #1b1b1f; --border: #2a2a30; --ink: #f4f4f5;
+    --secondary: #b0b0b8; --muted: #6b6b74; --accent: #389a7a; --accent-tint: rgba(56,154,122,.14);
+    --issue-pin: #bf8134;
+    --warning-ink: #e8a33d;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; background: var(--bg); color: var(--ink);
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 13.5px; line-height: 1.5; }
+button, input { font-family: inherit; font-size: inherit; }
+a { color: inherit; }
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+}
+
+#app { display: flex; min-height: 100vh; }
+
+/* nav rail (desktop) */
+/* sticky, so Health and the about lines under the nav stay in sight on a
+   long view rather than waiting at the foot of the page */
+#rail { width: 210px; flex: 0 0 210px; background: var(--card); border-right: 1px solid var(--border);
+  display: flex; flex-direction: column; padding: 20px 12px;
+  position: sticky; top: 0; height: 100vh; overflow-y: auto; }
+#rail .wordmark { font-size: 16px; font-weight: 700; padding: 4px 12px 20px; }
+/* the mark beside the name, on the rail and in the phone's top bar */
+.wordmark { display: flex; align-items: center; gap: 8px; }
+.wordmark img { width: 22px; height: 22px; display: block; }
+#rail nav { display: flex; flex-direction: column; gap: 2px; }
+#rail nav button { text-align: left; border: none; border-left: 3px solid transparent; background: transparent;
+  color: var(--secondary); font-size: 13.5px; padding: 10px 12px; border-radius: 0 6px 6px 0; cursor: pointer;
+  min-height: 40px; transition: background-color 140ms ease, color 140ms ease; }
+#rail nav button:hover { background: var(--accent-tint); }
+#rail nav button.active { border-left-color: var(--accent); padding-left: 9px; color: var(--ink); font-weight: 600; }
+/* fixed chrome under the nav: Health and Not shown are never views */
+#rail .health-pin { margin-top: auto; padding-top: 12px; border-top: 1px solid var(--border); font-size: 11px;
+  display: flex; flex-direction: column; gap: 2px; }
+.pin-btn { text-align: left; border: none; border-left: 3px solid transparent; background: transparent; color: var(--secondary);
+  padding: 8px 12px; border-radius: 0 6px 6px 0; cursor: pointer; font-size: 11px; transition: background-color 140ms ease; }
+.pin-btn:hover { background: var(--accent-tint); }
+.pin-btn.active { border-left-color: var(--accent); padding-left: 9px; color: var(--ink); }
+.pin-btn .label { color: var(--muted); font-weight: 600; letter-spacing: .08em; font-size: 10.5px;
+  text-transform: uppercase; margin-bottom: 6px; }
+.pin-btn.active .label { color: var(--accent); }
+.pin-btn .row { display: flex; align-items: center; gap: 6px; color: var(--secondary); padding: 2px 0; }
+/* where the page is served from, and where the project lives */
+.about { font-size: 10.5px; color: var(--muted); padding: 10px 12px 0; display: flex; flex-direction: column; gap: 2px; }
+.about a { color: var(--secondary); text-decoration: none; }
+.about a:hover { color: var(--accent); text-decoration: underline; }
+.about .about-note { color: var(--warning-ink); }
+.about .about-links { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 4px; }
+
+/* main column */
+#main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+#topbar { display: none; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+#topbar .wordmark { font-size: 15px; font-weight: 700; }
+/* the phone's way to Health, Not shown and the about lines: the bottom
+   bar is the house's views and nothing else */
+#topbar-status { display: flex; align-items: center; gap: 6px; border: 1px solid var(--border); background: var(--card);
+  color: var(--secondary); border-radius: 14px; padding: 4px 10px; min-height: 32px; cursor: pointer; font-size: 12px; }
+#topbar-status.active { border-color: var(--accent); color: var(--accent); }
+#status-sheet { display: none; position: fixed; top: 56px; right: 8px; left: 8px; max-width: 360px; margin-left: auto;
+  background: var(--card); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.18);
+  padding: 8px 4px 12px; z-index: 25; flex-direction: column; gap: 2px; }
+#status-sheet.show { display: flex; }
+#banner { display: none; background: var(--warning); color: #1c1917; font-size: 12.5px; text-align: center; padding: 6px; }
+#banner.show { display: block; }
+#view { padding: 24px 24px 96px; max-width: 1100px; width: 100%; }
+h1.view-title { font-size: 20px; margin: 0 0 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+/* the way to the text behind a view (overlay type 'text') */
+.view-text-btn { border: 1px solid var(--border); background: var(--card); color: var(--secondary); border-radius: 14px;
+  font-size: 11.5px; font-weight: 500; padding: 3px 10px; cursor: pointer; flex: 0 0 auto; }
+.view-text-btn:hover { border-color: var(--accent); color: var(--accent); }
+pre.view-text { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.5;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px; overflow-x: auto;
+  white-space: pre; user-select: all; margin: 12px 0; }
+.view-text-note { font-size: 12.5px; color: var(--secondary); }
+.view-text-note code { font-size: 12px; }
+
+/* bottom tabs (mobile) */
+#tabs { display: none; position: fixed; bottom: 0; left: 0; right: 0; background: var(--card);
+  border-top: 1px solid var(--border); padding: 4px 4px calc(4px + env(safe-area-inset-bottom)); z-index: 10; }
+/* the file's views, scrolling when there are more than fit; Health and
+   Not shown live behind the top bar's status button */
+#tabs .row { display: flex; align-items: stretch; }
+#tabs .tabs-views { display: flex; flex: 1 1 auto; min-width: 0; overflow-x: auto; scroll-snap-type: x proximity;
+  scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+#tabs .tabs-views::-webkit-scrollbar { display: none; }
+#tabs button { flex: 0 0 auto; min-width: 72px; max-width: 110px; scroll-snap-align: start; border: none; background: transparent; color: var(--muted);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+  padding: 6px 4px; min-height: 44px; cursor: pointer; }
+#tabs .tabs-views button:only-child, #tabs .tabs-views button:nth-last-child(-n+4):first-child ~ button,
+#tabs .tabs-views button:nth-last-child(-n+4):first-child { flex: 1 1 0; max-width: none; } /* up to four views: fill the row */
+#tabs button .tab-label { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#tabs button svg { display: block; }
+#tabs button .tab-label { font-size: 10px; }
+#tabs button.active { color: var(--accent); font-weight: 600; }
+
+@media (max-width: 720px) {
+  #rail { display: none; }
+  #topbar { display: flex; }
+  #tabs { display: block; }
+  #view { padding: 16px 16px 96px; }
+}
+
+/* toast */
+#toast { position: fixed; bottom: 70px; left: 50%; transform: translateX(-50%); background: var(--ink);
+  color: var(--bg); padding: 10px 16px; border-radius: 8px; font-size: 13px; opacity: 0;
+  pointer-events: none; transition: opacity 140ms ease; max-width: 90vw; z-index: 20; }
+#toast.show { opacity: 1; }
+
+/* a command in flight: the request is shown as a request — the
+ * asked-for value in the accent, a toggle where it was asked to go but
+ * outlined dashed — and a line under the control says which stage it is
+ * in, then how it ended. The control keeps taking taps. */
+.cmd-pending { outline: 1.5px dashed var(--accent); outline-offset: 2px; }
+.stepper-value.cmd-target, .dial-target.cmd-target, .sval.cmd-target { color: var(--accent); font-weight: 600; }
+.cmd-status { font-size: 11.5px; line-height: 1.4; padding: 2px 4px 6px; color: var(--secondary); }
+.cmd-status.tone-busy::before { content: ''; display: inline-block; width: 9px; height: 9px; margin-right: 6px;
+  vertical-align: -1px; border: 1.5px solid var(--muted); border-top-color: transparent; border-radius: 50%;
+  animation: cmd-spin 700ms linear infinite; }
+.dial + .cmd-status { text-align: center; }
+.cmd-status.tone-ok { color: var(--good); }
+.cmd-status.tone-warn { color: var(--warning-ink); }
+.cmd-status.tone-bad { color: var(--critical); }
+@keyframes cmd-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .cmd-status.tone-busy::before { animation: none; border-top-color: var(--muted); }
+}
+
+/* cards / widgets */
+.card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px;
+  box-shadow: 0 1px 2px rgba(0,0,0,.05); }
+.card + .card { margin-top: 16px; }
+.card.clickable { cursor: pointer; transition: border-color 140ms ease, box-shadow 140ms ease; }
+.card.clickable:hover { border-color: var(--muted); box-shadow: 0 2px 8px rgba(0,0,0,.07); }
+.card-label { font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--muted); margin-bottom: 10px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 16px; align-items: start; }
+.grid > .span-all { grid-column: 1 / -1; }
+.grid > .card + .card { margin-top: 0; } /* the gap is the grid's; the stacked-card rule above is for columns */
+.chart-card { height: 120px; margin: 8px 0 4px; }
+/* a group is one card: its members keep their own markup and lose their
+   own chrome, so a dial and the traces under it read as one thing */
+.group-card > .card-label + * { margin-top: 10px; }
+.group-card .card { background: none; border: none; border-radius: 6px; padding: 0; }
+.group-card .card + .card { margin-top: 14px; }
+.group-card .card.clickable:hover { box-shadow: none; background: var(--accent-tint); }
+/* burner card: the two commands, then the two temperatures with their day */
+.burner-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+.burner-state { font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.burner-state.lit { color: var(--serious); }
+.burner-control { display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  min-height: 40px; font-size: 12.5px; color: var(--secondary); }
+.burner-reading { margin-top: 10px; }
+.burner-reading .burner-reading-head { display: flex; align-items: baseline; justify-content: space-between;
+  font-size: 12.5px; color: var(--secondary); }
+.burner-reading b { color: var(--ink); font-variant-numeric: tabular-nums; }
+/* unit card: head, then the manifest's relations as sections */
+.unit-card .unit-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin: -4px -8px 4px; padding: 4px 8px; }
+.unit-card .unit-name { font-size: 15px; font-weight: 600; }
+.unit-card .unit-desc { font-size: 12.5px; color: var(--secondary); margin-top: 1px; }
+.unit-card .section-label { font-size: 10.5px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 14px 0 2px; }
+.unit-card .param-row:first-of-type { border-top: none; }
+/* a relation is one field: what it is on the left, what it reads on the right */
+.unit-card .group-toggle { margin-top: 14px; }
+.rel-row { display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  font-size: 12.5px; color: var(--secondary); padding: 5px 4px; min-height: 32px; }
+.rel-row .rel-value { color: var(--ink); font-variant-numeric: tabular-nums; }
+.muted { color: var(--secondary); }
+.faint { color: var(--muted); }
+
+.row-clickable { cursor: pointer; transition: background-color 140ms ease; border-radius: 6px; }
+.row-clickable:hover { background-color: var(--accent-tint); }
+
+/* signal tiles */
+.big, .stat-value { font-size: 26px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.tile .big { margin: 6px 0 4px; }
+.tile .big.stale { color: var(--muted); text-decoration: line-through dotted; }
+.tile .caption { font-size: 12px; color: var(--muted); }
+
+/* charts (sparklines + detail chart) */
+/* No chart is worth selecting as text, and a press on one that becomes a
+   selection after half a second leaves a phone unable to read a value off
+   a plot at all. */
+.chart-wrap { position: relative; width: 100%;
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+/* Set by wireChartInteractions on the charts it lets a finger scrub: a
+   drag across one is a scrub, not a scroll, and `pan-y` keeps the page
+   scrolling vertically while horizontal movement stays ours. The charts
+   inside a card that taps through keep plain `auto`, so pinch-zoom over
+   them is untouched. */
+.chart-wrap.scrubbable { touch-action: pan-y; }
+.chart-wrap svg { display: block; width: 100%; height: 100%; }
+.chart-tile { height: 36px; }
+.chart-row { height: 28px; }
+.chart-detail { height: 220px; margin: 12px 0 4px; }
+/* Full window is for separating lines, which takes height as much as
+   width; a chart merely stretched sideways is no easier to read. */
+.chart-detail-wide { height: 440px; margin: 16px 0 4px; }
+.chart-timeline-wide { height: 96px; margin: 16px 0 4px; }
+.chart-timeline { height: 64px; margin: 12px 0 4px; }
+.chart-commands { height: 28px; margin: 8px 0 2px; }
+.chart-note { font-size: 12px; color: var(--muted); }
+.chart-empty { height: 100%; min-height: 36px; display: flex; align-items: center; justify-content: center;
+  color: var(--muted); font-size: 12px; }
+.chart-line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;
+  vector-effect: non-scaling-stroke; }
+.chart-area { fill: var(--accent); opacity: .08; stroke: none; }
+/* Positioned in the wrapper, not the SVG: the viewBox is stretched to
+   fit (preserveAspectRatio="none"), so an SVG circle would render as an
+   ellipse — subtly at 2:1, unmissably at the full-window chart's 6:1. */
+.chart-dot, .chart-crosshair-dot { position: absolute; width: 7px; height: 7px;
+  border-radius: 50%; background: var(--accent); transform: translate(-50%, -50%);
+  pointer-events: none; }
+/* The future, in the same ink as the past because it is the same series,
+   dashed because it is a belief rather than a record. */
+/* The braid: one line per stored issue, on a sequential ramp by age —
+   older paler, because issue time is ORDERED and a ramp needs no legend
+   (darker IS newer). Never categorical hues: twenty of those would be
+   unreadable and would fail every colourblind check. A transparent
+   companion stroke makes a 1.3px line tappable with a thumb. */
+.chart-issue { fill: none; stroke-width: 1.3; stroke-linecap: round; stroke-linejoin: round;
+  vector-effect: non-scaling-stroke; }
+.chart-issue-hit { fill: none; stroke: transparent; stroke-width: 14; cursor: pointer;
+  vector-effect: non-scaling-stroke; }
+/* A contributing source: grey and thin, so the computed value's accent
+   always reads as what the house believes
+   (docs/design.md#charts-forecasts-and-sources). */
+.chart-contributor { fill: none; stroke: var(--muted); stroke-width: 1.5; stroke-linecap: round;
+  stroke-linejoin: round; vector-effect: non-scaling-stroke;
+  /* Dotted, where the forecast is dashed (4 3): both are secondary to the
+     accent's solid record, and they must not read as each other. A zero
+     dash under a round cap IS the dot. */
+  stroke-dasharray: 0 3; }
+.source-legend { display: flex; gap: 10px; flex-wrap: wrap; }
+.source-legend span::before { content: ''; display: inline-block; width: 12px; height: 0;
+  border-top: 2px dotted var(--muted); vertical-align: middle; margin-right: 5px; }
+/* Naming a source in the legend only identifies a line if the reader can
+   tell the lines apart, and one deliberate grey means they cannot. So the
+   legend lights its own line on demand: emphasis, never a colour a
+   contributor must not own
+   (docs/design.md#charts-forecasts-and-sources). */
+.source-legend span { cursor: default; }
+.chart-contributor.hi { stroke: var(--secondary); stroke-width: 2; opacity: 1; }
+.chart-contributor.dim { opacity: .4; }
+.source-legend span.hi { color: var(--ink); }
+.source-legend span.dim { opacity: .45; }
+.chart-issue.pinned { stroke: var(--issue-pin); stroke-width: 2.4; }
+.chart-issue.hovered { stroke: var(--issue-pin); stroke-width: 2; }
+.chart-note + .chart-note { margin-top: 2px; }
+.chart-forecast { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linecap: round;
+  stroke-linejoin: round; stroke-dasharray: 4 3; opacity: .75; vector-effect: non-scaling-stroke; }
+/* Still the house's current belief, so still dashed — but older than the
+   span it has left to say, so it does not get to wear the accent
+   (docs/design.md#charts-forecasts-and-sources). */
+.chart-forecast.stale { stroke: var(--muted); opacity: .6; }
+.chart-now { stroke: var(--secondary); stroke-width: 1; stroke-dasharray: 3 3; opacity: .55;
+  vector-effect: non-scaling-stroke; }
+.chart-grid { stroke: var(--border); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.chart-crosshair { stroke: var(--muted); stroke-width: 1; vector-effect: non-scaling-stroke; }
+/* Over the plot, so it has to stay readable with a line beneath it: a
+   halo in the surface colour rather than a box, which would read as a
+   mark. */
+.chart-ylabel { position: absolute; right: 4px; font-size: 12px; color: var(--muted); pointer-events: none;
+  text-shadow: 0 0 3px var(--card), 0 0 3px var(--card), 0 0 2px var(--card); }
+.chart-ylabel-top { top: 0; }
+.chart-ylabel-bottom { bottom: 0; }
+/* The time axis, under the plot rather than over it: a label inside the
+   frame either covers a mark or gets covered by one, and there is room
+   below. Ends only — a chart this size cannot carry a tick per hour, and
+   the scrub reads any instant between them. */
+.chart-xaxis { position: relative; display: flex; justify-content: space-between;
+  font-size: 11px; color: var(--muted); margin-top: 3px; }
+/* "now" sits under the rule it names, not in the middle of the row —
+   a centred label points at the wrong instant the moment a horizon
+   pushes the rule off centre. */
+.chart-xnow { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+.chart-loading { opacity: .5; transition: opacity 140ms ease; }
+/* timeline (bool / string history): one band per run */
+.tl-on { fill: var(--accent); }
+.tl-off { fill: var(--accent); opacity: .12; }
+.tl-a { fill: var(--accent); opacity: .55; }
+.tl-b { fill: var(--accent); opacity: .25; }
+
+#chart-tooltip { position: fixed; left: 0; top: 0; background: var(--card); border: 1px solid var(--border);
+  border-radius: 6px; padding: 6px 10px; box-shadow: 0 2px 8px rgba(0,0,0,.14); pointer-events: none;
+  opacity: 0; transition: opacity 100ms ease; z-index: 50; max-width: 220px; }
+#chart-tooltip.show { opacity: 1; }
+#chart-tooltip-value { font-weight: 650; color: var(--ink); font-variant-numeric: tabular-nums; font-size: 13px; }
+#chart-tooltip-time { color: var(--secondary); font-size: 12px; margin-top: 2px; }
+
+/* deviations list */
+.dev-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+  padding: 10px 8px; margin: 0 -8px; border-top: 1px solid var(--border); min-height: 40px; }
+.dev-row:first-of-type { border-top: none; padding-top: 4px; }
+.dev-main .title { font-weight: 600; font-size: 13px; }
+.dev-main .detail { font-size: 12px; color: var(--secondary); margin-top: 2px; }
+.dev-tag { font-size: 10px; color: var(--muted); white-space: nowrap; margin-top: 2px; }
+.dev-btn { border: 1px solid var(--border); background: var(--card); color: var(--secondary);
+  border-radius: 14px; padding: 4px 12px; font-size: 12px; white-space: nowrap; cursor: pointer; }
+.dev-btn:hover { border-color: var(--muted); color: var(--ink); }
+.equilibrium { display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 10px; padding: 48px 24px; color: var(--secondary); font-size: 15px; text-align: center; }
+.equilibrium .eq-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good); opacity: .55; }
+
+/* map (person entities) */
+/* `isolation` keeps Leaflet's own z-indexes (panes at 400, controls at
+   1000) inside the map: without it its zoom buttons and marker labels sit
+   above the phone's tab bar and take its taps */
+.map-wrap { height: 320px; border-radius: 8px; overflow: hidden; background: var(--bg); isolation: isolate; }
+.map-hint { font-size: 12px; color: var(--muted); margin-top: 8px; }
+.map-nofix { font-size: 12px; color: var(--secondary); margin-top: 8px; }
+.person-marker { position: relative; }
+.person-marker-dot { width: 12px; height: 12px; border-radius: 50%; background: var(--accent);
+  border: 2px solid var(--card); box-shadow: 0 1px 2px rgba(0,0,0,.3); }
+.person-marker-label { position: absolute; left: 16px; top: -5px; white-space: nowrap; font-size: 11px;
+  font-weight: 600; color: var(--ink); background: var(--card); border: 1px solid var(--border);
+  border-radius: 4px; padding: 1px 5px; }
+
+/* room cards */
+.room-card { margin-bottom: 16px; }
+.room-card h3 { margin: 0 0 10px; font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.entity-row { display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  min-height: 40px; padding: 6px 8px; margin: 0 -8px; border-top: 1px solid var(--border); }
+.entity-row:first-of-type { border-top: none; }
+.entity-name { font-size: 13px; flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.entity-sub { margin-top: 2px; }
+/* a multi-aspect sensor's readings, under its head row */
+.entity-row.sensor-reading { min-height: 34px; }
+.sensor-reading .entity-name { padding-left: 12px; font-size: 12px; color: var(--secondary); }
+.entity-row .muted.stale { color: var(--muted); text-decoration: line-through dotted; }
+.status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; flex: 0 0 auto; }
+.dot-on { background: var(--ink); }
+.dot-off { background: transparent; border: 1.4px solid var(--muted); }
+
+/* toggle switch */
+.toggle { width: 40px; height: 22px; border-radius: 11px; background: var(--border);
+  position: relative; cursor: pointer; flex: 0 0 40px; transition: background-color 140ms ease; }
+.toggle .knob { position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%;
+  background: var(--card); border: 1px solid var(--border); box-shadow: 0 1px 2px rgba(0,0,0,.2);
+  transition: left 140ms ease; }
+.toggle.on { background: var(--accent); }
+.toggle.disabled { opacity: .4; cursor: default; }
+.toggle.on .knob { left: 20px; border-color: var(--accent); }
+
+/* slider row */
+.slider-row { display: flex; align-items: center; gap: 12px; padding: 6px 0 6px 18px; font-size: 12px; }
+.slider-row .slabel { flex: 0 0 70px; color: var(--secondary); }
+.slider-row .sval { flex: 0 0 auto; min-width: 40px; text-align: right; color: var(--ink); font-variant-numeric: tabular-nums; }
+
+/* A finger scrolling the page past a slider must not drag it. `pan-y`
+   gives vertical panning back to the page and keeps horizontal drags for
+   the control — the same trade the scrubbable chart makes above. Without
+   it a scroll that starts on the thumb commands the device, and on a
+   phone that is most of the surface. */
+input[type=range] { touch-action: pan-y; flex: 1 1 40px; min-width: 40px; -webkit-appearance: none; appearance: none; height: 2px;
+  background: var(--border); border-radius: 1px; outline: none; }
+input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%;
+  background: var(--accent); cursor: pointer; border: 2px solid var(--card); box-shadow: 0 1px 2px rgba(0,0,0,.2); }
+input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 50%; background: var(--accent);
+  cursor: pointer; border: 2px solid var(--card); box-shadow: 0 1px 2px rgba(0,0,0,.2); }
+input[type=range]::-moz-range-track { background: var(--border); height: 2px; border-radius: 1px; }
+
+/* climate stepper */
+.stepper { display: flex; align-items: center; gap: 6px; }
+.step-btn { border: 1px solid var(--border); background: var(--card); color: var(--secondary); border-radius: 6px;
+  width: 26px; height: 26px; font-size: 14px; line-height: 1; cursor: pointer; flex: 0 0 auto;
+  display: flex; align-items: center; justify-content: center; transition: background-color 140ms ease, border-color 140ms ease; }
+.step-btn:hover { border-color: var(--muted); }
+.step-btn:disabled { opacity: .4; cursor: default; }
+.stepper-value { min-width: 42px; text-align: center; font-variant-numeric: tabular-nums; color: var(--ink); }
+
+/* setpoint controls */
+.param-row { padding: 12px 0; border-top: 1px solid var(--border); }
+.param-row:first-of-type { border-top: none; }
+.param-row.flash-highlight { animation: flash-highlight 1.5s ease; }
+@keyframes flash-highlight { from { background: var(--accent-tint); } to { background: transparent; } }
+.param-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 6px; }
+.param-readonly { font-size: 14px; }
+.tier-badge { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; margin-left: 4px; vertical-align: middle; }
+.param-head .name { font-weight: 600; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.param-caption { font-size: 12px; color: var(--muted); margin-top: 4px; cursor: help; }
+.seg { display: flex; gap: 8px; flex-wrap: wrap; }
+.seg button { border: 1px solid var(--border); background: var(--card); color: var(--secondary); border-radius: 14px;
+  padding: 6px 12px; font-size: 12px; cursor: pointer; min-height: 32px; transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease; }
+.seg button:hover { border-color: var(--muted); }
+.seg button.active { background: var(--accent-tint); color: var(--accent); border-color: var(--accent); font-weight: 600; }
+select.control { border: 1px solid var(--border); background: var(--card); color: var(--ink); border-radius: 6px;
+  padding: 7px 10px; font-size: 13px; min-height: 32px; max-width: 100%; }
+/* a slider with its value and a coarse ± pair — the range moves under the finger, the buttons for a nudge */
+.slider-row .step-btn { flex: 0 0 auto; }
+/* thermostat dial: the target on an arc from min to max, the reading under it */
+.dial { position: relative; width: 168px; margin: 8px auto 0; }
+.dial svg { display: block; width: 100%; height: auto; }
+.dial-track { fill: none; stroke: var(--border); stroke-width: 7; stroke-linecap: round; }
+.dial-arc { fill: none; stroke: var(--accent); stroke-width: 7; stroke-linecap: round; }
+.dial-knob { fill: var(--card); stroke: var(--accent); stroke-width: 3; }
+.dial-readout { position: absolute; left: 0; right: 0; top: 34%; text-align: center; pointer-events: none; }
+.dial-target { font-size: 28px; font-weight: 650; font-variant-numeric: tabular-nums; line-height: 1.1; }
+.dial-current { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.dial-buttons { display: flex; justify-content: space-between; padding: 0 22px; margin-top: -26px; position: relative; }
+.dial-buttons .step-btn { width: 34px; height: 34px; font-size: 17px; }
+.dial-row { display: flex; flex-direction: column; align-items: stretch; }
+.dial-row .aspect-label { align-self: flex-start; }
+input[type=text], input[type=time] { border: 1px solid var(--border); background: var(--card); color: var(--ink);
+  border-radius: 6px; padding: 8px 10px; font-size: 13px; }
+
+/* chips (rooms view) */
+.chips { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+.chip { border: 1px solid var(--border); background: var(--card); color: var(--secondary); border-radius: 14px;
+  padding: 6px 14px; font-size: 12.5px; cursor: pointer; min-height: 32px; transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease; }
+.chip:hover { border-color: var(--muted); }
+.chip.active { background: var(--accent-tint); color: var(--accent); border-color: var(--accent); font-weight: 600; }
+
+/* health cards */
+.health-card { display: flex; flex-direction: column; gap: 4px; }
+.health-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.health-head .name { font-weight: 600; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.status-badge { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--secondary); cursor: help; white-space: nowrap; }
+.status-glyph { font-size: 12px; width: 14px; text-align: center; }
+.status-glyph.status-running { color: var(--good); }
+.status-glyph.status-starting { color: var(--muted); }
+.status-glyph.status-backoff { color: var(--warning); }
+.status-glyph.status-open { color: var(--critical); }
+.status-glyph.status-stopped { color: var(--muted); }
+.health-meta { font-size: 12px; color: var(--muted); }
+.event-feed { margin-top: 10px; }
+.event-row { font-size: 12px; padding: 6px 0; border-top: 1px solid var(--border); color: var(--secondary); }
+.event-row:first-of-type { border-top: none; }
+.event-row .ts { color: var(--muted); margin-right: 6px; cursor: help; }
+.badge-arbitrated { font-size: 9px; letter-spacing: .05em; color: var(--muted); border: 1px solid var(--border);
+  border-radius: 8px; padding: 2px 6px; margin-left: 6px; }
+/* Amber, not the accent: the set point's colour is the brand's alert
+   (docs/brand/README.md), and motion is the one thing on a camera card
+   that is not calm. */
+.badge-motion { font-size: 9px; letter-spacing: .05em; color: var(--warning); border: 1px solid currentColor;
+  border-radius: 8px; padding: 2px 6px; margin-left: 6px; }
+.camera-tap { display: flex; align-items: center; justify-content: center; gap: 6px;
+  width: 100%; min-height: 72px; border-radius: 8px; border: 1px dashed var(--border);
+  background: var(--bg); color: var(--secondary); font-size: 12px; }
+video-rtc { display: block; width: 100%; min-height: 180px; background: #000; border-radius: 8px; overflow: hidden; }
+video-rtc video { width: 100%; display: block; }
+.aspect-row { font-size: 12px; color: var(--secondary); padding: 6px 4px; }
+.aspect-row.row-clickable { min-height: 40px; display: flex; align-items: center; }
+/* described entity on a room card: head line with the first control, readings under it */
+.entity-row.described-card { flex-direction: column; align-items: stretch; gap: 4px; }
+.described-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 28px; }
+.described-readings { display: flex; flex-wrap: wrap; gap: 2px 6px; font-size: 12px; color: var(--muted); }
+.described-readings b { font-weight: 500; color: var(--secondary); font-variant-numeric: tabular-nums; }
+.described-readings .stale, .described-readings .stale b { color: var(--muted); text-decoration: line-through dotted; }
+.described-readings .sep { color: var(--border); }
+.described-readings .card-badge { margin-left: auto; }
+.described-readings .card-badge .badge-arbitrated { margin-left: 0; }
+/* described aspects (docs/design.md#aspect-descriptors): label · value, a control when declared */
+.aspect-row.described { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 40px; }
+.aspect-row .aspect-label { color: var(--ink); font-size: 13px; }
+/* A commanded aspect's label is its way into history: the row itself
+   cannot be the target, because the row is the control. */
+.aspect-label.linked { cursor: pointer; border-radius: 4px; padding: 2px 4px; margin: -2px -4px; }
+.aspect-label.linked:hover { background-color: var(--accent-tint); color: var(--accent); }
+.aspect-row .aspect-value { color: var(--secondary); font-variant-numeric: tabular-nums; }
+.aspect-row .aspect-value.stale { color: var(--muted); text-decoration: line-through dotted; }
+.stale-mark { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin-left: 6px; }
+.group-toggle { background: none; border: none; color: var(--muted); font: inherit; font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; cursor: pointer; padding: 0; margin-top: 20px; }
+.empty-hint { color: var(--muted); font-size: 12.5px; padding: 8px 0; }
+.log-feed { margin-top: 10px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px; }
+.log-line { padding: 2px 0; white-space: pre-wrap; word-break: break-all; color: var(--secondary); }
+.log-line .ts { color: var(--muted); margin-right: 6px; }
+.log-line.stderr { color: var(--critical); }
+
+/* stat row (history detail) */
+.stat-row { display: flex; gap: 16px; margin-top: 12px; flex-wrap: wrap; }
+.stat-item { flex: 1 1 80px; }
+.stat-item .stat-label { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin-top: 2px; }
+
+/* detail overlay */
+#overlay-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.35); opacity: 0; pointer-events: none;
+  transition: opacity 140ms ease; z-index: 30; }
+#overlay-backdrop.show { opacity: 1; pointer-events: auto; }
+#overlay-panel { position: fixed; top: 0; right: 0; bottom: 0; width: 440px; max-width: 100vw;
+  background: var(--card); border-left: 1px solid var(--border); box-shadow: -4px 0 24px rgba(0,0,0,.14);
+  transform: translateX(100%); transition: transform 200ms ease; z-index: 31;
+  display: flex; flex-direction: column; outline: none; }
+#overlay-panel.show { transform: translateX(0); }
+/* Full window, for reading a chart rather than glancing at one. The
+   detail overlay is a 440px rail because that is right on a phone and
+   beside a view; it is wrong when the subject is a dense plot. */
+#overlay-panel.wide { left: 0; width: 100vw; border-left: none; }
+.overlay-head { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 16px; border-bottom: 1px solid var(--border); flex: 0 0 auto; }
+.overlay-title { font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.overlay-close { border: none; background: transparent; color: var(--secondary); font-size: 20px; line-height: 1;
+  cursor: pointer; width: 32px; height: 32px; flex: 0 0 auto; border-radius: 6px; transition: background-color 140ms ease; }
+.overlay-close:hover { background: var(--bg); }
+.overlay-actions { display: flex; align-items: center; gap: 2px; flex: 0 0 auto; }
+.overlay-wide { border: none; background: transparent; color: var(--secondary); cursor: pointer;
+  width: 32px; height: 32px; border-radius: 6px; transition: background-color 140ms ease;
+  display: flex; align-items: center; justify-content: center; }
+.overlay-wide:hover { background: var(--bg); }
+.overlay-wide svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8;
+  stroke-linecap: round; stroke-linejoin: round; }
+.overlay-body { padding: 16px; overflow-y: auto; flex: 1 1 auto; }
+
+@media (max-width: 720px) {
+  #overlay-panel { top: auto; left: 0; right: 0; width: auto; height: 88vh; border-left: none;
+    border-top: 1px solid var(--border); border-radius: 14px 14px 0 0; transform: translateY(100%); }
+  #overlay-panel.show { transform: translateY(0); }
+}
