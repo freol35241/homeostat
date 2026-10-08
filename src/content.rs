@@ -3,12 +3,12 @@
 //!
 //! Two hashes decide "changed" cheaply before any semantic comparison:
 //! - `manifest_hash`: sha256 of the manifest file bytes.
-//! - `files_hash`: sha256 over the unit's non-manifest repo inputs — command
-//!   tokens that resolve to files (the `uv run units/foo.py` script) and
-//!   their `.lock` files, the unit's bound entity files, and `zones.toml`
-//!   when any of the unit's key expressions referenced a zone. A
-//!   house-wide unit (`watches = "house"`) also takes every manifest,
-//!   every entity file and `dashboard.toml`.
+//! - `files_hash`: sha256 over the unit's non-manifest repo inputs. These
+//!   are the command tokens that resolve to files (the
+//!   `uv run units/foo.py` script) and their `.lock` files, the unit's
+//!   bound entity files, and `zones.toml` when any of the unit's key
+//!   expressions referenced a zone. A house-wide unit (`watches = "house"`) also takes
+//!   every manifest, every entity file and `dashboard.toml`.
 
 use std::fmt::Write as _;
 use std::fs;
@@ -64,15 +64,15 @@ pub fn files_hash(root: &Path, unit: &LoadedUnit, house: &House, unit_uses_zone:
         if root.join(token).is_file() {
             feed(token);
             // A script's lock pins the dependencies it runs against, so a
-            // lock-only bump is as much a change as an edit to the script.
+            // lock-only bump is a change just like an edit to the script.
             feed(&format!("{token}.lock"));
         }
     }
     let name = &unit.manifest.unit.name;
     if unit.manifest.unit.watches == Some(crate::manifest::UnitWatches::House) {
-        // A house-wide unit reads every manifest, every entity file and
-        // the zones: all of them are its inputs, so all of them must be
-        // able to mark it changed. Sorted, since the hash is order-fed.
+        // A house-wide unit reads every manifest, every entity file and the
+        // zones. All of them are its inputs, so any of them can mark it
+        // changed. Sorted, because the order they are fed in changes the hash.
         let mut paths: Vec<&str> = house
             .units
             .iter()
@@ -148,10 +148,10 @@ mod tests {
 
     #[test]
     fn a_house_wide_unit_is_changed_by_another_units_entity() {
-        // The dashboard's model spans the whole house, so a binding added
-        // to an adapter changes its inputs while changing none of its own
-        // files. Without this, apply reports success and leaves the page
-        // confidently stale.
+        // The dashboard's model covers the whole house. A binding added to an
+        // adapter changes the dashboard's inputs without changing any of its
+        // own files. Without this, apply reports success and the page keeps
+        // showing the old house.
         let dir = house_dir("house-scope");
         let before = hash_of(&dir, "dash");
         entity(&dir, "second_lamp");
@@ -194,9 +194,9 @@ mod tests {
 
     #[test]
     fn a_house_wide_unit_is_changed_by_the_views_file() {
-        // dashboard.toml is layout as text: editing a view must restart
-        // the unit that renders it, and the file is optional, so its
-        // arrival is a change too.
+        // dashboard.toml holds the layout. Editing a view must restart the
+        // unit that renders it. The file is optional, so adding it is also a
+        // change.
         let dir = house_dir("house-views");
         let before = hash_of(&dir, "dash");
         let probe_before = hash_of(&dir, "probe");
@@ -225,7 +225,7 @@ mod tests {
     #[test]
     fn an_own_scope_unit_ignores_files_it_does_not_own() {
         // The default stays narrow: probe owns its entities, and the
-        // dashboard's manifest is none of its business.
+        // dashboard's manifest is not one of its inputs.
         let dir = house_dir("own-scope");
         let before = hash_of(&dir, "probe");
         let dash = dir.join("units/dash.toml");

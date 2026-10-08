@@ -4,9 +4,9 @@
 //! entities through templates exercises `Context` expanding them. The two
 //! halves fail asymmetrically: an unexpanded templated publish raises (the
 //! coverage check compares the concrete key against a literal `{room}`
-//! chunk), while an unexpanded templated subscribe hands zenoh that chunk
-//! verbatim, matches nothing, and says nothing — a unit reporting healthy
-//! and deaf to every command.
+//! chunk). An unexpanded templated subscribe hands zenoh that chunk
+//! verbatim, matches nothing and reports nothing, which leaves a unit
+//! that reports healthy and is deaf to every command.
 //!
 //! `latches` binds two entities in two rooms through one subscribe and one
 //! publish expression. Commanding either latch and seeing its state come
@@ -15,9 +15,9 @@
 //!
 //! Determinism: the command publishers wait for a matching subscriber
 //! (the evening.rs pattern), which is also where a regression in the
-//! subscribe half surfaces — no expansion, no match. States are read both
-//! live and from the core mirror, so a publish that beats the subscriber
-//! is not lost.
+//! subscribe half surfaces: without expansion there is no match. States
+//! are read both live and from the core mirror, so a publish that beats
+//! the subscriber is not lost.
 
 mod common;
 

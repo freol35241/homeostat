@@ -20,8 +20,9 @@ const CAMERAS_ENV: &str = "HOMEOSTAT_CAMERAS";
 const LISTEN_ENV: &str = "HOMEOSTAT_GO2RTC_LISTEN";
 
 /// A temp dir whose `go2rtc` executable is a wrapper around the fake
-/// (`tests/fake_go2rtc.py`) — prepended to PATH so the shim's bare-name
-/// spawn resolves to it, exactly as image provisioning would.
+/// (`tests/fake_go2rtc.py`). It is prepended to PATH so the shim's
+/// bare-name spawn resolves to it, as it resolves to the binary image
+/// provisioning installs.
 fn fake_binary_dir() -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
     let dir = std::env::temp_dir().join(format!("homeostat-go2rtc-bin-{}", std::process::id()));

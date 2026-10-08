@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Fetches the Chromium that tests/browser is locked against, with the
-# system libraries it needs. Installs only — it runs no tests.
+# system libraries it needs. It only installs and runs no tests.
 #
-# Through the test script rather than `playwright install` directly, so the
-# browser is always the version tests/browser/run.py.lock resolved: a
-# mismatch between the two is a "Executable doesn't exist" that costs half
-# an hour to read.
+# It goes through the test script instead of calling `playwright install`
+# directly, so the browser matches the Playwright version that
+# tests/browser/run.py.lock resolved. A mismatch shows up as an unhelpful
+# "Executable doesn't exist" error.
 #
 #   scripts/install_browser.sh
 set -euo pipefail

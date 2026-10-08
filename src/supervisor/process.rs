@@ -13,28 +13,28 @@ use tokio::process::{Child, Command};
 use crate::bus::LogEntry;
 use crate::supervisor::LogMap;
 
-/// Per-unit ring buffer capacity: bounded memory, gone on restart — logs are
-/// operational exhaust, not the durable trail (see
-/// docs/design.md#logs-and-the-audit-trail).
+/// Per-unit ring buffer capacity. Memory stays bounded and the buffer is lost
+/// on restart, because logs are for debugging and the durable trail lives
+/// elsewhere (see docs/design.md#logs-and-the-audit-trail).
 pub const LOG_CAPACITY: usize = 500;
 
-/// Resolves the command a unit is actually exec'd with. For a `uv run`
-/// unit this materialises the script's environment and returns the
-/// environment's interpreter invoked on the script directly; anything
-/// else comes back unchanged.
+/// Resolves the command a unit is exec'd with. For a `uv run` unit this
+/// prepares the script's environment and returns that environment's
+/// interpreter, invoked on the script directly. Any other command comes back
+/// unchanged.
 ///
-/// `uv run` would otherwise stay alive as the unit's parent for its whole
-/// lifetime, doing nothing but `wait()` — and holding real memory while it
-/// does: 4 MB warm at best, 25-55 MB when the environment was created or
-/// resolved from a git source, so a seven-unit house measured 223 MB of
-/// 443 MB resident in these parents. Syncing the environment in a process
-/// that EXITS, then exec'ing its interpreter, keeps the PEP 723 metadata as
-/// the single authority on the unit's dependencies and removes the parent
-/// entirely: the interpreter IS the unit's process-group leader.
+/// Otherwise `uv run` stays alive as the unit's parent for its whole lifetime,
+/// doing nothing but `wait()`. It also holds memory while it waits: 4 MB warm
+/// at best, and 25-55 MB when the environment was created or resolved from a
+/// git source. In a seven-unit house these parents measured 223 MB of 443 MB
+/// resident. Syncing the environment in a process that exits, then exec'ing
+/// its interpreter, removes the parent. The PEP 723 metadata stays the only
+/// source of the unit's dependencies, and the interpreter becomes the unit's
+/// process-group leader.
 ///
 /// Best effort: if uv cannot resolve the script (no PEP 723 block, a broken
-/// dependency, no network) the original `uv run` command is returned, so
-/// the failure surfaces from `uv run` itself.
+/// dependency, no network), the original `uv run` command is returned, so the
+/// failure surfaces from `uv run` itself.
 pub async fn resolve(command: &str, cwd: &Path) -> String {
     let Some((script, args)) = uv_script(command) else {
         return command.to_string();
@@ -66,7 +66,7 @@ pub async fn resolve(command: &str, cwd: &Path) -> String {
         _ => return command.to_string(),
     };
     if interpreter.is_empty() || interpreter.contains(char::is_whitespace) {
-        // The command is re-tokenized on whitespace at spawn; a path that
+        // The command is re-tokenized on whitespace at spawn. A path that
         // would not survive that round trip is left to `uv run`.
         return command.to_string();
     }
@@ -79,15 +79,15 @@ pub async fn resolve(command: &str, cwd: &Path) -> String {
 }
 
 /// The script in a `uv run [flags] <script.py> [args]` command and the
-/// arguments that follow it. None for anything else — a binary on PATH,
-/// `homeostat mcp`, a test fake — which is left exactly as it was.
+/// arguments that follow it. None for anything else, such as a binary on PATH,
+/// `homeostat mcp` or a test fake; those are left as they are.
 fn uv_script(command: &str) -> Option<(&str, Vec<&str>)> {
     let mut parts = command.split_whitespace();
     if parts.next()? != "uv" || parts.next()? != "run" {
         return None;
     }
-    // By extension, not by position: `--script` may precede it, and a
-    // flag's VALUE must never be mistaken for the script.
+    // Find the script by extension, not position. `--script` may precede it,
+    // and a flag's value must not be mistaken for the script.
     let script = parts.find(|token| token.ends_with(".py"))?;
     Some((script, parts.collect()))
 }
@@ -117,13 +117,13 @@ fn inherited(name: &str, declared: &[String]) -> bool {
         || declared.iter().any(|d| d == name)
 }
 
-/// Spawns a unit command. The command string is whitespace-tokenized and
-/// exec'd directly — no shell, so no quoting in v1 manifests. Lookup uses
-/// PATH; relative paths resolve against the house repo root (the cwd).
-/// Stdout/stderr are piped, not inherited: `capture` re-emits and buffers
-/// them once the child is spawned. The environment is the base set plus
-/// the variables `declared` by the manifest, then `env` set on top: a
-/// secret handed to the supervisor for one unit must not reach the rest.
+/// Spawns a unit command. The command string is split on whitespace and exec'd
+/// directly, with no shell, so v1 manifests have no quoting. Lookup uses PATH.
+/// Relative paths resolve against the house repo root, which is the cwd.
+/// Stdout and stderr are piped rather than inherited, and `capture` re-emits
+/// and buffers them once the child is spawned. The environment is the base set
+/// plus the variables the manifest `declared`, with `env` set on top. A secret
+/// handed to the supervisor for one unit must not reach the others.
 pub fn spawn(
     command: &str,
     cwd: &Path,
@@ -166,12 +166,12 @@ pub fn spawn(
 }
 
 /// Takes a freshly spawned unit's stdout/stderr pipes and starts capturing
-/// them: each line is re-emitted on the supervisor's own matching stream,
-/// tagged `[{unit}] ` — `docker logs` stays the raw stream, attributable
-/// per unit — and appended to the unit's ring buffer. Two reader tasks
-/// run independently until their pipe closes (the unit exits); this touches
-/// only the child's stdout/stderr handles, never its pid or process group,
-/// so it does not interact with termination or reaping.
+/// them. Each line is re-emitted on the supervisor's own matching stream,
+/// tagged `[{unit}] `, so `docker logs` stays the raw stream and each line
+/// shows its unit. Each line is also appended to the unit's ring buffer. Two
+/// reader tasks run independently until their pipe closes when the unit exits.
+/// This touches only the child's stdout/stderr handles and not its pid or
+/// process group, so it does not interact with termination or reaping.
 pub fn capture(child: &mut Child, unit: &str, log: &LogMap) {
     if let Some(stdout) = child.stdout.take() {
         tokio::spawn(read_stream(stdout, unit.to_string(), "stdout", log.clone()));
@@ -181,9 +181,9 @@ pub fn capture(child: &mut Child, unit: &str, log: &LogMap) {
     }
 }
 
-/// Reads one pipe line by line until EOF, re-emitting and buffering each
-/// line. Non-UTF8 bytes are lossy-decoded — malformed unit output must
-/// never bring down capture.
+/// Reads one pipe line by line until EOF, re-emitting and buffering each line.
+/// Non-UTF8 bytes are decoded lossily, so malformed unit output cannot bring
+/// down capture.
 async fn read_stream<R>(reader: R, unit: String, stream: &'static str, log: LogMap)
 where
     R: AsyncRead + Unpin,
@@ -204,10 +204,10 @@ where
                     _ => eprintln!("[{unit}] {line}"),
                 }
                 let mut buffers = log.lock().expect("log map lock");
-                // Append-only: the entry is created at launch and removed at
+                // Append-only. The entry is created at launch and removed at
                 // destroy. A final line drained after destroy must not
-                // re-create it — a phantom entry would keep the unit alive
-                // in the served meta space and re-plan as a destroy forever.
+                // re-create it, because a phantom entry would keep the unit in
+                // the served meta space and re-plan as a destroy forever.
                 let Some(buffer) = buffers.get_mut(&unit) else {
                     continue;
                 };
@@ -232,10 +232,10 @@ fn now_us() -> i64 {
 }
 
 /// Graceful termination: SIGTERM to the unit's process group, wait up to
-/// `grace`, then SIGKILL the group. Waits for the whole group, not just
-/// the direct child: a unit that wraps or spawns something (a shell
-/// wrapper, a relay it manages) may exit ahead of it, and the survivor
-/// gets the rest of the grace before the sweep.
+/// `grace`, then SIGKILL the group. It waits for the whole group and not only
+/// the direct child. A unit that wraps or spawns something (a shell wrapper, a
+/// relay it manages) may exit before it, and the survivor gets the rest of the
+/// grace before the sweep.
 pub async fn terminate(child: &mut Child, grace: Duration) {
     let Some(pid) = child.id() else {
         return; // already reaped
@@ -264,9 +264,9 @@ fn group_alive(pgid: u32) -> bool {
     unsafe { libc::kill(-pid_t(pgid), 0) == 0 }
 }
 
-/// Sweeps a unit's process group after its leader exited on its own. A
-/// wrapper or a managed child left behind would keep the unit's liveliness
-/// token alive and poison the next incarnation's supervision.
+/// Sweeps a unit's process group after its leader exited on its own. A wrapper
+/// or a managed child left behind would keep the unit's liveliness token alive
+/// and break the next incarnation's supervision.
 pub fn sweep_group(pid: u32) {
     signal_group(pid, libc::SIGKILL);
 }
@@ -277,8 +277,8 @@ fn signal_group(pid: u32, signal: i32) {
     }
 }
 
-/// A child's id as the kernel's `pid_t`. `Child::id` is a `u32` but the
-/// kernel never hands out a pid above `i32::MAX`.
+/// A child's id as the kernel's `pid_t`. `Child::id` is a `u32`, but the
+/// kernel does not hand out a pid above `i32::MAX`.
 fn pid_t(pid: u32) -> libc::pid_t {
     libc::pid_t::try_from(pid).expect("a pid fits pid_t")
 }
@@ -321,8 +321,8 @@ mod tests {
 
     #[test]
     fn anything_else_is_left_alone() {
-        // A binary on PATH, the core's own subcommand, a test fake: these
-        // have no environment to warm and must not be touched.
+        // A binary on PATH, the core's own subcommand, a test fake: these have
+        // no environment to prepare and are left alone.
         assert_eq!(uv_script("fake_adapter"), None);
         assert_eq!(uv_script("reflector"), None);
         assert_eq!(uv_script("homeostat mcp --http 0.0.0.0:8642"), None);

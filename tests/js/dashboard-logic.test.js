@@ -1,8 +1,9 @@
 // Tests for the dashboard's extracted decision logic
-// (adapters/assets/dashboard-logic.js), run by `node --test tests/js` —
-// Node's built-in runner, no packages. The DOM wiring
-// (adapters/assets/dashboard/) stays covered by the browser suite
-// (tests/browser) and the server-side one (tests/dashboard.rs) plus hands.
+// (adapters/assets/dashboard-logic.js), run by `node --test tests/js`,
+// Node's built-in runner, with no packages. The DOM wiring
+// (adapters/assets/dashboard/) is covered by the browser suite
+// (tests/browser), the server-side one (tests/dashboard.rs) and manual
+// testing.
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -370,7 +371,7 @@ test('a described entity plans sections in descriptor order, diagnostics last an
   assert.deepEqual(plan.map((s) => s.group), ['control', 'readings', 'diagnostics']);
   assert.deepEqual(plan.map((s) => s.collapsed), [false, false, true]);
   assert.deepEqual(plan[0].rows.map((r) => r.aspect), ['setpoint', 'operating_mode', 'feed_temperature_target']);
-  // undescribed aspects fall to diagnostics, sorted; a foreign entity's keys never appear
+  // undescribed aspects fall to diagnostics, sorted; a foreign entity's keys are absent
   assert.deepEqual(plan[2].rows.map((r) => r.aspect), ['available', 'GT3_2_raw']);
   // a described field with no state is not a row
   assert.ok(!plan[1].rows.some((r) => r.aspect === 'never_published'));
@@ -660,8 +661,8 @@ test('a readback for another aspect leaves it pending', () => {
 
 test('a bridge republishing the old value is not an answer', () => {
   // ivt490's bridge sends the setpoint on every poll. Counting any
-  // readback as confirmation would clear the control on the next poll —
-  // the old value — before the pump had done anything.
+  // readback as confirmation would clear the control on the next poll,
+  // which carries the old value, before the pump had done anything.
   const pending = logic.trackCommand({}, cmd({ aspect: 'setpoint', value: 22.5, before: 21, capability: 'climate' }), 1000);
   assert.equal(logic.resolveFromState(pending, 'home/state/livingroom/lamp/setpoint', 21), null);
   const entry = logic.pendingFor(pending, 'livingroom', 'lamp', 'setpoint');
@@ -781,8 +782,8 @@ test("an adapter's drop is a rejection carrying the adapter's own reason", () =>
 });
 
 test('an event for a different command leaves ours alone', () => {
-  // The reason the envelope carries an id at all: two commands to one
-  // aspect must not resolve each other.
+  // The envelope carries an id so that two commands to one aspect do not
+  // resolve each other.
   const pending = logic.trackCommand({}, cmd(), 1000);
   assert.equal(logic.resolveFromEvent(pending, { kind: 'refuse', cmd_id: 'somethingelse' }), null);
   assert.equal(logic.resolveFromEvent(pending, { kind: 'refuse' }), null);
@@ -858,8 +859,8 @@ test('an undescribed reading is charted by its type: numbers a line, anything el
 });
 
 test('a described enum is runs whatever its values are coded as', () => {
-  // ivt490's operating_mode: labelled codes, not a quantity — a line
-  // between 1 and 3, with a mean, says nothing.
+  // ivt490's operating_mode: labelled codes rather than a quantity. A
+  // line between 1 and 3, with a mean, would mean nothing.
   const mode = { label: 'mode', kind: 'enum', values: [{ value: 1, label: 'normal' }, { value: 3, label: 'boost' }] };
   assert.equal(logic.historyShape(1, mode), 'timeline');
   assert.equal(logic.historyShape('auto', { kind: 'enum' }), 'timeline');
@@ -963,12 +964,12 @@ test('placement: each widget kind places exactly what it shows', () => {
     ['lamp', 'fused', 'anna']);
   assert.deepEqual(names(logic.placement(viewsModel([{ name: 'v', widgets: [{ kind: 'people' }] }]))).entities,
     ['lamp', 'thermo', 'fused']);
-  // a unit card places what it publishes, drives and sets — not what it reads
+  // a unit card places what it publishes, drives and sets, and not what it reads
   const unit = names(logic.placement(viewsModel([{ name: 'v', widgets: [{ kind: 'unit', unit: 'evening_lights' }, { kind: 'unit', unit: 'fusion' }] }])));
   assert.deepEqual(unit, { entities: ['thermo', 'anna'], params: ['heating.night'] });
   assert.deepEqual(names(logic.placement(viewsModel([{ name: 'v', widgets: [{ kind: 'params', unit: 'heating' }] }]))).params,
     ['evening_lights.off_time']);
-  // a group places exactly what its members place, and nothing itself
+  // a group places what its members place and nothing of its own
   assert.deepEqual(names(logic.placement(viewsModel([{ name: 'v', widgets: [
     { kind: 'group', label: 'Kitchen', widgets: [{ kind: 'tile', entity: 'thermo' }, { kind: 'people' }] },
   ] }]))).entities, ['lamp', 'fused']);
@@ -1050,8 +1051,8 @@ test('a forecast decodes to millisecond points on the chart axis', () => {
 });
 
 test("the horizon ends where a final interval ends, not where it starts", () => {
-  // Otherwise a coarse trailing window — the shape real sources publish
-  // furthest out — is drawn as a dot at its own start.
+  // Otherwise a coarse trailing window (the shape real sources publish
+  // furthest out) is drawn as a dot at its own start.
   const f = logic.forecastFor(
     doc([
       { t: '2026-09-21T09:00:00+00:00', v: 1.0, d: 3600 },
@@ -1143,7 +1144,7 @@ test('a point sits where its timestamp falls, so a gap stays a gap', () => {
   const xs = geo.coords.map((c) => Math.round(c.x));
   assert.deepEqual(xs, [PAD, W / 2, W - PAD], 'placed by time, not by index');
 
-  // Three points bunched into the first hour must NOT spread across the
+  // Three points bunched into the first hour must not spread across the
   // window: even spacing would draw a day of history from twenty minutes.
   const bunched = logic.chartGeometry(
     [at('2026-09-25T00:00:00Z', 10), at('2026-09-25T00:20:00Z', 11), at('2026-09-25T00:40:00Z', 12)],
@@ -1319,7 +1320,7 @@ function issueDoc(issued, points) {
 
 test('stored issues decode like live ones and come back oldest first', () => {
   // The store replies in the wire's own spelling, so one decoder serves
-  // both — which is why the recorder answers in issues rather than rows.
+  // both. That is why the recorder answers in issues rather than rows.
   const issues = logic.decodeIssues([
     issueDoc('2026-09-21T09:00:00+00:00', [{ t: '2026-09-21T12:00:00+00:00', v: 1.4, d: 3600 }]),
     issueDoc('2026-09-21T08:00:00+00:00', [{ t: '2026-09-21T12:00:00+00:00', v: 1.0, d: 3600 }]),
@@ -1346,7 +1347,7 @@ test("one issue's value follows the extent rule, not the nearest point", () => {
       { t: '2026-09-21T13:00:00+00:00', v: 2.0, d: 3600 },
     ]),
   ]);
-  // An interval HOLDS across its window rather than sliding toward the
+  // An interval holds across its window rather than sliding toward the
   // next point, and stops at its end rather than running on.
   assert.equal(logic.valueAt(held, Date.parse('2026-09-21T12:30:00+00:00')), 1.0);
   assert.equal(logic.valueAt(held, Date.parse('2026-09-21T13:30:00+00:00')), 2.0);
@@ -1366,15 +1367,15 @@ test("one issue's value follows the extent rule, not the nearest point", () => {
 test('a forecast recorded before sources existed is not given a provider', () => {
   // The recorder names those rows `_unknown` so they stay addressable
   // (adapters/recorder.py, LEGACY_SOURCE). Drawn raw beside a real
-  // provider it would read as one, which is the provenance the store
-  // deliberately did not invent.
+  // provider it would read as one, claiming a provenance the store does
+  // not have.
   assert.equal(logic.sourceLabel('_unknown'), 'source not recorded');
   assert.equal(logic.sourceLabel('smhi'), 'smhi');
 });
 
 test('a column reads what every issue said about one instant', () => {
   // The slice whose x axis is issue time, and which therefore cannot
-  // share the chart — delivered by the scrub instead.
+  // share the chart. The scrub delivers it instead.
   const issues = logic.decodeIssues([
     issueDoc('2026-09-21T08:00:00+00:00', [{ t: '2026-09-21T12:00:00+00:00', v: 1.0, d: 3600 }]),
     issueDoc('2026-09-21T09:00:00+00:00', [{ t: '2026-09-21T12:00:00+00:00', v: 1.6, d: 3600 }]),
@@ -1385,8 +1386,8 @@ test('a column reads what every issue said about one instant', () => {
     min: 1.0,
     max: 1.6,
   });
-  // Outside every horizon there is nothing to report — not a zero-width
-  // spread, which would read as perfect agreement.
+  // Outside every horizon there is nothing to report. A zero-width
+  // spread would read as perfect agreement.
   assert.equal(logic.columnAt(issues, Date.parse('2026-09-21T20:00:00+00:00')), null);
   assert.equal(logic.columnAt([], Date.parse('2026-09-21T12:30:00+00:00')), null);
 });
@@ -1433,7 +1434,7 @@ test('an entity that declares no sources contributes nothing to draw', () => {
 });
 
 test('several providers claim one future, each under its own source', () => {
-  // The whole point of the source segment: without it, the second
+  // This is what the source segment is for: without it, the second
   // provider would overwrite the first at the same key.
   const forecasts = {
     'home/forecast/global/spot/price/yr': {
@@ -1466,8 +1467,8 @@ test('several providers claim one future, each under its own source', () => {
 
 test('source usage folds transition events into the state now', () => {
   // Events are emitted only on transition, so the last one before the
-  // window closes is the state now — and a source with nothing on record
-  // is participating, which is what its declaration already says.
+  // window closes is the state now. A source with nothing on record is
+  // participating, as its declaration says.
   const contributors = [{ name: 'kitchen' }, { name: 'shed' }];
   const usage = logic.sourceUsage(
     [

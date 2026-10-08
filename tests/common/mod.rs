@@ -183,7 +183,7 @@ impl Drop for Supervisor {
 
 /// A `uv run <script.py> [args]` fixture command, resolved the way the
 /// supervisor resolves a unit's: the script's environment is materialised
-/// by a process that EXITS, and what comes back is the interpreter
+/// by a process that exits, and what comes back is the interpreter
 /// invoked on the script directly.
 ///
 /// Fixtures must not be spawned through `uv run`. It stays alive as the
@@ -195,8 +195,8 @@ impl Drop for Supervisor {
 /// process that has to die.
 ///
 /// Falls back to the command as given when uv cannot resolve the script,
-/// exactly as `process::resolve` does — a fixture that cannot start is a
-/// visible failure, a leaked one is not.
+/// as `process::resolve` does. If that fixture then fails to start, the
+/// test fails visibly; a leaked process would go unnoticed.
 #[allow(dead_code)] // each test binary uses its own subset of the harness
 pub async fn fixture_command(command: &str) -> (String, Vec<String>) {
     let resolved =
@@ -209,11 +209,11 @@ pub async fn fixture_command(command: &str) -> (String, Vec<String>) {
 
 /// A free port no earlier call in this test process returned. The kernel
 /// readily hands a just-closed port out again, and a binary's tests run
-/// concurrently: two given the same port each start a broker or a
-/// supervisor on it, the loser's fails to bind, and its spawn — which only
-/// checks that something accepts on the port — carries on against the
-/// winner's, a test then asserting on another test's house. Unique within
-/// the process is enough: cargo runs test binaries one at a time.
+/// concurrently. Two tests given the same port each start a broker or a
+/// supervisor on it, and the loser's fails to bind. Its spawn only checks
+/// that something accepts on the port, so it carries on against the
+/// winner's, and the test then asserts on another test's house. Unique
+/// within the process is enough: cargo runs test binaries one at a time.
 pub fn free_port() -> u16 {
     static HANDED_OUT: Mutex<BTreeSet<u16>> = Mutex::new(BTreeSet::new());
     let mut handed_out = HANDED_OUT
@@ -329,8 +329,8 @@ impl Mosquitto {
         Self::spawn_conf(|port, _| format!("listener {port} 127.0.0.1\nallow_anonymous true\n"))
     }
 
-    /// A broker that REQUIRES the given credentials — no anonymous
-    /// fallback, so a unit that cannot present a password never connects.
+    /// A broker that requires the given credentials, with no anonymous
+    /// fallback, so a unit that cannot present a password does not connect.
     #[allow(dead_code)] // each test binary uses its own subset of the harness
     pub fn spawn_with_auth(username: &str, password: &str) -> Self {
         let passwd = std::env::temp_dir().join(format!(
@@ -524,7 +524,7 @@ pub async fn expect_state(sub: &StateSub, expected: Value) {
     }
 }
 
-/// Polls the core state mirror until `key` holds `expected` — the
+/// Polls the core state mirror until `key` holds `expected`. This is the
 /// late-joiner read path. Publishes that predate a test's subscriber
 /// (connect-time availability, first states) are only observable here.
 #[allow(dead_code)] // each test binary uses its own subset of the harness
@@ -551,9 +551,9 @@ pub async fn await_mirror(observer: &zenoh::Session, key: &str, expected: &serde
     }
 }
 
-/// The NEXT health event, whatever it is. Unlike `expect_drop_event` this
-/// does not scan past events that do not match — which is the point when
-/// the assertion is that some event must NOT have been emitted.
+/// The next health event, whatever it is. Unlike `expect_drop_event` this
+/// does not scan past events that do not match, which is what a test needs
+/// when it asserts that some event was not emitted.
 #[allow(dead_code)] // each test binary uses its own subset of the harness
 pub async fn next_event(sub: &StateSub) -> Value {
     let sample = tokio::time::timeout(Duration::from_secs(20), sub.recv_async())
@@ -581,7 +581,7 @@ pub async fn expect_drop_event(sub: &StateSub, reason: &str) -> Value {
     }
 }
 
-/// Reads health events until one matches the expected kind — degraded
+/// Reads health events until one matches the expected kind. Degraded
 /// conditions (a recorder backend outage, say) publish kind = condition,
 /// unlike dropped-input events.
 #[allow(dead_code)] // each test binary uses its own subset of the harness
@@ -602,8 +602,8 @@ pub async fn expect_event_kind(sub: &StateSub, kind: &str) {
 
 pub type Publisher = zenoh::pubsub::Publisher<'static>;
 
-/// Declares a publisher and waits until a subscriber matches it, so
-/// nothing this publisher puts is ever write-side filtered.
+/// Declares a publisher and waits until a subscriber matches it, so the
+/// writer does not filter out anything this publisher puts.
 #[allow(dead_code)] // each test binary uses its own subset of the harness
 pub async fn matched_publisher(session: &zenoh::Session, key: &str) -> Publisher {
     let publisher = session
@@ -656,8 +656,8 @@ pub async fn config_write(
 /// The unit contract every supervised unit owes (docs/adapters.md, §2 and
 /// §10; docs/design.md#the-unit-contract): once ready it is `running`
 /// with a pid, and when the supervisor gets SIGTERM it exits cleanly
-/// inside `shutdown_grace_s` and leaves no orphan. One call per adapter
-/// suite — the conformance check a new adapter gets for free.
+/// inside `shutdown_grace_s` and leaves no orphan. Each adapter suite
+/// calls it once, so a new adapter's suite gets the check with one line.
 #[allow(dead_code)] // each test binary uses its own subset of the harness
 pub async fn assert_unit_contract(sup: &mut Supervisor, observer: &zenoh::Session, unit: &str) {
     let mut watch = health_watch(observer, unit).await;
@@ -682,10 +682,10 @@ pub async fn assert_unit_contract(sup: &mut Supervisor, observer: &zenoh::Sessio
 /// The late-joiner read for a test: subscribe, then get, merge
 /// (docs/design.md#the-last-value-mirror). A unit that reached
 /// `running` may already have published its initial states before the
-/// test's subscriber existed — an adapter's device connection races the
-/// liveliness token — and a zenoh subscriber never sees past samples, so a
-/// test that only waits on `sub` loses that race on a slow runner. This
-/// drains the subscription AND reads the core mirror until every expected
+/// test's subscriber existed, because an adapter's device connection races
+/// the liveliness token. A zenoh subscriber does not see past samples, so
+/// a test that only waits on `sub` loses that race on a slow runner. This
+/// drains the subscription and reads the core mirror until every expected
 /// key carries its value. `sub` must already be declared (declaring it
 /// after the mirror read would open the opposite gap).
 #[allow(dead_code)]
@@ -729,8 +729,8 @@ pub async fn await_states(observer: &zenoh::Session, sub: &StateSub, expected: &
 
 /// A unit's discovery document as a late joiner reads it: polled from the
 /// core mirror of `home/discovery/*` until `ready` accepts it (the record
-/// count, say) — the read path the MCP surface uses, and the only one a
-/// test can rely on when the publish may predate its subscriber.
+/// count, say). The MCP surface reads it the same way, and it is the only
+/// path a test can rely on when the publish may predate its subscriber.
 #[allow(dead_code)]
 pub async fn await_discovery<F>(observer: &zenoh::Session, unit: &str, ready: F) -> Value
 where
@@ -908,15 +908,15 @@ pub fn assert_cli_ok(output: &Output) {
 /// tests in parallel, so five four-unit houses resolve and start together.
 /// On a two-core runner the slowest starves past its health deadline and
 /// fails a test that nothing about it broke. Parallelism pays for very
-/// little: measured on the dashboard suite, the five tests
-/// take 23.3 s run serially and 12.9 s in parallel on sixteen cores, but
-/// 23.5 s versus 20.7 s on two — the tests wait on fixed delays, not on the
-/// CPU. Two at a time keeps what parallelism is worth on a developer's
-/// machine and removes the herd from the runner.
+/// little. Measured on the dashboard suite, the five tests take 23.3 s
+/// run serially and 12.9 s in parallel on sixteen cores, but 23.5 s versus
+/// 20.7 s on two, because the tests mostly wait on fixed delays. Two at a
+/// time keeps most of the gain on a developer's machine and removes the
+/// herd from the runner.
 ///
 /// The permit covers startup only. Hold it until the units under test
 /// report healthy, then drop it: the body of a test costs nothing to
-/// overlap, and holding it longer would serialize the suite for real.
+/// overlap, and holding it longer would serialize the whole suite.
 static STARTUP: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
 
 #[allow(dead_code)] // each test binary uses its own subset of the harness

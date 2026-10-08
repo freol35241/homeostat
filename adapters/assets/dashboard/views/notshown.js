@@ -5,9 +5,10 @@ import { store } from '../store.js';
 import { renderRoomCard } from '../widgets/entity.js';
 import { renderParamRow } from '../widgets/params.js';
 
-// The complement of every placement in dashboard.toml (dashboard-logic.js,
-// placement): what the family cannot reach from the nav, by room, each
-// row its normal widget so it is usable here and not merely listed.
+// Everything dashboard.toml does not place (dashboard-logic.js,
+// placement), which the family cannot reach from the nav. It is grouped
+// by room, and each row uses its normal widget so it can be used here,
+// not only listed.
 export function renderNotShown() {
   var unplaced = logic.placement(store.model);
   var byRoom = {};
@@ -16,7 +17,7 @@ export function renderNotShown() {
     byRoom[e.room].push(e);
   });
   var rooms = Object.keys(byRoom).sort(function (a, b) {
-    // the pseudo-rooms last: the house's own things, and people
+    // the pseudo-rooms go last: the house's own entities, and people
     var pa = a === 'global' || a === 'person', pb = b === 'global' || b === 'person';
     return pa === pb ? (a < b ? -1 : 1) : (pa ? 1 : -1);
   });

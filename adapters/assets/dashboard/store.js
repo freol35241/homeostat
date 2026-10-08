@@ -1,12 +1,12 @@
 /* The page's state: the house as the bus reports it (store), this
- * browser's own view of it (localState, overlay), lookups over the model,
- * and scheduleRender, which any module calls to have the page redrawn. */
+ * browser's own UI state (localState, overlay), lookups over the model,
+ * and scheduleRender, which any module calls to redraw the page. */
 import logic from './logic.js';
 
 export var store = {
   model: { zones: {}, entities: [], units: [] },
   state: {},
-  forecasts: {},    // home/forecast key -> the house's current belief about its future
+  forecasts: {},    // home/forecast key -> that source's current forecast
   holds: {},        // home/hold/{unit} -> what that arbiter is holding right now
   health: {},
   config: {},
@@ -39,10 +39,11 @@ export var overlay = {
   rangeData: {},          // hours -> {points, window, loaded, loading}
   cmdData: {},             // hours -> the same, for the cmd series (what was asked)
   // What is drawn beside the record: '' (the value and its current
-  // belief), 'sources' (the contributors it is derived from) or
-  // 'forecasts' (every issue the recorder kept). One at a time — two sets
-  // of thin grey lines on one chart read as one set — so one field, not
-  // a flag each (docs/design.md#charts-forecasts-and-sources).
+  // forecast), 'sources' (the contributors it is derived from) or
+  // 'forecasts' (every issue the recorder kept). Only one is shown at a
+  // time, because two sets of thin grey lines on one chart look like one
+  // set. So this is one field rather than a flag for each
+  // (docs/design.md#charts-forecasts-and-sources).
   layer: '',
   issues: [],              // decoded stored issues for the current window
   issuesLoading: false,
@@ -104,8 +105,8 @@ export function entitySpec(room, entity) {
 }
 
 /* One render per frame, however many modules ask for it. The render
- * itself is main.js's, handed over at boot, so that asking for one does
- * not mean importing the entry module. */
+ * function belongs to main.js, which passes it in at startup, so modules
+ * can request a render without importing the entry module. */
 var renderQueued = false;
 var renderPage = null;
 
@@ -122,34 +123,34 @@ export function scheduleRender() {
   });
 }
 
-// dashboard.toml's [[control]] entries, or none. The house's say over a
-// control's grain, applied wherever that control is drawn.
+// dashboard.toml's [[control]] entries, or none. They set a control's
+// grain wherever that control is drawn.
 export function houseControls() {
   return (store.model && store.model.controls) || [];
 }
 
-// Every live claim about one aspect's future, one per source.
+// Every live forecast for one aspect, one per source.
 export function forecastsOf(entity, aspect) {
   return logic.forecastsFor(store.forecasts, entity.room, entity.name, aspect);
 }
 
-// The claims that are still about the future. A belief whose horizon has
-// run out is not drawn as one — the mirror keeps a producer's last word
-// for as long as the core lives, and a curve that ends before now says
-// nothing about what is ahead
-// (docs/design.md#charts-forecasts-and-sources). It stays in the overlay
-// under `forecasts`, which is where a spent claim is judged against what
-// actually happened.
+// The forecasts that still reach into the future. A forecast whose
+// horizon has run out is not drawn as a forecast. The mirror keeps a
+// producer's last value for as long as the core runs, and a curve that
+// ends before now says nothing about what is ahead
+// (docs/design.md#charts-forecasts-and-sources). It is still shown in the
+// overlay under `forecasts`, where an expired forecast can be compared
+// with what happened.
 export function liveForecastsOf(entity, aspect) {
   return forecastsOf(entity, aspect).filter(function (b) {
     return !logic.forecastFreshness(b.forecast, Date.now()).expired;
   });
 }
 
-// Controls render inert when this dashboard's manifest does not grant the
-// entity's capability (model.commandable): the server refuses such a
-// command anyway, and a live-looking control for it would misreport the
-// grant table.
+// Controls are disabled when this dashboard's manifest does not grant the
+// entity's capability (model.commandable). The server would refuse such a
+// command anyway, and an enabled control would misrepresent the grant
+// table.
 export function controlDisabled(entity) { return !entity.commandable; }
 
 export function personEntities() {

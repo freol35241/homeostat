@@ -1,12 +1,13 @@
 """Live numeric adapter parameters from home/config/{unit}/*.
 
-The step-4 read pattern: subscribe first, then seed via get. A value the
-subscription already delivered wins over the seed — the served reply may
-predate a write that raced startup. Adapter-side defaults let a manifest
-omit any parameter; non-numeric (and non-finite) values are ignored.
+This follows the step-4 read pattern: subscribe first, then seed the
+values with a get. A value the subscription has already delivered takes
+precedence over the seed, because the get reply may predate a write that
+raced startup. Adapter-side defaults let a manifest omit any parameter.
+Non-numeric and non-finite values are ignored.
 
-Owned here once rather than copied into each adapter; adapters subclass
-it with typed properties over `get`.
+Adapters share this class and subclass it with typed properties over
+`get`.
 """
 
 import json

@@ -1,23 +1,22 @@
 """A fake house behind the real dashboard page.
 
-The page under test is `adapters/dashboard.html`, served exactly as the
-dashboard unit serves it, with its real assets. Everything behind it is
-canned: no supervisor, no bus, no clock. That is the point — the states
-worth testing (a forecast whose horizon has ended, two providers
-disagreeing, a hold at each band, a contributor that dropped out) take
-minutes to stage on a live house and are a few lines of JSON here, and a
-test can decide exactly when a delta arrives and therefore when the page
-re-renders.
+The page under test is `adapters/dashboard.html`, served as the dashboard
+unit serves it, with its real assets. Everything behind it is canned: no
+supervisor, no bus, no clock. The states worth testing (a forecast whose
+horizon has ended, two providers disagreeing, a hold at each band, a
+contributor that dropped out) take minutes to stage on a live house and
+are a few lines of JSON here. A test can also decide when a delta arrives
+and therefore when the page re-renders.
 
-What is NOT canned: the page and its assets. The canary test in
+The page and its assets are not canned. The canary test in
 tests/dashboard.rs (a real supervised house, booted once) checks that
-model.json carries the same fields as the real unit's /api/model; nothing
+model.json carries the same fields as the real unit's /api/model. Nothing
 checks snapshot.json that way, so it holds only shapes the unit emits.
 
-Time-relative data — history, forecasts — is GENERATED per request rather
+Time-relative data (history, forecasts) is generated per request rather
 than stored, because a canned timestamp goes stale: a forecast frozen into
-a file would be a spent one by tomorrow, and a test would start failing
-for a reason that has nothing to do with the page.
+a file would be spent by tomorrow, and a test would start failing for a
+reason that has nothing to do with the page.
 """
 
 import json
@@ -30,8 +29,8 @@ from aiohttp import web
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 # The page under test. The override exists to check the harness itself:
-# point it at a deliberately broken copy and the suite must go red, because
-# a net that cannot fail is indistinguishable from one that passes.
+# point it at a broken copy and the suite must go red. A suite that
+# cannot fail looks the same as one that passes.
 PAGE = pathlib.Path(os.environ.get("HOMEOSTAT_TEST_PAGE") or ROOT / "adapters" / "dashboard.html")
 ASSETS = ROOT / "adapters" / "assets"
 FIXTURES = pathlib.Path(__file__).resolve().parent / "fixtures"
@@ -92,8 +91,8 @@ class FakeHouse:
         app.router.add_post("/api/lights/off", self.api_lights_off)
         # The camera card mounts a player that opens this socket. Accepting
         # and saying nothing keeps a camera in the fixture house without
-        # the console error a refused connection would log — which the
-        # smoke test would otherwise read as a page fault.
+        # the console error a refused connection would log, which the
+        # smoke test would read as a page fault.
         app.router.add_get("/api/camera/{entity}/live", self.api_camera)
         app.router.add_get("/assets/{name:.+}", self.api_asset)
         app.router.add_get("/tiles.pmtiles", self.api_tiles)
@@ -145,12 +144,12 @@ class FakeHouse:
     def _freshen(self, snapshot: dict) -> dict:
         """Re-stamps the time-bearing documents against now.
 
-        A forecast frozen into a fixture is a spent one by tomorrow, and a
-        hold frozen into one has expired before the test starts — both
-        would fail for a reason that has nothing to do with the page. The
-        structure is the fixture's; the clock is this method's. A test that
-        wants a spent forecast or a lapsed hold pushes its own document
-        with explicit timestamps, which is the honest way to ask for one.
+        A forecast frozen into a fixture is spent by tomorrow, and a hold
+        frozen into one has expired before the test starts. Both would fail
+        for a reason that has nothing to do with the page. The structure is
+        the fixture's; the clock is this method's. A test that wants a spent
+        forecast or a lapsed hold pushes its own document with explicit
+        timestamps.
         """
         now = time.time()
         fresh = dict(snapshot)

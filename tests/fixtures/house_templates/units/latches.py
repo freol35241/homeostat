@@ -7,15 +7,15 @@
 # [tool.uv.sources]
 # homeostat = { path = "../../../../sdk/python", editable = true }
 # ///
-"""Latches: commandable virtual switches
-(docs/design.md#commandable-virtual-entities), bound through
-`{room}`/`{entity}` templates.
+"""Latches: commandable virtual switches bound through templates.
 
-The unit exists for the SDK's template expansion. It binds two entities in
-two rooms through ONE subscribe and ONE publish expression, so a test that
-commands either latch and sees its state come back has proved the SDK
-expanded both directions the way the core's plan did — the subscribe half
-silently matching nothing being the failure this fixture exists to catch.
+See docs/design.md#commandable-virtual-entities. The unit binds through
+`{room}`/`{entity}` templates and exists to test the SDK's template
+expansion. It binds two entities in two rooms through one subscribe and
+one publish expression. A test that commands either latch and sees its
+state come back has shown the SDK expanded both directions the way the
+core's plan did. The failure this fixture catches is the subscribe half
+matching nothing without an error.
 
 A latch holds what it was told: the command's value becomes the state.
 """

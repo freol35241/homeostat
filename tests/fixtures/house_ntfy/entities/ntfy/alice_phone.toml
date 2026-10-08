@@ -1,7 +1,7 @@
 schema = 1
 
 [entity]
-# id is the ntfy topic; deliberately not the entity name, so the tests
+# id is the ntfy topic. It differs from the entity name, so the tests
 # prove binding goes through the id.
 id = "alice"
 capability = "notifier"

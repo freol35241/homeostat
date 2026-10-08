@@ -1,7 +1,7 @@
 schema = 1
 
 [entity]
-# id is the Zigbee2MQTT topic segment (friendly name); deliberately not the
+# id is the Zigbee2MQTT topic segment (friendly name). It differs from the
 # entity name, so the tests prove binding goes through the id.
 id = "lamp_kitchen_1"
 capability = "light"

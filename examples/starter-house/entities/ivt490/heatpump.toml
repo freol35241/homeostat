@@ -2,8 +2,8 @@ schema = 1
 
 [entity]
 # The device's own MQTT base topic, as configured on the ESP8266 interface
-# board (MQTT_BASE_TOPIC) — not a topic segment under a shared root, unlike
-# Zigbee2MQTT: each IVT490 interface owns its whole topic tree.
+# board (MQTT_BASE_TOPIC). Unlike Zigbee2MQTT, where the id is a segment
+# under a shared root, each IVT490 interface owns its whole topic tree.
 id = "ivt490"
 capability = "climate"
 features = []

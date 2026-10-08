@@ -75,7 +75,7 @@ async fn await_arbiter(observer: &zenoh::Session) {
 /// from the run state, `power_level` as an int, the two temperatures
 /// normalized) plus passthrough under firmware names, dotted or not; an
 /// operating document publishes prefixed; the identical republish a poll
-/// later yields NOTHING, a changed field yields exactly that field; a
+/// later yields nothing, and a changed field yields only that field; a
 /// non-object payload drops with malformed-payload; and the discovery
 /// record carries the descriptor.
 #[tokio::test(flavor = "multi_thread")]
@@ -138,7 +138,7 @@ async fn status_translates_on_change_only() {
         "unchanged status republished to the bus: {silence:?}"
     );
 
-    // One field moves: exactly one sample.
+    // One field moves: one sample.
     mqtt.publish(&format!("{BASE}/status"), &status(26.0)).await;
     let sample = tokio::time::timeout(Duration::from_secs(10), state_sub.recv_async())
         .await
@@ -244,7 +244,7 @@ async fn silence_flips_available() {
 
 /// (b) Manual-band `on` and `power_level` wishes ride the arbiter to
 /// {base}/set in the bridge's own command shape; while the manual `on`
-/// lease holds, an automation-band `on` is refused upstream — but the
+/// lease holds, an automation-band `on` is refused upstream, but the
 /// automation's `power_level` still passes, because leases are per aspect.
 #[tokio::test(flavor = "multi_thread")]
 async fn commands_reach_set_topic_via_arbiter_per_aspect() {
@@ -283,7 +283,7 @@ async fn commands_reach_set_topic_via_arbiter_per_aspect() {
     );
 
     // The manual `on` lease holds (hold_minutes = 30): an automation `on`
-    // is refused upstream and never reaches MQTT.
+    // is refused upstream and does not reach MQTT.
     let wish = json!({"value": true, "priority": "automation", "actor": "heat_plan"});
     observer
         .put(ON_CMD_KEY, wish.to_string())

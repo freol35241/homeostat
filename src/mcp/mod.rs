@@ -1,19 +1,19 @@
-//! The agent surface (docs/design.md#agent-surface-mcp): an MCP server
-//! through which an agent observes the house. Read-only: an agent with a
-//! filesystem changes the house by editing the house repo and running the
-//! CLI, the same plan/apply path as every other actor.
+//! The agent surface (docs/design.md#agent-surface-mcp): an MCP server through
+//! which an agent observes the house. It is read-only. An agent with a
+//! filesystem changes the house by editing the house repo and running the CLI,
+//! the same plan/apply path every other actor uses.
 //!
-//! Six tools. `read_state` and `read_history` read the live bus (the
-//! core's last-value caches, the recorder's history queryable); `read_logs`
-//! and `read_events` read the operational exhaust and the durable audit
-//! trail (docs/design.md#logs-and-the-audit-trail); `schema` and `explain`
-//! serve the authoring contract — the manifest schema and the validator's
-//! rules — for an agent writing manifests through the repo.
+//! There are six tools. `read_state` and `read_history` read the live bus: the
+//! core's last-value caches and the recorder's history queryable. `read_logs`
+//! reads unit output, and `read_events` reads the durable audit trail
+//! (docs/design.md#logs-and-the-audit-trail). `schema` and `explain` serve the
+//! authoring contract, which is the manifest schema and the validator's rules,
+//! for an agent writing manifests through the repo.
 //!
-//! The server is a bus client like any observer: it needs no house root
-//! and never touches the repo. Run under the supervisor as a service unit
-//! it declares the unit liveliness token; standalone (stdio, launched by
-//! an MCP client) it is just a CLI with a session.
+//! The server is a bus client like any observer. It needs no house root and
+//! does not touch the repo. Under the supervisor, as a service unit, it
+//! declares the unit liveliness token. Standalone (stdio, launched by an MCP
+//! client) it is a CLI with a session.
 
 pub mod http;
 pub mod protocol;
@@ -34,10 +34,10 @@ pub struct Server {
 }
 
 impl Server {
-    /// Connects to the live bus (an unreachable endpoint is a startup
-    /// error, per the unit contract: supervisor backoff makes it visible),
-    /// declares the liveliness token when running as a unit, and installs
-    /// the SIGTERM/SIGINT handler.
+    /// Connects to the live bus, declares the liveliness token when running as
+    /// a unit, and installs the SIGTERM/SIGINT handler. An unreachable
+    /// endpoint is a startup error, as the unit contract requires, so the
+    /// supervisor's backoff makes it visible.
     pub fn start(endpoint: &str) -> Result<Server, String> {
         let runtime = tokio::runtime::Runtime::new().map_err(|e| format!("tokio runtime: {e}"))?;
         let session = runtime.block_on(world::connect(endpoint))?;
@@ -136,9 +136,9 @@ impl Server {
                 .ok_or("\"limit\" must be a positive integer")?;
             params.push(format!("limit={value}"));
         }
-        // The recorder's two chart shapes. Mutually exclusive there,
-        // so the refusal is here rather than as an error reply from a
-        // selector that carries both.
+        // The recorder's two chart shapes. The recorder treats them as
+        // mutually exclusive, so the refusal happens here instead of as an
+        // error reply to a selector that carries both.
         let bucket = args.get("bucket");
         let changes = args.get("changes").map_or(Ok(false), |value| {
             value.as_bool().ok_or("\"changes\" must be a boolean")
@@ -187,8 +187,8 @@ impl Server {
     }
 
     /// Reads a unit's captured stdout/stderr ring buffer over the bus and
-    /// renders it as one `ts_us stream line` row per captured line —
-    /// operational exhaust for debugging, gone on supervisor restart.
+    /// renders it as one `ts_us stream line` row per captured line. This is
+    /// output for debugging and is lost when the supervisor restarts.
     fn read_logs(&self, args: &Value) -> Result<String, String> {
         let unit = str_arg(args, "unit")?;
         let mut selector = bus::log_key(unit);
@@ -235,9 +235,10 @@ impl Server {
         }
         for name in ["from", "to"] {
             if let Some(value) = args.get(name) {
-                // Integer µs UTC, the recorder's native convention and the
-                // same unit the reply's ts carries — not read_history's
-                // RFC3339; an events range refines directly from prior rows.
+                // Integer µs UTC: the recorder's native convention and the
+                // unit the reply's ts carries. read_history uses RFC3339
+                // instead. Using µs here lets an events range refine directly
+                // from prior rows.
                 let value = value
                     .as_i64()
                     .ok_or(format!("\"{name}\" must be an integer (microseconds UTC)"))?;
@@ -299,9 +300,9 @@ pub const TOOL_NAMES: &[&str] = &[
     "schema",
 ];
 
-/// The `schema` tool: the manifest contract as JSON Schema, one file kind
-/// or all four — what an agent reads before authoring a unit, instead of
-/// the validator's source.
+/// The `schema` tool: the manifest contract as JSON Schema, for one file kind
+/// or all four. An agent reads this before authoring a unit, instead of the
+/// validator's source.
 fn schema(args: &Value) -> Result<String, String> {
     let value = match args.get("file").and_then(Value::as_str) {
         None => crate::schema::all(),
@@ -317,10 +318,10 @@ fn schema(args: &Value) -> Result<String, String> {
     Ok(serde_json::to_string_pretty(&value).expect("schema serializes"))
 }
 
-/// The `explain` tool: the registered paragraph for one error code, or
-/// every code with its paragraph when none is given. Refused plans already
-/// carry these inline; this is for an agent reading a code elsewhere (a
-/// pending plan, a log) or surveying the contract before authoring.
+/// The `explain` tool: the registered paragraph for one error code, or every
+/// code with its paragraph when none is given. Refused plans already carry
+/// these inline. This tool is for an agent that meets a code elsewhere (a
+/// pending plan, a log) or surveys the contract before authoring.
 fn explain(args: &Value) -> Result<String, String> {
     match args.get("code").and_then(Value::as_str) {
         Some(code) => crate::error::explain(code)

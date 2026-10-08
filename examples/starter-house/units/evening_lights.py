@@ -6,12 +6,13 @@
 # ///
 """Evening lights: the first automation (see docs/design.md).
 
-A regulator, not a scheduler: on every input — clock minute, presence
-change, light state — it re-evaluates one rule: inside the night window
-(off_time until 05:00, window may span midnight) with nobody present,
-every light that is on gets turned off. Lights are known from their state
-keys; commands go back through the manifest's publish expression. off_time
-is a live parameter: an edit applies at the next evaluation, no restart.
+It regulates rather than schedules. On every input (clock minute,
+presence change, light state) it re-evaluates one rule: inside the night
+window (off_time until 05:00, which may span midnight) with nobody
+present, every light that is on gets turned off. Lights are known from
+their state keys; commands go back through the manifest's publish
+expression. off_time is a live parameter: an edit applies at the next
+evaluation, with no restart.
 """
 
 import datetime

@@ -3,26 +3,26 @@
 
 Stored forecasts are not a series. They are a 2-D field, `(issued, valid)
 -> value`, because the house says something about the same future instant
-many times over. Any plot must collapse one axis, and there are exactly
-three ways: fix the issue time and you have a ROW, fix the valid time a
-COLUMN, fix the lead time a DIAGONAL.
+many times over. Any plot must collapse one axis, and there are three
+ways to do it. Fixing the issue time gives a row, fixing the valid time
+gives a column, and fixing the lead time gives a diagonal.
 
-The sheet's argument is that these are not rival charts. Draw every row
-at once — the bundle — and the row and the diagonal are already inside
-it, as a line and as a locus; they want highlighting, not a chart each.
-Only the column needs its own, because its x axis is issue time, and that
-is a different domain rather than a different style.
+The sheet argues that these are not rival charts. Drawn all at once, the
+rows form a bundle, and the row and the diagonal are already inside it, as
+a line and as a locus. They need highlighting rather than a chart each.
+Only the column needs its own chart, because its x axis is issue time,
+which is a different domain rather than a different style.
 
-Run from anywhere: python3 forecast-history.py — output lands next to the
-script.
+Run from anywhere with `python3 forecast-history.py`; the output lands
+next to the script.
 
-Colour discipline (docs/brand/README.md, and the dataviz form heuristic):
-the outcome is the point and the highlighted forecast is what is being
-examined, so those two are a validated two-hue categorical pair,
-direct-labelled, never a legend box. The bundle behind them is context
-and recedes. Issue time is ORDERED, so were individual issues drawn they
-would be a sequential ramp on age — never categorical hues: twenty of
-those would be unreadable and would fail every colourblind check.
+Colour (docs/brand/README.md, and the dataviz form heuristic): the outcome
+and the highlighted forecast are what the reader examines, so those two
+are a validated two-hue categorical pair, labelled directly rather than
+with a legend box. The bundle behind them is context and recedes. Issue
+time is ordered, so issues drawn individually use a sequential ramp on
+age. Categorical hues would not work: twenty of them would be unreadable
+and would fail every colourblind check.
 """
 
 import math
@@ -40,7 +40,7 @@ SURFACE = "#ffffff"
 CANVAS = "#fafafa"
 ACTUAL = "#1f8a66"   # what happened
 FCAST = "#c7761a"    # the forecast under examination
-BAND = "#e8c9a4"     # every issue at once — context, and it recedes
+BAND = "#e8c9a4"     # every issue at once: context, so it recedes
 BANDINK = "#a5741f"  # a label for the band, dark enough to read
 SANS = "DejaVu Sans, sans-serif"
 
@@ -59,7 +59,7 @@ T0, T1 = HORIZON, SPAN
 
 
 def truth(t: float) -> float:
-    """What actually happened, in hours since the sheet's origin."""
+    """What happened, in hours since the sheet's origin."""
     return 1.0 + 0.55 * math.sin(2 * math.pi * (t - 6) / 24) + 0.22 * math.sin(2 * math.pi * t / 8)
 
 
@@ -68,12 +68,11 @@ def forecast(issued: float, valid: float) -> float:
 
     Two error terms, because one would misdraw the picture. A bias that
     grows with lead time and differs per issue is what makes successive
-    issues disagree — the reason the field has two axes at all. A small
-    term that does NOT vanish at zero lead keeps the bundle straddling
-    the outcome: without it every issue is exactly right about the moment
-    it was made, so the band hugs the actual on one edge and fans only to
-    the other, which is an artifact of the toy rather than anything true
-    about forecasts.
+    issues disagree, and is why the field has two axes. A small term that
+    does not vanish at zero lead keeps the bundle straddling the outcome.
+    Without it every issue is right about the moment it was made, so the
+    band hugs the actual on one edge and fans only to the other. That is
+    an artifact of the toy rather than anything true about forecasts.
     """
     lead = max(valid - issued, 0.0)
     bias = 0.62 * math.sin(issued / 6.5 + 0.4)
@@ -82,7 +81,7 @@ def forecast(issued: float, valid: float) -> float:
 
 
 def issues_covering(t: float) -> list:
-    """Every issue that said something about `t` — one column of the field."""
+    """Every issue that said something about `t`: one column of the field."""
     first = max(math.ceil((t - HORIZON) / ISSUE_EVERY) * ISSUE_EVERY, 0.0)
     out, i = [], first
     while i <= t:
@@ -150,9 +149,11 @@ def window_issues() -> list:
 
 
 def age_ramp(f: float) -> str:
-    """A sequential step on issue age: 0 oldest and pale, 1 newest and
-    full. Issue time is ORDERED, so this is a ramp and never categorical
-    hues — and the ramp needs no legend, because darker IS newer."""
+    """A sequential step on issue age: 0 oldest and pale, 1 newest and full.
+
+    Issue time is ordered, so this is a ramp rather than categorical hues.
+    The ramp needs no legend, because darker means newer.
+    """
     pale, full = (0xEA, 0xD8, 0xBC), (0xC7, 0x76, 0x1A)
     r, g, b = (round(a + (z - a) * f) for a, z in zip(pale, full))
     return f"#{r:02x}{g:02x}{b:02x}"
@@ -164,10 +165,10 @@ def issue_lines(to, uniform=None) -> list:
     A line per issue rather than an envelope over them, because an
     envelope's edge is not a forecast: at each instant it belongs to
     whichever issue happened to be highest there, so the boundary is
-    stitched from many and is a path nobody ever predicted. What a
-    reader wants from this chart — do the recent ones agree, is one
-    stale outlier doing the disagreeing, does each one drift the same
-    way — is exactly what an envelope flattens away.
+    stitched from many and is a path no issue predicted. A reader of this
+    chart wants to know whether the recent ones agree, whether one stale
+    outlier is doing the disagreeing, and whether each one drifts the same
+    way. An envelope flattens all of that away.
     """
     issues = window_issues()
     out = []
@@ -182,14 +183,19 @@ def issue_lines(to, uniform=None) -> list:
 
 
 def edge_owners(ts) -> int:
-    """How many distinct issues the envelope's upper edge is made of over
-    the drawn window — the measure of how much of a fiction it is."""
+    """How many distinct issues make up the envelope's upper edge.
+
+    Counted over the drawn window, it shows how far that edge is from any
+    one forecast.
+    """
     return len({max(issues_covering(t), key=lambda i: forecast(i, t)) for t in ts})
 
 
 def bundle_band(to, ts) -> str:
-    """The same issues reduced to min/max per instant — kept only to show
-    what the reduction costs."""
+    """The same issues reduced to min/max per instant.
+
+    Kept only to show what the reduction costs.
+    """
     hi = [to(t, max(forecast(i, t) for i in issues_covering(t))) for t in ts]
     lo = [to(t, min(forecast(i, t) for i in issues_covering(t))) for t in ts]
     d = path(hi) + " L " + " L ".join(f"{px:.1f} {py:.1f}" for px, py in reversed(lo)) + " Z"
@@ -272,8 +278,8 @@ def bundle_panel(x, y, w, h):
     out.append(series([to2(t, truth(t)) for t in ts], ACTUAL, 1.8))
     out += [
         text(qx, py - 8, "or reduced to an envelope", 10, MUT),
-        # Counted from what is actually drawn, not asserted: the number
-        # is the point of the caption.
+        # Counted from what is drawn rather than written in by hand,
+        # because the caption is about this number.
         text(qx, py + ph + 20,
              f"its edge is stitched from {edge_owners(ts)} different", 10, BANDINK),
         text(qx, py + ph + 34, "issues — a path nobody predicted", 10, BANDINK),
@@ -330,7 +336,7 @@ def column_panel(x, y, w, h):
     valid = 54.0
     issues = issues_covering(valid)
     # Its own y range: on the shared scale a day of opinions about one
-    # instant is a flat line, and the disagreement is the whole subject.
+    # instant is a flat line, and the disagreement is what this panel shows.
     vals = [forecast(i, valid) for i in issues] + [truth(valid)]
     lo, hi = min(vals), max(vals)
     margin = (hi - lo) * 0.4 or 0.1

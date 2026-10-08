@@ -6,65 +6,66 @@ uv run --script tests/browser/run.py Smoke      # one case
 ```
 
 The page under test is the real `adapters/dashboard.html` with its real
-assets. Behind it is `server.py`: canned model, snapshot, history,
-forecasts and holds, plus a WebSocket a test can push deltas down. No
-supervisor, no bus, no clock — so a test can force a re-render at a chosen
-moment, and states that take minutes to stage on a live house are a few
-lines of JSON here.
+assets. Behind it is `server.py`. It serves a canned model, snapshot,
+history, forecasts and holds, and a WebSocket that a test can push deltas
+down. There is no supervisor, bus or clock. A test can therefore force a
+re-render at a chosen moment. A state that takes minutes to set up on a
+live house is a few lines of JSON here.
 
-## What this suite is, and is not
+## What this suite covers
 
-It is **not** the discovery mechanism. Rendering bugs — the legend pin
-dying on a re-render, `&MIDDOT;` in an upper-cased label, a spent forecast
-blanking a tile's caption, a key rebuild that drops a segment — are found
-by a person opening a browser, and that habit is what finds the next one.
-Browser-verify your dashboard change.
+This suite does not find most rendering bugs. People find them by opening
+the page in a browser. Examples are the legend pin lost on a re-render,
+`&MIDDOT;` in an upper-cased label, a spent forecast blanking a tile's
+caption, and a key rebuild that drops a segment. Check your dashboard
+change in a browser.
 
-What this carries is the boring half:
+The suite covers two things:
 
-1. **A broad net.** No page errors, every view renders, every widget kind
-   draws, at desktop and phone width. Better odds against a bug nobody has
-   thought of than any hand-picked assertion.
-2. **One regression per rule we have written down** — not per past bug.
-   "What a reader chose survives a re-render only if it is held outside the
-   markup" has five instances today; a test each turns the insight into a
-   checklist item that stays checked.
+1. A broad check. There are no page errors, every view renders, and every
+   widget kind draws, at desktop and phone width. This catches bugs that
+   no hand-picked assertion anticipates.
+2. One regression test per written-down rule, rather than one per past
+   bug. For example, "a choice the reader made survives a re-render only
+   if it is held outside the markup" has five instances, and each has a
+   test.
 
-## House rules for assertions
+## Rules for assertions
 
-Assert through the **DOM** and the **network** only. The page's scripts are
-ES modules that put nothing on `window`, so there are no internals to
-reach — which is the right discipline anyway: everything asserted is something a person or another process could
+Assert through the DOM and the network only. The page's scripts are ES
+modules that put nothing on `window`, so there are no internals to reach.
+Everything a test asserts is something a person or another process could
 observe.
 
 - Prefer the attributes the event delegation already needs: `data-action`,
   `data-entity`, `data-aspect`, `data-layer`, `data-source`, and stable ids
   like `#paramrow-{unit}-{param}`.
-- Match derived text by shape, never by wording: `/issued \d{2}:\d{2}/`,
-  not `"issued 09:00"`. Copy changes; facts do not.
+- Match derived text by its pattern, not its wording: `/issued \d{2}:\d{2}/`
+  rather than `"issued 09:00"`. Wording changes more often than the facts
+  it reports.
 - Assert a tap by the request it makes, not by what the page draws next.
 
-Do not assert: pixels or screenshots, whole-HTML snapshots, CSS beyond the
-handful that is behaviour (`touch-action`), or chart path coordinates —
-chart geometry is asserted numerically in `tests/js`.
+Do not assert pixels or screenshots, whole-HTML snapshots, or chart path
+coordinates. Do not assert CSS, apart from the few properties that are
+behaviour (`touch-action`). `tests/js` checks chart geometry numerically.
 
 ## Fixtures
 
 `fixtures/model.json` and `fixtures/snapshot.json` are a real supervised
-house's model and snapshot, extended to cover every widget kind. Their
-time-bearing parts are re-stamped per request by `server.py`, because a
-forecast frozen into a file is a spent one by tomorrow. A test that wants a
-spent forecast or a lapsed hold pushes its own document with explicit
-timestamps.
+house's model and snapshot, extended to cover every widget kind.
+`server.py` re-stamps their time-bearing parts on each request, because a
+forecast stored in a file would be spent by the next day. A test that
+wants a spent forecast or a lapsed hold pushes its own document with
+explicit timestamps.
 
-Fixtures drift. The canary test — a real house, booted once — checks that
-`model.json` carries the same fields as the real unit's `/api/model`.
-Nothing checks `snapshot.json` that way, so keep it to shapes the unit
-emits.
+Fixtures can drift from the real unit. The canary test boots a real house
+once and checks that `model.json` has the same fields as the unit's
+`/api/model`. Nothing checks `snapshot.json` that way, so keep it to
+shapes the unit emits.
 
-## Checking the net itself
+## Checking that the tests can fail
 
-A net that cannot fail is indistinguishable from one that passes:
+Break the page on purpose and confirm the suite reports it:
 
 ```sh
 cp adapters/dashboard.html /tmp/broken.html   # then break something in it

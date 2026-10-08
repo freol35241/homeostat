@@ -9,75 +9,46 @@
 # [tool.uv.sources]
 # homeostat = { path = "../sdk/python", editable = true }
 # ///
-"""ESPHome adapter: native API, not MQTT.
+"""ESPHome adapter: ESPHome devices on the bus over the native API.
 
-One aioesphomeapi connection per BOUND device (never to a device with no
-entity file), using the library's own ReconnectLogic — no broker, matching
-encryption-default device configs and the dialect voice satellites will
-reuse later. The entity file's `id` is `{device}/{object_id}`, the
-OwnTracks two-segment shape; the device half resolves via mDNS
-(`{device}.local:6053`) unless HOMEOSTAT_ESPHOME_DEVICES (a TOML file
-outside the repo) gives that device a `host` override and/or a Noise `key`
-— a device with no entry in that file, or an unset env var, is plaintext at
-the mDNS default. Addresses and keys never enter the repo.
+The adapter keeps one aioesphomeapi connection per bound device, with the
+library's ReconnectLogic. It uses the native API instead of MQTT because
+it needs no broker, it matches device configs that encrypt by default, and
+voice satellites will use the same dialect. A device that no entity file
+binds is never connected to.
 
-v1 vocabulary, grown by need, translation driven by what the entity FILE
-declares (the z2m pattern — the wire is never trusted to redescribe an
-entity the house already bound): switch -> capability "switch", aspect
-"on" (bool). light -> "light", aspect "on" plus features "brightness" and
-"color_temp" when the device's supported_color_modes carry them. ESPHome's
-native brightness is a 0.0-1.0 float and color_temperature a float mired;
-z2m's `brightness` aspect is the raw Zigbee 0-254 integer scale (see
-zigbee2mqtt.py, and the dashboard's `b / 254`), so brightness is rescaled
-both ways (native * 254 in, /254.0 out) to match that scale exactly;
-color_temp is already mireds on both sides and only rounded to an int.
-sensor -> "sensor", aspect = the ESPHome device_class if the entity has
-one, else its object_id (mirrors z2m's field-name pass-through).
-binary_sensor -> "binary_sensor", aspect = device_class or object_id the
-same way, EXCEPT device_class motion/occupancy/presence, which the entity
-file instead binds as capability "presence" with aspect "occupancy" (a
-bool) — z2m's own aspect name for its occupancy exposes, so the dashboard
-treats both adapters' presence entities alike. Sensors take no commands.
+Binding: an entity file's `id` is `{device}/{object_id}`. The capability
+the entity file declares drives translation; the wire does not redescribe
+a bound entity (`state_values`):
 
-Commands arrive as envelopes on home/cmd (and home/arbiter for arbitrated
-entities, via keys.arbiter_keyexpr instead of keys.cmd_keyexpr — exactly
-the zigbee2mqtt.py plan-time-expansion pattern); keys.parse_cmd_envelope
-validates, and anything malformed, off-vocabulary, or aimed at a device
-that isn't currently connected drops with a home/health/{unit}/event
-("malformed-payload" for a payload that is not JSON, "invalid-command" or
-"device-unavailable") instead of reaching the wire.
+- switch: capability `switch`, aspect `on`.
+- light: capability `light`, aspect `on`, plus `brightness` and
+  `color_temp` when declared as features.
+- sensor: capability `sensor`, aspect = the device_class, else the
+  object_id. Sensors take no commands.
+- binary_sensor: capability `binary_sensor`, aspect named the same way,
+  or capability `presence` with aspect `occupancy` for device classes
+  motion, occupancy and presence.
 
-Discovery (home/discovery/{unit}) carries every entity of every connected
-BOUND device (whether that particular entity is itself claimed by an
-entity file or not — a device's other entities are exactly the kind of
-"not yet claimed" record discovery exists for), each with a best-effort
-suggested capability/features stanza and the raw ESPHome type/device_class
-verbatim so an unmapped device_class stays visible rather than disappearing.
-A bound entity's record also carries its aspect descriptor
-(docs/design.md#aspect-descriptors), generated from the same EntityInfo:
-the sensor's unit_of_measurement picks the kind (°C → temperature, % →
-percent, else a number carrying the unit), its ESPHome name is the label
-(with the aspect in parentheses when they differ), and the alarm-shaped
-binary device classes (smoke, gas, moisture, ...) are notable. One ESPHome
-entity is one bus aspect, so a descriptor here is one field — or the
-light's three. A best-effort mDNS browse of `_esphomelib._tcp` additionally
-surfaces *unbound* device names (nothing to connect to yet, so no entity
-list) — its record's `id` is the bare device name; failure or total absence
-of mDNS (no multicast, sandboxed network, ...) is guarded completely and
-never touches the bound-device connections, which are unaffected either way
-("mdns-unavailable", or a "drop" with reason "mdns-record-error" for one
-unreadable record). Anything unusable drops with a health event; the unit
-never crashes. A connected device whose entity list cannot be read drops
-with "list-entities-failed" and is disconnected, so ReconnectLogic retries
-it rather than leaving it connected with no state subscription.
+Configuration: a device is reached at `{device}.local:6053` (mDNS) unless
+the TOML file that HOMEOSTAT_ESPHOME_DEVICES names gives it a `host`
+override. A Noise `key` in the same file enables encryption. A device with
+no entry, or an unset variable, means plaintext at the mDNS default.
+Addresses and keys stay out of the repo.
 
-Device availability (docs/design.md#availability): the ReconnectLogic
-connection IS the loss signal — every bound entity of a device gets
-home/state/{room}/{entity}/available = true once its entities are
-(re)enumerated, false on disconnect. The device's other aspects stand on
-loss — stale, never false — and a sensor whose device_class/object_id
-would mint the reserved aspect drops with a "reserved-aspect" health event
-(one that is not a legal key segment, with "malformed-payload").
+Commands: see `cmd_handler`.
+
+Availability: `available` is true once a device's entities are enumerated
+after a connect, and false on an unexpected disconnect.
+
+Discovery (home/discovery/{unit}): every entity of every connected bound
+device, bound or not, with an aspect descriptor on the bound ones
+(`aspect_descriptor`), plus unbound device names from a best-effort mDNS
+browse (`mdns_browse`).
+
+Health events: `drop` (malformed-payload, invalid-command,
+device-unavailable, reserved-aspect, list-entities-failed,
+mdns-record-error) and mdns-unavailable.
 """
 
 import asyncio
@@ -111,14 +82,19 @@ ENV_DEVICES = "HOMEOSTAT_ESPHOME_DEVICES"
 MDNS_SERVICE = "_esphomelib._tcp.local."
 DEFAULT_PORT = 6053
 PRESENCE_DEVICE_CLASSES = {"motion", "occupancy", "presence"}
-BRIGHTNESS_SCALE = 254  # z2m's raw Zigbee scale (see zigbee2mqtt.py / the dashboard)
+# ESPHome's native brightness is a 0.0-1.0 float. z2m's `brightness` is
+# the raw Zigbee 0-254 integer (see zigbee2mqtt.py, and the dashboard's
+# `b / 254`), so brightness is rescaled both ways to match it. color_temp
+# is mireds on both sides and is only rounded to an int.
+BRIGHTNESS_SCALE = 254
 
 
 def load_devices(path: str | None) -> dict:
     """Load the optional HOMEOSTAT_ESPHOME_DEVICES TOML.
 
-    Per-device `key` (Noise PSK) / `host` override. Unset env var: every
-    device plaintext at its mDNS default (never a hard requirement).
+    Per-device `key` (Noise PSK) and `host` override. With the variable
+    unset, every device is plaintext at its mDNS default; the file is
+    optional.
     """
     if not path:
         return {}
@@ -136,10 +112,7 @@ def resolve_host_port(device: str, devices: dict) -> tuple[str, int]:
 
 
 def light_features(modes: list) -> list[str]:
-    """Derive best-effort brightness/color_temp features from a light's supported_color_modes.
-
-    The vocabulary is v1, grown by need.
-    """
+    """Derive best-effort brightness/color_temp features from a light's supported_color_modes."""
     features = []
     if any(m not in (ColorMode.UNKNOWN, ColorMode.ON_OFF) for m in modes):
         features.append("brightness")
@@ -154,8 +127,8 @@ def light_features(modes: list) -> list[str]:
 def native_aspect(info) -> str:
     """Return a sensor/binary_sensor's bus aspect.
 
-    Its device_class if it has one, else its object_id — z2m's field-name
-    pass-through, mirrored.
+    Its device_class if it has one, else its object_id, like z2m's
+    field-name pass-through.
     """
     return info.device_class or info.object_id
 
@@ -163,8 +136,11 @@ def native_aspect(info) -> str:
 def suggest(info) -> dict | None:
     """Suggest a best-effort entity-file stanza for a discovery record.
 
-    The adapter suggests, plan/apply review decides
-    (docs/design.md#discovery).
+    The adapter suggests and plan/apply review decides
+    (docs/design.md#discovery). motion, occupancy and presence binary
+    sensors suggest `presence`, whose `occupancy` aspect is z2m's name for
+    its occupancy exposes, so the dashboard treats both adapters' presence
+    entities alike.
     """
     if isinstance(info, SwitchInfo):
         return {"capability": "switch", "features": []}
@@ -200,8 +176,13 @@ def aspect_label(info, aspect: str) -> str:
 def aspect_descriptor(entity, info) -> dict | None:
     """Return the bound entity's aspect descriptor from its EntityInfo.
 
-    Built on the capability the entity FILE declares (the translation
-    rule); None for a kind this adapter publishes nothing for.
+    Built on the capability the entity file declares, like the
+    translation. One ESPHome entity is one bus aspect, so the descriptor
+    has one field, or three for a light. A sensor's unit_of_measurement
+    picks the kind (°C is temperature, % is percent, anything else a
+    number carrying the unit), the ESPHome name is the label, and the
+    alarm-like binary device classes in NOTABLE_DEVICE_CLASSES are
+    notable. None for a kind this adapter publishes nothing for.
     """
     fields: dict[str, dict] = {}
     if entity.capability == "switch" and isinstance(info, SwitchInfo):
@@ -241,8 +222,8 @@ def aspect_descriptor(entity, info) -> dict | None:
 def describe(info) -> dict:
     """Return the raw ESPHome descriptor, verbatim.
 
-    Verbatim so an unmapped device_class or entity kind stays visible
-    instead of disappearing.
+    Verbatim so an unmapped device_class or entity kind is still visible
+    in discovery.
     """
     body = {"type": type(info).__name__.removesuffix("Info"), "object_id": info.object_id}
     if getattr(info, "device_class", ""):
@@ -257,9 +238,9 @@ def describe(info) -> dict:
 def state_values(entity, info, state):
     """Translate one incoming ESPHome EntityState into (aspect, value) pairs.
 
-    The pairs are on the entity's OWN declared capability/features —
-    translation is driven by what the entity file says the device is, never
-    by re-deriving it from the wire (the z2m pattern).
+    The pairs follow the entity's declared capability and features. What
+    the entity file says the device is drives translation, and the wire is
+    not used to re-derive it (as in zigbee2mqtt.py).
     """
     if isinstance(state, (SensorState, BinarySensorState)) and state.missing_state:
         return
@@ -284,7 +265,12 @@ async def run_device(device, bound, devices_conf, session, entity_runtime, entit
 
     On every (re)connect, it re-enumerates entities (device_info +
     list_entities, in one round trip), republishes this device's discovery
-    slice, and (re)subscribes to state.
+    slice, marks its bound entities available and (re)subscribes to state.
+    A device whose entity list cannot be read drops with
+    `list-entities-failed` and is disconnected, so ReconnectLogic retries
+    it. A state whose aspect would be `available` drops with
+    `reserved-aspect`, and one that is not a valid key segment with
+    `malformed-payload`.
     """
     host, port = resolve_host_port(device, devices_conf)
     noise_psk = (devices_conf.get(device) or {}).get("key")
@@ -296,11 +282,11 @@ async def run_device(device, bound, devices_conf, session, entity_runtime, entit
             infos, _services = await client.list_entities_services()
         except Exception as err:
             session.health_event("drop", reason="list-entities-failed", device=device, error=str(err))
-            # ReconnectLogic is already READY at this point: returning would
-            # leave the device connected but with no state subscription and
-            # no retry ever scheduled. Dropping the connection re-enters its
-            # retry loop instead (suppressed: raising out of on_connect
-            # would kill the reconnect task outright).
+            # ReconnectLogic is already READY here, so returning would leave
+            # the device connected with no state subscription and no retry.
+            # Disconnecting re-enters its retry loop. Errors are suppressed
+            # because raising out of on_connect would kill the reconnect
+            # task.
             with contextlib.suppress(Exception):
                 await client.disconnect()
             return
@@ -337,8 +323,7 @@ async def run_device(device, bound, devices_conf, session, entity_runtime, entit
             entity, info = hit
             for aspect, value in state_values(entity, info, state):
                 if aspect == "available":
-                    # Reserved for the adapter's own liveness signal — a
-                    # device field must not impersonate it.
+                    # Reserved for the adapter's own liveness signal.
                     session.health_event(
                         "drop", reason="reserved-aspect", device=device, object_id=info.object_id
                     )
@@ -356,8 +341,9 @@ async def run_device(device, bound, devices_conf, session, entity_runtime, entit
         client.subscribe_states(on_state)
 
     async def on_disconnect(expected: bool) -> None:
-        # A requested disconnect (adapter shutdown) is not a device loss;
-        # only an unexpected one flips availability.
+        # A requested disconnect (adapter shutdown) is not a device loss,
+        # so only an unexpected one marks the entities unavailable. Other
+        # aspects keep their last values.
         if not expected:
             for entity, _info in key_map.values():
                 session.put_json(keys.state_key(entity.room, entity.name, "available"), False)
@@ -375,9 +361,12 @@ async def run_device(device, bound, devices_conf, session, entity_runtime, entit
 async def mdns_browse(unit, session, by_device, unbound_discovery, publish_discovery):
     """Browse mDNS for a best-effort inventory of unbound device names for home/discovery.
 
-    See docs/design.md#discovery. Never a prerequisite
-    for the bound-device connections, so every failure here is caught and
-    reported as a health event rather than raised.
+    See docs/design.md#discovery. An unbound device's record has the bare
+    device name as `id` and no entity list, since there is no connection
+    to read one from. The bound-device connections do not depend on this,
+    so every failure (no multicast, a sandboxed network, ...) is caught
+    and reported: `mdns-unavailable`, or `drop` with `mdns-record-error`
+    for one unreadable record.
     """
     try:
         aiozc = AsyncZeroconf()
@@ -428,6 +417,14 @@ async def mdns_browse(unit, session, by_device, unbound_discovery, publish_disco
 
 
 def cmd_handler(entity, entity_runtime, entity_lock, loop, session):
+    """Return the command handler for one entity.
+
+    A switch takes `on` (a bool). A light takes `on` (a bool), and
+    `brightness` and `color_temp` (numbers) when they are declared
+    features. Sensors take no commands. A command for a device that is not
+    connected drops with `device-unavailable`; anything else that does not
+    fit drops with `invalid-command`.
+    """
     def handler(sample) -> None:
         parsed = session.parse_command(sample)
         if parsed is None:
@@ -504,9 +501,9 @@ async def serve(unit, session, config, devices_conf) -> None:
     ]
     mdns_task = asyncio.create_task(mdns_browse(unit, session, by_device, unbound_discovery, publish_discovery))
 
-    # Every bound device has a connection attempt in flight (the library's
-    # own reconnect logic keeps trying); the mDNS browse is best-effort and
-    # never gates this. The unit is wired up.
+    # Every bound device has a connection attempt in flight, and the
+    # library's reconnect logic keeps trying. The mDNS browse is best
+    # effort and does not gate readiness.
     session.ready()
 
     stop = asyncio.Event()

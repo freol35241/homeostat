@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Smoke test for examples/starter-house: boots the template with docker
-# compose the way its README says to when there is no coordinator stick
-# (mosquitto + homeostat only) and asserts every unit reaches `running`
-# and the house shuts down cleanly. HOMEOSTAT_IMAGE points the compose
-# file at the image under test instead of the published one.
+# Smoke test for examples/starter-house. It boots the template with docker
+# compose as its README describes for a house without a coordinator stick
+# (mosquitto and homeostat only). It asserts that every unit reaches
+# `running` and that the house shuts down cleanly. HOMEOSTAT_IMAGE points
+# the compose file at the image under test instead of the published one.
 #
 # Usage: scripts/smoke_starter.sh <image>
 set -euo pipefail
@@ -13,9 +13,10 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 WORK="$(mktemp -d)"
 PROJECT="homeostat-starter-$$"
 export HOMEOSTAT_IMAGE="$IMAGE"
-# What the README has a house set in .env: the container runs as the
-# checkout's owner (so data/ lands host-owned and plain rm cleans up),
-# and the compose file refuses to start without a z2m frontend token.
+# The values the README has a house set in .env. The container runs as
+# the checkout's owner, so data/ is owned by the host user and a plain rm
+# cleans it up. The compose file refuses to start without a z2m frontend
+# token.
 export HOMEOSTAT_UID="$(id -u)" HOMEOSTAT_GID="$(id -g)"
 export Z2M_FRONTEND_TOKEN="smoke"
 
@@ -39,8 +40,9 @@ fail() {
 cp -r "$REPO/examples/starter-house" "$WORK/house"
 # The README's first-start step.
 cp "$WORK/house/mosquitto.passwd.example" "$WORK/house/mosquitto.passwd"
-# The example maps the MCP port fixed for the README's UX; the smoke run
-# swaps in a free host port so parallel runs (or a busy 8642) never collide.
+# The example maps a fixed MCP port, which the README relies on. The smoke
+# run swaps in a free host port so that parallel runs, or another process
+# on 8642, do not collide.
 MCP_PORT="$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
 sed -i "s/\"8642:8642\"/\"127.0.0.1:${MCP_PORT}:8642\"/" "$WORK/house/docker-compose.yml"
 grep -q "${MCP_PORT}:8642" "$WORK/house/docker-compose.yml" \
@@ -53,8 +55,9 @@ git -C "$WORK/house" -c user.name=smoke -c user.email=smoke@example.com \
 
 compose up -d mosquitto homeostat >/dev/null 2>&1
 
-# Four units resolve their uv environments on first boot (SDK from the
-# release tag, eclipse-zenoh and paho-mqtt from PyPI): generous deadline.
+# Four units resolve their uv environments on first boot (the SDK from the
+# release tag, eclipse-zenoh and paho-mqtt from PyPI), so the deadline is
+# generous.
 echo "waiting for all starter units to reach running..."
 deadline=$((SECONDS + 300))
 for unit in clock recorder zigbee evening_lights mcp; do
@@ -70,17 +73,17 @@ for unit in clock recorder zigbee evening_lights mcp; do
   echo "$unit is running"
 done
 
-# The agent surface refuses a request without the write header — the
-# shape a cross-origin browser POST can produce
-# (docs/design.md#local-only-access). Asserted before the happy path, so a
-# surface that answered everything could not pass this smoke.
+# The agent surface refuses a request without the write header. A
+# cross-origin browser POST can produce such a request
+# (docs/design.md#local-only-access). This is checked before the normal
+# request, so a surface that answered everything would fail here.
 refused="$(curl -s -m 10 -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:${MCP_PORT}" \
   -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}')"
 [ "$refused" = "403" ] \
   || fail "MCP answered a request with no X-Homeostat header: HTTP $refused"
 
-# ...and answers a client that carries it.
+# It answers a client that sends the header.
 init="$(curl -s -m 10 -X POST "http://127.0.0.1:${MCP_PORT}" \
   -H 'Content-Type: application/json' -H 'X-Homeostat: 1' \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}')"
@@ -94,9 +97,9 @@ profile="$(docker exec "$(compose ps -q homeostat)" uv run /opt/homeostat/store_
 echo "$profile" | grep -q "^store " || fail "store_profile.py printed no store line: $profile"
 echo "store_profile.py reads the recorder's stats"
 
-# Every unit resolved from its committed lockfile: uv rewrites a lock it
-# finds stale, and a house repo dirtied by its own boot means the lock
-# shipped by sync_starter.sh does not match the script beside it.
+# Every unit must resolve from its committed lockfile. uv rewrites a lock
+# it finds stale. If booting leaves the house repo dirty, a lock shipped by
+# sync_starter.sh does not match the script beside it.
 dirty="$(git -C "$WORK/house" status --porcelain -- 'units/*.lock')"
 [ -z "$dirty" ] || fail "a unit rewrote its lockfile at boot:
 $dirty"

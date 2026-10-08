@@ -7,15 +7,15 @@
 # [tool.uv.sources]
 # homeostat = { path = "../../../../sdk/python", editable = true }
 # ///
-"""A latch that restores its decision
-(docs/design.md#restoring-a-units-own-last-value).
+"""A latch that restores its decision.
 
-The fixture for `ctx.restore`. A latch holds what a person decided, so
-after a core restart there is nothing to recompute and nothing in the
-mirror to replay — the recorder is the only record that the decision was
-ever made. The unit reads its own last published value back and republishes
-it, at whatever age, before declaring itself ready; with no row to find it
-starts on the code default, which is what a house with no history does.
+See docs/design.md#restoring-a-units-own-last-value. This is the fixture
+for `ctx.restore`. A latch holds what a person decided, so after a core
+restart there is nothing to recompute and nothing in the mirror to
+replay. The recorder is the only record that the decision was made. The
+unit reads its own last published value back and republishes it, at
+whatever age, before declaring itself ready. With no row to find, it
+starts on the code default, as a house with no history does.
 """
 
 from homeostat import automation, keys
@@ -40,7 +40,7 @@ def main():
         publish(commanded)
 
     ctx.subscribe("commands", on_command)
-    # Age is irrelevant to a decision: whatever was last decided still is.
+    # Age does not matter for a decision: the last one still stands.
     restored = ctx.restore("state", room=ROOM, entity=ENTITY, aspect="on")
     publish(DEFAULT if restored is None else restored[0])
     ctx.ready()

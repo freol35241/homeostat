@@ -8,105 +8,50 @@
 # [tool.uv.sources]
 # homeostat = { path = "../sdk/python", editable = true }
 # ///
-"""Aduro pellet-burner adapter.
+"""Aduro adapter: an Aduro pellet burner through the aduro2mqtt bridge.
 
-See docs/design.md#burners-and-interlocks.
+See docs/design.md#burners-and-interlocks. The burner speaks the NBE UDP
+protocol, and github.com/freol35241/aduro2mqtt bridges it to MQTT. The
+bridge polls every ADURO_POLL_INTERVAL (default 30 s) and republishes
+every topic each cycle, changed or not. This adapter reads
+{base}/status and {base}/operating and sends commands to {base}/set.
 
-The burner speaks the NBE UDP protocol; github.com/freol35241/aduro2mqtt
-bridges it to MQTT. The bridge polls on a fixed interval
-(ADURO_POLL_INTERVAL, default 30 s) and republishes EVERY topic each cycle,
-changed or not: {base}/status (the `status *` response, positional CSV
-mapped onto pyduro's STATUS_PARAMS names — 116 fields — as one JSON
-object, values floated where they parse), {base}/operating and
-{base}/advanced (one JSON object each), {base}/settings/{group} (17 groups
-of device configuration), {base}/consumption/{key} (9 arrays) and
-{base}/logs. Commands go to {base}/set as {"path": "<group>.<name>",
-"value": ...}. The entity file's `id` is the bridge's MQTT_BASE_TOPIC
-(`aduro2mqtt` by default); the file stem is the entity name. One entity
-per burner.
+Binding: an entity file's `id` is the bridge's MQTT_BASE_TOPIC
+(`aduro2mqtt` by default), and the file stem is the entity name. One
+entity per burner, capability `burner` with the `power_level` feature.
+The entity is arbitrated, so the family's `on` and an automation's
+`power_level` hold separate leases, and commands arrive on
+home/arbiter/{room}/{entity}/{aspect}.
 
-What becomes state, and how much. Republish-on-poll means an adapter
-forwarding each message would record every field 2,700 times a day
-whether or not it ever moved — the status topic alone is two and a half
-times the reporting house's entire heat-pump adapter. So the adapter
-subscribes exactly {base}/status and {base}/operating, and publishes a
-field ONLY WHEN ITS VALUE CHANGES (plus once, on the first poll after
-start; late joiners read the core's state mirror). Settings are
-configuration, not samples; consumption, advanced and logs are the long
-tail — none are subscribed. Status fields publish under their firmware
-names (dots included: `regulation.fixed_power` is a legal key segment);
-operating fields publish as `operating_{field}`, the prefix keeping the
-two NBE namespaces apart without a table of one to check the other
-against.
+State: each status field publishes under its firmware name, each
+operating field as `operating_{field}`, and only when its value changes
+(`Stoves.on_message`). `on`, `power_level`, `flue_temperature` and
+`boiler_temperature` are the burner vocabulary (`status_aspects`).
+`available` goes false after availability_timeout_s without a message
+(`Stoves.sweep`).
 
-Four normalizations carry the `burner` vocabulary:
+Commands: `on` (a bool) and `power_level` (10, 50 or 100); see
+`command_body`.
 
-- `on` (the base aspect, bool) is DERIVED from the run state: the burner
-  is on unless `state` is one of OFF_STATES. Start and stop are momentary
-  writes in this dialect (misc.start / misc.stop), so `on` can only ever
-  be the device's own readback, never an echo of a command. OFF_STATES
-  holds the single code observed so far — 14, the burner idle and unlit —
-  and grows as the heating season produces codes; `state` and `substate`
-  pass through raw beside it for exactly that purpose. A code not in
-  OFF_STATES reads as on.
-- `power_level` (feature) is status `regulation.fixed_power`, the fixed
-  output setting, 10 / 50 / 100 on this device — published as an int
-  when integral so the enum matches.
-- `flue_temperature` is status `smoke_temp` (the exhaust reading; the
-  flue cutouts at the reporting house read this one).
-- `boiler_temperature` is status `boiler_temp`.
+Configuration: the endpoint is the MQTT broker, with credentials inline
+or in HOMEOSTAT_MQTT_CREDENTIALS. The live parameter
+availability_timeout_s is owner-editable, default 300 s (about nine
+polls).
 
-Everything else passes through, including `shaft_temp` (the feed shaft,
-the device's own fire-safety reading) and `power_pct` (actual output) —
-except a raw field that would mint a reserved name (`available`, or one
-of the normalized names above arriving under its bus name rather than
-its firmware name), which drops with a "reserved-aspect" event, and a
-field name that is not a legal key segment, which drops with
-"malformed-payload"; the rest of the document still publishes.
+Discovery: one record per entity with the aspect descriptor and a
+`bound` flag that turns true the first time the base topic is seen.
 
-Commands (COMMANDS) — the burner is an arbitrated entity (the family's
-`on` and an automation's `power_level` lease independently, per aspect),
-so every command arrives on home/arbiter/{room}/{entity}/{aspect}:
+Health events: `drop` (malformed-payload, reserved-aspect,
+invalid-command) and device-silent.
 
-- `on`: strictly a bool. true -> {"path": "misc.start", "value": "1"},
-  false -> {"path": "misc.stop", "value": "1"}, the bridge's own switch
-  shape.
-- `power_level`: strictly the integer 10, 50 or 100 ->
-  {"path": "regulation.fixed_power", "value": <int>}.
-
-Anything else — a wrong type, an out-of-enum level, an unknown aspect,
-a malformed or envelope-less payload — DROPS with an "invalid-command"
-(or "malformed-payload") health event and never reaches the device.
-Commands are not retained: every command shares the one {base}/set topic,
-so a retained slot would hold whichever came last, and a misc.start or
-misc.stop replayed on the bridge's reconnect would act, not restore.
-
-Combustion safety is not this adapter's. The burner carries its own alarm
-layer (shaft and boiler temperature limits), and that is where it lives;
-a house-local flue cutout publishing `on = false` is an ordinary,
-contestable automation the house must not rely on.
-
-Discovery is the static one-record-per-entity document (the ivt490
-shape): base-topic id, a suggested `burner` capability stanza with the
-`power_level` feature, the aspect descriptor (ASPECT_FIELDS) and a
-`bound` flag that flips true the first time the base topic is seen. The
-descriptor declares readback_s = 75: a command is read back on a poll
-after the burner acted on it, so two default polls and some slack. A
-bridge configured to poll slower outruns it, and the dashboard then says
-"no answer" early.
-
-Availability: the bridge publishes on a cadence, so silence is the loss
-signal — a receive timer flips home/state/{room}/{entity}/available to
-false after availability_timeout_s (parameter, owner-editable, default
-300 s, about nine polls) without a message from the base topic, with one
-"device-silent" health event per down transition; the next message flips
-it back. The bridge skips a topic's publish when the burner does not
-answer, so an unreachable burner and a dead bridge both go silent. On
-loss every other aspect stands — stale, never false.
+Combustion safety is not this adapter's job. The burner has its own
+alarm layer (shaft and boiler temperature limits). A house-local flue
+cutout publishing `on = false` is an ordinary automation that can be
+overridden, and the house must not rely on it.
 
 Operational note: the bridge's README wires Home Assistant switches and
-selects straight to {base}/set; disable them (and any Node-RED writer)
-before this adapter goes live — one master per device.
+selects straight to {base}/set. Disable them, and any Node-RED writer,
+before this adapter goes live, so it is the device's only writer.
 """
 
 import json
@@ -130,33 +75,42 @@ class Params(LiveParams):
         return max(0.1, self.get("availability_timeout_s"))
 
 
-# Status field -> burner vocabulary (see module docstring).
+# Status field -> burner vocabulary. `power_level` is the fixed output
+# setting (10 / 50 / 100 on this device). `flue_temperature` is the
+# exhaust reading, which the flue cutouts at the house this was written
+# for read. The derived `on` is in status_aspects.
 ASPECT_OVERRIDES = {
     "smoke_temp": "flue_temperature",
     "boiler_temp": "boiler_temperature",
     "regulation.fixed_power": "power_level",
 }
 
-# Run-state codes that mean the burner is not making heat. 14 is the one
-# code observed to date (idle, unlit); extend from the heating season.
+# Run-state codes that mean the burner is not making heat. 14 (idle,
+# unlit) is the only code observed so far. Add codes as the heating
+# season shows them; `state` and `substate` are published raw so they can
+# be read off the bus.
 OFF_STATES = frozenset({14})
 
-# Names a status field may not mint raw: the adapter's own liveness
-# signal, and the vocabulary the overrides derive (a wire field literally
-# named `on` would otherwise overwrite the derived one and poison the
-# publish-on-change cache).
+# Names a raw status field may not publish as: the adapter's own liveness
+# signal and the normalized vocabulary. A wire field named `on` would
+# otherwise overwrite the derived one and corrupt the publish-on-change
+# cache.
 RESERVED_STATUS_FIELDS = frozenset({"available", "on", *ASPECT_OVERRIDES.values()})
 
 POWER_LEVELS = (10, 50, 100)
 
 # Commandable aspect -> the NBE set path (None for `on`, whose path
 # depends on the value: misc.start / misc.stop).
+#
+# Commands are not retained. They all share the one {base}/set topic, so
+# a retained slot would hold whichever came last, and a misc.start or
+# misc.stop replayed when the bridge reconnects would act, not restore.
 COMMANDS = {"on": None, "power_level": "regulation.fixed_power"}
 
 # The aspect descriptor (docs/design.md#aspect-descriptors). The dashboard
 # renders descriptor commands as enums or numbers, so `on` is described as
-# a two-valued enum — a segmented off/on control on the card. Labels keep
-# the firmware field name in parentheses where it differs.
+# a two-valued enum, which shows as an off/on control on the card. Labels
+# keep the firmware field name in parentheses where it differs.
 ASPECT_GROUPS = ["control", "readings", "status"]
 T = "temperature"
 ASPECT_FIELDS = {
@@ -198,10 +152,18 @@ ASPECT_DESCRIPTOR = {
 def status_aspects(status: dict) -> tuple[dict, list[str]]:
     """Map one status document to the bus aspects it yields.
 
-    The aspects are the normalized names, the derived `on`, and every other
-    field under its firmware name — plus the raw fields dropped for naming
-    a reserved aspect. `power_level` is an int when the wire float is
-    integral.
+    Returns the aspects and the raw fields dropped for naming a reserved
+    aspect. The aspects are the normalized names, the derived `on`, and
+    every other field under its firmware name, including `shaft_temp` (the
+    feed shaft, the device's own fire-safety reading) and `power_pct`
+    (actual output). Firmware names may contain dots
+    (`regulation.fixed_power` is a valid key segment). `power_level` is an
+    int when the wire float is integral, so it matches the enum.
+
+    `on` is derived from the run state: the burner is on unless `state` is
+    in OFF_STATES, so an unknown code reads as on. Start and stop are
+    momentary writes in this dialect (misc.start / misc.stop), so `on` is
+    always the device's own readback and not an echo of a command.
     """
     aspects = {}
     reserved = []
@@ -222,8 +184,10 @@ def status_aspects(status: dict) -> tuple[dict, list[str]]:
 def command_body(aspect: str, value):
     """Return the {base}/set payload for a validated command, or None.
 
-    None when the value is not one this aspect takes (a bool for `on`, one
-    of POWER_LEVELS — an int, never a bool — for `power_level`).
+    None when the value is not one this aspect takes: a bool for `on`, or
+    one of POWER_LEVELS (an int, not a bool) for `power_level`. `on` sends
+    {"path": "misc.start" | "misc.stop", "value": "1"}, the bridge's own
+    switch shape. The caller drops a None with `invalid-command`.
     """
     if aspect == "on":
         if not isinstance(value, bool):
@@ -251,12 +215,11 @@ def route(topic: str, entities):
 class Stoves:
     """The stove-to-bus direction: status and operating documents in, aspects out.
 
-    It publishes on change (a poll that repeats the last value is not a
-    sample), tracks each stove's availability from when it last spoke, and
-    keeps discovery's `bound` flag: whether a stove has been heard at all.
-    `session` is anything with `put_json` and `health_event`; the clock is
-    injectable. paho delivers messages on one thread and the watchdog
-    sweeps on another, so availability is locked.
+    It publishes on change, tracks each stove's availability from when it
+    last spoke, and keeps discovery's `bound` flag: whether a stove has
+    been heard at all. `session` is anything with `put_json` and
+    `health_event`; the clock is injectable. paho delivers messages on one
+    thread and the watchdog sweeps on another, so availability is locked.
     """
 
     def __init__(self, session, unit: str, entities, clock=time.monotonic):
@@ -295,7 +258,29 @@ class Stoves:
         ]
 
     def on_message(self, topic: str, raw: bytes) -> None:
-        """Translate one {id}/status or {id}/operating document."""
+        """Translate one {id}/status or {id}/operating document.
+
+        {base}/status is the `status *` response: its positional CSV mapped
+        onto pyduro's STATUS_PARAMS names (116 fields) as one JSON object,
+        with values converted to float where they parse. {base}/operating
+        is one JSON object. The bridge also publishes {base}/advanced,
+        {base}/settings/{group} (17 groups), {base}/consumption/{key} (9
+        arrays) and {base}/logs. Those are not subscribed: settings are
+        configuration, and the rest is detail nothing reads.
+
+        A field is published only when its value changed since the last
+        publish, and once on the first poll after start; late joiners read
+        the core's mirror. The bridge republishes every field each poll, so
+        forwarding every message would record each field 2,700 times a
+        day. The status topic alone would then write two and a half times
+        as much as the whole heat-pump adapter.
+
+        Operating fields get the prefix `operating_`, which keeps the two
+        NBE namespaces apart without checking one against the other. A
+        field that would publish as a reserved name drops with
+        `reserved-aspect`, and a field name that is not a valid key segment
+        with `malformed-payload`; the rest of the document still publishes.
+        """
         session = self.session
         entity, rest = route(topic, self.entities)
         if entity is None or len(rest) != 1 or rest[0] not in ("status", "operating"):
@@ -328,12 +313,19 @@ class Stoves:
                 session.health_event("drop", reason="malformed-payload", topic=topic, field=aspect)
                 continue
             if self.last.get((entity.name, aspect), _UNSET) == value:
-                continue  # unchanged since the last poll: not a sample
+                continue  # unchanged since the last poll
             self.last[(entity.name, aspect)] = value
             session.put_json(key, value)
 
     def sweep(self, timeout_s: float) -> None:
-        """Mark a stove silent for `timeout_s` unavailable, one event per transition."""
+        """Mark a stove silent for `timeout_s` unavailable, one event per transition.
+
+        The bridge publishes on a cadence, so silence is the loss signal.
+        The bridge skips a topic's publish when the burner does not answer,
+        so an unreachable burner and a dead bridge both go silent. The next
+        message marks the stove available again, and the other aspects
+        keep their last values.
+        """
         now = self.clock()
         for entity in self.entities:
             if now - self.last_rx[entity.id] > timeout_s and self.set_available(entity, False):
@@ -408,8 +400,8 @@ def main():
 
     stop.set()
     watchdog_thread.join(timeout=5)
-    # The MQTT loop stops first: an in-flight on_message during teardown
-    # would otherwise put on a closed zenoh session.
+    # Stop the MQTT loop first, or an in-flight on_message could put on
+    # a closed zenoh session.
     client.loop_stop()
     client.disconnect()
     for sub in subscribers:

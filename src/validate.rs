@@ -29,12 +29,12 @@ pub fn validate(house: &House) -> Vec<ValidationError> {
     errors
 }
 
-/// Whether a name is usable as exactly one bus key segment. Anything else
-/// either breaks the fixed key schema (`/`), is meaningful to the bus
-/// (`*`, `$`, `?`, `#`), or invites whitespace/encoding surprises — and a
-/// bad unit name would panic the supervisor's liveliness subscriber. `.`
-/// and `..` are refused as path-like; the SDK refuses them too, so a name
-/// that passes here is one every unit can build keys from.
+/// Whether a name is usable as one bus key segment. Other names break the
+/// fixed key schema (`/`), mean something to the bus (`*`, `$`, `?`, `#`), or
+/// risk whitespace and encoding problems. A bad unit name would also panic the
+/// supervisor's liveliness subscriber. `.` and `..` are refused as path-like.
+/// The SDK refuses the same names, so a name that passes here is one every
+/// unit can build keys from.
 fn valid_segment(name: &str) -> bool {
     !name.is_empty()
         && name != "."
@@ -46,9 +46,9 @@ fn valid_segment(name: &str) -> bool {
 
 /// Every name that becomes a key segment: unit and parameter names
 /// (`home/config/{unit}/{param}`, `home/meta/{unit}/...`), entity and room
-/// names (`home/state/{room}/{entity}/{aspect}`), zone names (expanded in
-/// key expressions). The unit name `system` is refused outright: the core
-/// serves `home/meta/system/**` itself.
+/// names (`home/state/{room}/{entity}/{aspect}`), and zone names (expanded in
+/// key expressions). The unit name `system` is refused because the core serves
+/// `home/meta/system/**` itself.
 fn check_names(house: &House, errors: &mut Vec<ValidationError>) {
     let segment_message = |what: &str, name: &str| {
         format!(
@@ -167,9 +167,9 @@ fn check_duplicates(house: &House, errors: &mut Vec<ValidationError>) {
         }
     }
 
-    // The binding `id` is the device address within one owner's namespace;
-    // two files sharing it would silently collapse to whichever the
-    // adapter's `by_id` map keeps last.
+    // The binding `id` is the device address within one owner's namespace. Two
+    // files sharing it would collapse to whichever one the adapter's `by_id`
+    // map keeps last.
     let mut entity_ids: BTreeMap<(&str, &str), Vec<&str>> = BTreeMap::new();
     for entity in &house.entities {
         let Some(id) = &entity.file.entity.id else {
@@ -234,8 +234,8 @@ fn check_manifest_shape(house: &House, errors: &mut Vec<ValidationError>) {
                 ));
             }
         } else {
-            // Automations may bind entities (virtual sensors); services
-            // have no need to and are refused until one does.
+            // Automations may bind entities (virtual sensors). Services have
+            // no need to, and are refused until one does.
             if unit.manifest.entities.is_some() && unit.manifest.unit.kind != UnitKind::Automation {
                 errors.push(ValidationError::new(
                     Code::InvalidManifest,
@@ -271,10 +271,9 @@ fn check_entities(house: &House, errors: &mut Vec<ValidationError>) {
             ));
         }
 
-        // A write mode governs commands, so it means nothing on a
-        // capability without a base aspect. It is required where there IS
-        // something to govern, so a light or a lock never inherits a
-        // policy silently.
+        // A write mode governs commands, so it means nothing on a capability
+        // without a base aspect. It is required where there is something to
+        // govern, so a light or a lock does not silently get a default policy.
         if entity.file.write_policy.mode.is_none()
             && VOCABULARY
                 .iter()
@@ -290,9 +289,9 @@ fn check_entities(house: &House, errors: &mut Vec<ValidationError>) {
             ));
         }
 
-        // An adapter binds periphery, so its entity files address it. An
-        // automation's do not: a computed value has no device behind it,
-        // and requiring an `id` there would only make units invent one.
+        // An adapter binds devices, so its entity files address them. An
+        // automation's do not: a computed value has no device behind it, and
+        // requiring an `id` would only make units invent one.
         let owner_is_adapter = house
             .unit(&entity.file.write_policy.owner)
             .is_some_and(|u| u.manifest.unit.kind == UnitKind::Adapter);
@@ -349,9 +348,9 @@ fn check_entities(house: &House, errors: &mut Vec<ValidationError>) {
                     && entity.file.write_policy.mode() == WriteMode::Arbitrated =>
             {
                 // A commandable virtual entity is a latch
-                // (docs/design.md#commandable-virtual-entities): no device to
-                // contend for, no hold to expire, so arbitration has nothing
-                // to order.
+                // (docs/design.md#commandable-virtual-entities). There is no
+                // device to contend for and no hold to expire, so arbitration
+                // has nothing to order.
                 errors.push(ValidationError::new(
                     Code::VirtualEntityArbitrated,
                     &entity.name,
@@ -511,12 +510,11 @@ fn check_param(subject: &str, spec: &ParamSpec, path: &str, errors: &mut Vec<Val
         }
     }
 
-    // The default must satisfy its own constraint: the repo-edit parameter
-    // path is enforced here, so an out-of-constraint default
-    // never plans, let alone reaches a running unit. Skipped when this
-    // param already has errors — a default judged against a malformed
-    // constraint would only add noise.
-    // errors.len() == before already implies the default matched its type.
+    // The default must satisfy its own constraint. The repo-edit parameter
+    // path is enforced here, so an out-of-constraint default does not plan and
+    // cannot reach a running unit. Skipped when this param already has errors,
+    // since judging a default against a malformed constraint only adds noise.
+    // `errors.len() == before` also implies the default matched its type.
     if errors.len() == before {
         if let Err(message) = crate::config::default_within_constraint(spec) {
             errors.push(ValidationError::new(
@@ -553,8 +551,8 @@ pub(crate) fn parse_time(s: &str) -> Option<(u8, u8)> {
     (hh < 24 && mm < 60).then_some((hh, mm))
 }
 
-/// `dashboard.toml`: each view is a generated one or a composition, never
-/// both; each widget carries exactly the fields its kind takes, and every
+/// `dashboard.toml`: each view is either a generated one or a composition.
+/// Each widget carries the fields its kind takes and no others, and every
 /// reference resolves against the house.
 fn check_dashboard(house: &House, errors: &mut Vec<ValidationError>) {
     let Some(dashboard) = &house.dashboard else {
@@ -595,9 +593,9 @@ fn check_dashboard(house: &House, errors: &mut Vec<ValidationError>) {
         for (i, widget) in view.widgets.iter().enumerate() {
             let subject = format!("{}[{i}]", view.name);
             check_widget(house, &rooms, widget, &subject, file.as_deref(), errors);
-            // A group's members are widgets like any other, and take the
-            // same checks. One level only: a group of groups is a layout
-            // language, which the file is deliberately not.
+            // A group's members are widgets like any other and get the same
+            // checks. Groups go one level deep, because the file is not meant
+            // to be a layout language.
             for (j, member) in widget.widgets.iter().enumerate() {
                 let subject = format!("{subject}[{j}]");
                 if member.kind == WidgetKind::Group {
@@ -624,9 +622,9 @@ fn check_dashboard(house: &House, errors: &mut Vec<ValidationError>) {
     }
 }
 
-/// One `[[control]]`: exactly one target, a reference that resolves, and a
-/// step that is a step. The dashboard reads this wherever it draws that
-/// control; the core only checks that it names something real.
+/// One `[[control]]`: one target, a reference that resolves, and a positive
+/// finite step. The dashboard reads this wherever it draws that control. The
+/// core only checks that it names something real.
 fn check_control(
     house: &House,
     control: &ControlSpec,
@@ -684,8 +682,8 @@ fn check_control(
                 format!("control names unknown unit \"{unit}\""),
                 file.map(str::to_string),
             )),
-            // A step is the grain of a control, so it must name a
-            // parameter that gets one: the unit's own, by name.
+            // A step sets the grain of a control, so it must name a
+            // parameter the unit declares.
             Some(u)
                 if !u
                     .manifest
@@ -732,8 +730,8 @@ fn check_widget(
                 format!("widget names unknown entity \"{entity}\""),
                 file.map(str::to_string),
             )),
-            // A capability widget draws that capability's vocabulary, so
-            // it is only meaningful over an entity that speaks it.
+            // A capability widget draws that capability's vocabulary, so it
+            // only makes sense over an entity of that capability.
             Some(e)
                 if widget.kind == WidgetKind::Burner && e.file.entity.capability != "burner" =>
             {
@@ -782,8 +780,8 @@ fn check_widget(
     }
 }
 
-/// The fields a widget kind takes — required ones first, then optional —
-/// against what it carries; None when they agree.
+/// The fields a widget kind takes (required ones first, then optional) against
+/// the fields it carries. None when they agree.
 fn widget_fields_message(widget: &WidgetSpec) -> Option<String> {
     let (required, optional): (&[&str], &[&str]) = match widget.kind {
         WidgetKind::Tile | WidgetKind::Dial => (&["entity"], &["aspect"]),

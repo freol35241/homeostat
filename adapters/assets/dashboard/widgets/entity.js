@@ -22,7 +22,7 @@ function widgetForLight(entity) {
     var pct = typeof b === 'number' ? Math.round((b / 254) * 100) : 0;
     if (localState.sliderDrag[bkey] !== undefined) pct = localState.sliderDrag[bkey];
     var nudgeAttrs = html` data-room="${entity.room}" data-entity="${entity.name}"${inert || typeof b !== 'number' ? html` disabled` : ''}`;
-    // This is a percent the house may want in fives; the bespoke light
+    // A house may want this percent in steps of five. The light's own
     // controls read the same [[control]] entries as every other slider.
     var bstep = logic.declaredStep(houseControls(), { entity: entity.name, aspect: 'brightness' });
     rows.push(html`<div class="slider-row entity-sub"><span class="slabel">brightness</span>
@@ -77,8 +77,9 @@ export function widgetForClimate(entity, big) {
   var badge = entity.write_mode === 'arbitrated' ? html`<span class="badge-arbitrated">ARBITRATED</span>` : '';
   var disabled = !(hasSetpoint && !controlDisabled(entity));
   if (big) {
-    // the overlay and the dial widget: the vocabulary's setpoint on a
-    // dial, bounds the capability's usual (the adapter enforces its own)
+    // The overlay and the dial widget: the vocabulary's setpoint on a
+    // dial, with the capability's usual bounds. The adapter enforces its
+    // own.
     return renderDial('climate-step', html` data-room="${entity.room}" data-entity="${entity.name}"`, {
       value: setpoint, display: readout, min: 5, max: 30, step: 0.5,
       disabled: disabled, current: nowParts.join(' · ')
@@ -96,13 +97,13 @@ export function widgetForClimate(entity, big) {
     </span></span></div>`;
 }
 
-// A sensor's card: one sparkline row per reading, each tapping through to
-// that aspect's history. Which readings, in what order, is the descriptor's
-// say (dashboard-logic.js, sensorCardPlan): a thermometer lists
-// temperature and humidity, not its link quality. A multi-aspect sensor
-// gets a head row with the entity name that opens the entity detail — the
-// aspect rows are the only other affordance, and they lead to a chart. The
-// overlay, which is that detail, renders the rows without the head.
+// A sensor's card: one sparkline row per reading, and tapping a row opens
+// that aspect's history. The descriptor decides which readings appear and
+// in what order (dashboard-logic.js, sensorCardPlan). A thermometer lists
+// temperature and humidity, not its link quality. A sensor with several
+// aspects gets a head row with the entity name, which opens the entity
+// detail. Without it, every tap on the card would lead to a chart. The
+// overlay is that detail, and it renders the rows without the head.
 export function widgetForSensor(entity, withHead) {
   var rows = logic.sensorCardPlan(entity, store.state, store.aspects[entity.name]);
   if (rows.length === 0) {
@@ -116,7 +117,7 @@ export function widgetForSensor(entity, withHead) {
     : '';
   return html`${head}${rows.map(function (r) {
     var sk = entity.name + '|' + r.aspect;
-    ensureHistory(entity.name, r.aspect); // fetched once (guarded), on first render while visible
+    ensureHistory(entity.name, r.aspect); // fetched once, on the first render while visible
     var s = localState.sparklines[sk];
     var spark = s && s.loaded ? buildChart('room-' + sk, s.points, { height: 28, sizeClass: 'chart-row', aspect: r.aspect, area: true, window: s.window }) : null;
     var name = multi ? r.label : entity.label;
@@ -144,13 +145,14 @@ function widgetGeneric(entity) {
 }
 
 function widgetForCamera(entity) {
-  // No poster: a still frame means transcoding H.264 to JPEG, which is a
-  // transcoder in the image for a thumbnail (docs/design.md#cameras —
-  // the plane split is a pure remux). A failing <img> renders as a black
-  // rectangle indistinguishable from a dark room, which is worse than
-  // saying plainly the picture is a tap away. Motion still reads here,
-  // from the event plane, which is the part that matters at a glance. The
-  // live view opens in the detail overlay — never N always-on streams.
+  // No poster image. A still frame would need transcoding H.264 to JPEG,
+  // which means shipping a transcoder in the image for a thumbnail. The
+  // camera path only remuxes (docs/design.md#cameras). A failing <img>
+  // renders as a black rectangle that looks like a dark room, which is
+  // worse than a plain note that the picture is one tap away. Motion is
+  // still shown here, from the event plane, and that is what matters at a
+  // glance. The live view opens in the detail overlay, so the page never
+  // runs one stream per camera all the time.
   var motion = stateValue(entity.room, entity.name, 'motion');
   var badge = motion === true ? html`<span class="badge-motion">MOTION</span>` : '';
   return html`<div class="entity-row row-clickable" data-action="entity-detail" data-room="${entity.room}" data-entity="${entity.name}" style="flex-direction:column;align-items:stretch;gap:6px;">
@@ -161,10 +163,10 @@ function widgetForCamera(entity) {
 }
 
 // The room-card row for an entity whose adapter published an aspect
-// descriptor: name and the first family control on one line, the headline
-// readings underneath — never the readout-wrapped-around-a-stepper row
-// the undescribed climate widget degrades to in a narrow column. Which
-// readings are headline is dashboard-logic.js's cardPlan.
+// descriptor. The name and the first family control share one line, with
+// the headline readings below. This avoids the undescribed climate
+// widget's layout, which wraps the readout around a stepper in a narrow
+// column. dashboard-logic.js's cardPlan picks the headline readings.
 function widgetForDescribed(entity) {
   var plan = logic.cardPlan(entity, store.state, store.aspects[entity.name], !controlDisabled(entity), houseControls());
   var badge = entity.write_mode === 'arbitrated' ? html`<span class="badge-arbitrated">ARBITRATED</span>` : '';
@@ -173,8 +175,9 @@ function widgetForDescribed(entity) {
     return html`${i ? html`<span class="sep">&middot;</span>` : ''}<span class="card-reading${r.stale ? ' stale' : ''}" title="${r.aspect}">
       ${r.label} <b>${r.display}</b></span>`;
   });
-  // The badge rides the readings line: inside the ellipsed name it clips
-  // to a stub in a narrow column, and the head line belongs to the control.
+  // The badge goes on the readings line. Inside the truncated name it
+  // would be cut off in a narrow column, and the head line is for the
+  // control.
   return html`<div class="entity-row described-card row-clickable" data-action="entity-detail" data-room="${entity.room}" data-entity="${entity.name}">
     <div class="described-head"><span class="entity-name" title="${entity.label}">${entity.label}</span>${control}</div>
     ${readings.length || badge ? html`<div class="described-readings">${readings}${badge ? html`<span class="card-badge">${badge}</span>` : ''}</div>` : ''}
@@ -215,7 +218,7 @@ export function relTime(ms) {
   return hrs + ' hr ago';
 }
 
-// An entity's own row — its control or its readings — as a card.
+// An entity's own row (its control or its readings) as a card.
 export function widgetEntity(entity) {
   return html`<div class="card">${widgetForEntity(entity)}</div>`;
 }

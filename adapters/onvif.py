@@ -8,92 +8,39 @@
 # [tool.uv.sources]
 # homeostat = { path = "../sdk/python", editable = true }
 # ///
-"""ONVIF camera adapter.
+"""ONVIF adapter: camera motion events on the bus through Profile S pull points.
 
-See docs/design.md#cameras.
+See docs/design.md#cameras. The adapter handles the event plane only:
+on-camera detections become scalar aspects, currently `motion` (a bool)
+at home/state/{room}/{entity}/motion. Video goes through go2rtc
+(adapters/go2rtc.py). There is no PTZ, imaging service or capability
+negotiation. On Tapo cameras, person detection is app-only and not
+exposed over ONVIF, and pan/tilt and privacy mode need the vendor API;
+an adapter for those would take the cameras over (docs/adapters.md,
+Files).
 
-Named for the dialect it speaks, not the vendor: Profile S pull-point
-events only — no PTZ, no imaging service, no capability negotiation. The
-event plane is the whole job: on-camera detections normalize to scalar bus
-aspects (v1: `motion`, a bool) at home/state/{room}/{entity}/motion.
-Pixels never pass through here — the media plane is go2rtc's (see
-adapters/go2rtc.py).
+Binding: an entity file's `id` is the camera's key in the
+HOMEOSTAT_CAMERAS file.
 
-What the cameras do beyond that is deliberately not here. A Tapo's
-on-camera person detection is app-only, not exposed over ONVIF, so it is
-not an aspect. ONVIF on Tapo does no PTZ; pan/tilt and privacy mode need
-the vendor API. A vendor adapter for those commands would bind the
-cameras itself and take over their events, through an ordinary entity
-file migration, rather than sit beside this one: exactly one adapter
-binds each entity.
+Configuration: HOMEOSTAT_CAMERAS names a TOML file outside the repo with,
+per camera, `host` (optionally `host:port`; the default port is Tapo's
+ONVIF port 2020), `username` and `password`. These are the camera-account
+credentials created in the vendor app (on Tapo, with third-party
+compatibility enabled). A camera with no entry drops with
+`camera-unconfigured` and is skipped. An entry missing a field drops with
+`camera-misconfigured` and the camera reads unavailable. Other cameras
+are unaffected either way.
 
-The entity file's `id` is the camera's key into HOMEOSTAT_CAMERAS, a TOML
-file outside the repo carrying per-camera `host` (optionally `host:port`;
-the port default is Tapo's ONVIF 2020), `username`, and `password` — the
-camera-account credentials created in the vendor app (on Tapo, with
-third-party compatibility enabled). Addresses and passwords never enter
-the repo. A camera with no entry drops with "camera-unconfigured" and is
-skipped; an entry missing a field drops with "camera-misconfigured" and
-the camera reads unavailable, since no resubscribe can fix it. The other
-cameras are unaffected either way.
+State: `motion`, published when it changes, and `available`, true while
+a pull-point subscription works (`run_camera`).
 
-The SOAP layer is hand-rolled (an ONVIF/WS-* client library would be the
-largest dependency in the tree for four calls):
-CreatePullPointSubscription, PullMessages (a long poll), Renew, and a
-WS-Security UsernameToken digest header on each. Tapo firmware has broken
-pull-point subscriptions before (the 1.3.6 regression), so ANY fault on
-the event stream — HTTP error, SOAP fault, timeout, unparseable envelope —
-tears the subscription down and recreates it from scratch, with one
-"event-stream-lost" health event per down transition, never a crash. Every
-error names the call that produced it and carries the fault's reason: a
-camera that accepts CreatePullPointSubscription and rejects Renew is a
-different problem from one that rejects the subscribe, and a bare status
-code cannot tell them apart from outside the process. The retry backs off
-from RESUBSCRIBE_DELAY_S toward RESUBSCRIBE_MAX_S and the event carries
-the consecutive-failure count, because a camera whose subscribe succeeds
-and whose stream then fails oscillates -- up flips back on each new
-subscription, so "one per down transition" would otherwise mean one per
-cycle, forever, against a live camera. A COMPLETED round trip resets
-both -- a successful subscribe alone does not, or a camera that refuses
-only Renew would reset the count every cycle and never back off. A notification that parses but carries an unusable value
-drops with a "malformed-payload" health event and the stream continues.
+Health events: `drop` (camera-unconfigured, camera-misconfigured,
+malformed-payload), event-stream-lost and renew-unsupported.
 
-`motion` is published on CHANGE, not per notification. A notification is
-not a transition: a Tapo C200 sends MotionAlarm on every evaluation tick,
-so one real episode against VP52's cameras arrived as 417 identical `true`s
-in 56 seconds, for what is semantically two edges. The adapter therefore
-compares against the last value it published and stays silent otherwise,
-which is also what makes it behave like the other event-driven adapters,
-where the device itself speaks only on change.
-
-The same transitions carry the availability signal
-(docs/design.md#availability): a working pull-point subscription
-publishes home/state/{room}/{entity}/available = true, its loss publishes
-false — and `motion` stands untouched on loss, stale, never false.
-
-The camera may return a subscription address with an unroutable host (NAT,
-container namespaces); only its path and query are trusted — the netloc
-stays the configured one. This is load-bearing, not defensive: a Tapo
-tested in the field advertises a per-subscription port (1024, 1025, ...)
-that nothing can connect to, so without the rewrite every call after the
-subscribe would time out.
-
-Renew and Unsubscribe are the WS-BaseNotification SubscriptionManager
-operations, and firmware that serves pull points happily may implement
-NEITHER — the same Tapo answers CreatePullPointSubscription and
-PullMessages with 200 and both of those with 400, and its own
-GetServiceCapabilities reports the SubscriptionManager interfaces absent.
-A Renew fault has two causes and they must be told apart: firmware with no
-SubscriptionManager, where the stream is fine, or a subscription that is
-genuinely gone, where it is dead. The NEXT pull decides — it succeeds in
-the first case and fails in the second — so the adapter withholds judgment
-for one round trip rather than concluding from the fault alone. On the
-first reading it emits "renew-unsupported", stops renewing that camera,
-keeps pulling, and rotates the subscription RESUBSCRIBE_BEFORE_S before
-InitialTerminationTime expires, unsubscribing the old one best-effort;
-availability does not flap, because nothing was lost. On the second the
-ordinary loss path runs. Learned from behaviour rather than negotiated: no
-capability calls, per the scope above.
+The SOAP layer is hand-written, because an ONVIF/WS-* client library
+would be the largest dependency in the tree for four calls:
+CreatePullPointSubscription, PullMessages (a long poll), Renew and
+Unsubscribe, each with a WS-Security UsernameToken digest header.
 """
 
 import asyncio
@@ -118,16 +65,16 @@ DEFAULT_PORT = 2020  # Tapo's ONVIF service port; override per camera with host:
 PULL_TIMEOUT = "PT10S"
 TERMINATION_TIME = "PT60S"
 TERMINATION_S = 60
-# Re-create a subscription this long before it expires, for cameras with
-# no working Renew. The old one lingers until it times out, so this also
-# bounds the overlap: at 40 s against a PT60S termination, at most two per
-# camera are live at once, well under the MaxPullPoints these firmwares
-# advertise.
+# Re-create a subscription this long after it was created, for cameras
+# with no working Renew. The old one lingers until it times out, so this
+# also bounds the overlap: at 40 s against a PT60S termination, at most
+# two per camera are live at once, well under the MaxPullPoints these
+# firmwares advertise.
 RESUBSCRIBE_BEFORE_S = 40
 RESUBSCRIBE_DELAY_S = 5
-# A camera that rejects one call rejects it again: back off toward
-# RESUBSCRIBE_MAX_S rather than hammering a live camera at a fixed cadence
-# forever. Any success resets it.
+# A camera that rejects a call will reject it again, so back off toward
+# RESUBSCRIBE_MAX_S instead of retrying a live camera at a fixed rate. A
+# completed round trip resets it.
 RESUBSCRIBE_MAX_S = 300
 HTTP_TIMEOUT_S = 30  # must exceed the PT10S long poll
 # A SOAP fault's reason lives in the body; enough of it to be diagnostic,
@@ -164,7 +111,7 @@ def resolve_host_port(conf: dict) -> tuple[str, int]:
 
 
 def security_header(username: str, password: str) -> str:
-    """Build a WS-Security UsernameToken with PasswordDigest — what Tapo demands.
+    """Build a WS-Security UsernameToken with PasswordDigest, which Tapo requires.
 
     The digest is Base64(SHA1(nonce + created + password)).
     """
@@ -201,8 +148,8 @@ class SoapError(Exception):
 def fault_detail(text: str) -> str:
     """Return the fault's Reason/Text, or a bounded excerpt of whatever the camera actually said.
 
-    A bare status code cannot distinguish which of four calls a camera
-    objected to, or why.
+    A bare status code does not say which of four calls a camera objected
+    to, or why.
     """
     with contextlib.suppress(ElementTree.ParseError):
         root = ElementTree.fromstring(text)
@@ -230,10 +177,11 @@ async def soap_call(
 ) -> ElementTree.Element:
     """Make one SOAP call and return the reply's root, raising SoapError on any failure.
 
-    `op` names the call in every error it can raise: a camera that
-    accepts CreatePullPointSubscription and rejects Renew is a completely
-    different problem from one that rejects the subscribe, and "HTTP 400"
-    alone cannot tell them apart from outside the process.
+    `op` names the call in every error it can raise, and the error carries
+    the fault's reason. A camera that accepts CreatePullPointSubscription
+    and rejects Renew is a different problem from one that rejects the
+    subscribe, and "HTTP 400" alone cannot tell them apart from outside
+    the process.
     """
     try:
         async with http.post(
@@ -242,14 +190,14 @@ async def soap_call(
             headers={"Content-Type": "application/soap+xml; charset=utf-8"},
             timeout=aiohttp.ClientTimeout(total=HTTP_TIMEOUT_S),
         ) as response:
-            # ⚠️ READ UNTIL EOF, NOT ONCE. `content.read(n)` returns
-            # whatever is buffered, up to n -- for a chunked reply that is
-            # the FIRST CHUNK, so a single read truncates mid-document and
-            # every parse fails with "unclosed token". Cameras stream their
-            # replies; aiohttp's own test responses do not, so a one-shot
-            # read passes a test and fails against a camera. The cap is
-            # enforced after each chunk, which is also where it belongs --
-            # it must not depend on how the body happens to be framed.
+            # Read until EOF. `content.read(n)` returns whatever is
+            # buffered, up to n, which for a chunked reply is the first
+            # chunk. A single read then truncates the document and every
+            # parse fails with "unclosed token". Cameras stream their
+            # replies and aiohttp's test responses do not, so a one-shot
+            # read passes the tests and fails against a camera. The size cap
+            # is checked after each chunk, so it does not depend on how the
+            # body is framed.
             raw = bytearray()
             async for chunk in response.content.iter_chunked(RESPONSE_CHUNK_BYTES):
                 raw += chunk
@@ -274,7 +222,11 @@ async def soap_call(
 def subscription_url(root: ElementTree.Element, base_url: str) -> str:
     """Return the SubscriptionReference address, with only its path and query trusted.
 
-    The netloc stays the configured one.
+    The netloc stays the configured one. The camera may return an
+    unroutable host (NAT, container namespaces), and a Tapo tested in the
+    field advertises a per-subscription port (1024, 1025, ...) that
+    nothing can connect to. Without the rewrite every call after the
+    subscribe would time out.
     """
     address = root.find(".//{*}SubscriptionReference/{*}Address")
     if address is None or not (address.text or "").strip():
@@ -310,8 +262,36 @@ def motion_values(root: ElementTree.Element):
 async def run_camera(entity, conf: dict, session, http: aiohttp.ClientSession, stop: asyncio.Event) -> None:
     """Run one pull-point event stream for one camera: subscribe, long-poll, renew, forever.
 
-    Any fault recreates the subscription from scratch after a delay (one
-    health event per down transition).
+    Any fault on the event stream (HTTP error, SOAP fault, timeout,
+    unparseable envelope) tears the subscription down and recreates it
+    after a delay, because Tapo firmware has broken pull-point
+    subscriptions before (the 1.3.6 regression). Each down transition
+    reports one `event-stream-lost` with the consecutive-failure count, and
+    the delay doubles from RESUBSCRIBE_DELAY_S up to RESUBSCRIBE_MAX_S.
+
+    A working subscription publishes `available = true` and its loss
+    `false`. `motion` keeps its last value through a loss.
+
+    `motion` is published when it changes, not per notification. A Tapo
+    C200 sends MotionAlarm on every evaluation tick: one real episode at
+    the house this was written for arrived as 417 identical `true`s in 56
+    seconds. Comparing with the last published value makes the camera
+    behave like the event-driven adapters, whose devices speak only on
+    change. A notification with an unusable value drops with
+    `malformed-payload` and the stream continues.
+
+    Renew and Unsubscribe are WS-BaseNotification SubscriptionManager
+    operations, and firmware that serves pull points may implement
+    neither. The same Tapo answers CreatePullPointSubscription and
+    PullMessages with 200, Renew and Unsubscribe with 400, and its
+    GetServiceCapabilities reports no SubscriptionManager. After a Renew
+    fault the next pull decides: if it succeeds, the camera has no
+    SubscriptionManager, so it reports `renew-unsupported`, stops renewing,
+    and rotates the subscription every RESUBSCRIBE_BEFORE_S, unsubscribing
+    the old one best effort. Availability does not change, since nothing
+    was lost. If the pull fails, the ordinary loss path runs. This is
+    learned from behaviour, since the adapter does no capability
+    negotiation.
     """
     motion_key = keys.state_key(entity.room, entity.name, "motion")
     available_key = keys.state_key(entity.room, entity.name, "available")
@@ -319,8 +299,8 @@ async def run_camera(entity, conf: dict, session, http: aiohttp.ClientSession, s
         host, port = resolve_host_port(conf)
         username, password = conf["username"], conf["password"]
     except (KeyError, ValueError) as err:
-        # Unusable camera config: no amount of resubscribing fixes it.
-        # The event is the trace; the camera reads unavailable.
+        # Unusable camera config, which resubscribing cannot fix. Report
+        # it and mark the camera unavailable.
         session.health_event("drop", reason="camera-misconfigured", camera=entity.name, error=str(err))
         session.put_json(available_key, False)
         return
@@ -328,24 +308,20 @@ async def run_camera(entity, conf: dict, session, http: aiohttp.ClientSession, s
     # Tri-state: None until the first subscription attempt settles, so the
     # first success and the first failure each publish availability once.
     up: bool | None = None
-    # A camera whose subscribe SUCCEEDS and whose stream then fails
-    # oscillates: up flips back to True each cycle, so "one event per down
-    # transition" becomes one event per cycle. Count the consecutive
-    # failures and back off, so a persistently broken camera is legible as
-    # persistent instead of arriving as a steady drip.
+    # A camera whose subscribe succeeds and whose stream then fails
+    # oscillates: `up` flips back to True each cycle, so "one event per down
+    # transition" becomes one event per cycle. Counting consecutive
+    # failures and backing off shows a persistently broken camera as such.
     failures = 0
     delay = RESUBSCRIBE_DELAY_S
-    # Whether this camera's SubscriptionManager answers. Set false by the
-    # first Renew fault and stays false: re-asking every rotation would
-    # fault every rotation.
+    # Whether this camera's SubscriptionManager answers. Once false it
+    # stays false, since asking again every rotation would fault every
+    # rotation.
     renews = True
-    # The last motion value published, so a camera that re-asserts what it
-    # already said does not republish it. Cameras differ on what a
-    # notification means: a Tapo C200 sends MotionAlarm on every evaluation
-    # tick, so one real episode arrives as hundreds of identical `true`s.
-    # Kept across resubscription deliberately -- the camera's state did not
-    # change because our subscription broke, and `motion` is documented to
-    # stand through a loss rather than go false.
+    # The last motion value published, so a repeated value is not
+    # republished. Kept across resubscription: the camera's state did not
+    # change because the subscription broke, and `motion` keeps its value
+    # through a loss.
     last_motion: bool | None = None
     loop = asyncio.get_running_loop()
 
@@ -363,8 +339,8 @@ async def run_camera(entity, conf: dict, session, http: aiohttp.ClientSession, s
             )
             sub_url = subscription_url(created, base_url)
             created_at = loop.time()
-            # A fresh subscription: believe Renew works until it says
-            # otherwise AND a pull confirms the stream survived it.
+            # A fresh subscription. Renew is assumed to work until it
+            # faults and a pull then confirms the stream survived.
             renew_fault: SoapError | None = None
             if up is not True:
                 session.put_json(available_key, True)
@@ -382,12 +358,10 @@ async def run_camera(entity, conf: dict, session, http: aiohttp.ClientSession, s
                     "PullMessages",
                 )
                 if renew_fault is not None:
-                    # The pull above succeeded, so the stream was never
-                    # lost: this firmware serves pull points and does not
-                    # implement the SubscriptionManager. Stop renewing and
-                    # rotate the subscription before it expires instead.
-                    # Learned from behaviour, not from GetServiceCapabilities:
-                    # no capability negotiation (see the module docstring).
+                    # The pull above succeeded, so the stream was not
+                    # lost: this firmware serves pull points without the
+                    # SubscriptionManager. Stop renewing and rotate the
+                    # subscription before it expires.
                     renews = False
                     session.health_event(
                         "renew-unsupported", camera=entity.name, error=str(renew_fault)
@@ -414,26 +388,23 @@ async def run_camera(entity, conf: dict, session, http: aiohttp.ClientSession, s
                             "Renew",
                         )
                     except SoapError as err:
-                        # A Renew fault has two causes and they need
-                        # telling apart: firmware with no SubscriptionManager
-                        # (the stream is fine), or a subscription that is
-                        # genuinely gone (the stream is dead). Do not
-                        # conclude yet — the NEXT pull decides, because it
-                        # succeeds in the first case and fails in the
-                        # second. Concluding here marks a camera whose
-                        # subscription merely expired as permanently
-                        # renew-less.
+                        # Either the firmware has no SubscriptionManager
+                        # (the stream is fine) or the subscription is gone
+                        # (the stream is dead). The next pull decides.
+                        # Deciding here would mark a camera whose
+                        # subscription merely expired as renew-less for
+                        # good.
                         renew_fault = err
-                # Progress is a COMPLETED round trip, not merely a
-                # successful subscribe: a camera that accepts the
-                # subscribe and refuses Renew would otherwise reset the
-                # count every cycle and never back off at all.
+                # Reset only after a completed round trip. Resetting on a
+                # successful subscribe would let a camera that accepts the
+                # subscribe and refuses Renew reset the count every cycle
+                # and never back off.
                 failures = 0
                 delay = RESUBSCRIBE_DELAY_S
                 if not renews and loop.time() - created_at >= RESUBSCRIBE_BEFORE_S:
-                    # Best effort: a camera with a working SubscriptionManager
-                    # is left clean, and the one that got us here refuses this
-                    # too, which is exactly why the rotation exists.
+                    # Best effort. A camera with a working
+                    # SubscriptionManager is left clean; the cameras that
+                    # need rotation refuse this too.
                     with contextlib.suppress(SoapError):
                         await soap_call(
                             http,
@@ -445,10 +416,10 @@ async def run_camera(entity, conf: dict, session, http: aiohttp.ClientSession, s
                         )
                     break
         except Exception as err:
-            # ANY fault recreates the subscription after the delay — a
-            # non-SOAP surprise (bad reply shape, a failed put) must not
-            # silently end this camera's stream while the unit reads ready.
-            # (CancelledError is BaseException and still cancels the task.)
+            # Any exception recreates the subscription after the delay. A
+            # non-SOAP error (bad reply shape, a failed put) must not end
+            # this camera's stream while the unit reads ready.
+            # CancelledError is a BaseException and still cancels the task.
             failures += 1
             if up is not False:
                 session.health_event(
@@ -480,8 +451,8 @@ async def serve(session, config, cameras_conf) -> None:
                 continue
             tasks.append(asyncio.create_task(run_camera(entity, conf, session, http, stop)))
 
-        # Every configured camera has a subscription attempt in flight (its
-        # own loop keeps trying); the unit is wired up.
+        # Every configured camera has a subscription attempt in flight, and
+        # each camera's loop keeps retrying on its own.
         session.ready()
 
         await stop.wait()

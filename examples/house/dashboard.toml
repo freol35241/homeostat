@@ -1,7 +1,7 @@
 # The family surface's views (docs/design.md#views-are-text).
-# Each [[view]] is a nav entry; without this file the dashboard renders
-# its generated views. Health and "Not shown" — everything no view places
-# — stay reachable from the rail whatever is written here.
+# Each [[view]] is a nav entry. Without this file the dashboard renders
+# its generated views. Health and "Not shown" (everything no view places)
+# stay reachable from the rail whatever this file says.
 schema = 1
 
 [[view]]
@@ -16,7 +16,7 @@ widgets = [
 [[view]]
 name = "outdoors"
 widgets = [
-  # a group is one card over its members: the reading, then its day
+  # a group draws its members on one card: the reading, then its 24 hours
   { kind = "group", label = "Outdoor", widgets = [
     { kind = "tile", entity = "outdoor_temp" },
     { kind = "chart", entity = "outdoor_temp", aspect = "temperature", hours = 24 },
@@ -28,8 +28,8 @@ name = "downstairs"
 widgets = [
   { kind = "unit", unit = "evening_lights" },           # its setpoint, and the lights it drives
   { kind = "unit", unit = "fused_temperature" },        # what it publishes, and what it reads
-  # Opening this chart's detail overlay offers "with sources": the two
-  # thermometers it is fused from, drawn beside it (docs/design.md#sources).
+  # This chart's detail overlay offers "with sources", which draws the two
+  # thermometers it is fused from beside it (docs/design.md#sources).
   { kind = "chart", entity = "downstairs_temperature", aspect = "temperature", hours = 24 },
   { kind = "room", room = "kitchen" },
   { kind = "room", room = "livingroom" },
@@ -40,11 +40,11 @@ widgets = [
 name = "setpoints"
 kind = "setpoints"
 
-# How coarse a control is, keyed by what it controls rather than by the
-# widget that places it — so the same grain applies on the room card, on a
-# view and in the detail overlay. Without an entry the dashboard derives
-# one (a twentieth of the range), which is a guess the house may know
-# better than. A slider is the one control a finger moves by accident.
+# The step a control moves in. It is keyed by what the control sets, not
+# by the widget that places it, so the same step applies on the room card,
+# on a view and in the detail overlay. Without an entry the dashboard
+# guesses one (a twentieth of the range), and the house may know better.
+# It matters most for sliders, which a finger can move by accident.
 [[control]]
 entity = "livingroom_lamp"
 aspect = "brightness"

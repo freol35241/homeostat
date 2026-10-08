@@ -1,17 +1,18 @@
 //! Forecast bus class, end to end (docs/design.md#forecasts).
 //!
 //! 1. A unit may publish `home/forecast/{room}/{entity}/{aspect}/{source}`
-//!    for an entity that EXISTS — it need not bind it — and the plan
-//!    accepts the class and the key shape.
+//!    for an entity that exists, without binding it, and the plan accepts
+//!    the class and the key shape.
 //! 2. The payload is the SDK's: `schema`, `issued`, and irregular `points`
-//!    ascending in time, each declaring the window it covers. Irregular is
-//!    the point — a regular grid could not carry the hourly-then-coarser
-//!    shape real sources publish, nor say how long a value holds.
-//! 3. The core MIRRORS the class, which is what makes a forecast usable at
-//!    all: a day-ahead curve is published once a day, so a consumer that
-//!    starts after the publish must still get it. This is the property the
-//!    whole class rests on, so it is read here through a session that was
-//!    not connected when the unit published.
+//!    ascending in time, each declaring the window it covers. The points
+//!    are irregular because a regular grid could not carry the
+//!    hourly-then-coarser shape real sources publish, nor say how long a
+//!    value holds.
+//! 3. The core mirrors the class, which is what makes a forecast usable:
+//!    a day-ahead curve is published once a day, so a consumer that starts
+//!    after the publish must still get it. The class depends on this, so it
+//!    is read here through a session that was not connected when the unit
+//!    published.
 
 mod common;
 
@@ -26,7 +27,7 @@ const FIXTURE: &str = "tests/fixtures/house_forecast";
 const FORECAST_KEY: &str = "home/forecast/global/spot_price/price/nordpool";
 
 /// Queries a key and returns the first ok reply's payload, retrying until
-/// one arrives — the mirror answers only once it has seen the put.
+/// one arrives, because the mirror answers only once it has seen the put.
 async fn mirror_read_eventually(session: &zenoh::Session, key: &str) -> Value {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     loop {
@@ -95,9 +96,9 @@ async fn a_forecast_is_published_and_mirrored_for_a_late_joiner() {
 
     assert_eq!(points[0]["v"], 1.20, "{payload}");
 
-    // Each point says what it covers, so a reader never has to infer a
-    // hold length from the gap to the next point — which the last point,
-    // having no next, could not do at all.
+    // Each point says what it covers, so a reader does not have to infer a
+    // hold length from the gap to the next point. The last point has no
+    // next point, so that inference would fail for it.
     let extents: Vec<f64> = points
         .iter()
         .map(|p| p["d"].as_f64().expect("point extent"))
@@ -111,20 +112,16 @@ async fn a_forecast_is_published_and_mirrored_for_a_late_joiner() {
     sup.shutdown();
 }
 
-/// Epoch seconds from an RFC3339 instant with a UTC offset, without adding
-/// a date dependency for one assertion: the fixture publishes `Z`-less
-/// ISO with a `+00:00` offset, which is all this needs to handle.
-/// The mirror is in memory, so a core restart empties it — and a forecast
-/// is then only as available as its producer's startup behaviour. A
+/// The mirror is in memory, so a core restart empties it, and a forecast
+/// is then available again only if its producer publishes at startup. A
 /// producer that issues on a schedule and not at start leaves the class
 /// answering nothing, which for a once-daily curve is most of a day
 /// (docs/design.md#forecasts: "Producers publish their current forecast
 /// at startup").
 ///
 /// Published from the test session rather than from `seer`, because
-/// `seer` re-issues at start and would mask exactly the gap this pins.
-/// The convention exists because of this behaviour; the test is what
-/// makes the reason executable rather than a sentence in a document.
+/// `seer` re-issues at start and would hide the gap this test pins. The
+/// startup convention exists because of this behaviour.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_core_restart_empties_the_mirror_and_only_a_producer_refills_it() {
     const KEY: &str = "home/forecast/global/spot_price/price/oracle";
@@ -155,15 +152,15 @@ async fn a_core_restart_empties_the_mirror_and_only_a_producer_refills_it() {
         h.status == HealthStatus::Running
     })
     .await;
-    // `seer` is up and has re-issued its OWN key, so the mirror is
-    // serving forecasts again — this one is simply not among them.
+    // `seer` is up and has re-issued its own key, so the mirror is
+    // serving forecasts again. This one is not among them.
     mirror_read_eventually(&observer, FORECAST_KEY).await;
     assert!(
         query_once(&observer, KEY).await.is_none(),
         "a forecast nobody republished must not survive the core that held it"
     );
 
-    // And it comes back the only way it can: someone says it again.
+    // It comes back only when a producer publishes it again.
     let publisher = matched_publisher(&observer, KEY).await;
     publisher
         .put(issue.to_string())
@@ -186,6 +183,9 @@ async fn query_once(session: &zenoh::Session, key: &str) -> Option<Value> {
     None
 }
 
+/// Epoch seconds from an RFC3339 instant with a UTC offset, without adding
+/// a date dependency for one assertion: the fixture publishes `Z`-less
+/// ISO with a `+00:00` offset, which is all this needs to handle.
 fn chrono_free_epoch_seconds(ts: &str) -> Option<i64> {
     let (date, rest) = ts.split_once('T')?;
     let time = rest.split(['+', 'Z']).next()?;

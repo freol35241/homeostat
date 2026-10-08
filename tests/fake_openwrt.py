@@ -4,13 +4,11 @@
 #     "aiohttp>=3.9,<4",
 # ]
 # ///
-"""A minimal, honest OpenWrt ubus endpoint, for the openwrt adapter's
-integration tests (tests/openwrt.rs; the adapter's own docstring is its
-spec).
+"""A minimal OpenWrt ubus endpoint for the tests in tests/openwrt.rs.
 
-Speaks the slice of the ubus JSON-RPC surface the adapter touches: POST
-/ubus with `session.login` (rpcd credential check, real session id
-enforcement on every later call — status 6 on a bad sid, like rpcd),
+It speaks the part of the ubus JSON-RPC surface the adapter touches: POST
+/ubus with `session.login` (rpcd credential check, with session id
+enforcement on every later call: status 6 on a bad sid, like rpcd),
 `list` for hostapd.* object names, `network.interface dump`, and
 `hostapd.X get_clients`.
 
@@ -42,7 +40,7 @@ STATE = {
 
 # Where a chunked reply is cut. Anywhere inside the document does; this
 # lands inside the opening object, so a client that stops at the first
-# chunk fails to decode rather than quietly getting a shorter one.
+# chunk fails to decode instead of getting a shorter one without an error.
 CHUNK_AT = 12
 
 

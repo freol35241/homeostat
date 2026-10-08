@@ -1,7 +1,7 @@
 //! ntfy notifier adapter integration tests: each scenario spawns a fake
-//! ntfy server (`tests/fake_ntfy.py` — the real publish shape, bearer-token
-//! checking, a controllable outage) on a free port plus the real
-//! supervisor on the ntfy fixture house, and asserts on the bus.
+//! ntfy server (`tests/fake_ntfy.py`, with the real publish shape,
+//! bearer-token checking and a controllable outage) on a free port plus
+//! the real supervisor on the ntfy fixture house, and asserts on the bus.
 
 mod common;
 
@@ -196,10 +196,10 @@ async fn delivers_by_topic_with_severity_as_priority() {
     assert_unit_contract(&mut sup, &observer, "ntfy").await;
 }
 
-/// (b) What never reaches the server: a non-string value, an empty
-/// string, an unknown aspect, an envelope-less payload — each an
-/// invalid-command drop — and a second message inside the floor, a
-/// rate-limited drop.
+/// (b) What does not reach the server. A non-string value, an empty
+/// string, an unknown aspect and an envelope-less payload each drop as
+/// invalid-command, and a second message inside the floor drops as
+/// rate-limited.
 #[tokio::test(flavor = "multi_thread")]
 async fn invalid_and_flooding_commands_drop() {
     let (server, _sup, observer) = setup().await;
@@ -305,7 +305,7 @@ async fn failed_delivery_is_loud_and_recovers() {
 /// (d) A wrong token is refused by the server at the first publish, not
 /// at startup (ntfy's health endpoint is unauthenticated): the message
 /// drops with delivery-failed naming the 401. An unset token, and an
-/// unreachable server, never reach `running` at all.
+/// unreachable server, do not reach `running`.
 #[tokio::test(flavor = "multi_thread")]
 async fn bad_credentials_and_dead_server_are_visible() {
     let server = FakeNtfy::spawn().await;
@@ -388,9 +388,9 @@ alert = { key = "home/cmd/person/*/alert", capability = "notifier", priority = "
         "the grant is rendered: {text}"
     );
     assert!(text.contains("-> alice_phone"), "{text}");
-    // The alert grant's own entry (not the plan as a whole — ntfy's own
-    // adapter-binding entry legitimately lists every entity it owns,
-    // "adults" included): every grant entry starts at 2-space indent, its
+    // The alert grant's own entry (not the plan as a whole, because ntfy's
+    // own adapter-binding entry lists every entity it owns, "adults"
+    // included): every grant entry starts at 2-space indent, its
     // detail lines are indented further, so the next 2-space-indent line
     // ends it.
     let alert_grant: String = text

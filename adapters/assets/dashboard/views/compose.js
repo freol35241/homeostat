@@ -1,7 +1,7 @@
-/* A view made of widgets: a list of them (dashboard.toml, or the
- * generated views' implicit lists), each a card built from what the
- * page already renders. The dashboard owns every one of these; a widget
- * places, never draws. */
+/* A view made of widgets. The list comes from dashboard.toml, or is
+ * implied by a generated view. Each widget is a card built from things
+ * the page already renders. A widget only says where something goes; the
+ * dashboard's own code draws it. */
 import { byId, html } from '../html.js';
 import { entitiesInRoom, findEntityByName, personEntities, unitByName } from '../store.js';
 import { widgetBurner } from '../widgets/burner.js';
@@ -14,14 +14,13 @@ import { widgetPeople } from '../widgets/people.js';
 import { widgetChart, widgetTiles } from '../widgets/readings.js';
 import { widgetUnit } from '../widgets/unit.js';
 
-// The compositor: a view's widgets, in order, in one grid. The map is
-// mounted after the markup lands (Leaflet owns its container).
+// Lays out a view's widgets, in order, in one grid. The map is mounted
+// after the markup is inserted, because Leaflet owns its container.
 export function renderWidgets(title, widgets) {
   var persons = personEntities();
   var wantMap = false;
-  // One widget's card. A group calls this for each of its members, which
-  // is the whole of "a group holds widgets": a member renders exactly as
-  // it would on the view itself.
+  // One widget's card. A group calls this for each of its members, so a
+  // member renders the same as it would directly on the view.
   function card(w) {
     if (w.kind === 'tile') {
       var te = findEntityByName(w.entity);
@@ -64,10 +63,10 @@ export function renderWidgets(title, widgets) {
   if (wantMap) mountMap(persons);
 }
 
-// A group is one card over its members: its label, then each member's own
-// card, whose chrome the CSS removes inside a group — a dial with the
-// traces that explain it reads as one thing. One level deep; the core
-// refuses a group inside a group.
+// A group is one card around its members: its label, then each member's
+// own card. Inside a group the CSS removes each member's card frame, so a
+// dial and the traces that explain it read as one thing. Groups are one
+// level deep, and the core refuses a group inside a group.
 function widgetGroup(w, card) {
   var body = html`${(w.widgets || []).map(card)}`;
   if (!String(body)) return '';

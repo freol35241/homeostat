@@ -60,17 +60,17 @@ pub fn log_key(unit: &str) -> String {
 pub const GRANTS_KEY: &str = "home/meta/system/grants";
 /// The house commit last applied.
 pub const APPLIED_COMMIT_KEY: &str = "home/meta/system/applied_commit";
-/// What is running, as one JSON document: this binary's version and the
-/// commit it was built from (when the build was told), and the house
-/// commit last applied. For a surface that wants to say where it is served
-/// from — the dashboard's footer, an agent — without parsing the raw
-/// `applied_commit` bytes or shelling out to `homeostat --version`.
+/// What is running, as one JSON document: this binary's version, the commit it
+/// was built from (when the build was told), and the house commit last
+/// applied. It is for surfaces that show where they are served from, such as
+/// the dashboard's footer or an agent, without parsing the raw
+/// `applied_commit` bytes or running `homeostat --version`.
 pub const ABOUT_KEY: &str = "home/meta/system/about";
 
 /// The `about` document (see [`ABOUT_KEY`]). `HOMEOSTAT_COMMIT` is read at
-/// compile time: the image and release builds pass the commit they build,
-/// and a local `cargo build` that does not know it reports none rather
-/// than shelling out to git from a build script.
+/// compile time. The image and release builds pass the commit they build. A
+/// local `cargo build` that does not know the commit reports none, instead of
+/// running git from a build script.
 pub fn about(applied_commit: Option<&str>) -> serde_json::Value {
     serde_json::json!({
         "homeostat": {
@@ -123,9 +123,9 @@ fn base_config(mode: &str) -> Config {
     config
 }
 
-/// Supervision status of a unit, published as JSON at `home/health/{unit}`
-/// on every transition; late joiners read current health through the
-/// supervisor's health queryable on the same key.
+/// Supervision status of a unit, published as JSON at `home/health/{unit}` on
+/// every transition. Late joiners read current health through the supervisor's
+/// health queryable on the same key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum HealthStatus {
@@ -169,14 +169,14 @@ impl Health {
     }
 }
 
-/// One captured line from a unit's stdout or stderr, held in the per-unit
-/// ring buffer and served as JSON at `home/meta/{unit}/log`. Operational
-/// exhaust, not the durable trail: bounded memory, gone on supervisor
-/// restart, never recorded.
+/// One captured line from a unit's stdout or stderr, held in the per-unit ring
+/// buffer and served as JSON at `home/meta/{unit}/log`. This is for debugging
+/// and is not part of the durable trail. Memory is bounded, the buffer is lost
+/// when the supervisor restarts, and nothing records it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogEntry {
-    /// Capture time, microseconds since the Unix epoch, UTC — the same
-    /// convention the recorder uses for its own timestamps.
+    /// Capture time in microseconds since the Unix epoch, UTC. The recorder
+    /// uses the same convention for its own timestamps.
     pub ts_us: i64,
     /// "stdout" | "stderr"
     pub stream: String,
@@ -210,13 +210,12 @@ pub struct ApplyStep {
     pub error: Option<String>,
 }
 
-/// Sends an apply request to the running supervisor and decodes its reply.
-/// The bool is false when the supervisor replied with an error reply (a
-/// refused or halted apply); the `ApplyResult` carries the detail either way.
-/// `planned_steps` is the caller's preview walk length: the reply timeout
-/// scales with it, since every step may legitimately take up to the
-/// supervisor's 60s readiness deadline — a fixed timeout would misreport
-/// a long-but-succeeding walk as "no reply".
+/// Sends an apply request to the running supervisor and decodes its reply. The
+/// bool is false when the supervisor sent an error reply (a refused or halted
+/// apply). The `ApplyResult` carries the detail either way. `planned_steps` is
+/// the caller's preview walk length. The reply timeout scales with it, since
+/// every step may take up to the supervisor's 60s readiness deadline. A fixed
+/// timeout would report a long but successful walk as "no reply".
 pub async fn request_apply(
     session: &zenoh::Session,
     request: &ApplyRequest,
@@ -242,8 +241,8 @@ pub async fn request_apply(
     }
 }
 
-/// The supervisor's reply to an apply request. `steps` holds every unit
-/// step attempted, in walk order; a halted walk names its position.
+/// The supervisor's reply to an apply request. `steps` holds every unit step
+/// attempted, in walk order. A halted walk names its position.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApplyResult {
     pub ok: bool,

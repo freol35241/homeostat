@@ -1,8 +1,8 @@
 //! The house's text as types: unit manifests, entity files, `zones.toml`
 //! and `dashboard.toml`, plus the capability vocabulary. These structs are
-//! the manifest contract. `deny_unknown_fields` makes them complete, and
-//! their doc comments become `docs/manifest.md` and the JSON Schema that
-//! `homeostat schema` serves.
+//! the manifest contract. `deny_unknown_fields` rejects any key they do not
+//! name. Their doc comments become `docs/manifest.md` and the JSON Schema
+//! that `homeostat schema` serves.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -28,13 +28,13 @@ pub const CAPABILITIES: &[&str] = &[
     "switch",
 ];
 
-/// One capability's aspect vocabulary: what an adapter binding it must
-/// publish under which names, and what the family surfaces act on. This
-/// is the public schema's side of "adapters speak homeostat vocabulary"
-/// (docs/design.md#the-capability-vocabulary): the base aspect is what
-/// commands target and the dashboard widget renders; features are the
-/// optional aspects an entity file may declare; notable names the reading
-/// that counts as a deviation on `Now`. Rendered into docs/manifest.md.
+/// One capability's aspect vocabulary: the names an adapter binding it
+/// publishes under, and the aspects the family surfaces act on. See
+/// docs/design.md#the-capability-vocabulary. The base aspect is what
+/// commands target and what the dashboard widget renders. The other
+/// aspects are optional ones an entity file may declare. Notable names the
+/// reading that counts as a deviation on `Now`. Rendered into
+/// docs/manifest.md.
 #[derive(Debug, Clone, Copy)]
 pub struct Capability {
     pub name: &'static str,
@@ -154,13 +154,11 @@ pub const COMMON_ASPECTS: &[(&str, &str)] = &[
 /// The `schema` version every house file must declare.
 pub const SUPPORTED_SCHEMA: u32 = 1;
 
-// The structs below ARE the manifest contract: `deny_unknown_fields` makes
-// them complete, and `JsonSchema` makes them readable without the source —
-// `homeostat schema`, the MCP `schema` tool, and the generated
-// docs/manifest.md all derive from here. Doc comments become field
-// descriptions, so a rule worth knowing while authoring belongs on the
-// field it constrains, and a rule the validator enforces beyond the shape
-// names its error code.
+// `homeostat schema`, the MCP `schema` tool and the generated
+// docs/manifest.md all derive from the structs below. Doc comments become
+// field descriptions. A rule an author needs belongs on the field it
+// constrains. A rule the validator enforces beyond the shape names its
+// error code.
 
 /// A unit manifest: `units/<name>.toml`. One schema, three kinds (adapter,
 /// automation, service); which sections a kind accepts is stated on each
@@ -175,8 +173,8 @@ pub struct UnitManifest {
     /// How an adapter reaches its backend. Required for adapters, allowed
     /// for services, refused for automations.
     pub discovery: Option<DiscoverySection>,
-    /// The unit's declared bus surface. A unit gets exactly this and
-    /// nothing else: the SDK refuses a publish outside it.
+    /// The unit's declared bus surface, and its only one. The SDK refuses
+    /// a publish outside it.
     pub bus: Option<BusSection>,
     /// Live parameters, keyed by name (`home/config/{unit}/{param}`).
     /// Names become key segments (`invalid-name`).
@@ -184,8 +182,8 @@ pub struct UnitManifest {
     /// The entities this unit binds. Required for adapters, allowed for
     /// automations (virtual sensors), refused for services.
     pub entities: Option<EntitiesSection>,
-    /// Human names for voice and the dashboard. Dashboard quality is a
-    /// function of naming hygiene.
+    /// Human names for voice and the dashboard. The dashboard reads well
+    /// only when these are set.
     pub naming: Option<UnitNaming>,
 }
 
@@ -207,10 +205,11 @@ pub struct UnitSection {
     pub watches: Option<UnitWatches>,
 }
 
-/// A unit whose model spans the WHOLE house (the dashboard) is changed by
-/// any entity or manifest anywhere, not just by files it owns. Per-unit
-/// change detection cannot infer that, so the unit declares it: otherwise
-/// `apply` reports success while leaving the unit confidently stale.
+/// Which files restart a unit when they change. A unit whose model covers
+/// the whole house, such as the dashboard, depends on every entity file and
+/// manifest, not only the files it owns. Per-unit change detection cannot
+/// infer that, so the unit declares it. Without the declaration, `apply`
+/// reports success and leaves the unit running on stale files.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum UnitWatches {
@@ -262,8 +261,8 @@ pub struct RuntimeSection {
     /// `["HOMEOSTAT_NTFY_TOKEN"]`). A unit sees nothing else of the
     /// supervisor's environment beyond a fixed base set (`PATH`, `HOME`,
     /// locale, `TZ`, `UV_*`, `PYTHON*`, CA bundles) and the
-    /// `HOMEOSTAT_UNIT`/`HOMEOSTAT_BUS` it is given — a secret meant for
-    /// one unit is never visible to another.
+    /// `HOMEOSTAT_UNIT`/`HOMEOSTAT_BUS` it is given. A secret meant for
+    /// one unit is therefore not visible to another.
     pub env: Option<Vec<String>>,
 }
 
@@ -304,17 +303,17 @@ pub enum DiscoveryMode {
 }
 
 /// `[bus]`: the unit's declared key surface. Keys are `home/{class}/...`
-/// (`key-outside-schema` otherwise); a zone name in the room slot expands
-/// to its rooms at plan time; `{room}`/`{entity}` templates expand per
-/// bound entity and are valid only in adapters and automations
-/// (`template-outside-binding-unit`), in a unit that actually binds some
-/// (`template-without-entities`).
+/// (`key-outside-schema` otherwise). A zone name in the room slot expands
+/// to its rooms at plan time. `{room}`/`{entity}` templates expand per
+/// bound entity. They are valid only in adapters and automations
+/// (`template-outside-binding-unit`), and only in a unit that binds
+/// entities (`template-without-entities`).
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct BusSection {
     /// `[bus.subscribes]`: binding name → key expression. The SDK
     /// subscribes by binding name. A unit's own `home/config/{unit}/*` is
-    /// implicit and never declared.
+    /// implicit and is not declared.
     #[serde(default)]
     pub subscribes: BTreeMap<String, String>,
     /// `[bus.publishes]`: binding name → what the unit may publish. This
@@ -329,10 +328,10 @@ pub struct BusSection {
 pub struct PublishSpec {
     /// Key expression. Under `home/state/` it must name a bound entity's
     /// room and entity literally or by template (`state-publish-unbound`).
-    /// Under `home/forecast/` the entity must EXIST but need not be one
-    /// this unit binds (`forecast-publish-unbound`), and the key carries a
-    /// sixth segment naming the source — who claims this future — so
-    /// several may speak about one series without overwriting each other
+    /// Under `home/forecast/` the entity must exist but need not be one
+    /// this unit binds (`forecast-publish-unbound`). The key carries a
+    /// sixth segment naming the forecast's source. Several sources can then
+    /// forecast one series without overwriting each other
     /// (`forecast-publish-conflict`).
     pub key: String,
     /// Required under `home/cmd/` (`publish-missing-capability`): the grant
@@ -478,20 +477,20 @@ pub struct EntityFile {
     pub write_policy: WritePolicy,
     /// `[inputs]`: device inputs fed from one source each, keyed by the
     /// adapter's own input name (e.g. `indoor_temperature_actual`). A fed
-    /// input is a continuous signal with one master, not a command: it
-    /// stops being a command aspect for this entity, never rides the
-    /// arbiter, and staleness is the device's own validity window. Only a
-    /// device entity can be fed (`virtual-entity-fed`); the adapter is the
-    /// authority on which input names exist.
+    /// input is a continuous signal with one source, not a command. It
+    /// stops being a command aspect for this entity and does not go through
+    /// the arbiter. The device's own validity window decides when it is
+    /// stale. Only a device entity can be fed (`virtual-entity-fed`). The
+    /// adapter decides which input names exist.
     pub inputs: Option<BTreeMap<String, InputSource>>,
-    /// `[sources]`: the readings this entity's value is DERIVED from, keyed
-    /// by a short name for each contributor. Declared, not inferred — a
-    /// unit subscribes many things for many reasons and nothing in its
-    /// subscriptions says which feed which published aspect. It is what
-    /// the history overlay draws beside the computed value
-    /// (docs/design.md#sources), and it is not `[inputs]`: a device feed
-    /// carries a runtime contract that does not apply here, and a wired
-    /// input stops being a command aspect, which would collide on a
+    /// `[sources]`: the readings this entity's value is derived from, keyed
+    /// by a short name for each contributor. The history overlay draws them
+    /// beside the computed value (docs/design.md#sources). They must be
+    /// declared because they cannot be inferred: a unit subscribes to many
+    /// keys for many reasons, and its subscriptions do not say which feed
+    /// which published aspect. This is separate from `[inputs]`. A device
+    /// feed carries a runtime contract that does not apply here. A wired
+    /// input also stops being a command aspect, which would collide on a
     /// commandable virtual entity.
     pub sources: Option<BTreeMap<String, SourceRef>>,
 }
@@ -503,7 +502,7 @@ pub struct EntityFile {
 #[serde(deny_unknown_fields)]
 pub struct InputSource {
     /// Name of the source entity; must exist (`input-unknown-entity`). Any
-    /// owner will do — an automation's virtual sensor or another adapter's
+    /// owner will do: an automation's virtual sensor or another adapter's
     /// device.
     pub entity: String,
     /// The aspect to read. When the source is automation-owned, that
@@ -526,18 +525,16 @@ pub struct SourceRef {
     /// automation-owned, that automation's `[bus.publishes]` must cover the
     /// key (`source-unpublished-aspect`).
     pub aspect: String,
-    /// Free text about THIS contributor, shown beside it in the history
-    /// overlay. What belongs here is what the subject's own descriptor
-    /// cannot say because it is not true of every source: that one sensor
-    /// sits in the sun, or that a reading carries an offset the house
-    /// itself writes and so must not be fused back in. Kind and unit stay
-    /// on the aspect descriptor, which is a contract every source is held
-    /// to; this is the source's own caveat.
+    /// Free text about this contributor, shown beside it in the history
+    /// overlay. Use it for what the subject's own descriptor cannot say
+    /// because it is not true of every source. For example, one sensor sits
+    /// in the sun, or a reading carries an offset the house itself writes
+    /// and so must not be fused back in. Kind and unit stay on the aspect
+    /// descriptor, which every source is held to.
     pub note: Option<String>,
     /// The contributor's resolution in the aspect's own unit, where it
-    /// differs enough to matter — a half-degree sensor read against a
-    /// hundredth-degree one looks like it disagrees when it is merely
-    /// coarse.
+    /// differs enough to matter. A half-degree sensor read against a
+    /// hundredth-degree one looks like it disagrees when it is only coarse.
     pub precision: Option<f64>,
 }
 
@@ -564,7 +561,7 @@ pub struct EntitySection {
     /// publishes.
     #[serde(default)]
     pub features: Vec<String>,
-    /// The single source of spatial truth for this entity. A key segment;
+    /// Where the entity is. No other file places it. A key segment;
     /// not `home` or a key class (`reserved-room-name`). The pseudo-rooms
     /// `global` and `person` are for entities with no place.
     pub room: String,
@@ -589,15 +586,16 @@ pub struct EntityNaming {
 #[serde(deny_unknown_fields)]
 pub struct WritePolicy {
     /// How commands are governed. Required on a capability that takes
-    /// commands — one with a base aspect, such as `light` or `lock`
-    /// (`write-mode-required`) — so its policy is always stated, never
-    /// inherited. Optional elsewhere (`sensor`, `camera`, `router`, …),
-    /// where a mode governs nothing; absent, it reads as `shared`.
+    /// commands, which is one with a base aspect such as `light` or `lock`
+    /// (`write-mode-required`). A commandable entity's policy is then
+    /// always written in its own file. Optional elsewhere (`sensor`,
+    /// `camera`, `router`, …), where a mode governs nothing. When absent it
+    /// reads as `shared`.
     // Read it through `WritePolicy::mode()`, which applies that default.
     #[serde(default)]
     pub mode: Option<WriteMode>,
-    /// Exactly one unit binds each entity: an adapter, or an automation
-    /// for virtual entities. Must exist (`missing-owner-unit`) and be the
+    /// The one unit that binds this entity: an adapter, or an automation
+    /// for a virtual entity. Must exist (`missing-owner-unit`) and be the
     /// unit whose entities dir holds this file (`owner-mismatch`).
     pub owner: String,
 }
@@ -648,18 +646,18 @@ pub struct ZonesFile {
     /// `[zones]`: zone name → member rooms. A zone name is a key segment,
     /// not reserved (`reserved-zone-name`), not also a room
     /// (`zone-room-collision`); members must be rooms some entity binds
-    /// (`zone-unknown-room`) and never pseudo-rooms (`zone-pseudo-room`).
+    /// (`zone-unknown-room`) and not pseudo-rooms (`zone-pseudo-room`).
     #[serde(default)]
     pub zones: BTreeMap<String, Vec<String>>,
 }
 
 /// `dashboard.toml` at the house root: the family surface's views, each a
 /// nav entry composed of widgets over things the house already has.
-/// Optional — without it the dashboard renders its generated views (Now,
-/// Setpoints, Rooms) — and when present it is the whole nav: Health and
-/// the list of everything not shown stay reachable as fixed chrome, never
-/// as views. Layout is text in the repo, never browser-side state
-/// (docs/design.md#views-are-text).
+/// The file is optional. Without it the dashboard renders its generated
+/// views (Now, Setpoints, Rooms). When present it is the whole nav. Health
+/// and the list of everything not shown stay reachable as fixed chrome
+/// outside the views. Layout lives as text in the repo and not as
+/// browser-side state (docs/design.md#views-are-text).
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DashboardFile {
@@ -674,14 +672,13 @@ pub struct DashboardFile {
 }
 
 /// One `[[control]]`: how coarse a slider is for the thing it controls.
-/// Keyed by what is controlled — an entity's aspect, or a unit's parameter
-/// — never by the widget that happens to place it, because the same
-/// control is drawn on a room card, in a view and in the detail overlay,
-/// and a grain that differed between them would read as a bug.
+/// It is keyed by what is controlled (an entity's aspect or a unit's
+/// parameter) and not by the widget that places it. The same control is
+/// drawn on a room card, in a view and in the detail overlay, and a step
+/// that differed between them would look like a bug.
 ///
-/// This is the house's say over a rendering the dashboard would otherwise
-/// derive (a twentieth of the range). It is not a layout hint: it says
-/// what the control does, not where it sits.
+/// Without an entry the dashboard uses a twentieth of the range. The step
+/// changes how the control behaves. It is not a layout hint.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ControlSpec {
@@ -699,7 +696,7 @@ pub struct ControlSpec {
 }
 
 /// One `[[view]]`: either a generated view kept as is (`kind`) or a
-/// composition of widgets (`widgets`), never both (`dashboard-view-shape`).
+/// composition of widgets (`widgets`), not both (`dashboard-view-shape`).
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ViewSpec {
@@ -709,8 +706,8 @@ pub struct ViewSpec {
     pub name: String,
     /// Nav label; the name, title-cased, when absent.
     pub label: Option<String>,
-    /// A generated view, kept exactly as the dashboard renders it without
-    /// this file.
+    /// A generated view, kept as the dashboard renders it without this
+    /// file.
     pub kind: Option<GeneratedView>,
     /// The view's widgets, in order.
     #[serde(default)]
@@ -733,8 +730,8 @@ pub enum GeneratedView {
 /// One widget on a view. Which fields it takes is fixed per kind
 /// (`dashboard-widget-fields`); references must resolve
 /// (`dashboard-unknown-entity`, `dashboard-unknown-room`,
-/// `dashboard-unknown-unit`). The dashboard owns every rendering: a widget
-/// places something, it never describes how it looks.
+/// `dashboard-unknown-unit`). The dashboard does all rendering. A widget
+/// says what to place, not how it looks.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct WidgetSpec {
@@ -756,8 +753,8 @@ pub struct WidgetSpec {
     pub hours: Option<f64>,
     /// `group`: the label over its members; unlabelled when absent.
     pub label: Option<String>,
-    /// `group`: the widgets it draws as one card, in order. A group never
-    /// holds another group (`dashboard-nested-group`).
+    /// `group`: the widgets it draws as one card, in order. A group cannot
+    /// hold another group (`dashboard-nested-group`).
     #[serde(default)]
     pub widgets: Vec<WidgetSpec>,
 }
@@ -772,7 +769,7 @@ pub enum WidgetKind {
     Tile,
     /// One aspect's history over a window.
     Chart,
-    /// An entity's own row — its control or its readings — as a card.
+    /// An entity's own row (its control or its readings) as a card.
     Entity,
     /// A thermostat dial: a temperature setpoint on an arc, the current
     /// reading beneath it.
@@ -781,7 +778,8 @@ pub enum WidgetKind {
     Room,
     /// A unit's card: its family setpoints, the entities it publishes,
     /// the entities it drives (from the grant table) and the entities it
-    /// reads (from its subscriptions) — a pure function of its manifest.
+    /// reads (from its subscriptions). All of it derives from its
+    /// manifest.
     Unit,
     /// A unit's family-editable parameters as one card.
     Params,
@@ -791,10 +789,11 @@ pub enum WidgetKind {
     Deviations,
     /// The map over every entity with a location.
     Map,
-    /// Several widgets as one card — a dial with the traces that explain
-    /// it, a setpoint beside what it drives. One level deep.
+    /// Several widgets as one card, such as a dial with the traces that
+    /// explain it, or a setpoint beside what it drives. Groups do not nest.
     Group,
     /// A burner's card: its two commands and the two temperatures an
-    /// interlock reads — the `burner` vocabulary, nothing dialectal.
+    /// interlock reads. It uses only the `burner` vocabulary, with nothing
+    /// adapter-specific.
     Burner,
 }

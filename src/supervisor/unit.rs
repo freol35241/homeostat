@@ -27,8 +27,9 @@ pub struct UnitSpec {
     pub cwd: PathBuf,
     /// Bus endpoint handed to the unit via `HOMEOSTAT_BUS`.
     pub endpoint: String,
-    /// Environment variable names the manifest declares (`runtime.env`);
-    /// passed through from the supervisor's environment, nothing else is.
+    /// Environment variable names the manifest declares (`runtime.env`). They
+    /// are passed through from the supervisor's environment, and nothing else
+    /// is.
     pub env: Vec<String>,
 }
 
@@ -56,9 +57,9 @@ impl UnitSpec {
     }
 }
 
-/// Publishes health transitions and keeps the supervisor's shared health
-/// map current; the map (served by a queryable) is what late joiners see,
-/// so transitions are published exactly once.
+/// Publishes health transitions and keeps the supervisor's shared health map
+/// current. Late joiners read the map through a queryable, so each transition
+/// is published once.
 struct HealthPublisher {
     session: Session,
     key: String,
@@ -123,9 +124,9 @@ pub async fn supervise(
     let mut restarts: u32 = 0;
 
     loop {
-        // A fresh subscriber per incarnation: reusing one across restarts
-        // lets a queued Put from the previous incarnation mark the next one
-        // running before its child even connected. history(true) still
+        // A fresh subscriber per incarnation. If one were reused across
+        // restarts, a queued Put from the previous incarnation could mark the
+        // next one running before its child connected. history(true) still
         // catches a token declared between spawn and here.
         let token_sub = session
             .liveliness()
@@ -141,8 +142,8 @@ pub async fn supervise(
             (bus::ENV_UNIT, spec.name.as_str()),
             (bus::ENV_BUS, spec.endpoint.as_str()),
         ];
-        // Per incarnation, not once: a restart after an SDK bump must pick
-        // up the new environment. See process::resolve.
+        // Resolve per incarnation, because a restart after an SDK bump must
+        // pick up the new environment. See process::resolve.
         let command = process::resolve(&spec.command, &spec.cwd).await;
         let started = Instant::now();
         let mut child = match process::spawn(&command, &spec.cwd, &spec.env, &env) {
@@ -179,10 +180,11 @@ pub async fn supervise(
                 }
                 sample = token_sub.recv_async() => {
                     if let Ok(sample) = sample {
-                        // Put: the unit declared its token — running. Delete
-                        // while the child is still alive: the token dropped
-                        // (or a stale token from the previous incarnation
-                        // just cleared) — back to starting until it returns.
+                        // Put: the unit declared its token, so it is running.
+                        // Delete while the child is still alive: the token
+                        // dropped, or a stale token from the previous
+                        // incarnation just cleared. Go back to starting until
+                        // it returns.
                         let status = match sample.kind() {
                             SampleKind::Put => HealthStatus::Running,
                             SampleKind::Delete => HealthStatus::Starting,
@@ -196,7 +198,7 @@ pub async fn supervise(
             }
         };
 
-        // The group must not outlive its leader: sweep any descendants the
+        // The group must not outlive its leader. Sweep any descendants the
         // exited child left behind before deciding what happens next.
         if let (RunOutcome::Exited(_), Some(pid)) = (&outcome, pid) {
             process::sweep_group(pid);
@@ -240,12 +242,13 @@ pub async fn supervise(
     }
 
     // A unit that stopped or opened its breaker keeps its last health state
-    // visible through the supervisor's health queryable; nothing left to do.
+    // visible through the supervisor's health queryable. There is nothing left
+    // to do.
 }
 
-/// The breaker's step after an incarnation ends with a restart due: open
-/// the breaker, or count the restart, report the backoff and sleep it
-/// out. False when the unit is done: the breaker opened, or shutdown
+/// The breaker's step after an incarnation ends with a restart due. Either
+/// open the breaker, or count the restart, report the backoff and sleep it
+/// out. Returns false when the unit is done: the breaker opened, or shutdown
 /// arrived during the backoff.
 async fn back_off_or_open(
     health: &mut HealthPublisher,

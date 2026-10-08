@@ -4,19 +4,19 @@
 #     "aiohttp>=3.9,<4",
 # ]
 # ///
-"""A minimal, honest go2rtc, for the go2rtc shim's and the dashboard
-camera proxies' integration tests (tests/go2rtc.rs, tests/dashboard.rs;
-see docs/design.md#cameras).
+"""A minimal go2rtc for the camera integration tests.
 
-Speaks the slice of go2rtc's surface homeostat touches, and nothing else:
+It serves the go2rtc shim's and the dashboard camera proxies' tests
+(tests/go2rtc.rs, tests/dashboard.rs; see docs/design.md#cameras). It
+speaks the part of go2rtc's surface homeostat touches, and nothing else:
 
-  - `-config <path>`: reads the shim's rendered config (JSON — a YAML
-    subset, exactly what the shim writes), takes `api.listen` and the
-    stream names from it. `--listen`/`--streams` override for direct
+  - `-config <path>`: reads the shim's rendered config (JSON, which is a
+    YAML subset and is what the shim writes), and takes `api.listen` and
+    the stream names from it. `--listen`/`--streams` override for direct
     spawning without a config file (the dashboard test's path).
-  - GET /api/streams -> {name: {"producers": [{"url": ...}]}} — what the
-    shim polls for readiness and what the tests assert config rendering
-    against.
+  - GET /api/streams -> {name: {"producers": [{"url": ...}]}}. The shim
+    polls it for readiness, and the tests assert config rendering
+    against it.
   - GET /api/frame.jpeg?src=<name> -> a tiny JPEG (magic bytes and all);
     404 for an unknown stream.
   - WS /api/ws?src=<name> -> expects the player's {"type":"mse"} request,
@@ -24,9 +24,9 @@ Speaks the slice of go2rtc's surface homeostat touches, and nothing else:
     open; 404 for an unknown stream. Enough for a byte-for-byte relay to
     be asserted through the dashboard.
 
-Test control: POST /control/quit exits abruptly (code 3) — the child
-death the shim must translate into its own exit and the supervisor into
-a restart.
+Test control: POST /control/quit exits abruptly (code 3). That is the
+child death the shim must translate into its own exit, and the supervisor
+into a restart.
 """
 
 import argparse

@@ -90,7 +90,7 @@ async fn non_location_type_is_ignored() {
     )
     .await;
 
-    // No event, no state within a generous window — just quiet.
+    // No event and no state within a generous window.
     let no_event = tokio::time::timeout(Duration::from_millis(1500), event_sub.recv_async()).await;
     assert!(
         no_event.is_err(),
@@ -168,7 +168,7 @@ async fn bad_input_drops_with_health_event() {
     sup.shutdown();
 }
 
-/// (d) The adapter honors the step-2 unit contract: liveliness token when
+/// (d) The adapter honors the unit contract: liveliness token when
 /// ready, clean SIGTERM shutdown within the grace, no orphans.
 #[tokio::test(flavor = "multi_thread")]
 async fn adapter_honors_unit_contract() {
@@ -176,8 +176,8 @@ async fn adapter_honors_unit_contract() {
     assert_unit_contract(&mut sup, &observer, "owntracks").await;
 }
 
-/// (e) Discovery: every user/device pair seen on the broker — bound or
-/// not — is tracked incrementally and republished at
+/// (e) Discovery: every user/device pair seen on the broker, bound or
+/// not, is tracked incrementally and republished at
 /// home/discovery/owntracks.
 #[tokio::test(flavor = "multi_thread")]
 async fn seen_devices_published_as_discovery() {
@@ -205,7 +205,7 @@ async fn seen_devices_published_as_discovery() {
         "{doc}"
     );
 
-    // An unconfigured device shows up on its own traffic — the record set
+    // An unconfigured device shows up on its own traffic: the record set
     // grows and is republished, without disturbing the first record.
     mqtt.publish(
         "owntracks/bob/phone",
@@ -268,8 +268,8 @@ async fn seen_devices_published_as_discovery() {
     sup.shutdown();
 }
 
-/// An unbound phone keeps publishing forever, so the unknown-device event
-/// fires once on first sight and then stays quiet — discovery already
+/// An unbound phone keeps publishing indefinitely, so the unknown-device
+/// event fires once on first sight and then stays quiet. Discovery already
 /// carries the pair with configured=false.
 #[tokio::test(flavor = "multi_thread")]
 async fn an_unbound_phone_reports_once_not_per_fix() {

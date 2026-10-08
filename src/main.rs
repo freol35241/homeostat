@@ -266,9 +266,9 @@ fn apply_command(path: PathBuf, bus: Option<String>, plan_file: Option<PathBuf>)
         return ExitCode::FAILURE;
     };
 
-    // A pending plan auto-invalidates when the repo moves past its base
-    // commit; on a match the plan is recomputed fresh below — the file is
-    // a review artifact, not an execution script.
+    // A pending plan is invalid once the repo moves past its base commit. On a
+    // match the plan is recomputed below, because the file is for review and
+    // is not executed as written.
     if let Some(plan_file) = &plan_file {
         let pending = match homeostat::pending::load(plan_file) {
             Ok(pending) => pending,

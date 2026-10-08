@@ -7,18 +7,18 @@
 # [tool.uv.sources]
 # homeostat = { path = "../../../../sdk/python", editable = true }
 # ///
-"""A recorder that is up but slow to answer (#102, #121).
+"""A recorder that is up but slow to answer.
 
-Stands in for adapters/recorder.py in the one respect `ctx.restore` waits
-on: its history queryable exists, but every `stats` answer takes SLOW_S,
-and like the real recorder it answers one query at a time (zenoh runs a
-queryable's callback serially). SLOW_S is longer than zenoh's default get
-timeout, so a client that reads one timed-out get as "no" gives up (#102);
-and a client that gives up on a short get and asks again only queues
-another slow answer behind the one it abandoned, so it never hears a
-reply at all (#121). A client that asks once and waits is answered. The
-latch's series is answered at once from one canned row, the value a
-person once decided and the only record of it.
+It stands in for adapters/recorder.py in the one respect `ctx.restore`
+waits on: its history queryable exists, but every `stats` answer takes
+SLOW_S, and like the real recorder it answers one query at a time (zenoh
+runs a queryable's callback serially). SLOW_S is longer than zenoh's
+default get timeout, so a client that reads one timed-out get as "no"
+gives up. A client that gives up on a short get and asks again only
+queues another slow answer behind the one it abandoned, so it does not
+hear a reply at all. A client that asks once and waits is answered. The
+latch's series is answered at once from one canned row: the value a
+person decided, and the only record of it.
 """
 
 import json

@@ -7,8 +7,8 @@ services:
       - ./mosquitto.acl:/mosquitto/config/acl:ro
       - ./mosquitto.passwd:/mosquitto/config/passwd:ro
     ports:
-      # The authenticated LAN listener: heat-pump interface, OwnTracks
-      # phones. 1883 stays compose-internal on purpose (see mosquitto.conf).
+      # The authenticated LAN listener, for the heat-pump interface and
+      # OwnTracks phones. 1883 stays compose-internal (see mosquitto.conf).
       - "1884:1884"
 
   zigbee2mqtt:
@@ -25,15 +25,16 @@ services:
       ZIGBEE2MQTT_CONFIG_MQTT_SERVER: mqtt://mosquitto:1883
       ZIGBEE2MQTT_CONFIG_SERIAL_PORT: /dev/ttyUSB0
       ZIGBEE2MQTT_CONFIG_FRONTEND_ENABLED: "true"
-      # The frontend pairs and renames devices and edits z2m's own
-      # config: full control of the Zigbee network. The token lives in
-      # .env (gitignored, see README) and is required — a missing one
-      # fails `docker compose` outright rather than starting open.
+      # The frontend pairs and renames devices and edits z2m's own config,
+      # which is full control of the Zigbee network. The token lives in
+      # .env (gitignored, see README) and is required. Without it,
+      # `docker compose` fails instead of starting the frontend open.
       ZIGBEE2MQTT_CONFIG_FRONTEND_AUTH_TOKEN: ${Z2M_FRONTEND_TOKEN:?set Z2M_FRONTEND_TOKEN in .env}
     ports:
-      # Pairing/management frontend, loopback only: reach it through an
-      # SSH tunnel (`ssh -L 8080:127.0.0.1:8080 <host>`) or widen the
-      # bind knowingly. The token above is the second lock on that door.
+      # The pairing and management frontend, on loopback only. Reach it
+      # through an SSH tunnel (`ssh -L 8080:127.0.0.1:8080 <host>`), or
+      # widen the bind if you accept the exposure. The token above still
+      # guards it.
       - "127.0.0.1:8080:8080"
 
   homeostat:
@@ -50,16 +51,16 @@ services:
       - .:/house
       - uv-cache:/var/cache/uv
     ports:
-      # The bus (7447) is deliberately NOT published. Reaching it is full
+      # The bus (7447) is not published. Whoever reaches it has full
       # authority over the house: the cmd envelope's priority and actor are
       # self-declared, so anything that can publish can command every
-      # entity, outbid the arbiter, and forge state. Nothing here needs it
-      # — plan and apply run through `docker compose exec` (see README), on
-      # this container's own loopback, and a sibling container reaches it
-      # over the compose network. Publish it only for a Zenoh observer, and
-      # know that `127.0.0.1:7447:7447` is NOT a boundary: any container on
-      # network_mode: host — Home Assistant, zigbee2mqtt — shares the
-      # host's loopback and reaches it too.
+      # entity, outbid the arbiter and forge state. Nothing here needs it
+      # published. The plan and apply commands run through `docker compose
+      # exec` (see README) on this container's own loopback, and a sibling
+      # container reaches the bus over the compose network. Publish it only
+      # for a Zenoh observer. Even then, `127.0.0.1:7447:7447` is no
+      # boundary: any container with network_mode: host (Home Assistant or
+      # zigbee2mqtt, say) shares the host's loopback and reaches it too.
       - "8642:8642" # the agent surface: MCP over HTTP (units/mcp.toml)
       - "8600:8600" # the family dashboard (units/dashboard.toml)
 

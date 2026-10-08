@@ -12,18 +12,19 @@ ENV_UNIT = "HOMEOSTAT_UNIT"
 ENV_BUS = "HOMEOSTAT_BUS"
 
 # The core's rule for a name that becomes one key segment (src/validate.rs,
-# valid_segment): anything else breaks the fixed key schema ("/"), is
-# meaningful to the bus ("*", "$", "?", "#") or invites encoding surprises.
+# valid_segment). Other characters either break the fixed key schema ("/"),
+# have a meaning on the bus ("*", "$", "?", "#"), or risk encoding
+# problems.
 _SEGMENT = re.compile(r"[A-Za-z0-9_.-]+")
 
 
 def valid_segment(name: str) -> bool:
-    """Return whether `name` is usable as exactly one bus key segment.
+    """Return whether `name` is usable as a single bus key segment.
 
     Parameters
     ----------
     name : str
-        The candidate segment; a non-string is never valid.
+        The candidate segment. A non-string is not valid.
 
     Returns
     -------
@@ -36,10 +37,10 @@ def valid_segment(name: str) -> bool:
 def _segments(*names: str) -> str:
     """Join validated segments with "/".
 
-    Raises ValueError on a segment the core would refuse — a device-chosen
-    field name is the usual offender (a "**" would put on a wildcard and fan
-    out to every aspect subscriber; a "#" or "" raises inside the zenoh
-    put); callers drop the field with a "malformed-payload" health event.
+    Raises ValueError on a segment the core would refuse. The usual cause
+    is a field name chosen by a device. A "**" would put on a wildcard and
+    reach every aspect subscriber. A "#" or "" raises inside the zenoh put.
+    Callers drop the field with a "malformed-payload" health event.
     """
     for name in names:
         if not valid_segment(name):
@@ -75,8 +76,9 @@ def state_key(room: str, entity: str, aspect: str) -> str:
 def state_keyexpr(room: str, entity: str) -> str:
     """Return the key expression matching every direct state aspect of one entity.
 
-    For subscribing to a fed input's whole state, room/entity coming from
-    the house's own manifests, not a device (see `_segments`).
+    Used to subscribe to a fed input's whole state. The room and entity
+    come from the house's own manifests rather than from a device (see
+    `_segments`).
 
     Parameters
     ----------
@@ -99,14 +101,14 @@ def state_keyexpr(room: str, entity: str) -> str:
 
 
 def forecast_key(room: str, entity: str, aspect: str, source: str) -> str:
-    """Return the key of a series' future, keyed like its present plus WHO says so.
+    """Return the key of a series' forecast: its state key plus the source.
 
     See docs/design.md#forecasts. The key has the same room/entity/aspect as
-    `state_key`, so a forecast is the same series extended forward and the
-    entity's aspect descriptor already labels it, and then the source.
-    Several sources may speak about one series — two weather providers, or
-    a controller publishing the trajectory it plans to cause — so the slot
-    is required rather than optional.
+    `state_key`, followed by the source. A forecast is therefore the same
+    series extended forward, and the entity's aspect descriptor already
+    labels it. Several sources may forecast one series, such as two weather
+    providers, or a controller publishing the trajectory it plans to cause.
+    The source segment is therefore required.
 
     Parameters
     ----------
@@ -260,8 +262,8 @@ def command_keyexprs(entity) -> list[str]:
     """Return the key expressions on which one bound entity receives commands.
 
     That is home/cmd for plain entities. An arbitrated entity gets no
-    home/cmd subscription at all — not subscribing IS the structural
-    enforcement — and instead receives the arbiter's forwarded envelope.
+    home/cmd subscription at all, which is how arbitration is enforced. It
+    receives the arbiter's forwarded envelope instead.
 
     Parameters
     ----------
@@ -289,16 +291,16 @@ CMD_PRIORITIES = ("automation", "agent", "family", "manual")
 def cmd_envelope(value: Any, priority: str, actor: str, *, cmd_id: str | None = None) -> dict:
     """Build a home/cmd/** payload (docs/design.md#cmd-envelopes).
 
-    Every cmd payload is an envelope, priority stamped from the publishing
-    unit's manifest declaration, actor the unit name.
+    Every cmd payload is an envelope. Its priority comes from the
+    publishing unit's manifest, and its actor is the unit name.
 
-    `id` correlates one command with whatever ends it. A command is a
-    proposal that passes through stages — arbitration, adapter validation,
-    device readback — and each can legitimately end it somewhere other than
-    the device. Without an id, a publisher watching for the outcome can only
-    guess by matching key and value, which crosses wires when two commands
-    to one aspect overlap. Minted here when the caller does not supply one,
-    so every envelope the SDK builds carries one.
+    `id` links one command to whatever ends it. A command passes through
+    arbitration, adapter validation and device readback, and any of these
+    stages can end it before it reaches the device. Without an id, a
+    publisher watching for the outcome can only match on key and value,
+    which goes wrong when two commands to one aspect overlap. An id is
+    generated here when the caller does not supply one, so every envelope
+    the SDK builds has one.
 
     Parameters
     ----------
@@ -309,7 +311,7 @@ def cmd_envelope(value: Any, priority: str, actor: str, *, cmd_id: str | None = 
     actor : str
         The publishing unit's name.
     cmd_id : str or None, optional
-        The correlation id; a random one is minted when not given.
+        The correlation id. A random one is generated when not given.
 
     Returns
     -------
@@ -327,14 +329,14 @@ def cmd_envelope(value: Any, priority: str, actor: str, *, cmd_id: str | None = 
 def cmd_envelope_id(payload: Any) -> str | None:
     """Return the correlation id of a cmd payload, or None if it has none.
 
-    None for an envelope minted by something that does not stamp one — the
-    id is optional on the wire, so nothing refuses a command for the lack
-    of it.
+    Returns None for an envelope from a publisher that does not set an id.
+    The id is optional on the wire, so a command without one is not
+    refused.
 
     Parameters
     ----------
     payload : Any
-        A decoded cmd payload; a non-object has no id.
+        A decoded cmd payload. A non-object has no id.
 
     Returns
     -------
@@ -422,7 +424,7 @@ def config_keyexpr(unit: str) -> str:
 def history_key(space: str, entity: str, aspect: str) -> str:
     """Return a history series key, entity-first.
 
-    The entity is the series identity; the room is a tag carried per row.
+    The entity identifies the series. The room is a tag stored on each row.
 
     Parameters
     ----------
@@ -449,9 +451,9 @@ def history_key(space: str, entity: str, aspect: str) -> str:
 def hold_key(unit: str) -> str:
     """Return the key of what an arbiter is currently holding.
 
-    One document per arbiter unit, the discovery shape, mirrored by the
-    core. State, not the audit trail — the preempt/refuse events answer
-    "what happened", this answers "is this aspect held right now?"
+    There is one document per arbiter unit, in the discovery shape, and
+    the core mirrors it. The preempt and refuse events record what
+    happened. This key answers whether an aspect is held right now
     (docs/design.md#arbitrated-mode).
 
     Parameters

@@ -1,8 +1,8 @@
 schema = 1
 
 [entity]
-# The ESPHome device name and its switch's object_id: two segments, like
-# OwnTracks ("porch" is the node's configured `name:` in its YAML).
+# The ESPHome device name and the switch's object_id, two segments as for
+# OwnTracks. "porch" is the node's configured `name:` in its YAML.
 id = "porch/relay"
 capability = "switch"
 room = "porch"

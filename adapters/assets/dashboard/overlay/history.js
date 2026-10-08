@@ -1,6 +1,7 @@
-/* The history overlay: one aspect's record over a chosen window, with its
- * current belief, the sources it is derived from or every forecast the
- * recorder kept, and what was commanded of it. */
+/* The history overlay: one aspect's record over a chosen window. It also
+ * shows the current forecast, either the sources the value is derived
+ * from or every forecast the recorder kept, and the commands sent to the
+ * aspect. */
 import { fetchHistory } from '../api.js';
 import { buildChart, buildTimeline, fmtDuration, formatChartClock, formatChartTime, formatChartValue, horizonCaption, issuedCaption } from '../charts.js';
 import { html } from '../html.js';
@@ -10,9 +11,9 @@ import { aspectsFor, descriptorField, findEntity, forecastsOf, liveForecastsOf, 
 
 var RANGE_PRESETS = [{ label: '1h', hours: 1 }, { label: '6h', hours: 6 }, { label: '24h', hours: 24 }, { label: '7d', hours: 168 }];
 
-// The newest issues a braid draws. Past this the lines stop being
-// separable and the fetch stops being small; the page says how many it
-// drew rather than letting the window quietly mean different things.
+// The number of newest issues a braid draws. Beyond this the lines can no
+// longer be told apart and the fetch gets large. The page says how many it
+// drew, so the reader knows when the window is not fully shown.
 var BRAID_ISSUES = 40;
 
 // detail overlay, range-selectable
@@ -22,7 +23,7 @@ export function fetchHistoryRange(entityName, aspect, hours, shape) {
   overlay.rangeData[hours] = { points: [], loaded: false, loading: true };
   fetchHistory(entityName, aspect, hours, shape).then(function (loaded) {
     if (!overlay.shapeSettled && loaded.points.length) {
-      // guessed without a live value: the recorded values have the say
+      // the shape was guessed without a live value; the recorded values decide
       overlay.shapeSettled = true;
       var actual = logic.historyShape(loaded.points[0].value);
       if (actual !== overlay.shape && overlay.open && overlay.aspect === aspect) {
@@ -39,10 +40,11 @@ export function fetchHistoryRange(entityName, aspect, hours, shape) {
   fetchCommandRange(entityName, aspect, hours);
 }
 
-/* What a computed value is derived FROM, over the same window. Fetched
- * only when the reader asks: contributors are diagnosis, and every one is
- * an ordinary entity whose series the recorder already keeps, so this is
- * the same history call the chart above already makes. */
+/* What a computed value is derived from, over the same window. It is
+ * fetched only when the reader asks, because contributors are for
+ * diagnosis. Each contributor is an ordinary entity whose series the
+ * recorder already keeps, so this is the same history call the chart
+ * above makes. */
 function contributorsOf(entity, aspect) {
   return logic.contributorsFor((store.model && store.model.entities) || [], entity.name, aspect);
 }
@@ -60,9 +62,9 @@ function sourceCacheKey(hours, c) {
   return hours + '|' + c.entity + '|' + c.aspect;
 }
 
-/* When each source last went in or out of the computation. Declared
- * sources say what MAY contribute; these say what did, so a contributor
- * the fusion has dropped stops reading as if it were still voting
+/* When each source last joined or left the computation. Declared sources
+ * say what may contribute, and these events say what did. A contributor
+ * the fusion has dropped is then no longer shown as if it still counted
  * (docs/design.md#which-sources-a-computation-actually-used). */
 export function fetchSourceEvents(entity, aspect, hours) {
   var ck = hours + '|' + entity.name + '|' + aspect;
@@ -102,17 +104,17 @@ export function fetchSources(entity, aspect, hours) {
   });
 }
 
-// The contributors the chart should draw right now: declared, asked for,
-// and arrived. One still loading simply is not drawn yet.
+// The contributors the chart should draw now: declared, requested, and
+// loaded. One that is still loading is not drawn yet.
 function drawnSources(entity, aspect, hours) {
   if (overlay.layer !== 'sources') return null;
   var out = [];
   contributorsOf(entity, aspect).forEach(function (c) {
     var d = overlay.sourceData[sourceCacheKey(hours, c)];
     if (!d || !d.loaded || !d.points.length) return;
-    // Carries the contributor's identity and caveat, not just its line:
-    // the legend names it, says whether it is still reporting, and shows
-    // what is true of THIS source and not of the aspect.
+    // Includes the contributor's identity and caveat, not just its line.
+    // The legend names it, says whether it is still reporting, and shows
+    // the caveat that applies to this source rather than to the aspect.
     out.push({
       name: c.name,
       label: c.label,
@@ -124,10 +126,11 @@ function drawnSources(entity, aspect, hours) {
   return out.length ? out : null;
 }
 
-/* What the house SAID about this window, as against what it now
- * believes: every issue the recorder kept. Fetched only when the reader
- * asks for it — a braid is analysis, and a house with no recorder has
- * none of this while still having a forecast to draw. */
+/* What the house forecast for this window at the time, as opposed to its
+ * current forecast: every issue the recorder kept. It is fetched only
+ * when the reader asks, because a braid is for analysis. A house with no
+ * recorder has no stored issues but can still draw its current
+ * forecast. */
 export function fetchIssues(entityName, aspect, hours) {
   overlay.issuesLoading = true;
   var url = '/api/forecasts?entity=' + encodeURIComponent(entityName) +
@@ -147,19 +150,19 @@ export function fetchIssues(entityName, aspect, hours) {
     });
 }
 
-/* What was asked of this aspect, beside what it did. The recorder types
- * every cmd envelope into its own series
- * (docs/design.md#history-and-the-recorder), and this is where that
- * audit is read. Always fetched rather than gated on whether the page
- * thinks the aspect is commandable: recorded commands are the honest
- * test, and the rules for who may command what live on the server. The strip renders only when the window actually holds
- * commands. */
+/* The commands sent to this aspect, beside what it did. The recorder
+ * stores every cmd envelope in its own series
+ * (docs/design.md#history-and-the-recorder), and this reads that record.
+ * It is always fetched, whether or not the page thinks the aspect is
+ * commandable. Recorded commands are the reliable test, and the rules for
+ * who may command what are on the server. The strip renders only when
+ * the window holds commands. */
 function fetchCommandRange(entityName, aspect, hours) {
   var cd = overlay.cmdData[hours];
   if (cd && (cd.loaded || cd.loading)) return;
   overlay.cmdData[hours] = { points: [], loaded: false, loading: true };
-  // Commands are edges, never a curve: their runs are the shape, whatever
-  // the aspect's own readings are drawn as.
+  // Commands are drawn as runs, not a curve, however the aspect's own
+  // readings are drawn.
   fetchHistory(entityName, aspect, hours, 'timeline', 'cmd').then(function (loaded) {
     overlay.cmdData[hours] = loaded;
     if (overlay.open && overlay.type === 'history' && overlay.aspect === aspect) renderOverlayContent();
@@ -172,11 +175,11 @@ export function openHistoryDetail(room, entityName, aspect) {
   overlay.type = 'history';
   overlay.entity = entity;
   overlay.aspect = aspect;
-  // The descriptor's kind decides the shape where it has one, and its
-  // word is final — an enum coded as integers is runs, not a curve.
-  // Undescribed, the live value's type decides; without a value yet (a
-  // fresh page, a sensor that has not reported) that is a guess the
-  // first points fetched settle (fetchHistoryRange).
+  // The descriptor's kind decides the shape when there is one. An enum
+  // coded as integers is drawn as runs, not a curve. Without a
+  // descriptor, the live value's type decides. Without a value yet (a
+  // fresh page, or a sensor that has not reported), the shape is a guess
+  // that the first fetched points correct (fetchHistoryRange).
   var live = stateValue(room, entityName, aspect);
   var field = descriptorField(entity, aspect);
   var described = !!(field && (field.kind === 'boolean' || field.kind === 'enum'));
@@ -190,30 +193,29 @@ export function openHistoryDetail(room, entityName, aspect) {
   overlay.pinned = null;
   overlay.sourcePinned = null;
   overlay.lastPoints = null;
-  // Sources are this entity's, so the layer and the fetched contributor
-  // history do not survive into the next overlay.
+  // Sources belong to this entity, so the layer and the fetched
+  // contributor history are reset for the next overlay.
   overlay.sourceData = {};
   overlay.sourceEvents = {};
   fetchHistoryRange(entityName, aspect, 24, overlay.shape);
   showOverlay();
 }
 
-/* Which line is which, on demand: pointing at a source in the legend
- * lights its line and stands the others down, and a tap holds that until
- * it is tapped again. Emphasis, not colour — a contributor owning a hue
- * would compete with the accent the computed value keeps
- * (docs/design.md#charts-forecasts-and-sources). */
+/* Which line is which, on demand. Pointing at a source in the legend
+ * highlights its line and dims the others, and a tap keeps that until it
+ * is tapped again. Lines are told apart by emphasis rather than colour,
+ * because a colour per contributor would compete with the accent colour
+ * of the computed value (docs/design.md#charts-forecasts-and-sources). */
 export function wireSourceLegend(root) {
   var scope = root || document;
   var entries = scope.querySelectorAll('.source-legend span[data-source]');
   if (!entries.length) return;
-  // The pin belongs to the overlay, not to this wiring. Live state
-  // re-renders the panel — a forecast re-issue is enough — which throws
-  // away these nodes and every class on them, and a fresh closure would
-  // take its highlight from whatever the pointer happens to be over: a
-  // pin that quietly moves to another source, or vanishes, while the
-  // reader is still reading. Same reason the braid's pin lives in
-  // `overlay.pinned`.
+  // The pin is stored on the overlay, not in this handler. Live state
+  // re-renders the panel (a new forecast issue is enough), which discards
+  // these nodes and their classes. A new closure would take its highlight
+  // from whatever the pointer is over, so the pin could move to another
+  // source or disappear while the reader is still reading. The braid's pin
+  // is kept in `overlay.pinned` for the same reason.
   var sticky = overlay.sourcePinned || null;
   var marks = scope.querySelectorAll('.chart-contributor, .source-legend span');
   var highlight = function (name) {
@@ -233,8 +235,7 @@ export function wireSourceLegend(root) {
       highlight(sticky);
     });
   });
-  // Re-apply on every wiring, so a re-render restores the pin rather than
-  // dropping it.
+  // Re-apply on every wiring, so a re-render restores the pin.
   highlight(sticky);
 }
 
@@ -267,14 +268,14 @@ export function renderHistoryDetailBody() {
   var chips = RANGE_PRESETS.map(function (rp) {
     return html`<button data-action="range-chip" data-hours="${rp.hours}" class="${overlay.range === rp.hours ? 'active' : ''}">${rp.label}</button>`;
   });
-  // One row for what is drawn beside the record: the several opinions
-  // behind the value's past, or the several claims about its future.
-  // Both are owner work, which is why they live here and not on a tile —
-  // a family wants the temperature, not which sensor read low — and only
-  // one can be drawn at a time, so they are one control and not two
+  // One row of chips for what is drawn beside the record: the sources
+  // behind the value's past, or the stored forecasts of its future. Both
+  // are for the owner, so they are here and not on a tile. A family wants
+  // the temperature, not which sensor read low. Only one can be drawn at a
+  // time, so they share one control
   // (docs/design.md#charts-forecasts-and-sources). A chip appears only
-  // where the house has the thing it names, so an ordinary sensor's
-  // overlay has no such row.
+  // when the house has what it names, so an ordinary sensor's overlay has
+  // no such row.
   var layers = [{ id: '', label: 'value' }];
   if (overlay.shape !== 'timeline' && contributorsOf(entity, aspect).length) {
     layers.push({ id: 'sources', label: 'sources' });
@@ -293,9 +294,9 @@ export function renderHistoryDetailBody() {
   var points = loaded ? rd.points : (overlay.lastPoints || []);
   var win = rd && rd.window ? rd.window : { from: Date.now() - overlay.range * 3600e3, to: Date.now() };
   var field = descriptorField(entity, aspect);
-  // The viewBox height is baked when the chart is built, so a taller
-  // chart is a rebuild, not a restyle — which is why toggling the width
-  // re-renders rather than just swapping a class.
+  // The viewBox height is fixed when the chart is built, so a taller chart
+  // needs a rebuild. That is why toggling the width re-renders instead of
+  // only swapping a class.
   var wide = overlayWide();
   var chartHtml, statsHtml;
   if (overlay.shape === 'timeline') {
@@ -309,13 +310,14 @@ export function renderHistoryDetailBody() {
     chartHtml = buildChart('detail-chart', points, {
       height: wide ? 440 : 220, sizeClass: wide ? 'chart-detail-wide' : 'chart-detail',
       aspect: aspect, gridlines: true, area: true, yLabels: true, window: win,
-      // Under `forecasts` the current belief steps aside: drawing it over
-      // the braid would make one issue look special for no reason.
+      // Under `forecasts` the current forecast is not drawn. Drawing it
+      // over the braid would make one issue stand out for no reason.
       forecast: overlay.layer === 'forecasts' ? null : liveForecastsOf(entity, aspect),
       issues: overlay.layer === 'forecasts' ? overlay.issues : null,
       pinned: overlay.pinned,
-      // Contributors stand down behind the braid: two greys on one chart,
-      // one per issue and one per source, would read as one set of lines.
+      // Contributors are not drawn with the braid. Two sets of grey lines
+      // on one chart, one per issue and one per source, would look like
+      // one set.
       contributors: overlay.layer === 'forecasts' ? null : drawnSources(entity, aspect, overlay.range)
     });
     var stats = rangeStats(points);
@@ -324,12 +326,11 @@ export function renderHistoryDetailBody() {
       ${statItem('Max', stats.max, aspect)}${statItem('Avg', stats.avg, aspect)}</div>`;
   }
 
-  // The four stats describe the RECORDED window the chips select, so a
-  // drawn forecast can peak above the MAX beside it — which reads as a
-  // contradiction unless the horizon says its own extreme out loud.
-  // One caption per source: "where the horizon goes" is a claim, and
-  // averaging two providers into one sentence would state a horizon
-  // neither of them predicted.
+  // The four stats describe the recorded window the chips select, so a
+  // drawn forecast can peak above the MAX shown beside it. That looks like
+  // a contradiction unless the horizon states its own extreme.
+  // There is one caption per source. Combining two providers into one
+  // sentence would describe a horizon neither of them predicted.
   var horizonHtml = '';
   if (overlay.layer !== 'forecasts') {
     var beliefs = forecastsOf(entity, aspect);
@@ -337,10 +338,10 @@ export function renderHistoryDetailBody() {
       var fresh = logic.forecastFreshness(b.forecast, Date.now());
       var who = beliefs.length > 1 ? b.source + ' · ' : '';
       var issued = issuedCaption(b.forecast);
-      // A claim whose horizon has run out is not drawn here, so this note
-      // is the only thing that distinguishes "this producer stopped" from
-      // "this aspect has no forecast" — the braid beside it is where the
-      // spent claim itself can still be read.
+      // A forecast whose horizon has run out is not drawn here. This note
+      // is the only thing that tells "this producer stopped" apart from
+      // "this aspect has no forecast". The expired forecast itself can
+      // still be read in the braid.
       if (fresh.expired) {
         return html`<div class="chart-note">spent · ${who}ran out ${formatChartTime(b.forecast.to)}${issued ? ' · ' + issued : ''}</div>`;
       }
@@ -358,9 +359,9 @@ export function renderHistoryDetailBody() {
           : overlay.issues.length
             ? overlay.issues.length + ' forecast' + (overlay.issues.length === 1 ? '' : 's') +
               (function () {
-                // Issues from several providers in one braid would make
-                // "they disagree" and "it drifted" look the same, so the
-                // count says how many sources are mixed in.
+                // With issues from several providers in one braid, "they
+                // disagree" and "it drifted" look the same, so the count
+                // says how many sources are mixed in.
                 var seen = {};
                 overlay.issues.forEach(function (f) { if (f.source) seen[f.source] = 1; });
                 var n = Object.keys(seen).length;
@@ -371,10 +372,9 @@ export function renderHistoryDetailBody() {
             : 'nothing kept for this window \u2014 the recorder may not subscribe home/forecast/**'
       }</div>`;
   }
-  // The legend doubles as the scrub readout: with no cursor it names the
-  // sources, with one it says what each read at that instant. Colour
-  // cannot tell them apart — they are all the same grey, deliberately —
-  // so naming them is the identification.
+  // The legend is also the scrub readout. With no cursor it names the
+  // sources, and with one it says what each read at that instant. The
+  // lines are all the same grey, so the names are what identify them.
   var legendHtml = '';
   var drawn = overlay.layer === 'forecasts' ? null : drawnSources(entity, aspect, overlay.range);
   if (drawn) {
@@ -382,10 +382,10 @@ export function renderHistoryDetailBody() {
                                contributorsOf(entity, aspect));
     legendHtml = html`<div class="chart-note source-legend" id="sources-legend">${
       drawn.map(function (c) {
-        // A contributor that has dropped out still draws — the line
-        // stopping IS the diagnosis — but it must not read as live.
-        // Two different ways to be out: its own device is gone, or the
-        // computation is choosing not to use it.
+        // A contributor that has dropped out is still drawn, because
+        // where its line stops is useful, but it must not look live. It
+        // can be out in two ways: its own device is gone, or the
+        // computation chooses not to use it.
         var down = stateValue(contributorRoom(c), c.entity, 'available') === false;
         var use = usage[c.name];
         var excluded = use && use.used === false;
@@ -408,9 +408,8 @@ export function renderHistoryDetailBody() {
   return { title: label, body: body };
 }
 
-/* What was asked, under what happened. An aspect nothing ever commanded
- * has no strip at all — this is the recorder's cmd series, so the strip
- * appears exactly where there is an audit to show. */
+/* The commands sent, under what happened. This is the recorder's cmd
+ * series, so an aspect that was never commanded has no strip. */
 function commandStrip(aspect, field, win) {
   var cd = overlay.cmdData[overlay.range];
   if (!cd || !cd.loaded || !cd.points.length) return '';

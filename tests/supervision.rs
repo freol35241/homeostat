@@ -137,15 +137,15 @@ async fn crash_restarts_with_exponential_backoff() {
         let ms = backoff.backoff_ms.expect("backoff_ms present");
         if ms == 100 {
             // An incarnation that survived past the 5s stability window
-            // before its crash command landed legitimately reset the
-            // breaker; the doubling run starts over.
+            // before its crash command landed reset the breaker, as it
+            // should; the doubling run starts over.
             backoffs.clear();
         }
         backoffs.push(ms);
     }
     assert_eq!(backoffs, vec![100, 200, 400], "exponential backoff delays");
 
-    // And it actually came back after all that.
+    // It came back afterwards.
     await_health(&mut watch, Duration::from_secs(10), running).await;
     sup.shutdown();
 }
@@ -195,11 +195,11 @@ async fn sigterm_shuts_down_gracefully_without_orphans() {
     );
 }
 
-/// SIGTERM the moment the bus accepts connections — while the core is
-/// still serving its queryables and launching units — must take the same
-/// graceful path. The socket listens before `zenoh::open` even returns,
-/// and a stop that lands in that window is what systemd or `docker stop`
-/// sends to a service stopped right after it started.
+/// SIGTERM as soon as the bus accepts connections, while the core is
+/// still serving its queryables and launching units, must take the same
+/// graceful path. The socket listens before `zenoh::open` returns, and a
+/// stop that lands in that window is what systemd or `docker stop` sends
+/// to a service stopped right after it started.
 #[tokio::test(flavor = "multi_thread")]
 async fn sigterm_during_startup_still_shuts_down_gracefully() {
     let mut sup = Supervisor::spawn("tests/fixtures/house");
@@ -272,7 +272,7 @@ async fn log_capture_tags_and_orders_by_stream() {
     );
     assert!(entries.iter().all(|e| e.ts_us > 0), "{entries:?}");
 
-    // lines=N truncates to the tail of whatever order actually landed.
+    // lines=N truncates to the tail of whatever order landed.
     let tail = get_log(&observer, "logger", Some(3)).await;
     assert_eq!(tail.len(), 3, "{tail:?}");
     assert_eq!(
@@ -292,7 +292,7 @@ async fn log_capture_tags_and_orders_by_stream() {
 }
 
 /// (g) Ring-buffer eviction: printing past the 500-line capacity drops the
-/// oldest lines, keeping exactly the most recent 500.
+/// oldest lines, keeping the most recent 500.
 #[tokio::test(flavor = "multi_thread")]
 async fn log_capture_evicts_oldest_past_capacity() {
     let mut sup = Supervisor::spawn("tests/fixtures/house_logs");

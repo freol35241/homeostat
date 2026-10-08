@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Starts the starter house with simulated devices (see demo/README.md):
-# copies the house out to its own directory and git repo the way the
-# starter's README says, does the first-start steps, and brings up the
-# broker, homeostat and the simulator. Run it again to pick up where it
-# left off.
+# Starts the starter house with simulated devices (see demo/README.md).
+# It copies the house into its own directory and git repo as the
+# starter's README describes, does the first-start steps, and brings up
+# the broker, homeostat and the simulator. Running it again picks up
+# where it left off.
 #
-# With arguments, it is `docker compose` for the demo instead — the same
-# project, files and environment — so nothing else has to repeat them:
+# With arguments, it runs `docker compose` for the demo instead, with the
+# demo's project, files and environment, so callers need not repeat them:
 #   demo/up.sh down             stop it (down -v also drops the uv cache)
 #   demo/up.sh logs -f homeostat
 #
@@ -21,8 +21,8 @@ compose() {
     -f "$DEMO_DIR/docker-compose.yml" -f "$DEMO_DIR/demo/docker-compose.demo.yml" "$@"
 }
 
-# The z2m frontend token the compose file insists on; the demo never
-# starts zigbee2mqtt, so any value does.
+# The compose file requires a z2m frontend token. The demo does not
+# start zigbee2mqtt, so any value works.
 export Z2M_FRONTEND_TOKEN="${Z2M_FRONTEND_TOKEN:-demo-not-used}"
 export HOMEOSTAT_UID="${HOMEOSTAT_UID:-$(id -u)}" HOMEOSTAT_GID="${HOMEOSTAT_GID:-$(id -g)}"
 

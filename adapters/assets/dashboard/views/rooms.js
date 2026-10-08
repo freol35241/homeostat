@@ -33,7 +33,7 @@ export function renderRooms() {
   var byRoom = {};
   (store.model.entities || []).forEach(function (e) {
     if (!e.room) return;
-    if (e.capability === 'person') return; // the map is their widget, not a room card
+    if (e.capability === 'person') return; // people are shown on the map, not in a room card
     if (allowedRooms && allowedRooms.indexOf(e.room) === -1) return;
     if (!byRoom[e.room]) byRoom[e.room] = [];
     byRoom[e.room].push(e);

@@ -1,7 +1,7 @@
 schema = 1
 
-# No `id`: this value is computed, so there is no adapter-native address
-# to hold and nothing to invent one for.
+# No `id`: this value is computed, so it has no adapter-native address
+# and none needs to be made up.
 [entity]
 capability = "sensor"
 features = ["temperature"]
@@ -16,10 +16,11 @@ aliases = []
 mode = "exclusive"
 owner = "fused_temperature"
 
-# What this value is DERIVED from (docs/design.md#sources). Declared
-# rather than inferred: the unit subscribes a zone-wide expression, and
-# nothing in a subscription says which readings feed which published
-# aspect. The history overlay draws these beside the fused line.
+# The readings this value is derived from (docs/design.md#sources). They
+# are declared because they cannot be inferred: the unit subscribes to a
+# zone-wide expression, and a subscription does not say which readings
+# feed which published aspect. The history overlay draws them beside the
+# fused line.
 [sources.kitchen]
 entity = "kitchen_temp"
 aspect = "temperature"

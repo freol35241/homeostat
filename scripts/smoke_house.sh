@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# Writes the minimal house the packaging smoke tests boot (smoke_image.sh,
-# smoke_bare.sh): the clock adapter as its one unit, committed to git.
+# Writes the minimal house that the packaging smoke tests boot
+# (smoke_image.sh, smoke_bare.sh). Its one unit is the clock adapter, and
+# the house is committed to git.
 #
-# Its SDK dependency is rewritten from the in-repo path source to
-# `homeostat==VERSION` with no sources block — the shape a deployed unit
-# has (docs/design.md#sdk-distribution), so a smoke test resolves the SDK
-# from the bundled wheel the way a real house does. The rewrite mirrors
-# pin_sdk in scripts/sync_starter.sh.
+# The unit's SDK dependency is rewritten from the in-repo path source to
+# `homeostat==VERSION` with no sources block. A deployed unit has that form
+# (docs/design.md#sdk-distribution), so the smoke test resolves the SDK
+# from the bundled wheel as a real house does. The rewrite mirrors pin_sdk
+# in scripts/sync_starter.sh.
 #
 # Usage: scripts/smoke_house.sh <dir> <sdk-version>
 set -euo pipefail

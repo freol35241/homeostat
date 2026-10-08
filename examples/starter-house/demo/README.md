@@ -1,17 +1,17 @@
 # The starter house, with simulated devices
 
-Everything the starter house runs — the clock, the recorder, the arbiter,
-the dashboard, the evening-lights automation and the Zigbee2MQTT, IVT490,
-OwnTracks and ESPHome adapters — running unchanged, against a simulator
-that stands where the hardware would be. No coordinator stick, heat pump,
-phone or ESPHome board needed.
+This runs every unit of the starter house unchanged against a simulator
+that takes the place of the hardware. The units are the clock, the
+recorder, the arbiter, the dashboard, the evening-lights automation, and
+the Zigbee2MQTT, IVT490, OwnTracks and ESPHome adapters. You need no
+coordinator stick, heat pump, phone or ESPHome board.
 
 ## Start it
 
 In a browser, with nothing installed: open the repository in GitHub
 Codespaces with the demo configuration (the "Open in Codespaces" button
 in the top-level README). The dashboard opens by itself once the house
-is up; the first boot takes a couple of minutes while every unit
+is up. The first boot takes a couple of minutes while every unit
 resolves its environment.
 
 On your own machine, with Docker:
@@ -29,8 +29,8 @@ through `docker compose exec`, the recorder's store in `data/`.
 
 ## What is simulated
 
-`simulator.py` speaks the far side of each protocol, so the adapters
-cannot tell it from the real thing:
+`simulator.py` implements the device side of each protocol, so the
+adapters cannot tell it from real hardware:
 
 | Device | Protocol | Behaviour |
 |---|---|---|
@@ -45,9 +45,9 @@ cannot tell it from the real thing:
 
 ## How it is wired
 
-`docker-compose.demo.yml` is layered over the house's own compose file:
-it parks `zigbee2mqtt` behind a `hardware` profile, adds the `simulator`
-service, and tells the ESPHome adapter where the porch switch is
-(`esphome-devices.toml`, since an mDNS name does not cross the compose
-network). Nothing else in the house changes. Delete `demo/` when you move
-in with real devices.
+`docker-compose.demo.yml` is layered over the house's own compose file.
+It moves `zigbee2mqtt` behind a `hardware` profile and adds the
+`simulator` service. It also tells the ESPHome adapter where the porch
+switch is, in `esphome-devices.toml`, because an mDNS name does not
+resolve across the compose network. Nothing else in the house changes.
+Delete `demo/` when you move in with real devices.

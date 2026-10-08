@@ -1,7 +1,7 @@
 schema = 1
 
 [entity]
-# id is the decimal code the sender transmits; deliberately not the entity
+# id is the decimal code the sender transmits. It differs from the entity
 # name, so the tests prove binding goes through the code.
 id = "11970086"
 capability = "presence"

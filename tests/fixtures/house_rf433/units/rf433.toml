@@ -28,7 +28,7 @@ type = "float"
 default = 1.0
 editable_by = "owner"
 
-# Deliberately long: one test asserts the contact is STILL held after the
+# Long, because one test asserts the contact is still held after the
 # PIR's hold has expired, and a hold close to the PIR's races the test's own
 # round trips rather than testing the adapter. Nothing waits for this to
 # expire.

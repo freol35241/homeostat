@@ -8,93 +8,38 @@
 # [tool.uv.sources]
 # homeostat = { path = "../sdk/python", editable = true }
 # ///
-"""Zigbee2MQTT adapter: a translating subscriber.
+"""Zigbee2MQTT adapter: Zigbee devices on the bus through a z2m bridge's MQTT topics.
 
-The broker prefix is the discovery endpoint's path
-(`mqtt://broker:1883/VP52/zigbee2mqtt`), defaulting to `zigbee2mqtt`: an
-estate that has run a non-default base topic for years cannot move it,
-because other consumers address it directly. A wrong prefix is the
-failure worth naming — the subscription SUCCEEDS and simply matches
-nothing, so there is no SUBACK timeout and no error, just an adapter that
-is permanently deaf while reporting healthy. The retained
-`{base}/bridge/devices` inventory is therefore treated as proof of life:
-silence past inventory_timeout_s (parameter, owner-editable, adapter-side
-default 30 s) emits one "bridge-silent" health event naming the base topic
-actually in use.
+Binding: an entity file's `id` is the device's z2m topic segment, its
+friendly name or IEEE address. The file stem is the entity name. A
+friendly name containing "/" is not supported, because the device
+subscription is {base}/+.
 
-That guard covers boot only. Mid-run the bridge's own retained
-{base}/bridge/state carries online/offline, and one "bridge-silent" event
-goes out per down transition — the inventory cannot serve here, because
-z2m republishes bridge/devices only on CHANGE, so its silence never
-distinguishes a dead bridge from a stable estate.
+State: JSON on {base}/{id} fans out to home/state/{room}/{entity}/{aspect}.
+z2m's `state` field becomes `on` (lights, switches) or `locked` (locks);
+other scalar fields keep their z2m names. When availability is enabled in
+the z2m config, {base}/{id}/availability becomes the reserved `available`
+aspect. Without it the aspect does not appear. `Bridge.on_message` has the
+details.
 
-Broker credentials come from HOMEOSTAT_MQTT_CREDENTIALS (a TOML outside
-the repo, keyed by hostname) unless the endpoint carries them inline;
-inline wins. A broker that needs auth must not force its password into a
-unit manifest, and a raw `@`, `/` or `#` in a password reparses the URL
-instead of failing, so the file is the safe place for one.
+Commands: the capability's base aspect (`on` or `locked`), a declared
+`brightness` or `color_temp`, or a command the device's exposes describe.
+Each is sent to {base}/{id}/set; `command_body` has the translation.
 
-Device state published as JSON on {base}/{id} fans out to per-aspect keys
-home/state/{room}/{entity}/{aspect}; commands on
-home/cmd/{room}/{entity}/{aspect} translate to {base}/{id}/set. The entity
-file's `id` is the z2m topic segment (friendly name or IEEE address); the
-file stem is the entity name. The device subscription is {base}/+, which
-keeps bridge/# traffic out and means a friendly name containing "/" is
-unsupported. The z2m `state` field is normalized (`on` for
-lights/switches, `locked` for locks); other scalar fields pass through
-under their z2m names — a field name that is not a legal key segment
-(empty, a wildcard, "#") drops with a "malformed-payload" event and the
-rest of the payload still publishes; nested objects (e.g. color) are
-deferred. A command is taken for the capability's base aspect
-(`on`/`locked`, a bool), a declared feature (`brightness`/`color_temp`, a
-number) or a command the device's own exposes describe (see below: a float
-or one of the enum's values); any other aspect, or a value of the wrong
-type, drops with "invalid-command" and never reaches the device. `on`
-sends {"state": "ON"|"OFF"}; `locked` sends {"state": "LOCK"|"UNLOCK"},
-because z2m's lock vocabulary is asymmetric (reports say LOCKED/UNLOCKED,
-set commands LOCK/UNLOCK); anything else sends {aspect: value}. Arbitrated
-entities (e.g. locks) get no home/cmd subscription at all — plan-time
-expansion gives the adapter's templated cmd subscription only its
-non-arbitrated bound entities — and instead receive the arbiter's
-forwarded envelope on home/arbiter/{room}/{entity}/{aspect}, translated
-the same way a cmd envelope would be. Anything dropped emits a JSON event
-at home/health/{unit}/event instead of crashing.
+Discovery: the retained {base}/bridge/devices inventory is republished at
+home/discovery/{unit}, and each bound device's record carries an aspect
+descriptor generated from its exposes (`inventory`, `describe`).
 
-A message for an unbound device drops with "unknown-device" only when the
-device is absent from bridge/devices. A device the bridge knows but no
-entity file binds is a steady state, not dropped input: discovery
-already reports it with configured=false, and an event per publish
-would flood the recorder for as long as the house leaves it unbound.
+Configuration: the base topic is the endpoint's path
+(`mqtt://broker:1883/VP52/zigbee2mqtt`), default `zigbee2mqtt`. Broker
+credentials are inline in the endpoint or in the TOML file that
+HOMEOSTAT_MQTT_CREDENTIALS names, keyed by hostname. The live parameter
+inventory_timeout_s (owner-editable, default 30 s) is how long to wait for
+the inventory at startup.
 
-Device availability (docs/design.md#availability): the bridge's
-availability feature on {base}/{id}/availability — both the {"state":
-"online"|"offline"} payload and the legacy bare string — maps to the
-reserved base aspect home/state/{room}/{entity}/available (bool).
-Operational note: availability must be enabled in the z2m config; without
-it the aspect simply never appears (opt-in by construction). On loss the
-device's other aspects stand — stale, never false — and a native device
-field that would mint the reserved aspect drops with a "reserved-aspect"
-health event.
-
-The retained {base}/bridge/devices inventory is republished at
-home/discovery/{unit}: every paired device (coordinator excluded) as a
-record carrying the entity-file binding `id`, whether an entity file
-already binds it, a best-effort suggested capability/features stanza
-mapped from the z2m `exposes` descriptor, and the raw definition for
-anything the mapping does not cover (docs/design.md#discovery). A bound
-device's record also carries the entity's aspect descriptor
-(docs/design.md#aspect-descriptors), generated from the same `exposes`: every
-scalar expose becomes a labelled field — z2m's unit picks the kind (°C →
-temperature, % → percent, anything else a number carrying the unit), its
-category picks the group (diagnostic → diagnostics, config → config, else
-readings; z2m before 1.34 has no category at all, so the diagnostics it
-would categorise — linkquality, a battery voltage in mV — are known by
-property), battery is a reading but ordered last so it never headlines the
-room card, a settable config expose becomes an owner-tier command with
-z2m's own value bounds, and the alarm-shaped binaries (water leak, smoke,
-...) are notable. The capability's own vocabulary (on, locked, brightness,
-color_temp) is described as readings only: its controls are the
-dashboard's bespoke widget, not a descriptor command.
+Health events: `drop` (malformed-payload, unknown-device, reserved-aspect,
+invalid-command), and `bridge-silent` when the inventory does not arrive in
+time or the bridge reports itself offline.
 """
 
 import json
@@ -108,7 +53,7 @@ from homeostat.params import LiveParams
 
 DEFAULT_BASE_TOPIC = "zigbee2mqtt"
 # The retained bridge/devices inventory arrives on subscribe, so silence
-# past this means the base topic is wrong (see the module docstring).
+# past this means the base topic is wrong (see bridge_watchdog in main).
 PARAM_DEFAULTS = {"inventory_timeout_s": 30.0}
 
 
@@ -123,9 +68,9 @@ class Params(LiveParams):
 def availability_state(payload: bytes):
     """Return `online`/`offline` from an availability-shaped payload, or None.
 
-    The payload is the {"state": ...} object or the legacy bare string;
-    None if it is neither. Shared by device availability and the bridge's
-    own state.
+    The payload is the {"state": "online"|"offline"} object or the legacy
+    bare string; None if it is neither. Used for device availability and
+    for the bridge's own state.
     """
     raw = payload.decode(errors="replace").strip()
     try:
@@ -137,7 +82,11 @@ def availability_state(payload: bytes):
 
 
 def state_aspect(capability: str, z2m_field: str, value):
-    """Map one z2m JSON field to a (bus aspect, JSON value) pair."""
+    """Map one z2m JSON field to a (bus aspect, JSON value) pair.
+
+    `state` becomes `locked` for a lock and `on` otherwise, as a bool.
+    Every other field keeps its z2m name and value.
+    """
     if z2m_field == "state":
         if capability == "lock":
             return "locked", value == "LOCKED"
@@ -148,8 +97,8 @@ def state_aspect(capability: str, z2m_field: str, value):
 def suggest(exposes):
     """Suggest a best-effort entity-file stanza from a z2m exposes descriptor.
 
-    None when no confident mapping exists — the raw definition rides along
-    in the record either way, so nothing becomes invisible.
+    None when no confident mapping exists. The record carries the raw
+    definition either way, so an agent can still see the device.
     """
     for exp in exposes:
         if not isinstance(exp, dict):
@@ -172,19 +121,19 @@ def suggest(exposes):
     return None
 
 
-# Binary exposes whose `true` is out of the ordinary — z2m property names,
-# so dialect knowledge (docs/design.md#aspect-descriptors: notable).
+# Binary exposes whose `true` is out of the ordinary, by z2m property name
+# (docs/design.md#aspect-descriptors: notable).
 NOTABLE_BINARY = frozenset(
     {"battery_low", "water_leak", "smoke", "gas", "carbon_monoxide", "tamper", "vibration"}
 )
 KIND_BY_UNIT = {"°C": "temperature", "%": "percent"}
-# Exposes older z2m (< 1.34, no `category` field) leaves uncategorised that
-# newer z2m files under diagnostic — by property, the way battery is
-# promoted by property. Voltage is only diagnostic as a battery voltage
-# (mV); a plug's mains voltage (V) is a reading.
+# Exposes that z2m 1.34 and later categorise as diagnostic. Older z2m has
+# no `category` field, so these are recognised by property. Voltage is
+# diagnostic only as a battery voltage (mV); a plug's mains voltage (V) is
+# a reading.
 DIAGNOSTIC_PROPERTIES = frozenset({"linkquality"})
-# The capability vocabulary the dashboard's own widgets command: described
-# as readings, never as descriptor commands.
+# The capability vocabulary, which the dashboard's own widgets command.
+# These are described as readings and get no descriptor command.
 VOCABULARY_ASPECTS = frozenset({"on", "locked", "brightness", "color_temp"})
 # The capability's base aspect (docs/manifest.md, Capability vocabulary):
 # the one command every entity of that capability takes.
@@ -196,7 +145,23 @@ SPECIFIC_TYPES = ("light", "switch", "lock", "cover", "climate", "fan")
 def describe(capability: str, exposes) -> dict | None:
     """Return the entity's aspect descriptor from its z2m exposes.
 
-    None when nothing scalar is exposed (docs/design.md#aspect-descriptors).
+    Every scalar expose becomes a labelled field
+    (docs/design.md#aspect-descriptors):
+
+    - z2m's unit picks the kind: °C is temperature, % is percent, anything
+      else is a number that carries the unit.
+    - z2m's category picks the group: diagnostic goes to diagnostics,
+      config to config, everything else to readings. Without a category
+      (z2m before 1.34), DIAGNOSTIC_PROPERTIES and a battery voltage in mV
+      go to diagnostics.
+    - battery is a reading, ordered last.
+    - A settable numeric or enum expose becomes an owner-tier command,
+      with z2m's own value bounds.
+    - The alarm-like binaries in NOTABLE_BINARY are notable.
+    - The capability's vocabulary (VOCABULARY_ASPECTS) is described as
+      readings only, because the dashboard's own widget controls it.
+
+    None when nothing scalar is exposed.
     """
     fields: dict[str, dict] = {}
 
@@ -210,7 +175,7 @@ def describe(capability: str, exposes) -> dict | None:
             return
         prop = exp.get("property")
         if not isinstance(prop, str) or etype not in ("numeric", "binary", "enum", "text"):
-            return  # composite/list are deferred, like their state
+            return  # composite and list exposes are not published as state either
         aspect, _ = state_aspect(capability, prop, None)
         if aspect == "available" or aspect in fields:
             return
@@ -220,7 +185,7 @@ def describe(capability: str, exposes) -> dict | None:
         if category is None and (prop in DIAGNOSTIC_PROPERTIES or (prop == "voltage" and unit == "mV")):
             group = "diagnostics"
         if prop == "battery":
-            group = "readings"  # z2m files it under diagnostic; a family watches it
+            group = "readings"  # z2m files it under diagnostic, but the family watches it
         label = exp.get("label") if isinstance(exp.get("label"), str) else prop.replace("_", " ")
         label = label[:1].lower() + label[1:]
         if label.replace(" ", "_") != prop:
@@ -270,18 +235,25 @@ def describe(capability: str, exposes) -> dict | None:
     if not fields:
         return None
     if "battery" in fields:
-        # Watched, never the headline: z2m lists battery first, and field
-        # order is what the room card reads as priority.
+        # z2m lists battery first, and the room card reads field order as
+        # priority, so battery goes last.
         fields["battery"] = fields.pop("battery")
     return {"schema": 1, "groups": ["readings", "config", "diagnostics"], "fields": fields}
 
 
 def inventory(devices, by_id):
-    """Build the complete discovery document from one bridge/devices payload."""
+    """Build the complete discovery document from one bridge/devices payload.
+
+    One record per paired device, the coordinator excluded, with the
+    binding `id`, whether an entity file binds it, a suggested stanza from
+    `suggest`, and the raw definition for what the mapping does not cover
+    (docs/design.md#discovery). A bound device's record also carries its
+    aspect descriptor from `describe`.
+    """
     records = []
     for dev in devices:
-        # Structurally malformed entries skip like id-less ones below: a
-        # surprise inventory shape must never take the translator down.
+        # Malformed entries are skipped like id-less ones below, so an
+        # unexpected inventory shape cannot stop the translator.
         if not isinstance(dev, dict):
             continue
         if dev.get("type") == "Coordinator":
@@ -319,16 +291,17 @@ def command_body(entity, aspect: str, value, fields: dict) -> dict | None:
 
     A command this entity takes is its capability's base aspect (a bool), a
     declared vocabulary feature (a number) or a command its exposes-derived
-    descriptor `fields` carry (a float, or one of the enum's values). None
-    for anything else: an unknown aspect or a value of the wrong type never
-    reaches the device.
+    descriptor `fields` carry (a float, or one of the enum's values). `on`
+    sends {"state": "ON"|"OFF"}, `locked` sends {"state": "LOCK"|"UNLOCK"},
+    and anything else sends {aspect: value}. None for an unknown aspect or
+    a value of the wrong type, which the caller drops with
+    `invalid-command`.
     """
     if aspect == BASE_ASPECT.get(entity.capability):
         if not isinstance(value, bool):
             return None
         if aspect == "locked":
-            # z2m's lock vocabulary is asymmetric: state REPORTS are
-            # LOCKED/UNLOCKED, but SET commands are LOCK/UNLOCK.
+            # z2m reports LOCKED/UNLOCKED but takes LOCK/UNLOCK as commands.
             return {"state": "LOCK" if value else "UNLOCK"}
         return {"state": "ON" if value else "OFF"}
     number = isinstance(value, (int, float)) and not isinstance(value, bool)
@@ -349,12 +322,12 @@ def command_body(entity, aspect: str, value, fields: dict) -> dict | None:
 class Bridge:
     """The z2m-to-bus direction: one `on_message` per MQTT message.
 
-    It owns what the messages build up: the device ids the bridge has
+    It holds what the messages build up: the device ids the bridge has
     reported (bound or not), the bridge's last known liveness and, per
     bound entity, the descriptor fields its exposes yielded (the commands
-    beyond the base vocabulary it takes, for command_body). `session` is
-    anything with `put_json` and `health_event`; paho calls `on_message`
-    from its one network thread, so nothing here is locked.
+    beyond the base vocabulary, for command_body). `session` is anything
+    with `put_json` and `health_event`. paho calls `on_message` from its
+    one network thread, so nothing here is locked.
     """
 
     def __init__(self, session, unit: str, base: str, by_id: dict):
@@ -372,21 +345,30 @@ class Bridge:
     def unbound(self, topic: str, dev_id: str) -> None:
         """Report a message for an unbound device only when the bridge does not know it.
 
-        A device the BRIDGE knows but no entity file binds is a steady
-        state, not a dropped message — discovery already reports it with
-        configured=false, and the discovery-first workflow guarantees a
-        period where every device is in exactly this state. Only a device
-        absent from the inventory entirely is an anomaly worth an event.
+        A device the bridge knows but no entity file binds is normal:
+        discovery already reports it with configured=false, and every
+        device is in that state between pairing and binding. An event per
+        publish would flood the recorder for as long as it stays unbound.
+        Only a device missing from the inventory gets an event.
         """
         if dev_id not in self.known:
             self.session.health_event("drop", reason="unknown-device", topic=topic)
 
     def on_message(self, topic: str, raw: bytes) -> None:
-        """Translate one message under the base topic onto the bus."""
+        """Translate one message under the base topic onto the bus.
+
+        bridge/devices updates the inventory and republishes discovery.
+        bridge/state is the bridge's liveness. {id}/availability becomes
+        the `available` aspect. {id} is device state: each scalar field is
+        published as its own aspect. A field that would publish as
+        `available` drops with `reserved-aspect`, and a field name that is
+        not a valid key segment drops with `malformed-payload`; the other
+        fields still publish.
+        """
         session = self.session
         # Everything routed here matched a {base}/... subscription, so the
         # remainder is the device part. Splitting at a fixed position would
-        # break the moment the base topic carries its own slashes.
+        # break when the base topic contains slashes.
         rest = topic[len(self.base) + 1 :]
         if rest == "bridge/devices":
             self.inventory_seen.set()
@@ -406,9 +388,10 @@ class Bridge:
             session.put_json(keys.discovery_key(self.unit), records)
             return
         if rest == "bridge/state":
-            # The bridge's own liveness. The inventory cannot carry this:
-            # z2m republishes bridge/devices only on CHANGE, so its silence
-            # never distinguishes a dead bridge from a stable estate.
+            # The bridge's own liveness, used after startup. The inventory
+            # cannot serve: z2m republishes bridge/devices only when it
+            # changes, so its silence does not distinguish a dead bridge
+            # from a stable one.
             state = availability_state(raw)
             if state is None:
                 session.health_event("drop", reason="malformed-payload", topic=topic)
@@ -419,8 +402,8 @@ class Bridge:
                 session.health_event("bridge-silent", base_topic=self.base, state="offline")
             self.online = online
             return
-        # Exactly {base}/{id}/availability — two segments would be a device
-        # whose friendly name is literally "availability".
+        # Only {base}/{id}/availability. A single segment would be a device
+        # whose friendly name is "availability".
         if rest.endswith("/availability") and rest.count("/") == 1:
             dev_id = rest.split("/")[0]
             entity = self.by_id.get(dev_id)
@@ -451,15 +434,14 @@ class Bridge:
                 continue  # composite fields (color, ...) deferred
             aspect, value = state_aspect(entity.capability, z2m_field, value)
             if aspect == "available":
-                # Reserved for the adapter's own liveness signal — a device
-                # field must not impersonate it.
+                # Reserved for the adapter's own liveness signal.
                 session.health_event("drop", reason="reserved-aspect", topic=topic)
                 continue
             try:
                 key = keys.state_key(entity.room, entity.name, aspect)
             except ValueError:
-                # A field name the key schema refuses; the rest of the
-                # payload is still good.
+                # A field name the key schema refuses. The rest of the
+                # payload still publishes.
                 session.health_event("drop", reason="malformed-payload", topic=topic, field=z2m_field)
                 continue
             session.put_json(key, value)
@@ -471,6 +453,9 @@ def main():
     by_id = {e.id: e for e in config.entities}
 
     endpoint = mqtt.parse_endpoint(config.endpoint)
+    # The base topic is configurable because an installation that has used
+    # a non-default one for years cannot move it: other consumers address
+    # it directly.
     base = mqtt.base_topic(endpoint, DEFAULT_BASE_TOPIC)
 
     session = homeostat.connect()
@@ -511,12 +496,13 @@ def main():
         for expr in keys.command_keyexprs(e)
     ]
 
-    # Both translation directions are wired up: the unit is ready.
     session.ready()
 
-    # A wrong base topic subscribes SUCCESSFULLY and then receives nothing:
-    # no SUBACK timeout, no error, an adapter that is permanently deaf and
-    # reports healthy. The retained inventory is the proof of life.
+    # A wrong base topic subscribes without error and then receives
+    # nothing, so the adapter would be deaf while reporting healthy. The
+    # retained inventory is the proof of life: if it has not arrived after
+    # inventory_timeout_s, report one `bridge-silent` naming the base
+    # topic in use. This covers startup only; bridge/state covers later.
     stop = threading.Event()
 
     def bridge_watchdog():
@@ -525,8 +511,7 @@ def main():
         while time.monotonic() < deadline:
             if bridge.inventory_seen.wait(min(0.25, timeout)) or stop.is_set():
                 return
-        # A degraded condition, not dropped input: its own event kind,
-        # never a `drop`.
+        # A degraded condition, so its own event kind (docs/adapters.md#6-health-events).
         session.health_event("bridge-silent", base_topic=base, timeout_s=timeout)
 
     watchdog = threading.Thread(target=bridge_watchdog, daemon=True)
@@ -535,8 +520,8 @@ def main():
     mqtt.wait_for_shutdown()
     stop.set()
 
-    # The MQTT loop stops first: an in-flight on_message during teardown
-    # would otherwise put on a closed zenoh session.
+    # Stop the MQTT loop first, or an in-flight on_message could put on
+    # a closed zenoh session.
     client.loop_stop()
     client.disconnect()
     for sub in subscribers:

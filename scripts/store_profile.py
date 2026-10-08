@@ -13,13 +13,13 @@ HOMEOSTAT_BUS already points at the supervisor:
 
     docker exec <container> uv run /opt/homeostat/store_profile.py
 
-The stats reply carries one entry per series. On a house with a few
-hundred of them, which entity is filling the file (usually an adapter
-publishing every poll rather than on change) is arithmetic nobody does
-by hand: this ranks entities by rows and series by write rate.
+The stats reply has one entry per series. A house can have a few hundred
+series, which makes it hard to see by hand which entity is filling the
+file. The usual cause is an adapter that publishes on every poll instead
+of on change. This script ranks entities by rows and series by write rate.
 
-Reads only: one get on home/history/stats, so it is safe against a live
-house.
+It only reads, with one get on home/history/stats, so it is safe to run
+against a live house.
 """
 
 import argparse

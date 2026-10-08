@@ -1,20 +1,22 @@
 """Automation-side SDK: the Context (see docs/design.md#the-sdks-view-of-a-unit).
 
-A Context gives an automation exactly the surface its manifest declares:
-subscriptions by binding name from [bus.subscribes], typed live parameters
-from [params.*] (seeded via a bus get, updated live by a config
-subscription), and publishing through [bus.publishes] expressions.
+A Context gives an automation the bus access its manifest declares:
 
-Publishes go to concrete keys only — a put on a `**` expression would hand
-adapters an unparseable wildcard key. Literal segments of the publish
-expression are defaults, wildcard segments must be named, and any key the
-declared expression does not cover is refused: the manifest stays the
-authority on intent.
+- subscriptions by binding name from [bus.subscribes];
+- typed live parameters from [params.*], seeded by a bus get and kept
+  current by a config subscription;
+- publishing through [bus.publishes] expressions.
 
-Zone references in the room slot expand against the house's zones.toml,
-and `{room}`/`{entity}` templates expand against the entities this unit
-binds — the same two expansions the core performs at plan time, so what a
-unit subscribes to is what `plan` printed for it.
+Publishes go to concrete keys only. A put on a `**` expression would give
+adapters a wildcard key they cannot parse. Literal segments of the publish
+expression are defaults, and wildcard segments must be named. A key the
+declared expression does not cover is refused, so the manifest decides
+what the unit may publish.
+
+A zone in the room slot expands against the house's zones.toml.
+`{room}`/`{entity}` templates expand against the entities this unit
+binds. The core performs the same two expansions at plan time, so a unit
+subscribes to what `plan` printed for it.
 """
 
 import datetime
@@ -58,17 +60,17 @@ def context(root: str | Path = ".") -> "Context":
     return Context(os.environ[keys.ENV_UNIT], root)
 
 
-# The classes addressed per entity — home/{class}/{room}/{entity}/{aspect}
-# — so they are the ones with slots to fill and the ones that expand.
-# Mirrors ENTITY_ADDRESSED in src/keyspace.rs; `arbiter` is left out
-# because it is an adapter's class and adapters use UnitSession directly,
-# not a Context. A class added in the core but not here leaves its
-# templated publishes unaddressable through `ctx` while `plan` validates
-# them happily.
+# The classes addressed per entity, as home/{class}/{room}/{entity}/{aspect}.
+# These are the classes with slots to fill and the ones that expand.
+# Mirrors ENTITY_ADDRESSED in src/keyspace.rs. `arbiter` is left out
+# because only adapters use it, and adapters use UnitSession directly
+# instead of a Context. If the core adds a class and this tuple does not,
+# `plan` accepts that class's templated publishes but `ctx` cannot address
+# them.
 _ENTITY_ADDRESSED = ("state", "cmd", "forecast")
 
-# The recorder's store description: the one history selector that answers
-# whether it is up, whatever the store happens to hold.
+# The recorder's store description. It is the only history selector that
+# answers whenever the recorder is up, whatever the store holds.
 _HISTORY_STATS = "home/history/stats"
 
 
@@ -86,10 +88,10 @@ def _expand(
 ) -> list[str]:
     """Expand an expression as the core does at plan time (src/expand.rs).
 
-    `{room}`/`{entity}` templates are substituted per bound entity, or a
-    zone in the room slot is expanded to one expression per member room.
-    The two are exclusive — a template is not a zone name — and only the
-    entity-addressed classes expand at all: those are the ones with a room
+    `{room}`/`{entity}` templates are substituted per bound entity.
+    Otherwise a zone in the room slot expands to one expression per member
+    room. The two cannot both apply, since a template is not a zone name.
+    Only the entity-addressed classes expand, because only they have a room
     slot to fill (src/keyspace.rs, ENTITY_ADDRESSED).
     """
     segments = expr.split("/")
@@ -101,11 +103,11 @@ def _expand(
             filled = {"{room}": entity.room, "{entity}": entity.name}
             return "/".join(filled.get(seg, seg) for seg in segments)
 
-        # A cmd path to an arbitrated entity belongs to the arbiter, not
-        # to the entity's owner, so a templated cmd expands only over the
-        # rest. Automation-owned entities are never arbitrated
-        # (`virtual-entity-arbitrated`), so this excludes nothing today;
-        # it is here because the two expansions must not drift.
+        # A cmd path to an arbitrated entity belongs to the arbiter, not to
+        # the entity's owner, so a templated cmd skips arbitrated entities.
+        # Automation-owned entities cannot be arbitrated
+        # (`virtual-entity-arbitrated`), so this currently excludes
+        # nothing. It keeps this expansion in step with the core's.
         return _dedup(
             substitute(entity)
             for entity in entities
@@ -118,12 +120,12 @@ def _expand(
 
 
 def _house_has_recorder(root: str | Path) -> bool:
-    """Return whether the house runs a recorder at all, read from the text.
+    """Return whether the house runs a recorder, read from the manifests.
 
-    The recorder is the unit declaring a publish under home/history/, a
-    class src/grants.rs keeps to a single service. Without one there is
-    nothing for `restore` to wait for, and waiting out its timeout would
-    stall every start in a recorder-less house.
+    The recorder is the unit that declares a publish under home/history/.
+    src/grants.rs allows only one service to publish there. Without a
+    recorder, `restore` has nothing to wait for, and waiting out its
+    timeout would delay every start in a house without one.
     """
     return any(
         spec.get("key", "").startswith("home/history/")
@@ -155,7 +157,7 @@ class _Params:
 
 
 class Context:
-    """An automation's bus surface, exactly as its manifest declares it.
+    """An automation's bus surface, as its manifest declares it.
 
     `context()` builds one for the unit the supervisor started.
 
@@ -196,8 +198,9 @@ class Context:
         if zones_path.exists():
             self._zones = tomllib.loads(zones_path.read_text()).get("zones", {})
         # Entities are only needed to expand templates, and reading them
-        # means parsing the whole house. Units without templates pay
-        # nothing; those with them fail at startup rather than mid-run.
+        # means parsing the whole house. Units without templates skip it.
+        # Units with templates fail at startup if it goes wrong, not while
+        # running.
         self._entities: list[house.Entity] = []
         declared = [
             *self._subscribes.values(),
@@ -220,8 +223,8 @@ class Context:
         self._sources_used: dict[tuple[str, str, str], bool] = {}
 
         if self._param_specs:
-            # Subscribe, then get, merge: the get covers everything before
-            # the subscription, the subscriber everything after.
+            # Subscribe, then get, then merge. The get covers everything
+            # before the subscription, and the subscriber everything after.
             self._subs.append(
                 self._session.subscribe(keys.config_keyexpr(unit), self._on_config)
             )
@@ -229,7 +232,7 @@ class Context:
             with self._lock:
                 for name, spec in self._param_specs.items():
                     if name in self._param_values:
-                        continue  # the subscription already delivered fresher
+                        continue  # the subscription delivered a newer value
                     self._param_values[name] = served.get(
                         keys.config_key(unit, name), spec["default"]
                     )
@@ -254,15 +257,16 @@ class Context:
         The handler receives (key, decoded JSON value). Non-JSON payloads
         are ignored.
 
-        Subscribe, then get, merge — as for config: the current value of
-        every matching key is read from the core's state mirror and
-        delivered before this returns, so a restarted unit is not blind
-        until its sources happen to publish again. A mirrored value can be
-        arbitrarily old, and a handler cannot otherwise tell a catch-up
-        from a fresh publish, so a handler declared as
-        `(key, value, age_s)` receives the age in seconds — zero for a live
-        sample — to hand to `Freshness.seen`. A two-argument handler gets
-        the catch-up without it, i.e. as though it had just arrived.
+        This subscribes, then gets, then merges, as for config. The current
+        value of every matching key is read from the core's state mirror and
+        delivered before this returns. A restarted unit therefore has its
+        inputs without waiting for its sources to publish again.
+
+        A mirrored value can be any age, and a handler cannot otherwise
+        tell a catch-up from a new publish. A handler declared as
+        `(key, value, age_s)` receives the age in seconds, which is zero for
+        a live sample, to pass to `Freshness.seen`. A two-argument handler
+        gets the catch-up without the age, as though it had just arrived.
 
         Parameters
         ----------
@@ -282,8 +286,9 @@ class Context:
         """
         wants_age = len(inspect.signature(handler).parameters) >= 3
         delivered: set[str] = set()
-        # Orders catch-up against live samples. Its own lock, not
-        # `self._lock`: the handler runs under it and may read `params`.
+        # Orders catch-up against live samples. It is a separate lock from
+        # `self._lock` because the handler runs under it and may read
+        # `params`.
         order = threading.Lock()
 
         def deliver(key: str, value: Any, age_s: float) -> None:
@@ -307,8 +312,8 @@ class Context:
             self._subs.append(self._session.subscribe(expr, callback))
         for expr in exprs:
             for key, value, age_s in self._session.get_json_aged(expr):
-                # Under the lock so a live sample for the same key, which
-                # is fresher, is delivered after the catch-up, never before.
+                # Under the lock, so a live sample for the same key, which
+                # is newer, is delivered after the catch-up and not before.
                 with order:
                     if key in delivered:
                         continue
@@ -324,14 +329,14 @@ class Context:
         aspect: str | None,
         source: str | None = None,
     ) -> str:
-        """Return the one concrete key a `[bus.publishes]` binding addresses.
+        """Return the concrete key a `[bus.publishes]` binding addresses.
 
-        Literal expression segments are defaults, wildcard and template
-        segments must be named, and a key the declared expression does not
-        cover is refused: the manifest stays the authority on intent.
+        Literal expression segments are defaults, and wildcard and template
+        segments must be named. A key the declared expression does not cover
+        is refused, so the manifest decides what the unit may publish.
 
-        A forecast key carries one slot more than the rest — its source,
-        which says WHO is claiming this future (docs/design.md#forecasts).
+        A forecast key has one more slot than the others: its source, which
+        says who publishes this forecast (docs/design.md#forecasts).
         """
         expr = self._publishes[binding]["key"]
         segments = expr.split("/")
@@ -380,10 +385,10 @@ class Context:
     ) -> None:
         """Publish through a `[bus.publishes]` expression to one concrete key.
 
-        Literal expression segments are defaults; wildcard segments must be
-        named via room/entity/aspect. cmd-class publishes are wrapped in the
-        envelope automatically (priority from the manifest's publish
-        declaration, actor this unit).
+        Literal expression segments are defaults. Wildcard segments must be
+        named with room/entity/aspect. cmd-class publishes are wrapped in the
+        envelope automatically. The priority comes from the manifest's
+        publish declaration, and the actor is this unit.
 
         Parameters
         ----------
@@ -434,13 +439,15 @@ class Context:
 
         This is `publish`, for the forecast class.
 
-        The binding is the point. Without this an automation has to reach
-        past its own manifest and hand a key to the session, which leaves
-        the declaration `plan` validated doing nothing at runtime: the
-        manifest stops being the authority on what this unit publishes.
+        Publishing through a binding is the purpose of this method. Without
+        it, an automation would have to bypass its manifest and give a key
+        to the session. The declaration `plan` validated would then have no
+        effect at runtime, and the manifest would no longer decide what this
+        unit publishes.
 
-        `points` are what the source said — see homeostat.forecast for the
-        shape and for why the extent and the resampling live there.
+        `points` are what the source said. See homeostat.forecast for their
+        shape, and for why the extent and the resampling are handled
+        there.
 
         Parameters
         ----------
@@ -457,7 +464,7 @@ class Context:
         aspect : str or None, optional
             The aspect slot, as for `publish`.
         source : str or None, optional
-            The source slot: who is claiming this future.
+            The source slot: who publishes this forecast.
 
         Raises
         ------
@@ -491,35 +498,36 @@ class Context:
     ) -> tuple[Any, float] | None:
         """Read back the last value this unit published on `binding`'s key.
 
-        It is read from the recorder as `(value, age_s)` — or None when there
+        It is read from the recorder as `(value, age_s)`, or None when there
         is nothing to restore.
 
-        The core's state mirror is in-memory, so a core restart (every
-        version upgrade is one) empties it and `subscribe`'s catch-up has
-        nothing to replay. For most units that is correct. For a latch it
-        is not: nothing can recompute a decision somebody made, and the
-        only record that it was made is the recorder's.
+        The core's state mirror is in memory, so a core restart empties it,
+        and every version upgrade restarts the core. `subscribe`'s catch-up
+        then has nothing to replay. For most units that is correct. A latch
+        is different. Nothing can recompute a decision somebody made, and
+        the recorder holds the only record of it.
 
-        Never automatic, because the right behaviour is not the same for
-        all state and only the unit knows which kind it holds — an rf433
-        adapter must publish `false` at startup rather than resurrect an
-        expired motion event (docs/design.md#one-way-senders), while a
-        fusion wants its inputs recomputed. So this is a call the unit
-        makes, and the age comes with the value: a latch does not care how
-        old its decision is, and a fusion very much does.
+        Restoring is not automatic, because the right behaviour differs
+        between kinds of state and only the unit knows which kind it holds.
+        An rf433 adapter must publish `false` at startup rather than bring
+        back an expired motion event (docs/design.md#one-way-senders). A
+        fusion wants its inputs recomputed. The unit therefore calls this
+        itself, and gets the age with the value. A latch does not care how
+        old its decision is, but a fusion does.
 
-        Reads only a state key this unit itself publishes, addressed by the
-        same slots as `publish` — a unit restoring somebody else's state is
-        a different and worse thing.
+        It reads only a state key this unit publishes, addressed by the
+        same slots as `publish`. Restoring another unit's state is not
+        supported.
 
-        Returns None, rather than raising, when the house has no recorder,
-        when the series has no rows, or when the store answers an error
-        (logged as a `restore-failed` health event): a unit must still be
-        able to start on its code defaults. Because there is no start order
-        between units (docs/design.md#restoring-a-units-own-last-value) the
-        recorder may not be answering yet, so this retries until
-        `timeout_s` — call it before `ready()`, where a unit that is not yet
-        able to do its job is exactly what the supervisor should see.
+        It returns None, rather than raising, when the house has no
+        recorder, when the series has no rows, or when the store answers
+        with an error. The last case is logged as a `restore-failed` health
+        event. A unit must still be able to start on its code defaults.
+        Units have no start order
+        (docs/design.md#restoring-a-units-own-last-value), so the recorder
+        may not be answering yet, and this retries until `timeout_s`. Call
+        it before `ready()`. Until then the supervisor sees the unit as not
+        yet able to do its job, which is accurate.
 
         Parameters
         ----------
@@ -557,20 +565,20 @@ class Context:
         def failed(reason: str) -> None:
             self.health_event("restore-failed", key=key, reason=reason)
 
-        # Wait for the recorder to answer, not for rows: a series with no
-        # rows yet is not answered at all (the recorder replies per series
-        # it holds), so waiting on the series itself would stall every
-        # first start for the whole timeout. `stats` describes the store
-        # and always answers while the recorder is up.
+        # Wait for the recorder to answer, not for rows. The recorder
+        # replies once per series it holds, so a series with no rows gets no
+        # reply at all. Waiting on the series itself would delay every first
+        # start by the whole timeout. `stats` describes the store and always
+        # answers while the recorder is up.
         #
-        # One question at a time, waiting out the rest of the deadline. The
-        # recorder answers queries one at a time (zenoh runs a queryable's
-        # callback serially), so a get that gives up and asks again leaves
-        # its question queued: once an answer takes longer than the get,
-        # every later answer reaches an asker who has already left, and such
-        # a loop never hears one however long it waits. A get nobody serves
-        # returns at once with no replies -- the recorder not up yet -- and
-        # only that is asked again.
+        # Send one query at a time, and let it wait for the rest of the
+        # deadline. The recorder answers queries one at a time (zenoh runs a
+        # queryable's callback serially). A get that gives up and asks again
+        # leaves its query in the recorder's queue. Once an answer takes
+        # longer than the get's timeout, every later answer arrives after
+        # its get has given up, and the loop never receives one. A get that
+        # no queryable serves returns at once with no replies, which means
+        # the recorder is not up yet. Only that case is retried.
         deadline = time.monotonic() + timeout_s
         while True:
             remaining = max(deadline - time.monotonic(), 0.1)
@@ -623,18 +631,18 @@ class Context:
 
         See docs/design.md#which-sources-a-computation-actually-used.
 
-        Declared sources say what MAY contribute; this says what did. A
-        source dropped as stale, failed on a plausibility check, or
-        excluded by a house rule would otherwise still be drawn as
-        participating, which is backwards — a dropped source is the
-        diagnosis.
+        Declared sources say what may contribute. This reports what did.
+        Without it, a source dropped as stale, failed on a plausibility
+        check, or excluded by a house rule would still be shown as
+        contributing. A dropped source is often the explanation for an odd
+        value.
 
-        Emits ONLY on a change, because "on transition" is the discipline
-        hand-written producers get wrong, and a stream that repeats every
-        tick is one nobody can fold into intervals. Call it every time you
-        decide, including at startup: the first call for a triple always
-        reports, so a consumer starting mid-window does not read silence
-        as agreement.
+        It emits only on a change. Hand-written producers often get
+        "emit on transition" wrong, and a stream that repeats every tick
+        cannot be turned into intervals. Call it every time you decide,
+        including at startup. The first call for a triple always reports,
+        so a consumer that starts mid-window does not mistake silence for
+        agreement.
 
         Parameters
         ----------

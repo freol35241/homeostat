@@ -58,10 +58,9 @@ pub fn render_sorted(errors: &[ValidationError]) -> Vec<String> {
 macro_rules! codes {
     ($($variant:ident => $code:literal: $why:literal,)*) => {
         /// Every error code the pipeline can emit, each with the paragraph a
-        /// reader (or an agent) needs to fix it: what the rule is and why it
-        /// exists. The only registry: `homeostat explain`, the MCP `explain`
-        /// tool, and the explanations appended to refused plans all read
-        /// from here.
+        /// reader or an agent needs to fix it: what the rule is and why it
+        /// exists. `homeostat explain`, the MCP `explain` tool and the
+        /// explanations appended to refused plans all read from this registry.
         #[derive(Debug, Clone, Copy, PartialEq, Eq)]
         pub enum Code {
             $(#[doc = $why] $variant,)*
@@ -391,8 +390,8 @@ pub fn explain(code: &str) -> Option<&'static str> {
 }
 
 /// One `code: explanation` paragraph per distinct code in `errors`, in code
-/// order — appended wherever a refused plan is reported so the reader has
-/// the rule next to the failure.
+/// order. It is appended wherever a refused plan is reported, so the reader
+/// sees the rule next to the failure.
 pub fn explanations(errors: &[ValidationError]) -> Vec<String> {
     let mut codes: Vec<Code> = errors.iter().map(|e| e.code).collect();
     codes.sort_unstable_by_key(|c| c.as_str());
@@ -407,9 +406,9 @@ pub fn explanations(errors: &[ValidationError]) -> Vec<String> {
 mod tests {
     use super::*;
 
-    /// A code is emitted by naming its variant, so every variant must be
-    /// named somewhere outside this registry, or it explains a rule
-    /// nothing checks.
+    /// A code is emitted by naming its variant. So every variant must be named
+    /// somewhere outside this registry, or it explains a rule that nothing
+    /// checks.
     #[test]
     fn every_code_is_emitted_and_renders_distinctly() {
         let sources = [

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Smoke test for the starter house's demo (examples/starter-house/demo):
-# boots it the way demo/up.sh does, against the image under test, and
-# asserts that every simulated device's state reaches the recorder through
-# its real adapter and that a dashboard command round-trips to a device.
-# The demo is the first thing a newcomer runs; this is what stops an
-# adapter change from quietly leaving it half-dark.
+# Smoke test for the starter house's demo (examples/starter-house/demo).
+# It boots the demo the way demo/up.sh does, against the image under test.
+# It asserts that every simulated device's state reaches the recorder
+# through its real adapter, and that a dashboard command round-trips to a
+# device. The demo is the first thing a newcomer runs, so this catches an
+# adapter change that would leave some of its devices without data.
 #
 # Usage: scripts/smoke_demo.sh <image>
 set -euo pipefail
@@ -16,8 +16,8 @@ export HOMEOSTAT_IMAGE="$IMAGE"
 export DEMO_DIR="$WORK/house"
 UP="$REPO/examples/starter-house/demo/up.sh"
 
-# up.sh with arguments is `docker compose` for the demo: the project and
-# files are named in one place.
+# up.sh with arguments runs `docker compose` for the demo, so the project
+# and files are named in one place.
 cleanup() {
   "$UP" down -v --timeout 5 >/dev/null 2>&1 || true
   rm -rf "$WORK"
@@ -48,7 +48,8 @@ except sqlite3.Error:
 PY
 }
 
-# Units resolve their environments on first boot: a generous deadline.
+# Units resolve their environments on first boot, so the deadline is
+# generous.
 echo "waiting for every simulated device to reach the store..."
 deadline=$((SECONDS + 420))
 for pair in livingroom_lamp:on front_door:locked hallway_motion:occupancy \
@@ -62,8 +63,8 @@ for pair in livingroom_lamp:on front_door:locked hallway_motion:occupancy \
   echo "$entity/$aspect = $(latest "$entity" "$aspect")"
 done
 
-# The other direction: the dashboard's command reaches the simulated
-# ESPHome switch, and the device's readback comes home.
+# The other direction. A dashboard command reaches the simulated ESPHome
+# switch, and the device's readback reaches the store.
 [ "$(latest porch_switch on)" = "0" ] || fail "the porch switch did not start off"
 curl -sf -m 10 -X POST http://127.0.0.1:8600/api/cmd \
   -H 'Content-Type: application/json' -H 'X-Homeostat: family' \

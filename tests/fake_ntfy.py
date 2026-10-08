@@ -2,15 +2,14 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""A minimal, honest ntfy server for the ntfy adapter's integration tests
-(tests/ntfy.rs; see docs/design.md#notifications).
+"""A minimal ntfy server for the tests in tests/ntfy.rs.
 
-Speaks the two calls the adapter makes: GET /v1/health -> {"healthy":
-true}, and POST /{topic} with the message as the body and Title /
-Priority headers -> the message document ntfy returns ({id, time, topic,
-message, title, priority}). Every publish must carry `Authorization:
-Bearer <token>` matching --token — anything else is 401 — which is how
-the tests know the adapter authenticates.
+See docs/design.md#notifications. It speaks the two calls the adapter
+makes: GET /v1/health -> {"healthy": true}, and POST /{topic} with the
+message as the body and Title / Priority headers -> the message document
+ntfy returns ({id, time, topic, message, title, priority}). Every publish
+must carry `Authorization: Bearer <token>` matching --token, and anything
+else gets 401. That is how the tests know the adapter authenticates.
 
 Test control rides plain HTTP on the same port:
 

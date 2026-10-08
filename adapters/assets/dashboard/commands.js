@@ -6,21 +6,21 @@ import { toast } from './chrome.js';
 import logic from './logic.js';
 import { descriptorField, entitySpec, scheduleRender, stateValue, store, unitLabel } from './store.js';
 
-/* In-flight commands, keyed room/entity/aspect. Deliberately outside
- * `store`: the store is the house's state as the bus reports it, and a
- * pending command is this browser's private business — nothing on the
- * bus knows this tab tapped a button. */
+/* In-flight commands, keyed room/entity/aspect. They are kept outside
+ * `store`, which holds the house's state as the bus reports it. A pending
+ * command is local to this browser, and nothing on the bus knows this tab
+ * tapped a button. */
 export var pending = {};
 
-/* A command is a proposal passing through stages, and the page shows
- * which one it is in: asked from the tap, then confirmed by readback,
+/* A command passes through stages, and the page shows which one it is
+ * in. It is "asked" from the tap. It ends as confirmed by readback,
  * adjusted when the device settled elsewhere, held by the arbiter,
- * rejected by the adapter, unheard when nothing subscribes to its key,
- * or unconfirmed when nothing answers. The envelope's id, handed
- * back by /api/cmd, is what ties an event to the command it ended. The
- * stage is said on the control itself (markPendingControls) and stays
- * said for a while after it ends (`recent`); the toast is only for an
- * outcome whose control is no longer on screen. */
+ * rejected by the adapter, unheard when nothing subscribes to its key, or
+ * unconfirmed when nothing answers. The envelope's id, returned by
+ * /api/cmd, ties an event to the command it ended. The stage is shown on
+ * the control itself (markPendingControls) and stays for a while after
+ * the command ends (`recent`). The toast is only for an outcome whose
+ * control is no longer on screen. */
 export var recent = {};
 
 // key -> timer: a stepper still being tapped (stepCmd)
@@ -30,7 +30,7 @@ var STEP_SETTLE_MS = 600;
 
 var cmdSeq = 0;
 
-// How far a readback may sit from the request and still be it: the
+// How far a readback may be from the request and still match it. The
 // brightness scale (0–254) is finer than the percent its control shows.
 function cmdTolerance(aspect) {
   return aspect === 'brightness' ? 254 / 200 : 0;
@@ -61,7 +61,7 @@ export function sendCmd(room, entity, aspect, value) {
     if (outcome) announceOutcome(outcome);
     scheduleRender();
   }).catch(function (e) {
-    // Refused before it ever reached the bus: nothing to wait for.
+    // Refused before it reached the bus, so there is nothing to wait for.
     var entry = pending[key];
     if (entry && entry.outcome === 'sending' && entry.seq === seq) delete pending[key];
     announceOutcome({ key: key, outcome: 'failed', value: value, reason: errText(e) });
@@ -69,10 +69,10 @@ export function sendCmd(room, entity, aspect, value) {
   });
 }
 
-/* A stepper's tap. Held as a draft for a moment, so the taps that follow
- * build on it (logic.commandBase) and one command goes out for where they
- * end: three taps of + are one request for +1.5, not three requests each
- * computed from a readback that has not moved yet. */
+/* A stepper's tap. It is held as a draft for a moment, so the taps that
+ * follow build on it (logic.commandBase), and one command is sent for
+ * where they end. Three taps of + are one request for +1.5, not three
+ * requests each computed from a readback that has not moved yet. */
 export function stepCmd(room, entity, aspect, value) {
   var key = logic.pendingKey(room, entity, aspect);
   delete recent[key];
@@ -106,10 +106,10 @@ function formatCmdValue(room, entity, aspect, value) {
   return logic.formatAspect(aspect, field, value);
 }
 
-/* What can be said about a command before anything answers it: the unit
- * that owns the device is not running, or the device says it is
- * unavailable. Either makes a long wait likely, and the family is better
- * told now than in twenty seconds. */
+/* Warnings that can be given before anything answers a command: the unit
+ * that owns the device is not running, or the device reports itself
+ * unavailable. Either makes a long wait likely, so the page says so now
+ * rather than after twenty seconds. */
 function commandWarning(room, entity) {
   var spec = entitySpec(room, entity);
   if (!spec) return '';
@@ -122,11 +122,11 @@ function commandWarning(room, entity) {
 }
 
 /* The line under a control: the stage its command is in, or how it
- * ended. `tone` is the colour: busy while waiting, ok when the device
- * took it, warn when it settled elsewhere or was held, bad when it went
- * nowhere. A refusal is deliberately not worded as a failure: the
- * command was well-formed and lost to a higher band, and a retry would
- * lose identically. */
+ * ended. `tone` is the colour: busy while waiting, ok when the device took
+ * it, warn when it settled elsewhere or was held, and bad when it went
+ * nowhere. A refusal is not worded as a failure. The command was
+ * well-formed and lost to a higher band, and a retry would lose the same
+ * way. */
 function commandStatus(key) {
   var parts = key.split('/');
   var room = parts[0], entity = parts[1], aspect = parts[2];
@@ -169,9 +169,9 @@ function outcomeStatus(done, fmt, room, entity, aspect) {
   return null;
 }
 
-/* An ended command is said on its control; the toast is the fallback for
- * one whose control is not on screen any more (the overlay closed, the
- * view changed), and a confirmation needs no fallback. */
+/* An ended command is shown on its control. The toast is the fallback
+ * when that control is no longer on screen (the overlay closed, or the
+ * view changed). A confirmation needs no toast. */
 export function announceOutcome(outcome) {
   logic.noteOutcome(recent, outcome, Date.now());
   if (outcome.outcome === 'confirmed') return;
@@ -228,26 +228,27 @@ function controlAspect(el) {
   return el.getAttribute('data-aspect');
 }
 
-// The actions that send a command; anything else carrying room and entity
-// (a row that opens a detail, a label that opens history) is not a control.
+// The actions that send a command. Other elements with a room and entity
+// (a row that opens a detail, a label that opens history) are not
+// controls.
 var COMMAND_ACTIONS = {
   'toggle-light': 1, 'toggle-lock': 1, 'climate-step': 1, 'brightness-step': 1,
   'aspect-step': 1, 'aspect-enum': 1, 'aspect-select': 1, 'aspect-slider': 1, 'slider': 1
 };
 
-/* Chrome applied after every render rather than baked into each control's
- * markup: the views rebuild their HTML wholesale, so the pending state has
- * to be re-applied to the new nodes anyway, and doing it in one pass keeps
- * it out of a dozen render paths.
+/* Applied after every render rather than built into each control's
+ * markup. The views rebuild their HTML completely, so the pending state
+ * has to be applied to the new nodes anyway. Doing it in one pass keeps it
+ * out of a dozen render paths.
  *
- * A control with a command in flight shows the request as a request: the
- * value it asked for in the value slot (or the toggle's knob where it was
- * asked to go, outlined dashed), and a line under it saying which stage
- * the command is in. It keeps taking taps — a toggle tapped again asks to
- * go back, a stepper tapped again steps on from the request — because
- * freezing it until the device answers would make several steps
- * impossible. The line stays a while after the command ends, saying how
- * it ended. */
+ * A control with a command in flight shows the request as a request. The
+ * asked-for value appears in the value slot, or the toggle's knob moves
+ * where it was asked to go, with a dashed outline. A line under the
+ * control says which stage the command is in. The control still accepts
+ * taps: a toggle tapped again asks to go back, and a stepper tapped again
+ * steps on from the request. Blocking it until the device answers would
+ * make several steps in a row impossible. The line stays for a while
+ * after the command ends and says how it ended. */
 export function markPendingControls() {
   var old = document.querySelectorAll('.cmd-status');
   for (var o = 0; o < old.length; o++) old[o].remove();
@@ -281,7 +282,7 @@ export function markPendingControls() {
   }
 }
 
-// The asked-for value, painted as asked rather than as done.
+// The asked-for value, drawn as a request rather than as done.
 function showRequest(el, row, room, entity, aspect, value) {
   if (el.classList.contains('toggle')) {
     el.classList.toggle('on', value === true);

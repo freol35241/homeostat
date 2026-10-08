@@ -4,21 +4,18 @@
 #     "aioesphomeapi>=45,<46",
 # ]
 # ///
-"""A minimal, honest ESPHome native-API device, for the esphome adapter's
-integration tests (tests/esphome.rs; the adapter's own docstring is its
-spec).
+"""A minimal ESPHome native-API device for the tests in tests/esphome.rs.
 
-Speaks the real plaintext wire protocol (a zero byte, a varint length, a
-varint message-type id, then the protobuf payload, as aioesphomeapi's own
-frame helper defines it; this mirrors it
-by hand rather than reaching into aioesphomeapi's internals) using the
+It speaks the real plaintext wire protocol: a zero byte, a varint length,
+a varint message-type id, then the protobuf payload, as aioesphomeapi's
+own frame helper defines it. The framing is written by hand here rather
+than reaching into aioesphomeapi's internals. The payloads use the
 protobuf message classes bundled in aioesphomeapi.api_pb2, so the bytes on
-the wire are exactly what a real device would send. Encryption (Noise) is
-deliberately not implemented here — the devices-file key plumbing is
-exercised without a live encrypted peer (see the adapter's module
-docstring).
+the wire are what a real device would send. Encryption (Noise) is not
+implemented: the devices-file key plumbing is tested without a live
+encrypted peer (see the adapter's module docstring).
 
-Fixed inventory, just enough for the adapter's v1 vocabulary:
+Fixed inventory, enough for the adapter's v1 vocabulary:
   - switch "relay" (key 1)
   - sensor "temperature" (key 2), device_class "temperature"
   - binary_sensor "motion" (key 3), device_class "motion"
@@ -27,7 +24,7 @@ Handles: HelloRequest, DeviceInfoRequest, ListEntitiesRequest (+ Done),
 SubscribeStatesRequest (sends the current state of every entity, then any
 future change), SwitchCommandRequest (updates state and echoes it back to
 every subscribed connection, like a real relay), PingRequest. Anything else
-is ignored, never crashes the server.
+is ignored and does not crash the server.
 """
 
 import argparse
@@ -96,14 +93,17 @@ async def read_message(reader: asyncio.StreamReader) -> tuple[int, bytes]:
 
 
 class Device:
-    """Shared state across connections (a real device has exactly one, but
-    the test harness is honest about it being possible to reconnect)."""
+    """State shared across connections.
+
+    A real device stays one device however often the adapter reconnects,
+    so its state does not belong to a connection.
+    """
 
     def __init__(self, name: str, reserved_sensor: bool = False):
         self.name = name
         self.state = {"relay": False, "temperature": 21.5, "motion": True}
         # When set, the device also exposes a sensor whose object_id is the
-        # reserved "available" aspect — the adapter must drop its states.
+        # reserved "available" aspect; the adapter must drop its states.
         self.reserved_sensor = reserved_sensor
         self.subscribers: set[asyncio.StreamWriter] = set()
 
@@ -238,8 +238,8 @@ def make_handler(device: Device):
                     writer.write(encode_message(DISCONNECT_RESPONSE, api_pb2.DisconnectResponse()))
                     await writer.drain()
                     return
-                # else: unhandled message type — real devices ignore what
-                # they don't support too; never crash on it.
+                # else: unhandled message type. Real devices ignore what they
+                # don't support too, so this does not crash on it.
         finally:
             device.subscribers.discard(writer)
             writer.close()

@@ -1,17 +1,18 @@
 """Per-key cooldowns for automations that reach people (docs/design.md#notifications).
 
-A notification per event is a notification 417 times when a motion
-episode arrives as 417 samples, so the live estate's alarm flow limits
-itself to one message per ten minutes and that limiter is load-bearing.
-The window is house policy — a family-editable parameter — and this is
-the bookkeeping behind it, owned once rather than hand-rolled per unit:
-the monotonic time each key last fired, and whether a key may fire again
-now.
+One notification per event means 417 notifications when a motion
+episode arrives as 417 samples. The alarm flow in the live installation
+therefore limits itself to one message per ten minutes, and it depends on
+that limit. The window is house policy, set by a family-editable parameter.
+This class does the bookkeeping for it, so units do not each write their
+own. It records the monotonic time each key last fired and answers
+whether a key may fire again now.
 
 `ready(key, window_s)` answers and, when true, records the firing, so the
 call site is one `if`. A key that has never fired is ready. The adapter
-side carries its own floor (`min_interval_s`) as defense in depth; this
-helper is the norm, that floor is the backstop.
+side also enforces its own minimum interval (`min_interval_s`). This
+helper sets the normal rate, and the adapter's minimum is a second line
+of defence.
 """
 
 import time
@@ -34,9 +35,10 @@ class Cooldown:
     def ready(self, key: str, window_s: float) -> bool:
         """Return whether `key` may fire now, marking it as fired if so.
 
-        True, and the key marked as fired now, when at least `window_s`
-        seconds have passed since the key last fired (or it never has);
-        False otherwise, leaving the record untouched.
+        The key may fire when at least `window_s` seconds have passed
+        since it last fired, or when it has never fired. In that case the
+        key is marked as fired now. Otherwise the record is left
+        unchanged.
 
         Parameters
         ----------
@@ -60,8 +62,8 @@ class Cooldown:
     def reset(self, key: str) -> None:
         """Forget `key`, so its next `ready` is True.
 
-        For example when the condition that fired it has cleared and the
-        next occurrence is a new episode, not a repeat.
+        Use this when the condition that fired the key has cleared, so the
+        next occurrence is a new episode rather than a repeat.
 
         Parameters
         ----------

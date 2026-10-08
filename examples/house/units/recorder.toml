@@ -13,18 +13,18 @@ restart = "always"
 mode = "static"
 endpoint = "sqlite:data/history.db"
 
-# Retention: rows older than the window are purged hourly; 0 keeps them
-# forever. Events are the audit trail — the smaller table and the one
-# worth keeping longest — so the two windows are separate.
+# Retention: rows older than the window are purged hourly, and 0 keeps
+# them forever. Events are the audit trail. That table is the smaller one
+# and the one worth keeping longest, so it has a window of its own.
 [params.retain_samples_days]
 type = "float"
 default = 0
 constraint = { min = 0 }
 editable_by = "owner"
 
-# Superseded issues are what grows: every re-issue of a horizon is kept
-# so a forecast can be checked against what actually happened, which is
-# the whole reason to store one. Measured on issue time.
+# Superseded issues are what grows. Every re-issue of a horizon is kept,
+# so a forecast can be checked against what actually happened, and that
+# check is the reason to store forecasts. Age is measured from issue time.
 [params.retain_forecasts_days]
 type = "float"
 default = 0
@@ -37,30 +37,30 @@ default = 0
 constraint = { min = 0 }
 editable_by = "owner"
 
-# A disk returning corrupt data is silent in SQLite until a read hits it:
-# PRAGMA integrity_check on this schedule, reported as a health event.
-# 0 disables.
+# SQLite does not notice a disk returning corrupt data until a read hits
+# it. This runs PRAGMA integrity_check every this many hours and reports
+# the result as a health event. 0 disables it.
 [params.integrity_check_hours]
 type = "float"
 default = 24
 constraint = { min = 0 }
 editable_by = "owner"
 
-# Archiving moves, retention deletes: a month that closed more than this
-# many months ago is sealed into archive/<store>-YYYY-MM.db beside the
-# store (a plain SQLite file with the store's schema) and leaves this
-# file, so the file the recorder writes stays one window deep and nothing
-# is lost. 0 never archives.
+# Archiving moves rows, where retention deletes them. A month that closed
+# more than this many months ago is sealed into archive/<store>-YYYY-MM.db
+# beside the store, a plain SQLite file with the store's schema, and
+# removed from the live store. The live store stays one window deep and
+# nothing is lost. 0 never archives.
 [params.archive_after_months]
 type = "int"
 default = 0
 constraint = { min = 0 }
 editable_by = "owner"
 
-# Archives are kept forever unless this is set: then a whole archive file
-# goes once its month closed more than this many months ago. It never
-# touches the hot file, which the retain_*_days windows govern. 0 keeps
-# every archive.
+# Archives are kept forever unless this is set. When it is, an archive
+# file is deleted whole once its month closed more than this many months
+# ago. It does not touch the live store, which the retain_*_days windows
+# govern. 0 keeps every archive.
 [params.retain_archives_months]
 type = "int"
 default = 0
@@ -69,8 +69,8 @@ editable_by = "owner"
 
 [bus.subscribes]
 state = "home/state/**"
-# A series' future, stored beside its past. Recording forecasts is a
-# house's choice — drop this line and the class is simply not kept.
+# A series' future, stored beside its past. Recording forecasts is the
+# house's choice: without this line, forecasts are not kept.
 forecast = "home/forecast/**"
 cmd = "home/cmd/**"
 health = "home/health/**"

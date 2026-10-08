@@ -13,20 +13,19 @@
 
 The page is the real `adapters/dashboard.html`; the house behind it is
 `server.py`'s fixtures (see that file for why). Assertions go through the
-DOM and the network only — the page's script is an IIFE, so there are no
-internals to reach, which keeps every assertion to something a person or
-another process could observe.
+DOM and the network only. The page's state lives inside its ES modules, so
+there are no internals to reach, and every assertion is about something a
+person or another process could observe.
 
-What these tests are for (docs/design.md#the-page): locking in rules we
-have already learned, and one broad net — no page errors, every view
-renders, every widget kind draws. They are NOT the discovery mechanism.
-Rendering bugs are found by a person opening a browser, and that habit is
-the thing to keep; this suite carries the boring half so nobody re-runs
-twenty checks by hand.
+What these tests are for (docs/design.md#the-page): they lock in rules
+already learned, and cast one broad net (no page errors, every view
+renders, every widget kind draws). They do not find new rendering bugs; a
+person opening a browser does that, and should keep doing it. The suite
+carries the repetitive checks so nobody re-runs twenty of them by hand.
 
-Deliberately not asserted: pixels, screenshots, whole-HTML snapshots, CSS
-beyond the handful that is behaviour, exact copy (match a shape, not a
-wording), and chart path coordinates — geometry is asserted numerically in
+Not asserted: pixels, screenshots, whole-HTML snapshots, CSS beyond the
+handful that is behaviour, exact copy (tests match a shape rather than a
+wording), and chart path coordinates. Geometry is asserted numerically in
 tests/js.
 """
 
@@ -50,9 +49,11 @@ DESKTOP = {"width": 1280, "height": 900}
 
 
 class PageTest(unittest.IsolatedAsyncioTestCase):
-    """One fake house and one browser page per test, so a test can never
-    inherit another's state — the bugs this suite exists for are about
-    state surviving, and a shared page would hide them."""
+    """One fake house and one browser page per test.
+
+    A test cannot inherit another's state. The bugs this suite looks for
+    are about state surviving, and a shared page would hide them.
+    """
 
     viewport = DESKTOP
 
@@ -65,8 +66,8 @@ class PageTest(unittest.IsolatedAsyncioTestCase):
             viewport=self.viewport, timezone_id="Europe/Stockholm", locale="en-GB"
         )
         self.page = await context.new_page()
-        # A thrown exception or a console error IS a failure, in every
-        # test: the page renders on, so nothing else would notice.
+        # A thrown exception or a console error is a failure in every
+        # test: the page keeps rendering, so nothing else would notice.
         self.faults: list[str] = []
         self.page.on("pageerror", lambda e: self.faults.append(f"pageerror: {e}"))
         self.page.on(
@@ -95,8 +96,11 @@ class PageTest(unittest.IsolatedAsyncioTestCase):
 
 
 class Smoke(PageTest):
-    """The broad net: the odds against a bug nobody has thought of are
-    better here than in any targeted assertion."""
+    """The broad net.
+
+    A bug nobody has thought of is likelier to show up here than in any
+    targeted assertion.
+    """
 
     async def test_every_view_renders_something(self):
         for name in ("now", "heating", "downstairs", "everything", "health", "notshown"):
@@ -128,8 +132,8 @@ class Smoke(PageTest):
         self.assertGreater(await self.page.locator(".param-row").count(), 0, "params")
 
     async def test_the_nav_is_the_file_and_the_chrome_is_the_rail(self):
-        # dashboard.toml REPLACES the nav; Health and Not shown are fixed
-        # chrome below it, never views (docs/design.md#views-are-text).
+        # dashboard.toml replaces the nav; Health and Not shown are fixed
+        # chrome below it and are not views (docs/design.md#views-are-text).
         names = await self.page.locator("nav button[data-view]:visible").evaluate_all(
             "els => els.map(e => e.getAttribute('data-view'))"
         )
@@ -145,13 +149,13 @@ class Smoke(PageTest):
 
 
 class ChoiceSurvivesRerender(PageTest):
-    """`docs/design.md#controls-and-the-overlay`: what a reader chose
-    survives a re-render only if it is held outside the markup.
+    """What a reader chose survives a re-render.
 
-    Live state re-renders the panel and replaces its nodes; the rule has
-    five instances, and a change to one ships the others broken unless
-    each is re-checked. One test each, so the insight stays a checklist
-    item.
+    `docs/design.md#controls-and-the-overlay`: a choice survives only if it
+    is held outside the markup, because live state re-renders the panel and
+    replaces its nodes. The rule has five instances, and a change to one
+    can break the others unless each is re-checked, so each has its own
+    test.
     """
 
     async def rerender(self) -> None:
@@ -207,9 +211,9 @@ class ChoiceSurvivesRerender(PageTest):
         self.assertEqual(await active.get_attribute("data-hours"), "168")
 
     async def test_an_unsent_drag_is_not_snatched_back(self):
-        # A slider moved but not RELEASED holds the reader's value, not the
-        # house's: a delta mid-drag that reset it would fight the finger.
-        # `input` is the drag, `change` is the release — Playwright's fill()
+        # A slider moved but not released holds the reader's value rather than
+        # the house's: a delta mid-drag that reset it would fight the finger.
+        # `input` is the drag and `change` is the release. Playwright's fill()
         # fires both, which is a finished drag and a different test.
         await self.view("downstairs")
         slider = self.page.locator(
@@ -225,9 +229,9 @@ class ChoiceSurvivesRerender(PageTest):
 
         self.assertEqual(await slider.input_value(), "35")
 
-        # Releasing it is what commands, once — and in the device's scale,
-        # not the slider's: the control is a percent, `brightness` is
-        # 0-254, so 35 % leaves as 89.
+        # Releasing it commands, once, in the device's scale rather than the
+        # slider's: the control is a percent and `brightness` is 0-254, so
+        # 35 % leaves as 89.
         await slider.dispatch_event("change")
         await self.page.wait_for_timeout(300)
         self.assertEqual(
@@ -410,8 +414,10 @@ class HoldsOnNow(PageTest):
 
 
 class SmokePhone(Smoke):
-    """The same net at phone width, where the family surface mostly lives:
-    a different nav, a different grid, the same page."""
+    """The same net at phone width, where the family mostly uses the page.
+
+    The nav and the grid differ; the page is the same.
+    """
 
     viewport = PHONE
 
@@ -458,12 +464,15 @@ class UnitOverlay(PageTest):
 
 
 class PagesDemo(unittest.IsolatedAsyncioTestCase):
-    """The static demo on GitHub Pages (demo-site/README.md), as built and
-    as served: under /homeostat/, with demo-site/shim.js standing in for
-    the dashboard unit. The shim is a second fake of the unit's endpoints
-    beside server.py, so this is what keeps it honest — a page that starts
-    asking for something the shim does not answer faults here, or fails a
-    request, instead of breaking the published demo where nobody looks."""
+    """The static demo on GitHub Pages, as built and served.
+
+    See demo-site/README.md. It is served under /homeostat/, with
+    demo-site/shim.js standing in for the dashboard unit. The shim is a
+    second fake of the unit's endpoints beside server.py, and this test
+    keeps it in step with the page. A page that starts asking for something
+    the shim does not answer faults here, or fails a request, instead of
+    breaking the published demo where nobody looks.
+    """
 
     viewport = DESKTOP
 
@@ -536,9 +545,12 @@ class PagesDemo(unittest.IsolatedAsyncioTestCase):
 
 
 def install_browser() -> int:
-    """Fetches the Chromium this script's locked Playwright expects, with
-    the system libraries it needs. One command for CI and the devcontainer,
-    so the browser can never be a version the lockfile did not ask for."""
+    """Fetch the Chromium this script's locked Playwright expects.
+
+    It comes with the system libraries it needs. CI and the devcontainer
+    run the same command, so the browser is always the version the lockfile
+    asks for.
+    """
     return subprocess.call(
         [sys.executable, "-m", "playwright", "install", "--with-deps", "chromium"]
     )

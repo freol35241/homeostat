@@ -1,16 +1,15 @@
 //! Minimal JSON-RPC / MCP request handling shared by both transports:
-//! initialize, tools/list, tools/call, ping. Hand-rolled on purpose — the
-//! surface this server needs is four methods over JSON-RPC 2.0, stateless,
-//! one message at a time, and stays that way; an SDK would be the largest
-//! dependency in the tree.
+//! initialize, tools/list, tools/call, ping. It is hand-rolled because the
+//! server needs only these four methods over JSON-RPC 2.0, stateless, one
+//! message at a time. An MCP SDK would be the largest dependency in the tree.
 
 use serde_json::{json, Value};
 
 use super::Server;
 
-/// The newest MCP revision this server knows; initialize echoes the
-/// client's requested revision since everything served here is valid under
-/// every published one.
+/// The newest MCP revision this server knows. initialize echoes the client's
+/// requested revision, since everything served here is valid under every
+/// published revision.
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
 
 /// Handles one JSON-RPC message; None for notifications (no reply).
@@ -52,8 +51,8 @@ fn initialize(params: &Value) -> Value {
     })
 }
 
-/// An unknown tool is a protocol error; a known tool that fails is a tool
-/// result with isError — the agent reads the message and adjusts.
+/// An unknown tool is a protocol error. A known tool that fails is a tool
+/// result with isError, so the agent reads the message and adjusts.
 fn tool_call(server: &Server, params: &Value) -> Result<Value, Value> {
     let name = params
         .get("name")
@@ -79,13 +78,13 @@ fn tool_call(server: &Server, params: &Value) -> Result<Value, Value> {
     }))
 }
 
-/// The longest stdio message accepted: generous for any tool call, and a
-/// bound rather than an allocation failure for a runaway client.
+/// The longest stdio message accepted. It is generous for any tool call, and
+/// turns a runaway client into an error instead of an allocation failure.
 const MAX_LINE: u64 = 16 * 1024 * 1024;
 
 /// The stdio transport: newline-delimited JSON-RPC on stdin/stdout, one
-/// response line per request. Returns on EOF — the MCP client hanging up
-/// is the shutdown signal.
+/// response line per request. Returns on EOF, which is how the MCP client
+/// signals shutdown.
 pub fn serve_stdio(server: &Server) -> Result<(), String> {
     use std::io::{BufRead, Read, Write};
     let mut stdin = std::io::stdin().lock();

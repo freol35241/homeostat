@@ -1,7 +1,7 @@
-//! The plan engine: diffs a validated house repo against the world as the
-//! bus reports it (see docs/design.md#plan-and-apply). No state file —
-//! desired state is the repo, actual state is queryable, drift is
-//! impossible by construction.
+//! The plan engine: diffs a validated house repo against the world as the bus
+//! reports it (see docs/design.md#plan-and-apply). There is no state file.
+//! Desired state is the repo and actual state is queried from the bus, so
+//! there is no stored copy that can drift.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -19,8 +19,8 @@ use crate::repo::LoadedUnit;
 use crate::validate::display_value;
 use crate::CheckResult;
 
-/// Plan tiers per docs/design.md#tiers, derived mechanically from the diff,
-/// never declared. Any grant-table delta escalates to structural.
+/// Plan tiers per docs/design.md#tiers. They are derived from the diff, and
+/// nothing declares them. Any grant-table delta escalates to structural.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tier {
     ParameterOnly,
@@ -38,7 +38,7 @@ impl fmt::Display for Tier {
     }
 }
 
-/// One unit as the world reports it: what is actually running.
+/// One unit as the world reports it: what is running.
 #[derive(Debug, Clone)]
 pub struct WorldUnit {
     /// The manifest TOML as the supervisor loaded it.
@@ -47,8 +47,8 @@ pub struct WorldUnit {
     pub files_hash: String,
 }
 
-/// The actual world, read from the bus (manifest hashes, current
-/// parameters, resolved grants) — or empty when planning offline.
+/// The actual world, read from the bus (manifest hashes, current parameters,
+/// resolved grants), or empty when planning offline.
 #[derive(Debug, Default)]
 pub struct World {
     /// Label for plan output: "empty" or the bus endpoint.
@@ -72,8 +72,8 @@ impl World {
     }
 }
 
-/// The unit's world entry as the repo currently describes it — what the
-/// supervisor records at startup and after a successful apply step.
+/// The unit's world entry as the repo currently describes it. The supervisor
+/// records this at startup and after a successful apply step.
 pub fn world_unit_from_repo(
     root: &Path,
     unit: &LoadedUnit,
@@ -109,9 +109,9 @@ pub struct ParamChange {
 }
 
 /// A unit whose manifest changed at parameter level only (the fields
-/// `param_level_only` strips): no restart, but the running world must
-/// refresh — the config store re-enforces the new constraints and the
-/// served meta manifest updates so plans and the dashboard see it.
+/// `param_level_only` strips). It needs no restart, but the running world must
+/// refresh: the config store enforces the new constraints, and the served meta
+/// manifest updates so plans and the dashboard see it.
 #[derive(Debug)]
 pub struct Refresh {
     pub name: String,
@@ -207,9 +207,9 @@ pub fn diff(check: &CheckResult, root: &Path, world: &World) -> Diff {
             });
         }
 
-        // Parameter diffs: live value vs repo default. One rule covers both
-        // a changed default and live drift — the repo is the system of
-        // record either way.
+        // Parameter diffs: live value against repo default. One rule covers
+        // both a changed default and live drift, because the repo is the
+        // system of record either way.
         if let Some(params) = &unit.manifest.params {
             for (param, spec) in params {
                 let repo = default_value(spec);
@@ -251,10 +251,11 @@ pub fn diff(check: &CheckResult, root: &Path, world: &World) -> Diff {
     diff
 }
 
-/// True when the two manifests differ only in parameter values — every
-/// param's `default`/`constraint`/`editable_by` stripped, the rest equal.
-/// Param add/remove or a type change is NOT parameter-level: the running
-/// unit read its manifest at startup. An unparseable side is a change.
+/// True when the two manifests differ only in parameter values: with every
+/// param's `default`, `constraint` and `editable_by` stripped, the rest is
+/// equal. Adding or removing a param, or changing its type, is not
+/// parameter-level, because the running unit read its manifest at startup. An
+/// unparseable side counts as a change.
 fn param_level_only(repo: &[u8], world: &[u8]) -> bool {
     let parse = |bytes: &[u8]| -> Option<toml::Value> {
         toml::from_str(std::str::from_utf8(bytes).ok()?).ok()
@@ -323,9 +324,10 @@ fn policy_value(value: Option<&toml::Value>) -> String {
     }
 }
 
-/// The apply walk over units, ordered by the grant table (adapters before
-/// the automations granted onto their entities), never declared. Parameter
-/// writes are not steps: they happen first and restart nothing.
+/// The apply walk over units, ordered by the grant table: adapters before the
+/// automations granted onto their entities. The order is derived, not
+/// declared. Parameter writes are not steps. They happen first and restart
+/// nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StepAction {
     Stop,
@@ -359,7 +361,7 @@ pub fn walk_steps(diff: &Diff, check: &CheckResult, world: &World) -> Vec<Step> 
 
     let stop_set: BTreeSet<String> = diff.destroys.iter().cloned().collect();
     let old_edges = grant_edges(&world.grants);
-    // Kinds once per unit up front: kind_of runs per comparison inside
+    // Look up each unit's kind once. kind_of runs per comparison inside
     // ordered, and the world's kind lives in unparsed manifest TOML.
     let stop_kinds: BTreeMap<String, u8> = stop_set
         .iter()
@@ -401,10 +403,10 @@ pub fn walk_steps(diff: &Diff, check: &CheckResult, world: &World) -> Vec<Step> 
     steps
 }
 
-/// Topological order over `set` under `edges` (owner before dependent),
-/// each layer sorted by (kind, name). A cyclic grant table is refused at
-/// check time (`grant-cycle`), so one cannot reach a plan; a malformed
-/// table still degrades to sorted order rather than looping.
+/// Topological order over `set` under `edges` (owner before dependent), each
+/// layer sorted by (kind, name). Check time refuses a cyclic grant table
+/// (`grant-cycle`), so one cannot reach a plan. A malformed table still falls
+/// back to sorted order instead of looping.
 fn ordered<F>(set: &BTreeSet<String>, edges: &[(String, String)], kind_of: F) -> Vec<String>
 where
     F: Fn(&str) -> u8,
@@ -548,8 +550,8 @@ pub fn render(check: &CheckResult, diff: &Diff, repo_label: &str, world: &World)
         }
     }
 
-    // Created units and units restarting on a manifest change: both may
-    // bring new key surface, and an approval prompt must show it.
+    // Created units and units restarting on a manifest change may both bring
+    // new key surface, and an approval prompt must show it.
     let mut with_keys = created.clone();
     with_keys.extend(
         diff.restarts
@@ -587,8 +589,8 @@ pub fn render(check: &CheckResult, diff: &Diff, repo_label: &str, world: &World)
         }
     }
 
-    // Device feeds: printed only when the house wires any, so a house
-    // without them gets no empty section.
+    // Device feeds, printed only when the house wires any, so a house without
+    // them gets no empty section.
     if !check.feeds.is_empty() {
         out.push_str("\nFeeds:\n\n");
         for feed in &check.feeds {
@@ -604,8 +606,8 @@ pub fn render(check: &CheckResult, diff: &Diff, repo_label: &str, world: &World)
         }
     }
 
-    // Declared sources: what a computed value is derived from. Printed
-    // like feeds and on the same terms — only when a house declares any.
+    // Declared sources: what a computed value is derived from. Printed on the
+    // same terms as feeds, only when a house declares any.
     if !check.sources.is_empty() {
         out.push_str("\nSources:\n\n");
         for source in &check.sources {
@@ -734,8 +736,9 @@ fn render_unit(check: &CheckResult, unit: &LoadedUnit, out: &mut String) {
         .iter()
         .filter(|e| &e.owner == name)
         .collect();
-    // Adapters always render the block (an empty one is telling); other
-    // binding units (automations with virtual sensors) only when non-empty.
+    // Adapters always render the block, because an adapter with no entities
+    // is worth noticing. Other binding units (automations with virtual
+    // sensors) render it only when non-empty.
     if unit.manifest.unit.kind == UnitKind::Adapter || !entities.is_empty() {
         out.push_str(&format!("    entities ({}):\n", entities.len()));
         let name_w = entities.iter().map(|e| e.name.len()).max().unwrap_or(0);
@@ -835,9 +838,9 @@ mod tests {
         );
     }
 
-    /// An automation that binds a commandable virtual entity is an edge
-    /// source like an adapter: it starts before the automation commanding
-    /// it, even where kind and name order would put it second.
+    /// An automation that binds a commandable virtual entity is an edge source
+    /// like an adapter. It starts before the automation commanding it, even
+    /// where kind and name order would put it second.
     #[test]
     fn ordered_puts_a_latch_owner_before_its_commander() {
         let set: BTreeSet<String> = ["buttons", "modes"]

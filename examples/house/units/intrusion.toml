@@ -15,13 +15,13 @@ motion = "home/state/hallway/*/occupancy"
 presence = "home/state/global/*/presence"
 
 # The notifier grant: who this unit may reach, and with which severity.
-# Adding or widening it is a grant delta — a structural plan the owner
-# applies (docs/design.md#notifications).
+# Adding or widening it is a grant delta, which makes the plan structural
+# and leaves it for the owner to apply (docs/design.md#notifications).
 [bus.publishes]
 alert = { key = "home/cmd/person/alice_phone/alert", capability = "notifier", priority = "automation" }
 
-# One alert per window, however many motion samples arrive: the SDK's
-# Cooldown in the script, the window a family setpoint here.
+# One alert per window, however many motion samples arrive. The script
+# uses the SDK's Cooldown, and the window length is this family setpoint.
 [params.cooldown_minutes]
 type = "float"
 default = 10

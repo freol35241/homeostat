@@ -1,6 +1,6 @@
 //! Arbiter service integration tests: a real supervisor on the arbiter
-//! fixture house (no broker — the arbiter is a pure bus service), asserting
-//! on the forward/preempt/refuse/expiry contract of
+//! fixture house (no broker, because the arbiter only talks on the bus),
+//! asserting on the forward/preempt/refuse/expiry contract of
 //! docs/design.md#arbitrated-mode.
 
 mod common;
@@ -67,14 +67,14 @@ async fn expect_silence(sub: &Sub, window: Duration, what: &str) {
     }
 }
 
-/// What the arbiter is HOLDING, as state rather than as an event stream:
+/// What the arbiter is holding, as state rather than as an event stream:
 /// the document answers "is this aspect held right now?" for a consumer
 /// that was not listening when the hold was taken
 /// (docs/design.md#arbitrated-mode). Asserts it is published empty at
 /// startup, carries the holder with a wall-clock deadline once a wish
 /// lands, counts what it refuses, and empties itself when the hold expires
-/// — with no further command to prompt it, which is the part lazy expiry
-/// cannot do.
+/// with no further command to prompt it. Lazy expiry cannot do that last
+/// part.
 #[tokio::test(flavor = "multi_thread")]
 async fn holds_are_published_as_state() {
     let (mut sup, observer) = setup().await;
@@ -341,9 +341,9 @@ async fn forward_preempt_refuse_and_expiry() {
 
 /// Leases are per (entity, aspect), not per entity
 /// (docs/design.md#arbitrated-mode): a manual hold on one aspect must not
-/// block an automation commanding a sibling aspect of the same entity
-/// — the family's setpoint never freezes the price automation's offset —
-/// while same-aspect contention still refuses.
+/// block an automation commanding a sibling aspect of the same entity, so
+/// the family's setpoint does not freeze the price automation's offset.
+/// Same-aspect contention still refuses.
 #[tokio::test(flavor = "multi_thread")]
 async fn aspects_lease_independently() {
     let (mut sup, observer) = setup().await;
@@ -371,8 +371,8 @@ async fn aspects_lease_independently() {
         .expect("manual wish forwarded");
     assert_eq!(forwarded, manual_wish);
 
-    // An automation wish on a sibling aspect of the same entity flows —
-    // its own lease, no refusal, no event.
+    // An automation wish on a sibling aspect of the same entity flows: it
+    // takes its own lease, with no refusal and no event.
     let sibling_wish = envelope(json!(30), "automation", "scheduler");
     observer
         .put(sibling_cmd, sibling_wish.to_string())
@@ -412,7 +412,7 @@ async fn aspects_lease_independently() {
 }
 
 /// (f) A malformed cmd envelope for an arbitrated entity drops with an
-/// "invalid-command" health event, and never reaches home/arbiter/**.
+/// "invalid-command" health event, and does not reach home/arbiter/**.
 #[tokio::test(flavor = "multi_thread")]
 async fn malformed_envelope_drops_with_health_event() {
     let (mut sup, observer) = setup().await;
@@ -439,10 +439,10 @@ async fn malformed_envelope_drops_with_health_event() {
     )
     .await;
 
-    // An envelope with an unknown priority is just as malformed — but it
-    // parsed far enough to carry an id, and the drop reports it, so the
-    // publisher learns its command died here instead of waiting out a
-    // timeout. The malformed-payload case above cannot: nothing parsed.
+    // An envelope with an unknown priority is malformed too, but it parsed
+    // far enough to carry an id, and the drop reports it. The publisher
+    // learns its command died here instead of waiting out a timeout. The
+    // malformed-payload case above has no id to report: nothing parsed.
     observer
         .put(
             CMD_KEY,
@@ -468,7 +468,7 @@ async fn malformed_envelope_drops_with_health_event() {
     sup.shutdown();
 }
 
-/// (e) The arbiter honors the step-2 unit contract: liveliness token when
+/// (e) The arbiter honors the unit contract: liveliness token when
 /// ready, clean SIGTERM shutdown within the grace, no orphans.
 #[tokio::test(flavor = "multi_thread")]
 async fn adapter_honors_unit_contract() {

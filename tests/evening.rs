@@ -1,19 +1,19 @@
-//! Step-4 integration tests: the clock service, the `evening_lights`
-//! automation, and the live parameter path, each scenario on a real
+//! Integration tests for the clock service, the `evening_lights`
+//! automation and the live parameter path, each scenario on a real
 //! supervisor.
 //!
-//! The off-time-crossing scenarios run on the clock-less sim fixture: the
-//! test process publishes `home/clock/minute` itself, so no scenario ever
-//! waits out a wall-clock minute and no test hook exists in production
-//! code — the automation cannot tell who publishes clock keys.
+//! The off-time-crossing scenarios run on the clock-less sim fixture. The
+//! test process publishes `home/clock/minute` itself, so no scenario waits
+//! out a wall-clock minute and production code needs no test hook: the
+//! automation cannot tell who publishes clock keys.
 //!
 //! Determinism: state puts go through publishers that have awaited a
 //! matching subscriber. A zenoh client filters puts at the writer until
 //! the router's subscriber interests have propagated back to it, so a put
-//! racing a freshly (re)started automation would otherwise be silently
-//! dropped. Clock ticks need no such guard — the core's clock mirror
-//! subscribes `home/clock/*` from the first moment. Once delivery is
-//! guaranteed, same-session FIFO makes every silence assertion sound.
+//! racing a freshly (re)started automation would otherwise be dropped
+//! without notice. Clock ticks need no such guard, because the core's
+//! clock mirror subscribes `home/clock/*` from the start. With delivery
+//! guaranteed, per-session ordering makes every silence assertion sound.
 
 mod common;
 
@@ -90,8 +90,8 @@ async fn cache_read_eventually(session: &zenoh::Session, key: &str, timeout: Dur
 
 /// Expects the lamp-off command within the timeout: a cmd envelope whose
 /// value is `false`, priority and actor stamped from the automation's own
-/// manifest declaration (docs/design.md#cmd-envelopes) — the SDK's
-/// Context.publish does this, not the automation's code.
+/// manifest declaration (docs/design.md#cmd-envelopes). The SDK's
+/// Context.publish does the stamping; the automation's code does not.
 async fn expect_lamp_off(sub: &Sub, timeout: Duration) {
     let sample = tokio::time::timeout(timeout, sub.recv_async())
         .await
@@ -128,8 +128,8 @@ async fn expect_no_command(sub: &Sub, window: Duration) {
 
 /// Waits until the reflector's lamp-off echo (`state on = false`) reaches
 /// the observer. The echo passed the router before reaching us, so it is
-/// queued to the automation ahead of anything we put afterwards — staging
-/// the lamp back on after this cannot be overridden by a late echo.
+/// queued to the automation ahead of anything we put afterwards, so a late
+/// echo cannot override staging the lamp back on after this.
 async fn await_echo_off(state_sub: &Sub) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {
@@ -158,7 +158,7 @@ async fn clock_payloads_match_schema() {
     let Value::String(minute) = minute else {
         panic!("minute payload is not a JSON string: {minute}");
     };
-    // 2026-07-04T21:04:00+02:00 — on the minute, offset never omitted.
+    // 2026-07-04T21:04:00+02:00: on the minute, with the offset always present.
     assert_eq!(minute.len(), 25, "RFC3339 with offset: {minute}");
     assert_eq!(&minute[10..11], "T", "date/time separator: {minute}");
     assert_eq!(&minute[17..19], "00", "published on the minute: {minute}");
@@ -211,8 +211,9 @@ async fn off_time_crossing_with_presence_drives_lights() {
 
     // Someone is home: the lamp comes back on and stays on past off_time.
     // Zenoh orders samples per key, not across keys (each subscription's
-    // callbacks run on their own thread), so let presence settle — the
-    // lamp is off, nothing may fire — before staging the lamp against it.
+    // callbacks run on their own thread), so the test lets presence settle
+    // before staging the lamp against it. The lamp is off, so nothing may
+    // fire meanwhile.
     put_state(&presence, json!(true)).await;
     expect_no_command(&cmd_sub, Duration::from_millis(1500)).await;
     put_state(&lamp, json!(true)).await;
@@ -260,7 +261,7 @@ async fn off_time_edit_applies_live_and_survives_restart() {
     tick(&observer, "22:30").await;
     expect_no_command(&cmd_sub, Duration::from_millis(1500)).await;
 
-    // ...the new one does — in the same process: no restart happened.
+    // ...the new one does, in the same process, so no restart happened.
     // (Health publishes on transitions only, so read the current state
     // from the queryable rather than waiting on the subscriber.)
     tick(&observer, "23:30").await;
@@ -276,8 +277,8 @@ async fn off_time_edit_applies_live_and_survives_restart() {
     );
 
     // Kill the automation; the supervisor sweeps its process group,
-    // restarts it, and the edited value still governs — last-value, not
-    // manifest default.
+    // restarts it, and the edited value still governs: the last value wins
+    // over the manifest default.
     let mut watch = health_watch(&observer, "evening_lights").await;
     unsafe {
         libc::kill(pid_before as i32, libc::SIGKILL);
@@ -290,10 +291,10 @@ async fn off_time_edit_applies_live_and_survives_restart() {
 
     // The fresh incarnation caught up from the core mirror: it
     // already knows it is 23:30, nobody is present and the lamp is off
-    // (the reflector applied the command), so it has nothing to do — and
-    // staging the lamp on now would rightly be answered with lights-off.
-    // Move the clock first, let it settle, then re-stage. The
-    // discriminator is 22:30 — silent under the surviving 23:30, would
+    // (the reflector applied the command), so it has nothing to do, and
+    // staging the lamp on now would correctly be answered with lights-off.
+    // The test moves the clock first, lets it settle, then re-stages. 22:30
+    // tells the two apart: it is silent under the surviving 23:30 and would
     // fire had the value reverted to 22:00.
     tick(&observer, "22:30").await;
     expect_no_command(&cmd_sub, Duration::from_millis(1500)).await;
@@ -308,8 +309,8 @@ async fn off_time_edit_applies_live_and_survives_restart() {
     sup.shutdown();
 }
 
-/// (d) An out-of-constraint write is rejected observably — an error reply
-/// naming the violation — and the effective value is unchanged: reads
+/// (d) An out-of-constraint write gets an error reply naming the
+/// violation, and the effective value is unchanged: reads
 /// return the old value and the automation still acts on it.
 #[tokio::test(flavor = "multi_thread")]
 async fn out_of_constraint_write_is_rejected() {
@@ -332,7 +333,7 @@ async fn out_of_constraint_write_is_rejected() {
         .await
         .expect_err("unknown parameter rejected");
 
-    // No rejected value ever reached the config key...
+    // No rejected value reached the config key...
     if let Ok(Ok(sample)) =
         tokio::time::timeout(Duration::from_millis(1500), config_sub.recv_async()).await
     {

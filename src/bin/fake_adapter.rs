@@ -26,8 +26,8 @@ struct Args {
     /// Exit with code 1 after this many milliseconds (0: immediately).
     #[arg(long)]
     crash_after_ms: Option<u64>,
-    /// Exit cleanly (code 0, token undeclared) after this many
-    /// milliseconds — a oneshot's natural end, for restart-policy tests.
+    /// Exit cleanly (code 0, token undeclared) after this many milliseconds.
+    /// This is a oneshot's normal end, for restart-policy tests.
     #[arg(long)]
     exit_after_ms: Option<u64>,
     /// Key to publish the heartbeat counter on.

@@ -4,9 +4,9 @@ An adapter learns its bindings from the same files the core validated: its
 own manifest at units/{unit}.toml and the entity files in its entities dir.
 The supervisor sets the unit's cwd to the house root, so paths are relative.
 
-The discovery endpoint may reference environment variables (`${VAR}`) —
-ports and credentials don't belong in the repo; expansion happens here, on
-the adapter side, because endpoints are opaque to the core.
+The discovery endpoint may reference environment variables (`${VAR}`),
+because ports and credentials don't belong in the repo. They are expanded
+here, on the adapter side, because endpoints are opaque to the core.
 """
 
 import os
@@ -43,7 +43,7 @@ class InputSource:
 class SourceRef:
     """One `[sources]` entry: a reading a computed value is derived from.
 
-    It carries the caveat that belongs to THIS contributor rather than to
+    It carries the caveat that belongs to this contributor rather than to
     the aspect (docs/design.md#sources).
 
     Attributes
@@ -92,7 +92,7 @@ class Entity:
         `[sources]`: contributor name to the reading the value derives from.
     """
 
-    name: str  # file stem: the globally unique entity name
+    name: str
     # Adapter-native address (for z2m: the topic segment). Empty on an
     # automation-owned entity, which has no periphery to address.
     id: str
@@ -173,8 +173,9 @@ def _entity_from(path: Path, data: dict, default_owner: str) -> Entity:
         capability=data["entity"]["capability"],
         room=data["entity"]["room"],
         features=data["entity"].get("features", []),
-        # `mode` governs commands, so an entity whose capability takes
-        # none may omit it; absent it reads as shared, as the core does.
+        # `mode` governs commands, so an entity whose capability takes no
+        # commands may omit it. A missing mode reads as shared, as in the
+        # core.
         write_mode=data["write_policy"].get("mode", "shared"),
         owner=data["write_policy"].get("owner", default_owner),
         naming=dict(data.get("naming", {})),
@@ -217,8 +218,8 @@ class UnitInfo:
     description: str = ""
     naming: dict = field(default_factory=dict)
     params: dict = field(default_factory=dict)
-    publishes: dict = field(default_factory=dict)  # [bus.publishes], as declared
-    subscribes: dict = field(default_factory=dict)  # [bus.subscribes], as declared
+    publishes: dict = field(default_factory=dict)
+    subscribes: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -240,23 +241,21 @@ class HouseModel:
         file.
     """
 
-    zones: dict[str, list[str]]  # zone name -> member rooms
+    zones: dict[str, list[str]]
     units: list[UnitInfo]
     entities: list[Entity]
-    # dashboard.toml's [[view]] list as written, None without the file.
     views: list[dict] | None = None
-    # dashboard.toml's [[control]] list as written: the grain each named
-    # control moves in, keyed by what it controls rather than by where it
-    # is drawn. Empty without the file.
+    # The grain each named control moves in, keyed by what it controls
+    # rather than by where it is drawn.
     controls: list[dict] = field(default_factory=list)
 
 
 def load_house(root: str | Path = ".") -> HouseModel:
     """Return the whole house as validated text.
 
-    Every unit manifest, every adapter's entity files, the zones, the
-    dashboard's views. Read-only rendering data for consumers like the
-    dashboard; the core remains the validator.
+    This reads every unit manifest, every adapter's entity files, the
+    zones and the dashboard's views. It is read-only data for consumers
+    such as the dashboard. The core does the validation.
 
     Parameters
     ----------
@@ -338,9 +337,9 @@ def load_adapter(unit: str, root: str | Path = ".") -> AdapterConfig:
     manifest_path = root / "units" / f"{unit}.toml"
     manifest = tomllib.loads(manifest_path.read_text())
 
-    # mDNS-discovery adapters (e.g. ESPHome) resolve each device's address
-    # individually and declare no [discovery].endpoint; only the static
-    # (single-endpoint) adapters need this populated.
+    # Adapters that discover devices over mDNS (e.g. ESPHome) resolve each
+    # device's address separately and declare no [discovery].endpoint.
+    # Only single-endpoint adapters need it.
     endpoint = (
         _expand_endpoint(manifest) if "endpoint" in manifest.get("discovery", {}) else None
     )
@@ -354,8 +353,7 @@ def load_adapter(unit: str, root: str | Path = ".") -> AdapterConfig:
         data = tomllib.loads(path.read_text())
         entity = _entity_from(path, data, unit)
         if data.get("inputs"):
-            # Resolve each source's room from the house's entity files; the
-            # plan has already validated that the entity exists.
+            # The plan has already checked that each source entity exists.
             if rooms is None:
                 rooms = {e.name: e.room for e in load_house(root).entities}
             entity.inputs = {

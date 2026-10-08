@@ -1,42 +1,43 @@
 """Forecasts: a series' future, on the bus (docs/design.md#forecasts).
 
-A forecast rides `home/forecast/{room}/{entity}/{aspect}/{source}` — the
-same room/entity/aspect as `home/state`, because it is the same series
-extended forward, then the source that claims it. The entity's aspect
-descriptor therefore already supplies its label, kind and unit, and past
-and future share one chart axis.
+A forecast is published on `home/forecast/{room}/{entity}/{aspect}/{source}`.
+It has the same room/entity/aspect as `home/state`, because it is the same
+series extended forward, followed by the source that publishes it. The
+entity's aspect descriptor therefore already supplies its label, kind and
+unit, and past and future share one chart axis.
 
-The payload is what the source actually said:
+The payload is what the source said:
 
     {"schema": 1,
      "issued": "2026-09-20T08:00:00Z",
      "points": [{"t": "2026-09-20T09:00:00Z", "v": 1.23},
                 {"t": "2026-09-20T12:00:00Z", "v": 0.4, "d": 10800}, ...]}
 
-A point is an instant unless it carries `d`, the extent in seconds it
-describes — an accumulation over a window, or a value that holds across
-one. See `Point`.
+A point is an instant unless it carries `d`, the extent in seconds that it
+describes. That is either an accumulation over a window or a value that
+holds across one. See `Point`.
 
-What makes a forecast different from state is not the array — it is that
-each point carries TWO times, when it was said and when it is about,
-where a state sample carries one. The array transports one issue
-atomically; the value inside it is a scalar like any other.
+A forecast differs from state because each point has two times: when it
+was said and when it is about. A state sample has one. The array carries
+one issue as a unit, and each value in it is an ordinary scalar.
 
-Points are irregular by design. A regular grid cannot represent an
-irregular series while the reverse is trivial, and forcing one would make
-the producer resample — which is lossy, and worse, not single-valued: a
-spot price is a step function that HOLDS for its interval, a temperature
-forecast interpolates. A grid would bake one of those readings into the
-producer where no consumer could see or override it. So the wire carries
-the source's own points and the resampling lives here, in the SDK, where
-a consumer names the rule it wants.
+Points can be irregularly spaced. A regular grid cannot represent an
+irregular series, while the reverse is easy. Forcing a grid would make the
+producer resample, which loses data. Resampling also depends on how the
+series is read. A spot price is a step function that holds for its
+interval, while a temperature forecast interpolates. A grid would fix one
+of those readings in the producer, where no consumer could see or
+override it. The wire therefore carries the source's own points, and the
+resampling happens here in the SDK, where a consumer names the rule it
+wants.
 
 `issued` is required. Without it nothing downstream can tell a stale
-forecast from a fresh one, and staleness is the whole safety story: a
-consumer applies its own max age (the `Freshness` reasoning — freshness
-policy is the automation's, never a core TTL) and a controller that
-refuses simply stops writing, which is what makes a house fall back to
-its own control (see adapters/ivt490.py, the FEEDABLE inputs).
+forecast from a fresh one, and staleness is what keeps forecasts safe to
+use. A consumer applies its own maximum age, as with `Freshness`:
+freshness policy belongs to the automation, not to a TTL in the core. A
+controller that refuses a stale forecast stops writing, and the house
+then falls back to its own control (see adapters/ivt490.py, the FEEDABLE
+inputs).
 """
 
 import datetime
@@ -47,20 +48,20 @@ from itertools import pairwise
 
 SCHEMA = 1
 
-# A guard against a runaway producer, not a design constraint: 15-minute
-# resolution over a week is 672 points, so nothing legitimate comes near
-# this. The core never inspects state-class payloads (src/world.rs mirrors
-# without reading), so this is the SDK's own refusal, raised where the
-# producer can see it rather than discovered by the recorder later.
+# A guard against a runaway producer. 15-minute resolution over a week is
+# 672 points, so no real forecast comes near this. The core does not
+# inspect state-class payloads (src/world.rs mirrors them without reading),
+# so the SDK refuses here, where the producer sees the error, instead of
+# the recorder finding the problem later.
 MAX_POINTS = 2048
 
 
 def _parse_ts(value) -> datetime.datetime:
     """Parse an RFC3339 timestamp with an offset, as the recorder's samples path uses.
 
-    A naive one is refused rather than guessed at: "09:00" means
+    A naive timestamp is refused rather than guessed at. "09:00" means
     different instants in different places, and a forecast that is an hour
-    wrong is worse than one that is absent.
+    wrong is worse than no forecast.
     """
     if not isinstance(value, str):
         raise ValueError(f"timestamp must be a string, got {value!r}")
@@ -74,18 +75,17 @@ def _parse_ts(value) -> datetime.datetime:
 class Point:
     """One predicted value, and what it is predicted for.
 
-    `d` is the point's extent in seconds, and it is the difference between
-    an instant and an interval. Without it the value is instantaneous at
-    `t` — a temperature. With it the value describes `[t, t + d)`: an
-    accumulation over that window (rainfall in a period), or a value that
-    holds across it (a tariff over its settlement period).
+    `d` is the point's extent in seconds. Without it the value is an
+    instant at `t`, such as a temperature. With it the value describes
+    `[t, t + d)`. That is either an accumulation over the window (rainfall
+    in a period) or a value that holds across it (a tariff over its
+    settlement period).
 
-    Carrying it is the same rule as carrying irregular spacing. Sources
-    state the interval — that is what they said — and a bare instant
-    discards it: an accumulation over six hours, stamped at one end, reads
-    as a spike at that instant, and a held value's length can otherwise
-    only be guessed from the gap to the next point, which fails at the end
-    of a horizon, where there is no next point.
+    `d` is kept for the same reason irregular spacing is kept: it is what
+    the source said. A bare instant would lose it. An accumulation over six
+    hours, stamped at one end, would read as a spike at that instant. A
+    held value's length could only be guessed from the gap to the next
+    point, and at the end of a horizon there is no next point.
 
     Attributes
     ----------
@@ -104,8 +104,9 @@ class Point:
     def covers(self, when: datetime.datetime) -> bool:
         """Return whether this point speaks for `when`.
 
-        An instant speaks only for itself; an interval for `[t, t + d)`,
-        half-open so abutting intervals do not both claim their shared edge.
+        An instant covers only itself. An interval covers `[t, t + d)`. The
+        interval is half-open so that adjacent intervals do not both claim
+        their shared edge.
 
         Parameters
         ----------
@@ -141,9 +142,9 @@ class Forecast:
     def horizon_end(self) -> datetime.datetime | None:
         """The end of what this forecast covers, or None if it has no points.
 
-        That is the last point's instant, or the end of its interval where
-        it declares one. Without this an interval-valued final point would
-        be unreadable past its start.
+        That is the last point's instant, or the end of its interval if it
+        has one. Without this, a final point with an interval could not be
+        read past its start.
         """
         if not self.points:
             return None
@@ -174,27 +175,25 @@ class Forecast:
     def at(self, when: datetime.datetime, mode: str, max_gap_s: float) -> float | None:
         """Return the value predicted for `when`, or None if the forecast does not cover it.
 
-        `mode` is the reading the series carries and has no default,
-        because guessing it is exactly the mistake a regular grid would
-        have made for everyone:
+        `mode` says how to read the series. It has no default, because a
+        guessed mode is the same mistake a regular grid would make:
 
-          "step"    the value holds from its point until the next one — a
-                    tariff, a schedule, anything piecewise-constant.
-          "linear"  the value moves between points — a temperature.
+          "step"    the value holds from its point until the next one, as
+                    for a tariff, a schedule, or anything piecewise-constant.
+          "linear"  the value moves between points, as for a temperature.
 
-        `max_gap_s` is what keeps a hole honest where points are instants.
-        A source that returns hours 0-5 and 12-24 has said nothing about
-        the middle, and both modes would otherwise invent it: "step" by
-        holding a six-hour-old value, "linear" by drawing a straight line
-        through the gap. A wider gap than this yields None, so missing data
-        stays missing. Where a point declares its own extent there is
-        nothing to guess and `max_gap_s` does not apply: the source said
-        what the value covers, and outside it the answer is None.
+        `max_gap_s` keeps gaps between instant points empty. A source that
+        returns hours 0-5 and 12-24 has said nothing about the middle. Both
+        modes would otherwise fill it in: "step" by holding a six-hour-old
+        value, and "linear" by drawing a straight line through the gap. A
+        gap wider than `max_gap_s` yields None, so missing data stays
+        missing. When a point declares its own extent, `max_gap_s` does not
+        apply. The source said what the value covers, and outside that the
+        answer is None.
 
-        Asking for "linear" across an interval-valued point raises: a value
-        the source declared to span a window is not a sample to interpolate
-        between, and quietly averaging two accumulations is the kind of
-        invention this helper exists to refuse.
+        Asking for "linear" across a point with an interval raises. A value
+        the source declared to span a window is not a sample to
+        interpolate, and averaging two accumulations would make up data.
 
         Parameters
         ----------
@@ -220,14 +219,14 @@ class Forecast:
         if mode not in ("step", "linear"):
             raise ValueError(f"mode must be 'step' or 'linear', got {mode!r}")
         points = self.points
-        end = self.horizon_end  # None exactly when there are no points
+        end = self.horizon_end  # None only when there are no points
         if end is None or when < points[0].t:
             return None
         # An interval ends half-open, so its own end instant is past it.
         if when > end or (when == end and points[-1].d is not None):
             return None
-        # Points are ascending (enforced on decode), so the last one at or
-        # before `when` and its successor bracket it.
+        # Points are ascending (decode checks this), so the last one at or
+        # before `when` and the one after it bracket it.
         lo = 0
         for i, p in enumerate(points):
             if p.t <= when:
@@ -264,9 +263,10 @@ class Forecast:
     ) -> list[float | None]:
         """Return `count` values on a regular grid from `start`.
 
-        For a consumer that wants one — an optimiser's horizon, say. A slot
-        the forecast does not cover is None rather than a fabricated number,
-        so a controller can refuse instead of optimising against invention.
+        This is for a consumer that needs a grid, such as an optimiser's
+        horizon. A slot the forecast does not cover is None rather than a
+        made-up number, so a controller can refuse instead of optimising
+        against invented data.
 
         Parameters
         ----------
@@ -305,9 +305,9 @@ class Forecast:
 def _extent(d) -> float | None:
     """Return a point's declared extent in seconds, validated, or None for an instant.
 
-    Zero is refused along with the negatives: a window of no
-    length is not an interval, and admitting it would give `covers` an
-    empty range that nothing could ever read.
+    Zero is refused along with negative values. A window of no length is
+    not an interval, and `covers` would give it an empty range that nothing
+    could read.
     """
     if d is None:
         return None
@@ -327,9 +327,9 @@ def encode(issued: datetime.datetime, points) -> bytes:
     only where a producer gave one, so a series of instants is unchanged
     on the wire.
 
-    Sorting is done here rather than demanded of the producer — ascending
-    order is a cheap invariant that makes every reader simpler, and it is
-    shape, not meaning.
+    The points are sorted here, so the producer does not have to sort
+    them. Ascending order is cheap to guarantee and makes every reader
+    simpler.
 
     Parameters
     ----------
@@ -367,8 +367,8 @@ def encode(issued: datetime.datetime, points) -> bytes:
             raise ValueError(f"forecast value must be a number, got {v!r}")
         v = float(v)
         if not math.isfinite(v):
-            # The recorder drops non-finite samples with an event; refusing
-            # here names the producer instead.
+            # The recorder drops non-finite samples with an event. Refusing
+            # here reports the error at the producer instead.
             raise ValueError("forecast value must be finite")
         prepared.append(Point(t, v, _extent(d)))
     if len(prepared) > MAX_POINTS:
@@ -406,17 +406,17 @@ def decode(payload: bytes) -> Forecast:
     Raises
     ------
     ValueError
-        On anything malformed — the codebase's uniform "bad input"
-        sentinel, so a subscriber drops it with a malformed-payload health
-        event like any other.
+        On anything malformed. ValueError is the codebase's usual "bad
+        input" error, so a subscriber drops the payload with a
+        malformed-payload health event as it would any other.
     """
     parsed = json.loads(payload)
     if not isinstance(parsed, dict):
         raise ValueError("forecast payload is not an object")
     schema = parsed.get("schema")
     if schema != SCHEMA:
-        # Louder than ignoring it: a future encoding (a compact one, say)
-        # must not be read as if it were this one.
+        # A future encoding (a compact one, say) must not be read as if it
+        # were this one.
         raise ValueError(f"forecast schema {schema!r} is not {SCHEMA}")
     issued = _parse_ts(parsed.get("issued"))
     raw = parsed.get("points")
