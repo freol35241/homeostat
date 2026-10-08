@@ -39,10 +39,9 @@ def fetch(bus: str) -> dict:
     config.insert_json5("scouting/gossip/enabled", "false")
     with zenoh.open(config) as session:
         for reply in session.get("home/history/stats", timeout=20.0):
-            result = reply.result()
-            if hasattr(result, "payload"):
-                return json.loads(result.payload.to_bytes())
-            raise SystemExit(f"stats replied with an error: {result.payload.to_string()}")
+            if reply.ok is not None:
+                return json.loads(reply.ok.payload.to_bytes())
+            raise SystemExit(f"stats replied with an error: {reply.err.payload.to_string()}")
     raise SystemExit("no reply from home/history/stats within 20 s")
 
 
