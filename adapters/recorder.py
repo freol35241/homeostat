@@ -1996,31 +1996,30 @@ def migrate_v0(conn: sqlite3.Connection) -> None:
     conn.execute("VACUUM")
 
 
-def migrate_v4(conn: sqlite3.Connection) -> None:
-    """Migrate version 4 -> 5: give empty-source forecast series the reserved name.
+def migrate_v1(conn: sqlite3.Connection) -> None:
+    """Migrate version 1 -> 2: the per-series tally arrives.
 
-    The forecast series migrate_v3 left with an empty source get the
-    reserved name instead (LEGACY_SOURCE).
-
-    An empty source is not addressable: the source is a segment of the
-    reply key, and an empty segment makes a key expression SQLite is happy
-    to store and zenoh refuses to parse. The read path therefore skips a
-    series with an empty source, so its rows can never be read; under the
-    reserved name they can.
-
-    Only forecast series are touched: every other class has an empty
-    source by definition, and none of them puts it in a key.
+    An existing store's tally has to be counted once — at startup, where
+    nothing is waiting on a query timeout, instead of on every stats read
+    forever. Each aggregate is a correlated subquery on the clustered
+    primary key rather than one GROUP BY over the table: the counts walk
+    each series' key range, the bounds are seeks to its ends, and nothing
+    depends on a SQLite newer than the schema already does (measured on a
+    synthetic 4.8 M-row store: 0.13 s, against 0.62 s for the GROUP BY). A
+    store migrating straight from version 0 already has the columns — they
+    are in SCHEMA, which built its new tables — and only needs the count.
     """
-    # OR IGNORE because the name is reserved, not impossible: a store
-    # that somehow holds both spellings of one series keeps the empty
-    # one, which the read path skips, rather than failing the migration
-    # and with it the recorder's startup.
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(series)")}
+    if "row_count" not in columns:
+        conn.execute("ALTER TABLE series ADD COLUMN row_count INTEGER NOT NULL DEFAULT 0")
+        conn.execute("ALTER TABLE series ADD COLUMN oldest_ts INTEGER")
+        conn.execute("ALTER TABLE series ADD COLUMN newest_ts INTEGER")
     conn.execute(
-        "UPDATE OR IGNORE series SET source = ?"
-        " WHERE class = 'forecast' AND source = ''",
-        (LEGACY_SOURCE,),
+        "UPDATE series SET"
+        " row_count = (SELECT COUNT(*) FROM samples WHERE series_id = series.id),"
+        " oldest_ts = (SELECT MIN(ts) FROM samples WHERE series_id = series.id),"
+        " newest_ts = (SELECT MAX(ts) FROM samples WHERE series_id = series.id)"
     )
-    conn.commit()
 
 
 def migrate_v3(conn: sqlite3.Connection) -> None:
@@ -2089,30 +2088,31 @@ def migrate_v3(conn: sqlite3.Connection) -> None:
     conn.execute("PRAGMA legacy_alter_table=OFF")
 
 
-def migrate_v1(conn: sqlite3.Connection) -> None:
-    """Migrate version 1 -> 2: the per-series tally arrives.
+def migrate_v4(conn: sqlite3.Connection) -> None:
+    """Migrate version 4 -> 5: give empty-source forecast series the reserved name.
 
-    An existing store's tally has to be counted once — at startup, where
-    nothing is waiting on a query timeout, instead of on every stats read
-    forever. Each aggregate is a correlated subquery on the clustered
-    primary key rather than one GROUP BY over the table: the counts walk
-    each series' key range, the bounds are seeks to its ends, and nothing
-    depends on a SQLite newer than the schema already does (measured on a
-    synthetic 4.8 M-row store: 0.13 s, against 0.62 s for the GROUP BY). A
-    store migrating straight from version 0 already has the columns — they
-    are in SCHEMA, which built its new tables — and only needs the count.
+    The forecast series migrate_v3 left with an empty source get the
+    reserved name instead (LEGACY_SOURCE).
+
+    An empty source is not addressable: the source is a segment of the
+    reply key, and an empty segment makes a key expression SQLite is happy
+    to store and zenoh refuses to parse. The read path therefore skips a
+    series with an empty source, so its rows can never be read; under the
+    reserved name they can.
+
+    Only forecast series are touched: every other class has an empty
+    source by definition, and none of them puts it in a key.
     """
-    columns = {row[1] for row in conn.execute("PRAGMA table_info(series)")}
-    if "row_count" not in columns:
-        conn.execute("ALTER TABLE series ADD COLUMN row_count INTEGER NOT NULL DEFAULT 0")
-        conn.execute("ALTER TABLE series ADD COLUMN oldest_ts INTEGER")
-        conn.execute("ALTER TABLE series ADD COLUMN newest_ts INTEGER")
+    # OR IGNORE because the name is reserved, not impossible: a store
+    # that somehow holds both spellings of one series keeps the empty
+    # one, which the read path skips, rather than failing the migration
+    # and with it the recorder's startup.
     conn.execute(
-        "UPDATE series SET"
-        " row_count = (SELECT COUNT(*) FROM samples WHERE series_id = series.id),"
-        " oldest_ts = (SELECT MIN(ts) FROM samples WHERE series_id = series.id),"
-        " newest_ts = (SELECT MAX(ts) FROM samples WHERE series_id = series.id)"
+        "UPDATE OR IGNORE series SET source = ?"
+        " WHERE class = 'forecast' AND source = ''",
+        (LEGACY_SOURCE,),
     )
+    conn.commit()
 
 
 def main():
