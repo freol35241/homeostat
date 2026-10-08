@@ -654,7 +654,7 @@ pub async fn config_write(
 }
 
 /// The unit contract every supervised unit owes (docs/adapters.md, §2 and
-/// §10; docs/design.md, The unit contract): once ready it is `running`
+/// §10; docs/design.md#the-unit-contract): once ready it is `running`
 /// with a pid, and when the supervisor gets SIGTERM it exits cleanly
 /// inside `shutdown_grace_s` and leaves no orphan. One call per adapter
 /// suite — the conformance check a new adapter gets for free.
@@ -679,8 +679,8 @@ pub async fn assert_unit_contract(sup: &mut Supervisor, observer: &zenoh::Sessio
     );
 }
 
-/// The late-joiner read for a test: subscribe, then get, merge (docs/
-/// design.md, "Last-value lives in the core"). A unit that reached
+/// The late-joiner read for a test: subscribe, then get, merge
+/// (docs/design.md#the-last-value-mirror). A unit that reached
 /// `running` may already have published its initial states before the
 /// test's subscriber existed — an adapter's device connection races the
 /// liveliness token — and a zenoh subscriber never sees past samples, so a

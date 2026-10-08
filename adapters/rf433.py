@@ -17,9 +17,11 @@ shape) republishes each burst on ONE topic, {base}/SRFBtoMQTT, and the only
 thing distinguishing one device from another is the decimal code in the
 payload. So the entity file's `id` is that code, and the file stem is the
 entity name — the same addressing every adapter uses, with the device's
-"address" being what it transmits.
+"address" being what it transmits. The wire's code is normalized through
+int, so the id is written as a plain decimal, without padding or leading
+zeros.
 
-THE DECAY IS THIS ADAPTER'S (docs/design.md, One-way senders). The radio's
+THE DECAY IS THIS ADAPTER'S (docs/design.md#one-way-senders). The radio's
 lack of an off is a protocol fact, so synthesizing one is dialect knowledge
 and belongs in the membrane; it is never a core TTL. Three rules:
 
@@ -31,18 +33,40 @@ and belongs in the membrane; it is never a core TTL. Three rules:
      adapter's own construct, not a device reading, so after a restart
      "nothing has asserted within the hold" is the honest state rather than
      an invented one. It is also what stops a crash-looping adapter from
-     leaving a motion sensor stuck on: every restart self-clears.
+     leaving a motion sensor stuck on: every restart self-clears. Only a
+     permanently dead adapter (breaker open) leaves a `true` standing, and
+     its unit health shows it. Restoring the last published value would
+     be wrong here: it resurrects an assertion whose hold has expired.
   3. THE HOLD IS A PARAMETER, PER ASPECT, not per entity. A contact, a PIR
      and a smoke detector want different holds (seconds, a minute, ten
      minutes) but every contact wants the same one, so the entity's
      capability and features pick the parameter and the house tunes three
-     numbers rather than one per device.
+     numbers rather than one per device: occupancy_hold_s (default 15 s),
+     contact_hold_s (60 s), smoke_hold_s (600 s), and hold_s (60 s) for
+     any other aspect, so a sensor class nobody anticipated still decays.
+
+Not consumer-side debouncing: every consumer would reimplement it,
+they would disagree, and the recorder could not reconstruct what was true
+when.
 
 Capabilities: a PIR binds `presence` and publishes `occupancy`; a contact
 or a detector binds `binary_sensor` and publishes the aspect its `features`
 name (`contact`, `smoke`, ...), because the radio cannot say what it is and
 the entity file is where that knowledge lives. A smoke detector's field
-carries `notable` so a detector firing reaches Now as a deviation.
+carries `notable` so a detector firing reaches Now as a deviation. A
+binary_sensor without exactly one feature has no aspect: it emits one
+"misconfigured" health event (reason "no-aspect") at startup and its
+bursts are ignored. A payload with no decodable code drops with
+"malformed-payload".
+
+Discovery lists every bound entity, heard or not (its descriptor is what
+the dashboard renders), with a `heard` flag, then every unbound code
+heard. Unbound codes are the normal state of a 433 MHz estate
+(neighbours' remotes, car keys), and discovery is how a device gets
+identified at all: press it, watch its code appear, write the entity
+file. They emit no health event. Because they are wire-controlled, only
+the MAX_UNBOUND most recently first-heard are kept, and the document is
+republished at most once per DISCOVERY_COALESCE_S.
 
 Availability is the bridge's own LWT, not a receive timer: silence from a
 433 MHz sender is its normal state and says nothing about the gateway.
@@ -99,9 +123,9 @@ HOLD_PARAM = {
     "smoke": "smoke_hold_s",
 }
 
-# Aspects worth surfacing on Now when they go true (docs/design.md, Aspect
-# descriptors: notable). A detector firing is a deviation; a door opening is
-# not.
+# Aspects worth surfacing on Now when they go true
+# (docs/design.md#aspect-descriptors: notable). A detector firing is a
+# deviation; a door opening is not.
 NOTABLE = frozenset({"smoke", "gas", "carbon_monoxide", "water_leak"})
 
 

@@ -1,6 +1,6 @@
 //! The live parameter path: an in-memory last-value store for
 //! `home/config/{unit}/{param}`, seeded from manifest defaults and served
-//! over the bus by a queryable (see docs/design.md, step 4).
+//! over the bus by a queryable (see docs/design.md#the-write-path).
 //!
 //! Only the core ever puts on `home/config/**`. A GET without payload reads
 //! the current value; a GET with payload is a write request: the payload is
@@ -170,8 +170,8 @@ fn build(house: &House) -> BTreeMap<(String, String), StoredParam> {
 /// Whether the spec's default satisfies its own constraint — the plan-time
 /// check behind the repo-edit parameter path: a default outside the
 /// constraint must fail validation, never reach a running unit (see
-/// docs/design.md, step 6). A malformed constraint enforces nothing here;
-/// plan-time validation reports it separately.
+/// docs/design.md#repo-and-live-values). A malformed constraint enforces
+/// nothing here; plan-time validation reports it separately.
 pub fn default_within_constraint(spec: &ParamSpec) -> Result<(), String> {
     check(
         spec.param_type,

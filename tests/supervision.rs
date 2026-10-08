@@ -328,7 +328,7 @@ async fn log_capture_evicts_oldest_past_capacity() {
     sup.shutdown();
 }
 
-/// (g) Restart-policy terminal states (docs/design.md, health key schema):
+/// (g) Restart-policy terminal states (docs/design.md#health):
 /// a clean exit under `on-failure` and any exit under `never` both settle
 /// at `stopped` with the exit code recorded, and neither restarts.
 #[tokio::test(flavor = "multi_thread")]

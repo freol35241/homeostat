@@ -1,6 +1,6 @@
 //! Zenoh session construction and the supervision key schema.
 //!
-//! Key schema (see docs/design.md):
+//! Key schema (see docs/design.md#key-space):
 //! - `home/health/{unit}`        supervisor-published JSON health status
 //! - `home/health/{unit}/alive`  liveliness token declared by the unit itself
 //! - `home/meta/{unit}/manifest_hash`  sha256 of the unit's manifest file
@@ -171,7 +171,7 @@ pub struct LogEntry {
 }
 
 /// Payload of a GET on `home/meta/system/apply`: the apply request the CLI
-/// sends to the running supervisor (see docs/design.md, step 5b).
+/// sends to the running supervisor (see docs/design.md#the-apply-walk).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApplyRequest {
     /// The repo's HEAD when the house root is a git worktree root;

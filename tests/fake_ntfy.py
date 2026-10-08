@@ -3,7 +3,7 @@
 # dependencies = []
 # ///
 """A minimal, honest ntfy server for the ntfy adapter's integration tests
-(tests/ntfy.rs; see docs/design.md, "The ntfy adapter").
+(tests/ntfy.rs; see docs/design.md#notifications).
 
 Speaks the two calls the adapter makes: GET /v1/health -> {"healthy":
 true}, and POST /{topic} with the message as the body and Title /

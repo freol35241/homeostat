@@ -9,8 +9,7 @@
 # ///
 """ntfy notifier adapter.
 
-See docs/design.md, "Notifications (settled 2026-09-09, #31)" and "The ntfy
-adapter".
+See docs/design.md#notifications.
 
 A delivery dialect for the `notifier` capability. An ntfy server
 (self-hosted, a compose sidecar beside the MQTT broker — the phones
@@ -21,7 +20,24 @@ name; one entity per addressee — a person's phone in the pseudo-room
 `person`, a group topic in `global`. The manifest's `[discovery].endpoint`
 is the server URL (compose-internal, not a secret). The publisher token is
 HOMEOSTAT_NTFY_TOKEN in the environment, never in the repo; unset is a
-startup error.
+startup error. Redirects are refused, because following one would replay
+the token at whatever host the reply names.
+
+Why ntfy: a small self-hostable push server with an Android app; no
+account, no phone number and, self-hosted, no third party; reached over
+the LAN or WireGuard like the dashboard. It speaks UnifiedPush, the
+transport a homeostat app would use. Not Signal or WhatsApp: both need a
+phone number as the house's identity.
+
+The server's users, access rules and tokens are text too: ntfy (>= 2.12)
+provisions them from its config on every start (examples/house/ntfy/
+server.yml). The publisher may only write; each person reads only their
+own topic and the group's. That access list repeats the entity files by
+hand on purpose: rendering it from them would make ntfy a unit, and the
+sidecar's lifetime must not follow a unit restart. A phone fetches what
+it missed on reconnect, back to the server's cache-duration; older is
+lost, so a phone must be able to reach the server from wherever it is
+(WireGuard always on) for an alert sent to an empty house to arrive.
 
 Startup GETs `{endpoint}/v1/health` and refuses to declare ready until the
 server answers healthy — a dead server or a wrong URL is the supervisor's
@@ -37,21 +53,22 @@ Commands (the two commandable aspects of the vocabulary; every channel is
   therefore enforced by the phone itself.
 
 The envelope's `actor` (the sending unit) becomes the notification's
-Title, so the phone says who spoke. Anything else — a wrong type, an
-empty string, an unknown aspect, a malformed or envelope-less payload —
-DROPS with "invalid-command" (or "malformed-payload") and never reaches
-the server.
+Title, so the phone says who spoke; an actor that is not printable ASCII
+(a CR/LF would be header injection) falls back to this unit's name.
+Anything else — a wrong type, an empty string, an unknown aspect, a
+malformed or envelope-less payload — DROPS with "invalid-command" (or
+"malformed-payload") and never reaches the server.
 
 Rate floor: `min_interval_s` (parameter, owner-editable, default 5 s) per
 (entity, aspect) — `message` and `alert` on the same entity never share a
 window, since one channel's traffic must never delay the other's; a
 `message` inside the window since the last SEND ATTEMPT drops with reason
-"rate-limited". `alert` is exempt from the floor entirely (docs/design.md,
-Notifications: quiet hours and rate limits withhold `message`, never
-`alert` — the severity split is a delivery-path property, not a courtesy
-this adapter may override). This floor is defense in depth, kept whatever
-the callers do: the cooldown that is house policy lives in the automation
-as a family-editable parameter on the SDK's Cooldown.
+"rate-limited". `alert` is exempt from the floor entirely
+(docs/design.md#notifications: quiet hours and rate limits withhold
+`message`, never `alert` — the severity split is a delivery-path property,
+not a courtesy this adapter may override). This floor is defense in depth,
+kept whatever the callers do: the cooldown that is house policy lives in
+the automation as a family-editable parameter on the SDK's Cooldown.
 
 Delivery: sends are serialised on one worker thread so a slow server
 never stalls the bus callback. The server's JSON reply carries the
@@ -63,10 +80,11 @@ home/state/{room}/{entity}/available to false; the next successful send
 flips it back. Stale, never false: `delivered` stands across an outage.
 
 Health events: drop/malformed-payload, drop/invalid-command,
-drop/rate-limited, drop/delivery-failed, drop/queue-full (the outbox is
-bounded — a dead server sheds load rather than queueing forever),
-drop/stale (an item that waited past the queue's age limit). Discovery is
-the static one-record-per-entity document with the aspect descriptor.
+drop/rate-limited, drop/delivery-failed, drop/queue-full (the outbox holds
+at most 1000 sends — a dead server sheds load rather than queueing
+forever), drop/stale (a send that waited more than 15 minutes: long enough
+to survive a server restart, short enough to still be timely). Discovery
+is the static one-record-per-entity document with the aspect descriptor.
 """
 
 import json
@@ -227,7 +245,8 @@ def main():
                 return
             if aspect != "alert":
                 # The floor never applies to alert: quiet hours and rate
-                # limits withhold message, never alert (docs/design.md).
+                # limits withhold message, never alert
+                # (docs/design.md#notifications).
                 now = time.monotonic()
                 last = last_attempt.get((entity.name, aspect))
                 if last is not None and now - last < params.min_interval_s:

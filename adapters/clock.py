@@ -7,7 +7,7 @@
 # [tool.uv.sources]
 # homeostat = { path = "../sdk/python", editable = true }
 # ///
-"""Clock service: civil time on the bus (see docs/design.md).
+"""Clock service: civil time on the bus (see docs/design.md#unit-kinds).
 
 Publishes home/clock/minute (RFC3339 local time with offset, on the minute)
 and home/clock/date (at local midnight). The current minute and date are

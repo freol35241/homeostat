@@ -146,7 +146,7 @@ class ConcreteKeyTest(unittest.TestCase):
     def test_a_forecast_binding_wildcarding_its_source_needs_one_named(self):
         # The source says WHO claims this future, so a binding that leaves
         # the slot open must have it filled at the call — exactly as an
-        # open aspect must (docs/design.md, Sources).
+        # open aspect must (docs/design.md#forecasts).
         ctx = bare_context({"f": {"key": "home/forecast/global/spot_price/price/*"}})
         with self.assertRaises(ValueError):
             ctx._concrete_key("f", room=None, entity=None, aspect=None)

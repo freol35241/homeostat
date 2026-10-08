@@ -4,7 +4,7 @@
 #
 # Its SDK dependency is rewritten from the in-repo path source to
 # `homeostat==VERSION` with no sources block — the shape a deployed unit
-# has (docs/design.md, SDK distribution), so a smoke test resolves the SDK
+# has (docs/design.md#sdk-distribution), so a smoke test resolves the SDK
 # from the bundled wheel the way a real house does. The rewrite mirrors
 # pin_sdk in scripts/sync_starter.sh.
 #

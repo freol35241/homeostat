@@ -1,5 +1,5 @@
 //! `ctx.restore`: a unit reading its own last published value back from
-//! the recorder (docs/design.md, Restoring a unit's own last value).
+//! the recorder (docs/design.md#restoring-a-units-own-last-value).
 //!
 //! The core's state mirror is in-memory, so a core restart — every version
 //! upgrade is one — empties it and `subscribe`'s catch-up has nothing to

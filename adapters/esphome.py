@@ -11,8 +11,6 @@
 # ///
 """ESPHome adapter: native API, not MQTT.
 
-See docs/design.md, "ESPHome adapter (settled 2026-07-16)".
-
 One aioesphomeapi connection per BOUND device (never to a device with no
 entity file), using the library's own ReconnectLogic — no broker, matching
 encryption-default device configs and the dialect voice satellites will
@@ -55,27 +53,31 @@ entity file or not — a device's other entities are exactly the kind of
 "not yet claimed" record discovery exists for), each with a best-effort
 suggested capability/features stanza and the raw ESPHome type/device_class
 verbatim so an unmapped device_class stays visible rather than disappearing.
-A bound entity's record also carries its aspect descriptor (docs/design.md,
-Aspect descriptors), generated from the same EntityInfo: the sensor's
-unit_of_measurement picks the kind (°C → temperature, % → percent, else a
-number carrying the unit), its ESPHome name is the label (with the aspect
-in parentheses when they differ), and the alarm-shaped binary device
-classes (smoke, gas, moisture, ...) are notable. One ESPHome entity is one
-bus aspect, so a descriptor here is one field — or the light's three.
-A best-effort mDNS browse of `_esphomelib._tcp` additionally surfaces
-*unbound* device names (nothing to connect to yet, so no entity list) —
-its record's `id` is the bare device name; failure or total absence of
-mDNS (no multicast, sandboxed network, ...) is guarded completely and
-never touches the bound-device connections, which are unaffected either
-way. Anything unusable drops with a health event; the unit never crashes.
+A bound entity's record also carries its aspect descriptor
+(docs/design.md#aspect-descriptors), generated from the same EntityInfo:
+the sensor's unit_of_measurement picks the kind (°C → temperature, % →
+percent, else a number carrying the unit), its ESPHome name is the label
+(with the aspect in parentheses when they differ), and the alarm-shaped
+binary device classes (smoke, gas, moisture, ...) are notable. One ESPHome
+entity is one bus aspect, so a descriptor here is one field — or the
+light's three. A best-effort mDNS browse of `_esphomelib._tcp` additionally
+surfaces *unbound* device names (nothing to connect to yet, so no entity
+list) — its record's `id` is the bare device name; failure or total absence
+of mDNS (no multicast, sandboxed network, ...) is guarded completely and
+never touches the bound-device connections, which are unaffected either way
+("mdns-unavailable", or a "drop" with reason "mdns-record-error" for one
+unreadable record). Anything unusable drops with a health event; the unit
+never crashes. A connected device whose entity list cannot be read drops
+with "list-entities-failed" and is disconnected, so ReconnectLogic retries
+it rather than leaving it connected with no state subscription.
 
-Device availability (docs/design.md, "Sensor dropout and availability"):
-the ReconnectLogic connection IS the loss signal — every bound entity of a
-device gets home/state/{room}/{entity}/available = true once its entities
-are (re)enumerated, false on disconnect. The device's other aspects stand
-on loss — stale, never false — and a sensor whose device_class/object_id
-would mint the reserved aspect drops with a "reserved-aspect" health
-event (one that is not a legal key segment, with "malformed-payload").
+Device availability (docs/design.md#availability): the ReconnectLogic
+connection IS the loss signal — every bound entity of a device gets
+home/state/{room}/{entity}/available = true once its entities are
+(re)enumerated, false on disconnect. The device's other aspects stand on
+loss — stale, never false — and a sensor whose device_class/object_id
+would mint the reserved aspect drops with a "reserved-aspect" health event
+(one that is not a legal key segment, with "malformed-payload").
 """
 
 import asyncio
@@ -161,8 +163,8 @@ def native_aspect(info) -> str:
 def suggest(info) -> dict | None:
     """Suggest a best-effort entity-file stanza for a discovery record.
 
-    The adapter suggests, plan/apply review decides (docs/design.md,
-    Discovery).
+    The adapter suggests, plan/apply review decides
+    (docs/design.md#discovery).
     """
     if isinstance(info, SwitchInfo):
         return {"capability": "switch", "features": []}
@@ -373,7 +375,7 @@ async def run_device(device, bound, devices_conf, session, entity_runtime, entit
 async def mdns_browse(unit, session, by_device, unbound_discovery, publish_discovery):
     """Browse mDNS for a best-effort inventory of unbound device names for home/discovery.
 
-    See docs/design.md, Discovery / ESPHome adapter. Never a prerequisite
+    See docs/design.md#discovery. Never a prerequisite
     for the bound-device connections, so every failure here is caught and
     reported as a health event rather than raised.
     """

@@ -10,11 +10,16 @@
 # ///
 """OwnTracks adapter: a translating subscriber, same shape as Zigbee2MQTT.
 
+Phones reach the house over MQTT through the existing broker, not
+OwnTracks' HTTP mode: the broker's retained message is each phone's
+last-known position across restarts, and the house gains no second
+ingress surface. The topic prefix is fixed at `owntracks`.
+
 Phone location published as JSON on owntracks/{user}/{device} fans out to
 per-aspect keys home/state/person/{entity}/{aspect}: lat, lon, accuracy
 (from `acc`), battery (from `batt`) and fixed_at (from `tst`) — scalar
 aspects, not one composite fix, so the recorder gives position trails for
-free (docs/design.md, Map and person entities). accuracy/battery/fixed_at
+free (docs/design.md#map-and-people). accuracy/battery/fixed_at
 are omitted when the fix does not carry them. The entity file's `id` is
 the two OwnTracks topic segments ("{user}/{device}"); the file stem is the
 entity name; person entities bind capability = "person", room = "person"
@@ -22,8 +27,14 @@ entity name; person entities bind capability = "person", room = "person"
 room). Non-location `_type` payloads (transition, lwt, waypoint, cmd, ...)
 are normal OwnTracks traffic and are ignored. Persons are read-only: there
 is no command subscription. Anything unusable — malformed JSON, or a
-location payload missing lat/lon — emits a JSON event at
-home/health/{unit}/event instead of crashing.
+location payload missing lat/lon — drops with "malformed-payload" at
+home/health/{unit}/event instead of crashing. A location from an unbound
+pair drops with "unknown-device" on first sight only: discovery already
+carries it, and a phone nobody has bound yet publishes forever.
+
+There is no `available` aspect. A retained position has no liveness
+semantics, so the protocol offers no real loss signal and the adapter
+does not fake one; an old fix shows its age through fixed_at.
 
 Unlike z2m there is no retained bridge inventory to mirror: every
 user/device pair seen on the broker, bound or not, is tracked incrementally

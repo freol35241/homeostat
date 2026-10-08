@@ -1,7 +1,7 @@
 //! Dashboard service integration: the family's web surface against a live
 //! supervised house (`tests/fixture_house_dashboard`).
 //!
-//! Success criteria (docs/design.md, Dashboard):
+//! Success criteria (docs/design.md#dashboard):
 //! 1. `/api/model` renders the manifests: entities with capability,
 //!    features and naming; units with every param and its `editable_by`,
 //!    of which only family ones are writable.
@@ -12,7 +12,7 @@
 //!    before the bus, and the model marks the entity not commandable. An
 //!    aspect descriptor in the owning adapter's discovery record admits
 //!    the family-editable commands it declares, within their constraints,
-//!    and rides the snapshot (docs/design.md, Aspect descriptors).
+//!    and rides the snapshot (docs/design.md#aspect-descriptors).
 //! 3. A parameter write within constraints persists through the core's
 //!    validating config queryable; an out-of-constraint write is refused
 //!    and changes nothing.
@@ -21,12 +21,11 @@
 //! 5. The map surface: vendored assets are served allowlisted, person
 //!    entities render in `/api/model` but are never commandable, and
 //!    `/tiles.pmtiles` 404s without `HOMEOSTAT_DASHBOARD_TILES` and serves
-//!    Range requests when it is set (docs/design.md, "Map and person
-//!    entities").
-//! 6. `/api/logs` proxies a unit's captured stdout/stderr tail (docs/design.md,
-//!    "Logs and the audit trail"): known lines come back stream-tagged,
-//!    `lines=N` truncates, and an unknown unit 404s.
-//! 7. The camera media plane (docs/design.md, Cameras): browsers never
+//!    Range requests when it is set (docs/design.md#map-and-people).
+//! 6. `/api/logs` proxies a unit's captured stdout/stderr tail
+//!    (docs/design.md#logs-and-the-audit-trail): known lines come back
+//!    stream-tagged, `lines=N` truncates, and an unknown unit 404s.
+//! 7. The camera media plane (docs/design.md#cameras): browsers never
 //!    speak go2rtc — `/api/camera/{entity}/live` relays the MSE WebSocket
 //!    byte-for-byte, addressing the stream by the camera's entity id (how
 //!    the shim names it) rather than its entity name, and an unknown or
@@ -374,8 +373,8 @@ async fn dashboard_serves_the_family_surface() {
     // 1b. dashboard.toml rides the model as written (the core validated
     // it), and each unit carries the relations its card draws: what it
     // drives, from the grant table, and what it reads, from its
-    // subscriptions resolved against live state keys (docs/design.md,
-    // Dashboard: views are text).
+    // subscriptions resolved against live state keys
+    // (docs/design.md#views-are-text).
     assert_eq!(model["views"][0]["name"], "downstairs", "{model}");
     assert_eq!(model["views"][0]["widgets"][0]["kind"], "unit");
     assert_eq!(model["views"][1]["kind"], "rooms");
@@ -427,7 +426,7 @@ async fn dashboard_serves_the_family_surface() {
     // asset are one artifact written against each other; without this the
     // browser is on heuristic freshness and an upgrade can pair the new
     // page with the cached old logic — an empty page that takes no taps,
-    // with a healthy backend behind it (docs/design.md, Dashboard).
+    // with a healthy backend behind it (docs/design.md#the-page).
     let revalidates = |path: &str| {
         let (status, headers, _) = http_request_bytes(&addr, path, &[]);
         assert_eq!(status, 200, "{path}");
@@ -621,7 +620,7 @@ async fn dashboard_serves_the_family_surface() {
     // The wish still just goes to home/cmd at manual band, stamped the same
     // way as any other command — for a real arbitrated entity, the arbiter
     // (not exercised by this fixture) is what enforces the family always
-    // winning over automations (docs/design.md, Arbitrated mode).
+    // winning over automations (docs/design.md#commanding).
     let (status, reply) = http_request(
         &addr,
         "POST",
@@ -686,8 +685,8 @@ async fn dashboard_serves_the_family_surface() {
     );
 
     // A climate command is accepted: COMMANDABLE maps climate ->
-    // {"setpoint"}, the family-facing base aspect (docs/design.md, IVT490
-    // heat-pump adapter, "Climate vocabulary"). Setpoint is a float — the
+    // {"setpoint"}, the family-facing base aspect
+    // (docs/design.md#the-capability-vocabulary). Setpoint is a float — the
     // envelope must carry it through unmodified, same as any other value.
     let (status, reply) = http_request(
         &addr,
@@ -728,7 +727,7 @@ async fn dashboard_serves_the_family_surface() {
         "non-commandable climate aspect must be refused: {reply}"
     );
 
-    // 2b. Aspect descriptors (docs/design.md, Aspect descriptors): the
+    // 2b. Aspect descriptors (docs/design.md#aspect-descriptors): the
     // owning adapter's discovery record may describe an entity's aspects
     // and declare commands beyond the capability's vocabulary. A
     // family-editable one is admitted at /api/cmd within its constraint;
@@ -1219,8 +1218,8 @@ async fn dashboard_proxies_camera_media() {
     sup.shutdown();
 }
 
-/// 8. The whole-house darken (docs/design.md, Dashboard, "Group actions
-/// are manual-edge fan-outs"): POST /api/lights/off publishes one
+/// 8. The whole-house darken (docs/design.md#commanding, "Group actions fan
+/// out at the manual edge"): POST /api/lights/off publishes one
 /// manual-band off-command per bound light — and only lights — behind the
 /// same write gate as every other command.
 #[tokio::test(flavor = "multi_thread")]

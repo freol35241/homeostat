@@ -348,9 +348,10 @@ fn check_entities(house: &House, errors: &mut Vec<ValidationError>) {
                 if unit.manifest.unit.kind == UnitKind::Automation
                     && entity.file.write_policy.mode() == WriteMode::Arbitrated =>
             {
-                // A commandable virtual entity is a latch (docs/design.md,
-                // Commandable virtual entities): no device to contend for,
-                // no hold to expire, so arbitration has nothing to order.
+                // A commandable virtual entity is a latch
+                // (docs/design.md#commandable-virtual-entities): no device to
+                // contend for, no hold to expire, so arbitration has nothing
+                // to order.
                 errors.push(ValidationError::new(
                     "virtual-entity-arbitrated",
                     &entity.name,

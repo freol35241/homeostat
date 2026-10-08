@@ -271,7 +271,7 @@ pub const CODES: &[(&str, &str)] = &[
     (
         "virtual-entity-fed",
         "An `[inputs]` block sits on an entity bound by an automation. A fed \
-         input is a device's control input (docs/design.md, Device feeds); a \
+         input is a device's control input (docs/design.md#device-feeds); a \
          virtual entity has no device behind it and nothing to feed.",
     ),
     (
@@ -435,7 +435,7 @@ pub const CODES: &[(&str, &str)] = &[
          aspect: that is what the source segment is for, and under their own \
          sources they coexist. A publish that wildcards its aspect or source \
          slot accepts anything there, so it collides with a publish that \
-         names one (docs/design.md, Sources).",
+         names one (docs/design.md#forecasts).",
     ),
 ];
 

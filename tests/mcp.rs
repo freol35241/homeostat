@@ -495,7 +495,7 @@ async fn http_transport_runs_as_supervised_unit() {
 /// One HTTP POST: connect, send, read the full response. Retries while the
 /// server's listener may still be coming up.
 /// The agent surface serves the whole house state, and reachability is
-/// its only credential (docs/design.md, Local-only access). A page in a
+/// its only credential (docs/design.md#local-only-access). A page in a
 /// family browser can reach a LAN address, so the three dashboard gates
 /// apply here too — and the header is the one a cross-origin `fetch`
 /// cannot add without a preflight this server refuses.

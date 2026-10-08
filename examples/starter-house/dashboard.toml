@@ -1,4 +1,4 @@
-# The family surface's views (docs/design.md, Dashboard: views are text).
+# The family surface's views (docs/design.md#views-are-text).
 # Each [[view]] is a nav entry, in this order; a widget places something
 # the house already has — the dashboard owns every rendering. Without this
 # file the dashboard renders its generated views (Now, Setpoints, Rooms).

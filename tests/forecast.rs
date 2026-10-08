@@ -1,4 +1,4 @@
-//! Forecast bus class, end to end (docs/design.md, Forecasts).
+//! Forecast bus class, end to end (docs/design.md#forecasts).
 //!
 //! 1. A unit may publish `home/forecast/{room}/{entity}/{aspect}/{source}`
 //!    for an entity that EXISTS — it need not bind it — and the plan
@@ -118,8 +118,8 @@ async fn a_forecast_is_published_and_mirrored_for_a_late_joiner() {
 /// is then only as available as its producer's startup behaviour. A
 /// producer that issues on a schedule and not at start leaves the class
 /// answering nothing, which for a once-daily curve is most of a day
-/// (docs/design.md, Forecasts: "a producer should publish its current
-/// forecast at startup").
+/// (docs/design.md#forecasts: "Producers publish their current forecast
+/// at startup").
 ///
 /// Published from the test session rather than from `seer`, because
 /// `seer` re-issues at start and would mask exactly the gap this pins.

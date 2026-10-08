@@ -1,4 +1,4 @@
-//! Virtual sensor integration test (docs/design.md, Virtual sensors): an
+//! Virtual sensor integration test (docs/design.md#virtual-sensors): an
 //! automation binds an entity and publishes derived state onto it, proving
 //! the plan accepts automation-bound entities end to end and the derived
 //! reading behaves like any other state — mirrored by the core, published

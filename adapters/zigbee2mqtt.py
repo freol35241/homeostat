@@ -29,55 +29,68 @@ z2m republishes bridge/devices only on CHANGE, so its silence never
 distinguishes a dead bridge from a stable estate.
 
 Broker credentials come from HOMEOSTAT_MQTT_CREDENTIALS (a TOML outside
-the repo, keyed by hostname) unless the endpoint carries them inline; a
-broker that needs auth must not force its password into a unit manifest.
+the repo, keyed by hostname) unless the endpoint carries them inline;
+inline wins. A broker that needs auth must not force its password into a
+unit manifest, and a raw `@`, `/` or `#` in a password reparses the URL
+instead of failing, so the file is the safe place for one.
 
-Device state published as JSON on {base}/{id} fans out to per-aspect
-keys home/state/{room}/{entity}/{aspect}; commands on
-home/cmd/{room}/{entity}/{aspect} translate to {base}/{id}/set. The
-entity file's `id` is the z2m topic segment; the file stem is the entity
-name. The z2m `state` field is normalized (`on` for lights/switches,
-`locked` for locks); other scalar fields pass through under their z2m
-names — a field name that is not a legal key segment (empty, a wildcard,
-"#") drops with a "malformed-payload" event and the rest of the payload
-still publishes; nested objects (e.g. color) are deferred. A command is
-taken for the capability's base aspect (`on`/`locked`, a bool), a
-declared feature (`brightness`/`color_temp`, a number) or a command the
-device's own exposes describe (see below: a float or one of the enum's
-values); any other aspect, or a value of the wrong type, drops with
-"invalid-command" and never reaches the device. Arbitrated entities (e.g.
-locks) get no home/cmd subscription at all — plan-time expansion gives the
-adapter's templated cmd subscription only its non-arbitrated bound
-entities — and instead receive the arbiter's forwarded envelope on
-home/arbiter/{room}/{entity}/{aspect}, translated the same way a cmd
-envelope would be. Anything dropped emits a JSON event at
-home/health/{unit}/event instead of crashing.
+Device state published as JSON on {base}/{id} fans out to per-aspect keys
+home/state/{room}/{entity}/{aspect}; commands on
+home/cmd/{room}/{entity}/{aspect} translate to {base}/{id}/set. The entity
+file's `id` is the z2m topic segment (friendly name or IEEE address); the
+file stem is the entity name. The device subscription is {base}/+, which
+keeps bridge/# traffic out and means a friendly name containing "/" is
+unsupported. The z2m `state` field is normalized (`on` for
+lights/switches, `locked` for locks); other scalar fields pass through
+under their z2m names — a field name that is not a legal key segment
+(empty, a wildcard, "#") drops with a "malformed-payload" event and the
+rest of the payload still publishes; nested objects (e.g. color) are
+deferred. A command is taken for the capability's base aspect
+(`on`/`locked`, a bool), a declared feature (`brightness`/`color_temp`, a
+number) or a command the device's own exposes describe (see below: a float
+or one of the enum's values); any other aspect, or a value of the wrong
+type, drops with "invalid-command" and never reaches the device. `on`
+sends {"state": "ON"|"OFF"}; `locked` sends {"state": "LOCK"|"UNLOCK"},
+because z2m's lock vocabulary is asymmetric (reports say LOCKED/UNLOCKED,
+set commands LOCK/UNLOCK); anything else sends {aspect: value}. Arbitrated
+entities (e.g. locks) get no home/cmd subscription at all — plan-time
+expansion gives the adapter's templated cmd subscription only its
+non-arbitrated bound entities — and instead receive the arbiter's
+forwarded envelope on home/arbiter/{room}/{entity}/{aspect}, translated
+the same way a cmd envelope would be. Anything dropped emits a JSON event
+at home/health/{unit}/event instead of crashing.
 
-Device availability (docs/design.md, "Sensor dropout and availability"):
-the bridge's availability feature on {base}/{id}/availability — both
-the {"state": "online"|"offline"} payload and the legacy bare string —
-maps to the reserved base aspect home/state/{room}/{entity}/available
-(bool). Operational note: availability must be enabled in the z2m config;
-without it the aspect simply never appears (opt-in by construction). On
-loss the device's other aspects stand — stale, never false — and a native
-device field that would mint the reserved aspect drops with a
-"reserved-aspect" health event.
+A message for an unbound device drops with "unknown-device" only when the
+device is absent from bridge/devices. A device the bridge knows but no
+entity file binds is a steady state, not dropped input: discovery
+already reports it with configured=false, and an event per publish
+would flood the recorder for as long as the house leaves it unbound.
+
+Device availability (docs/design.md#availability): the bridge's
+availability feature on {base}/{id}/availability — both the {"state":
+"online"|"offline"} payload and the legacy bare string — maps to the
+reserved base aspect home/state/{room}/{entity}/available (bool).
+Operational note: availability must be enabled in the z2m config; without
+it the aspect simply never appears (opt-in by construction). On loss the
+device's other aspects stand — stale, never false — and a native device
+field that would mint the reserved aspect drops with a "reserved-aspect"
+health event.
 
 The retained {base}/bridge/devices inventory is republished at
 home/discovery/{unit}: every paired device (coordinator excluded) as a
 record carrying the entity-file binding `id`, whether an entity file
 already binds it, a best-effort suggested capability/features stanza
 mapped from the z2m `exposes` descriptor, and the raw definition for
-anything the mapping does not cover (docs/design.md, Discovery). A bound
-device's record also carries the entity's aspect descriptor (docs/
-design.md, Aspect descriptors), generated from the same `exposes`: every
-scalar expose becomes a labelled field — z2m's unit picks the kind
-(°C → temperature, % → percent, anything else a number carrying the unit),
-its category picks the group (diagnostic → diagnostics, config → config,
-else readings; z2m before 1.34 has no category at all, so the diagnostics
-it would categorise — linkquality, a battery voltage in mV — are known
-by property), battery is a reading but ordered last so it never headlines
-the room card, a settable config expose becomes an owner-tier command with
+anything the mapping does not cover (docs/design.md#discovery). A bound
+device's record also carries the entity's aspect descriptor
+(docs/design.md#aspect-descriptors), generated from the same `exposes`: every
+scalar expose becomes a labelled field — z2m's unit picks the kind (°C →
+temperature, % → percent, anything else a number carrying the unit), its
+category picks the group (diagnostic → diagnostics, config → config, else
+readings; z2m before 1.34 has no category at all, so the diagnostics it
+would categorise — linkquality, a battery voltage in mV — are known by
+property), battery is a reading but ordered last so it never headlines the
+room card, a settable config expose becomes an owner-tier command with
 z2m's own value bounds, and the alarm-shaped binaries (water leak, smoke,
 ...) are notable. The capability's own vocabulary (on, locked, brightness,
 color_temp) is described as readings only: its controls are the
@@ -160,7 +173,7 @@ def suggest(exposes):
 
 
 # Binary exposes whose `true` is out of the ordinary — z2m property names,
-# so dialect knowledge (docs/design.md, Aspect descriptors: notable).
+# so dialect knowledge (docs/design.md#aspect-descriptors: notable).
 NOTABLE_BINARY = frozenset(
     {"battery_low", "water_leak", "smoke", "gas", "carbon_monoxide", "tamper", "vibration"}
 )
@@ -183,8 +196,7 @@ SPECIFIC_TYPES = ("light", "switch", "lock", "cover", "climate", "fan")
 def describe(capability: str, exposes) -> dict | None:
     """Return the entity's aspect descriptor from its z2m exposes.
 
-    None when nothing scalar is exposed (docs/design.md, Aspect
-    descriptors).
+    None when nothing scalar is exposed (docs/design.md#aspect-descriptors).
     """
     fields: dict[str, dict] = {}
 

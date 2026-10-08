@@ -7,8 +7,8 @@
 # [tool.uv.sources]
 # homeostat = { path = "../../../sdk/python", editable = true }
 # ///
-"""A latch that restores its decision (docs/design.md, Restoring a unit's
-own last value).
+"""A latch that restores its decision
+(docs/design.md#restoring-a-units-own-last-value).
 
 The fixture for `ctx.restore`. A latch holds what a person decided, so
 after a core restart there is nothing to recompute and nothing in the

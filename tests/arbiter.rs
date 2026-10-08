@@ -1,7 +1,7 @@
 //! Arbiter service integration tests: a real supervisor on the arbiter
 //! fixture house (no broker — the arbiter is a pure bus service), asserting
-//! on the forward/preempt/refuse/expiry contract of docs/design.md,
-//! Arbitrated mode ("Settled 2026-07-16").
+//! on the forward/preempt/refuse/expiry contract of
+//! docs/design.md#arbitrated-mode.
 
 mod common;
 
@@ -69,11 +69,12 @@ async fn expect_silence(sub: &Sub, window: Duration, what: &str) {
 
 /// What the arbiter is HOLDING, as state rather than as an event stream:
 /// the document answers "is this aspect held right now?" for a consumer
-/// that was not listening when the hold was taken (docs/design.md,
-/// Arbitrated mode). Asserts it is published empty at startup, carries the
-/// holder with a wall-clock deadline once a wish lands, counts what it
-/// refuses, and empties itself when the hold expires — with no further
-/// command to prompt it, which is the part lazy expiry cannot do.
+/// that was not listening when the hold was taken
+/// (docs/design.md#arbitrated-mode). Asserts it is published empty at
+/// startup, carries the holder with a wall-clock deadline once a wish
+/// lands, counts what it refuses, and empties itself when the hold expires
+/// — with no further command to prompt it, which is the part lazy expiry
+/// cannot do.
 #[tokio::test(flavor = "multi_thread")]
 async fn holds_are_published_as_state() {
     let (mut sup, observer) = setup().await;
@@ -283,9 +284,9 @@ async fn forward_preempt_refuse_and_expiry() {
     sup.shutdown();
 }
 
-/// Leases are per (entity, aspect), not per entity (docs/design.md,
-/// Arbitrated mode, amended 2026-07-18): a manual hold on one aspect must
-/// not block an automation commanding a sibling aspect of the same entity
+/// Leases are per (entity, aspect), not per entity
+/// (docs/design.md#arbitrated-mode): a manual hold on one aspect must not
+/// block an automation commanding a sibling aspect of the same entity
 /// — the family's setpoint never freezes the price automation's offset —
 /// while same-aspect contention still refuses.
 #[tokio::test(flavor = "multi_thread")]

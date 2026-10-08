@@ -90,7 +90,7 @@ async fn cache_read_eventually(session: &zenoh::Session, key: &str, timeout: Dur
 
 /// Expects the lamp-off command within the timeout: a cmd envelope whose
 /// value is `false`, priority and actor stamped from the automation's own
-/// manifest declaration (docs/design.md, Arbitrated mode) — the SDK's
+/// manifest declaration (docs/design.md#cmd-envelopes) — the SDK's
 /// Context.publish does this, not the automation's code.
 async fn expect_lamp_off(sub: &Sub, timeout: Duration) {
     let sample = tokio::time::timeout(timeout, sub.recv_async())

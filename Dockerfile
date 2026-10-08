@@ -63,7 +63,7 @@ FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2
 ARG UID=1000
 ARG GID=1000
 
-# git: plan --save, apply and the MCP repo tools shell out to it.
+# git: plan --save and apply shell out to it for the house commit.
 # tini: PID 1 — forwards signals and reaps any orphan a unit leaves behind.
 # tzdata: the uv-managed CPython reads /usr/share/zoneinfo for zoneinfo.
 RUN apt-get update \

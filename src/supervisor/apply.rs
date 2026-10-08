@@ -1,10 +1,11 @@
-//! The apply engine (docs/design.md, step 5b): the CLI commands the running
-//! supervisor through a control queryable at `home/meta/system/apply` — a
-//! GET with payload is an apply request. The supervisor re-reads the repo,
-//! derives its own diff against its in-memory world, and executes the walk
-//! per-unit and rolling: parameters first (no restarts), removals in
-//! reverse grant order, creates/restarts in grant order, awaiting health
-//! `running` after each. Failure halts the walk in place.
+//! The apply engine (docs/design.md#the-apply-walk): the CLI commands the
+//! running supervisor through a control queryable at
+//! `home/meta/system/apply` — a GET with payload is an apply request. The
+//! supervisor re-reads the repo, derives its own diff against its in-memory
+//! world, and executes the walk per-unit and rolling: parameters first (no
+//! restarts), removals in reverse grant order, creates/restarts in grant
+//! order, awaiting health `running` after each. Failure halts the walk in
+//! place.
 //!
 //! The supervisor holds the apply lock — one apply at a time. Parameter-only
 //! applies bypass it (the fast path). A deliberate apply restart spawns a

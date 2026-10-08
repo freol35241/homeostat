@@ -350,7 +350,7 @@ async fn adapter_honors_unit_contract() {
 /// document at home/discovery/zigbee — binding ids, configured flags,
 /// best-effort suggestions, raw definitions; the coordinator is omitted.
 /// A bound device's record also carries the aspect descriptor generated
-/// from its exposes (docs/design.md, Aspect descriptors); an unbound one
+/// from its exposes (docs/design.md#aspect-descriptors); an unbound one
 /// does not.
 #[tokio::test(flavor = "multi_thread")]
 async fn bridge_inventory_published_as_discovery() {
@@ -558,9 +558,9 @@ async fn envelope_less_command_drops_with_health_event() {
     sup.shutdown();
 }
 
-/// (g) Arbitrated lock command, end to end (docs/design.md, Arbitrated
-/// mode): the fixture's `front_door` lock is arbitrated and the house runs
-/// an arbiter unit. A manual-band wish on home/cmd forwards through the
+/// (g) Arbitrated lock command, end to end
+/// (docs/design.md#arbitrated-mode): the fixture's `front_door` lock is
+/// arbitrated and the house runs an arbiter unit. A manual-band wish on home/cmd forwards through the
 /// arbiter to home/arbiter, which z2m subscribes to and translates
 /// into z2m's LOCK/UNLOCK set vocabulary. While that manual lease holds, a
 /// direct automation-band wish on the same home/cmd key is refused

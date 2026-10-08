@@ -204,8 +204,8 @@ async fn wifi_association_drives_presence() {
 }
 
 /// (b) Connectivity state: WAN down is a `wan = false` transition, and
-/// back up again. Tunnels are not this adapter's (design.md,
-/// amended 2026-09-23): it reports presence and WAN.
+/// back up again. Tunnels are not this adapter's
+/// (docs/design.md#the-capability-vocabulary): it reports presence and WAN.
 #[tokio::test(flavor = "multi_thread")]
 async fn connectivity_state_translates_to_bus() {
     let (router, _routers_path, mut sup, observer) = setup().await;

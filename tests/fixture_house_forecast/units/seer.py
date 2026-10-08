@@ -7,16 +7,16 @@
 # [tool.uv.sources]
 # homeostat = { path = "../../../sdk/python", editable = true }
 # ///
-"""A forecast producer, standing in for a house's own (docs/design.md,
-Forecasts).
+"""A forecast producer, standing in for a house's own
+(docs/design.md#forecasts).
 
 Deliberately not an adapter for any real source: which prices, and what to
-do about them, are house content by the boundary test (docs/design.md,
-Repo split). This exists so the bus class, the SDK codec, the manifest
-binding and the core's mirror are exercised end to end by something shaped
-like the real thing — an irregular horizon whose points declare the window
-they hold for, published through this unit's own `[bus.publishes]` entries
-rather than around them.
+do about them, are house content by the boundary test
+(docs/design.md#repo-split). This exists so the bus class, the SDK codec,
+the manifest binding and the core's mirror are exercised end to end by
+something shaped like the real thing — an irregular horizon whose points
+declare the window they hold for, published through this unit's own
+`[bus.publishes]` entries rather than around them.
 """
 
 import datetime

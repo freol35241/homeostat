@@ -7,8 +7,9 @@
 # [tool.uv.sources]
 # homeostat = { path = "../../../sdk/python", editable = true }
 # ///
-"""Latches: commandable virtual switches (docs/design.md, Commandable
-virtual entities), bound through `{room}`/`{entity}` templates.
+"""Latches: commandable virtual switches
+(docs/design.md#commandable-virtual-entities), bound through
+`{room}`/`{entity}` templates.
 
 The unit exists for the SDK's template expansion. It binds two entities in
 two rooms through ONE subscribe and ONE publish expression, so a test that

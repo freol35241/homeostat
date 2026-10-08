@@ -261,7 +261,8 @@ pre.view-text { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, mono
 .chart-issue-hit { fill: none; stroke: transparent; stroke-width: 14; cursor: pointer;
   vector-effect: non-scaling-stroke; }
 /* A contributing source: grey and thin, so the computed value's accent
-   always reads as what the house believes (docs/design.md, Sources). */
+   always reads as what the house believes
+   (docs/design.md#charts-forecasts-and-sources). */
 .chart-contributor { fill: none; stroke: var(--muted); stroke-width: 1.5; stroke-linecap: round;
   stroke-linejoin: round; vector-effect: non-scaling-stroke;
   /* Dotted, where the forecast is dashed (4 3): both are secondary to the
@@ -274,7 +275,8 @@ pre.view-text { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, mono
 /* Naming a source in the legend only identifies a line if the reader can
    tell the lines apart, and one deliberate grey means they cannot. So the
    legend lights its own line on demand: emphasis, never a colour a
-   contributor must not own (docs/design.md, Sources). */
+   contributor must not own
+   (docs/design.md#charts-forecasts-and-sources). */
 .source-legend span { cursor: default; }
 .chart-contributor.hi { stroke: var(--secondary); stroke-width: 2; opacity: 1; }
 .chart-contributor.dim { opacity: .4; }
@@ -287,7 +289,7 @@ pre.view-text { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, mono
   stroke-linejoin: round; stroke-dasharray: 4 3; opacity: .75; vector-effect: non-scaling-stroke; }
 /* Still the house's current belief, so still dashed — but older than the
    span it has left to say, so it does not get to wear the accent
-   (docs/design.md, Forecasts). */
+   (docs/design.md#charts-forecasts-and-sources). */
 .chart-forecast.stale { stroke: var(--muted); opacity: .6; }
 .chart-now { stroke: var(--secondary); stroke-width: 1; stroke-dasharray: 3 3; opacity: .55;
   vector-effect: non-scaling-stroke; }
@@ -486,7 +488,7 @@ video-rtc video { width: 100%; display: block; }
 .described-readings .sep { color: var(--border); }
 .described-readings .card-badge { margin-left: auto; }
 .described-readings .card-badge .badge-arbitrated { margin-left: 0; }
-/* described aspects (docs/design.md, Aspect descriptors): label · value, a control when declared */
+/* described aspects (docs/design.md#aspect-descriptors): label · value, a control when declared */
 .aspect-row.described { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 40px; }
 .aspect-row .aspect-label { color: var(--ink); font-size: 13px; }
 /* A commanded aspect's label is its way into history: the row itself
@@ -595,7 +597,7 @@ video-rtc video { width: 100%; display: block; }
 <script src="/assets/dashboard-logic.js"></script>
 <script type="module">
   // The vendored go2rtc player (assets/README.md). MSE only: WebRTC can't
-  // ride the dashboard's /api/camera proxy (docs/design.md, Cameras).
+  // ride the dashboard's /api/camera proxy (docs/design.md#cameras).
   import { VideoRTC } from '/assets/video-rtc.js';
   customElements.define('video-rtc', VideoRTC);
 </script>
@@ -662,7 +664,7 @@ var overlay = {
   // belief), 'sources' (the contributors it is derived from) or
   // 'forecasts' (every issue the recorder kept). One at a time — two sets
   // of thin grey lines on one chart read as one set — so one field, not
-  // a flag each (docs/design.md, Forecasts and Sources).
+  // a flag each (docs/design.md#charts-forecasts-and-sources).
   layer: '',
   issues: [],              // decoded stored issues for the current window
   issuesLoading: false,
@@ -1066,7 +1068,7 @@ function toast(msg) {
 
 // ---- history fetch ----
 //
-// The recorder folds the window (docs/design.md, Read path): a line asks
+// The recorder folds the window (docs/design.md#read-path): a line asks
 // for one bucket per drawn column, a timeline for the runs of the state.
 // The window travels with the points so the chart places them by time.
 
@@ -1151,7 +1153,7 @@ function sourceCacheKey(hours, c) {
 /* When each source last went in or out of the computation. Declared
  * sources say what MAY contribute; these say what did, so a contributor
  * the fusion has dropped stops reading as if it were still voting
- * (docs/design.md, Which sources a computation actually used). */
+ * (docs/design.md#which-sources-a-computation-actually-used). */
 function fetchSourceEvents(entity, aspect, hours) {
   var ck = hours + '|' + entity.name + '|' + aspect;
   var cached = overlay.sourceEvents[ck];
@@ -1236,11 +1238,11 @@ function fetchIssues(entityName, aspect, hours) {
 }
 
 /* What was asked of this aspect, beside what it did. The recorder types
- * every cmd envelope into its own series (docs/design.md, History), and
- * this is where that audit is read. Always fetched rather than gated on
- * whether the page thinks the aspect is commandable: recorded commands
- * are the honest test, and the rules for who may command what live on
- * the server. The strip renders only when the window actually holds
+ * every cmd envelope into its own series
+ * (docs/design.md#history-and-the-recorder), and this is where that
+ * audit is read. Always fetched rather than gated on whether the page
+ * thinks the aspect is commandable: recorded commands are the honest
+ * test, and the rules for who may command what live on the server. The strip renders only when the window actually holds
  * commands. */
 function fetchCommandRange(entityName, aspect, hours) {
   var cd = overlay.cmdData[hours];
@@ -1493,9 +1495,10 @@ function forecastsOf(entity, aspect) {
 // The claims that are still about the future. A belief whose horizon has
 // run out is not drawn as one — the mirror keeps a producer's last word
 // for as long as the core lives, and a curve that ends before now says
-// nothing about what is ahead (docs/design.md, Forecasts). It stays in
-// the overlay under `forecasts`, which is where a spent claim is
-// judged against what actually happened.
+// nothing about what is ahead
+// (docs/design.md#charts-forecasts-and-sources). It stays in the overlay
+// under `forecasts`, which is where a spent claim is judged against what
+// actually happened.
 function liveForecastsOf(entity, aspect) {
   return forecastsOf(entity, aspect).filter(function (b) {
     return !logic.forecastFreshness(b.forecast, Date.now()).expired;
@@ -2099,7 +2102,7 @@ function widgetGeneric(entity) {
 
 function widgetForCamera(entity) {
   // No poster: a still frame means transcoding H.264 to JPEG, which is a
-  // transcoder in the image for a thumbnail (docs/design.md, Cameras —
+  // transcoder in the image for a thumbnail (docs/design.md#cameras —
   // the plane split is a pure remux). A failing <img> renders as a black
   // rectangle indistinguishable from a dark room, which is worse than
   // saying plainly the picture is a tap away. Motion still reads here,
@@ -2172,7 +2175,7 @@ function relTime(ms) {
 // ---- widget: map (person entities) ----
 //
 // The map is a view over every person entity, not a per-entity row (see
-// docs/design.md, "Map and person entities"). Leaflet's map object is
+// docs/design.md#map-and-people). Leaflet's map object is
 // stateful (pan/zoom, tile cache) and must not be recreated on every
 // state-delta render, so its container is a detached DOM node kept in
 // mapState and moved into a fresh slot each render, rather than rebuilt
@@ -2469,11 +2472,12 @@ function widgetDial(entity, aspect) {
 
 // ---- widget: burner ----
 //
-// The `burner` vocabulary as one card (docs/design.md, Burners and
-// interlocks): its two commands — the family lever `on` and the output
-// `power_level` — over the two temperatures an interlock reads, each with
-// its day. Nothing dialectal: run-state codes and a firmware's own
-// readings stay in the entity's overlay, which the card taps through to.
+// The `burner` vocabulary as one card
+// (docs/design.md#burners-and-interlocks): its two commands — the family
+// lever `on` and the output `power_level` — over the two temperatures an
+// interlock reads, each with its day. Nothing dialectal: run-state codes
+// and a firmware's own readings stay in the entity's overlay, which the
+// card taps through to.
 // A descriptor keeps the firmware's field name in parentheses — "flue
 // (smoke_temp)" — which the overlay shows and a card has no room for, the
 // same trim the room card makes (dashboard-logic.js, cardPlan).
@@ -3177,7 +3181,7 @@ function openUnitDetail(unitName) {
 
 /* The text behind a view: the dashboard.toml block that makes it, with
  * the widget kinds that name what is on screen. Read-only, deliberately —
- * the dashboard never writes the house (docs/design.md, Family tier only)
+ * the dashboard never writes the house (docs/design.md#views-are-text)
  * — but it gives what someone points at a name they can use, with a
  * person or with an agent working in the house repo. */
 function renderViewTextBody() {
@@ -3224,7 +3228,7 @@ function renderOverlayContent() {
  * lights its line and stands the others down, and a tap holds that until
  * it is tapped again. Emphasis, not colour — a contributor owning a hue
  * would compete with the accent the computed value keeps
- * (docs/design.md, Sources). */
+ * (docs/design.md#charts-forecasts-and-sources). */
 function wireSourceLegend(root) {
   var scope = root || document;
   var entries = scope.querySelectorAll('.source-legend span[data-source]');
@@ -3317,8 +3321,9 @@ function renderHistoryDetailBody() {
   // Both are owner work, which is why they live here and not on a tile —
   // a family wants the temperature, not which sensor read low — and only
   // one can be drawn at a time, so they are one control and not two
-  // (docs/design.md, Sources). A chip appears only where the house has
-  // the thing it names, so an ordinary sensor's overlay has no such row.
+  // (docs/design.md#charts-forecasts-and-sources). A chip appears only
+  // where the house has the thing it names, so an ordinary sensor's
+  // overlay has no such row.
   var layers = [{ id: '', label: 'value' }];
   if (overlay.shape !== 'timeline' && contributorsOf(entity, aspect).length) {
     layers.push({ id: 'sources', label: 'sources' });
@@ -3481,7 +3486,7 @@ function renderAspectRow(entity, r) {
   // so an automation's wish for it is being refused. `Now` says so only
   // when the hold displaced somebody; the control says so whenever it is
   // held, because this is where a person stands when they wonder why the
-  // house is not driving it (docs/design.md, Arbitrated mode).
+  // house is not driving it (docs/design.md#views-are-text).
   var hold = logic.holdOn(store.holds, entity.room, entity.name, r.aspect, Date.now());
   var heldMark = hold
     ? '<span class="stale-mark" title="' + esc('held by ' + hold.actor + ' at the ' + hold.priority + ' band') + '">held</span>'

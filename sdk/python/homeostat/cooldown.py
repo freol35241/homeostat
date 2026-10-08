@@ -1,4 +1,4 @@
-"""Per-key cooldowns for automations that reach people (docs/design.md, Notifications).
+"""Per-key cooldowns for automations that reach people (docs/design.md#notifications).
 
 A notification per event is a notification 417 times when a motion
 episode arrives as 417 samples, so the live estate's alarm flow limits

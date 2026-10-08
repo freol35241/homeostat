@@ -50,8 +50,8 @@ impl Grant {
 /// of. Because these live in the table — and every bound entity sits in
 /// its owner's state row — an entity move, a write-mode flip, a
 /// capability change or a re-binding IS a grant-table delta, and any grant
-/// delta escalates the plan to structural (docs/design.md, Plan/apply
-/// mechanics), with the owner shown exactly what changed.
+/// delta escalates the plan to structural (docs/design.md#tiers), with the
+/// owner shown exactly what changed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GrantEntity {
     pub name: String,
@@ -65,7 +65,7 @@ pub struct GrantEntity {
 }
 
 /// One resolved feed: a device input wired to a source aspect
-/// (docs/design.md, Device feeds). Rendered in the plan next to the grant
+/// (docs/design.md#device-feeds). Rendered in the plan next to the grant
 /// table; not a walk-order edge — a control loop that reads a device and
 /// feeds a term back is legitimately cyclic.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -470,9 +470,9 @@ pub fn resolve(
         }
     }
 
-    // A commandable virtual entity is a latch (docs/design.md, Commandable
-    // virtual entities): its owning automation subscribes to the entity's
-    // cmd keys and sets its own state. A cmd-class grant onto an
+    // A commandable virtual entity is a latch
+    // (docs/design.md#commandable-virtual-entities): its owning automation
+    // subscribes to the entity's cmd keys and sets its own state. A cmd-class grant onto an
     // automation-owned entity nobody subscribes for would hand commands to
     // a producer that never receives them, so it stays refused.
     for grant in grants.iter().filter(|g| g.is_cmd()) {
@@ -694,13 +694,13 @@ pub fn resolve(
         }
     }
 
-    // Reserved classes (docs/design.md, Key space): `config` and `meta` are
-    // the core's alone; `health` and `discovery` are per unit, under the
-    // publishing unit's own name; `arbiter`, `clock` and `history` are one
-    // service's output each. The SDK only checks that a published key is
-    // within a declared expression, so without this an automation could
-    // declare `home/arbiter/**` and forge post-arbitration commands, or
-    // another unit's discovery record, with an empty grant table.
+    // Reserved classes (docs/design.md#reserved-classes): `config` and
+    // `meta` are the core's alone; `health` and `discovery` are per unit,
+    // under the publishing unit's own name; `arbiter`, `clock` and `history`
+    // are one service's output each. The SDK only checks that a published
+    // key is within a declared expression, so without this an automation
+    // could declare `home/arbiter/**` and forge post-arbitration commands,
+    // or another unit's discovery record, with an empty grant table.
     let publish_class = |key: &ExpandedKey| -> Option<(String, Option<String>)> {
         let mut segments = key.source.split('/').skip(1).map(str::to_string);
         Some((segments.next()?, segments.next()))
@@ -948,9 +948,10 @@ mod tests {
         );
     }
 
-    /// The tier-escalation property behind docs/design.md's "entity moves,
-    /// write-policy changes" structural rule: a room move or a write-mode
-    /// flip changes the resolved grant table, so it diffs as a grant delta.
+    /// The tier-escalation property behind the "entity moves, write-policy
+    /// changes" structural rule (docs/design.md#tiers): a room move or a
+    /// write-mode flip changes the resolved grant table, so it diffs as a
+    /// grant delta.
     #[test]
     fn entity_move_and_policy_flip_change_the_grant_table() {
         let arbiter_bus = || {
@@ -1468,8 +1469,8 @@ mod tests {
 
     /// Every bound entity sits in its owner's state row, so a change to an
     /// entity nobody is granted onto — the lamp here — is still a grant
-    /// delta (docs/design.md: entity moves and write-policy changes are
-    /// structural).
+    /// delta (docs/design.md#the-grant-table: entity moves and write-policy
+    /// changes are structural).
     #[test]
     fn a_change_to_an_ungranted_entity_changes_the_grant_table() {
         let with_state = || {

@@ -7,7 +7,7 @@
 # [tool.uv.sources]
 # homeostat = { path = "../sdk/python", editable = true }
 # ///
-"""Recorder service: history end to end (see docs/design.md, step 5a).
+"""Recorder service: history end to end (see docs/design.md#history-and-the-recorder).
 
 Subscribes the key spaces its manifest declares and writes a SQLite store
 named by [discovery].endpoint ("sqlite:<path>", relative to the house
@@ -23,7 +23,7 @@ config keys land raw in an events audit table; so does every cmd envelope
 (alongside its unwrapped value in samples) — the "who" audit, askable via
 home/history/events.
 
-Forecasts (docs/design.md, Forecasts) are the one class that does NOT
+Forecasts (docs/design.md#forecasts) are the one class that does NOT
 ride samples, because a forecast point carries two times — when it was
 said and when it is about — where a sample carries one, and keeping
 superseded issues is the entire reason to store a forecast. They land in
@@ -180,7 +180,7 @@ FORECAST_KEY = zenoh.KeyExpr("home/history/forecast/**")
 # per series have no index that answers them; version 2 carries them on
 # series instead (see the tally trigger). Version 3 added the forecasts
 # table; version 4 gives `series` a `source`, because a forecast key
-# carries one (docs/design.md, Sources) and two providers speaking about
+# carries one (docs/design.md#forecasts) and two providers speaking about
 # one aspect are two series, not one series written twice. Version 5
 # names the sources version 4 left empty (see LEGACY_SOURCE). Version 6
 # adds `archives`, the record of the closed months sealed out of the file.
@@ -835,7 +835,7 @@ class Writer:
     def _archive(self) -> bool:
         """Move one closed month out of the hot file into archive files.
 
-        See docs/design.md, Archive. One month per call; returns True when
+        See docs/design.md#archives. One month per call; returns True when
         it did something, so the writer comes straight back for the next
         month once pending samples have flushed. Off while
         archive_after_months is 0.
@@ -1333,7 +1333,7 @@ class Recorder:
         """Record one forecast issue as one row per point.
 
         The document is the unit of issuance; the row is the unit of fact
-        (docs/design.md, Forecasts) — a scalar with its two coordinates,
+        (docs/design.md#forecasts) — a scalar with its two coordinates,
         which is why it cannot ride `samples` and why it decomposes so
         plainly once it has its own table.
 
@@ -1350,7 +1350,7 @@ class Recorder:
         """
         # room/entity/aspect/source — six segments with the class and the
         # `home` root. An aspect never spans segments here, because the
-        # last one is the source (docs/design.md, Sources).
+        # last one is the source (docs/design.md#key-space).
         if len(parts) != 6:
             self.sess.health_event("drop", reason="off-schema-key", key=key)
             return
@@ -1500,7 +1500,7 @@ class Recorder:
                 # providers for one aspect come back as two series a
                 # caller can tell apart — and a caller that wants all of
                 # them asks with a wildcard in that slot rather than
-                # getting them merged (docs/design.md, Sources).
+                # getting them merged (docs/design.md#forecasts).
                 # Migrated stores are repaired to LEGACY_SOURCE, but the
                 # store is not this loop's to trust: an empty segment is
                 # not a key expression, and building one here would take
@@ -2024,7 +2024,8 @@ def migrate_v3(conn: sqlite3.Connection) -> None:
 
     Its uniqueness moves from (class, entity, aspect) to (class, entity,
     aspect, source) so two providers forecasting one aspect are two series
-    rather than one series written twice (docs/design.md, Sources).
+    rather than one series written twice
+    (docs/design.md#history-and-the-recorder).
 
     A column can be added in place, but the old uniqueness cannot be
     removed in place: it is a table-level UNIQUE, so SQLite implements it

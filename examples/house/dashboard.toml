@@ -1,4 +1,4 @@
-# The family surface's views (docs/design.md, Dashboard: views are text).
+# The family surface's views (docs/design.md#views-are-text).
 # Each [[view]] is a nav entry; without this file the dashboard renders
 # its generated views. Health and "Not shown" — everything no view places
 # — stay reachable from the rail whatever is written here.
@@ -29,7 +29,7 @@ widgets = [
   { kind = "unit", unit = "evening_lights" },           # its setpoint, and the lights it drives
   { kind = "unit", unit = "fused_temperature" },        # what it publishes, and what it reads
   # Opening this chart's detail overlay offers "with sources": the two
-  # thermometers it is fused from, drawn beside it (docs/design.md, Sources).
+  # thermometers it is fused from, drawn beside it (docs/design.md#sources).
   { kind = "chart", entity = "downstairs_temperature", aspect = "temperature", hours = 24 },
   { kind = "room", room = "kitchen" },
   { kind = "room", room = "livingroom" },
