@@ -59,9 +59,8 @@ jobs:
       - run: uvx ruff@0.16.7 check adapters sdk scripts tests/adapters tests/browser
       # The dashboard's extracted decision logic (adapters/assets/
       # dashboard-logic.js) and its html tag: Node's built-in runner, no
-      # packages. The
-      # shell expands the glob — newer Node treats a bare directory
-      # argument as a module path and dies with MODULE_NOT_FOUND.
+      # packages. The shell expands the glob — newer Node treats a bare
+      # directory argument as a module path and dies with MODULE_NOT_FOUND.
       - run: node --test tests/js/*.test.js
       # examples/starter-house ships generated copies of adapters/; this
       # fails the build the moment one is edited by hand or a release
