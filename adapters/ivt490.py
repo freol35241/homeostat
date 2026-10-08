@@ -10,11 +10,12 @@
 # ///
 """IVT490 heat-pump adapter.
 
-See docs/design.md, "IVT490 heat-pump adapter (settled 2026-07-18)".
-
 The bespoke ESP8266 interface board (github.com/freol35241/IVT490-interface-
 esp8266, tracked firmware ref: the GT3_2_boiler_emulation branch) speaks
-its own MQTT dialect. Heat-pump state lives under {base}/ivt490/state: the
+its own MQTT dialect, and the adapter absorbs that dialect as it is: the
+board is house-specific hardware (a serial read of the control board,
+GT2 digipot emulation, an EXT_IN relay) with no drop-in replacement
+firmware to move to. Heat-pump state lives under {base}/ivt490/state: the
 whole document as one JSON blob, then — src/main.cpp's publish_json_object
 recursing into every nested JsonObject — each sub-object as its own blob
 and each scalar leaf on its own subtopic. The document (lib/IVT490/
@@ -72,7 +73,7 @@ stale" answerable months later. A {value}-only field grows no such
 aspect. (These are read-only observations; `available` remains the
 receive-timer signal below, unaffected.)
 
-The heat pump is an arbitrated entity (docs/design.md, Arbitrated mode):
+The heat pump is an arbitrated entity (docs/design.md#arbitrated-mode):
 all commands ride the arbiter, and the family's manual setpoint always
 wins — its templated home/cmd subscription therefore expands to nothing
 at plan time, so every command this adapter ever sees has already been
@@ -98,7 +99,7 @@ COMMANDS.
 The firmware's
 fifth set topic, controller/set/indoor_temperature_actual, is NOT a command
 aspect: it is a sensor-feedback input, a continuous signal with one master
-rather than contestable intent (docs/design.md, "Device feeds"). It and
+rather than contestable intent (docs/design.md#device-feeds). It and
 outdoor_temperature_offset are the FEEDABLE inputs: an entity file wires
 one with `[inputs] <input> = { entity, aspect }`, and the adapter then
 subscribes that source's state key and forwards each sample to
@@ -116,7 +117,11 @@ adapter constants — device physics, not
 house config (setpoint 10-30 degC, feed_temperature_target 20-60 degC,
 outdoor_temperature_offset +/-50 K): a wrong-type or out-of-range command
 DROPS with an "invalid-command" health event carrying the offending
-aspect and value, never clamped. A malformed or envelope-less command
+aspect and value, never clamped. The firmware has no range checks of its
+own (it stores each control value verbatim, and the outdoor NTC emulator
+saturates at the ends of its digipot), so these bounds are the only
+refusal in the chain and must admit everything the firmware can act on.
+A malformed or envelope-less command
 (keys.parse_cmd_envelope) drops the same way, like every other adapter.
 NOTE: the firmware's toFloat()/toInt() parse treats 0 as failure, so a
 legitimate outdoor_temperature_offset of exactly 0.0 — in range here — is
@@ -127,9 +132,12 @@ Discovery is a small, static document at home/discovery/{unit}: one
 record per bound entity carrying its base-topic id, a suggested
 capability "climate" stanza, the entity's aspect descriptor (ASPECT_FIELDS
 — labels, kinds, groups and the command vocabulary the dashboard renders;
-docs/design.md, Aspect descriptors), and a `bound` flag that starts false
+docs/design.md#aspect-descriptors), and a `bound` flag that starts false
 and flips permanently true (with a republish) the first time that base
-topic is actually seen on the broker. The OwnTracks/Zigbee2MQTT incremental
+topic is actually seen on the broker. The descriptor declares readback_s
+= 30: the firmware publishes controller state every 10 s by default, and
+three cycles keep one dropped publish from reading as "no answer". The
+OwnTracks/Zigbee2MQTT incremental
 inventory pattern — discovering devices never bound by any entity file —
 is overkill for a dialect with exactly one address per entity file, known
 up front.
@@ -147,9 +155,9 @@ with a "null-value" health event. Not publishing is how the bus says
 confident-looking nothing that a late subscriber's catch-up would replay
 as the last known value.
 
-Device availability (docs/design.md, "Sensor dropout and availability"):
-this firmware publishes continuously — every serial telegram fans out —
-so silence IS the loss signal. A receive timer flips
+Device availability (docs/design.md#availability): this firmware
+publishes continuously — every serial telegram fans out — so silence IS
+the loss signal. A receive timer flips
 home/state/{room}/{entity}/available to false after
 availability_timeout_s (parameter, owner-editable, adapter-side default
 300 s) without a single routed message from that device's base topic,
@@ -244,9 +252,9 @@ OPERATING_MODES = (1, 2, 3)
 # and must admit anything the firmware can act on.
 OFFSET_BOUNDS = (-50.0, 50.0)
 
-# Device inputs an entity file may wire to a source (docs/design.md, Device
-# feeds). Values forwarded as floats within the same physical bounds as the
-# matching command where one exists.
+# Device inputs an entity file may wire to a source
+# (docs/design.md#device-feeds). Values forwarded as floats within the same
+# physical bounds as the matching command where one exists.
 FEEDABLE = {
     "indoor_temperature_actual": (-50.0, 60.0),
     "outdoor_temperature_offset": OFFSET_BOUNDS,
@@ -294,7 +302,7 @@ COMMANDS = {
     "operating_mode": ("operating_mode", None, False),
 }
 
-# The aspect descriptor (docs/design.md, Aspect descriptors) this adapter
+# The aspect descriptor (docs/design.md#aspect-descriptors) this adapter
 # publishes in each bound entity's discovery record: labels, kinds and
 # groups for the aspects worth a family-facing name, and the command
 # vocabulary the dashboard may render — bounds straight from COMMANDS so
@@ -377,12 +385,12 @@ COMMAND_TIER = {
     "outdoor_temperature_offset": "owner",
 }
 COMMAND_STEP = {"setpoint": 0.5}
-# How long a command takes to come back (docs/design.md, Aspect
-# descriptors: readback_s). The firmware stores a set value at once and
-# reports it in its controller state, published every
-# GENERAL_STATE_PUBLISH_INTERVAL (10 s in the firmware's own config
-# template): three cycles of that, so one dropped publish is not "no
-# answer".
+# How long a command takes to come back
+# (docs/design.md#aspect-descriptors: readback_s). The firmware stores
+# a set value at once and reports it in its controller state, published
+# every GENERAL_STATE_PUBLISH_INTERVAL (10 s in the firmware's own
+# config template): three cycles of that, so one dropped publish is not
+# "no answer".
 READBACK_S = 30
 
 

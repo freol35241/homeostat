@@ -31,10 +31,10 @@ pub const CAPABILITIES: &[&str] = &[
 /// One capability's aspect vocabulary: what an adapter binding it must
 /// publish under which names, and what the family surfaces act on. This
 /// is the public schema's side of "adapters speak homeostat vocabulary"
-/// (docs/design.md, Dashboard): the base aspect is what commands target
-/// and the dashboard widget renders; features are the optional aspects
-/// an entity file may declare; notable names the reading that counts as
-/// a deviation on `Now`. Rendered into docs/manifest.md.
+/// (docs/design.md#the-capability-vocabulary): the base aspect is what
+/// commands target and the dashboard widget renders; features are the
+/// optional aspects an entity file may declare; notable names the reading
+/// that counts as a deviation on `Now`. Rendered into docs/manifest.md.
 #[derive(Debug, Clone, Copy)]
 pub struct Capability {
     pub name: &'static str,
@@ -104,7 +104,7 @@ pub const VOCABULARY: &[Capability] = &[
         base: Some("message"),
         aspects: &["alert", "delivered"],
         notable: None,
-        note: "A channel that reaches a person: a phone, a group chat. `message` and `alert` are commandable strings — the text itself — and two structurally separate delivery paths, granted and policed apart (an alert overrides quiet hours; a message never will). `delivered` is the epoch time the delivery service acknowledged the last message, never a human's receipt. Room `person` for one person's channel, `global` for a group (docs/design.md, Notifications).",
+        note: "A channel that reaches a person: a phone, a group chat. `message` and `alert` are commandable strings — the text itself — and two structurally separate delivery paths, granted and policed apart (an alert overrides quiet hours; a message never will). `delivered` is the epoch time the delivery service acknowledged the last message, never a human's receipt. Room `person` for one person's channel, `global` for a group (docs/design.md#notifications).",
     },
     Capability {
         name: "person",
@@ -147,7 +147,7 @@ pub const VOCABULARY: &[Capability] = &[
 /// notable when false) and `{aspect}_valid` beside a reading the device
 /// itself may stop trusting. Rendered with the vocabulary.
 pub const COMMON_ASPECTS: &[(&str, &str)] = &[
-    ("available", "bool, published on transition by the owning adapter when the protocol has a real loss signal; `false` is notable (docs/design.md, Availability)."),
+    ("available", "bool, published on transition by the owning adapter when the protocol has a real loss signal; `false` is notable (docs/design.md#availability)."),
     ("{aspect}_valid", "bool beside a reading the device itself may stop trusting; the value stands, the flag says stale."),
 ];
 
@@ -248,8 +248,9 @@ impl fmt::Display for UnitKind {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeSection {
-    /// Shell command, run from the house root with `HOMEOSTAT_UNIT` and
-    /// `HOMEOSTAT_BUS` set. Typically `uv run units/<name>.py`.
+    /// The command line, split on whitespace and run without a shell from
+    /// the house root, with `HOMEOSTAT_UNIT` and `HOMEOSTAT_BUS` set.
+    /// Typically `uv run units/<name>.py`.
     pub command: String,
     pub restart: RestartPolicy,
     /// Seconds between SIGTERM and SIGKILL at shutdown. Default 5.
@@ -383,7 +384,8 @@ pub struct ParamSpec {
     pub default: toml::Value,
     /// Inline table of constraint keys the type understands
     /// (`malformed-constraint` otherwise): `min`/`max` for `int` and
-    /// `float`; `after`/`before` (`"HH:MM"`, may span midnight) for `time`.
+    /// `float`; `after`/`before` (`"HH:MM"`, may span midnight) for `time`;
+    /// `enum` (a non-empty list of strings) for `string`.
     #[schemars(with = "Option<BTreeMap<String, serde_json::Value>>")]
     pub constraint: Option<BTreeMap<String, toml::Value>>,
     /// Who may change it live. `family` params appear as editable
@@ -483,10 +485,11 @@ pub struct EntityFile {
     /// by a short name for each contributor. Declared, not inferred — a
     /// unit subscribes many things for many reasons and nothing in its
     /// subscriptions says which feed which published aspect. It is what
-    /// the history overlay draws beside the computed value (docs/design.md,
-    /// Sources), and it is not `[inputs]`: a device feed carries a runtime
-    /// contract that does not apply here, and a wired input stops being a
-    /// command aspect, which would collide on a commandable virtual entity.
+    /// the history overlay draws beside the computed value
+    /// (docs/design.md#sources), and it is not `[inputs]`: a device feed
+    /// carries a runtime contract that does not apply here, and a wired
+    /// input stops being a command aspect, which would collide on a
+    /// commandable virtual entity.
     pub sources: Option<BTreeMap<String, SourceRef>>,
 }
 
@@ -509,7 +512,7 @@ pub struct InputSource {
 /// One entry in `[sources]`: a reading that a computed value is derived
 /// from, named the same way a device feed names its source, because the
 /// identity layer between a unit and a bus key is the same one
-/// (docs/design.md, Device feeds).
+/// (docs/design.md#device-feeds).
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SourceRef {
@@ -613,7 +616,7 @@ impl WritePolicy {
 pub enum WriteMode {
     /// Any granted writer may command it; last write wins.
     Shared,
-    /// At most one automation-band writer may be granted
+    /// At most one unit below the manual band may be granted
     /// (`exclusive-write-conflict`); manual-band surfaces sit above.
     Exclusive,
     /// Commands go through the arbiter (leases, bands, preemption); the
@@ -653,7 +656,7 @@ pub struct ZonesFile {
 /// Setpoints, Rooms) — and when present it is the whole nav: Health and
 /// the list of everything not shown stay reachable as fixed chrome, never
 /// as views. Layout is text in the repo, never browser-side state
-/// (docs/design.md, Dashboard).
+/// (docs/design.md#views-are-text).
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DashboardFile {

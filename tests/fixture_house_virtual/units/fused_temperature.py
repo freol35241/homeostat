@@ -7,8 +7,8 @@
 # [tool.uv.sources]
 # homeostat = { path = "../../../sdk/python", editable = true }
 # ///
-"""Fused temperature: the first virtual sensor (docs/design.md, Virtual
-sensors).
+"""Fused temperature: the first virtual sensor
+(docs/design.md#virtual-sensors).
 
 Publishes the mean of its fresh source temperatures onto the entity it
 binds, on transition only — an input update that does not move the mean

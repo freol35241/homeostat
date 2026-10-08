@@ -10,7 +10,7 @@
 # ///
 """ONVIF camera adapter.
 
-See docs/design.md, "Cameras (settled 2026-07-19)".
+See docs/design.md#cameras.
 
 Named for the dialect it speaks, not the vendor: Profile S pull-point
 events only — no PTZ, no imaging service, no capability negotiation. The
@@ -19,12 +19,23 @@ aspects (v1: `motion`, a bool) at home/state/{room}/{entity}/motion.
 Pixels never pass through here — the media plane is go2rtc's (see
 adapters/go2rtc.py).
 
+What the cameras do beyond that is deliberately not here. A Tapo's
+on-camera person detection is app-only, not exposed over ONVIF, so it is
+not an aspect. ONVIF on Tapo does no PTZ; pan/tilt and privacy mode need
+the vendor API. A vendor adapter for those commands would bind the
+cameras itself and take over their events, through an ordinary entity
+file migration, rather than sit beside this one: exactly one adapter
+binds each entity.
+
 The entity file's `id` is the camera's key into HOMEOSTAT_CAMERAS, a TOML
 file outside the repo carrying per-camera `host` (optionally `host:port`;
 the port default is Tapo's ONVIF 2020), `username`, and `password` — the
-camera-account credentials created in the vendor app. Addresses and
-passwords never enter the repo. A camera with no entry drops with a health
-event and is skipped; the other cameras are unaffected.
+camera-account credentials created in the vendor app (on Tapo, with
+third-party compatibility enabled). Addresses and passwords never enter
+the repo. A camera with no entry drops with "camera-unconfigured" and is
+skipped; an entry missing a field drops with "camera-misconfigured" and
+the camera reads unavailable, since no resubscribe can fix it. The other
+cameras are unaffected either way.
 
 The SOAP layer is hand-rolled (an ONVIF/WS-* client library would be the
 largest dependency in the tree for four calls):
@@ -55,8 +66,8 @@ compares against the last value it published and stays silent otherwise,
 which is also what makes it behave like the other event-driven adapters,
 where the device itself speaks only on change.
 
-The same transitions carry the availability signal (docs/design.md,
-"Sensor dropout and availability"): a working pull-point subscription
+The same transitions carry the availability signal
+(docs/design.md#availability): a working pull-point subscription
 publishes home/state/{room}/{entity}/available = true, its loss publishes
 false — and `motion` stands untouched on loss, stale, never false.
 
@@ -77,11 +88,12 @@ SubscriptionManager, where the stream is fine, or a subscription that is
 genuinely gone, where it is dead. The NEXT pull decides — it succeeds in
 the first case and fails in the second — so the adapter withholds judgment
 for one round trip rather than concluding from the fault alone. On the
-first reading it stops renewing that camera, keeps pulling, and rotates the
-subscription RESUBSCRIBE_BEFORE_S before InitialTerminationTime expires,
-unsubscribing the old one best-effort; availability does not flap, because
-nothing was lost. On the second the ordinary loss path runs. Learned from
-behaviour rather than negotiated: no capability calls, per the scope above.
+first reading it emits "renew-unsupported", stops renewing that camera,
+keeps pulling, and rotates the subscription RESUBSCRIBE_BEFORE_S before
+InitialTerminationTime expires, unsubscribing the old one best-effort;
+availability does not flap, because nothing was lost. On the second the
+ordinary loss path runs. Learned from behaviour rather than negotiated: no
+capability calls, per the scope above.
 """
 
 import asyncio

@@ -1,4 +1,4 @@
-"""Forecasts: a series' future, on the bus (docs/design.md, Forecasts).
+"""Forecasts: a series' future, on the bus (docs/design.md#forecasts).
 
 A forecast rides `home/forecast/{room}/{entity}/{aspect}/{source}` — the
 same room/entity/aspect as `home/state`, because it is the same series

@@ -17,7 +17,7 @@ DOM and the network only — the page's script is an IIFE, so there are no
 internals to reach, which keeps every assertion to something a person or
 another process could observe.
 
-What these tests are for (docs/design.md, Dashboard): locking in rules we
+What these tests are for (docs/design.md#the-page): locking in rules we
 have already learned, and one broad net — no page errors, every view
 renders, every widget kind draws. They are NOT the discovery mechanism.
 Rendering bugs are found by a person opening a browser, and that habit is
@@ -129,7 +129,7 @@ class Smoke(PageTest):
 
     async def test_the_nav_is_the_file_and_the_chrome_is_the_rail(self):
         # dashboard.toml REPLACES the nav; Health and Not shown are fixed
-        # chrome below it, never views (docs/design.md, Views are text).
+        # chrome below it, never views (docs/design.md#views-are-text).
         names = await self.page.locator("nav button[data-view]:visible").evaluate_all(
             "els => els.map(e => e.getAttribute('data-view'))"
         )
@@ -145,8 +145,8 @@ class Smoke(PageTest):
 
 
 class ChoiceSurvivesRerender(PageTest):
-    """`docs/design.md`, Dashboard: what a reader chose survives a
-    re-render only if it is held outside the markup.
+    """`docs/design.md#controls-and-the-overlay`: what a reader chose
+    survives a re-render only if it is held outside the markup.
 
     Live state re-renders the panel and replaces its nodes; the rule has
     five instances, and a change to one ships the others broken unless
@@ -346,7 +346,7 @@ class RulesAboutControls(PageTest):
 
 
 class ViewsAreText(PageTest):
-    """`docs/design.md`, Views are text: a view shows the dashboard.toml
+    """`docs/design.md#views-are-text`: a view shows the dashboard.toml
     block that makes it, so what is on screen has a name to say."""
 
     async def test_a_view_shows_its_text(self):
@@ -364,7 +364,7 @@ class ViewsAreText(PageTest):
 
 
 class HoldsOnNow(PageTest):
-    """`docs/design.md`, Arbitrated mode: a hold is a deviation when it
+    """`docs/design.md#views-are-text`: a hold is a deviation when it
     displaced somebody, and possession shows on the control either way."""
 
     async def test_a_hold_over_an_automated_aspect_is_a_deviation(self):
@@ -418,7 +418,7 @@ class SmokePhone(Smoke):
     async def test_the_nav_is_the_file_and_the_chrome_is_the_rail(self):
         # On a phone the bottom bar is the file's views and nothing else;
         # Health and Not shown are behind the top bar's status button, with
-        # the about lines (docs/design.md, Views are text).
+        # the about lines (docs/design.md#views-are-text).
         names = await self.page.locator("button[data-view]:visible").evaluate_all(
             "els => els.map(e => e.getAttribute('data-view'))"
         )

@@ -242,15 +242,14 @@ home/cmd/kitchen/kitchen_lamp/on  true
 Unknown devices and malformed payloads are dropped with a health event at
 `home/health/{unit}/event`, never a crash. The full contract an adapter
 must honour — files, lifecycle, state and command rules, health
-vocabulary, discovery, testing — is [docs/adapters.md](docs/adapters.md);
-the reasoning is in the
-[design record §Zigbee2MQTT](docs/design.md#zigbee2mqtt-adapter-and-python-sdk-settled-in-step-3).
+vocabulary, discovery, testing, and the reasons for each rule — is
+[docs/adapters.md](docs/adapters.md).
 
 Adapters that can enumerate their periphery also publish a discovery
 document at `home/discovery/{unit}` — every paired device with its
 binding id, whether an entity file claims it yet, and a suggested
 capability stanza — which is how an agent constructs entity files for
-unconfigured devices ([design record §Discovery](docs/design.md#discovery-settled-2026-07-05)).
+unconfigured devices ([design record §Discovery](docs/design.md#discovery)).
 
 ### Automations: regulators, not schedulers
 
@@ -306,7 +305,7 @@ zenoh get 'home/history/state/lamp/on?from=2026-07-01T00:00:00+02:00;limit=100'
 A backend outage (full disk, dying SD card) buffers samples in memory with
 their original timestamps and reports itself as health events; recovery
 flushes the buffer. Details:
-[design record §History](docs/design.md#history--recorder-settled-in-step-5a).
+[design record §History](docs/design.md#history-and-the-recorder).
 
 ### Plan / apply
 
@@ -335,9 +334,9 @@ pure bus client that needs no house root. An agent changes the house the
 way every other actor does — it edits the repo and runs `homeostat plan`,
 and the owner applies. (Write tools — `propose`, `apply`, `plan` — were
 removed on 2026-09-12 until an agent without a filesystem exists to use
-them; the design record states the conditions of their return.) A
-refused plan names each failure by code and carries the rule behind
-every code inline; `explain` (and
+them; [the design record](docs/design.md#agent-surface-mcp) states the
+conditions of their return.) A refused plan names each failure by code
+and carries the rule behind every code inline; `explain` (and
 `homeostat explain <code>` on the CLI) serves the same paragraphs on
 demand, so the authoring contract's rules are readable in-band rather
 than from the validator's source. The manifest contract itself is
@@ -372,7 +371,7 @@ core's validating queryable; access is local-only by design (LAN /
 WireGuard, no accounts — and family-tier only: nothing structural is
 reachable from a browser). The map over person entities (OwnTracks,
 self-hosted tiles) is settled design, not yet built. Details:
-[design record §Dashboard](docs/design.md#dashboard-settled-2026-07-15).
+[design record §Dashboard](docs/design.md#dashboard).
 
 ![The dashboard on a desktop and a phone: a "Downstairs" view composed in dashboard.toml — a spot-price chart whose recorded day runs into a dashed forecast past the now-rule, captioned with when that forecast was issued; a heat-pump dial grouped with the room's temperature trace; the living-room card; and the evening-lights automation's card with its setpoint and its wiring behind one line — and the phone's "Now" with the price tile, people, and four rows out of the ordinary](docs/screenshots/dashboard.png)
 
@@ -383,49 +382,45 @@ its subscriptions.*
 
 ## Status
 
-Pre-1.0, under active development, following the build sequence in the
-design record:
-
-1. ✅ Key space, manifest parser, validator, `homeostat plan`
-2. ✅ Process supervisor: liveliness, backoff, circuit breaker
-3. ✅ Zigbee2MQTT adapter and Python SDK
-4. ✅ First automation, clock service, live parameter path
-5. ✅ Recorder / history, then plan/apply proper
-6. ✅ Agent MCP surface
-7. ✅ Dashboard (MVP)
-8. ⬜ Voice
+Pre-1.0. Running today: the validator and `homeostat plan`/`apply`, the
+supervisor, the Python SDK, the recorder with history, forecasts and
+archives, the arbiter, the dashboard, the read-only MCP surface, and
+adapters for Zigbee2MQTT, ESPHome, OwnTracks, an IVT490 heat pump, Aduro
+burners, ONVIF cameras with go2rtc, OpenWrt routers, 433 MHz senders and
+ntfy notifications. Voice is planned
+([docs/design.md#voice](docs/design.md#voice)).
 
 ## Development
 
+What CI runs, in order (the devcontainer has everything they need:
+`mosquitto`, `uv`, `node`, and a browser via `scripts/install_browser.sh`):
+
 ```
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
 cargo test
+uv run --no-project --with-editable sdk/python --with 'paho-mqtt>=2,<3' python -m unittest discover sdk/python/tests
+uvx ruff@0.16.7 check adapters sdk tests/browser
+node --test tests/js/*.test.js
+scripts/sync_starter.sh --check
+uv run --script tests/browser/run.py
 ```
 
 Writing a unit? The field-level contract is [docs/manifest.md](docs/manifest.md)
 (generated from the parser's structs; `homeostat schema` serves the same as
-JSON) and the validator's rules are `homeostat explain`.
+JSON), the validator's rules are `homeostat explain`, and
+[docs/adapters.md](docs/adapters.md) is the adapter contract.
 
 Integration tests run the real binary against real infrastructure — a live
-supervisor, a real mosquitto broker on a free port, a real SQLite store —
-never mocks. The invalid-manifest corpus in `tests/corpus/invalid/` pairs
-each broken house with its complete expected error list. CI needs
-`mosquitto`, `uv` and `node` installed; the devcontainer provides all
-three, so `cargo test` and `node --test tests/js/*.test.js` run the same
-suite CI does. CI also builds the container image and
-runs `scripts/smoke_image.sh` against it — a packaging test that boots a
-minimal house in the image and asserts a unit reaches `running`, the bus
-answers a second container, and SIGTERM shuts down cleanly —
-and `scripts/smoke_bare.sh`, the same checks for the binary and SDK wheel
-on a host without Docker.
-
-| Test | Pins |
-| --- | --- |
-| `tests/supervision.rs` | the unit contract: spawn, crash/backoff, breaker, clean shutdown |
-| `tests/z2m.rs` | adapter translation both ways, drop policy, unit contract |
-| `tests/evening.rs` | automation behavior, live parameter edits, constraint rejection |
-| `tests/recorder.rs` | typed history, room-tag transitions, outage buffering, bus reads |
-| `tests/plan_apply.rs` | tier derivation, rolling apply, halt-in-place, stale plans |
-| `tests/mcp.rs` | agent reads over stdio and HTTP, the browser gates, the read-only tool list |
+supervisor, a real mosquitto broker on a free port, a real SQLite store,
+and fake device servers that speak each protocol — never mocks. Every
+adapter has its own suite in `tests/<adapter>.rs`. The invalid-manifest
+corpus in `tests/corpus/invalid/` pairs each broken house with its
+complete expected error list, and `tests/browser/` drives the dashboard
+page in a real browser against canned fixtures. CI also builds the
+container image and runs `scripts/smoke_image.sh`, `smoke_starter.sh` and
+`smoke_demo.sh` against it, and `scripts/smoke_bare.sh` checks the binary
+and SDK wheel on a host without Docker.
 
 ## License
 

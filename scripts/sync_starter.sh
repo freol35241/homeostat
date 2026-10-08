@@ -9,7 +9,7 @@
 #
 # The one edit a copy needs is the SDK source: adapters/ pins the
 # working-tree SDK so the tests exercise it, a shipped house pins the
-# release (docs/design.md, SDK distribution). The lockfile beside each
+# release (docs/design.md#sdk-distribution). The lockfile beside each
 # adapter travels with it and takes the same edit (pin_lock below), so a
 # shipped unit resolves exactly what the release's adapter was locked
 # against. Adapter and SDK must come from the SAME commit — an adapter from main against the previous tag's

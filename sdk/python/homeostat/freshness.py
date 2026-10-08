@@ -1,4 +1,4 @@
-"""Bounded-age inputs for automations (docs/design.md, Availability).
+"""Bounded-age inputs for automations (docs/design.md#staleness).
 
 `available` is device liveness, not data freshness: a sensor can die
 mid-reading and its last value stays trusted until the bridge notices,

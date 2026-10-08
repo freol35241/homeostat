@@ -1,4 +1,5 @@
-//! Unit content hashing for plan/apply (see docs/design.md, step 5b).
+//! Unit content hashing for plan/apply (see
+//! docs/design.md#change-detection).
 //!
 //! Two hashes decide "changed" cheaply before any semantic comparison:
 //! - `manifest_hash`: sha256 of the manifest file bytes.

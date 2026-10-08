@@ -6,7 +6,7 @@
 # ///
 """A minimal, honest go2rtc, for the go2rtc shim's and the dashboard
 camera proxies' integration tests (tests/go2rtc.rs, tests/dashboard.rs;
-see docs/design.md, "Cameras (settled 2026-07-19)").
+see docs/design.md#cameras).
 
 Speaks the slice of go2rtc's surface homeostat touches, and nothing else:
 

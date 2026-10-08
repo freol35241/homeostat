@@ -101,7 +101,7 @@ class UnitSession:
         json accepts and re-emits, but JSON has no spelling for) is dropped
         with a "non-finite" health event instead: every consumer would
         otherwise have to guard against it, and the recorder cannot store
-        it (docs/design.md, Bus payload conventions).
+        it (docs/design.md#bus-payload-conventions).
 
         Parameters
         ----------
@@ -132,7 +132,7 @@ class UnitSession:
         self._session.put(key, encoded)
 
     def put_forecast(self, key: str, issued, points) -> None:
-        """Publish a forecast (docs/design.md, Forecasts).
+        """Publish a forecast (docs/design.md#forecasts).
 
         Retained like state, so a consumer restarting mid-horizon has its
         inputs at once rather than waiting for the next issue. A payload

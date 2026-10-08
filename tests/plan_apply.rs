@@ -2,7 +2,8 @@
 //! copies of `tests/fixture_house_apply`/ that each scenario edits between
 //! plan and apply. Scenarios that need `applied_commit` or pending-plan
 //! staleness git-init their copy: the checked-in fixture is a nested
-//! directory of this repo and must not inherit its HEAD (see docs/design.md).
+//! directory of this repo and must not inherit its HEAD (see
+//! docs/design.md#the-apply-walk).
 //!
 //! No fixed ports (each supervisor gets a fresh ephemeral endpoint), no
 //! wall-clock sleeps (every wait polls a bus-observable condition within a
@@ -405,8 +406,8 @@ async fn entity_move_plans_as_structural() {
 /// (c3) Moving an entity nobody is granted onto is structural too: the
 /// owner's state row records every bound entity, so the move is a grant
 /// delta rendered with the entity's old and new facts — not a bare
-/// adapter restart on a `files_hash` change (docs/design.md, Plan/apply
-/// mechanics: entity moves are structural).
+/// adapter restart on a `files_hash` change (docs/design.md#tiers: entity
+/// moves are structural).
 #[tokio::test(flavor = "multi_thread")]
 async fn ungranted_entity_move_plans_as_structural() {
     let house = temp_house(FIXTURE, "apply-move-ungranted");

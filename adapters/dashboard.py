@@ -8,7 +8,7 @@
 # [tool.uv.sources]
 # homeostat = { path = "../sdk/python", editable = true }
 # ///
-"""Dashboard service: the family's web surface (see docs/design.md, Dashboard).
+"""Dashboard service: the family's web surface (see docs/design.md#dashboard).
 
 An adapter for humans: HTTP + WebSocket toward browsers, the SDK toward the
 bus. Serves dashboard.html (one self-contained file next to this script) and
@@ -25,7 +25,7 @@ a small API generated entirely from the house's text:
                      version, for the page's footer)
   GET  /ws           snapshot of state/forecasts/health/config plus every aspect
                      descriptor adapters publish in their discovery
-                     records (docs/design.md, Aspect descriptors), then
+                     records (docs/design.md#aspect-descriptors), then
                      live deltas
   POST /api/cmd      one command toward a device, published at the manual
                      band ({room, entity, aspect, value}): the capability's
@@ -39,8 +39,8 @@ a small API generated entirely from the house's text:
                      queryable ({unit, param, value})
   POST /api/lights/off  the whole-house darken: one manual-band off-command
                      per bound light — group actions are manual-edge
-                     fan-outs, never a relay entity (docs/design.md,
-                     Dashboard)
+                     fan-outs, never a relay entity
+                     (docs/design.md#commanding)
   GET  /api/history  recorder proxy for charts (?entity=..&aspect=..&hours=..
                      plus bucket=<s> for one point per bucket or changes=1
                      for a state's runs, the recorder's chart shapes).
@@ -54,7 +54,7 @@ a small API generated entirely from the house's text:
                      home/meta/{unit}/log queryable
   GET  /api/camera/{entity}/live       WebSocket relayed byte-for-byte to
                      go2rtc's api/ws (MSE) — browsers never speak go2rtc
-                     (docs/design.md, Cameras); HOMEOSTAT_GO2RTC overrides
+                     (docs/design.md#cameras); HOMEOSTAT_GO2RTC overrides
                      the localhost default. It addresses the stream by the
                      camera's entity id, which is how the go2rtc shim
                      names it — resolved server-side, since ids are not
@@ -225,7 +225,7 @@ def granted_capabilities(publishes: dict) -> set[str]:
     `plan` resolves into the grant table. A capability COMMANDABLE knows but this manifest does not
     name is refused at /api/cmd and rendered read-only, so the running
     dashboard cannot do what its own grant table says it cannot. Grants
-    resolve at plan time (docs/design.md, Grants), so this is the unit
+    resolve at plan time (docs/design.md#commanding), so this is the unit
     honouring its declaration, not a boundary against a unit that lies.
     """
     return {
@@ -334,7 +334,7 @@ def driven_aspects(model: dict, grants: list, descriptors: dict[str, dict]) -> d
     grant table is the only honest source for that, because it says who may
     command what and at which band, resolved at plan time — where guessing
     from an automation's last refusal would instead depend on how often
-    that automation happens to publish (docs/design.md, Arbitrated mode).
+    that automation happens to publish (docs/design.md#views-are-text).
     """
     entities = {e["name"]: e for e in model["entities"]}
     lowest: dict[str, str] = {}
@@ -492,7 +492,7 @@ def command_value_ok(command: dict, value) -> bool:
 
     It must be a member of an enum's values, or a number within the
     float/int constraint. A courtesy check before the bus — the adapter's own bounds are the
-    enforcement (docs/design.md, IVT490: bounds live in the adapter).
+    enforcement (docs/design.md#aspect-descriptors: bounds live in the adapter).
     """
     if command.get("type") == "enum":
         return any(isinstance(v, dict) and v.get("value") == value for v in command["values"])
@@ -608,7 +608,7 @@ class Hub:
         # home/hold/{unit} -> what that arbiter is holding right now. State,
         # not the audit trail: the preempt/refuse events say what happened,
         # this says what is in force, which is the question a browser
-        # opening mid-hold is asking (docs/design.md, Arbitrated mode).
+        # opening mid-hold is asking (docs/design.md#arbitrated-mode).
         self.holds: dict[str, object] = {}
         self.health: dict[str, object] = {}
         self.config: dict[str, object] = {}
@@ -916,7 +916,7 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
                 # Which aspects something drives, and at what band: the page
                 # reads an arbiter hold against this to tell "the family took
                 # over from the heating" from "the family locked a door
-                # nothing automates" (docs/design.md, Arbitrated mode).
+                # nothing automates" (docs/design.md#views-are-text).
                 driven=hub.driven(model.model),
                 about=about,
             )
@@ -1070,7 +1070,7 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
             f"?from={start.isoformat(timespec='seconds')}"
             f";to={now.isoformat(timespec='seconds')};limit={limit}"
         )
-        # The recorder's chart shapes (docs/design.md, Read path): one point
+        # The recorder's chart shapes (docs/design.md#read-path): one point
         # per bucket for a line, or the runs of a state for a timeline.
         if bucket:
             selector += f";bucket={bucket}"
@@ -1117,8 +1117,8 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         # reaching into it is still part of the picture.
         # A wildcard in the source slot: every provider that spoke about
         # this aspect, each as its own series, rather than one merged
-        # answer that could not say who said what (docs/design.md,
-        # Sources).
+        # answer that could not say who said what
+        # (docs/design.md#forecasts).
         selector = (
             f"{keys.history_key('forecast', entity, aspect)}/*"
             f"?valid_from={start.isoformat(timespec='seconds')}"
@@ -1145,7 +1145,7 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         """When each declared source of a computed value went in or out.
 
         Declared sources say what MAY contribute; these say what did
-        (docs/design.md, Which sources a computation actually used). The
+        (docs/design.md#which-sources-a-computation-actually-used). The
         window read is WIDER than the window drawn, because a source
         excluded before the chart opens has no transition inside it and
         would otherwise read as live for the whole span.
@@ -1240,8 +1240,8 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         # Downstream is an opaque byte-for-byte relay from localhost go2rtc
         # — the browser edge of the media plane. Upstream carries only the
         # MSE request: go2rtc's socket also takes WebRTC offers (ICE to a
-        # public STUN server) and the design is MSE-only (docs/design.md,
-        # Cameras). Either side closing closes both.
+        # public STUN server) and the design is MSE-only
+        # (docs/design.md#cameras). Either side closing closes both.
         try:
             async with client["http"].ws_connect(
                 f"{go2rtc_base()}/api/ws", params={"src": stream}

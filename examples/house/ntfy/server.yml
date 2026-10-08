@@ -1,4 +1,4 @@
-# The ntfy sidecar's config (docs/design.md, "The ntfy adapter"). Mounted
+# The ntfy sidecar's config (docs/design.md#notifications). Mounted
 # read-only at /etc/ntfy/server.yml by the compose file:
 #
 #   ntfy:

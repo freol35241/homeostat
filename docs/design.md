@@ -1,3808 +1,2433 @@
-# Homeostat: Design Record
- 
-Status: settled decisions from the founding design discussion (July 2026).
-This document is the authority on architecture. Code follows it. Changes to
-load-bearing decisions require updating this document first.
- 
-## Name and framing
- 
-**Homeostat**, after W. Ross Ashby's 1948 machine. The system maintains a
-household in equilibrium. It is not an assistant that waits for commands; it
-is a regulator whose setpoints the family adjusts. This framing is the
-architectural argument: parameters (setpoints) are family-editable, structure
-(the regulating machinery) is owner-governed.
- 
-## Motivation
- 
-Replacement for Home Assistant, motivated by:
- 
-- Text configuration as a first-class citizen. The repo is the single source
-  of truth. No hidden state mutated by a UI.
-- Pure-code automations, no DSL ceiling.
-- Agent-native maintenance: an agent authors and maintains automations
-  through the same plan/apply discipline as humans.
-- Small core, subtractive design. The runtime is a pure function of
-  config + current world state.
-Built for the owner's actual device inventory (ESPHome, MQTT, Zigbee2MQTT),
-not the general long tail. No Home Assistant bridge in v1.
- 
-## Architecture overview
- 
-- **Core (Rust):** config loader, schema validation, template expansion,
-  grant-table resolution, plan/apply engine, process supervisor. Owns the
-  key space and nothing else of consequence.
-- **Bus: Zenoh.** Pub/sub for live state and commands, queryables for reads,
-  storage backends for last-known-value. Localhost and remote processes are
-  indistinguishable, so machine placement is not an architectural question.
-  MQTT device traffic stays on its own broker (mosquitto), bridged only by
-  dialect adapters — the zenoh MQTT plugin/bridge was considered and
-  rejected (2026-07-17): broker retain is load-bearing (OwnTracks
-  last-known position, z2m's bridge/devices inventory) and the plugin does
-  not document it; mapping device topics into the zenoh key space would
-  dissolve the adapters-as-only-membrane boundary that keeps the core
-  owning `home/**`; and since the supervisor IS the router, plugin mode
-  would put foreign-protocol parsing inside the one process that
-  supervises everything else. Revisit only if the plugin gains a
-  documented retain story and the deployment is too constrained for a
-  broker process.
-  Commands are puts, not queries — settled 2026-10-08, after the
-  question came up; pub/sub had been their shape since Step 1 without a
-  stated reason. A reply can only say what the replier knows while the
-  query is open, and the answer a command waits for, the device's
-  readback, comes seconds to a minute later (75 s on the burner).
-  Everything else a reply would carry already arrives: whether anything
-  listens (liveliness and matching status, `/api/cmd`'s `heard`), an
-  arbiter refusal and an adapter's out-of-range drop (events echoing
-  the envelope's `cmd_id`). Queries would cost the recorder's audit of
-  every command (a subscriber never sees a query), the arbiter's
-  invisibility to writers (it would have to answer, query the adapter
-  and relay the reply), and fire-and-forget automations. Left uncovered
-  is "delivered to the device", which only slow devices make visible
-  and which changes nothing the family does but wait; if living with it
-  says otherwise, that is an adapter event, not a query (Dashboard, a
-  command's stages). Queries stay the shape where one owner answers in
-  full while the query is open: parameter writes and `apply`.
-- **Units:** every running thing is a unit: `adapter`, `automation`, or
-  `service`. Uniform manifest schema, uniform supervision. Python units are
-  uv-run scripts with PEP 723 inline dependencies (one hermetic venv per
-  process). Rust units are compiled binaries. The unit is the atom of
-  authority, failure, and change; how many rules a unit script hosts is
-  the author's call (see Unit granularity).
-- **Process model:** plain OS processes supervised by the core
-  (Erlang/actor-model lineage: fault isolation and language boundaries, not
-  microservices). NOT containerized internally. The whole system may run
-  inside ONE container as a deployment boundary on a shared host; the image
-  then runs tini as PID 1 (reaping orphans, forwarding signals) with the
-  core as its child — the core itself does per-unit process-group
-  termination and sweeps, not global reaping. Host networking is
-  required for mDNS/ESPHome discovery and Zenoh scouting. Config repo mounts
-  as a volume.
-- **Supervision:** liveliness tokens on the bus, not just PIDs. Restart with
-  exponential backoff and a circuit breaker whose state is visible at
-  `home/health/{unit}`. (Pattern imported from the Keelson liveliness RFC.)
-## Supervision (settled in step 2)
+# Homeostat design
 
-### The unit contract
+How homeostat works, and why it is built that way. The document
+describes the system as it is: a change that makes a sentence here
+untrue fixes the sentence in the same commit. How each decision was
+reached is in the git history, not here.
 
-What the supervisor guarantees to every unit, and what every unit owes back.
+Field-by-field references live beside it: the manifest contract in
+[manifest.md](manifest.md) (generated from the parser), the adapter
+contract in [adapters.md](adapters.md), and the dashboard's widgets in
+[widgets.md](widgets.md).
 
-Supervisor -> unit, at spawn:
+1. [What homeostat is](#what-homeostat-is)
+2. [Architecture](#architecture)
+3. [Glossary](#glossary)
+4. [Key space](#key-space)
+5. [Units and manifests](#units-and-manifests)
+6. [Capabilities, grants and write policy](#capabilities-grants-and-write-policy)
+7. [Plan and apply](#plan-and-apply)
+8. [Supervision](#supervision)
+9. [Live parameters](#live-parameters)
+10. [State, history and forecasts](#state-history-and-forecasts)
+11. [Derived values](#derived-values)
+12. [Health, availability and the audit trail](#health-availability-and-the-audit-trail)
+13. [Surfaces](#surfaces)
+14. [Security model](#security-model)
+15. [Distribution](#distribution)
+16. [Open questions](#open-questions)
 
-- `runtime.command` is whitespace-tokenized and exec'd directly — no shell,
-  so no quoting in v1 manifests. Lookup uses PATH; relative paths resolve
-  against the house repo root, which is the unit's cwd.
-- Each unit runs in its own process group. On Linux the child additionally
-  gets `PR_SET_PDEATHSIG(SIGKILL)`, so even a SIGKILLed supervisor cannot
-  leak orphans. If the direct child exits on its own, the supervisor sweeps
-  the remainder of its process group before applying the restart policy —
-  a unit's descendants (a shell wrapper's child, a relay a unit manages)
-  never outlive its leader, so a survivor can't keep the liveliness token
-  alive and poison the next incarnation.
-- Environment: `HOMEOSTAT_UNIT` (the unit's name) and `HOMEOSTAT_BUS` (the
-  Zenoh endpoint to connect to, e.g. `tcp/127.0.0.1:7447`).
-- **`uv run` is resolved away at spawn** (settled 2026-09-08). For a
-  command of the form `uv run [flags] <script.py> [args]` the supervisor
-  runs `uv sync --script` and then `uv python find --script` in processes
-  that exit, and execs the environment's interpreter on the script
-  directly. The interpreter is the unit's process-group leader and the
-  direct holder of `PR_SET_PDEATHSIG`; there is no long-lived wrapper. The
-  PEP 723 block stays the single authority on dependencies, `files_hash`
-  still covers the pin, and the manifest still says `uv run` — the
-  resolution is a supervisor mechanic, not a manifest contract. Resolution
-  happens per incarnation, so a restart after an SDK bump picks up the new
-  environment. If uv cannot resolve the script the original command is
-  spawned unchanged, so a broken script fails exactly where and how it did
-  before. Verified on the evening fixture: three interpreters as direct
-  children of the supervisor, each its own group leader, nothing between.
+## What homeostat is
 
-  Why (measured 2026-08-29 on a live seven-unit house and reproduced in
-  the release image): the `uv run` parent stayed alive for the unit's
-  lifetime doing nothing but `wait()`, and its `Pss_Anon` scaled with
-  what the unit's environment CONTAINED, on every run — not with whether
-  that run installed it. Warm, uv 0.9, same machine:
+Homeostat runs a household from a git repository. It is named after
+W. Ross Ashby's 1948 machine, and the name is the design argument: the
+system is a regulator holding the house in equilibrium, not an
+assistant waiting for commands. The family adjusts its setpoints; the
+owner governs the regulating machinery. In the code that split is
+literal: parameters are family-editable at runtime, structure changes
+only through the repo and [plan and apply](#plan-and-apply).
 
-  | unit shape | warm parent |
-  |---|---|
-  | paho-mqtt + git-pinned SDK | 3.8 MB |
-  | aioesphomeapi + zeroconf + git-pinned SDK | 38.4 MB |
-  | aioesphomeapi + zeroconf + PATH-pinned SDK | 4.0 MB |
+It replaces Home Assistant for one owner's actual devices (Zigbee
+through Zigbee2MQTT, ESPHome, MQTT), not the long tail. What it is for:
 
-  The git-vs-path source was the dominant factor for a heavy environment,
-  which is why in-repo benching missed it entirely: `adapters/` use a path
-  source and every vendored house used a git one. A live house measured
-  223 MB of 443 MB in these parents. The earlier `uv sync --script`
-  prewarm (v0.8.0) removed only the COLD-install spike, measured at
-  ~15-25 MB on a real house, NOT the ~180 MB its commit message claimed;
-  the wheel-distributed SDK (see SDK distribution) reached the git-source
-  share; exec'ing the interpreter removes the parent altogether, warm or
-  cold, whatever the source. A second thing it closes: `PR_SET_PDEATHSIG`
-  only ever reached the direct child, so a SIGKILLed supervisor left the
-  interpreter under a dead `uv run` orphaned. With the interpreter as the
-  direct child, the kernel reaches it.
+- **Text configuration first.** The house repo is the system of record.
+  No UI mutates hidden state; the running system is derived from the
+  repo plus the current state of the world.
+- **Automations are plain code.** A Python script against a small SDK,
+  with no DSL to outgrow.
+- **Agents maintain it the way people do.** An agent reads the same
+  files, runs the same `plan`, and its changes reach the house through
+  the same commit-and-apply path as a human's.
+- **A small core.** The core owns the key space, validation, the grant
+  table, plan and apply, and supervision. Everything that speaks a
+  device protocol or keeps data lives in a unit outside it.
 
-Unit -> bus, obligations:
+There is no Home Assistant bridge.
 
-- Connect to `HOMEOSTAT_BUS` as a Zenoh client. The supervisor's session
-  runs in router mode — the hub that routes between units and observers
-  (Zenoh peers do not route between clients, and peer linkstate routing was
-  removed in Zenoh 1.9). Multicast scouting stays off; topology is explicit.
-- Declare a liveliness token at `home/health/{unit}/alive` once actually
-  ready. The token — not the PID — is what "up" means; the supervisor only
-  reports `running` after the token appears.
-- On SIGTERM, exit cleanly within `shutdown_grace_s` (default 5s). After the
-  grace the whole process group gets SIGKILL.
+## Architecture
 
-### Health key schema
+Four parts: a Rust core, a Zenoh bus, the units it supervises, and the
+house repo they are all derived from.
 
-The supervisor publishes JSON at `home/health/{unit}` on every transition;
-since step 4 the core's last-value cache serves the current value to late
-joiners via a queryable (this replaced a 1s-republish stopgap):
-
-```json
-{
-  "status": "starting | running | backoff | open | stopped",
-  "pid": 1234,
-  "restarts": 2,
-  "backoff_ms": 400,
-  "last_exit_code": 1
-}
+```
+house repo (git) --plan/apply--> core: homeostat up
+                                 (bus router, supervisor, last-value caches)
+                                        |
+                              Zenoh bus, home/**
+        +---------------+---------------+---------------+
+     adapters      automations       services        observers
+        |                          recorder, arbiter,  CLI, tests
+     devices                       clock, dashboard,
+  (MQTT broker,                    mcp
+   ESPHome API, ...)
 ```
 
-- `starting`: process spawned, token not yet seen. `running`: token present.
-- `backoff`: process exited, restart scheduled in `backoff_ms` (present only
-  in this status).
-- `open`: circuit breaker open, no further restarts until the supervisor is
-  restarted.
-- `stopped`: not coming back — policy `never`, clean exit under
-  `on-failure`, or supervisor shutdown.
+### Core
 
-Restart policy per manifest (`always` / `on-failure` / `never`). Backoff is
-exponential: 100ms base, doubling, capped at 30s. A run that survives 5s
-resets the consecutive-failure counter; the 5th consecutive quick exit opens
-the breaker. Any quick exit counts — a clean-exit loop is as much a crash
-loop as a panic loop.
+The `homeostat` binary. Offline (`homeostat plan`) it validates a
+house repo, expands templates and zones, resolves the grant table and
+prints a plan. Running (`homeostat up`) it is the bus router, the
+process supervisor, the owner of the live parameter store and the
+last-value mirrors, and the executor of apply walks; `homeostat mcp`
+serves the read-only agent surface. It parses no device protocol and
+keeps no history.
 
-The supervisor also publishes `home/meta/{unit}/manifest_hash` (sha256 hex
-of the manifest file) at startup.
+### Bus
 
-### Clock key schema
+Zenoh. Pub/sub carries state and commands; queryables answer reads
+(last values, history, parameters) and the two writes that need a
+synchronous answer, a parameter write and an apply. The supervisor's
+session is a router on a fixed endpoint; every unit and observer
+connects to it as a client, scouting off, so topology is explicit and
+parallel test buses never find each other. Keys and payloads are in
+[Key space](#key-space).
 
-Documented in step 2, implemented in step 4 (see the step-4 section):
+MQTT device traffic stays on its own broker (mosquitto), reached only
+by the adapters that speak it. Not the Zenoh MQTT plugin or bridge:
+broker retain is load-bearing (an OwnTracks phone's last position,
+Zigbee2MQTT's device inventory) and the plugin does not document it;
+mapping device topics into `home/**` would end adapters being the only
+membrane between a dialect and the bus; and plugin mode would parse
+foreign protocols inside the supervisor.
 
-- `home/clock/minute` — published each minute on the minute; payload is
-  RFC3339 local time with offset, e.g. `2026-07-03T21:04:00+02:00`.
-- `home/clock/date` — published at local midnight; payload `2026-07-03`.
-- The clock service owns timezone and DST; subscribers never do naive time
-  arithmetic.
+### Units
 
-## Zigbee2MQTT adapter and Python SDK (settled in step 3)
+Every running thing besides the core is a unit: an `adapter`,
+`automation` or `service` ([Unit kinds](#unit-kinds)), with one
+manifest schema declaring everything it may touch ([Units and
+manifests](#units-and-manifests)). Python units are `uv run` scripts
+whose dependencies are a PEP 723 block in the script, so each has its
+own hermetic environment; Rust units are binaries. The SDK
+(`sdk/python`, package `homeostat`) gives a Python unit its session,
+typed key builders, the automation `Context` and the command envelope.
 
-### How an adapter learns its configuration
+### Process model
 
-An adapter reads its own manifest at `units/{HOMEOSTAT_UNIT}.toml` and the
-entity files in its `[entities].dir` — the same files the core already
-validated; cwd is the house root, so paths are relative. There is no second
-config channel and no core-to-adapter config protocol.
+Units are plain OS processes supervised by the core
+([Supervision](#supervision)), in the Erlang lineage: a process
+boundary buys fault isolation and a language boundary, not a
+microservice. They are not containerized individually; the whole
+system may run in one container ([Distribution](#distribution)).
 
-The discovery endpoint may reference environment variables (`${VAR}`),
-expanded by the adapter — endpoints are opaque to the core, and ports or
-credentials don't belong in the repo. An unset variable is a startup error
-(the supervisor's backoff makes it visible).
+### The house repo is the system of record
 
-Broker credentials (revised 2026-08-29): `${VAR}` in the endpoint still
-works and stays the lighter option, but URL syntax cannot carry every
-password — `@`, `/` or `#` in one silently reparses the host rather than
-failing — so `HOMEOSTAT_MQTT_CREDENTIALS` may instead name a TOML outside
-the repo, keyed by broker hostname, read in the SDK so every MQTT adapter
-gets it. Inline credentials win when both are present. A broker that
-requires auth must never force its password into a unit manifest.
+Nothing running edits the repo's manifests, entity files,
+`zones.toml` or `dashboard.toml`; the only things written into the
+checkout are a unit's own data (the recorder's store under the
+gitignored `data/`) and pending plans under `plans/`. The running world
+is diffed against the repo, never the reverse: a change is a commit,
+then [plan and apply](#plan-and-apply); a live parameter edit is drift
+the next apply resets ([Live parameters](#live-parameters)); and
+`home/meta/system/applied_commit` names the commit that is running.
 
-Entity binding for z2m: the entity file's `id` is the Zigbee2MQTT topic
-segment (`{base}/{id}` — the friendly name or IEEE address), the file
-stem is the bus entity name, `room` comes from the entity file. The base
-topic is the endpoint's path (`mqtt://broker:1883/VP52/zigbee2mqtt`),
-defaulting to `zigbee2mqtt` (revised 2026-08-29 — an estate that has run
-a non-default prefix for years cannot move it, because Home Assistant and
-Node-RED address it directly). It is not a secret, so the repo is its
-place; it is not runtime-tunable, so it is not a param. The adapter
-subscribes `{base}/+`, which keeps `bridge/#` traffic out and means
-friendly names containing `/` are unsupported.
+### Unit granularity: the atom is the unit
 
-House-wide inputs (added 2026-08-29, from a live standup): change
-detection is per-unit — a unit's `files_hash` covers its command, its own
-entity files and its zone. The dashboard breaks that assumption, because
-its model is a view over the WHOLE house: entities bound to another
-adapter change what it should render while changing none of its own
-files, so `apply` restarted the adapter, reported success, and left the
-page confidently wrong — rendering, responsive, missing a room that
-exists. A unit declares `[unit] inputs = "house"` (default `own`) and
-every manifest, every entity file and `zones.toml` feed its hash. The
-dashboard also rebuilds its model per `/api/model` request, keeping the
-last good one if a rebuild fails, so a browser refresh suffices even
-without a restart. `mcp` needs neither: it does not read the repo at all.
+The unit is the atom of **authority** (its grants, subscriptions,
+publishes and parameters), of **failure** (its liveliness token,
+backoff, breaker and process group) and of **change** (its
+`files_hash` and its step in the apply walk). Those three boundaries
+coinciding on one process is what the process model buys.
 
-An unbound device is not a dropped message (revised 2026-08-29, from a
-live 12-device bridge): `unknown-device` fires only when the device is
-not in the adapter's own discovery view — for z2m, absent from
-`bridge/devices` entirely; for OwnTracks, whose view grows incrementally,
-on first sight and then never again. A device the bridge knows but no
-entity file binds is a steady state that discovery already reports with
-`configured: false`, and the discovery-first workflow makes it the normal
-condition for a house mid-configuration. Reporting it per publish
-measured 107 events/hour from ONE device, forever, into the recorder's
-store.
+What a unit contains is the author's call: a script may host several
+rules, and its manifest declares the union of what they need.
 
-A wrong base topic is the failure worth designing against: the
-subscription SUCCEEDS and matches nothing, so there is no SUBACK timeout
-and no error — an adapter permanently deaf while reporting healthy, the
-shape of bug this project keeps finding. The retained
-`{base}/bridge/devices` inventory is therefore proof of life: silence
-past `inventory_timeout_s` (parameter, owner-editable, default 30 s)
-emits one `bridge-silent` health event naming the base topic in use.
+- **Group by shared blast radius, not size.** Rules share a unit when
+  they should live and die together: they share a restart and a health
+  key, and an edit to one is a behavioral change to all. "Evening
+  lighting" and "the heat-pump setback" are two units, however small.
+- **Authority is the union.** The grant table sees units, not rules,
+  so a rule that must not touch what its neighbour touches is a
+  separate unit.
+- **Cost.** A minimal Python unit is about 12 MB resident; forty are
+  about 0.5 GB, fine on a NUC or a Pi 4. If that binds, bundle by the
+  rule above.
 
-That covers boot. Mid-run liveness rides the bridge's own retained
-`{base}/bridge/state` (online/offline), one `bridge-silent` per down
-transition — the ivt490 `device-silent` precedent. A re-arming inventory
-timer would be the WRONG mechanism and was rejected: z2m republishes
-`bridge/devices` only on change, so its silence cannot distinguish a dead
-bridge from a stable estate and the timer would fire on a healthy one.
+Not a multi-tenant automation runner (one service hosting many rules
+with a scheduler): it shares authority and failure across rules that
+did not choose to, and with per-rule health and restart it is the
+supervisor rebuilt in Python.
+
+## Glossary
+
+The words this document, the code and the error messages use, each in
+one sense; where a word carries two, both are listed.
+
+- **House.** One home's configuration, and the system running it.
+- **House repo.** The git repository holding a house as text: unit
+  manifests, entity files, `zones.toml`, `dashboard.toml`. The system
+  of record the running world is diffed against.
+- **Core.** The `homeostat` binary: validation, plan and apply, the
+  supervisor, the last-value caches, the MCP server.
+- **Unit.** Every running thing other than the core: one process, one
+  manifest in `units/`. An **adapter** puts devices on the bus, an
+  **automation** regulates, a **service** is infrastructure with no
+  entities. See [Unit kinds](#unit-kinds).
+- **Entity.** One thing in the house with state, declared by an entity
+  file. Its name is the file stem and is unique across the house.
+- **Binding.** (1) The relation between an entity and the one unit that
+  embodies it: an adapter for a device, an automation for a virtual
+  entity. That unit is the entity's **owner**. (2) A **binding name**:
+  the key of an entry in a manifest's `[bus.subscribes]` or
+  `[bus.publishes]`, which the SDK takes instead of a key expression.
+- **Capability.** What kind of thing an entity is (`light`, `lock`,
+  `sensor`, …), from a fixed vocabulary. It decides the base aspect,
+  which commands are grantable, and the dashboard widget.
+- **Aspect.** One named value of an entity: `on`, `brightness`,
+  `temperature`. The last segment of a state key.
+- **Base aspect.** The aspect a capability's commands and widget act
+  on (`on` for a light). A capability without one takes no commands.
+- **Feature.** An optional aspect beyond the base that an entity file
+  declares (`brightness` on a light).
+- **Aspect descriptor.** An adapter's description of an entity's
+  aspects (label, kind, unit, group, commands), carried in its
+  discovery record. See [Aspect descriptors](#aspect-descriptors).
+- **Room.** Where an entity is; a key segment. **Pseudo-rooms**
+  `global` and `person` hold entities with no place.
+- **Zone.** A named set of rooms, written in a key's room slot and
+  expanded at plan time. Zones never appear in a published key.
+- **Key class.** The second segment of every bus key: `state`, `cmd`,
+  `arbiter`, `forecast`, `config`, `meta`, `health`, `clock`,
+  `history`, `discovery`, `hold`. See [Key space](#key-space).
+- **Grant.** A unit's publish resolved against the entities it reaches.
+  The **grant table** is all of them: the permission record `plan`
+  shows, and the dependency graph that orders an apply.
+- **Band.** A command's priority: `automation` < `agent` < `family` <
+  `manual`, declared per publish in the manifest, never per command.
+- **Write mode.** How commands to an entity are governed: `shared`,
+  `exclusive` or `arbitrated`. See
+  [Capabilities, grants and write policy](#capabilities-grants-and-write-policy).
+- **Envelope.** A command's payload: `{value, priority, actor, id}`.
+  The SDK stamps priority from the manifest and actor with the unit.
+- **Arbiter.** The service that orders commands to arbitrated entities,
+  granting a **hold** (a lease per entity and aspect) to the winning
+  band. See [Arbitrated mode](#arbitrated-mode).
+- **Latch.** A commandable virtual entity: an automation-owned entity
+  whose owner sets its state from the commands it receives.
+- **Virtual entity.** An entity an automation owns; its value is
+  computed, not read from a device.
+- **Feed.** A device input wired to another entity's aspect, declared
+  in the device's `[inputs]`. See [Device feeds](#device-feeds).
+- **Source.** (1) In `[sources]`: a reading a computed value is derived
+  from. See [Sources](#sources). (2) In a forecast key: the unit or
+  provider claiming that future. See [Forecasts](#forecasts).
+- **Forecast.** A series' future, published at `home/forecast/...`
+  beside its present at `home/state/...`.
+- **Live parameter.** A unit setting at `home/config/{unit}/{param}`,
+  validated by the core on every write. Who may change it live is its
+  `editable_by` tier: `owner` or `family`. See
+  [Live parameters](#live-parameters).
+- **Liveliness token.** What a unit declares on the bus once it can do
+  its job; "up" means the token is present.
+- **Health.** A unit's supervision status (`starting`, `running`,
+  `backoff`, `open`, `stopped`). A **health event** is a unit's own
+  report at `home/health/{unit}/event`; a **drop** is the event for
+  input the unit refused.
+- **Mirror.** The core's last-value cache, which a late joiner reads
+  instead of waiting for the next publish. See
+  [The last-value mirror](#the-last-value-mirror).
+- **Plan.** The diff between the house repo and the running world,
+  with its **tier**: `parameter-only`, `behavioral` or `structural`.
+  **Apply** executes it. See [Plan and apply](#plan-and-apply).
+- **Applied commit.** The house repo commit the running world was last
+  applied from.
+- **Discovery record.** What an adapter publishes about the devices its
+  backend knows, bound or not. See [Discovery](#discovery).
+- **Notable.** A reading the vocabulary marks as out of the ordinary;
+  the dashboard lists it as a **deviation**.
+- **Surface.** A way people or agents reach the house: the dashboard,
+  the MCP server, notifications. See [Surfaces](#surfaces).
+
+## Key space
+
+Every key starts `home/{class}/`. The class list is fixed in
+`src/keyspace.rs` (`CLASSES`); a manifest expression with any other
+class is a plan error. Four classes are entity-addressed and share one
+shape:
+
+```
+home/{class}/{room}/{entity}/{aspect}            state, cmd, arbiter
+home/forecast/{room}/{entity}/{aspect}/{source}  forecast
+```
+
+The forecast `source` is required and state has none
+([Sources](#sources)). Other classes take their own shape:
+
+| Key | Written by | Carries |
+|---|---|---|
+| `home/state/{room}/{entity}/{aspect}` | the entity's owning unit | current value of one aspect |
+| `home/cmd/{room}/{entity}/{aspect}` | any unit granted it | a command (a wish) |
+| `home/arbiter/{room}/{entity}/{aspect}` | the arbiter | a command it let through to an arbitrated entity |
+| `home/forecast/{room}/{entity}/{aspect}/{source}` | the source's unit | one issue of a series' future |
+| `home/config/{unit}/{param}` | the core only | a live parameter value |
+| `home/meta/{unit}/manifest_hash`, `files_hash`, `manifest`, `log` | the core | the unit as applied; its captured output |
+| `home/meta/system/grants`, `applied_commit`, `about`, `apply` | the core | the grant table, the applied commit, the running version; the apply queryable |
+| `home/health/{unit}` | the supervisor | the unit's supervision status |
+| `home/health/{unit}/alive` | the unit | its liveliness token |
+| `home/health/{unit}/event` | the unit | its health events |
+| `home/clock/minute`, `home/clock/date` | the clock service | civil time |
+| `home/discovery/{unit}` | an adapter | its view of its periphery |
+| `home/hold/{unit}` | the arbiter | what it currently holds |
+| `home/history/...` | (recorder queryables) | history reads |
+
+### Rooms, entities and zones
+
+- **One room segment**, no floors or areas; a room is a field of the
+  entity file. Entity names (the file stem) are unique across the house
+  (`duplicate-entity-name`), so an entity is addressable without it.
+- **Reserved words.** Entities with no place live in the pseudo-rooms
+  `global` or `person`. These, `home` and every class name are
+  reserved: a room may be a pseudo-room but no other reserved word
+  (`reserved-room-name`), a zone none of them (`reserved-zone-name`).
+  The unit name `system` is reserved for `home/meta/system/**`.
+- **Every name is one key segment.** Unit, parameter, entity, room,
+  zone and view names match `[A-Za-z0-9_.-]+` and are not `.` or `..`
+  (`invalid-name`): anything else breaks the fixed shape (`/`), means
+  something to Zenoh (`*`, `$`, `?`, `#`) or invites encoding
+  surprises. The SDK's key builders (`homeostat.keys`) apply the rule
+  at runtime; an adapter drops a device-chosen field name that fails
+  it with `malformed-payload`.
+- **Zones never appear in keys.** A zone is a named set of rooms in
+  `zones.toml`; a zone in an expression's room slot expands to one
+  expression per member room, at plan time and identically in the SDK,
+  so a unit subscribes to what `plan` printed. A zone may not share a
+  room's name or contain a pseudo-room; an empty zone is a warning.
+- **Templates.** `{room}` and `{entity}` expand once per entity the
+  unit binds ([Key expansion](#key-expansion)).
+
+**Identity or space.** A subscription chooses: `home/state/kitchen/**`
+is whatever is in the kitchen, `home/state/*/that_lamp/**` is that lamp
+wherever it lives.
+
+**Moving an entity** is an entity-file edit through plan and apply: the
+owner's `files_hash` changes and the walk restarts it, and grants that
+reached it by room are re-resolved. History survives, because a series
+is keyed without its room, which is why `home/history` keys have no
+room segment ([History and the recorder](#history-and-the-recorder)).
 
 ### Bus payload conventions
 
-Payloads on `state` keys are bare JSON values; `cmd` keys carry the cmd
-envelope `{value, priority, actor, id}` (see Arbitrated mode).
-
-State: a z2m JSON object fans out per top-level field to
-`home/state/{room}/{entity}/{field}`. The z2m `state` field is normalized —
-adapter-native vocabulary does not leak onto the bus:
-
-- lights/switches: aspect `on`, boolean (`"ON"` → `true`)
-- locks: aspect `locked`, boolean (`"LOCKED"` → `true`)
-
-Other scalar fields pass through under their z2m names (`brightness`,
-`temperature`, `occupancy`, ...). Composite fields (objects/arrays, e.g.
-`color`) are deferred.
-
-Commands: the payload on `home/cmd/{room}/{entity}/{aspect}` (and, for
-arbitrated entities, `home/arbiter/{room}/{entity}/{aspect}`) is the cmd
-envelope; the adapter unwraps its `value` and translates the same way
-either way. `on` + boolean value becomes `{"state": "ON"|"OFF"}`; `locked`
-+ boolean value becomes `{"state": "LOCK"|"UNLOCK"}` (z2m's lock vocabulary
-is asymmetric: state reports are `LOCKED`/`UNLOCKED`, but set commands are
-`LOCK`/`UNLOCK`); any other aspect passes through as `{aspect: value}` to
-`zigbee2mqtt/{id}/set`.
-
-Both command classes travel as commands, not as data (added 2026-10-07).
-The SDK's `put_json` sends a `home/cmd` or `home/arbiter` put with
-congestion control BLOCK and priority interactive-high. zenoh's default
-for a put is DROP at DATA priority: a congested link sheds it silently,
-which is right for the next temperature reading and wrong for "unlock
-the door". Automations, the dashboard and the arbiter all send through
-it, so none of them has to remember.
-
-Locks are commandable only via the arbiter's output key: plan-time
-expansion gives the adapter's templated `home/cmd` subscription only its
-non-arbitrated bound entities, and its templated `home/arbiter` subscription
-only the arbitrated ones (locks, today) — the adapter physically lacks a
-cmd path to an arbitrated entity, by expansion, so a wish can only reach it
-after clearing the arbiter's lease.
-
-Dropped input never crashes the adapter and always leaves a trace: a JSON
-event at `home/health/{unit}/event`, e.g.
-`{"kind": "drop", "reason": "unknown-device", "topic": "zigbee2mqtt/x"}`
-(reasons so far: `unknown-device`, `malformed-payload`, `invalid-command`).
-The parent key `home/health/{unit}` remains supervisor-owned.
-
-### Python SDK
-
-Lives at `sdk/python/`, package name `homeostat`. Minimal bootstrap, grown
-by need:
-
-- `homeostat.session` — `connect()` reads `HOMEOSTAT_UNIT`/`HOMEOSTAT_BUS`
-  and opens a client session (scouting off); `UnitSession.ready()` declares
-  the liveliness token — call it only once the unit can actually do its
-  job; `put_json` / `subscribe` / `health_event` / `close`.
-- `homeostat.keys` — key builders mirroring the Rust `src/bus.rs`.
-- `homeostat.house` — adapter-side manifest and entity loading.
-
-Python units consume it via PEP 723 inline metadata with a `[tool.uv.sources]`
-path source (`homeostat = { path = "../sdk/python" }`, resolved relative to
-the script file regardless of cwd); PyPI publication comes later. `uv sync
---script <unit>.py` pre-warms a unit's environment so first-run dependency
-resolution never eats into supervision timeouts (CI does this before
-`cargo test`).
-
-## First automation and the live parameter path (settled in step 4)
-
-### Last-value lives in the core, not a storage plugin
-
-The core owns an in-memory last-value cache inside the supervisor process,
-served over the bus by queryables. It backs three key spaces:
-
-- `home/config/{unit}/{param}` — the parameter path (below).
-- `home/health/{unit}` — replaces the step-2 1s-republish stopgap. The
-  supervisor publishes health only on transitions; a queryable serves the
-  current value to late joiners.
-- `home/clock/*` — the core mirrors clock publications so a late joiner
-  (or a test) can `get` the current minute/date instead of waiting out a
-  wall-clock minute.
-- `home/state/**` — the same mirror generalized (the agent surface and
-  the SDK's `subscribe` catch-up read it). Each reply's attachment is the
-  value's age in seconds since the mirror received it.
-
-Why not the Zenoh storage plugin: it is a heavy, version-coupled dependency,
-and a passive mirror cannot reject an out-of-constraint write — validation
-needs to sit on the write path anyway, so the write path and the cache
-belong to the same owner. The read pattern everywhere is *subscribe, then
-get, merge*: the subscriber catches everything after the get; the get covers
-everything before it.
-
-The cache is in-memory: parameter edits survive any unit restart (the
-supervisor holds the value) but not a supervisor restart — defaults re-seed
-from manifests. Durable parameter state arrives with plan/apply (step 5),
-where a parameter edit is a repo commit; the bus cache is a live view, not
-the system of record.
-
-### The parameter write path
-
-Only the core ever puts on `home/config/**`. It seeds each unit's parameters
-from manifest defaults at startup and declares a queryable on
-`home/config/*/*`:
-
-- **GET without payload** — read: replies the current JSON value.
-- **GET with payload** — write request: the core validates the JSON payload
-  against the manifest's type and constraint (`min`/`max`, `after`/`before`
-  with midnight spanning, `enum`). Accepted: the value is stored, put on the
-  key (every subscribed unit sees it live, no restart), and echoed in an ok
-  reply. Rejected: the query gets an **error reply** naming the violation —
-  synchronously observable to the writer — no put happens, and the old value
-  stands.
-
-Units never subscribe to config in their manifests; subscribing to your own
-`home/config/{unit}/*` subtree is implicit and the SDK does it for you.
-Actor-tier enforcement of `editable_by` waits for plan/apply and Zenoh ACLs;
-v1 is plan-time + trust, as everywhere else.
-
-### SDK automation Context
-
-`homeostat.automation.context()` reads the unit's own manifest (same file
-the core validated) and gives an automation exactly its declared surface:
-
-- `ctx.subscribe(binding, handler)` — binding names from `[bus.subscribes]`;
-  the handler gets `(key, value)` with the JSON payload decoded. Subscribe,
-  then get, merge, as for config: the current value of every matching key
-  is read from the core's state mirror and delivered before the call
-  returns, so a restarted unit is not blind until its sources publish
-  again. A handler declared `(key, value, age_s)` also gets the value's
-  age in seconds — zero for a live sample, the mirror's age for a
-  catch-up — to pass to `Freshness.seen`; a two-argument handler gets the
-  catch-up as though it had just arrived.
-- `ctx.params.name` — typed current values (`time` → `datetime.time`),
-  seeded via get and updated live by a config subscription.
-- `ctx.publish(binding, value, room=..., entity=..., aspect=...)` — publish
-  expressions from `[bus.publishes]`. Publishes go to **concrete keys only**
-  (a put on a `**` expression would hand adapters an unparseable wildcard
-  key); literal segments of the expression are defaults, wildcard segments
-  must be named, and the SDK refuses any key the declared expression does
-  not cover — the manifest stays the authority on intent.
-- `ctx.ready()` / `ctx.run()` — liveliness token, then block until SIGTERM.
-
-### Clock service
-
-A Python service (`adapters/clock.py`, generic and public) on the SDK's
-Context, stdlib zoneinfo for real DST handling. Timezone comes from its own
-manifest: `[params.timezone]`, type `string`, `editable_by = "owner"` — the
-clock dogfoods the live parameter path. Payloads are bare JSON strings like
-all bus payloads: `"2026-07-03T21:04:00+02:00"` on `home/clock/minute`,
-`"2026-07-03"` on `home/clock/date`.
-
-The clock publishes the *current* minute and date immediately at startup
-before declaring ready, then on each boundary. That startup publish is
-late-joiner catch-up, not a test hook — a restarted subscriber must not run
-blind for up to 59 seconds. Tests exploit it plus the core clock cache to
-assert the schema without waiting; the off-time-crossing scenarios run on a
-fixture house with no clock unit at all, where the test process publishes
-`home/clock/minute` itself. Nothing in any production path knows tests
-exist; an automation cannot tell who publishes clock keys.
-
-## Key space
- 
-```
-home/{class}/{room}/{entity}/{aspect}
-```
- 
-- `class`: `state`, `cmd`, `arbiter`, `forecast`, `config`, `meta`,
-  `health`, `clock`, `history`, `discovery`. `state`, `cmd`, `arbiter` and
-  `forecast` are the entity-addressed ones — the full five-segment shape
-  above; the rest take their own shape under the class.
-- One room segment, no floor hierarchy in keys.
-- Entity names are globally unique (enforced at plan time).
-- **Zones never appear in keys.** A zone is a named set of rooms in config.
-  Zone subscriptions expand to multiple key expressions at plan time.
-- Identity-vs-space: spatial glob `home/state/kitchen/**` means "whatever is
-  in this room"; wildcard-room pin `home/state/*/that_lamp/**` means "this
-  device wherever it lives". Automations choose explicitly.
-- Entity moves are plan/apply migrations: plan lists every key change and
-  every subscriber whose match-set changes (dropping to zero matches is a
-  warning).
-- Non-spatial entities use reserved pseudo-rooms (`global`, `person`),
-  validated against a reserved-word list.
-- Parameters live on the bus: `home/config/{unit}/{param}` backed by
-  last-value storage. Units subscribe to their own config subtree. Parameter
-  edits propagate live, no restart.
-- Meta: `home/meta/{unit}/manifest_hash`, `home/meta/system/applied_commit`,
-  `home/meta/system/about` (the core's version and build commit plus the
-  applied commit, as one JSON document — what the dashboard's about
-  lines and an agent read; added 2026-10-07).
-## History / recorder (settled in step 5a)
- 
-The recorder is NOT a naive Zenoh storage mirror. It subscribes to
-`home/state/**` and writes a time-series store with entity id as series
-identity and room as a tag. A move is a tag transition on a continuous
-series. Naive Zenoh storage is used only for last-value on live keys.
-Payloads are decoded and typed on the way in; anything that fails to decode
-leaves a health event, never a row of garbage.
-
-### Backend: SQLite, embedded in the recorder — production AND tests
-
-The founding candidates were QuestDB or TimescaleDB. v1 uses neither: a
-single home produces well under ten samples a second, and a SQLite file
-with a series index absorbs years of that without noticing. The heavier
-engines cost what this system refuses to pay: a permanent JVM (or a
-Postgres cluster) on the home server, a provisioning/supervision story the
-core doesn't have (the backend is not a unit), and CI setup beyond
-`cargo test` on a stock runner. Choosing a server backend for production
-and an embedded one for tests would hollow the tests out — so there is no
-dual path: the identical engine runs in both.
-
-What makes the backend swappable later is the read path: history reads go
-over the bus (below), so the store is recorder-private. Outgrowing SQLite
-means a behavioral change to one unit, not a structural change to the
-system. The growth path is archiving, not an engine swap: closed months
-move out of the store into one SQLite file each, and the store stays one
-window deep (see Archive below, #138). Tiering those months to Parquet
-with DuckDB reading across both was measured and is held in reserve —
-about 18× smaller at rest, for a ~50 MB native dependency and a second
-engine on the read path — for the day a house needs years of history
-queryable at speed on a disk that cannot hold it as SQLite. QuestDB was the earlier
-designation and is withdrawn: it is JVM-based, which is exactly what this
-section refuses. DuckDB was considered and rejected as the store —
-the recorder's workload is high-frequency tiny appends plus small indexed
-range reads (OLTP-shaped, SQLite's grain), while DuckDB is a columnar OLAP
-engine that is weak at frequent single-row inserts and single-process by
-design (no other process can read the file while the recorder writes; the
-tests and any live backup/inspection depend on exactly that). But it
-composes: DuckDB's `sqlite` extension can ATTACH the store file read-only,
-so an analytical layer (downsampling, long-range aggregation) can sit on
-top of the same SQLite file later — additive, no recorder change, no
-migration.
-
-The store location comes from the recorder's `[discovery]` section
-(`endpoint = "sqlite:<path>"`, path relative to the house root, `${VAR}`
-expansion recorder-side like adapters). `[discovery]` is therefore legal on
-services as well as adapters — required for adapters, optional for
-services, still an error on automations.
-
-### Schema
-
-Scalar samples from room/entity/aspect keys, normalised so the file is
-bounded by sample count rather than by repeated strings — the store layout
-version is stamped in `PRAGMA user_version` and `init_store()` migrates an
-older file in place (version 0 was one wide `samples` table with every
-tag as TEXT on every row: measured at ~113 bytes a row against ~25 here;
-version 1 kept the per-series aggregates on `samples`, where nothing
-indexes them):
-
-```sql
-series(id, class, entity, aspect,     -- UNIQUE (class, entity, aspect)
-       row_count, oldest_ts, newest_ts)
-  -- the tally home/history/stats reads, maintained by a trigger on
-  -- insert and by the purge on delete
-rooms(id, name)                       -- UNIQUE (name)
-samples(series_id, ts, room_id, kind, value)
-  -- PRIMARY KEY (series_id, ts), WITHOUT ROWID: the table is the index
-  -- ts:     µs since epoch, UTC, recorder receive time
-  -- class:  'state' | 'cmd'
-  -- kind:   0 bool | 1 number | 2 string; value stored natively per kind
-history                               -- a view joining the three back to
-  -- (ts, class, room, entity, aspect, kind, value) with kind spelled out,
-  -- for anything that opens the file directly (the tests, DuckDB ATTACH)
-```
-
-Series identity is a `series` row; `room` is a tag carried per sample. An
-entity move is consecutive samples whose tag changes — one continuous
-series, never a new one. Two samples for one series in the same
-microsecond collide on the primary key and the later one is dropped.
-
-The file is created with `auto_vacuum = INCREMENTAL` (and a migrated file
-is VACUUMed into it): it can only be set before the first page is
-written, and it is what lets a future retention delete return pages to
-the filesystem instead of leaving a file that never shrinks.
-
-The timestamp is recorder receive time, not the zenoh sample timestamp:
-sample timestamps are optional (client sessions don't stamp by default),
-and one consistent clock source beats mixed provenance. On a single-host
-bus the skew is microseconds. Timestamps are assigned at receive, before
-any buffering, so a backend outage never distorts history.
-
-Non-scalar payloads (JSON objects, arrays, null) are not recorded:
-composite fields are deferred by design (step 3), so their appearance is a
-bug worth a trace — a `drop` health event at `home/health/recorder/event`
-— not data. Non-JSON payloads likewise.
-
-Audit events from unit/param keys, raw JSON, no typing:
-
-```sql
-events(ts, key, payload)   -- indexes: (key, ts) and (ts)
-```
-
-### Recorded key spaces
-
-- `home/state/**` → samples, class `state`.
-- `home/cmd/**` → samples, class `cmd` — the envelope's `value` into
-  samples, what was commanded, when; the full envelope into events. "Who"
-  now arrives: command payloads carry actors.
-- `home/health/**` → events: supervisor transitions and unit drop events.
-  (Liveliness tokens are not samples and don't appear.)
-- `home/config/**` → events: only *accepted* writes ever land on config
-  keys (rejects never put), so this subscription IS the accepted-edit
-  audit trail. The step-4 rule "units never subscribe to config in their
-  manifests" is about consuming your own parameters (the SDK does that
-  implicitly); the recorder subscribes `home/config/**` as data, declared
-  in its manifest like any other subscription.
-
-Explicitly NOT recorded: `home/clock/**` (a derivable row per minute,
-forever — history queries don't need it), `home/meta/**`, liveliness
-tokens, and `home/history/**` itself.
-
-A recorder restart is a gap in history: there is no bus replay in v1; the
-supervisor's `always` restart policy keeps the gap small.
-
-### Read path: over the bus
-
-`home/history` is a key class. The recorder declares a queryable at
-`home/history/**`; a GET on
-
-```
-home/history/{state|cmd}/{entity}/{aspect}?from=<RFC3339>;to=<RFC3339>;limit=<n>
-```
-
-(`;` is zenoh's selector-parameter separator; RFC3339 offsets contain `+`
-and `&` would need escaping zenoh doesn't do.)
-
-returns one reply per concrete series (reply key = concrete history key),
-payload a JSON array of `{"ts": <RFC3339 UTC>, "room": ..., "value": ...}`
-ascending; `limit` (default 1000) keeps the most recent rows in range.
-Wildcards in the entity/aspect slots fan out to one reply per matching
-series. A malformed selector gets an error reply.
-
-Two optional, mutually exclusive parameters serve charts (2026-09-17):
-`bucket=<seconds>` folds the window into one point per bucket — `ts` the
-bucket's start, a number's `value` its mean with `min` and `max` beside
-it, a bool's or string's the last value seen — and `changes=1` keeps only
-the rows at which the value changed, the window's first included: a
-state's runs, for a timeline. Both fold the whole window before `limit`
-keeps the newest rows. They exist because `limit` alone made history
-length a function of publish rate: a thermometer reporting every thirty
-seconds filled 500 rows in four hours and its "7d" chart showed an
-afternoon, while a quiet sensor showed the week. Downsampling is the
-recorder's job — the page knows its pixel width, the recorder knows the
-rows — and repeats are kept in the store (each is a sighting) and
-collapsed on read.
-
-`home/history/stats` describes the store itself in one reply:
-`store_version`, `file_bytes` and `freelist_bytes` from the pager, one
-`{rows, oldest, newest, rows_per_day}` per series keyed by its history
-key (RFC3339, as the samples path; the rate is null for a series with no
-span to divide by), and `events: {rows, oldest, newest}` (integer µs,
-as the events path), and `archives`: one `{file, month, samples,
-forecasts, events, bytes, sha256, sealed}` per month sealed out of the
-file (see Archive), read from the record kept as each was sealed rather
-than from the files. It exists because choosing a retention window means
-knowing what is in the file, the recorder is the only process that reads
-it, and a host may have no `sqlite3` binary (2026-09-09, #25). A wildcard
-over `home/history/**` fans out over series only; `stats` and `events`
-answer their own keys.
-
-The per-series aggregates are carried on `series` and maintained as rows
-arrive, rather than computed per call (2026-09-19, #123). `COUNT`, `MIN`
-and `MAX` per series have no index that answers them, so the reply used
-to be a full scan of `samples` — 1.75 s at 4.9 M rows, growing at ~1 s
-per 2.8 M — while every other read path is a seek on `(series_id, ts)`
-and flat in the file size. Two things made that worse than a slow query:
-`ctx.restore` polls `stats` to decide whether the recorder is answering
-at all, so a store large enough to push the scan past the query timeout
-resets every restoring latch to its code default; and the reply is how
-an owner sees which series is filling the file, so the diagnostic
-degraded in proportion to the problem it diagnoses. Keeping the tally on
-the write path costs one `UPDATE` of a small cached table per sample.
-Considered and rejected: dropping repeated values at write time, which
-addresses one pathology (a device republishing unchanged) and not the
-general case (a jittering float, an honest 1 Hz sensor), and costs the
-store its record that a device asserted a value at a time — a sample
-asserts an observation at its stamp, and that is true of a repeat too.
-Volume is bounded by retention, which deletes on an owner's stated
-policy rather than silently.
-
-The history key is entity-first — no room slot — because entity is the
-series identity and room is a tag carried per row: a moved entity is ONE
-key whose rows show the tag transition. Reads over the bus keep the
-backend recorder-private (the step-6 agent needs zero backend knowledge or
-credentials) and give history the same access story as everything else
-(future Zenoh ACLs). The recorder declares the queryable surface under
-`[bus.publishes]` — replies are data the unit originates, and the plan
-renders the read surface visibly.
-
-### The recorder unit
-
-Python on the SDK (`adapters/recorder.py`, generic and public like the
-clock); `sqlite3` is stdlib, so no new dependencies. Subscriber callbacks
-stamp, type, and enqueue; a single writer thread drains the queue, one
-transaction per flush, on a connection opened per flush — the failure
-domain is "can I open and commit right now", with no long-lived handle to
-hold stale permissions or a deleted inode. Reads open their own read-only
-connections (readers and the writer never share a handle).
-
-- **The recorder catches up from the state mirror (2026-09-11, #60).**
-  A unit like any other, it subscribes when it starts, and anything
-  published in the seconds before — every unit's start publish on a
-  boot, a transition during a recorder restart — was never recorded. A
-  publish-on-change aspect that rarely changes (an availability flag)
-  could have no history at all, and "no rows" read as "never
-  published". Subscribe, then get, merge, as the SDK does for
-  automations since #36: after subscribing, the recorder reads
-  `home/state/**` from the core's mirror and enqueues what it did not
-  see live. Two rules make the seed honest rather than a new kind of
-  lie. The row is stamped at the value's own time — now less the
-  mirror's age — never at recorder start, because a sample asserts an
-  observation at its stamp and a mirrored value can be arbitrarily old.
-  A series the store already holds at or after that time (a
-  recorder-only restart; the live row was written before it went down)
-  is left alone, give or take the milliseconds between the core's
-  receipt and the recorder's. State only: commands, health and config
-  are the events audit, and a mirrored current value is not an event.
-  Considered and rejected: a start order that brings the recorder up
-  before the rest. It closes the boot case, not a recorder restart, and
-  it is the first dependency edge between units the manifest rules
-  refuse — the mirror is the settled answer to late joiners.
-
-### Failure policy: bounded buffer + flush
-
-- Startup: the store must open and its schema initialize before `ready()`
-  — a recorder that never had a working store must not claim readiness.
-  Failure (including an unset `${VAR}`) is a startup error, visible
-  through the supervisor's backoff.
-- Runtime: a failed flush keeps the batch queued (bounded, 10,000 samples,
-  drop-oldest — recent state is worth more than old) and emits
-  `{"kind": "backend-outage", ...}` at `home/health/recorder/event` once
-  per down-transition, not per retry. Retries happen on new samples and on
-  a ~1s timer.
-- Recovery: the buffer flushes and `{"kind": "backend-restored",
-  "flushed": N, "dropped": M}` is published. Buffered samples land with
-  their receive-time timestamps — the outage is invisible in the data
-  unless the buffer overflowed.
-- Reads during a write outage are attempted normally and usually still
-  work (disk-full and permission failures don't stop reading); a read
-  error becomes an error reply.
-
-For an embedded backend, "the backend is down" means the store file became
-unwritable — disk full, permissions, dying SD card. That is what the
-integration test induces (chmod the store read-only, publish, restore) and
-what the policy above is written against; no production code path knows
-tests exist.
-
-### Retention (settled 2026-09-09, #19, #26)
-
-Keep-forever was undecided rather than decided against: the log-sink
-rejection reasons that retention is deployment configuration, which is
-right for logs (they have a platform to be pushed to) and does not
-transfer to a recorder-private SQLite file. Keep-forever also dissolves
-the pressure the design relies on elsewhere — an adapter that publishes on
-poll rather than on change costs nothing anyone can see (the onvif motion
-flood, the 107-events-per-hour device, both caught only because someone
-happened to measure). Retention makes noise cost something visible, which
-pushes the fix back to the adapter.
-
-- **Two windows, not one**: `retain_samples_days` and `retain_events_days`
-  in the recorder's manifest. `events` is the audit trail — the "who" —
-  the smaller table and the one worth keeping longest; `samples` is the
-  bulk.
-- **Default 0, meaning forever**, so no upgrade silently deletes history.
-  The point is that the policy is expressible and visible, not that it
-  changes.
-- **Mechanism**: on the writer thread, so it serialises with flushes, a
-  `DELETE ... WHERE ts < cutoff` per table every hour and whenever a
-  window changes, then `PRAGMA incremental_vacuum` — what the file's
-  `auto_vacuum = INCREMENTAL` (#24) was reserved for. One `purge` health
-  event per purge that deleted anything, with rows per table and pages
-  freed; a purge that finds nothing is silent, so retention never fills
-  the events table with its own bookkeeping. A failed purge is a
-  `purge-failed` event and the next attempt is an hour later.
-- **The only destructive operation in the store.** Downsampling stays
-  out of the recorder: the additive analytics layer (DuckDB over ATTACH)
-  can roll up without deleting source rows, and a roll-up that deleted
-  them could not be additive. No pluggable backend either: the moment
-  `endpoint` accepts `postgresql://` the no-dual-path property dies and
-  the tests hollow out.
-
-### Archive (settled 2026-10-07, #138)
-
-The store grows with every observation, and the two answers that were on
-the table both lose something: retention deletes history, and dropping
-repeats at write time deletes the record that a device asserted a value
-at a time (see the stats paragraph above). Archiving keeps everything and
-bounds the file the recorder writes: a month that closed more than
-`archive_after_months` months ago is moved into its own file.
-
-- **Moves, never deletes.** `archive_after_months` (owner, default 0 =
-  never) moves; `retain_*_days` deletes, and only from the store — an
-  archive is kept until somebody removes it. With archiving at 2 and
-  retention at 0, the store holds about two months and nothing is ever
-  lost: the configuration neither lever could give before.
-- **One plain SQLite file per month**, `archive/<store>-YYYY-MM.db`
-  beside the store, with the store's own schema and its series and room
-  ids, so `sqlite3` or a DuckDB `ATTACH` reads it exactly as it reads the
-  store. Samples and events go by their stamp, forecasts by issue time,
-  as retention measures them. Not compressed: an archive that has to be
-  decompressed before it can be opened is one nobody opens.
-- **Sealed once, never written again.** The pass records the file as
-  `sealing`, writes it under a temporary name, verifies it
-  (`integrity_check` and the row counts it inserted), takes its checksum,
-  renames it into place, records it `sealed` and makes it read-only, in
-  that order. A crash leaves a `sealing` record: with the file in place
-  it was verified and is recorded sealed; without it, nothing was pruned
-  yet, and the attempt is discarded. Rows that reach a sealed month later
-  (a seed of an old value, a clock that jumped) go into a further file,
-  `.2`, `.3`, so the backup and integrity wins hold: a sealed file never
-  changes, so its checksum is the whole of a later check, and a backup's
-  diff is the current window.
-- **Only what a sealed file holds leaves the store**, matched on the
-  whole row — series, stamps, room and value; an event has no key, so an
-  exact duplicate of one already archived (same microsecond, key and
-  payload) counts as held. **Each series' newest sample and newest forecast issue stay
-  as well**: `ctx.restore`, the recorder's seed and every latest-value
-  read find a series' last word in the store, and a latch decided months
-  ago must still be found after a core restart (#83). It leaves on the
-  next pass after a newer row overtakes it.
-- **`home/history/**` answers from the store alone.** An archive is for
-  people and tools; every query the system makes — the dashboard's
-  ranges, `restore`, forecast verification — is far inside a window of a
-  month or two, so the seam does not come up. If that changes, a read
-  across the seam is buildable on the same schema; deferring it costs
-  nothing.
-- **On the writer thread, after the hourly purge**, so it serialises
-  with flushes and with retention (a row past its window is deleted
-  rather than archived and deleted), and one month per pass, so a first
-  archive of years flushes between months. One `archive` health event per
-  month that moved, with what was sealed and pruned; `archive-failed`
-  otherwise, retried an hour later.
-
-**Archives are kept until asked otherwise.** `retain_archives_months`
-(owner, default 0 = forever) drops a whole archive file once its month
-closed more than that many months ago — whole files only, since a sealed
-file is never rewritten, so its granularity is a month. It is a setting
-of its own rather than the `retain_*_days` windows reaching into the
-archive: those were written for the store, and a house that set one
-before archiving existed must not find it deleting archives after. It
-runs whether or not archiving still does, so archives made earlier age
-out too, and deletes the file before its record, so a crash between the
-two leaves a record of a missing file that the next pass finishes. One
-`archive-dropped` event lists what went.
-
-Settings that undercut each other are said out loud, once per change, as
-`archive-misconfigured`: a `retain_*_days` window shorter than
-`archive_after_months` + 1 months deletes a month's first rows before
-they are old enough to archive, and archives kept no longer than
-archiving waits are dropped as soon as they are sealed. Both are allowed
-— the owner may mean them — but neither is silent.
-
-### Integrity check (settled 2026-09-09, #27)
-
-SQLite has no page checksums by default (`cksumvfs` is an opt-in shim),
-where Postgres has `data_checksums`: a disk silently returning corrupt
-data is invisible until a read happens to hit the page, and the store is
-the only file in the system that would fail that way — VP52 spent three
-weeks with a disk doing exactly this while every layer reported health.
-So the recorder runs `PRAGMA integrity_check` every
-`integrity_check_hours` (default daily, 0 disables) on its own read-only
-connection — in WAL mode it never blocks the writer — the first one an
-interval after start so a restart loop never hammers a large file. The
-result is a health event at `home/health/recorder/event`: `integrity-ok`
-with the duration, or `integrity-failed` with the first lines SQLite
-reports. The event is the signal; repair or restore is the owner's call,
-and proportionate as a recorder feature rather than a reason for a
-different engine.
- 
-## Plan/apply proper (settled in step 5b)
-
-The founding mechanics (below, "Plan/apply mechanics") stand; this section
-records how they became concrete. Durable parameter state arrives here: the
-repo is the system of record, the bus cache is a live view.
-
-### How plan sees the live world
-
-`homeostat plan [path] --bus <endpoint>` (falling back to `HOMEOSTAT_BUS`)
-connects to the supervisor's bus as a client and reads the world through
-the core's existing last-value queryables — no second channel:
-
-- `home/meta/{unit}/manifest` (raw TOML as loaded), `.../manifest_hash`,
-  `.../files_hash`, `home/meta/system/grants`,
-  `home/meta/system/applied_commit` — a new meta cache/queryable in the
-  core, same pattern as config/health/clock (step 4). Startup previously
-  only *put* manifest hashes; late joiners could never read them.
-- `home/health/*` — unit status.
-- `home/config/*/*` — current parameter values.
-
-With no endpoint anywhere, plan runs offline against the empty world,
-labeled as such — still what a house repo's CI wants. An endpoint that is
-given but unreachable is a hard error, never a silent empty world: a plan
-that says "create everything" against a house that is merely unreachable
-is how you double-start a home.
-
-### What "changed" means: two hashes, then semantics
-
-- `manifest_hash` — sha256 of the manifest file (as in step 2).
-- `files_hash` — sha256 over the unit's non-manifest repo inputs: command
-  tokens that resolve to files under the house root (`uv run
-  units/foo.py` hashes the script), an adapter's entity files, and
-  `zones.toml` when any of the unit's key expressions referenced a zone.
-
-Hash-equal units are unchanged. A manifest-hash mismatch is classified
-semantically: both manifests are parsed and compared with every param's
-`default`/`constraint`/`editable_by` stripped. Equal after stripping (and
-files unchanged, and no grant delta) → the change is parameter-level →
-parameter-only tier. Anything else — including param add/remove or type
-change, since a running unit read its manifest at startup — is behavioral.
-Grant-table delta or unit create/destroy escalates to structural, as
-always. Parameter diffs themselves come from comparing live values against
-repo defaults, which covers both a changed default and live drift with one
-rule.
-
-### Who executes apply
-
-The CLI commands the running supervisor over the bus: a core-owned control
-queryable at `home/meta/system/apply`, GET-with-payload = apply request
-(the same query-as-command pattern as config writes). The supervisor
-executes the walk itself — it owns the process table, the per-unit
-backoff/breaker state, and the health map, so restart-and-await-readiness
-composes with supervision instead of racing it. The alternatives lose:
-a CLI-side walk needs remote per-unit stop/start controls plus its own
-lock anyway, and signal-and-re-read gives no plan verification and no
-result channel.
-
-The supervisor holds the apply lock (one apply at a time); parameter-only
-applies bypass it. On request it re-reads and re-validates the repo from
-disk and derives its own diff against its in-memory world — the CLI's
-printed plan is a preview; the supervisor's diff is what executes. "Await
-liveliness + healthy heartbeat" is defined as: health `running`, which by
-construction means the liveliness token is present. A deliberate apply
-restart gets a fresh supervise task and therefore a fresh breaker — new
-code earns a fresh failure budget, and a unit stuck in backoff/open can be
-replaced mid-cycle.
-
-### The walk
-
-Derived from the grant table (granting unit → granted entities → owner
-unit ⇒ owner before dependent), never declared. Owners are adapters, or
-automations for commandable virtual entities (a cyclic table is refused
-at check time, `grant-cycle`):
-
-1. Parameter writes (no restarts; a unit about to restart just reads the
-   new value on start).
-2. Removals, in reverse grant order — dependents stop before the owners
-   they write through.
-3. Creates and restarts, in grant order; after each unit: await health
-   `running`, halt on breaker `open`, `stopped`, or a readiness deadline.
-
-Grant-edgeless units and ties order by kind (adapter, automation,
-service), then name — deterministic. Failure halts the walk in place:
-exit code 1, the CLI prints the halt position (applied / halted-at /
-not-reached), the apply reply carries per-step results, the failed unit's
-state is visible at `home/health/{unit}`, earlier units keep running
-their new incarnations, later units are untouched, and neither
-`applied_commit` nor `home/meta/system/grants` advances — a re-run plans
-exactly the remaining work.
-
-### Parameter drift
-
-Plan renders every live≠repo parameter (`~ evening_lights/off_time
-live="21:30"  repo="23:00"`); drift is always visible. Apply sets live = repo:
-the repo is the system of record, and a live edit the family wants to
-keep is made durable by committing it (edit the manifest default; that
-plan is parameter-only, auto-applies with zero restarts, exempt from the
-apply lock). The capture path — turning a live edit into a commit
-automatically — belongs to the agent/voice surface ("voice-initiated
-changes commit with the transcript as the message") and is deferred; v1
-actor enforcement remains plan-time + trust.
-
-### Pending plans and applied_commit
-
-`homeostat plan --save` writes `plans/pending/{id}.plan` — TOML with
-`id`, `actor`, `created` (RFC3339), `base_commit`, `tier`, and the full
-rendered plan text, readable on a phone as-is. `homeostat apply --plan
-<file>` refuses when `base_commit` is not the repo's current HEAD (the
-auto-invalidation), otherwise recomputes the plan fresh against worktree
-+ bus — the file is a review artifact, not an execution script. Approval
-UX beyond this arrives with the agent surface.
-
-`applied_commit` exists only when the house root is itself a git worktree
-root (`git rev-parse --show-toplevel` == the house root — a nested
-fixture directory must not inherit the enclosing repo's HEAD). Then the
-CLI passes HEAD (suffixed `-dirty` when the worktree has uncommitted
-changes) with the apply request and the supervisor publishes it at
-`home/meta/system/applied_commit` after a fully applied walk. A non-git
-house applies fine but records no commit and cannot save pending plans.
-Integration tests git-init fixture copies in temp dirs.
-
-A house in a subdirectory of a larger repo was supported briefly
-(2026-08-28) and reverted 2026-08-29: the requesting deployment moved to
-its own repo, because a server needs the house as a real worktree and
-handing it one means cloning the whole enclosing repo onto the box. A
-subtree house is only useful when the enclosing repo is itself
-deployable, which left the loosened guard with no user. (The agent's
-`propose` commits were pathspec-limited regardless — a bare commit takes
-whatever else is staged, and the agent is not a house's only writer; a
-returning write side keeps that.)
-
-### Rollback
-
-Git does the time travel: check out the previous commit and run a normal
-forward plan/apply. Plan never reads arbitrary commits itself; it stays a
-function of worktree + bus.
-
-## Manifest schema
- 
-TOML. One schema, three kinds. `schema = 1` versioning field at the top of
-every manifest and entity file from day one. This section is the design
-record with examples; the field-by-field reference is `docs/manifest.md`,
-generated from the parser (see Agent surface).
- 
-### Unit manifest (automation example)
- 
-```toml
-schema = 1
- 
-[unit]
-name = "evening_lights"
-kind = "automation"          # adapter | automation | service
-description = "Dims and turns off downstairs lights at night"
- 
-[runtime]
-command = "uv run units/evening_lights.py"
-restart = "on-failure"       # with backoff + circuit breaker, always
-shutdown_grace_s = 5
- 
-[bus.subscribes]
-presence = "home/state/downstairs/**/presence"   # zone refs expand at plan time
-clock = "home/clock/minute"
- 
-[bus.publishes]
-lights = { key = "home/cmd/downstairs/**/light", capability = "light", priority = "automation" }
- 
-[params.off_time]
-type = "time"
-default = "23:00"
-constraint = { after = "20:00", before = "02:00" }   # may span midnight
-editable_by = "family"
- 
-[naming]
-sv = "kvällsbelysning"
-en = "evening lights"
-aliases = []
-room = "downstairs"          # zone or room, for voice/dashboard grouping
-```
- 
-### Adapter manifest
- 
-```toml
-schema = 1
- 
-[unit]
-name = "zigbee"
-kind = "adapter"
- 
-[runtime]
-command = "uv run units/zigbee.py"
-restart = "always"
- 
-[discovery]
-mode = "static"              # or "mdns" with service = "..."
-endpoint = "mqtt://localhost:1883"   # opaque to core
- 
-[bus.publishes]
-state = { key = "home/state/{room}/{entity}/**" }   # templated, expanded at plan time
- 
-[bus.subscribes]
-commands = "home/cmd/{room}/{entity}/**"
- 
-[entities]
-dir = "entities/zigbee/"     # one file per device
-```
- 
-### Entity file
- 
-```toml
-schema = 1
- 
-[entity]
-id = "0x00158d0003ab1c2d"    # adapter-native address
-capability = "light"
-features = ["brightness", "color_temp"]
-room = "kitchen"             # SINGLE source of spatial truth
- 
-[naming]
-sv = "taklampan i köket"
-en = "kitchen ceiling light"
-aliases = ["köksbelysningen"]
- 
-[write_policy]
-mode = "shared"              # shared | exclusive | arbitrated
-owner = "zigbee"             # exactly one adapter binds each entity
-```
- 
-### Manifest design rules
- 
-- The entity is the resource; the entity file is the SOLE authority on write
-  policy. Automations declare intent (publish expressions), never exclusivity.
-  Grants happen at plan time.
-- No dependency declarations between units (the bus decouples; dependency
-  graphs are rendered from the resolved grant table).
-- No version pinning per unit (the repo is the version).
-- No health section (derived from liveliness).
-- Constraint language stays minimal: min/max, after/before, enum. Anything
-  needing more expressiveness means the parameter is `editable_by = "owner"`.
-- Templated keys mean the core maintains a derived entity registry. This is
-  accepted; it is derived from text, never mutated by a UI. Plan output must
-  render the expansion visibly.
-- Manifests carry naming/alias/i18n data because they feed voice grammar and
-  dashboard generation. Voice quality is a function of manifest hygiene; the
-  agent can audit missing aliases.
-## Capability and permission model
- 
-- Plan-time validation resolves every automation's publish expressions
-  against the concrete entity set: capability match, write policy, reserved
-  classes. Two writers on an `exclusive` entity is a plan error.
-- The resolved grant table is part of plan output and doubles as the
-  dependency graph.
-- Adapters embody entities rather than commanding them; compromising an
-  adapter compromises exactly its bound entities, which is irreducible.
-- **Arbitrated mode** (from day one): a small arbiter service holds the write
-  token per arbitrated entity. Commands carry a priority band; higher
-  preempts, preemption events are published. Manual/voice commands occupy the
-  top band by convention: THE FAMILY ALWAYS WINS OVER AUTOMATIONS.
-  Arbitrated entities' adapters accept commands only via the arbiter's
-  output key, giving structural runtime enforcement for high-stakes entities
-  (locks, heat pump) without Zenoh ACLs.
-  Settled 2026-07-16: the arbiter's output is its own reserved class —
-  `home/arbiter/{room}/{entity}/{aspect}`, the cmd shape — so a wish and a
-  grant can never be confused by a subscription, and writers keep
-  publishing wishes to `home/cmd` without ever learning whether a target
-  is arbitrated. Every cmd payload is an envelope
-  `{value, priority, actor, id}`: the SDK stamps priority from the unit's
-  own manifest declaration and actor with the unit name, so automation code
-  doesn't change; adapters drop envelope-less commands with a health
-  event; the arbiter forwards the envelope unchanged.
-
-  `id` (added 2026-09-14, issue #94) is the correlation handle. A command
-  is a proposal, not a write: arbitration may refuse it, an adapter may
-  drop it as out of range, and only a device readback says it took effect.
-  A publisher that wants to show the outcome — the dashboard, for the
-  family — needs to know *which* command an event ended, and matching on
-  key and value alone crosses wires when two commands to one aspect
-  overlap. The SDK mints one per envelope; it is optional on the wire, so
-  a hand-rolled publisher is still valid and its events report `null`. The
-  events that end a command (`refuse`, and `drop` for `invalid-command`)
-  echo it as `cmd_id`. The write token is
-  a lease per (arbitrated entity, aspect) — amended 2026-07-18 from
-  per-entity when the heat pump showed why: orthogonal control
-  dimensions share an entity (the family adjusts `setpoint`, the price
-  automation continuously drives `outdoor_temperature_offset`) and must
-  not block each other, and the aspect is already the granularity of
-  the cmd key itself. A winning command holds its aspect at its band
-  for `hold_minutes` (an arbiter parameter, family-editable);
-  equal-or-higher bands pass and take the hold — a takeover from a
-  strictly lower band publishes a preemption event — lower bands are
-  refused with an event; expiry reopens the entity to automations, so a
-  forgotten override self-heals. Arbiter events land at
-  `home/health/arbiter/event` and are recorded like any health event.
-
-  **What is held is published as state (settled 2026-09-25, #179).** The
-  events are an audit trail and answer "what happened"; nothing answered
-  "is this aspect held right now?", which is what a browser opening
-  mid-hold, or any late joiner, is asking — and a lease lived only in the
-  arbiter's memory. So each arbiter publishes `home/hold/{unit}`, one
-  document of what it currently holds, the `home/discovery/{unit}` shape,
-  mirrored by the core. Four things this settles:
-  - *One document, not a key per lease.* It makes the awkward cases
-    trivial rather than clever: a restart publishes an empty list — the
-    leases were memory and are gone, and there is no set of keys to
-    enumerate and clear — expiry needs one timer rather than one per
-    lease, and a reader sees a consistent set. The cost is that a consumer
-    wanting one aspect filters a short list.
-  - *Enforcement stays on `time.monotonic()`; the published `until` is its
-    wall-clock twin.* No clock step can shorten or stretch a real hold,
-    and a countdown is the only kind of deadline that means anything in
-    another process. They can disagree after an NTP step, and only the
-    countdown suffers.
-  - *Expiry is published, not merely evaluated.* Arbitration expires a
-    lease lazily — on the next wish for that key — which is correct for
-    arbitration and wrong for a document, which would go on claiming a
-    hold that had ended. One thread waits on the earliest deadline and
-    republishes. Readers drop an entry past its `until` as well, the same
-    division as a forecast's `issued`.
-  - *A hold carries what it has refused.* Not what makes it a hold — see
-    the dashboard's rule below — but what says the override cost
-    something, without a consumer replaying the event log.
-
-  Deliberately not built: a way to hand control back. Equal-or-higher
-  bands take the lease, so a second family command refreshes rather than
-  releases, and the only exits are the countdown and `hold_minutes`. That
-  is a protocol question (a field on the envelope? a surface of the
-  arbiter's own?) and it is #188.
-  Plan-time structure: an adapter's templated cmd subscription expands
-  only over its non-arbitrated bound entities, and a templated
-  arbiter-class subscription expands only over the arbitrated ones — an
-  adapter physically lacks a cmd path to an arbitrated entity, by
-  expansion. An arbitrated entity not covered by some unit's
-  arbiter-class publish is a plan error.
-- Actor tiers: `owner`, `family`, `automation`, `agent`. Grant changes
-  require tier >= owner.
-- v1 runtime enforcement is plan-time + trust, except arbitrated entities.
-  Zenoh ACLs are the eventual hardening; declarations are already the right
-  shape.
-- Command payload validity: the SDK's typed command constructors make invalid
-  commands unrepresentable in practice; adapters drop invalid payloads with a
-  health event. No separate validation layer.
-## Plan/apply mechanics
- 
-- No state file. Desired state is the repo; actual state is queryable from
-  the bus (manifest hashes, liveliness, current parameters). Plan diffs repo
-  against bus. State drift is impossible by construction.
-- **Plan tiers, derived mechanically, never declared:**
-  - Parameter-only: config subtree write, no restart. Auto-applicable within
-    actor tier. This is the voice path.
-  - Behavioral: unit code/manifest changed, grant set unchanged. Restarts
-    that unit only.
-  - Structural: grant-table delta, unit create/destroy, entity moves,
-    write-policy changes. Owner approval required. Plan prints grant-table
-    diff, key changes, match-set changes.
-  - Any grant-table delta escalates the tier automatically; an agent cannot
-    smuggle structural change as a parameter edit.
-- **Apply is per-unit and rolling, not transactional.** Adapters before
-  dependent automations. Per unit: write config, restart if needed, await
-  liveliness + healthy heartbeat, proceed. Failure halts the walk in place
-  and reports position. No automatic whole-plan rollback.
-- **Rollback is git.** Applied plans record the commit hash. Rollback =
-  plan against the previous commit = a normal forward plan.
-- **Pending plans are files** (`plans/pending/{id}.plan`): diff, grant delta,
-  actor, timestamp, base commit. Survive restarts, mobile-reviewable.
-  Auto-invalidate if the repo moves past their base commit.
-- One apply at a time (core holds the lock). Parameter fast-path writes are
-  exempt. Voice-initiated changes commit with the transcript as the message.
-## Agent surface (MCP)
- 
-**Read-only (settled 2026-09-12).** The write tools — `propose`, `apply`
-and `plan` — are removed. The MCP server is a pure bus client: it takes
-no house root, never reads the repo, never shells out to git. Tools:
-`read_state`, `read_history`, `read_logs`, `read_events`, `explain`,
-`schema`. An agent changes the house the way every other actor does: it
-edits the repo and runs `homeostat plan`, and the owner applies. Two
-reasons, one of them the decisive one:
-
-- **No consumer.** The write path existed for an agent with no
-  filesystem — the voice / family-facing conversational agent of a later
-  phase. Every agent in use today works inside a checkout of the house
-  repo, where the CLI already gives it the full plan/apply discipline
-  with git review in between. Tools without a consumer are surface
-  without a test of their shape.
-- **The write path put unapproved code where units run from.** A
-  `propose` wrote into the supervised working tree and committed before
-  the tier was derived; the pending plan gated the restart, not the file
-  on disk. A behavioral proposal — new unit code, new PEP 723
-  dependencies — ran at the next crash or reboot with no approval, and
-  a sibling module a script imports is not in `files_hash` at all, so it
-  planned "No changes" and ran at the next restart of every importer.
-  Fixing that properly means staging proposals outside the tree units
-  spawn from, which is a design change worth its own consumer.
-
-When the write side returns, two conditions hold: proposals stage into a
-separate worktree or branch, so the tree the supervisor spawns from never
-holds unapproved content (or the supervisor spawns from a checkout of
-`applied_commit`); and the tier ceiling is enforced in the supervisor's
-apply queryable, not in the MCP client — the request carries the tier the
-actor may apply and `execute` refuses a diff above it. The removed
-implementation (v0.11.4, `src/mcp/mod.rs`) is the reference for the
-transactional write → validate → commit → unwind shape, the pathspec
-hygiene, and the symlink containment; the step 6 record below is kept as
-the history of what was built and learned.
-
-The HTTP transport carries the same three gates as the dashboard (added
-2026-08-29, reviewing it against Local-only access): `Host` non-global or
-known, `Origin` absent or allowed, and `X-Homeostat` on every request. It
-had none of them, and the design's own reasoning applies here too — this
-surface serves everything the house knows. Without the header a
-cross-origin `text/plain` POST is a CORS "simple request": no preflight,
-so a page in a family browser could drive it blind. `HOMEOSTAT_MCP_HOSTS`
-extends the name allowlist. An HTTP MCP client must send the header; stdio
-is unaffected.
-
-**Error codes are the contract's rules, served in-band (2026-09-07, #4).**
-Every validation failure carries a stable code, and `src/error.rs` holds the
-one registry mapping each code to a paragraph: the rule and why it exists. A
-test asserts the registry and the codes the source emits are the same set.
-A refused plan appends the paragraphs for the codes it hit, the
-`explain` tool and `homeostat explain <code>` serve them on demand, and no
-code without one is fitted.
-
-**The manifest contract is the parser, served (2026-09-07, #4).** The
-structs in `src/manifest.rs` are the complete spec (`deny_unknown_fields`),
-so they derive a JSON Schema; field doc comments are the descriptions,
-which puts the rule next to the field it constrains and nowhere else.
-`homeostat schema` and the MCP `schema` tool serve it, and
-`docs/manifest.md` is the same schema rendered — generated by
-`homeostat schema --markdown`, pinned by a test that refuses a stale copy.
-Hand-written reference documentation was rejected: it would be a second
-copy of the structs, and the drift it invites is the problem #4 reports.
- 
-### Step 6 goal (settled 2026-07-04, before implementation; write side removed 2026-09-12)
- 
-An MCP server through which an agent can observe the house and change it,
-with authority bounded by the same plan/apply machinery as every other
-actor. Rides entirely on step 5b: tier derivation, pending plans, the
-supervisor-executed walk.
- 
-- **Where it lives:** in the Rust core, `homeostat mcp`. Two transports:
-  stdio for local development (the MCP client launches the binary with the
-  house root and `--bus`), and HTTP for the deployed house. Deployed, the
-  MCP server is a **service unit** — `units/mcp.toml` with
-  `command = homeostat mcp --http <addr>` — so when `homeostat up` runs as
-  PID 1 in a container, the agent surface is supervised like any unit:
-  health at `home/health/mcp`, backoff, breaker, graceful shutdown, and
-  the house repo opts in by declaring it. No special casing in the
-  supervisor.
-- **Reads:** `read_state` serves live values from the core last-value
-  cache; `read_history` queries `home/history/**`, passing the recorder's
-  fold shapes (`bucket`, `changes`) through as tool arguments so an agent
-  asking a week-wide question does not get a chatty series' last hour
-  (2026-09-19, #110) — the same failure the dashboard had before #107,
-  and for the same reason: `limit` alone makes history length a function
-  of publish rate. Both are bus clients; the agent needs zero backend
-  knowledge.
-- **Writes go through the repo.** `propose` takes text — house-repo file
-  path(s) plus new content — writes it, commits to the current branch,
-  and plans. Parameter edits are repo edits: a manifest-default change
-  that plans parameter-only auto-applies (zero restarts, durable by
-  construction, transcript-as-commit-message falls out for free). No
-  separate live set_parameter tool — one path for everything.
-- **The tier gates the actor.** A plan that is behavioral or structural is
-  refused at agent tier by `apply`; `propose` leaves it committed and
-  saved as `plans/pending/{id}.plan`. Owner approval v1 is the owner
-  running `homeostat apply --plan <file>` — no in-band approval channel.
-  Unwanted proposals are reverted with git, like any commit.
-- **Success criteria** (`tests/mcp.rs`, real server against a live
-  supervised house):
-  1. `read_state`/`read_history` return what the bus and recorder hold.
-  2. A parameter `propose` within constraints auto-applies: commit lands,
-     the running unit sees the value with no restart.
-  3. An out-of-constraint parameter `propose` is rejected with the
-     constraint named; world and repo unchanged.
-  4. A structural `propose` (a grant delta) produces a pending plan and
-     does not touch the world; the agent's own `apply` on it is refused.
-  5. Smuggling: a manifest edit carrying a grant delta escalates to
-     structural through the MCP surface — the mechanical tier derivation
-     is the enforcement, not tool-level checks.
-- **Non-goals:** voice, dashboard generation, Zenoh ACLs, any approval UI
-  beyond the pending-plan file.
- 
-### Settled during step 6
- 
-- **The protocol layer is hand-rolled** (~200 lines): initialize,
-  tools/list, tools/call, ping over JSON-RPC 2.0 — newline-delimited on
-  stdio, stateless streamable-HTTP on `--http` (POST answers
-  `application/json`, which the spec permits in place of an SSE stream;
-  GET is 405 because this server never initiates messages, so there is no
-  session to manage). An MCP SDK would have been the largest dependency
-  in the tree for five methods.
-- **The core now mirrors `home/state/**`** into a last-value queryable —
-  the clock mirror generalized. read_state needed current values to be
-  readable on demand; every late joiner benefits, not just the agent.
-- **The enforcement point for agent parameter edits is plan-time
-  validation.** The validator rejects a default outside its own
-  constraint (`invalid-default`, pinned in the corpus), so propose
-  refuses the edit before anything is committed. Previously an
-  out-of-constraint default would have seeded the config store silently —
-  a real gap the agent surface exposed.
-- **Entries under `plans/` are excluded from head_commit's dirty check.**
-  A pending plan is a review artifact of the commit it plans against;
-  before this, saving one marked the repo dirty and made `apply --plan`
-  refuse the very plan it had just saved as stale.
-- **Propose is write → validate → restore-on-failure.** An invalid
-  proposal never reaches a commit and the working tree ends clean either
-  way. Proposed paths must be plain repo-relative (no `..`, nothing under
-  `.git/` or `plans/`).
-- **Agent commits are authored `homeostat-agent <agent@homeostat.local>`**
-  with the propose message as the commit message — the same channel the
-  voice phase will use for transcript-as-commit-message.
- 
-## Discovery (settled 2026-07-05)
+**JSON everywhere**, UTF-8, except in the core's meta space:
+`manifest_hash` and `files_hash` are hex text, `manifest` is the raw
+TOML, and `applied_commit` is the commit as text.
+
+**State is one bare JSON scalar per aspect**: a boolean, a number or a
+string, never wrapped. A composite reading is split into aspects (a
+position is `lat` and `lon`), because the mirror, the recorder and the
+dashboard handle one scalar per key, and a per-aspect key makes each
+part's history free. An object, array or `null` on a state key is a
+bug, which the recorder drops (`non-scalar`).
+
+**No non-finite numbers.** JSON has no NaN or Infinity, but Python's
+`json` writes them. The SDK's `put_json` drops such a value with a
+`drop` event (`non-finite`), the recorder drops one from any other
+publisher, and the dashboard refuses one, so no consumer has to guard.
+
+**Times carry an offset**: clock payloads are local RFC3339
+(`"2026-07-03T21:04:00+02:00"`), and the SDK refuses a naive forecast
+timestamp. Recorder events and log lines use integer µs UTC.
+
+**Commands are envelopes**, `{value, priority, actor, id}` on every
+`home/cmd` and `home/arbiter` payload, `priority` one of `automation`,
+`agent`, `family`, `manual` ([Cmd envelopes](#cmd-envelopes)).
+Priority and actor are self-declared and checked only for shape
+([Local-only access](#local-only-access)). An adapter's
+`parse_command` drops a non-JSON payload with `malformed-payload`, and
+one lacking `value` or a known `priority` with `invalid-command`.
+
+**Commands travel as commands.** `put_json` sends `home/cmd` and
+`home/arbiter` puts with congestion control `BLOCK` at priority
+`INTERACTIVE_HIGH`. Zenoh's default, `DROP` at data priority, suits the
+next temperature reading, not "unlock the door".
+
+**Commands are puts, not queries.** The outcome, a readback on
+`home/state`, arrives long after a query would close; who listens (the
+owner's liveliness token) and a refusal or drop (events carrying
+`cmd_id`) arrive anyway; and the recorder never sees a query. Queries
+serve where one owner answers in full at once: parameter writes, apply.
+
+**Queries.** A read is a GET without payload; a write is a GET with a
+JSON payload, refused with an error reply (`{"error": "<message>"}`
+from the config queryable). Mirror replies carry the value's age
+([The last-value mirror](#the-last-value-mirror)).
+
+**Documents.** A class that is not one scalar carries one JSON document
+per key: health status, a discovery record array, the arbiter's
+`{"schema": 1, "holds": [...]}`, a [forecast](#forecasts) issue
+`{"schema": 1, "issued": ..., "points": [...]}`. Health events are
+objects with a `kind` ([Health events](#health-events)).
+
+## Units and manifests
+
+A house is text. One manifest per unit under `units/`, one entity file
+per entity in the entities dir of the unit that binds it, an optional
+`zones.toml` and an optional `dashboard.toml`. Every file begins with
+`schema = 1`; a file declaring another version is refused
+(`unsupported-schema`) rather than half-read. The field-by-field
+reference is [`docs/manifest.md`](manifest.md); this section covers
+what the files mean and why.
+
+### Unit kinds
+
+Every running thing other than the core is a unit: one OS process, one
+manifest, one liveliness token. The manifest's `[unit] kind` is one of
+three, and decides which sections the manifest may carry
+(`invalid-manifest` otherwise), which key classes it may publish, and
+where it sorts among ties in the [apply walk](#the-apply-walk).
+
+- **`adapter`** puts devices on the bus and is the only place a device
+  dialect is spoken. It must carry `[discovery]` (how it reaches its
+  backend) and `[entities]` (where its entity files live).
+- **`automation`** regulates: it subscribes to state and publishes
+  commands. It has no `[discovery]`, and may carry `[entities]` to bind
+  entities with no device behind them
+  ([Virtual sensors](#virtual-sensors),
+  [Commandable virtual entities](#commandable-virtual-entities)).
+- **`service`** is infrastructure with no entities: the recorder, the
+  dashboard, the arbiter, the clock. It may carry `[discovery]` (the
+  recorder's store is its endpoint) and may not use `{room}`/`{entity}`
+  templates. Only a service may publish under `home/arbiter/`,
+  `home/clock/` or `home/history/` ([Reserved classes](#reserved-classes)).
+
+**The clock service** (`adapters/clock.py`) owns civil time. It
+publishes `home/clock/minute` (local RFC3339 with offset) each minute
+on the minute and `home/clock/date` at local midnight, and both at
+startup, so a restarted subscriber never waits up to a minute. Its
+timezone is an owner parameter: DST is handled in one place, and no
+subscriber does naive time arithmetic.
+
+The unit is the atom of authority, failure and change; how many rules
+one unit hosts is its author's call
+([Unit granularity](#unit-granularity-the-atom-is-the-unit)).
+`[runtime]` says how the supervisor runs it
+([The unit contract](#the-unit-contract)). A manifest declares **no
+dependencies between units** (the bus decouples them, and the one
+order that matters is derived from the [grant table](#the-grant-table)),
+**no version** (the repo is the version) and **no health section**
+(health is derived from liveliness).
+
+**Entity files.** The entity is the resource, and its file is the sole
+authority on its write policy: automations declare what they want to
+publish, never exclusivity. The file stem is the entity's name. `room`
+is the single source of spatial truth. `id` is the adapter-native
+address, required on an adapter-owned entity and optional on an
+automation-owned one. `[write_policy] owner` must name the unit whose
+entities dir holds the file (`owner-mismatch`), so the binding is
+stated in the file and its location must agree. `[naming]` (`sv`,
+`en`, `aliases`) on units and entities labels the dashboard and voice.
+
+### The manifest is the contract
+
+The structs in `src/manifest.rs` are the manifest contract.
+`deny_unknown_fields` makes a misspelled key an error, not a silently
+ignored line, and their doc comments are the field descriptions. From
+them come `homeostat schema [unit|entity|zones|dashboard]` (JSON
+Schema, also the MCP `schema` tool), `homeostat schema --markdown`
+([`docs/manifest.md`](manifest.md); a test refuses a stale copy) and
+the [vocabulary table](#the-capability-vocabulary).
+
+Every rule beyond the shape has a stable error code
+(`error[<code>] <subject>: <message> (<file>)`). `CODES` in
+`src/error.rs` gives each a paragraph on what the rule is and why,
+read by `homeostat explain`, the MCP `explain` tool and every refused
+plan; a test ties emitted codes and entries one to one. One source,
+because a person or an agent must learn the contract without reading
+Rust, and a second description would drift.
+
+### What validation guarantees
+
+`homeostat::check` is the plan-time pipeline every command starts
+from: load, validate, expand key expressions, resolve grants, feeds and
+sources. Errors accumulate across stages, and a file that fails to
+parse is reported and skipped, so one bad file never hides the errors
+in the others. `plan`, `apply` and `up` refuse a house with any error;
+warnings refuse nothing. A house that passes guarantees:
+
+- **Names** are key segments and none is a reserved word
+  ([Rooms, entities and zones](#rooms-entities-and-zones)). Unit and
+  entity names are unique, entity ids unique within one owner.
+- **Shape per kind**; one owner per entity, which exists and holds
+  the file; known capabilities, with a write mode wherever commands go.
+- **Zones** whose members are rooms some entity is in, never
+  pseudo-rooms, and whose names are not room names.
+- **Parameters** whose default matches the type and its own constraint.
+- **Keys** inside the key space, templates only where they expand,
+  state only under bound entities, reserved classes respected and
+  write policy satisfied
+  ([Capabilities, grants and write policy](#capabilities-grants-and-write-policy)).
+- **Feeds, sources and `dashboard.toml`** whose references resolve.
+
+Validation does not guarantee runtime behaviour: the SDK keeps a unit
+inside its declaration, but a process with its own bus session can
+publish anything ([Security model](#security-model)).
+
+### Key expansion
+
+`src/expand.rs` expands every `[bus]` expression at plan time by the
+rules in [Rooms, entities and zones](#rooms-entities-and-zones):
+templates once per bound entity, a zone once per member room, cmd and
+arbiter templates split by write mode, which is how
+[arbitration](#arbitrated-mode) is enforced by structure. The result is
+a derived entity registry, never mutated by a UI; `plan` prints it
+([Plan and apply](#plan-and-apply)) and the SDK performs the same
+expansion at runtime against the same files.
+
+An expression that expands to nothing subscribes to nothing and reports
+healthy, so it is never silent. A template in a unit with no
+`[entities]` table is an error (`template-without-entities`); a binding
+unit with no entities yet, or a zone with no rooms, is a house being
+built up and a warning. A templated `home/cmd/` left empty because every
+bound entity is arbitrated is correct and says nothing.
+
+### Discovery
 
 The `discovery` class carries an adapter's complete current view of its
-periphery — what the protocol can see that the house has not claimed.
-Contract: an adapter that can enumerate its devices publishes one JSON
-array at `home/discovery/{unit}`, each record carrying
+periphery, bound or not: one JSON array at `home/discovery/{unit}`, the
+whole inventory each time it changes. Each record carries `id` (the
+exact value an entity file's `id` must use; only the adapter knows its
+binding rule, so nobody guesses), whether and by which entity it is
+bound, a best-effort `suggested` stanza in homeostat vocabulary, the raw
+protocol descriptor, and on bound records the entity's
+[aspect descriptor](#aspect-descriptors). The format is in
+[`docs/adapters.md`](adapters.md), section 5.
 
-- `id` — the exact value an entity file's `id` field must use to bind
-  the device; only the adapter knows its own binding rule, so agents
-  never guess it;
-- `configured` / `entity` — whether an entity file already binds it,
-  and which;
-- `suggested` — a best-effort `{capability, features}` stanza in
-  homeostat vocabulary, or null: the adapter suggests, the plan/apply
-  review decides. A hard mapping would make unknown device types
-  invisible; agent-side-only mapping would push a per-protocol table
-  into every agent;
-- `description` — the raw protocol descriptor verbatim (for z2m: the
-  definition with its `exposes`), so richer consumers can dig;
-- `aspects` (optional, bound records only) — the entity's aspect
-  descriptor for the dashboard (see "Aspect descriptors (settled
-  2026-09-08)").
+- **One key, whole inventory.** Device ids may contain `/`, so a
+  segment per device is a trap; a complete document makes departures
+  trivial and matches the consumer, which filters `configured = false`.
+- **The adapter suggests, the review decides.** A hard
+  protocol-to-capability mapping makes unknown devices invisible;
+  mapping on the agent side puts a per-protocol table in every agent.
+- **The core stays thin**: it mirrors `home/discovery/*` and nothing
+  else. **Opt-in.** **An unbound device is a fact, not a fault**, the
+  normal condition of a house being configured.
 
-Decisions and why:
+Out of scope: rooms (no protocol knows them), actuating discovery
+(permit-join carries authority) and inventory history (an array does
+not fit the recorder's series). The workflow: read the record, write
+entity files for unconfigured devices, `homeostat plan`, owner applies.
 
-- **One key, whole inventory.** Device ids may contain `/` (z2m allows
-  hierarchical friendly names), so per-device key segments are a trap;
-  a complete document per publish also makes departures trivial and
-  matches the consumer (an agent reads everything, filters
-  `configured = false`).
-- **Core stays thin**: the class name in the schema, a supervisor
-  mirror of `home/discovery/*` for late joiners (what read_state
-  reads), nothing else. Same shape as `health`: plumbing in core,
-  content from units. How discovery happens (retained bridge topic,
-  mDNS browse, passive sniffing) is protocol business the core never
-  sees; the manifest's `[discovery]` section configures the mechanism,
-  this class carries its results.
-- **Opt-in.** Adapters with nothing to enumerate (Modbus-style static
-  buses) and non-adapters simply do not declare the publish.
-- Out of scope, deliberately: rooms (physical knowledge no protocol
-  has — the agent asks or proposes a guess for review); actuating
-  discovery (permit-join, commissioning — commands with authority
-  implications, grant territory for later); inventory history (the
-  recorder's typed-series model does not fit an array document;
-  read_state covers the agent workflow).
+### The SDK's view of a unit
 
-The agent loop this enables: `read_state home/discovery/{unit}` →
-write entity files for unconfigured records in the house checkout →
-`homeostat plan` → owner applies. The agent never touches the native bus.
+A unit reads its configuration from the files the core validated: the
+supervisor starts it at the house root with `HOMEOSTAT_UNIT` set, and it
+reads `units/{unit}.toml` and its entities dir. There is no core-to-unit
+configuration protocol. `[discovery] endpoint` may reference `${VAR}`,
+expanded by the adapter, because ports and credentials do not belong in
+the repo; an unset variable is a startup error.
 
-## Dashboard (settled 2026-07-15)
+Adapters use `homeostat.house.load_adapter` and a `UnitSession`.
+Automations use the Context, `homeostat.automation.context()`, which
+gives exactly the surface the manifest declares: `ctx.subscribe`
+(seeded from the [mirror](#the-last-value-mirror)), `ctx.params`
+([Live parameters](#live-parameters)), `ctx.publish`,
+`ctx.publish_forecast` ([Forecasts](#forecasts)), `ctx.restore`
+([Restoring a unit's own last value](#restoring-a-units-own-last-value)),
+`ctx.source_used`
+([Which sources a computation actually used](#which-sources-a-computation-actually-used)),
+`ctx.health_event`, `ctx.ready()` (the liveliness token, once the unit
+can do its job) and `ctx.run()`.
 
-The dashboard is an adapter for humans: a supervised unit like any
-other, whose protocol is HTTP + WebSocket toward browsers instead of
-MQTT toward radios. Browser ↔ dashboard unit ↔ bus; browsers never
-speak Zenoh.
+**Binding names, not keys.** `subscribe` and `publish` take a binding
+name from `[bus.subscribes]` or `[bus.publishes]`: the code says
+`lights`, the manifest says which keys `lights` means, and changing
+that is a manifest change `plan` shows. `ctx.publish(binding, value,
+room=, entity=, aspect=)` puts to one concrete key: literal segments
+are defaults, wildcard and template segments must be named, and an
+uncovered key is refused, since a put on a `**` expression would hand
+adapters an unparseable key. A `home/cmd/` publish is wrapped in a
+[cmd envelope](#cmd-envelopes) at the declared
+[band](#priority-bands).
 
-Decisions and why:
+## Capabilities, grants and write policy
 
-- **Local-only access.** LAN, or WireGuard for mobile/remote devices;
-  network reachability is the credential. Which is why the BUS is the
-  port that matters most (added 2026-08-29, from a live deployment):
-  a cmd envelope's `priority` and `actor` are self-declared and validated
-  only for shape, so anything that can publish on 7447 can command every
-  entity, outbid the arbiter by claiming the top band, and forge state.
-  The starter therefore does not publish it — and note `127.0.0.1:7447`
-  is not a boundary either, since a container on `network_mode: host`
-  shares the host's loopback, which is how the exposure was found. No accounts, no login, no
-  TLS. Two consequences worth recording: the browser is not local even
-  when the dashboard is — a public website in a family browser can fire
-  requests at LAN addresses (DNS rebinding / CSRF), so the unit
-  validates `Host`, checks `Origin` on the WebSocket, and requires a
-  custom header on writes, from day one, precisely because there is no
-  other gate. And no PWA for now: browsers demand a secure context for
-  service workers even on private addresses, so it is plain http and a
-  bookmark. A private CA is a plausible later path (WireGuard
-  onboarding already touches every device once); nothing architectural
-  depends on the choice. Deferred.
-- **Family tier only, forever.** Anyone on the network is `family`. No
-  owner mode, no admin panel, no approval surface; the owner acts
-  through git and the CLI. This is structural safety, not policy:
-  nothing structural is reachable from the dashboard, so a stolen phone
-  inside the perimeter can nudge setpoints and flip lights, not rewire
-  the house. The dashboard never grows an owner surface.
-- **Mediated, not raw bus.** Browsers speaking Zenoh directly (the
-  remote-api plugin) was rejected: it punches past the grant table, the
-  arbiter, and the manifest-declared surface, and couples every client
-  to the bus protocol. Through a unit instead: commands leave at
-  `priority = manual`, so THE FAMILY ALWAYS WINS falls out of the
-  arbiter design, arbitrated entities included; parameter edits are
-  publishes to `home/config/{unit}/{param}` validated by the existing
-  live-parameter machinery; a freshly opened page snapshots from the
-  core's last-value state mirror (the dashboard is just another late
-  joiner) and streams deltas over the WebSocket after that; charts
-  query the recorder over `home/history/**`. Almost the entire backend
-  is existing plumbing.
-- **Manual band vs exclusivity.** The dashboard needs a blanket
-  `home/cmd/**` publish, which the two-writers-on-an-exclusive-entity
-  plan error was not designed for. Settled: exclusivity constrains the
-  automation band only; manual-band units sit above it by construction.
-  Voice satellites inherit this same answer.
-- **The dashboard honours its own grant table (settled 2026-09-07, #11).**
-  Grants resolve at plan time and nothing on the bus re-checks them, so
-  a blanket `home/cmd/**` publish granted for `light` could still carry a
-  `climate` setpoint if the unit chose to send one — and the dashboard
-  did, gating only on the capability's vocabulary. Settled: the dashboard
-  derives the capabilities it may command from its own manifest's
-  cmd-class publishes, refuses `/api/cmd` for any other, and marks each
-  entity `commandable` in the model so the page renders ungranted
-  controls inert. This is the unit keeping its declaration, not a
-  boundary: a unit that opens its own session can publish anything. If
-  the grant table is ever to constrain rather than describe, that is a
-  bus credential per unit, not a check in each adapter.
-- **Group actions are manual-edge fan-outs (settled 2026-07-26).**
-  "Darken the whole house" is family intent over a set of entities, so
-  the fan-out happens at the manual edge: `POST /api/lights/off` sends
-  one manual-band off-command per bound light through the dashboard's
-  existing blanket publish, surfaced on `Now` as the corrective action
-  on the lights-on deviation (the button exists exactly when there is
-  something to darken). Routing it through a commandable "scene" entity
-  was rejected: the owning automation would re-publish at the
-  automation band — demoting family intent below arbiter holds, THE
-  FAMILY ALWAYS WINS breaking precisely when the family pressed the
-  button — and would collide with exclusivity as a second
-  automation-band writer on every exclusive light. Voice inherits the
-  same answer: fast-path grammar → manual-band fan-out at the voice
-  edge.
-- **A command's stages are shown, not collapsed (settled 2026-09-14, #94).**
-  A tap used to do nothing visible until the device reported back — a
-  second or two on an MQTT heat pump, half a minute on a burner behind a
-  polling bridge — and the natural response was to tap again. Optimistic
-  painting was rejected: a command is a proposal, not a write, so
-  asserting the device took it is sometimes simply false (an
-  out-of-range setpoint returns `ok` and is then dropped by the adapter,
-  and the control would snap back from a value the house never held).
-  Instead the control goes **pending** from the tap and stops taking
-  taps, and the stage that ends the command resolves it: a readback
-  confirms, an arbiter `refuse` shows **held** by the winning band, an
-  adapter's `invalid-command` drop shows the adapter's own reason, and a
-  timeout says "no confirmation from the device" — a real outcome that
-  was previously indistinguishable from success. A refusal is
-  deliberately not worded as a failure: the command was well-formed and
-  lost to a higher band, and a retry would lose identically. The
-  envelope's `id` is what ties an event to the command it ended; matching
-  on key and value alone crosses wires exactly when an impatient user
-  taps twice. The wait is scaled per capability, because no readback
-  cadence exists on the wire and the capability is the only thing the
-  browser knows about a device's class. Range inputs are exempt from the
-  freeze — a slider already moves under the finger, and taking it away
-  mid-gesture is worse than the silence — but are still tracked, so a
-  refusal or a timeout still says so.
-  Revised 2026-10-07, from living with it. Three things were wrong.
-  The control never said what had been asked: pending showed the old
-  value, dimmed. The freeze made several steps impossible, and it
-  existed only because each step was computed from the readback, so an
-  unfrozen second tap would have repeated the first. And "any readback
-  confirms" was false for a bridge that republishes on every poll: the
-  next poll, still carrying the old value, cleared the control before
-  the device had moved. Now:
-  - *The request is shown as a request.* The value slot shows what was
-    asked, in the accent. A toggle shows where it was asked to go,
-    outlined dashed. A line under the control names the stage ("asked
-    22.5° · still 21.0°"), then how it ended, and stays a few seconds
-    for a confirmation, longer for anything else. The toast is only for
-    an outcome whose control has left the screen. This is not the
-    optimistic painting rejected above: nothing claims the house holds
-    the value.
-  - *The freeze is gone.* A stepper's taps build on the request in
-    flight and settle for 600 ms before one command goes out for where
-    they ended. A toggle tapped again asks to go back. Each new request
-    replaces the last, as before.
-  - *Confirmation is the asked value coming back.* The value the device
-    held before the first tap, or one asked on the way, is progress and
-    not an answer. Any other value means the device settled elsewhere
-    (it clamped or rounded): **adjusted**, said with both numbers. Two
-    refinements, both from review. Tap on, then off: a republished old
-    "off" is not an answer while the "on" may yet land, so it waits for
-    the device to move or for the timeout, after which a device that
-    reported "off" throughout is where it was asked to be. And
-    brightness compares at the control's own grain (a percent of the
-    0–254 scale), so a bulb that rounds by one step is not "adjusted".
-    A POST's reply finds its request by a sequence number, never by
-    value: on, off, on are three requests, and the first reply must not
-    claim the third.
-  - *Two things are known before anything answers.* `/api/cmd` reports
-    whether the command can reach its device: the owning unit holds its
-    liveliness token, and something subscribes where that unit listens
-    (the arbiter's forward key for an arbitrated entity, the command key
-    otherwise; a zenoh publisher's matching status). A command that
-    reaches nobody was dropped silently, and the page could only find
-    out by waiting out its timeout. That is now **unheard**, at once.
-    Liveliness comes first because a match on the command key alone
-    proves little: the recorder subscribes to every command and the
-    arbiter to every one it arbitrates. And while a command waits, the
-    line says when the owning unit is not running or the device reports
-    itself unavailable.
-  Not done, and why. A positive "delivered to the device" event from
-  adapters would need every adapter to emit it; it is worth having for
-  slow devices but is its own change. Readbacks stay uncorrelated for
-  now; the command id could ride a zenoh attachment on the state put,
-  which leaves the payload alone for every other consumer, but each
-  adapter must then decide which readback answers which command. Done
-  since: the wait is the adapter's to declare (`readback_s`, Aspect
-  descriptors); the per-capability table is the fallback.
-- **Purely generated from manifests; layout state exists nowhere.**
-  Grouping from the entity `room` field and `zones.toml`; entity
-  widgets derived from `capability` + `features` (a light with
-  brightness/color_temp renders toggle + slider + temp control, a bare
-  sensor renders value + sparkline); parameter controls derived from
-  constraint types (min/max → slider, after/before → time picker, enum
-  → segmented control). Every parameter is visible — an owner-level
-  tuning constant reads in the unit overlay against its manifest default
-  and counts as a deviation when off it — but only `editable_by =
-  "family"` parameters get a control, and `/api/param` is the write gate
-  (revised 2026-09-07, #10: hiding owner params made a house running off
-  its manifest indistinguishable from one running it). Names and locale from `[naming]` — dashboard quality is a
-  function of manifest hygiene, auditable by the agent, exactly like
-  voice. Health (`home/health/**`: unit status, circuit breakers) is
-  family-visible by design. If generated turns out bland,
-  the escape hatch is ordering/pinning hints as text in the house repo
-  — never browser-side customization, which is exactly the hidden UI
-  state the project exists to reject.
-- **A Python unit on the SDK**, like the other adapters, serving an
-  embedded static bundle: one small SPA (Preact/Lit-scale, no
-  build-time empire), fine-grained DOM updates off the WebSocket. Live
-  state push is the dashboard's whole job, so client-side reactivity is
-  unavoidable; server-rendered-with-sprinkles was rejected on those
-  grounds.
+Authority is declared in text and resolved at plan time. An entity
+file says what the entity is (its capability) and how commands toward
+it are governed (its write policy); a manifest says what a unit wants
+to publish. The plan resolves every publish against the entities into
+the grant table: the permission record the owner reviews and the
+dependency graph the apply walk follows.
 
-- **The page and its assets are one artifact (added 2026-09-24, found on
-  a real upgrade).** `dashboard.html` and `assets/dashboard-logic.js` are
-  written against each other and change together at a release. aiohttp
-  serves both with `ETag` and `Last-Modified` and no `Cache-Control`,
-  which leaves the browser on heuristic freshness — commonly a tenth of
-  the file's age — so a file untouched for a fortnight earns roughly a day
-  in which it is never revalidated. Upgrade inside that window and the
-  browser pairs the new page with the cached old logic: views render
-  empty, taps do nothing, and the backend is healthy throughout, so the
-  symptom points at the release rather than at the cache. It gets likelier
-  the longer a release has been stable, and lands hardest on a phone,
-  where there is no console and no easy hard reload. Both are now served
-  `Cache-Control: no-cache` — cache it, but revalidate before use — which
-  the ETag makes a 304 and which removes the heuristic entirely. Versioned
-  asset URLs cached hard were rejected: the version would have to reach
-  three `src` attributes in a file this design keeps hand-editable, by a
-  serve-time rewrite or by hand at each release, and a hand-edited version
-  is exactly the drift `sync_starter.sh` exists to prevent. `tiles.pmtiles`
-  is deliberately left alone: it is an operator-supplied region extract
-  fetched by ranges, a stale map is not a broken page, and revalidating
-  every range request is a real cost over a tunnel.
+### The capability vocabulary
 
-Settled after wireframe review (2026-07-15, sheets in
-`docs/wireframes/` — the hybrid sheet is the direction; A and B are
-the exploration that produced it):
+A capability says what kind of thing an entity is. The list is fixed in
+the core (`CAPABILITIES` in `src/manifest.rs`): `binary_sensor`,
+`burner`, `camera`, `climate`, `cover`, `light`, `lock`, `notifier`,
+`person`, `presence`, `router`, `sensor`, `switch`; an unknown one is
+`unknown-capability`. Each has a row in `VOCABULARY`, kept in step by a
+test and rendered into [`docs/manifest.md`](manifest.md):
 
-- **The detail overlay can take the whole window** (added
-  2026-09-21). The overlay is a 440px rail, which is right on a phone
-  and right beside a view, and wrong when the subject is a dense plot.
-  A control in its header widens it to the browser window and the
-  choice is remembered per viewer, in `localStorage` — it is a reading
-  preference, not house state, so it belongs to the browser rather than
-  the bus, and nobody else's device should learn it. The chart gets
-  TALLER as well as wider: full window exists to separate lines, and a
-  plot merely stretched sideways is no easier to read. The height is
-  baked into the chart's viewBox when it is built, so the toggle
-  re-renders rather than restyling.
-  - A consequence worth recording, because it will catch the next
-    person: the chart SVG is stretched to its wrapper with
-    `preserveAspectRatio="none"`, so anything meant to be round cannot
-    live inside it. A circle in viewBox units renders as an ellipse —
-    barely at the rail's 2:1, unmissably at the full-window chart's
-    6:1 — so the value dots are positioned in the wrapper instead, by
-    percentage.
-- **Shape: four generated views** — `Now`, `Setpoints`, `Rooms`,
-  `Health`, with health also summarized in the nav rail. `Setpoints`
-  is every family-editable parameter in the house as one flat list:
-  the family's levers. `Rooms` is the spatial room-card grid. **`Now`
-  shows the error signal, not an inventory**: people, a few key
-  signals with today's range, and one deviations feed drawn from four
-  sources — supervision events, arbiter holds, notable state
-  (lights on, doors open), and setpoints differing from their manifest
-  default. A house in equilibrium renders a nearly empty page,
-  deliberately. What counts as "notable state" is per-capability
-  vocabulary in the public schema, never house configuration.
-  Revised 2026-09-09, from living with it: the MVP's "key signals"
-  were the first six numeric sensor aspects in model order, and its
-  "People" tile listed motion sensors — an inventory by another name,
-  and it read as random because nothing said what was key. Now `Now`
-  pins nothing by default: a reading is a signal tile only when its
-  entity file says `[dashboard] pin = true` — the ordering/pinning
-  escape hatch below, used for the first time — and the People tile is
-  the `person` entities, home or away from a `presence` aspect on the
-  person (new vocabulary; published by whichever adapter knows, a
-  geofence transition or a fused sighting), falling back to the age of
-  the last fix. Motion sensors are rooms' business. A pinned entity's
-  tiles are its sensor-card rows (2026-09-10, after #56): the
-  descriptor's readings in field order, never its diagnostics or a
-  control — a pinned thermometer is a temperature and a humidity tile,
-  not a link-quality one. The page's body is
-  the deviations feed; a house in equilibrium with no one pinned is
-  people plus "In equilibrium", which is what this bullet promised.
-  Superseded 2026-09-17 by **Views are text** below: the four views
-  are what the dashboard renders without `dashboard.toml`, `pin` is
-  retired in favour of a `tile` widget, and `Health` moved from the nav
-  to the rail's fixed chrome.
-- **Views are text (settled 2026-09-17).** Living with the generated
-  views raised four things at once: everything non-spatial (`room =
-  "global"`: fused sensors, notifiers) piled into one card; automations
-  had no presence beyond a param row and a health card; there was no way
-  to say which readings and rooms belong together; and the one layout
-  hint that existed, `pin`, was a boolean on an entity file, which does
-  not compose. Settled: `dashboard.toml` at the house root, beside
-  `zones.toml`, lists the views — each a nav entry with an ordered list
-  of widgets, a widget placing something the house already has (`tile`,
-  `chart`, `entity`, `room`, `unit`, `params`, `people`, `deviations`,
-  `map`), or a generated view kept as is (`kind = "rooms"`; Health is
-  not one, and `health`/`notshown` are refused as view names). The core
-  parses and validates it at `plan` time like `zones.toml` — every
-  reference must resolve, the widget vocabulary is closed, a view is a
-  kind or widgets and never both — and hashes it into the house-wide
-  unit's inputs, so a view edit is a visible change that restarts the
-  dashboard. This is the ordering/pinning escape hatch above used in
-  full, and the "vocabulary as schema" pattern from capabilities and
-  descriptors: the core validates what the page renders and never
-  renders it. Three consequences, each argued:
-  - *The file replaces the nav; it does not augment it.* With the file
-    present the generated views exist only where it names them. So that
-    nothing becomes unreachable, two things are fixed chrome under the
-    nav, never views and never in the file: **Health**, and **Not
-    shown** — the complement of every placement (an entity placed by a
-    widget naming it, its room, a unit that publishes or drives it, or
-    `people` for a person; a param by `params`, `unit` or a generated
-    Setpoints), rendered as room cards so it is usable, not merely a
-    list, with `global` shown as "House". Without the file the
-    generated views stand in unchanged. The alternative — custom views
-    in front of the generated ones — was rejected as never letting a
-    house say "these three views are the dashboard".
-    Amended 2026-10-07: on a phone the chrome left the bottom bar. Two
-    fixed tabs out of about five meant a house could name three views
-    before the bar scrolled. The bar now holds only the file's views,
-    and the chrome sits behind one status button in the top bar: the
-    worst unit's glyph and "n/m" running, opening a sheet with Health,
-    Not shown and the about lines. The rail is unchanged, apart from
-    those lines under it (the core's release and commit, the house
-    commit, a dashboard page from another release when it is one) and
-    becoming sticky so they stay in sight.
-  - *A view shows its text (added 2026-10-07).* Each view the nav names
-    has a **Text** button that opens the `[[view]]` block making it,
-    rendered from the parsed view `/api/model` carries, in the file's
-    own style. It is read-only: the dashboard never writes the house.
-    What it gives is a name for what someone points at, in the file's
-    own words, to say to a person or to an agent in the house repo.
-    `docs/widgets.md` is the same vocabulary with a picture per widget,
-    drawn by the real page from the browser fixtures
-    (`scripts/widget_gallery.py`); a test pins a section per kind the
-    parser accepts.
-  - *The unit card is a pure function of the manifest and the grant
-    table, and adapters still declare nothing.* A `unit` widget draws
-    the unit's family setpoints, the entities it publishes
-    (`[entities]`), the entities it drives (its cmd-class rows of
-    `home/meta/system/grants`, read once at start — a grant change is a
-    manifest change, which restarts a house-wide unit anyway) and the
-    entities it reads (each `[bus.subscribes]` state expression, its
-    room slot expanded through the zones as the core expands it,
-    intersected with the concrete state keys on the bus — not with
-    `{room}/{name}/**`, which would make every entity in a room a source
-    of a `*/presence` subscription). The section labels are the page's
-    words, never schema: there is no `[dashboard] drives = […]`, and if
-    the card is wrong the manifest is wrong. Adapter- or
-    automation-declared widgets were reconsidered and rejected again:
-    the pain was placement, and placement is what the file solves.
-    Revised 2026-09-18, from living with it: **Drives and From are
-    fields, not entities, and start collapsed.** Drawn as whole entities
-    the two sections were the card's bulk — a driven light dragged its
-    full row in — and an automation that commands a lamp and subscribes
-    to its readback listed the same entity in both, which reads as a
-    contradiction and is really two different fields. A relation is per
-    aspect, so each row is now one `{entity, aspect}` with its current
-    value: Drives is each granted entity's commandable aspects (the
-    capability's vocabulary plus whatever its descriptor declares a
-    command for) whose cmd key the grant's own resolved keys reach —
-    the keys are already part of the grant's identity, so `.../on` and
-    `.../**` read as different rows — and From is the aspect of each
-    concrete state key the subscription intersects, which it had to
-    compute anyway. An entity whose commandable aspects are not known
-    yet keeps a bare row rather than vanishing. The rows are read-only
-    and tap through to the entity: the card states the wiring, the
-    overlay is where one acts. Both sections sit behind one line
-    ("drives 2 · reads 4"), because a unit card is read for its
-    setpoints and what it publishes; its wiring is what one goes
-    looking for.
-  - *Placement is `dashboard.toml`'s alone*: an entity file carries no
-    `[dashboard]` table, and a reading is placed with a `tile` widget.
-    One way to place a reading.
-- **A reader's choices about a chart belong to the overlay, not to its
-  DOM** (added 2026-09-24, from living with it). Live state re-renders the
-  detail panel — a forecast re-issue is enough — which replaces its nodes
-  and every class on them. The braid's pin was already held in overlay
-  state for that reason; the source legend's was not, so tapping a
-  contributor to light its line held only until the next delta, after
-  which the highlight was re-derived from wherever the pointer happened to
-  be: a pin that silently dropped, or moved to another source, while the
-  reader was still reading it. Both pins now live in the overlay and are
-  re-applied on each render. The general rule, since this is the second
-  time: anything a reader chose survives a re-render only if it is held
-  outside the markup.
-- **A hold is a deviation when it displaced somebody (settled
-  2026-09-25, #179).** The arbiter takes a lease on every forwarded
-  command, not only on a preemption, so most holds are simply the house
-  working: listing them all would put a row on `Now` for half an hour
-  every time anyone touches a lock. What makes one worth saying out loud
-  is that it stands above a band something is granted to drive that aspect
-  at — which the grant table answers, resolved at plan time, per aspect
-  and per band. Two readings were rejected on the way:
-  - *Waiting for a refusal* — surfacing a hold once it has actually turned
-    an automation away. It was the first proposal and it is wrong: the row
-    would then appear according to how often the displaced automation
-    happens to publish, which is a fact about its author, not about the
-    house. Overriding a boost schedule is a takeover the moment it is
-    taken, even if the schedule would not have written again until
-    morning. What a hold has refused rides along as detail instead.
-  - *Listing possession* — every hold, contested or not. A family locking
-    a door nothing automates has displaced nobody and is not an error
-    signal. Possession is still shown, on the control itself, marked
-    **held** in the same vocabulary a refused command already uses (#94):
-    that is where a person stands when they wonder why the house is not
-    driving something.
-  The rule needs no new vocabulary and no judgement in the page: `driven`
-  is the lowest band anything may command an aspect at, computed from the
-  grant table the dashboard already reads for its unit cards, and the
-  comparison is a band index.
-- **The house says how coarse a control is: `[[control]]` (settled
-  2026-09-24).** The dashboard derives a slider's grain from its range — a
-  twentieth, rounded — which is a guess, and the guess is wrong wherever
-  the house knows the useful increment (brightness in fives, a cooldown in
-  whole minutes). A derived grain also leaves the accidental-drag problem
-  above at its worst: a mis-swipe lands on an arbitrary number rather than
-  one notch out. So `dashboard.toml` grows a second kind of entry beside
-  its views — `[[control]]`, naming `entity` + `aspect` or `unit` +
-  `param`, and a positive `step` — validated at plan time like every other
-  reference in the file (`dashboard-control-target`,
-  `dashboard-control-step`, `dashboard-unknown-param`). Three things this
-  settles, each argued:
-  - *It is keyed by what is controlled, never by the widget that places
-    it.* The same control is drawn on a room card, on a view and in the
-    detail overlay; a step carried by a widget would make one control
-    coarse in one place and fine in another, and would say nothing at all
-    about the overlay, which is reached by tapping rather than by
-    placement. The page therefore reads it through the aspect plan, where
-    no caller can forget it.
-  - *This is not the per-widget layout hint that was rejected above.*
-    `span` and a column count were refused because where a card sits is
-    the dashboard's own business. A step is not where a control sits but
-    what it does, and the house genuinely knows things about its own
-    devices that the descriptor's range cannot express.
-  - *A declared step governs the drag and the nudge together.* A slider
-    quantised to 5 beside ± buttons moving by 5.7 reads as a bug. Nothing
-    else about the control changes: the descriptor still decides whether
-    the control is a slider, a dial or a stepper, and `[[control]]` cannot
-    turn one into another — vocabulary stays the adapter's, rendering
-    stays the dashboard's.
-- **A family parameter prints its manifest default** (added 2026-09-24).
-  A slider moved by accident has nothing to undo it with, and the honest
-  cheap answer is not an undo but the number it came from: the caption
-  under every param control now reads `0–60 · default 5`. An entity aspect
-  has no default to print and gets nothing — an undo of the last command
-  is the thing that would answer it there, and it is deliberately not
-  built on spec.
-- **A range input must not steal a scroll** (added 2026-09-24). A slider
-  is the one control a finger can operate by accident: a page scroll that
-  begins on the thumb drags it, which on a phone commands the device. The
-  inputs take `touch-action: pan-y`, giving vertical panning back to the
-  page and keeping horizontal drags for the control — the same trade the
-  scrubbable chart makes. This is containment rather than a cure: the
-  value can still be changed in one gesture with nothing to undo it, which
-  is the open half of the problem.
-- **Widgets compose: the `group` widget (settled 2026-09-18).** A view
-  was a flat list of cards, so "the dial, and the two traces that explain
-  it" could only be three cards the eye had to associate. A `group`
-  widget takes an optional `label` and a nested `widgets` list, and draws
-  one card over its members; a member renders exactly as it would on the
-  view itself, losing only its own card chrome, so the group adds no
-  rendering and no widget needs a group-aware form. Placement sees
-  through it — a group places what its members place, and is never a
-  destination itself. **One level deep** (`dashboard-nested-group`):
-  nesting groups would make the file a layout language, and layout is
-  what the dashboard owns. Per-widget layout hints (`span`, a column
-  count) were rejected for the same reason: a group says what belongs
-  together, not how wide it is.
-- **Richer controls (2026-09-17).** Still the page's mapping from
-  descriptor vocabulary, no vocabulary added: a `temperature` command
-  with a step is a **dial** — the target on a 240° arc between the
-  command's bounds, the entity's first temperature reading beneath it as
-  "now", ± at the arc's ends — in the overlay and as a `dial` widget,
-  and a stepper on a room card, where there is no room; the climate
-  capability's own `setpoint` gets the same dial. An enum past four
-  values is a `<select>` instead of a segmented row (segments were
-  wrapping into two ragged lines on the pump's mode list). A slider
-  carries a coarse ± pair, a twentieth of its range rounded to something
-  a person would say (5 on a percent), because a range input is the one
-  control a finger cannot land precisely — the light's brightness gets
-  the same pair. Every new control keeps the compact stepper's action
-  attributes, so the pending/held/timeout stages (#94) apply to it
-  unchanged; the range input alone stays exempt from the freeze.
-- **English first.** `[naming]` already carries `en` and `sv`; the
-  dashboard renders `en` now, and locale becomes a per-browser choice
-  later. No architecture in it.
-- **The dashboard owns rendering; adapters never do.** Same shape as
-  the discovery settlement: adapters speak homeostat vocabulary
-  (capability, features, aspects, constraints); the mapping from that
-  vocabulary to widgets lives in the dashboard alone. Per-adapter UI
-  (the Home Assistant path) was rejected — widget drift, and the
-  dashboard stops being a pure function of the house's text. A device
-  class needing a new widget means extending the versioned schema
-  vocabulary plus one dashboard widget: public repo, reviewed, every
-  adapter benefits. Unknown aspects render generically (read-only
-  value, history if recorded) rather than becoming invisible.
-- **Map and person entities.** OwnTracks (or similar) is just another
-  adapter, binding `person` entities that publish location aspects.
-  The map is the first widget that is a view over every entity with a
-  location aspect rather than a per-entity row; it appears on `Now`
-  iff any exist. The key-space reservation this forces: persons move,
-  so the room-keyed space gains one reserved pseudo-room — person
-  entity files set `room = "person"` and their state lives at
-  `home/state/person/{entity}/…`; `person` can never be a physical
-  room or appear in a zone. Which physical room a person is in, when
-  derivable, is state, never structure. Map tiles are self-hosted (a
-  PMTiles region extract served by the dashboard unit — no tile
-  server): fetching public tile CDNs would leak family positions as
-  tile coordinates, exactly what local-only exists to prevent.
-  Settled 2026-07-16: location is scalar aspects (`lat`, `lon`,
-  `accuracy`, `battery`, and `fixed_at`, the fix's epoch timestamp
-  from OwnTracks `tst`), not one composite object — the recorder
-  stores scalars only, so per-aspect keys make position history free;
-  atomicity of a fix was judged worth less than trails. OwnTracks
-  reaches the house over MQTT via the existing broker (the
-  zigbee2mqtt pattern), not HTTP mode — retained messages give
-  last-known position across restarts and no second ingress surface.
-  The map library (Leaflet + protomaps-leaflet) is vendored into the
-  repo and served by the dashboard unit at `/assets/` — dashboard.html
-  stays a hand-editable file and runtime stays fetch-free, but the
-  strict one-file property is traded away. The same trade later
-  (2026-07-31) extracted the page's pure decision logic (the Now-view
-  deviation rules, WebSocket store application, presence-key parsing)
-  into `assets/dashboard-logic.js` so `node --test tests/js` — Node's
-  built-in runner, zero packages — can pin it; the DOM wiring stays in
-  the page.
-  - **Amended 2026-09-25 (#181): the wiring is no longer untested, and
-    the line moved.** "Untested by design" held while the page was
-    wiring; it is now 3,700 lines and 150 functions, and every rendering
-    bug this project has had was found by a person opening a browser —
-    a pin that died on a re-render, `&MIDDOT;` in an upper-cased label, a
-    spent forecast blanking a caption, three key rebuilds that dropped a
-    segment. `tests/browser` runs the real page in a real browser against
-    canned fixtures, asserting through the DOM and the network only.
-    Three things were settled with it, each because the obvious version
-    is worse:
-    - *It is not sold as prediction.* Asked honestly whether a suite
-      written before those four bugs would have contained the assertion
-      for each, the answer is one, optimistically two. What it carries is
-      lock-in of rules already learned — "what a reader chose survives a
-      re-render only if it is held outside the markup" has five instances
-      and one shipped broken because nobody re-checked the others — and a
-      broad net (no page errors, every view renders, every widget kind
-      draws) whose odds against an unnamed bug beat any hand-picked
-      assertion. **Discovery stays manual**: browser-verify the change.
-    - *The house behind the page is canned, and the fixtures are watched.*
-      A supervisor per test would be slow and would make the states worth
-      testing — a spent forecast, a hold at each band, a contributor that
-      dropped out — cost minutes each. The price is drift, paid for by one
-      canary in `tests/dashboard.rs` that compares a real `/api/model`'s
-      field names against the fixture's.
-    - *Decisions keep moving out.* `chartGeometry` went to the logic
-      module with the suite in place to catch the move, and the rule for
-      what follows it is: arithmetic and selection move, markup stays.
-      Arithmetic asserted on numbers is worth more than the same
-      arithmetic read back out of a DOM.
+- **Base aspect**: the aspect commands target and the widget acts on
+  (`on` for a light, `locked`, a climate's `setpoint`). A capability
+  without one takes no commands, and its entities need no write mode.
+- **Features and reserved aspects**: optional aspects an entity file
+  may declare (`brightness`) and normalized readings the vocabulary
+  names (`indoor_temperature` on `climate`).
+- **Notable**: the reading that is a deviation on the dashboard's `Now`
+  (a light on, a lock unlocked, a router's `wan = false`).
 
-## ESPHome adapter (settled 2026-07-16)
+Every capability also has `available` ([Availability](#availability))
+and `{aspect}_valid`, a boolean beside a reading the device itself may
+stop trusting. Less obvious rows: `camera` has `motion`, media never
+on the bus ([Cameras](#cameras)); `person` has `presence`, `lat`, `lon`,
+`accuracy`, `battery`, `fixed_at` ([Map and people](#map-and-people));
+`presence` takes `occupancy` or `presence`, as the protocol says;
+`notifier` is in [Notifications](#notifications); `cover` is reserved.
 
-- **Native API, not MQTT mode**: TCP 6053 via aioesphomeapi — no broker
-  dependency, matches encryption-default device configs, and the same
-  dialect serves the voice satellites later. The adapter is asyncio (the
-  dashboard's precedent), one connection per bound device with the
-  library's reconnect logic.
-- **Entity binding**: `id = "{device}/{object_id}"` — the OwnTracks
-  two-segment shape. The device half resolves via mDNS
-  (`{device}.local`) by default.
-- **Credentials**: `HOMEOSTAT_ESPHOME_DEVICES` points at a TOML file
-  outside the repo carrying each device's Noise PSK and an optional
-  host override; a device without an entry is assumed plaintext.
-  Device addresses and keys never enter the repo (the boundary test).
-- **v1 vocabulary, grown by need**: switch, light (brightness /
-  color_temp features), sensor, binary_sensor — motion/occupancy device
-  classes normalize to presence, the z2m rule (adapter-native
-  vocabulary does not leak onto the bus). Unmapped types land in
-  discovery carrying their raw type: visible, not translated.
-- **Discovery**: the adapter connects only to bound devices; an mDNS
-  browse of `_esphomelib._tcp` is best-effort input to the
-  home/discovery/{unit} feed (every seen device, bound or not, with a
-  suggested stanza), never a prerequisite for the bound connections.
-- **Commands**: cmd envelopes exactly like z2m; an arbitrated ESPHome
-  entity gets the arbiter-output subscription by the same plan-time
-  expansion rule. Nothing new.
+**Why a fixed vocabulary.** Adapters speak homeostat vocabulary, never
+their dialect's, so an automation, a widget, a deviation rule and a
+grant written against `light` work for every adapter that binds a
+light. Aspects outside the vocabulary pass through under their native
+names, and an [aspect descriptor](#aspect-descriptors) labels them.
 
-## IVT490 heat-pump adapter (settled 2026-07-18)
+**How it grows.** By need: *the inputs an automation or an interlock
+needs are vocabulary; thresholds are configuration.* A proposal built
+against one case (a `mode` capability, a `heat_source` spanning a
+burner and a heat pump) waits for a second.
 
-- **The bespoke firmware stays.** The IVT490 is interfaced by the owner's
-  own ESP8266 board (serial read of the control board, GT2 digipot
-  emulation, EXT_IN relay — github.com/freol35241/IVT490-interface-esp8266),
-  speaking its own MQTT dialect. Unlike ESPurna, there is no drop-in
-  replacement and the logic is house-specific hardware knowledge: the
-  dialect boundary settlement says the adapter absorbs it as-is.
-- **Climate vocabulary**: the capability's family-facing base aspect is
-  `setpoint` (indoor target, °C) — the climate analogue of `on`/`locked`.
-  The adapter also normalizes the current readings it can derive to
-  `indoor_temperature` and `feed_temperature`; every other state
-  parameter passes through under its firmware name. Expert knobs
-  (feed_temperature_target, outdoor_temperature_offset, operating_mode)
-  are commandable aspects under their own names — dialect-specific, not
-  schema vocabulary. The adapter tracks the firmware actually deployed:
-  the GT3_2_boiler_emulation branch (2026-07-18), whose controller adds
-  operating_mode (1 BAU / 2 BLOCK / 3 BOOST, the GT3_2 boiler-sensor
-  emulation) and has no vacation command — vacation is a read-only
-  state field there.
-- **The heat pump is an arbitrated entity** — it is the second name in
-  the arbitrated-mode sentence. All commands ride the arbiter; the
-  family's manual setpoint wins.
-- **Bounds live in the adapter**, as constants (setpoint 10–30 °C, feed
-  target 20–60 °C, outdoor offset ±50 K): device physics is dialect
-  knowledge, not house config. Out-of-range commands DROP with an
-  invalid-command health event, never silently clamp — same ethos as
-  every other adapter. The firmware itself has no clamps: it stores each
-  control value verbatim and the outdoor-NTC emulator saturates at the
-  ends of its digipot, so the adapter's bounds are the only refusal in
-  the chain and must be wide enough for what the firmware can act on.
-  (The offset was ±10 K through 0.12.0, a figure with no source; a
-  house's flow routinely wrote +13…+21 and lost every such write.)
-- **Dashboard v1**: a minimal climate widget — setpoint with ±0.5 °C
-  steppers at the manual band, current temperature readout when the
-  normalized aspects are present; expert knobs stay read-only in the
-  entity detail overlay with history. Superseded in the overlay
-  (2026-09-08) by the adapter's aspect descriptor — see "Aspect
-  descriptors": labelled, grouped readings, the owner knobs (mode
-  included) badged.
-- **MQTT boilerplate graduates to the SDK** (`homeostat.mqtt`): this is
-  the third paho adapter, the agreed rule-of-three trigger. A helper
-  function, not a transport layer — adapters still own their
-  connections.
-- Operational note: any Node-RED flow WRITING to the interface's
-  controller/set topics must be disabled when this adapter goes live —
-  one master per device. Read-only flows can coexist.
+**Presence and connectivity are house state; network metrics are
+observability**, for the monitoring tooling beside homeostat, so there
+is no `vpn` capability. Fusing sightings into "someone is home" is an
+automation ([Virtual sensors](#virtual-sensors)). "I cannot see" is
+never "nobody is home": an adapter that loses part of its view holds
+those aspects stale and says so in a health event.
 
-## Aspect descriptors (settled 2026-09-08)
+### Priority bands
 
-The dashboard renders parameters well and aspects badly, for one reason:
-a param arrives with a type, a constraint and an `editable_by`, and the
-page has a small engine turning that into a slider, a segmented control
-or a read-only value with a tier badge; an aspect arrives with a name
-and a value. The heat pump made this concrete — thirty-odd rows of raw
-firmware names in the detail overlay, and no way to reach the expert
-knobs the adapter takes commands for. A hand-built IVT490 panel was
-rejected on the settled rule that the dashboard owns rendering and
-adapters never do. The gap is metadata, so the fix is metadata.
+Every cmd publish leaves at a band declared per publish in the manifest
+and stamped by the SDK. Lowest to highest: `automation`, `agent`,
+`family`, and `manual` (the dashboard and voice). No unit publishes at
+`agent` or `family` today. `plan` reads a cmd publish with no
+`priority` as `automation`, but the SDK refuses to send one
+([Open questions](#open-questions)).
 
-- **An adapter may describe an entity's aspects**, in the same
-  vocabulary the schema already uses for params: per entity, a
-  `{schema, groups, fields}` document where each field carries `label`,
-  `kind` (`temperature`, `temperature_delta`, `percent`, `number`,
-  `boolean`, `enum` with `values: [{value, label}]`), `group`, an
-  optional `valid` naming the boolean aspect that marks the value
-  stale, an optional `notable` flag, and — for aspects the adapter takes
-  commands on — `command: {type, constraint, step?, editable_by}`, the
-  ParamSpec fields verbatim. The firmware names never become schema;
-  they get labels.
-  Added 2026-10-07: `readback_s`, the longest the device takes to report
-  a command back, on a command (`command.readback_s`) or for the whole
-  entity (top level, beside `fields`, so the base vocabulary's commands
-  that have no field are covered too). The dashboard waits that long
-  before saying "no answer"; without it, its per-capability guess. The
-  adapter is the one that knows: a bridge's poll interval, a firmware's
-  publish cadence. The guess was wrong in both directions. A heat pump
-  on a 10 s publish cycle was judged on 15 s, one late publish from a
-  false failure. A burner bridge polling every 30 s sat inside a 60 s
-  guess with no reason behind the figure.
-- **It rides the discovery record.** The descriptor is the `aspects`
-  member of the entity's record at `home/discovery/{unit}`. Considered
-  and rejected: a key under `home/meta/` (core-owned: the supervisor
-  serves that whole space to late joiners, so a unit publishing there is
-  invisible to a fresh reader) and a new class (a second self-description
-  document per adapter, with its own key shape, for the same purpose
-  discovery already serves — the adapter describing its devices in
-  homeostat vocabulary). Discovery is mirrored, declared, and already
-  per-entity; the dashboard lifts descriptors out of it and forwards
-  only those to browsers. Nothing in core changes.
-- **The dashboard still owns every widget.** It maps descriptor
-  vocabulary onto the param-control shapes it has (float with a step →
-  stepper, other numbers → slider, enum → segmented control, owner tier
-  → value with badge) and groups rows as the descriptor says, with every
-  undescribed aspect demoted to a collapsed diagnostics group rather
-  than hidden. An undescribed entity renders exactly as before. The
-  mapping is pure and pinned by `node --test tests/js`.
-- **Commands widen by the same rule that gates params.** `/api/cmd`
-  admits an aspect the descriptor declares a family-editable command
-  for, checked against the declared constraint — a courtesy before the
-  bus; the adapter's own bounds remain the enforcement, and the grant
-  table (the capability, from the dashboard's own manifest) is checked
-  first, unchanged. Owner-tier commands read in the overlay and are
-  written only through the bus. For the heat pump: the indoor target is
-  family intent; feed target, curve offset and the GT3_2 emulation's
-  mode are owner tuning — the mode is driven by an automation at the
-  reporting house, and a knob an automation owns is not a family lever.
-  Labels keep the firmware's sensor code, "outdoor (GT2)", so the page
-  and the pump's manual name the same thing.
-- **`notable` is a deviation source.** A described boolean marked
-  notable that reads true (the pump's alarm flag) lands on `Now` as an
-  entity deviation — the adapter declaring vocabulary, still never house
-  configuration.
-- **The room card follows the descriptor too (2026-09-08, #32).** A
-  described entity's card row is name plus the first family control on
-  one line, up to two headline readings under it, the arbitrated badge
-  on the readings line. Headline is a convention, not vocabulary: the
-  first two control-less rows of the first group that has any, so the
-  adapter's own field order decides. A `headline` flag was considered
-  and deferred until an adapter needs to say otherwise. Card labels
-  drop the trailing firmware code the overlay keeps. Strike one
-  (2026-09-09, #53): on a live house every z2m thermometer headlined
-  `battery`, because z2m lists it first and the generator promoted it
-  into readings without saying where — and on z2m before 1.34 no expose
-  carries a `category`, so `voltage` and `linkquality` were readings
-  too and diagnostics was always empty. Answered inside the convention,
-  not with the flag: a generator that bends the group by property name
-  (battery) bends the order by the same rule (battery last), and the
-  diagnostics newer z2m categorises are known by property when the
-  field is absent (linkquality; voltage in mV, since a plug's mains
-  voltage in V is a reading). The flag stays deferred: the strike was
-  a generator with one deliberate exception that forgot half of it, not
-  a case the adapter's order cannot express. A second generator needing
-  ordering logic beyond one demoted field is strike two. Strike one's
-  fix never reached the room card (2026-09-10, #56): `sensor` keeps its
-  bespoke sparkline widget, and that widget listed every numeric state
-  key in arrival order, descriptor unread — so the thermometers still
-  showed link quality beside temperature on Rooms, and had no tap that
-  opened the entity detail at all (each row leads to its aspect's
-  chart; only a deviation on `Now` reached the overlay). Settled the
-  same way as the climate card: a bespoke widget keeps its shape and
-  takes its row list from the descriptor — the numeric, control-less
-  rows outside diagnostics, in field order (`sensorCardPlan`), and a
-  multi-aspect sensor gets a head row naming the entity that opens the
-  detail. Routing sensors to the described card was the cheaper fix
-  and was rejected: two headline readings and no sparkline is a worse
-  thermometer than the widget already is. A single-aspect sensor is
-  unchanged, its overlay still one tap short; a head row on every fused
-  virtual sensor is a cost the gap does not yet justify.
-- **Reach.** Nothing here is heat-pump specific: any adapter can label
-  `battery` a percent and `linkquality` diagnostics. Grown by need, not
-  ahead of it. First growth (2026-09-09): the Zigbee2MQTT adapter
-  generates a descriptor per bound device from z2m's `exposes` — unit
-  picks the kind, category picks the group, a settable config expose
-  becomes an owner-tier command with z2m's own bounds, the alarm-shaped
-  binaries are notable — so no per-device label is ever hand-written.
-  It forced one vocabulary addition: a `number` may carry a `unit`
-  string (lqi, lux, hPa, W) the page shows after the value, because
-  kinds name formatting, not physics, and the long tail of units is the
-  protocol's to declare. The capability's own vocabulary (on, locked,
-  brightness, color_temp) is described as readings only; its controls
-  stay the dashboard's bespoke widget, never a descriptor command.
-  The same day, ESPHome (generated per entity from its EntityInfo:
-  unit → kind, the device's entity name → label, the alarm-shaped
-  device classes notable) and OpenWrt (a static one boolean per
-  capability with value labels, "up"/"down", "present"/"away" — the
-  whole of what it speaks). A boolean may carry `values` naming true
-  and false, the second and last vocabulary addition this round.
-  ONVIF and OwnTracks publish schema vocabulary only and describe
-  nothing. Locale (`{en, sv}` labels, the `[naming]` shape) is the
-  obvious next step and is deferred with the dashboard's English-first
-  settlement.
+THE FAMILY ALWAYS WINS OVER AUTOMATIONS. Arbitration orders commands by
+band, and the manual band is exempt from exclusive-write counting. An
+automation declaring `manual` plans with a warning.
 
-### Device feeds: an input wired to one source (settled 2026-09-08, #9)
+**No band laundering.** A unit that republishes a command re-stamps it
+with its own band, so a "scene" automation relaying a family button
+press would demote family intent below any arbiter hold. Group actions
+fan out at the manual edge instead, and house modes are latches that
+consumers read, never relays
+([Commandable virtual entities](#commandable-virtual-entities)).
 
-The firmware's fifth set topic, `controller/set/indoor_temperature_actual`,
-was reserved "for a future automation" with no plan behind the reservation.
-#9 arrived with that automation built and verified and nowhere to deliver
-to. Settling it also reframed the offset: at the reporting house
-`outdoor_temperature_offset` is likewise written continuously by an
-automation, so "feedback versus command" is not a property of the value.
+### Write modes
 
-- **What a feed is.** A command is discrete intent that may be contested:
-  it rides the arbiter, has a band, the family can override it. A feed is a
-  continuous signal with exactly one master, where the failure that
-  matters is staleness, not conflict. Which of a device's inputs are fed is
-  a per-house decision — the same input is a command in one house and a
-  feed in another — so the wiring lives in the entity file, beside the
-  other device-specific knowledge (the base topic).
-- **The reference is entity + aspect, not a bus key and not a unit.** The
-  house already has an identity layer between the two: entities, whose
-  aspects the bus keys derive from. A derived value becomes a virtual
-  entity precisely so it has that identity (recorder, dashboard,
-  `read_state`); the reporter's fusion already publishes to one. The
-  automation is the wrong granularity — a unit publishes several things,
-  and what is consumed is one signal. The core resolves the reference to
-  a key at plan time and prints it, exactly as it resolves grants.
-- **Shape.** The adapter declares which device inputs are feedable (for
-  ivt490: `indoor_temperature_actual`, `outdoor_temperature_offset`). The
-  entity file wires them:
+`[write_policy] mode` is `shared` (any granted writer; last write
+wins), `exclusive` (at most one unit granted onto it below the manual
+band, `exclusive-write-conflict`, counted per unit since authority is
+per process) or `arbitrated` ([Arbitrated mode](#arbitrated-mode)). A
+capability that takes commands must state it (`write-mode-required`),
+so a light or a lock never inherits a policy silently; elsewhere an
+absent mode reads as `shared` and governs nothing.
 
-  ```toml
-  [inputs]
-  indoor_temperature_actual = { entity = "indoor_temperature", aspect = "temperature" }
-  ```
+### The grant table
 
-  A wired input has one master by construction, so it stops being a
-  command aspect for that entity; an unwired offset stays a command, as
-  today. The plan validates that the source entity exists, that its owner
-  publishes the aspect where that is knowable (automation-owned entities
-  name their aspects literally in `[bus.publishes]`), and renders the
-  edge. The automation side needs nothing new.
-- **Staleness is the device's.** Each fed input carries the firmware's
-  own validity window (`{value, valid}`, #12): the adapter forwards while
-  the source is available and stops when it is not, and the device drops
-  the term and falls back to curve control on its own. No adapter-side
-  timeout; the honest signal is already on the bus as `{aspect}_valid`.
-- **A feed is a dependency edge the other way round.** Grants run
-  automation → device; a feed runs device → automation's entity. A
-  control loop that reads the pump's state and feeds a term back is
-  legitimately cyclic, and the apply walk tolerates it (ties by kind)
-  rather than refusing it.
-- **Rejected**: a fifth command aspect marked non-arbitrated and
-  non-family (mechanically enough, and a misdescription that would put
-  sensor feedback in the grant table next to setpoints); a new grant kind
-  (machinery for what an entity-file reference expresses); the adapter
-  subscribing a raw bus key (bypasses the identity layer the rest of the
-  design leans on).
+A grant is one publish resolved against the entities it reaches
+(`src/grants.rs`):
 
-Settled on the reporter's confirmation (2026-09-08, same thread), built
-in the same change:
+- **Writer rows** come from a non-adapter's `home/cmd/` publish, which
+  must name a capability (`publish-missing-capability`) and is granted
+  onto every entity of it that its key covers, with the band and each
+  entity's room, write mode and owner. One matching nothing is a
+  warning.
+- **Binding rows** come from a binding unit's `home/state/` or
+  `home/forecast/` publish over its own entities.
 
-- **Not retained, and cleared on loss.** The reporting house's Node-RED
-  writer published `indoor_temperature_actual` retained, so "stop
-  forwarding" would have stopped nothing: the broker keeps serving the
-  last value to the pump across a reconnect, and the firmware's validity
-  window becomes the only thing that ends a stale feed. A fed value is
-  therefore published NOT retained, and when the source's `available`
-  goes false the adapter clears the topic's retained slot once (an empty
-  retained publish — which this firmware's parse discards, so it is a
-  clear, not a zero) and reports `feed-source-lost`. Cutover note: clear
-  the topic when switching masters, or the old writer's retained value
-  outlives it.
-- **One subscriber per source (2026-09-09).** The adapter first subscribed
-  the value key and the `available` key separately; zenoh orders samples
-  within a subscriber, not across two, so `available = true` followed by
-  a value could be delivered value-first and the value silently dropped —
-  a CI-only failure until the ordering was understood. One subscriber on
-  the source entity's `home/state/{room}/{entity}/*` keeps both in
-  publish order, and a value dropped while the source is unavailable now
-  leaves one `feed-source-unavailable` drop per outage.
-- **No adapter-side refresh cadence, for now.** The adapter forwards each
-  source sample and nothing between samples; a transition-only source
-  plus a device validity window shorter than its quiet periods is a
-  house tuning question (publish on a cadence, or lengthen the window),
-  not adapter machinery. Revisit if the firmware turns out to need a
-  retained value after reboot.
-- **The adapter is the authority on input names.** The core validates the
-  reference (entity exists, an automation-owned source publishes the
-  aspect, the fed entity is a device); which inputs exist is dialect
-  knowledge, and an unknown one refuses to start, visibly.
-- **Source ownership is unrestricted.** Nothing in the reference needs to
-  know who owns the source; an adapter-owned aspect is as feedable as a
-  virtual sensor's. Only the *fed* side must be a device
-  (`virtual-entity-fed`).
-- **A per-house decision can cut through one automation.** At the
-  reporting house one computation writes both `outdoor_temperature_offset`
-  (a feed under this shape) and `operating_mode` (contestable, rightly
-  arbitrated), so half its output goes by feed and half by arbiter with
-  no guarantee they land together. Recorded, not mechanised: the two
-  halves genuinely have different governance, and coupling them would
-  push feed semantics into the arbiter. An automation that needs the
-  pair to move together holds the mode lease and feeds the offset
-  against it.
-- **Feeds are not walk-order edges.** They appear in the plan beside the
-  grant table and in the manifest reference; the apply walk still orders
-  by grants only, so the loop an automation closes through a device
-  never needs untangling.
+Adapters' cmd subscriptions form no rows: adapters embody entities
+rather than command them, and compromising one compromises exactly its
+bound entities, which is irreducible. Because every bound entity sits
+in its owner's binding row and keys are part of a row's identity,
+moving an entity, flipping its write mode, changing its capability,
+rebinding it, or widening a publish from `.../on` to `.../**` is a
+grant delta, which makes a plan [structural](#tiers).
 
-## Logs and the audit trail (settled 2026-07-18)
+**The table is the permission record.** `plan` prints it (whole
+offline, the delta against a live world), and the supervisor serves the
+applied table at `home/meta/system/grants`, where the dashboard reads
+which units drive which entities at which band.
 
-- **Unit output is captured, not inherited.** The supervisor pipes every
-  unit's stdout/stderr, re-emits each line onto its own corresponding
-  stream tagged `[{unit}]` — `docker logs` stays THE raw stream, now
-  attributable — and keeps the last 500 lines per unit in a ring buffer
-  served by a queryable at `home/meta/{unit}/log` (`?lines=N` caps the
-  tail), each entry `{ts_us, stream, line}`. Logs are operational
-  exhaust: bounded memory, gone on supervisor restart, never recorded —
-  the events channel is the durable trail, logs are for debugging.
-- **The events table gets a query surface.** The recorder's queryable
-  grows `home/history/events` (same selector conventions as the samples
-  path: `?key=<keyexpr>;from=..;to=..;limit=..`, key wildcards
-  included), replying `{ts, key, payload}` rows — health events,
-  preemptions, config writes, and cmd envelopes with their actors
-  become askable, not just written.
-- **Agent and family access ride the existing surfaces**: MCP gains
-  `read_logs` (unit, lines) and `read_events` (key/from/to/limit); the
-  dashboard's unit detail overlay gains the log tail through a
-  dashboard.py proxy endpoint, the /api/history pattern.
-- A unit still cannot set its own health status — `home/health/{unit}`
-  stays supervisor-owned; `ready()` and health events remain the unit's
-  two voices. Degradation is derived from those, never declared.
-- **A log sink was considered and rejected (2026-07-18).** The
-  supervisor's tagged stdout already is the standard export surface —
-  the 12-factor seam: the app emits an attributable line stream, the
-  platform sinks it. Durability, retention, and indexing are deployment
-  configuration (Docker logging drivers: json-file rotation, journald,
-  Loki), never house machinery — anything built here would be a worse
-  reimplementation of mature tooling, welded on. Deeper reason: "logs
-  are exhaust, events are the trail" is a design force, not just a
-  storage rule — if a line matters enough to query next week, that
-  pressure must push the unit to emit a structured health event, and a
-  durable, queryable log store inside homeostat would dissolve exactly
-  that pressure. The recorder records data; it never becomes a log
-  pipeline. (Mechanically it would also mean publishing every stdout
-  line onto the bus in the same traffic class as state and commands —
-  nothing good lives down that road.)
-- **The sanctioned extension: peripheral logs ride the adapters' own
-  stdout.** A device's or bridge's log stream (ESPHome's native-API log
-  subscription, zigbee2mqtt's bridge/logging topic) may be printed by
-  its adapter, one line per entry tagged with the device — the
-  supervisor then does the rest: `[{unit}]`-tagged docker logs, the
-  ring buffer, the dashboard tail, read_logs. One pipeline, no new
-  architecture. Gate at warning-and-up so a debug-chatty device cannot
-  drown a 500-line ring.
+**The table is the dependency graph.** An entity's owner runs before
+the units granted onto it ([apply walk](#the-apply-walk)). Owners can
+be automations (latches), so a cycle is possible, and it is refused
+(`grant-cycle`).
 
-## Cameras (settled 2026-07-19)
+**Enforcement is plan-time plus trust**, except that key expansion
+denies adapters a direct path to arbitrated entities. The hardening is
+a bus credential per unit, which the declarations already shape
+([Security model](#security-model)). Command payloads have no separate
+validation layer: adapters check type and bounds (`invalid-command`).
 
-The founding decision is a plane split, the camera analogue of "logs are
-exhaust, events are the trail": **pixels are the media plane, detections
-are data.** Everything in homeostat is small scalar JSON — the payload
-conventions, the recorder's schema, the last-value cache all assume it —
-and video is a different physical medium. The moment video bytes enter a
-homeostat process, the small core is gone.
+### Reserved classes
 
-- **Event plane (bus, recorded, automatable):** a camera is an entity
-  like any other — `capability = "camera"`, a room, an adapter binding —
-  publishing scalar aspects at `home/state/{room}/{camera}/…`. v1
-  vocabulary: `motion` (bool). Automations never see pixels; they see
-  `motion = true`, exactly as they see `occupancy` from a PIR. Motion
-  transitions land in the recorder as ordinary state — the event
-  timeline is history, the frames are not.
-- **Media plane (off-bus, never recorded):** live viewing rides RTSP →
-  **go2rtc**, run as a supervised `service` unit (a single static Go
-  binary — the process model fits it like a compiled Rust unit).
-  Restreaming is a pure remux, no transcoding; browsers never speak
-  RTSP, and the bus at most carries pointers, never frames. go2rtc
-  holds ONE upstream RTSP session per camera regardless of viewer
-  count — load-bearing here, since Tapo caps concurrent RTSP clients
-  at about two: viewers are free and `/stream2` stays open for a
-  future detector. Stream names equal entity ids.
-- **Browsers never speak go2rtc** — the Zenoh sentence, second verse.
-  go2rtc's API is unauthenticated and structurally capable: it adds
-  and removes streams at runtime, reads config back out (RTSP URLs
-  with credentials embedded), and its source types include `exec:` —
-  command execution. Exposing it to the LAN would hand every device
-  and every DNS-rebinding attack a surface far past "nudge setpoints",
-  recreating the raw-bus problem the dashboard exists to mediate. So
-  go2rtc binds its API to 127.0.0.1 and the dashboard mediates, with
-  the machinery it already has (Host validation, Origin-checked
-  WebSockets, the /api/history proxy pattern):
-  - `/api/camera/{entity}/live` — WebSocket, relayed byte-for-byte to
-    go2rtc's `api/ws?src={entity}`. Transport is **MSE/fMP4; WebRTC
-    is deliberately not v1**: ICE negotiates a direct peer connection
-    that structurally cannot ride the proxy, to buy sub-second
-    latency where MSE's ~0.5–1.5s is fine for glancing at a camera.
-    Revisit only if two-way talk ever matters.
-  - **No snapshot proxy, and no room-card poster** (amended 2026-09-20,
-    from a live deployment). The original design proxied go2rtc's
-    `frame.jpeg` for a poster on each camera's room card. go2rtc can
-    only produce a JPEG from an H.264 source by transcoding, which
-    shells out to `ffmpeg` — a binary the image deliberately does not
-    carry, because restreaming is a pure remux. So the proxy 502'd on
-    every call and the `<img>` rendered as a black rectangle,
-    indistinguishable from a dark room. Shipping a transcoder for a
-    thumbnail was rejected: it is ~100 MB and a second media path, for
-    a picture that is one tap away. The card carries the entity's name
-    and its motion badge — event-plane data, which is the part worth
-    reading at a glance — over a "tap to view" affordance. Live streams
-    still start only on tap, in the entity detail overlay — never N
-    always-on streams.
-  - Player: go2rtc's own `video-stream.js` web component, vendored
-    into `/assets/` (the Leaflet precedent), pointed at the proxy URL.
-  Video bytes do transit the dashboard unit — as an opaque socket
-  relay. The plane split's force is that the bus, recorder, and core
-  stay scalar; the dashboard is the declared browser edge of the
-  media plane, and relaying is not processing.
-- **First foreign binary as a unit — the shim owns the token.** The
-  unit contract demands a liveliness token a Go binary cannot
-  declare. `units/go2rtc.py` is a thin SDK shim: it reads
-  `HOMEOSTAT_CAMERAS`, renders the go2rtc config (API on 127.0.0.1,
-  one stream per camera, `rtsp://user:pass@host/stream1`), spawns the
-  binary as a child, polls its API until healthy, and only then
-  declares `ready()`. Child death → shim exit → supervisor backoff;
-  the process-group sweep already guarantees no orphan. The camera
-  list has one source of truth (the credentials file, keyed by entity
-  id); the binary itself is image-build provisioning, never repo
-  content. This shim pattern is the general answer for any future
-  foreign binary.
-- **Refused, deliberately** (the log-sink shape): no NVR, no motion
-  detection, no transcoding, no frame storage inside homeostat. All
-  four are mature-tooling territory; anything built here would be a
-  worse reimplementation welded on. The cameras' own SD-card loop
-  recording is the interim clip story; clips are out of scope.
-- **Frigate was evaluated and is the designated growth path, not v1**
-  — the QuestDB pattern. It is exactly z2m-shaped (an external bridge
-  with an MQTT dialect, one adapter to consume it) and would upgrade
-  the event plane to real person detection. Rejected for now on
-  hardware grounds: the house server is an i3-540 (Clarkdale, 2010) —
-  its Gen5 iGPU is below OpenVINO's Gen6/Skylake floor, there is no
-  Quick Sync and no AVX, so both accelerated and CPU inference paths
-  close. Because aspects are homeostat vocabulary (`motion`, `person` —
-  never the detector's words), adopting Frigate later changes one
-  adapter and zero automations; the key space is the stable contract.
-- **The inventory is TP-Link Tapo C200** (indoor pan/tilt). Dialect
-  facts, verified 2026-07-19: RTSP on 554 (`/stream1` HD, `/stream2`
-  SD — the substream a future detector would eat), ONVIF Profile S on
-  port 2020, local "camera account" credentials created in the Tapo
-  app with third-party compatibility enabled. The adapter consumes
-  ONVIF pull-point events for `motion` — the same source the Home
-  Assistant integration uses; Tapo firmware has broken this in the
-  past (1.3.6), so event-subscription loss must resubscribe/reconnect,
-  not crash. **A C200 notification is not a transition**, verified
-  against two of them 2026-08-29: it sends `MotionAlarm` on every
-  evaluation tick, so one real motion episode arrived as 417 identical
-  `true`s in 56 seconds. The adapter absorbs that as it absorbs any
-  other dialect quirk: `motion` publishes on change, the producer norm.
-  On-camera person detection exists but is not exposed over
-  ONVIF — it is app-only, so it is NOT an aspect until firmware
-  exposes it or a Frigate-class detector arrives. ONVIF on Tapo does
-  no PTZ; pan/tilt and privacy mode need the vendor API (pytapo) and
-  are deferred — noted for later because privacy mode ("family is
-  home → lens down") is the first camera *command* worth having, and
-  smells arbitrated.
-- **The adapter is `onvif.py`, named for the dialect it speaks** — the
-  esphome precedent (adapters are named for the dialect they absorb),
-  not for the vendor. Scope stays inventory-bounded: Profile S
-  pull-point events only — no PTZ, no imaging service, no capability
-  negotiation. Nothing in the event path is Tapo-flavored; the
-  Tapo-specific parts are per-camera facts (host, port, credentials),
-  which are config, not code. A vendor adapter (tapo, via pytapo)
-  exists only from the day vendor-API commands (privacy mode,
-  pan/tilt) are actually wanted — and since exactly one adapter binds
-  each entity, it then subsumes ONVIF events and takes the cameras
-  with it by a normal plan/apply migration, rather than sitting
-  beside `onvif.py`. Pre-building that path before any command exists
-  is the speculative branch.
-- **Credentials**: camera account user/pass and host per camera in an
-  out-of-repo TOML behind `HOMEOSTAT_CAMERAS`, keyed by entity `id` —
-  the ESPHome-devices pattern; addresses and passwords never enter
-  the repo (the boundary test). Cameras are cloud-attached by default; they belong on a
-  segment firewalled from WAN, with the app's cloud features accepted
-  as lost. No cloud in any homeostat path.
+The SDK only checks that a key is inside a declared expression, so the
+plan decides which classes a unit may declare at all
+(`reserved-class-publish`); otherwise an automation could declare
+`home/arbiter/**` and forge post-arbitration commands. `home/config/**`
+and `home/meta/**` are the core's. `home/health/{unit}/...` and
+`home/discovery/{unit}` sit under the publisher's own name.
+`home/arbiter/`, `home/clock/` and `home/history/` each belong to one
+service. A `home/state/` publish must name an entity the unit binds
+(`state-publish-unbound`); a `home/forecast/` one an entity that exists
+([Forecasts](#forecasts)). `home/hold/{unit}` is the arbiter's by
+convention and is not checked.
 
-## Network presence and connectivity (settled 2026-07-25)
+### Cmd envelopes
 
-**Amended 2026-09-23: the `vpn` capability is withdrawn.** Tunnel state
-left the adapter for the reasons below; `router`/`wan` and `presence`
-stand exactly as settled.
+Every payload on `home/cmd/**` and `home/arbiter/**` is an envelope:
 
-The founding decision is a scope split, the network analogue of "pixels
-are the media plane": **presence and connectivity state are house state;
-network metrics are observability.** Homeostat carries what regulation
-and the family consume — who is home, whether the WAN is up
-(tunnels: see the amendment). Throughput curves, router CPU, latency histories,
-per-interface counters are owner-facing diagnostics: mature-tooling
-territory (Prometheus + Grafana beside homeostat, blackbox probes,
-`prometheus-node-exporter-lua` on the routers), and anything built here
-would be a worse reimplementation welded on — the log-sink sentence,
-third verse. The same fact may surface on both sides (a tunnel down),
-deliberately: homeostat renders the family-facing deviation on `Now`,
-the monitoring stack the owner-facing diagnosis. No coupling in either
-direction.
+```json
+{"value": true, "priority": "automation", "actor": "evening_lights", "id": "9f2c1a07"}
+```
 
-- **The adapter is `openwrt.py`, named for the dialect it speaks**: ubus
-  JSON-RPC over HTTP (`uhttpd-mod-ubus`, rpcd session auth) — the first
-  polling adapter (MQTT pushes, ONVIF long-polls; ubus answers questions).
-  One adapter, many routers: `HOMEOSTAT_OPENWRT` points at an out-of-repo
-  TOML keyed by router name (`host`, `username`, `password`) — the
-  ESPHome/cameras pattern; the manifest's `[discovery].endpoint` is
-  `${HOMEOSTAT_OPENWRT}` itself, the recorder's endpoint-as-store shape.
-  Operational note: a dedicated read-only rpcd ACL login per router,
-  never root. A fresh login per poll cycle; rpcd expires idle sessions.
-- **Vocabulary** (one new capability, `router`):
-  - `router`, aspect `wan` (bool): the netifd interface named `wan` is
-    up. Entity `id` = the router's name in the credentials file.
-  - WiFi presence: capability `presence` (existing vocabulary), aspect
-    `presence` (bool), `id` = the device MAC, lowercase, `room =
-    "global"` (a phone is non-spatial). A sighting is association to
-    any hostapd BSS on any configured router — the union is what makes
-    AP roaming invisible. Absence requires `away_delay_s` (parameter,
-    family-editable, default 180) of continuous non-sighting: phones
-    sleep-drop WiFi for seconds at a time, and the same debounce
-    absorbs an AP reboot.
-- **Presence fusion is an automation, not adapter magic.** Exactly one
-  adapter binds each entity, so `openwrt.py` structurally cannot write
-  onto OwnTracks-bound `person` entities — correct, not a limitation.
-  Combining WiFi sightings with location into "someone is home" is
-  house-specific behavior (which MAC is whose) and lives in the house
-  repo as an ordinary automation consuming both.
-- **Publish on transition only** (plus each entity's current value
-  after the first successful poll): a poll is a read, not an event.
-  The recorder then stores exactly the transitions, and late joiners
-  are already covered by the core's state mirror.
-- **Failure policy**: an unreachable router emits one
-  `router-unreachable` health event per down transition (the
-  backend-outage precedent) and its aspects go stale rather than
-  false — an unreachable AP contributes no sightings, and
-  `away_delay_s` is what keeps a rebooting AP from marking the family
-  away. Recovery publishes whatever actually changed during the
-  outage; a long outage marking everyone absent is accepted v1
-  behavior, documented here. Absence is only assertable while *every*
-  configured router polled: with one silent, a sighting still publishes
-  `true` (evidence is evidence) but an unsighted device holds stale
-  rather than reading away — a failed AP beside an answering router is
-  the ordinary shape of a partial failure, and the union of what
-  answered would turn "I cannot see" into "nobody is home" (#144). Each
-  change of which routers are silent emits one `presence-partial`
-  health event naming them, so a long blind spot stays visible after
-  `router-unreachable` has latched.
-- **Read-only, deliberately**: no cmd surface. OpenWrt can be
-  commanded (reboot, guest WiFi, tunnel up/down); the pytapo rule
-  applies — the command adapter surface is built the day a command is
-  actually wanted, and reboot smells owner-tier.
-- **Discovery** from data already fetched: associated stations
-  (suggested `presence`) and the routers themselves. DHCP-lease hostnames would make station
-  records self-identifying; deferred until bare MACs prove
-  insufficient in practice.
-- **The remote ASUS router is deferred** — the QuestDB pattern. Its
-  reachability today is owner diagnostics (a blackbox probe on the
-  monitoring side); an `asuswrt.py` arrives the day its state feeds an
-  automation or a family-facing deviation, as a sibling dialect
-  adapter, changing nothing here.
-- **Dashboard**: `wan = false` joins the notable-state vocabulary — no
-  internet is exactly "out of the ordinary".
-  Parameters: `poll_interval_s` (owner-editable, default 30) and
-  `away_delay_s` ride the live parameter path like any other; both
-  have adapter-side fallbacks so a manifest may omit them.
+- **`value`** is the command; **`priority`** is the
+  [band](#priority-bands), stamped by the SDK from the manifest.
+- **`actor`** is the publishing unit, which the recorder stores with
+  every command for the audit trail.
+- **`id`** is minted per command by the SDK. A command is a proposal
+  that may be refused or dropped, and only a device readback says it
+  took effect; the events that end one (`refuse`, and `drop` with
+  `invalid-command`) echo it as `cmd_id`, so a publisher can tell which
+  of two overlapping commands ended. Optional: a hand-rolled
+  publisher's events report `null`.
 
-### Tunnels leave: the `vpn` capability is withdrawn (amended 2026-09-23)
+Adapters drop a payload that is not an envelope with `invalid-command`.
+Both classes travel with blocking congestion control at high priority,
+so a congested link sheds a temperature reading, never "unlock the
+door" ([Bus payload conventions](#bus-payload-conventions)).
 
-`vpn`/`up` collapsed every peer on an interface to "someone is
-connected" — right for a single-peer site-to-site tunnel, and the wrong
-question for anything else. Making it right meant per-peer visibility,
-and per-peer visibility ran into three walls at once: a peer's endpoint
-is a movement trace of whoever carries the device (the trail #51
-rejected for the companion app, arriving from the router with no opt-in
-and nobody's consent); a public key cannot be a key segment, so peer
-identity needed an entity-file binding of its own; and — measured — a
-peer is not a device and a handshake is not presence, since one phone
-held two peers on two tunnels and handshook from a private address on
-one while tunnelling from inside the house. Meanwhile the capability
-had no users: the one house reporting on it had never bound a `vpn`
-entity, and the tunnel fault that prompted the review was found by a
-phone failing to connect.
+### Arbitrated mode
 
-What is left is owner-facing diagnosis, which the scope split above
-already assigns to the monitoring stack. So the rule stands rather than
-bending: **tunnel reachability is observability, not house state.**
-Removing the rule rather than the code was the choice — dropping
-`wireguard_fresh` while keeping `vpn` would leave proto `wireguard`
-reading the interface's own up flag, which netifd reports true whether
-or not a peer can be reached: a false assurance, worse than no signal.
+High-stakes entities (locks, the heat pump, the burner) are
+`arbitrated`. The arbiter service (`adapters/arbiter.py`) holds the
+write token for each, and the bus structure makes it impossible to
+skip:
 
-The adapter is presence and WAN. It no longer touches `luci.wireguard`,
-so a router's read-only rpcd ACL need grant only `network.interface`
-and `hostapd.*`. Issue #176 (peer visibility) closes with this.
+- **Writers do not know.** Every writer publishes to
+  `home/cmd/{room}/{entity}/{aspect}`. The arbiter subscribes to
+  `home/cmd/**`, ignores non-arbitrated entities, and forwards a
+  granted wish, envelope unchanged, to the same path under
+  `home/arbiter/`.
+- **Adapters cannot hear a wish**: their templated `home/cmd/`
+  subscriptions expand only over non-arbitrated entities
+  ([Key expansion](#key-expansion)). An arbitrated entity no
+  `home/arbiter/` publish covers could never be commanded
+  (`arbitrated-uncovered`).
+- **The output is its own class**, so no subscription confuses a wish
+  with a grant.
 
-## Virtual sensors: derived state (settled 2026-07-26)
+**Leases.** The token is a lease per (entity, aspect), because one
+entity can carry orthogonal control dimensions (the family sets a heat
+pump's `setpoint` while an automation drives its outdoor offset). A
+wish with no lease in force, or at or above the holder's band, is
+forwarded and takes or refreshes the lease for `hold_minutes` (a
+family-editable arbiter parameter); a takeover from a strictly lower
+band publishes `preempt`. A wish below the holder's band gets a
+`refuse` naming the holder and echoing `cmd_id`. Expiry reopens the
+aspect to automations, so a forgotten override heals itself. Events
+land at `home/health/{arbiter unit}/event`.
 
-The founding decision: **derived state is ordinary state.** A virtual
-sensor — a fused downstairs temperature computed from the room sensors,
-the "someone is home" the presence-fusion sentence already promised — is
-an ordinary entity with an entity file, whose binding unit is an
-automation. "Exactly one adapter binds each entity" generalizes to
-**exactly one unit binds each entity**; nothing downstream can tell the
-difference, deliberately. Consumers never learn whether a temperature
-was measured or fused — the z2m sentence ("adapter-native vocabulary
-does not leak onto the bus") applied to provenance. Provenance is still
-visible where structure lives: the entity file names its owner, and the
-plan renders the automation's bound entities like an adapter's.
+**Holds are published as state**, because a browser opening mid-hold
+asks "is this held now?", which events do not answer: one document at
+`home/hold/{unit}`, mirrored by the core, `{schema, holds: [{room,
+entity, aspect, priority, actor, since, until, refused}]}`, where
+`refused` counts the wishes the hold has turned away.
 
-- **Mechanics**: `[entities]` becomes legal on automations (optional;
-  still required on adapters, still an error on services until one
-  needs it). Templated state publishes expand over bound entities
-  exactly as for adapters; a single-entity producer may equally declare
-  the concrete key. The SDK already covers both (`ctx.publish` +
-  entity loading); no SDK change.
-- **Everything downstream is free, which is the argument for the entity
-  file**: the recorder (subscribes `home/state/**`), the dashboard
-  widget (capability + features → value + sparkline), the core state
-  mirror and `read_state`, notable-state vocabulary, voice grammar
-  later — all generated from the entity registry. A free-form state key
-  would be recorded but invisible to every generated surface: hidden
-  state outside the repo, exactly what the project rejects.
-- **So state keys belong to bound entities, enforced at plan time**: a
-  state-class publish must fall under an entity the unit binds —
-  templated expressions are bound by construction; concrete ones must
-  name a bound entity's room and name literally (`state-publish-unbound`
-  otherwise). This closes a pre-existing hole: nothing previously
-  stopped a unit from publishing state under an entity it never bound,
-  or under no entity at all.
-- **Read-only by default**: an automation-owned entity nobody
-  subscribes commands for takes none; a cmd-class grant resolving onto
-  it is a plan error (`virtual-entity-commanded`). v1 refused every
-  such grant and kept the grant graph bipartite; a commandable virtual
-  entity was deferred under the pytapo rule until a house-mode switch
-  was actually wanted. That day came (#64) — see Commandable virtual
-  entities below for the latch it settled on. State-subscription
-  chains between automations need no ordering, as ever — a
-  late-joining consumer reads the mirror.
-- **Room**: a cross-room fusion lives in the pseudo-room `global` —
-  "downstairs" is a zone, zones never appear in keys, and the existing
-  zone-room-collision check already forbids smuggling a zone name in as
-  a room. A virtual sensor that is honestly about one room may use that
-  room. If `global` placement renders poorly, the escape hatch is the
-  dashboard's ordering/pinning hints — never a second spatial truth.
-- **Staleness is the producer's obligation**: a fusion of stale inputs
-  goes stale rather than confidently republishing — publish on
-  transition, one health event per input-loss transition (the openwrt
-  failure-policy precedent as a norm for producers). Norm, not
-  machinery: the core cannot know which inputs a fusion needs.
-- **Rejected, deliberately**: a `derived` key class (fragments the
-  vocabulary every consumer keys on); a generic fusion adapter
-  configured with rules (fusion config is a DSL — which sensors, what
-  weights, is house-specific behavior and lives in the house repo as
-  code); cross-adapter fusion inside an adapter (the membrane absorbs
-  dialects, it does not compute house behavior — an adapter derives
-  freely on its own bound entities, ivt490's normalized readings being
-  the standing example, and no further).
+- **One document, not a key per lease**: a restart publishes an empty
+  list with no keys to clear, expiry needs one timer, and a reader sees
+  a consistent set.
+- **Enforcement runs on the monotonic clock; `until` is its wall-clock
+  twin**, so no clock step can shorten or stretch a real hold.
+- **Expiry is published.** Arbitration expires leases lazily, on the
+  next wish, so a thread waits on the earliest deadline and
+  republishes. Readers also drop an entry past its `until`.
 
-## Sensor dropout and availability (settled 2026-07-31)
+There is no way to hand control back early: an equal or higher band
+refreshes the lease, and the only exit is expiry
+([Open questions](#open-questions)). Automation-owned entities cannot
+be arbitrated (`virtual-entity-arbitrated`), and a
+[fed input](#device-feeds) never rides the arbiter: one master leaves
+nothing to arbitrate.
 
-The founding decision closes the gap between the two liveness layers.
-Unit dropout has been solved since step 2 (liveliness tokens, supervisor
-health); a device dropping out behind a live adapter was invisible —
-state payloads are bare values, the last-value mirror serves them
-forever, and a late joiner cannot tell a fresh reading from one whose
-sensor died days ago. The crux: **publish-on-transition makes silence
-ambiguous.** The bus cannot distinguish "no change" from "no sensor";
-only the party with protocol knowledge can — z2m's availability timers,
-an ESPHome TCP session, an ONVIF pull-point subscription, a firmware's
-known publish cadence. That is dialect knowledge, so it lives in the
-adapter — the membrane rule.
+### Aspect descriptors
 
-- **Availability is ordinary state** — the virtual-sensor sentence
-  applied to device liveness. `available` (bool) is a base aspect in
-  the schema vocabulary, orthogonal to capability, published on
-  transition at `home/state/{room}/{entity}/available` by the entity's
-  owning unit. Opt-in, the discovery shape: an adapter with a real
-  loss signal publishes it; one with nothing to say (owntracks — a
-  retained phone position has no liveness semantics) does not fake
-  one. Everything downstream falls out unbuilt: the recorder gives
-  per-device availability history, the core state mirror covers late
-  joiners, `available = false` joins the notable-state vocabulary (a
-  dead sensor is a deviation on `Now`, family-visible exactly like a
-  downed tunnel), and automations subscribe to it like any other
-  aspect.
-- **Per adapter, the loss signal**: z2m maps the bridge's availability
-  feature through (`zigbee2mqtt/{id}/availability`, both the
-  `{"state": ...}` and legacy bare-string payloads; availability must
-  be enabled bridge-side — an operational note, not house config;
-  without it the aspect simply never appears, which is the opt-in
-  working as designed). esphome flips per device on ReconnectLogic
-  connect/disconnect. onvif flips per camera on pull-point
-  subscription loss/recreate — the same transitions that already emit
-  `event-stream-lost`. ivt490 runs a receive timer against the
-  firmware's publish cadence (`availability_timeout_s`,
-  owner-editable, adapter-side fallback 300 s — the openwrt
-  poll_interval_s shape), emitting one `device-silent` health event
-  per down transition. openwrt's own settled failure policy is this
-  norm and is unchanged.
-- **Stale-not-false graduates from openwrt policy to house-wide
-  norm**: on device loss the existing aspect values stand, `available`
-  flips, and the adapter never publishes invented values, nulls, or
-  clears keys. Unknown ≠ false; one boolean beside the values beats a
-  tri-state smeared across every aspect.
-- **`available` is reserved vocabulary**: an adapter whose open
-  passthrough could mint the aspect from a native field (a z2m field
-  name, an ESPHome object_id) drops that field with a
-  `reserved-aspect` health event instead of letting a device
-  impersonate its own liveness signal. Enumerated dialects (ivt490's
-  28 fields) need no runtime guard — a new firmware field arrives
-  only by adapter edit.
-- **Consumer policy stays in the consumer**: whether a stale input
-  means hold, fall back, or go stale downstream is house behavior —
-  the fusion argument. The virtual-sensor staleness norm now has
-  something mechanical to subscribe to instead of inventing per-input
-  timers. Commands toward an unavailable entity likewise stay
-  per-adapter (esphome drops with `device-unavailable`, MQTT dialects
-  fire into the broker and let the device miss it); a uniform rule is
-  the pytapo pattern — built the day something needs it.
-- **The consumer helper, shaped ahead of need (2026-07-31), built the
-  day the first consumer lands** (the promised presence fusion, by all
-  signs). Because `available` publishes on transition only, a
-  late-joining subscriber that skips the get runs blind until the next
-  transition — possibly weeks away — so the subscribe-then-get-merge
-  seed is a correctness trap every consumer would have to hand-roll.
-  That mechanical part is the SDK's: `ctx.availability(binding)`
-  returns a live per-entity map (seeded via get, updated by
-  subscription). The subscription itself is an **explicit
-  `[bus.subscribes]` binding** (`home/state/.../available`), never
-  implicit — the config-subtree carve-out is about a unit's own
-  namespace; watching *other* entities' availability is exactly the
-  declared-surface territory the manifest exists to render. Policy
-  (hold, fall back, go stale downstream) stays in the automation, as
-  above. Likely fellow traveler: the producer-side publish-on-
-  transition idiom exists twice (openwrt's `publish()`, ivt490's
-  `set_available()`); a fusion publishing its own `available` is the
-  third strike that graduates it to an SDK helper too.
-- **Rejected, deliberately**: a TTL on the core's last-value cache
-  (the core cannot know cadence; silence is ambiguous by
-  construction, and a lock is rightly silent for months); timestamps
-  as the mechanism (age without cadence knowledge answers "when", not
-  "should I trust this" — a transition-published value is supposed to
-  be old).
-- **The honest limitation, documented**: `available` is device
-  liveness, not data freshness. z2m's passive check-in timer for
-  battery devices is on the order of hours — a motion sensor dying
-  mid-`occupancy = true` stays trusted-and-wrong until the bridge
-  notices. An automation needing bounded-age input still needs its own
-  cadence (house knowledge: a parameter), never a core TTL. The
-  bookkeeping behind it is the SDK's `Freshness` (2026-09-07, #7,
-  graduated from a real fusion's private copy rather than waiting for
-  the rule of three, because the shape was already settled by use):
-  latest value and monotonic seen-time per source, `fresh(max_age_s)`
-  at recompute. A live triggering sample is age zero by construction, so
-  the fresh set is never empty — the trap is closed once, in the
-  helper. It owns no timer: reacting to outright silence is a
-  `home/clock/minute` subscription calling the same `fresh()`.
-- **A restarted automation catches up from the mirror, with age**
-  (2026-09-09, #36). `ctx.subscribe` did not do the subscribe-then-get-
-  merge that `Context.__init__` already did for config, so a unit that
-  needs every source before it can compute was silent after a restart for
-  up to the slowest source's interval — measured at 4 min on a real
-  house, 30 min worst case — while every value it needed sat in the
-  mirror. With device feeds that silence can outlast the fed device's
-  validity window and change how the house is heated. Now `subscribe`
-  reads the mirror after declaring its subscribers and delivers what the
-  subscription has not already delivered. The mirror's replies carry the
-  value's age (seconds since the mirror received it, in the attachment),
-  because a catch-up cannot otherwise be told from a fresh publish and a
-  six-hour-old reading fed into a moving average as new would trade one
-  silent failure for another: a handler that takes `age_s` hands it to
-  `Freshness.seen`, and a catch-up older than the policy drops out of the
-  first recompute. The one consequence for such a handler: a catch-up can
-  leave the fresh set empty, so it checks. Age rather than a wall-clock
-  stamp because only the mirror's clock is involved and the reply is read
-  the moment it is made; a two-argument handler keeps working and treats
-  the catch-up as just-arrived, which is still strictly better than
-  blindness.
-- **Availability must be able to say "no information".** A backend
-  configured without availability at all (z2m with no `availability:`
-  block publishes no such topics) yields an empty map that reads as
-  everything-is-up. When `ctx.availability()` is built it returns three
-  states per entity — up, down, unknown — and unknown is the honest
-  answer for an entity whose adapter never published `available`
-  (recorded 2026-09-07 from #7, ahead of the helper).
+A parameter reaches the dashboard with a type, a constraint and an
+`editable_by`, enough for a good control; a raw aspect has only a name
+and a value. So **an adapter may describe an entity's aspects** in the
+same vocabulary: a `{schema, groups, fields}` document whose fields
+carry a label, a formatting `kind`, a group, optionally `valid` and
+`notable`, and for a commandable aspect `command: {type, constraint,
+step?, editable_by}`, the parameter fields verbatim. Firmware names get
+labels, never schema. The contract is in
+[`docs/adapters.md`](adapters.md), section 5.
 
-## One-way senders: who synthesizes the off (settled 2026-09-11, #63)
+- **It rides the discovery record** (the `aspects` member of a bound
+  record), already declared, mirrored and per entity. Not `home/meta/`:
+  that is core-owned and served by the supervisor, so a unit's publish
+  there is invisible to a fresh reader. Not a new class: a second
+  self-description for what discovery serves. The core knows nothing
+  of descriptors.
+- **The dashboard still owns every widget**
+  ([Dashboard](#dashboard)); adapters never ship UI. An undescribed
+  aspect is demoted to a collapsed diagnostics group, never hidden.
+- **Commands widen by the rule that gates parameters**: the dashboard
+  admits one the descriptor declares family-editable, within its
+  constraint, once the grant table admits the capability. The adapter's
+  bounds remain the enforcement. A knob an automation drives is owner
+  tuning, not a family lever.
+- **`notable`** makes a described boolean reading true a deviation.
+  **`readback_s`** says how long the device takes to report a command
+  back, which only the adapter knows.
+- **A capability's own aspects** (`on`, `locked`) are described as
+  readings only; their controls stay the dashboard's.
 
-A sub-GHz PIR, door contact or smoke detector transmits when something
-happens and never transmits again — there is no "clear". The same is
-true of doorbells, RF remotes and most cheap 433 MHz kit. Something has
-to decide when the assertion stops being true.
+### Commandable virtual entities
 
-**The adapter owns the hold.** Three existing settlements decide it: the
-membrane rule (deriving on its own bound entities is what an adapter
-may do, and the radio's lack of an off is a protocol fact), the
-availability settlement's "never a core TTL" (a core-decayed momentary
-aspect is that timer under another name), and the pytapo rule (core
-machinery is designed the day a second case wants it).
+House modes (day/night, "asleep") have no device, are flipped by the
+dashboard, buttons and the clock, and are read by many lights. They
+are ordinary automation-bound entities, and **the shape is the latch**:
+the owner subscribes to `home/cmd/{room}/{entity}/**` over its own
+entities, sets its own state when commanded, and never republishes
+onward. Consumers read that state at their own bands.
 
-- **Transitions only.** `true` on the first assertion, `false` when the
-  hold expires; a repeat burst inside the hold extends the deadline and
-  publishes nothing. One-way senders repeat each burst by design, so
-  publishing per burst is a per-event flood.
-- **`false` for every bound momentary entity at startup.** The held
-  value is the adapter's own construct, not a device reading, so
-  "nothing has asserted within the hold" is the honest state after a
-  restart rather than an invented one — and it is what stops a
-  crash-looping adapter from leaving a motion sensor stuck on. Only a
-  permanently dead adapter (breaker open) leaves `true` standing, the
-  same accepted limitation as a dead Zigbee bridge, and the unit's
-  health shows it.
-- **The hold is a per-aspect parameter, not per entity.** A contact, a
-  PIR and a detector want different holds; every contact wants the same
-  one. The entity's capability and features pick the parameter, so a
-  house tunes three numbers rather than one per device — and entity
-  files keep denying unknown fields.
-- **Revisit trigger: the rule of three.** A second one-way adapter
-  carrying the same timer graduates it into the SDK, the way
-  `Freshness` and `Cooldown` did. Still not into the core.
+- **Capability `switch`**, room `global` or a non-spatial group name.
+- **Commandable means the owner listens**: a cmd grant onto an
+  automation-owned entity needs the owner's covering `home/cmd/`
+  subscription (`virtual-entity-commanded`).
+- **`shared` or `exclusive`, never `arbitrated`.** A button press
+  travels at the automation band yet is family intent, which
+  arbitration would rank below the dashboard; with nothing to contend
+  for, last write wins.
+- **A latch survives its own restart**, adopting its value from the
+  mirror or, after a core restart, the recorder
+  ([Restoring a unit's own last value](#restoring-a-units-own-last-value)):
+  the value is the family's decision, which nothing can recompute.
 
-**Rejected**: a momentary aspect class decayed by the core (the TTL the
-availability settlement already refused); consumer-side debouncing
-(every consumer reimplements it, they disagree, and the recorder cannot
-reconstruct what was true when).
+Rejected: an adapter holding modes in memory (an automation in an
+adapter's clothes), a `mode` capability, a relay (band laundering).
 
-## Commandable virtual entities: the latch (settled 2026-09-11, #64)
+### Burners and interlocks
 
-The case the virtual-sensors settlement named arrived exactly as named:
-four house modes (`night_day`, `light_mode_manual`, two asleep flags)
-with no device behind them, flipped by the dashboard, by Zigbee buttons
-and by the clock, and read by twenty lights. Home Assistant calls these
-helpers; here they are ordinary entities bound by an automation.
+**`burner`** is a deliberately small capability for a combustion heat
+source: base `on` (the family lever), feature `power_level` (an enum
+constraint the existing control renders), readings `flue_temperature`
+and `boiler_temperature` in °C. Everything else passes through raw.
 
-**The shape is the latch.** The owning automation subscribes to
-`home/cmd/{room}/{entity}/**` over its own entities, sets its own state
-on a command, and never republishes onward. Consumers subscribe to the
-state at their own bands. The button unit commands the mode; the lights
-unit reads it. No relay, no band laundering (the group-action
-settlement under Dashboard is why).
+- **Not `switch` plus sensors**: "is it making heat" would be read from
+  dialect fields, and per-aspect leases need `on` and `power_level` on
+  one entity, so holding the burner off does not freeze an automation's
+  power level. `power_level` is vocabulary for safety too: a flue
+  cutout's threshold depends on it.
+- **`on` reads back the device's run state**, never echoes the command,
+  since start and stop may be momentary writes. No run-phase vocabulary
+  until a second burner adapter shows what generalises.
 
-- **Capability `switch`.** Exactly one commandable boolean, already a
-  toggle on the dashboard, already granted to it at the manual band. A
-  `mode` capability would be vocabulary for one case. Room is a
-  grouping segment: `global` for a house-wide mode, or a non-spatial
-  group name if a house wants its modes together.
-- **Commandable means the owner listens.** A cmd grant onto an
-  automation-owned entity is legal only when the owning automation
-  declares a cmd subscription covering it; otherwise
-  `virtual-entity-commanded` stays, because the command would reach
-  nobody. Structural, like arbitration coverage — not a flag.
-- **The grant graph is no longer bipartite.** Owners are edge sources
-  whether adapter or automation, so the apply walk starts a latch
-  before the units commanding it. A cycle (A commands what B binds
-  while B commands what A binds) is refused at check time
-  (`grant-cycle`) rather than silently ordered; the walk's sorted-order
-  fallback stays as defence, never as policy.
-- **Write policy is `shared` or `exclusive`; `arbitrated` stays
-  refused.** A button press travels at the automation band yet is
-  family intent, and arbitration would rank it below the dashboard —
-  band laundering in another guise. A latch has no device to contend
-  for and no hold to expire, so last write wins is the semantics
-  wanted. `exclusive` works unchanged: one automation-band writer,
-  manual above it.
-- **The latch survives its own restart.** On start the owner reads its
-  entities from the mirror and adopts the value, defaulting only when
-  the mirror is empty. This is the inverse of the one-way-sender rule
-  above: that held value was the adapter's own construct, this one is
-  the family's decision.
+**Interlocks stay the device's job; homeostat is not in the safety
+path.** No band fits. At `automation` an interlock shares the band of
+the loop it guards against and is taken over within a minute; at
+`manual` it works and lies, attributing a cutout to the family in every
+audit surface. And a hold is timed while an interlock is conditional:
+refreshing it each sample makes a continuous writer whose death
+silently releases the burner. A house-local cutout at the automation
+band is welcome as belt and braces, but the house must not rely on it.
 
-**Rejected**: an adapter with a static endpoint pointing at nothing,
-holding the modes in memory (an automation wearing an adapter's
-clothes; the membrane does not compute house behaviour, and such a unit
-never gets removed); a `mode` capability; a relay. The SDK gains
-nothing yet: a latch helper graduates once a house's modes unit shows
-what repeats.
+- **Rejected: a band above `manual`.** Whether safety outranks the
+  family is a values decision, not a constant, and it inherits the
+  timed hold anyway.
+- **Deferred: an inhibit class**: a unit asserting a lockout on
+  `(entity, aspect)` while a condition holds, refused at every band. It
+  is the right shape (an interlock removes an option rather than
+  winning an argument) and the design to pick up if interlocks recur.
 
-## Restoring a unit's own last value (settled 2026-09-13, #83)
+## Plan and apply
 
-The latch above survives its own restart by reading the mirror. It does
-not survive the core's: the state mirror is in-memory, every version
-upgrade is a core restart, and `subscribe`'s catch-up then has nothing to
-replay. Measured on this house: a `modes` unit came back with four
-latches at their code defaults and the lighting rule disagreed with the
-actual lights for 55 minutes, until a person noticed. A
-`temperature_fusion` unit came back blind and took between 450 s and
-1800 s to republish across six deploys, twice exceeding the 1200 s after
-which the pump discards a fed value and falls back to curve control.
+There is no state file. Desired state is the repo; actual state is what
+the running supervisor reports over the bus. `homeostat plan` diffs the
+one against the other, and `homeostat apply` commands the supervisor to
+make the world match, so drift between a state file and reality cannot
+exist. **Rollback is git**: check out the previous commit and plan and
+apply forward. Plan never reads arbitrary commits.
 
-**The right behaviour is not the same for all state, and only the unit
-knows which kind it holds.** That is the whole finding, and it is why
-this is an SDK call and not a framework behaviour:
+**How plan sees the world.** `plan --bus <endpoint>` (or
+`HOMEOSTAT_BUS`) reads the core's queryables as an ordinary client:
+each unit's applied manifest and hashes, the grant table and applied
+commit under `home/meta/` ([Supervision](#supervision)), and the live
+values under `home/config/*/*`. With no endpoint, plan runs offline
+against an empty world, labelled as such: every unit is a create and
+the whole grant table is printed, which is what a house repo's CI
+wants. An endpoint that does not answer is a hard error, never a
+silent empty world: "create everything" against a house that is merely
+unreachable is how a home gets started twice.
+
+**What plan prints**: units to create (command, bound entities,
+parameters), destroy and restart (with the reason), parameter changes
+(`~ evening_lights/off_time  live="21:30"  repo="23:00"`), manifest
+refreshes, the expanded keys of every created unit and every unit
+restarting on a manifest change (new key surface an approval must
+show), grant changes (the whole table offline), feeds and sources,
+warnings, and the tier. There is no per-subscriber match-set diff: an
+entity move shows as grant changes, not as which subscriptions now
+match differently.
+
+### Tiers
+
+Every plan has a tier, derived from its diff and never declared
+(`derive_tier` in `src/plan.rs`):
+
+- **Structural**: a unit created or destroyed, or any grant-table delta,
+  which includes entity moves, rebindings, capability changes and
+  write-mode flips ([The grant table](#the-grant-table)).
+- **Behavioral**: otherwise, a unit restarted (its code, manifest or
+  files changed).
+- **Parameter-only**: otherwise. Live values reset to the repo and
+  parameter-level manifest changes refresh in place; nothing restarts.
+
+Because the tier is a function of the diff, no structural change
+passes as a parameter edit. In the core the tier gates only the apply
+lock, which a parameter-only apply skips; otherwise it is the
+reviewer's cue, and a [pending plan](#pending-plans) is how a
+structural plan waits for the owner. The core does not check who sends
+an apply ([Local-only access](#local-only-access)), and `apply` does
+not prompt: review happens at `plan`.
+
+### Change detection
+
+A unit is unchanged when two hashes match the world's:
+
+- **`manifest_hash`**: sha256 of the manifest file.
+- **`files_hash`**: sha256 over its other repo inputs: every token of
+  its command that resolves to a file under the house root (`uv run
+  units/foo.py` hashes the script), its own entity files, and
+  `zones.toml` when one of its expressions expanded through a zone.
+  Paths are hashed with content, so a rename is a change. Imports are
+  not followed, and the script's `{script}.py.lock` is not an input
+  ([Open questions](#open-questions)).
+
+**`[unit] inputs = "house"`** makes every manifest, entity file,
+`zones.toml` and `dashboard.toml` a unit's inputs. The dashboard is a
+view over the whole house: an entity bound to another adapter changes
+what it renders while changing none of its own files, and without the
+declaration `apply` would succeed and leave the page wrong.
+
+**A manifest-hash mismatch is classified semantically.** Both manifests
+are compared with every parameter's `default`, `constraint` and
+`editable_by` stripped. Equal (and files unchanged) is a parameter-level
+change, a refresh with no restart: the rebuilt store enforces the new
+constraints and the served meta manifest updates. Anything else,
+including adding, removing or retyping a parameter, is behavioral,
+because a running unit read its manifest at startup.
+
+**Parameter diffs** compare each live value with its repo default, one
+rule for a changed default and for live drift. An integer default on a
+`float` parameter is canonicalized, or `5` against `5.0` would plan as
+perpetual drift.
+
+### The apply walk
+
+**The supervisor executes apply.** The CLI sends HEAD to the core's
+`home/meta/system/apply` queryable; the supervisor re-validates the
+repo and derives its own diff, so the CLI's plan is a preview. The
+supervisor owns the process table, breakers and health, so
+restart-and-await-readiness composes with supervision instead of
+racing it. Not a CLI-driven walk (remote per-unit stop and start, its
+own lock); not a signal to re-read (no verification, no result).
+
+**One apply at a time.** A second request while one runs is refused,
+not queued; a parameter-only apply bypasses the lock, so a setpoint
+commit never waits behind a structural walk. **The walk** follows
+grant order, with ties and unconnected units by kind (adapter,
+automation, service) and then name, so it is deterministic:
+
+1. **Parameters.** The store is rebuilt and every changed value put,
+   under the config write lock, so a racing parameter write cannot
+   lose on the bus while the store keeps it.
+2. **Refreshes** of parameter-level manifest changes are recorded.
+3. **Removals**, in reverse grant order: dependents stop first.
+4. **Creates and restarts**, owners first. Each unit is stopped,
+   launched as a fresh supervision task and awaited: success is health
+   `running`; failure is breaker `open`, `stopped`, or 60 s. A fresh
+   task is a fresh breaker, so new code earns a fresh failure budget.
+
+**Apply is per unit and rolling, not transactional.** A failure halts
+the walk in place; the reply names each step's result, the unit it
+halted at and the units not reached, and the CLI exits 1. Earlier
+units keep their new incarnations, and neither the served grant table
+nor `applied_commit` advances, so a re-run plans exactly the remaining
+work. A supervisor shutting down mid-walk halts it the same way. No
+automatic rollback: undoing would be a second walk that can fail the
+same way, and git gives a forward path back.
+
+**`applied_commit`** is HEAD, suffixed `-dirty` for uncommitted changes
+outside `plans/`, published after a fully applied walk. It is recorded
+only when the house root is a worktree's top level, so a fixture nested
+in another repo never inherits that repo's HEAD. At `homeostat up` the
+repo on disk is taken as applied, and `applied_commit` stays unset
+until the first apply.
+
+### Pending plans
+
+`homeostat plan --save` writes `plans/pending/{id}.plan`: TOML with
+`id`, `actor` (`--actor`, default `owner`), `created`, `base_commit`,
+`tier`, and the rendered plan as a literal string, readable on a phone.
+It needs the live world and a git worktree, and refuses when there is
+nothing to save.
+
+`homeostat apply --plan <file>` refuses when `base_commit` is not HEAD
+as it reads now, `-dirty` included, so a pending plan invalidates
+itself when the repo moves past it; otherwise it recomputes the plan
+fresh like a plain `apply`. The file is a review artifact, not an
+execution script. `plans/` does not count toward `-dirty`, and applying
+a plan does not remove it.
+
+## Supervision
+
+`homeostat up` validates the house, opens the bus as a router and
+brings up the core's queryables (parameters, health, meta, mirrors,
+apply) before any unit spawns, so a unit's first read finds them. Then
+one supervision task per unit (`src/supervisor/`) owns its process,
+watches its liveliness token, applies its restart policy and publishes
+its health. The supervisor also publishes each applied unit's
+`manifest_hash`, `files_hash` and `manifest` and the grant table, and
+serves them with `applied_commit` and `about` from `home/meta/**`, the
+live world `plan` diffs against ([Change detection](#change-detection)).
+
+### The unit contract
+
+What the supervisor guarantees at spawn (`src/supervisor/process.rs`):
+
+- **No shell.** `runtime.command` is split on whitespace and exec'd
+  directly, with `PATH` lookup and relative paths resolved against the
+  house root, which is the unit's working directory. Stdin is
+  `/dev/null`.
+- **Its own process group**, and on Linux `PR_SET_PDEATHSIG(SIGKILL)`,
+  so even a SIGKILLed supervisor leaves no unit running.
+- **A filtered environment**: `HOMEOSTAT_UNIT` (its name),
+  `HOMEOSTAT_BUS` (the endpoint, e.g. `tcp/127.0.0.1:7447`), a fixed
+  base set from the supervisor's environment (`PATH`, `HOME`, `USER`,
+  `LOGNAME`, `SHELL`, `LANG`, `LANGUAGE`, `TZ`, `TMPDIR`, `TERM`,
+  `REQUESTS_CA_BUNDLE` and anything prefixed `LC_`, `XDG_`, `UV_`,
+  `PYTHON` or `SSL_CERT_`), and the variables its manifest names in
+  `runtime.env`, by exact name. Nothing else, so a secret handed to the
+  supervisor for one unit never reaches another.
+- **Captured output**, re-emitted on the supervisor's streams prefixed
+  `[{unit}] ` and kept in a 500-line ring at `home/meta/{unit}/log`
+  ([Logs and the audit trail](#logs-and-the-audit-trail)).
+
+What every unit owes back:
+
+- **Connect as a client** to `HOMEOSTAT_BUS`, scouting off. Zenoh peers
+  do not route between clients, so the supervisor's router is the hub.
+- **Declare a liveliness token** at `home/health/{unit}/alive` once it
+  can do its job (`UnitSession.ready()`). The token, not the PID, means
+  "up": it disappears with the session, whatever the process does.
+- **Exit on SIGTERM** within `runtime.shutdown_grace_s` (default 5 s).
+
+### Resolving `uv run`
+
+For a command `uv run [flags] <script.py> [args]`, the supervisor runs
+`uv sync --script` and `uv python find --script` to completion, then
+execs the environment's interpreter on the script, so the interpreter
+is the group leader and direct holder of `PR_SET_PDEATHSIG`. Any other
+command is left alone.
+
+- **Why.** `uv run` otherwise stays alive as an idle parent holding
+  4 MB warm to 25-55 MB after a fresh resolve, and keeps the
+  interpreter out of reach of `PR_SET_PDEATHSIG`, which reaches only
+  the direct child.
+- **The manifest still says `uv run`.** The PEP 723 block stays the
+  single authority on dependencies, covered by `files_hash`. Every
+  start resolves again, so a restart after an SDK bump picks it up.
+- **Best effort.** If uv cannot resolve the script (no PEP 723 block, a
+  broken dependency, no network), or the interpreter path would not
+  survive whitespace tokenizing, the original command runs unchanged
+  and fails exactly as `uv run` would.
+
+### Health
+
+The supervisor publishes JSON at `home/health/{unit}` on every
+transition and serves it from a queryable there; nothing republishes.
+
+```json
+{"status": "backoff", "pid": null, "restarts": 2, "backoff_ms": 400, "last_exit_code": 1}
+```
+
+`starting` (spawned, token not yet seen or lost while the process
+lives), `running` (token present), `backoff` (exited, restart due in
+`backoff_ms`, present only here), `open` (breaker open, no more
+restarts), `stopped` (policy `never`, a clean exit under `on-failure`,
+or shutdown).
+
+`restarts` counts from the start of the unit's supervision task: at
+supervisor start, or at the last apply that restarted it. Each
+incarnation gets a fresh liveliness subscriber, so a token event left
+from the previous one cannot mark the next `running` early.
+
+### Restart policy, backoff and the breaker
+
+`runtime.restart` says which exits count: `always`, `on-failure`
+(non-zero or a signal) or `never`. Restarts then follow one arithmetic
+(`src/supervisor/backoff.rs`): the first waits 100 ms and each further
+consecutive quick exit doubles it, capped at 30 s; a run lasting 5 s
+resets the count; the fifth consecutive quick exit opens the breaker
+(so the waits are 100, 200, 400 and 800 ms). Any quick exit counts,
+clean or not, since a clean-exit loop is as much a crash loop as a
+panic, and a failed spawn counts as an exit.
+
+An open breaker stays open until the supervisor restarts or an apply
+restarts the unit with a fresh task and breaker, so new code earns a
+fresh failure budget ([The apply walk](#the-apply-walk)).
+
+### Termination and sweeping
+
+- **Stopping a unit** (shutdown, or an apply step) sends SIGTERM to its
+  whole process group, waits up to the grace for the group, not just
+  the leader, then SIGKILLs the group.
+- **When a leader exits on its own**, the supervisor SIGKILLs the rest
+  of its group before restarting, because a descendant left behind
+  could keep the liveliness token alive into the next incarnation.
+- **Supervisor shutdown** on SIGTERM or SIGINT stops every unit in
+  parallel and reports each `stopped`. The handlers are installed
+  before the bus opens, so a signal during startup is graceful too.
+- **Global reaping** is tini's, PID 1 in the container image.
+
+## Live parameters
+
+A parameter is a value a running unit reads and someone may change
+without a restart: an off time, a hold duration, a poll interval. A
+unit declares each under `[params.<name>]` with a `type` (`bool`,
+`int`, `float`, `string`, `time`), a `default`, an optional
+`constraint` and an optional `editable_by` (`owner` or `family`). The
+current value lives at `home/config/{unit}/{param}`. The clock's
+timezone, the arbiter's `hold_minutes` and an adapter's poll interval
+ride this path like any automation's setpoint.
+
+The constraint language stays minimal: `min`/`max` for numbers,
+`after`/`before` for times (`"HH:MM"`, a window that may span
+midnight), `enum` for strings. A parameter needing more is
+`editable_by = "owner"`, changed by someone who can read the code.
+
+### The write path
+
+Only the core ever puts on `home/config/**`. At startup it seeds every
+parameter from its manifest default and declares one queryable on
+`home/config/*/*` (`src/config.rs`):
+
+- **A GET without payload is a read** of what the selector covers.
+- **A GET with payload is a write request** for one key. The core
+  checks the JSON value against the manifest's type and constraint.
+  Accepted, it is stored, put on the key (subscribers see it at once)
+  and echoed in an ok reply. Rejected, the reply names the violation,
+  nothing is put, and the old value stands.
+
+A write is a query rather than a put because one owner, the core,
+answers it in full while the query is open: the writer learns
+synchronously whether the value is in force. A plain put would bypass
+validation. Not the Zenoh storage plugin: a passive mirror cannot
+refuse an out-of-constraint write
+([The last-value mirror](#the-last-value-mirror)).
+
+A write and its put are one ordered step under the lock apply's
+parameter step also takes ([The apply walk](#the-apply-walk)), so the
+store and the bus never disagree. An integer written to a `float`
+parameter is stored as the float it means, as the repo default is
+read, so the two never differ by representation alone.
+
+### Repo and live values
+
+The repo is the system of record; the bus value is a live view of it.
+
+- **A live edit survives a unit restart**, because the core holds it,
+  but not a supervisor restart: the store re-seeds from defaults.
+- **Plan shows drift and apply resets it.** Every live value that
+  differs from its default is listed, and every apply sets live values
+  to the repo's ([Change detection](#change-detection)).
+- **Making a live edit durable** means committing it as the default:
+  a parameter-only plan, with no restart and no apply lock.
+- **Changing a constraint or `editable_by`** refreshes the unit in
+  place; adding, removing or retyping a parameter restarts it.
+
+A default outside its own constraint is `invalid-default`, so the repo
+path is checked as strictly as the live one.
+
+### Who may write
+
+`editable_by` says who may change a parameter live. The dashboard
+offers `family` parameters as setpoints, shows `owner` ones read-only
+and writes nothing else. The core's queryable does not know who is
+asking, so any bus client may write any parameter within its
+constraint: reaching the bus is the boundary
+([Security model](#security-model), [Open questions](#open-questions)).
+
+### In the SDK
+
+A unit follows its own `home/config/{unit}/*` implicitly, by subscribe,
+then get, merge ([The last-value mirror](#the-last-value-mirror)).
+
+- **Automations** read `ctx.params.<name>`, the typed current value
+  (`time` as `datetime.time`); an undeclared name raises.
+- **Adapters and services** use `LiveParams` (`homeostat.params`),
+  with defaults of their own so a manifest may omit a parameter; it
+  tracks finite numeric values only.
+- **Writers** (the dashboard) call `UnitSession.write_config`, which
+  raises `ConfigWriteError` with the core's message on refusal.
+
+## State, history and forecasts
+
+Three stores answer three questions: the core's last-value mirror says
+what is true now, the recorder what was true and what was predicted,
+and forecasts what a source claims will be true. All three are read
+over the bus, so no consumer holds a database handle or a credential,
+and each store stays private to its owner.
+
+### The last-value mirror
+
+The core keeps an in-memory last-value cache in the supervisor process
+(`src/supervisor/mod.rs`, `mirror`). For each mirrored key space it
+declares a subscriber and a queryable on the same expression: a put
+replaces the key's entry, a delete removes it, and a GET replies once
+per matching key with the last payload, byte for byte. Mirrored:
+`home/state/**`, `home/forecast/**`, `home/clock/*`,
+`home/discovery/*` and `home/hold/*`; `home/config/*/*` and
+`home/health/*` have last-value queryables of their own
+([Live parameters](#live-parameters), [Supervision](#supervision)).
+All are up before any unit spawns, so a unit's first get finds them.
+
+- **Every reply carries the value's age**, read off the mirror's
+  monotonic clock rather than a wall-clock stamp (`get_json_aged`; see
+  [Bus payload conventions](#bus-payload-conventions)).
+- **The read pattern everywhere is subscribe, then get, merge**.
+  `ctx.subscribe` does it for every binding, delivering each key's
+  catch-up, with its age, before a live sample for that key
+  ([Staleness](#staleness)).
+- **The mirror never inspects a payload and expires nothing.** It
+  cannot know a producer's cadence, so whether a value is too old is
+  the consumer's question ([Availability](#availability)).
+- **It is not durable.** A core restart, which every upgrade is,
+  empties it; a decision nobody can recompute is restored from history
+  ([Restoring a unit's own last value](#restoring-a-units-own-last-value)).
+
+### History and the recorder
+
+The recorder (`adapters/recorder.py`) is a generic service unit, one
+per house ([Reserved classes](#reserved-classes)), writing one SQLite
+file named by its `[discovery]` endpoint (`sqlite:<path>`, relative to
+the house root, `${VAR}` expanded). It is not a bus mirror: payloads
+are decoded and typed on the way in, and anything that fails leaves a
+`drop` health event, never a row of garbage.
+
+**SQLite, in production and in tests.** A home produces well under ten
+samples a second, which an indexed SQLite file absorbs for years, CI
+runs the identical engine with nothing beyond `cargo test`, and every
+read goes over the bus, so outgrowing it would change one unit. Not
+QuestDB or TimescaleDB: a permanent JVM or Postgres cluster outside the
+unit model. Not DuckDB: columnar, weak at single-row inserts, and
+single-process; it can `ATTACH` the store or an archive read-only for
+analysis instead. Not a pluggable backend: tests and production would
+diverge. Tiering [archives](#archives) to Parquet (about 18x smaller,
+for a ~50 MB dependency and a second read engine) is held in reserve.
+
+**What is recorded** is whatever the manifest subscribes. The shipped
+manifest takes `home/state/**` and `home/cmd/**` into `samples` (a
+command as its envelope's `value`), `home/forecast/**` into
+`forecasts`, and into `events` the raw payloads of `home/health/**`,
+`home/config/**` (only accepted writes are put there) and every command
+envelope ([Logs and the audit trail](#logs-and-the-audit-trail)). Not
+`home/clock/**` (a derivable row a minute, forever), `home/meta/**`,
+`home/discovery/*`, `home/hold/*`, liveliness tokens or
+`home/history/**`. The schema is `init_store()`'s, versioned by
+`PRAGMA user_version` and migrated in place.
+
+- **Series identity is `(class, entity, aspect, source)`; the room is
+  a per-row tag**, so an entity that moves is one continuous series.
+  `source` is `''` except for forecasts, not NULL, because SQLite
+  treats NULLs as distinct in a unique index. Interned names keep a
+  `WITHOUT ROWID` sample row near 25 bytes, against about 113 as text.
+- **Each series carries its own tally** (rows, oldest, newest), or
+  `stats` would scan a store growing with the problem it diagnoses and
+  `ctx.restore`, which polls it, would time out.
+- **The timestamp is recorder receive time** (µs, UTC), assigned before
+  any buffering, so an outage never distorts history. Zenoh stamps are
+  optional for client sessions, and one clock beats mixed provenance.
+  Two samples for one series in one microsecond collide; the later is
+  dropped.
+- **Repeats are kept.** A republished value is still a sighting;
+  dropping repeats would fix a republishing device but not a jittering
+  float or an honest 1 Hz sensor. [Retention](#retention) and
+  [archives](#archives) bound volume, and reads collapse repeats.
+- **Only scalars** ([Bus payload conventions](#bus-payload-conventions));
+  anything else is dropped (`non-scalar`, `non-finite`).
+- `auto_vacuum = INCREMENTAL` (settable only before the first page)
+  lets retention return pages; WAL keeps the writer and readers from
+  blocking each other.
+
+**The writer.** Subscriber callbacks stamp, type and enqueue; one
+writer thread commits one transaction per flush on a connection opened
+per flush, so no long-lived handle holds stale permissions or a
+deleted inode. Reads open their own read-only connections. The store
+must open before `ready()`, so a recorder without one shows as backoff.
+
+- **Outage** (disk full, permissions, a dying SD card): a failed flush
+  keeps the batch in a 10,000-row drop-oldest buffer (recent state is
+  worth more), retried on new samples and every second. One
+  `backend-outage` per down transition; on recovery the rows land with
+  their original stamps and `backend-restored` reports what was
+  flushed and dropped.
+- **Poison rows** are bad data, not an outage: the batch is replayed a
+  statement at a time, the refused row leaves a `drop`
+  (`integrity-error`), and the rest commits.
+- **Integrity check**: SQLite has no page checksums by default, so a
+  separate thread runs `PRAGMA integrity_check` read-only every
+  `integrity_check_hours` (owner, default 24, 0 disables; first run an
+  interval after start, so a restart loop never hammers a large file),
+  reporting `integrity-ok` or `integrity-failed` for the owner to act.
+
+**Catch-up from the mirror.** A recorder subscribing at start misses
+what was published just before, so a rarely-changing aspect could read
+as "never published". After subscribing it enqueues the mirror's
+`home/state/**` values it has not seen live, stamped at the value's own
+time (now less its age), skipping a series with a row at or after that
+time, within half a second. Not a start order putting the recorder
+first: that misses a recorder restart, and is a dependency edge between
+units. While the recorder is down there is a gap; nothing replays it.
+
+### Read path
+
+One queryable at `home/history/**`, declared under the recorder's
+`[bus.publishes]` so the plan shows the read surface. Parameters use
+Zenoh's `;` separator with no URL decoding, so an offset's `+` stays
+literal. Keys are entity-first with no room slot.
+
+- **Samples**:
+  `home/history/{state|cmd}/{entity}/{aspect}?from=..;to=..;limit=..`
+  (RFC3339 with offset), one reply per matching series, an array of
+  `{ts, room, value}`. Two exclusive folds apply to the whole window
+  before `limit`: `bucket=<seconds>` (a number's mean with `min` and
+  `max`, otherwise the last value; over 10,000 buckets is refused) and
+  `changes=1` (the rows where the value changed). Without them a
+  chart's span would depend on publish rate; the page knows its width
+  and the recorder the rows, so downsampling is the recorder's.
+- **Forecasts**: `home/history/forecast/{entity}/{aspect}/{source}`,
+  in issues in the wire's shape: `at=` (default now) is the latest
+  issue at or before that instant, `valid_from=..;valid_to=..` every
+  issue that spoke about the window, with only its overlapping points,
+  which is what verification reads. `limit` counts issues.
+- **Events**: `home/history/events?key=..;from=..;to=..;limit=..`,
+  `key` a key expression and bounds integer microseconds.
+- **Stats**: `home/history/stats`, the size and span of the store,
+  each series, the events table and each archive, from tallies, never
+  scans: choosing a retention window means knowing which series fills
+  the file, and a host may lack `sqlite3`.
+
+Every path clamps `limit` to 10,000, keeps the newest, and replies
+oldest first. Anything malformed or unexpected gets an error reply
+(the latter with a `query-failed` event): a callback that raises sends
+no reply, indistinguishable from "nothing recorded", the one wrong
+answer a history API must never give. Zenoh runs a queryable's
+callback serially, so a slow answer delays every query behind it.
+
+### Retention
+
+Three owner windows in days, `retain_samples_days`,
+`retain_forecasts_days` and `retain_events_days` (events, the audit
+trail, are worth keeping longest), default 0, forever, so no upgrade
+silently deletes history. Forecasts go by issue time, since superseded
+issues are what grows. The writer thread purges hourly and on a window
+change, per series in short primary-key range deletes, then `PRAGMA
+incremental_vacuum`. One `purge` event per purge that deleted anything
+(an empty one is silent); `purge-failed` is retried an hour later.
+
+Retention is the only operation that deletes from the store, and it
+makes noise visible: an adapter publishing every poll rather than on
+change fills the file, and `stats` names the series. No downsampling:
+a roll-up that deleted its source rows could not be additive, and an
+analytical layer over `ATTACH` can roll up without deleting.
+
+### Archives
+
+Archiving moves rows out of the store without deleting them, so the
+store stays one window deep and every observation is kept. With
+`archive_after_months` above 0 (owner, default 0 = never), each month
+that closed longer ago than that is sealed into
+`archive/<store>-YYYY-MM.db`, one month per pass, on the writer thread
+after the hourly purge (so a row past its window is deleted, not
+archived). Events: `archive`, `archive-failed`. `home/history/**`
+answers from the store alone: every query the system makes lies within
+a month or two, and archives are for people and tools.
+
+- **A plain, uncompressed SQLite file with the store's schema** and
+  ids, readable as the store is; an archive that must be unpacked
+  first is one nobody opens.
+- **Sealed once, never written again**: written under a temporary
+  name, verified, fsynced, renamed, recorded with its SHA-256 and made
+  read-only. A crash mid-seal loses nothing: the next pass seals a file
+  that is present and discards an attempt whose file is not, since
+  nothing was pruned. Late rows go into `.2`, `.3`. The checksum is
+  the whole of a later check, and a backup's diff is the current window.
+- **Only what a sealed file holds leaves the store**, matched on the
+  whole row. **Each series' newest sample and forecast issue stay**
+  until overtaken, because `ctx.restore`, the seed and every
+  latest-value read look in the store.
+- **`retain_archives_months`** (owner, default 0 = forever) drops whole
+  files, as its own setting so a store window never deletes archives.
+  It deletes the file before its record, so a crash leaves work the
+  next pass finishes (`archive-dropped`).
+- **Settings that undercut each other** (a `retain_*_days` window under
+  `archive_after_months` + 1 months, archives kept no longer than
+  archiving waits) are allowed, and reported once per change as
+  `archive-misconfigured`.
+
+### Forecasts
+
+Model-predictive control is a standing assumption, and it needs
+forecasts. Homeostat provides only the mechanism (a place to put a
+forecast, a store that keeps every issue, a chart that draws them);
+producers and controllers are house behaviour ([Repo split](#repo-split)).
+A forecast is **a source's claim about a series' future values**, so a
+controller's planned trajectory needs no second class; whether a claim
+is a prediction or an intent follows from the aspect ([Sources](#sources)).
+
+- **Keyed like the series it extends, plus who says so**
+  (`home/forecast/{room}/{entity}/{aspect}/{source}`), sharing its
+  descriptor and chart axis; several sources may speak about one aspect.
+  The source slot is required, never optional: with two key shapes, no
+  one wildcard expression would match every opinion about a series.
+- **The entity must exist; the publisher need not bind it**
+  (`forecast-publish-unbound`): a weather service or a controller is
+  routinely not the binder. Two units whose publishes can land on one
+  key are `forecast-publish-conflict` (slot by slot, a wildcard
+  colliding with any literal), since the mirror keeps one document.
+- **Two time coordinates are the whole difference from state**, when it
+  was said and when it is about, so even a one-point forecast cannot
+  ride `samples`, where two issues about one instant would collide. The
+  payload, one issue atomically, is `{schema: 1, issued, points:
+  [{t, v, d?}]}` with offset timestamps (an hour-wrong forecast is
+  worse than none).
+  - **Irregular points**, as the source said them, because resampling
+    is not single-valued (a price holds, a temperature interpolates).
+    The consumer names the rule: `Forecast.at(when, mode, max_gap_s)`,
+    `step` or `linear` with no default, and `resample()` give `None`
+    across a gap, so a controller can refuse rather than optimise
+    against invention.
+  - **`d` is a point's extent in seconds**, `[t, t + d)`: otherwise an
+    accumulation reads as a spike, and a horizon's last held value has
+    no length. Reading an interval point `linear` raises.
+  - **`issued` is required and is the whole staleness story**: the
+    consumer applies its own maximum age (`Forecast.age_s()`).
+  - **`put_forecast` refuses a bad payload** (over 2048 points,
+    non-finite, duplicate instants) with a `drop` (`invalid-forecast`).
+- **Mirrored by the core**, or a consumer starting at midday would be
+  blind to a day-ahead curve until tomorrow. **Producers publish their
+  current forecast at startup**, because a core restart empties it.
+- **Stored per point, every issue kept**, since checking superseded
+  issues against the outcome is why forecasts are recorded. Rows carry
+  the producer's `issued`, never receipt, so a replayed issue cannot
+  pose as fresher; an issue is accepted or refused whole.
+  `valid_end` is stored, since a last window has no successor to derive
+  it from. Not a widened `samples`: a nullable `issued_ts` cannot ride
+  a `WITHOUT ROWID` key, folds would average across issues, and
+  retention would need a class-conditional purge. Rows older than the
+  source segment carry the reserved source `_unknown`.
+- **A quiet producer is never diagnosed from its document's age**: a
+  crashed one is supervision's, and a failing upstream is the running
+  producer's health event. The [dashboard](#dashboard) draws forecasts
+  under its own staleness policy.
+- **Not representable**: uncertainty and corrections to the past
+  ([Open questions](#open-questions)). Percentiles as separate sources
+  are the tempting misuse: one issue's percentiles are one claim.
+
+### Restoring a unit's own last value
+
+The mirror survives a unit restart, not a core restart. After an
+upgrade a latch would come back at its code default, disagreeing with
+what the family set, and a fusion needing every input would be blind
+until its slowest source publishes. **The right behaviour differs by
+kind of state, and only the unit knows which it holds**, so restoring
+is a call the unit makes, never framework behaviour:
 
 | unit | on start | why |
 |---|---|---|
-| `rf433` | publish `false` | the held value was its own construct (One-way senders) |
-| `temperature_fusion` | recompute, seeded if it likes | derived, and a stale input is dangerous |
-| `modes` | restore what was last published | a person decided it, and age is irrelevant |
+| one-way sender adapter | publish `false` | the held value was its own construct ([One-way senders](#one-way-senders)) |
+| fusion | recompute, seeded from the mirror | derived, and a stale input is dangerous |
+| latch | restore what was last published | a person decided it; age is irrelevant |
 
-A framework guessing between those three would be wrong twice. The
-one-way-sender settlement is the standing proof.
+- **`ctx.restore(binding, room=, entity=, aspect=, timeout_s=30)`
+  returns `(value, age_s)` or `None`**, from the series' newest row in
+  the recorder, the only record that a decision was made. It reads only
+  the unit's own published state keys, resolved through the binding as
+  `publish` is: somebody else's state is a different and worse thing,
+  and a command is an event with nothing to restore.
+- **The age comes with the value**, which a latch ignores and a fusion
+  checks; a bare value would make the dangerous case the easy one.
+- **`None`, never an exception**, when there is no recorder, no rows,
+  or a store error (`restore-failed`), so a house without a recorder
+  starts on code defaults.
+- **It waits for the recorder, because there is no start order**,
+  polling `home/history/stats` (an empty series gets no reply) until
+  the timeout, unless no unit publishes under `home/history/`. Call it
+  before `ready()`. The recorder answers serially, so a get it took is
+  waited out rather than re-asked into its queue; only an unserved get
+  is repeated. Reads are not a declared bus surface; what constrains
+  `restore` is the unit's own publish bindings.
 
-- **`ctx.restore(binding, ...)` returns `(value, age_s)` or `None`.** The
-  recorder is the only record that a decision was ever made, and its
-  queryable has answered `home/history/{space}/{entity}/{aspect}` since
-  step 5a — the dashboard's sparklines already read it. What was missing
-  was not plumbing but a blessed path: without one, the obvious
-  workaround is a unit hand-building a selector into `home/history/**`.
-- **Its own published state keys only**, addressed by the same slots as
-  `publish` and resolved through the same binding, so a templated
-  expression restores per entity exactly as it publishes per entity. A
-  unit restoring somebody else's state is a different and worse thing,
-  and a `cmd` binding has no history to restore — a command is an event,
-  not a value a unit holds.
-- **The age comes with the value**, as in the mirror catch-up: `modes`
-  ignores it, a fusion refuses anything older than its staleness policy.
-  Returning a bare value would make the dangerous case the easy one.
-- **No new bus surface.** A history read is a `get`, and reads are not a
-  declared surface anywhere today — the dashboard queries the recorder
-  with nothing in its manifest. A `[bus.reads]` block would be
-  unenforceable decoration: the SDK cannot stop a unit opening its own
-  session, and what actually constrains `restore` is that it resolves
-  through the unit's own publish bindings. If reads ever become a
-  policed surface (Zenoh ACLs), they become one for every class at once.
-- **`None`, never an exception, when there is nothing to restore** — no
-  recorder in the house, no rows for the series, or a store that answers
-  an error (that one also leaves a `restore-failed` health event). A
-  house without a recorder still starts; a unit that cannot read its
-  past falls back to the default it would have used anyway.
-- **It waits for the recorder, because there is no start order.** A start
-  order was already considered and rejected for the recorder's own
-  catch-up: it is the first dependency edge between units the manifest
-  rules refuse. So `restore` asks `home/history/stats` — the one
-  history selector that answers whatever the store holds — until the
-  recorder answers or a timeout passes, and is called before `ready()`,
-  where a unit not yet able to do its job is exactly what the supervisor
-  should see. Waiting on the series itself would stall every first start
-  for the full timeout, because a series with no rows is not answered at
-  all. A house with no recorder is read from the text (nobody publishes
-  under `home/history/`) and never waits.
-- **One question at a time, waited out.** The recorder answers queries
-  one at a time (zenoh runs a queryable's callback serially), so a poll
-  that gives up on a short get and asks again leaves its question queued
-  behind it: once one answer takes longer than the poll, every later
-  answer reaches an asker that has already left, and `restore` never
-  hears a reply however long its deadline (#121, where a `stats` that
-  had grown to a full-table scan reset four latches on a core restart).
-  So the get waits out the rest of the deadline, and only a get nobody
-  serves — no recorder up yet, which returns at once — is asked again.
-  The two failures are told apart in the `restore-failed` reason: no
-  recorder answered, or one took the query and never replied.
+Not persisting unit state in the SDK or supervisor: the same framework
+guess, and it would resurrect a one-way sender's expired motion event.
+Not a file beside the unit: a second store with its own retention,
+backup and corruption story.
 
-**Rejected**: persisting unit state across restarts, in the SDK or the
-supervisor — it is the same framework guess, and it gets `rf433` wrong by
-resurrecting a motion event that expired long ago. Restoring
-automatically for any unit that binds entities, for the same reason. A
-start order that brings the recorder up first. Writing the last value to
-a file beside the unit, which is a second store with its own retention,
-backup and corruption story, next to the one the house already runs.
+## Derived values
 
-## Unit granularity: the atom is the unit, not the automation (settled 2026-09-08)
+A value the house computes rather than measures (a fused temperature,
+"someone is home") is ordinary state on an ordinary entity, bound by
+the automation that computes it. Consumers never learn whether a value
+was measured or derived, deliberately, just as the bus does not leak
+adapter-native vocabulary; provenance is visible where structure
+lives, in the entity file's owner and in the plan.
 
-The question was whether every automation, however small, should be its
-own `uv`-run process. The answer is that the question conflates two
-things. **The unit is the atom**: of authority (its manifest's grants,
-subscribes, publishes, params), of failure (its liveliness token, backoff,
-breaker, process group), and of change (its `files_hash`, its step in the
-apply walk). Those three boundaries coinciding on one process is the
-architectural payoff of the process model, and nothing here moves any of
-them. **What a unit contains is the author's call.** A unit script may
-host several rules — several `ctx.subscribe` handlers, a minute-tick
-handler, a fused sensor — and the SDK already supports it: the Context is
-callback-driven with no limit on subscriptions, and the manifest expresses
-the union of what the rules need. No SDK or schema change; this is a
-statement of what was always legal.
+### Virtual sensors
 
-- **The grouping rule is shared blast radius, not size.** Rules belong in
-  one unit when they should live and die together: one throws on the next
-  tick and the others going down with it is acceptable, they share a
-  restart, they share `home/health/{unit}`, and an edit to any of them is a
-  behavioral change to all of them at plan time. "All the evening
-  lighting" is one unit; "evening lighting" and "the heat-pump setback" are
-  two, however small each is, because nobody wants a bug in one to restart
-  the other.
-- **Authority is the union, deliberately.** A unit that hosts three rules
-  holds the grants all three need, and any of them can use any of them —
-  the grant table cannot tell rules apart, only units. That is the cost of
-  bundling and the reason the boundary stays at the process: a rule that
-  must not be able to touch what its neighbour touches is a separate unit.
-- **What a unit costs** (measured 2026-09-08, dev container, warm): a
-  minimal Python unit — zenoh and the SDK imported, nothing else — is
-  ~12 MB resident. That is the floor per unit now that the `uv run` parent
-  is gone (see Supervision); a heavy adapter is more, a trivial automation
-  is not less. Forty trivial units is ~0.5 GB, fine on a NUC or a Pi 4,
-  not on a Pi Zero. The lever if that ever binds is bundling by the rule
-  above, not a shared runner.
-- **Rejected: a multi-tenant automation runner** — one service hosting
-  many small rules with an in-process scheduler. It reintroduces shared
-  authority and shared failure across rules that did not choose it, and
-  the moment it grows per-rule health and restart it is the supervisor
-  rebuilt in Python. That is the Home Assistant model the project set out
-  to leave.
+A virtual sensor is an entity whose binding unit is an automation:
+**exactly one unit binds each entity**, adapter or automation. Presence
+fusion (router sightings, phones and motion into "someone is home") is
+the typical one.
 
-## Burners and interlocks (settled 2026-09-09, #37, #38)
+- **Mechanics.** An automation may carry `[entities]`
+  ([Unit kinds](#unit-kinds)), expanded as an adapter's are, and their
+  files may omit `id`: a computed value has no device-native address.
+- **The entity file is what makes everything downstream free**: the
+  recorder, the dashboard widget, the mirror and `read_state`, the
+  notable vocabulary and voice grammar all come from the entity
+  registry. A free-form state key would be recorded and invisible to
+  every generated surface, so a state publish must fall under an
+  entity the unit binds (`state-publish-unbound`); forecasts are held
+  only to the entity existing ([Forecasts](#forecasts)).
+- **Read-only unless the owner listens**, which makes it a latch
+  ([Commandable virtual entities](#commandable-virtual-entities)).
+  Chains need no ordering: a late joiner reads the mirror.
+- **Room.** A fusion across rooms lives in `global`: "downstairs" is a
+  zone, and zones never appear in keys. A virtual sensor honestly about
+  one room uses that room. Where it appears on the dashboard is
+  `dashboard.toml`'s say, never a second spatial truth.
+- **Staleness is the producer's obligation**, a norm rather than
+  machinery, since the core cannot know which inputs a fusion needs. A
+  fusion of stale inputs goes stale rather than confidently
+  republishing ([Staleness](#staleness)), and reports which inputs it
+  used ([below](#which-sources-a-computation-actually-used)).
 
-A house with a heat pump and a pellet burner has two heat sources, and an
-automation that chooses between them needs both describable in the same
-terms. #37 proposed a `burner` capability rather than `switch` plus loose
-sensors; #38 asked where the burner's flue-temperature cutout should stand
-in the arbiter. Both settled here.
+Not a `derived` key class: it fragments the vocabulary every consumer
+keys on. Not a generic fusion adapter with rules: which sensors and
+weights is house behaviour, and a rule language for it is a DSL. Not
+fusion across adapters inside one: an adapter may derive on its own
+bound entities and no further.
 
-- **Vocabulary: `burner`**, deliberately small. Base aspect `on` (bool, the
-  family lever, the burner analogue of `setpoint` and `locked`); feature
-  `power_level` (the output setting as the device enumerates it — the
-  reporting device offers 10/50/100 — described as a constraint so the
-  existing enum → segmented-control path renders it); normalised readings
-  `flue_temperature` and `boiler_temperature` in °C. Everything else passes
-  through under its firmware name, as `ivt490` does.
-- **Why a capability and not switch + sensors.** Modelled as a `switch` a
-  burner is a boolean with no meaning attached: "is it making heat" would
-  have to be read from dialect fields, which is what the vocabulary exists
-  to prevent. And per-aspect leases need `on` and `power_level` to be
-  aspects of one entity, so a family member holding the burner off does not
-  freeze an automation's power-level choice — the same reason the heat pump
-  moved to per-aspect leases.
-- **`power_level` is vocabulary for a safety reason** as well as a UI one:
-  a flue-temperature cutout's threshold is a function of the power level,
-  so an interlock needs both as first-class inputs. The test that fell out,
-  worth keeping: *the inputs an interlock needs are vocabulary; the
-  thresholds are configuration.*
-- **`on` reads back from the device.** In the reporting dialect start and
-  stop are momentary writes and the true on/off is derived from the run
-  state, so `on` must never be an echo of the command — the discipline
-  `ivt490` already states for `setpoint`.
-- **No run-phase vocabulary yet.** A `state` of `off / igniting / running /
-  cleaning / fault` is what would make an automation portable across
-  burners, but no code table exists anywhere in the reporting chain and
-  after ten idle days exactly one code has ever been observed. A phase
-  vocabulary now would be invented rather than generalised. `state` and
-  `substate` pass through raw; revisit after a heating season, ideally
-  against a second burner adapter.
-- **Not `heat_source`.** The arbitration argument is really about heat
-  sources, not combustion, but an abstraction spanning a burner and a heat
-  pump that is already `climate` would be built against one example — the
-  same objection. Grow it when a second case demands it.
-- **No dashboard widget in the same change.** The described-card fallback
-  already renders any capability without a bespoke widget from its
-  descriptors (`climate` uses it); `burner` gets a card the day someone
-  wants one. That day came 2026-09-18: **the `burner` widget** is one
-  card over the vocabulary and nothing else — the family lever `on` and
-  the output `power_level` as their described controls, then the two
-  temperatures an interlock reads, each with its day as a sparkline, and
-  a state word (`burning` / `idle` / `offline`) derived from `on` and
-  `available`. The dialect stays out of it: run-state codes and the feed
-  shaft are the entity overlay's, which the card's head taps through to,
-  because a card that listed a firmware's fields would be the
-  per-adapter UI this project rejects. The core refuses the widget over
-  an entity of another capability (`dashboard-widget-capability`): a
-  capability widget draws that capability's vocabulary, so an entity
-  that does not speak it has nothing to fill. The room card keeps the
-  described-card row — the widget is for a view, where there is room.
-- **Cost note, for whoever writes the adapter.** The reporting bridge
-  republishes all 30 topics every ~32 s whether or not anything changed,
-  and its `status` topic alone is 116 fields — naively that one topic is
-  ~310k recorder rows/day, two and a half times the entire `ivt490`
-  adapter, which is already 94% of that house's store. Publish on change
-  (the source is republish-on-poll, so forwarding inherits the full poll
-  rate for values that never move — #3 one layer out), and treat the
-  `settings/*` topics as configuration, not samples.
+### Device feeds
 
-### Aduro adapter (built 2026-09-09)
+A heat pump's "actual indoor temperature" input is not a command: it
+is a continuous signal with one master, where the failure that matters
+is staleness, not contention. A **feed** wires a device input to one
+source aspect. Which inputs are fed is a per-house decision, so the
+wiring lives in the fed entity's file:
 
-`adapters/aduro.py`, against the reporter's `aduro2mqtt` bridge (NBE UDP
-to MQTT). The entity `id` is the bridge's base topic; one entity per
-burner; arbitrated, so `on` and `power_level` lease independently.
+```toml
+[inputs]
+indoor_temperature_actual = { entity = "indoor_temperature", aspect = "temperature" }
+```
 
-- **Publish on change, from two topics.** Only `{base}/status` and
-  `{base}/operating` are subscribed; a field publishes when its value
-  differs from the last one put on the bus (and once after start). The
-  identical republish a poll later yields nothing. Settings, consumption,
-  advanced and logs are not subscribed at all. Status fields keep their
-  firmware names, dots included; operating fields carry an `operating_`
-  prefix so the two NBE namespaces stay apart without a table.
-- **`on` is derived**, from `state` not being in a set of off codes. The
-  set holds the one code observed (14, idle and unlit); it grows from the
-  heating season, which is why `state` and `substate` pass through raw
-  beside it. `power_level` is `regulation.fixed_power` as an int;
-  `flue_temperature` is `smoke_temp`; `boiler_temperature` is
-  `boiler_temp`. `shaft_temp`, the device's own fire-safety reading, passes
-  through labelled.
-- **Commands** are the bridge's own `{path, value}` shape on `{base}/set`:
-  a bool `on` becomes a momentary `misc.start` or `misc.stop`; an integer
-  `power_level` in {10, 50, 100} becomes `regulation.fixed_power`. Anything
-  else drops with `invalid-command`. Both are family-tier in the
-  descriptor, `on` described as a two-valued enum so the described card
-  gets a segmented control without a bespoke widget.
-- **Availability** is the receive timer (`availability_timeout_s`,
-  default 300 s, about nine polls): the bridge skips a topic when the
-  burner does not answer, so an unreachable burner and a dead bridge both
-  go silent.
+- **The reference is entity and aspect**, not a bus key or a unit:
+  entities are the identity layer keys derive from, and a device
+  consumes one signal. The plan resolves it to a state key and prints
+  the edge under `Feeds:`.
+- **Plan-time checks** (`resolve_feeds` in `src/grants.rs`): the source
+  entity exists (`input-unknown-entity`), an automation-owned source
+  publishes the aspect (`input-unpublished-aspect`), and the fed entity
+  is a device (`virtual-entity-fed`). Any owner's aspect is feedable.
+- **The adapter is the authority on input names**, which are dialect
+  knowledge: it refuses to start, visibly, on an input it does not
+  know, and drops the corresponding command aspect for an entity that
+  feeds it, so the input keeps one master.
+- **Staleness is the device's.** The adapter forwards source samples
+  while the source's `available` is not false; then the device's own
+  validity window expires the term and it falls back on its own
+  control. No adapter-side timeout or refresh: a transition-only source
+  quieter than the window is house tuning.
+- **A fed value must not outlive its source in a broker**, which would
+  serve it across reconnects: it is published unretained, and on source
+  loss the adapter clears any retained copy and reports
+  `feed-source-lost`.
+- **One subscriber per source entity** (`.../{entity}/*`), because
+  Zenoh orders samples only within a subscriber, and a value overtaking
+  the `available = true` before it would be dropped. A value arriving
+  while the source is unavailable leaves one `drop`
+  (`feed-source-unavailable`) per outage.
+- **Feeds are not walk-order edges.** A control loop that reads a
+  device and feeds a term back is legitimately cyclic, so the
+  [apply walk](#the-apply-walk) orders by grants only.
+- **One computation may straddle both**, one output fed and another
+  commanded, with no guarantee they land together; an automation that
+  needs that holds the command's lease and feeds against it.
 
-### Interlocks stay the device's job (settled 2026-09-09, #38)
+Not a fifth command aspect marked non-arbitrated: it misdescribes
+sensor feedback and puts it in the grant table next to setpoints. Not
+a new grant kind: machinery for what an entity-file reference
+expresses. Not an adapter subscribing a raw bus key: that bypasses the
+identity layer.
 
-The house runs two flue-temperature cutouts (stop above 200 °C at 10%
-power, above 225 °C at 50%) and wanted to port them as a house-local unit.
-No band fits: at `automation` the interlock and the 60 s heating loop it
-guards against sit at the same band, and equal-or-higher passes and takes
-the hold, so it is defeated within a minute; at `manual` it works and lies,
-attributing a thermal cutout to the family in every audit surface. Deeper,
-the arbiter's hold is *timed* and an interlock is *conditional*: the burner
-should stay stopped while the flue is hot, not for `hold_minutes`. Refreshing
-the hold on every sample turns the interlock into a continuous writer whose
-death silently releases the burner to the automation.
+### Sources
 
-- **Decision: homeostat is not in the safety path.** The device carries its
-  own alarm layer (the Aduro's `max_shaft_temp`, `min_boiler_temp`), and
-  that is where combustion safety lives. A house-local cutout that
-  additionally publishes `on = false` at the automation band is welcome as
-  belt-and-braces, but it is an automation like any other — contestable,
-  timed, honest about its band — and the house must not rely on it. This
-  is written down so "no band for interlocks" reads as a decision rather
-  than as "not yet".
-- **Rejected: a fifth band above `manual`.** It contradicts THE FAMILY
-  ALWAYS WINS OVER AUTOMATIONS by adding a constant, when whether safety
-  outranks the family is a values decision that deserves to be made in the
-  open, and it inherits the timed hold that is the wrong shape anyway.
-- **Deferred, not rejected: an inhibit class.** A unit asserting a lockout
-  on `(entity, aspect)` while a condition holds, the arbiter refusing every
-  band for as long as it is asserted, assertion and release published as
-  events — condition-based, honest about the actor, visible. It is the
-  right shape (an interlock removes an option; it does not want to win an
-  argument — the same distinction #9 drew between a feed and a command),
-  and it generalises to alarm-armed locks, dry-run pumps, valves held for
-  maintenance. It is also machinery, and it is being deferred against one
-  case. If interlocks recur, this is the design to pick up.
+The key space names the thing that reports, never the thing reported
+on. For a lamp the two are one object; several sensors and a weather
+service with opinions about the outdoor air is where they come apart.
 
-## Notifications (settled 2026-09-09, #31)
+- **Physical versus virtual is invisible** and never shapes a key.
+- **Commandable versus read-only is a property of an aspect, not an
+  entity.** Leases are per aspect and descriptors carry `command` per
+  field ([Aspect descriptors](#aspect-descriptors)): a heat pump's
+  `feed_temperature` is a reading, `feed_temperature_target` takes
+  commands. Asking "sensor or control?" per entity is what makes a
+  second noun for the subject look necessary.
+- **A plan and a prediction are one class, and which is derivable**: a
+  forecast for a commandable aspect is a plan, for a read-only one a
+  prediction, so no `kind` field. Divergence from the outcome measures
+  a prediction's accuracy but a plan's authority (revised, arbitrated
+  away, clamped), so an error metric must not average the two.
+- **The source segment is on forecasts only.** Two outdoor sensors are
+  two entities, since a sensor is in the house with a room and a
+  failure mode; a weather service is not, and an entity for it would
+  name subject and provenance in one string. Competing estimators of
+  one state value are separate entities until that stops being rare.
 
-A unit could publish state, commands, health and config, and none of it
-reached a person. #31 surveyed the reporting house's Node-RED estate and
-found three of five automation groups (intrusion, irrigation, heating)
-unportable without a way to tell someone, and asked whether that is in
-scope at all, what shape it takes, and how it is gated.
+**Declared sources on a derived entity.** A computed entity may declare
+what it is computed from, in a feed's reference shape:
 
-**In scope, and it is a capability delivered by an adapter.** Reaching
-a person is reaching a device the house binds: a phone's notification
-channel has a dialect exactly as a lamp does, and the adapter that speaks
-it embodies the channel as an entity. `notifier` is a capability; an
-entity file per addressee binds it to a delivery adapter; an automation
-that wants to reach one declares an ordinary cmd-class publish, granted
-at plan time onto that entity. Nothing new in the core beyond the
-vocabulary row.
+```toml
+[sources.kitchen]
+entity = "kitchen_temp"
+aspect = "temperature"
+note = "south-facing; reads high on a sunny afternoon"
+precision = 0.5
+```
 
-- **Vocabulary.** Base aspect `message` (string, commandable); feature
-  `alert` (string, commandable). Severity is an ASPECT, not a field in
-  the payload, so the two classes are structurally separate delivery
-  paths: separately grantable (`home/cmd/person/*/alert` grants alerts
-  and nothing else), separately policed by the adapter later (quiet
-  hours withhold `message`, never `alert`), and separately rendered in
-  history. The payload is the message itself, a bare string, the scalar
-  the recorder stores natively. Nothing dialect-shaped enters the
-  vocabulary: chat ids, topics, priorities, parse modes and receipt
-  semantics are the adapter's, in its credentials and its code.
-- **Addressing is the entity.** One entity per channel, pseudo-room
-  `person` for a person's phone, `global` for a group. A group is either
-  a fan-out loop in the automation (the group-actions settlement:
-  fan-out at the edge, never a relay) or a group channel bound as its
-  own entity, whichever the dialect makes honest. A person with two
-  channels is two entities; switching providers is a plan/apply
-  migration, and the automations do not change. Nothing "person has
-  channels" exists in the model, deliberately.
-- **Gating is the grant table, unchanged.** Adding a `notifier` publish
-  to a manifest is a grant delta, so the plan is structural and lands as
-  a pending plan for the owner; the smuggling criterion of the agent
-  surface already covers an agent trying it. The plan renders who may
-  reach whom; a mistyped entity is the existing "matches no entities"
-  warning; the SDK refuses a key outside the declared expression. The
-  issue's worry that "the grant table would describe who may speak" is
-  the point: the table already says which unit may do what to which
-  entity, and a phone is one more entity a compromised automation can
-  do harm through.
-- **The envelope's band is inert.** Channels are `shared`, so no lease,
-  no preemption, no arbiter. Every cmd payload still carries
-  `{value, priority, actor}`; `actor` is exactly what the audit wants
-  (the recorder stores every message with who sent it and when, and
-  `home/history/events` answers "what was sent to Alice yesterday"),
-  and `priority` carries no meaning here. Written down rather than
-  reinterpreted.
-- **Rate limiting splits in two.** The cooldown itself is house policy
-  (the reporting estate's one-per-ten-minutes intrusion limiter is
-  load-bearing against the 417-samples-in-56-seconds motion episode of
-  #3) and lives in the automation as a family-editable parameter; the
-  bookkeeping is the SDK's `Cooldown` (graduated on the Freshness
-  argument: the shape was settled by a live limiter, not invented). The
-  adapter carries a per-entity floor, `min_interval_s` (owner-editable),
-  as defense in depth — the ivt490 bounds argument — dropping with a
-  `rate-limited` event. A runaway automation still writes every attempt
-  as a cmd row, so the noise costs something visible, which is the
-  retention settlement's pressure back toward the producer.
-- **Failure is loud by existing machinery.** The adapter verifies its
-  server before `ready()`, so a bad token or an unreachable server is a
-  startup error the supervisor's backoff shows. Every undelivered
-  message is a `drop` with reason `delivery-failed`. The channel's
-  `available` flips false on a failed delivery and true on the next
-  success — notable-state vocabulary, so a dead channel is a deviation
-  on `Now`, recorded, and subscribable. The adapter publishes
-  `delivered`, the epoch time the server acknowledged the last message
-  (the `fixed_at` shape), so history holds the sent row and the acked
-  row side by side. The honest limit: `delivered` means the delivery
-  service accepted the message, not that a human saw it. A true far-end
-  acknowledgment arrives with a homeostat app (below).
-- **Rejected, deliberately.** An external subscriber (cannot carry
-  intent: "irrigation skipped because it rained" is not derivable from
-  state, and if it is a unit it is in scope anyway). Health events as
-  the channel (no addressee; every event becomes a candidate). A new
-  class `home/notify/**` with a notifier service (the addressee becomes
-  hidden structure — a name in an out-of-repo file the plan cannot
-  check, so a typo goes nowhere silently; gating needs a new grant
-  kind, which the feeds settlement already refused as machinery;
-  nothing downstream is free; a new class fragments the vocabulary
-  consumers key on, the `derived`-class objection). An SDK facility
-  (authority by import). Notification as state plus a routing service
-  (the routing table is a rules DSL in a manifest, the generic-fusion
-  rejection; an alarm condition may ALSO deserve a virtual entity so
-  `Now` shows it, which is orthogonal to delivery). Dashboard web push
-  (no secure context, and "looking at the dashboard" is what the issue
-  excludes).
+- **Declared, not inferred**: a fusion subscribes many things for many
+  reasons, and no subscription says which inputs feed which aspect.
+- **Checked like a feed** (`resolve_sources`: `source-unknown-entity`,
+  `source-unpublished-aspect`), plus a plan warning for a declared
+  source the owner does not subscribe, so the declaration is a checked
+  fact. The plan prints the edges under `Sources:`.
+- **`note` and `precision` are the contributor's own caveats** (it sits
+  in the sun; it is merely coarse, not disagreeing), shown beside it in
+  the overlay. Kind and unit stay on the aspect descriptor, a contract
+  every source is held to.
+- **Not `[inputs]`, though the shape matches.** A feed carries a
+  runtime contract and retires a command aspect, which would collide on
+  a commandable virtual entity that also declares sources.
+- **Nothing in the store changes**: each contributor is its own
+  series, drawn by the overlay's `sources` view ([Dashboard](#dashboard))
+  as its own line, never a band, whose edge would trace a path no
+  sensor took.
 
-### The ntfy adapter (built 2026-09-09)
+Not a second noun for "the thing reported on", with its own key shape
+and a canonical-selection rule: the bullets above, `[sources]` and
+optional `id` on automation-owned entities cover its cases.
 
-The first delivery dialect. Signal and WhatsApp were ruled out for the
-reporting house because both need a phone number for the house's
-identity (Signal through signal-cli, a foreign binary on the go2rtc
-shim pattern; WhatsApp through the Business Platform, or through your
-own account, which makes every message come from you). Telegram needs
-none and was the runner-up. ntfy won on fit: a small self-hostable push
-server with an Android app, no account, no number, no third party when
-self-hosted, local-only over WireGuard exactly like the dashboard, and
-it speaks UnifiedPush, which is the push transport a homeostat app would
-use — so this adapter is not thrown away when the app arrives.
+### Which sources a computation actually used
 
-- **ntfy is a compose sidecar, not a unit.** The phones connect to it
-  directly, so it is the peer of the MQTT broker, not of go2rtc, and its
-  lifetime must not follow a unit restart. Homeostat only publishes to
-  it. `adapters/ntfy.py` is a plain Python unit; no foreign binary in
-  the image.
-- **Configuration is text, all of it.** ntfy provisions users, access
-  rules and tokens from its config file (`auth-users`, `auth-access`,
-  `auth-tokens`, ntfy ≥ 2.12; re-applied on every start, removed when
-  they leave the file). The house repo carries `ntfy/server.yml` with
-  the base URL, cache window and the access rules — topics are the
-  notifier entity ids, the publisher writes only, each person reads
-  only their own topic and the group's — and the env file beside the
-  compose file carries the bcrypt user hashes and the token. Adding a
-  family member is an entity file, two access lines and a user entry.
-  The access list duplicates what the entity files say (the z2m
-  base-topic shape); rendering it from the entity files would make
-  ntfy a shim unit, and the sidecar's independent lifetime is worth
-  more than three lines.
-- **Binding.** The entity `id` is the ntfy topic. `[discovery].endpoint`
-  is the server URL (compose-internal, not a secret); the publisher
-  token is `HOMEOSTAT_NTFY_TOKEN` in the environment, never in the
-  repo. Startup GETs `/v1/health` before `ready()`.
-- **Mapping.** `message` → POST `{endpoint}/{topic}` with the string as
-  the body at ntfy priority 3, the actor's unit name as the title;
-  `alert` → the same at priority 5, which the Android app treats as
-  urgent: it overrides Do Not Disturb and plays a continuous alarm
-  tone. The severity split therefore maps onto something the phone
-  enforces. The server's reply carries the message id and time;
-  `delivered` is that time. A non-2xx or a connection error drops with
-  `delivery-failed` and flips `available`.
-- **What the cache window means.** The phone's app fetches what it
-  missed on reconnect, back to `cache-duration`; a message older than
-  that when the phone returns is lost. A phone must reach the server
-  from wherever it is — for the intrusion flow, which fires while the
-  house is empty, that means WireGuard always-on on the family phones
-  — or the alert waits in the cache until it does.
-- **The homeostat app is the designated growth path** (the Frigate
-  pattern): one more adapter binding its own `notifier` entities,
-  acknowledging for itself, changing zero automations.
+Declared sources say what may contribute; a fusion that drops one as
+stale, implausible or excluded knows more. Without that, the overlay
+would draw an excluded contributor as participating, when "the shed
+sensor is why this went stale" is what it is opened to find.
 
-## Forecasts (class settled 2026-09-20, #147)
+- **Two health events, on transition**, `source-dropped` and
+  `source-restored`, carrying `entity`, `aspect` and `source` (its
+  `[sources]` name), recorded and read back like any event.
+- **The SDK remembers, so the producer cannot forget**: the producer
+  calls `ctx.source_used(entity, aspect, source, used)` every time it
+  decides and it emits only on a change, the discipline hand-written
+  producers get wrong.
+- **A source with nothing on record is participating**, as declared.
+  The first call per source always reports, so a consumer starting
+  mid-window does not read silence as agreement. That report is
+  best-effort: health events are not mirrored, so one published before
+  the recorder subscribes is lost. If that misleads a house, the remedy
+  is to mirror participation or make it queryable on the producer.
+- **The overlay reads events from a week before its window**, so a
+  source excluded earlier is not shown live for the whole span. It
+  marks exclusion in the legend and keeps drawing the line, because
+  the line stopping is the diagnosis.
 
-Model-predictive control is a standing assumption, and MPC without
-forecasts is not MPC. Nothing in the system could carry one: `home/state`
-holds a scalar per aspect, the recorder stamps rows with receive time, and
-every chart walks backward from now.
+Not ordinary state: a list is not one scalar, a boolean aspect per
+source puts the source's name in the aspect's, and a count cannot
+answer "which".
 
-- **Mechanism only.** Homeostat provides a place to put a forecast, a
-  store that remembers it, and a chart that draws it — never which
-  forecast, and never what to do about it. Producers (price, weather) and
-  controllers are behavioural choices, so by the boundary test under Repo
-  split they live in a house repo, as units, and graduate later under the
-  rule-of-three if several houses want the same one. This is how every
-  class works: the core no more knows what a price curve means than it
-  knows what `motion` means.
-- **Keyed like the series it extends.**
-  `home/forecast/{room}/{entity}/{aspect}` — the same triple as `state`,
-  so a forecast is that series' future. The entity's aspect descriptor
-  already supplies its label, kind and unit; past and future share one
-  chart axis; and a controller publishing its own planned trajectory on
-  the same class needs no new vocabulary for "a plan". `forecast` is
-  therefore entity-addressed in `keyspace.rs` and held to the same
-  bound-entity rule as `state` (`forecast-publish-unbound`).
-  - **Amended 2026-09-21: the entity must exist, not be bound.** Holding
-    forecasts to state's rule was inherited rather than argued, and it
-    forbade the case this bullet advertises — a controller commands a
-    device it does not bind, so the grant graph makes "publish a plan for
-    the heat pump" unbuildable. It also forced one unit to own both the
-    fusion of a quantity's sensors and its weather provider. `state`
-    keeps the binder rule, which is what one master per entity means;
-    `forecast` requires only that the entity be declared, which is what
-    keeps the value in front of the recorder and the dashboard. The
-    single-publisher property the ownership rule gave for free is now
-    checked directly (`forecast-publish-conflict`), per entity rather
-    than per aspect because a publish may wildcard its aspect slot —
-    splitting one entity's aspects across two units is refused
-    conservatively, and narrows to per (entity, aspect, source) when
-    the source segment lands (Sources below).
-- **Two time coordinates is the whole difference** (sharpened 2026-09-21;
-  the first write-up said "forecasts are arrays", which is the symptom).
-  A state sample carries ONE time: when the value was true. A forecast
-  point carries TWO: when it was said, and when it is about. Value
-  cardinality is not the axis and never was — a forecast point's value is
-  a scalar, the SDK refuses anything else, and a forecast of a single
-  point still does not fit `samples`, because two issues about the same
-  future instant collide on `(series_id, ts)` exactly as a hundred would.
-  What the array does is transport one issue atomically; what makes a
-  forecast different is the second coordinate.
-  - The corollary worth stating, because it justifies `d` below: state
-    has an extent too, implicit by succession — that is precisely what
-    the `changes=1` read shape reconstructs when it builds a state's runs
-    from consecutive rows. Succession is CORRECT for state, whose last
-    run is genuinely still going, and WRONG for a forecast, whose last
-    window genuinely ends with no successor row to bound it.
-  - **A document on the bus, rows in the store**, and these are not in
-    tension: the document is the unit of issuance (one atomic publish per
-    issue, mirrored as a unit), the row is the unit of fact (one scalar
-    with its coordinates). `home/discovery/{unit}` is the precedent for
-    the first; the scalar rule's real force (stated under Cameras) is
-    that the bus never carries frames, and a bounded list of timestamped
-    numbers is not a frame.
-- **Irregular points, deliberately.** The payload is
-  `{schema, issued, points: [{t, v, d?}]}`, what the source actually said. A
-  regular grid was proposed and rejected: it cannot represent an irregular
-  series while the reverse is trivial, so it buys no expressiveness and
-  loses fidelity — and resampling is not single-valued. A spot price is a
-  step function that HOLDS for its interval; a temperature forecast
-  interpolates. A grid would bake one of those readings into the producer,
-  where no consumer could see or override it, and different consumers want
-  different grids anyway. The work moves to the SDK, where the consumer
-  names the rule: `Forecast.at(when, mode, max_gap_s)` with `mode` having
-  no default, and `max_gap_s` refusing to invent a value across a hole the
-  source left — otherwise "missing" silently becomes "interpolated", which
-  is the one way absence turns into made-up data.
-- **A point may be an interval, not an instant** (added 2026-09-20, from
-  porting a real producer — the first thing that exercise found). `d` is
-  the extent in seconds a point describes: absent, the value is
-  instantaneous at `t`; present, it covers `[t, t + d)` — an accumulation
-  over that window, or a value that holds across it. This is the same rule
-  as carrying irregular spacing one level down: sources state the interval,
-  so a bare instant discards what they said. An accumulation over six
-  hours stamped at one end reads as a spike at that instant, and a held
-  value's length is otherwise only guessable from the gap to the next
-  point — which fails at the end of a horizon, where there is no next
-  point, and around any gap. Where `d` is present there is nothing to
-  guess and `max_gap_s` does not apply; asking to read such a point
-  "linear" raises rather than interpolating between two windows.
-- **`issued` is required, and is the whole staleness story.** A consumer
-  applies its own max age, as `Freshness` does for state — freshness
-  policy is the automation's, never a core TTL. A controller that refuses
-  a stale forecast simply stops writing, and the house falls back on its
-  own: the heat pump's FEEDABLE inputs are non-retained precisely so that
-  the firmware expires them (see the IVT490 section, and the comment above
-  `COMMANDS` that already anticipated "a dead price feed"). No new
-  fail-safe was invented, and none should be.
-- **Mirrored by the core**, and more load-bearing here than for state: a
-  day-ahead curve is published once a day, so a consumer starting at
-  midday would otherwise run blind until tomorrow. Note the mirror reply's
-  age is the mirror's own; a forecast carries `issued`, which is what a
-  staleness policy reads.
-- **Bounds are an SDK guard, not a core rule.** The core never inspects
-  state-class payload content — it parses only to mirror — so the point
-  cap (generous: 2048, against 672 for 15-minute resolution over a week)
-  is refused at publish, where the producer can see it.
-- **The store follows from the coordinates.** `samples` is keyed
-  `(series_id, ts)`, one value per series per instant, so it cannot hold
-  a second opinion about the same instant — and keeping superseded issues
-  is the whole reason to record a forecast at all. Hence a `forecasts`
-  table keyed `(series_id, issued_ts, valid_ts)`, reusing `series` (whose
-  identity is already `(class, entity, aspect)`) and `rooms` (so an
-  entity move stays a tag transition, as for state). Widening `samples`
-  instead was rejected: a nullable `issued_ts` cannot ride a WITHOUT
-  ROWID primary key, so state rows would need a sentinel in the busiest
-  table in the store; the `bucket`/`changes` folds would silently apply
-  to forecast series and average across issues; and the one destructive
-  operation in the store would need a class-conditional purge.
-  - **The extent is stored, not derived**, for the reason above: a point
-    that describes `[valid_ts, valid_end)` has no successor to bound it
-    at the end of a horizon. `valid_end` is NULL for an instant, as an
-    absent `d` is on the wire, and `d` round-trips as the difference.
-    `valid_end` rather than a duration column because the verification
-    query is a small window over an unbounded history and only an end
-    gives it an indexable lower bound: `valid_ts > from - max_extent`
-    needs a `max_extent` nobody knows.
-- **The dashboard draws stored forecasts as a braid** (added
-  2026-09-21). The history detail overlay gains a second chip row where
-  an aspect has a future — `now` draws the current belief dashed past
-  the now-rule, `forecasts` draws every issue the recorder kept over
-  the window, one thin line each. This is owner work, not family work,
-  so it lives in the overlay rather than as a `dashboard.toml` widget:
-  a family wants what tonight will cost, not whether yesterday was
-  right, and the dashboard stays family-tier.
-  - **A line per issue, never an envelope over them.** An envelope's
-    edge belongs at each instant to whichever issue happened to be
-    highest there, so the boundary is stitched from many and is a path
-    nobody predicted — measured at ten distinct issues over one drawn
-    day in `docs/wireframes/forecast-history.svg`. It also flattens what
-    the chart is for: whether the recent issues agree, whether one stale
-    outlier is doing the disagreeing, whether each drifts the same way.
-  - **The braid is grey, the outcome keeps the accent**, and a pinned
-    issue takes the set point's amber. An earlier version ramped the
-    braid INTO the accent and its newest line became indistinguishable
-    from what actually happened. The pin's two steps are validated as a
-    pair against the accent in both modes; dark's is darker than the
-    obvious choice because the light step sits outside dark mode's
-    lightness band.
-  - **Scrubbing reads twice.** It highlights the nearest issue — by
-    distance in SCREEN pixels, since the viewBox is stretched and one x
-    unit is nothing like one y unit — and names it in the tooltip; and it
-    writes the whole column under the chart, "N forecasts, this to that",
-    which is the one slice whose x axis is issue time and which therefore
-    cannot share this chart. A tap pins a line, a drag does not: the two
-    arrive as the same pointer sequence and only travel separates them.
-  - `/api/forecasts` is its own route rather than a class on
-    `/api/history`, because the reply is issues where history is rows,
-    and one endpoint returning two shapes would have every caller sniff
-    which it got. The page asks for the newest few and says how many it
-    drew: a week of hourly issues is an unreadable mat and a large fetch,
-    and a window that quietly means different things at different ranges
-    is worse than one that states its limit.
-- **The dashboard states a belief's age, and stops drawing a spent one**
-  (added 2026-09-23). `issued` is required and the max age is the
-  consumer's, which left the one consumer that draws forecasts with no
-  policy at all: a curve issued thirty hours ago was drawn exactly like
-  one issued ten minutes ago, and the only place `issued` reached a reader
-  was the braid's tooltip — owner work, behind a chip row. Worse, the
-  mirror holds a producer's last word for as long as the core lives, so a
-  producer that stopped left its curve on the page until the horizon ran
-  out underneath it, at which point the tile's caption went BLANK: the
-  horizon summary names only points ahead of now, and a tile with one
-  source never fell back to today's range. A dead producer made the page
-  say less than no producer at all. Settled, as the dashboard's own
-  policy rather than a core TTL or a per-entity knob:
-  - *A spent claim is not the future.* Where the horizon has run out the
-    belief stops being drawn as one — no dashed span, no now-rule, and
-    the tile is back to today's range. It remains in the overlay, under
-    `forecasts` and as a `spent · ran out …` note, which is where a
-    claim is judged against what actually happened; the family/owner split
-    the braid already drew.
-  - *Every drawn belief says when it was said* — `issued 09:00` in the
-    tile and card captions and in the overlay's note, carrying the date
-    once the claim is older than today, because a bare clock on
-    yesterday's claim reads as this afternoon.
-  - *Stale is age > the span it has left to say*, and the line goes grey
-    and the caption takes the `stale` mark. Self-scaling, so no constant
-    per aspect and no new vocabulary: a day-ahead curve issued at 13:00
-    is fresh all evening (10 h old, 25 h left) and stale by the following
-    afternoon (31 h old, 4 h left), when its successor is long overdue,
-    while a ten-minute-old two-day forecast never trips it. A claim whose
-    `issued` did not parse has no age and is never called stale — the page
-    does not guess at a fact the producer failed to state.
-  - *A producer gone quiet is not a deviation.* A crashed one is already
-    supervision; a running one whose upstream is failing should publish
-    its own health event. Inferring a unit's health from the age of its
-    last document would put the diagnosis in the wrong place.
-- **One control, not two** (2026-09-24). The chart's two extra layers —
-  the contributors a computed value is derived from (Sources below) and
-  the braid — arrived as a chip row each: four buttons in which `value`
-  and `now` both meant "neither layer", over a state space of three,
-  because the layers were already mutually exclusive (two sets of thin
-  grey lines on one chart read as one set). A one-of-three state wearing
-  two controls also let a chip claim a state the chart was not in:
-  pressing `value` during the braid cleared the sources flag and left the
-  braid drawn. They are now one segmented control — `value · sources ·
-  forecasts` — rendering only the chips the house has something for, so
-  an ordinary sensor's overlay is unchanged. The pairing is exact, and is
-  the reason the two belong in one control rather than merely fitting in
-  one: `sources` is the several opinions behind the value's past,
-  `forecasts` the several claims about its future. `what we said` was
-  retired with the row — the claims belong to `nordpool` or `smhi`, not
-  to the house, which only kept them.
-- **What a forecast IS, stated plainly** (2026-09-21, when a rename to
-  `future` was considered and dropped): a SOURCE's claim about a series'
-  future values. A controller publishing its own planned trajectory is
-  therefore in scope without a second class and without a rename — it is
-  a claim about a series' future made by the source that controls it,
-  which makes it unusually reliable, not a different kind of thing. The
-  distinction that prompted the question — a commitment versus a
-  prediction — follows from the ASPECT: a future for a commandable aspect
-  is a plan, one for a read-only aspect is a prediction, and a consumer
-  reads that off the descriptor without being told (Sources below).
-  `future` was additionally refused because `Future` is Rust's async
-  trait and every type name in this crate would collide with it.
-- **A producer should publish its current forecast at startup** (recorded
-  2026-09-22, from #147's port of two real producers). The core's mirror
-  is an in-memory map, so a core restart empties it, and the class then
-  answers nothing until the producer next issues. For a once-daily curve
-  that can be most of a day. The core cannot supply this — it does not
-  know what a producer has to say — so it is a producer-side convention,
-  and one worth stating rather than leaving to be discovered by a house
-  that restarted at the wrong hour.
-- Built under #147: the class and its SDK (#151), a port of two real
-  producers onto it before the shape froze (which corrected the payload
-  twice, adding `d` to the wire and then `valid_end` to the store), the
-  recorder's table and both verification read shapes (#157), the
-  dashboard drawing past and future on one axis (#158) and the braid of
-  what a house said (#162). Deliberately deferred there and still open:
-  the `(series_id, valid_end)` index, which only pays once verification
-  is actually being run and costs the whole primary key on a
-  `WITHOUT ROWID` table (#123, #138); and a `schema: 2` delta encoding
-  for `t`, to be taken on a real measurement from a real producer.
+## Health, availability and the audit trail
 
-## Sources: several opinions about one value (settled 2026-09-22)
+Three different failures need three different signals. A unit that
+dies is the supervisor's to report ([Supervision](#supervision)). A
+device that dies behind a live unit is that unit's to report, as
+state. Something a unit refused, dropped or noticed is a health event.
+All three land on the bus, the recorder keeps the last two, and logs
+stay outside the trail entirely.
 
-The key space names the thing that *reports*, never the thing reported
-*on*. `home/state/kitchen/ceiling_lamp/on` names the lamp, and that has
-been invisible because for a light, a lock, a cover and a switch the
-producer and the subject are one object. Nothing was decided wrongly; a
-distinction was never forced.
+### Health events
 
-Forecasts forced it. Several sensors and a weather service all have an
-opinion about the outdoor air, and a forecast about it had nowhere to
-attach that did not require lying about who owns a device. A long
-detour — recorded below under Rejected — proposed a second noun for
-"the thing reported on". It was over-built. Two axes already in the
-design answer it, and what is actually missing is one key segment and
-one declaration.
+A unit has two voices about itself: its liveliness token, which the
+supervisor turns into the status at `home/health/{unit}`, and health
+events at `home/health/{unit}/event`
+([Bus payload conventions](#bus-payload-conventions)). The status stays
+the supervisor's: degradation is read from status and events, never
+asserted by the unit. The recorder keeps every event, queryable by key
+and window ([Read path](#read-path)).
 
-### The two axes, neither of them new
+- **The `drop` policy.** Input a unit cannot use never crashes it and
+  always leaves one `drop` event with a `reason` and enough context to
+  find the source (key, topic, device): `malformed-payload`,
+  `invalid-command`, `unknown-device`, `non-scalar`, and an adapter's
+  own. A silent drop is a bug, because a crash loop on poison input and
+  data vanishing without a word are both worse than a line in the trail.
+- **On transition, not per occurrence.** A persisting condition is
+  reported when it starts and, where it has one, when it ends
+  (`backend-outage`/`backend-restored`, one `device-silent` per down
+  transition). A stream repeating every tick fills the events table and
+  cannot be folded into intervals; a silent success stays silent.
+- **Kinds are per producer, not a closed vocabulary.** Each unit
+  documents its own; the SDK's (`restore-failed`, `source-dropped`,
+  `source-restored`) and the recorder's are shared by every house.
+- **Health events are not mirrored.** They are a stream of what
+  happened, so one published before the recorder subscribes is gone.
+  Anything a late joiner must see as current belongs in state.
 
-- **Physical versus virtual is already invisible, deliberately.** Under
-  Virtual sensors: derived state is ordinary state, consumers never
-  learn whether a temperature was measured or fused, and provenance is
-  visible where structure lives — the entity file names its owner. It
-  must therefore never shape a key, and it does not.
-- **Commandable versus read-only is a property of an ASPECT, not of an
-  entity**, which the design already works by in two places and had not
-  said plainly. The arbiter's write token is "a lease per (arbitrated
-  entity, aspect) — amended 2026-07-18 from per-entity when the heat
-  pump showed why: orthogonal control dimensions share an entity". And
-  an aspect descriptor carries `command: {type, constraint, step?,
-  editable_by}` PER FIELD, so a capability with no base aspect may still
-  take commands on a described one. `capability.base` is the primary
-  commandable aspect, never the whole set.
-  - A heat pump is both at once: `feed_temperature` is a reading,
-    `feed_temperature_target` takes commands. Reasoning at entity
-    granularity — "is this thing a sensor or a control?" — is what made
-    the second noun look necessary.
+### Availability
 
-### A plan and a forecast are one class, and which one is derivable
+A device dropping out behind a live adapter is not unit liveness. The
+mirror serves a bare value forever, and **publishing on transition
+makes silence ambiguous**: the bus cannot distinguish "no change" from
+"no sensor". Only the party with protocol knowledge can (a bridge's
+availability report, a TCP session, a firmware's known cadence), so it
+lives in the adapter.
 
-- A forecast is a source's claim about a series' future values
-  (Forecasts). Whether that claim is a PREDICTION or an INTENT follows
-  from the aspect it is about: a future for a commandable aspect is a
-  plan, because the publisher proposes to cause it; a future for a
-  read-only aspect is a forecast, because nobody in the house does.
-  `feed_temperature_target` ahead is intent, `feed_temperature` ahead is
-  prediction, a lamp's `on` ahead is a schedule, outdoor temperature
-  ahead is weather.
-- **So no vocabulary is needed for it.** A `kind: plan | prediction`
-  field was considered and is redundant: the descriptor already knows
-  whether the aspect takes commands. What the distinction is FOR is
-  scoring — a divergence between a prediction and the outcome measures
-  the source's accuracy, while a divergence between a plan and the
-  outcome measures the publisher's authority (it was revised,
-  arbitrated away, or clamped). A surface that computes an error must
-  not average the two, and it can tell them apart without being told.
+- **Availability is ordinary state.** `available` (bool) is a base
+  aspect orthogonal to capability, published on transition by the
+  entity's owner. Recorded history, the mirror, a family-visible
+  deviation on `false` and automations subscribing to it follow
+  unbuilt.
+- **Opt-in.** An adapter with a real loss signal publishes it; one with
+  nothing to say does not fake one. A receive-timer signal makes the
+  timeout a parameter, since the cadence is house knowledge, and
+  reports the down transition as a health event.
+- **Stale, not false.** On device loss the values stand and `available`
+  flips; the adapter never publishes invented values, nulls or cleared
+  keys. One boolean beside the values beats a tri-state smeared across
+  every aspect.
+- **`available` is reserved**: an adapter whose passthrough could mint
+  it from a native field drops the field (`reserved-aspect`).
+- **Commands toward an unavailable entity are per adapter** (refused
+  as `device-unavailable`, or left for the device to miss).
+- **No information is a state.** An entity with no `available` key is
+  unknown, not up. Watching another entity's availability is a
+  declared `[bus.subscribes]` binding, seeded from the mirror like any,
+  never implicit, because that is the surface a manifest exists to
+  show; an SDK helper answering up, down or unknown is not built.
 
-### The source segment, on forecasts only
+Not a TTL on the mirror: the core cannot know a producer's cadence, and
+a lock is rightly silent for months. Not timestamps: age without
+cadence answers "when", not "should I trust this", and a value
+published on transition is supposed to be old.
 
-- **`home/forecast/{room}/{entity}/{aspect}/{source}`**, legal on any
-  entity, physical or virtual, commandable or not. One segment, never a
-  multi-level source: the aspect slot is positional and the ivt490
-  adapter already flattens `GT2/raw` to `GT2_raw` rather than spill out
-  of it.
-- **`home/state` does NOT grow a segment.** State multiplicity already
-  has a home: two outdoor sensors are two entities, two series, two
-  charts, and that is accurate — a sensor is a thing in the house with a
-  room, an availability signal and a failure mode. Forecast sources have
-  no such home. A weather service is not in the house, and giving it an
-  entity would name a subject and its provenance in one string.
-- This is what lets a weather service forecast a fused reading it does
-  not own, and a controller publish a planned trajectory for a device it
-  commands and therefore — the grant graph runs automation to device —
-  cannot bind. The ownership half of that already shipped: see the
-  amendment under Forecasts. `forecast-publish-conflict` is currently
-  per entity BECAUSE there is no source segment yet; when one lands it
-  narrows to per `(entity, aspect, source)`, which is the whole point.
+**The honest limitation.** `available` is device liveness, not data
+freshness: a bridge's passive check on a battery device can take
+hours, so a motion sensor dying mid-`occupancy = true` stays trusted
+until then. Bounded-age input still needs the consumer's own policy.
 
-### Declared sources on a derived entity
+### Staleness
 
-- **An entity whose value is computed may declare what it is computed
-  FROM**, as entity + aspect references — the `[inputs]` reference
-  shape, which named entity and aspect for the reason that applies here
-  too (Device feeds: the house has an identity layer between a unit and
-  a bus key, and what is consumed is one signal).
+Whether an input is too old to use, and what to do then, is the
+consumer's policy, because it is house behaviour. The core enforces no
+age anywhere, and no adapter invents one on a consumer's behalf.
 
-  ```toml
-  [sources.station]
-  entity = "weather_station"
-  aspect = "temperature"
+- **`Freshness`** (`homeostat.freshness`) keeps the books per source:
+  `seen(source, value, age_s)` records on the monotonic clock,
+  `fresh(max_age_s)` returns what is within the automation's window at
+  recompute time, `forget()` drops a source (on `available = false`).
+- **A catch-up carries the mirror's age**, so a six-hour-old reading is
+  not averaged in as new after a restart. A live trigger is age zero,
+  so only a handler reachable from a catch-up must handle an empty set.
+- **No timer lives in the helper**: reacting to silence is a
+  `home/clock/minute` subscription calling the same `fresh()`.
+- **The same rule holds for every class**: a forecast's consumer
+  checks `issued` ([Forecasts](#forecasts)), a fed input expires in the
+  device ([Device feeds](#device-feeds)), and a fusion goes stale
+  ([Virtual sensors](#virtual-sensors)).
 
-  [sources.shed]
-  entity = "outbuilding_temp"
-  aspect = "temperature"
-  ```
+### One-way senders
 
-- **It must be declared, not inferred.** A fusion unit subscribes many
-  things for many reasons and nothing in its subscriptions says which
-  ones feed which published aspect. The plan checks the references
-  resolve and warns where the owning unit does not subscribe a declared
-  source, which makes it a checked fact rather than documentation.
-- **NOT `[inputs]`, though the shape is identical.** A device feed
-  carries a runtime contract that does not apply — not retained, cleared
-  on loss, staleness is the device's — and, decisively, a wired input
-  stops being a command aspect for that entity. A commandable virtual
-  entity with sources (a latch that also reads something) would collide
-  with that rule. Two contracts under one name is the fragmentation this
-  record refuses elsewhere.
-- **Its consumer is the chart, which is why it is worth having.** The
-  history detail overlay gains a chip row where an aspect has sources:
-  the computed value alone by default, its contributors added on
-  request. This is owner work, not family work — a family wants the
-  outdoor temperature, an owner wants to see the shed sensor reading
-  three degrees low in the afternoon — so it lives in the overlay beside
-  the forecast braid and not as a `dashboard.toml` widget, by the same
-  argument the braid settled.
-  - **A line per source, never a band across them.** An envelope's edge
-    belongs at each instant to whichever sensor happened to be highest,
-    so it traces a path no sensor took. This is the braid's rule for the
-    braid's reason.
-  - **Contributors grey, the computed value keeps the accent**, so what
-    the house believes never becomes indistinguishable from an input.
-  - **What does NOT transfer from the braid**: its lines are issues of
-    one series, transient and interchangeable, identified by scrubbing
-    to the nearest. Sources are distinct, stable and few — three to
-    eight, not a rolling mat — so they get a legend and a per-source
-    readout at the cursor. Importing the braid's interaction would be
-    the wrong one.
-  - Nothing in the store changes. Each contributor is already its own
-    entity with its own series; this is a declaration and a chart mode.
+A sub-GHz PIR, door contact or smoke detector transmits when something
+happens and never sends a "clear". **The adapter owns the hold** that
+decides when the assertion stops being true: the missing off is a
+protocol fact, and an adapter may derive on its own bound entities. A
+core-decayed momentary aspect would be the TTL
+[Availability](#availability) refuses under another name.
 
-### Built
+- **Transitions only.** `true` on the first assertion, `false` when the
+  hold expires; a repeat burst inside the hold extends the deadline
+  silently, since these senders repeat every burst by design.
+- **`false` for every bound entity at startup**, because the held value
+  is the adapter's own construct, and so a crash-looping adapter cannot
+  leave a sensor stuck on. Only a breaker-open adapter leaves `true`
+  standing, visible in its health. The opposite of a latch
+  ([Restoring a unit's own last value](#restoring-a-units-own-last-value)).
+- **The hold is a parameter per aspect, not per entity**, chosen by
+  capability and features with a generic fallback: a contact, a PIR and
+  a detector want different holds, every contact the same one.
+- **Availability is the bridge's, not a receive timer**: silence is a
+  one-way sender's normal state.
+- **A second one-way adapter moves the timer into the SDK**, as
+  `Freshness` and `Cooldown` moved; never into the core.
 
-- The source segment, required on every forecast key; the SDK's fourth
-  publish slot; `forecast-publish-conflict` narrowed from per entity to
-  per key, comparing wildcard slots pairwise; `[sources]` on a computed
-  entity with its two checks and its warning; and the history overlay
-  drawing both — contributors behind the computed value, and a line per
-  live forecast source.
-- The store took a migration after all, despite the note above that
-  subjects were new and nothing was published under one. The column is
-  additive but the UNIQUE that had to move is table-level, which SQLite
-  implements as an auto-index `DROP INDEX` refuses — so version 4 rebuilds
-  `series` the way SQLite documents. Pre-existing forecast rows keep an
-  empty source: the store they came from did not record one, and
-  inventing a provider name for them would be fabricating provenance.
-- Two things that only showed up in the building, both the same shape —
-  code that rebuilt a key from room/entity/aspect and silently dropped
-  the sixth segment. The SDK's `_concrete_key` made a unit's own publish
-  fall outside its declared expression, crashing it at startup; the
-  recorder's ingest folded the source into the aspect with `"/".join`.
-  Neither was a design question; both are what a positional key costs.
-- **A third of that shape, found on a real house after 0.15.0 shipped**
-  (2026-09-22). "Pre-existing forecast rows keep an empty source" above
-  also said they stay readable under it, and they did not: the source is
-  a key SEGMENT on the read path, and an empty one is not a key
-  expression at all. The read loop walks EVERY forecast series to decide
-  which ones a query asked for, so one migrated row raised before
-  reaching any other series — and a zenoh query callback that raises
-  sends no reply, which a caller cannot distinguish from "this house
-  recorded nothing". An upgraded house saw empty answers for forecasts
-  it was recording correctly.
-  - **Not fabricating provenance was right; leaving the slot empty was
-    the mistake.** Version 5 names those rows `_unknown` — reserved,
-    addressable, and with the leading underscore obviously not a unit —
-    rather than skipping them, which would have kept the promise of
-    inertness while quietly breaking the promise of readability.
-  - **And a read path must not be able to build an invalid key from its
-    own store**, so the loop skips an empty source regardless of what
-    the migration did, and `answer` turns anything unexpected into an
-    error reply. An empty result and a dead responder reading alike is
-    the hazard underneath all three of these.
+Not consumer-side debouncing: every consumer would reimplement it,
+differently, and the recorder could not reconstruct what was true when.
 
-### Which sources a computation actually used (settled 2026-09-22, #164)
+### Logs and the audit trail
 
-Declared sources say what MAY contribute. A fusion that drops a source as
-stale, fails it on a plausibility check, or excludes it under a house rule
-is reporting something the declaration cannot: the overlay would otherwise
-draw a contributor that looks like it is participating when it is not,
-which is backwards, since "the shed sensor is why this went stale" is the
-main thing the overlay is opened to find out.
+**Logs are exhaust; events are the trail.**
 
-- **Two health events, on transition**: `source-dropped` and
-  `source-restored`, each carrying `entity`, `aspect` and `source`. This
-  makes concrete a norm Virtual sensors already states as prose —
-  "publish on transition, one health event per input-loss transition" —
-  rather than inventing a channel for it. Events are recorded and the
-  recorder already answers them filtered by key expression and window, so
-  nothing new is needed to read them back.
-- **Why not ordinary state.** A list of live sources cannot ride
-  `samples`, whose value is one scalar with a kind — the same reason a
-  forecast could not, arrived at for the same reason. A boolean aspect
-  per source would put the source's name inside the aspect's name, which
-  is the subject-and-provenance-in-one-string that the source segment
-  exists to avoid. A bare count fits `samples` and cannot answer "which",
-  which is the entire question.
-- **The SDK remembers, so the producer cannot forget.**
-  `ctx.source_used(entity, aspect, source, used)` emits only on a change,
-  because "on transition" is exactly the discipline hand-written
-  producers get wrong, and a stream that repeats every tick is a stream
-  nobody can fold.
-- **A source with nothing on record is participating**, which is what the
-  declaration already says. The producer emits its current participation
-  at startup for the same reason a forecast producer re-issues at
-  startup: a consumer that starts mid-window would otherwise read silence
-  as agreement.
-  - **And that startup emission is best-effort, which was found by
-    running it.** Health events are not mirrored, so one published before
-    the recorder has subscribed is simply gone — unit start order is not
-    ordered against the recorder's. The failure is benign but not
-    invisible: a source excluded at startup and never changed since reads
-    as participating until its next transition, which is precisely the
-    case the startup emission exists to cover. A forecast does not have
-    this problem because the core mirrors that class. Options if it
-    bites: mirror the participation, or make it queryable on the
-    producer. Neither is worth building before a house is misled by it.
-- **The overlay reads a wider window than it draws**, so a source
-  excluded before the window opened is not shown as live for the whole
-  span. It reports the state in the legend rather than restyling the line
-  mid-flight; an excluded source still draws, because the line stopping
-  is the diagnosis.
+- **Unit output is captured**: tagged on the supervisor's streams and
+  kept in a 500-line ring per unit at `home/meta/{unit}/log` (MCP's
+  `read_logs`, the dashboard's unit detail), gone on supervisor
+  restart, never recorded ([The unit contract](#the-unit-contract)).
+  Peripheral logs ride their
+  adapter's stdout, tagged with the device, at warning and above so a
+  chatty device cannot drown the ring.
+- **The durable trail is the recorder's `events` table**: every health
+  event, accepted parameter write and command envelope with its actor
+  and band, read through `home/history/events`, MCP's `read_events`
+  ([Agent surface (MCP)](#agent-surface-mcp)) and the dashboard.
 
-### Open
+Not a log sink in homeostat. Tagged stdout is the standard export
+surface; durability, retention and indexing are deployment
+configuration (Docker logging drivers, journald, Loki), which anything
+built here would reimplement worse. And if a line matters enough to
+query next week, that pressure must push the unit to emit a health
+event, which a queryable log store, or stdout on the bus, would dissolve.
 
-- **Uncertainty has no representation.** A forecast point's value is a
-  scalar and the SDK refuses anything else, so an ensemble or a
-  confidence band cannot be published. Model-predictive control is a
-  standing assumption and a curve without a band is a real limit. The
-  source segment offers a tempting non-answer — `smhi_p10`, `smhi_p50`,
-  `smhi_p90` as three sources — which abuses source for a dimension it
-  does not mean: percentiles of one issue are one claim, not three.
-  Named here so nobody reaches for it by accident.
-- **Corrections to the past have no representation.** `state` is a
-  last-value scalar; a reanalysis that learns later what the temperature
-  actually was cannot be published.
+## Surfaces
 
-### Rejected, deliberately
+A surface is where a person or an agent meets the house. Every surface
+is a unit on the bus like any other, so it is supervised, has health,
+and holds only the authority its manifest declares. None has a path
+around [plan and apply](#plan-and-apply): the dashboard commands at the
+manual band and edits family parameters, the agent surface only reads,
+and every structural change goes through the house repo.
 
-- **A second noun for "the thing reported on"** — drafted at length on
-  2026-09-21 as `subject`, with its own key shape, a source segment on
-  `home/state`, a `series` migration and a canonical-selection rule.
-  It was justified on three things a virtual entity supposedly has to
-  lie about, and all three failed on inspection: the dead
-  `write_policy.mode` was fixed on its own (`write-mode-required`); a
-  fake `id` is a five-line fix, below; and "it must appoint a unit to
-  compute its value" turns out to be CORRECT rather than a lie, since a
-  computed value genuinely has a computer and the registry should say
-  who. What survived is the forecast source segment, the `[sources]`
-  block, and `id` becoming optional on automation-owned entities, where
-  there is no adapter-native address to hold — it stays required on
-  adapter-owned ones, which is where it addresses something. Recorded because the detour produced the two axes
-  at the top of this section, which are worth keeping.
-- **A `kind: plan | prediction` field** — derivable from the aspect, see
-  above.
-- **A source segment on `home/state`.** Competing estimators of one
-  value — two presence algorithms, say — would each need their own
-  entity, which does name a subject and its provenance in one string.
-  It is rare enough to defer under the pytapo rule, and `home/state` can
-  grow the segment if it stops being rare.
+### Dashboard
 
-## Voice (later phase)
- 
-- Two-tier command path: a fast-path intent matcher (high precision,
-  deliberately narrow, no fuzzy guessing; ambiguity falls through to the
-  agent) and the conversational agent as fallback.
-- The fast-path grammar is GENERATED from manifests + key-space schema at
-  plan/apply time, as a build artifact of the same transaction. Never
-  hand-maintained. Stale grammar is impossible by construction.
-- Grammar generation runs house-side only; the public tool never sees
-  private naming data.
-- ESPHome voice satellites; local wake word + STT; no cloud in the fast path.
-- Agent sessions: short-lived, satellite-scoped, expire after ~1 min silence.
-## Repo split
- 
-- **Public (`homeostat`):** Rust core, schema definitions (versioned),
-  Python SDK (typed commands, config helpers, automation Context), generic
-  adapters (Zigbee2MQTT, ESPHome, clock, arbiter, recorder), generic agent
-  skills, an example house as documentation.
-- **Private (house repo):** all manifests, entity files, zones, automations,
-  house-specific agent skills, pending plans, applied-commit metadata. Pins
-  a core version; CI runs `homeostat plan` on push (offline, against the
-  empty world, it exits non-zero on any validation error).
-- Boundary test: device address, family name, room name, or behavioral
-  choice => private. Identical in a stranger's house => public.
-- Generic automations graduate from private to public SDK helpers/examples.
-- Invariant: the public tool never sees the private repo except locally.
-- SDK distribution (settled 2026-07-05, REVISED 2026-08-29): a house unit
-  names `homeostat==X.Y.Z` in its PEP 723 dependencies and carries NO
-  `[tool.uv.sources]` block. The image bundles the SDK wheel and sets
-  `UV_FIND_LINKS`, so the unit resolves it locally — no clone at first
-  boot, no network for the SDK, and the pin is still a version in the unit
-  script that `files_hash` covers, which is the property the original
-  settlement was for. The git source it replaces cost an order of
-  magnitude in memory (38.4 MB against 4.0 MB in the long-lived `uv run`
-  parent, see Supervision); a version pin was already the anticipated end
-  state here ("PyPI publication later keeps the same shape"), and it
-  resolves from PyPI unchanged if that ever happens. What it costs: a
-  house pinning a version the running image does not bundle fails to
-  resolve at unit start — the version-floor hazard, in its loudest and
-  most diagnosable form. In-repo `adapters/` keep a relative `path`
-  source, so tests still exercise the working-tree SDK; never a vendored
-  copy. The pin lives in the unit script, which
-  files_hash covers, so an SDK bump is a visible behavioral change to
-  plan/apply; a vendored copy sits outside change detection and was
-  rejected for exactly that reason. In-repo adapters and fixtures keep
-  relative `path` sources so tests exercise the working-tree SDK. PyPI
-  publication later keeps the same shape (`homeostat==X.Y.Z`).
+The dashboard is an adapter for humans: HTTP and a WebSocket toward
+browsers on one side, the bus through the SDK on the other. Browsers
+never speak Zenoh. `adapters/dashboard.py` is a `service` unit
+(aiohttp) serving one hand-editable page, `dashboard.html`, its
+decision logic `assets/dashboard-logic.js` and a few vendored libraries
+from an allowlist of filenames, with no build step. The page is
+client-rendered because live state push is the dashboard's whole job.
 
-  Measured 2026-08-29, and acted on, recorded as a finding and NOT a decision: the
-  source form dominates a unit's resident memory. Same heavy environment
-  (aioesphomeapi + zeroconf), warm, uv 0.9 in the release image — git
-  source 38.4 MB in the long-lived `uv run` parent, a built wheel 4.0 MB,
-  a path source 4.0 MB. Four heavy units on a live house is ~136 MB of the
-  223 MB measured in parents there. Publishing the SDK would therefore buy
-  an order of magnitude more than the supervisor's prewarm did. What it
-  costs is the property this settlement was chosen FOR — the pin lives in
-  the unit script, `files_hash` covers it, and an SDK bump is a visible
-  behavioral change to plan/apply. A wheel pinned by version keeps that;
-  a wheel pinned by path or floated does not — which is why the revision
-  above pins by VERSION and bundles the wheel rather than naming a path.
+- **Mediated, not raw bus.** Not Zenoh's remote-api plugin in the
+  browser: it would bypass the grant table, the arbiter and the
+  manifest-declared surface, and couple every client to the bus
+  protocol. Through a unit the backend is existing plumbing: commands
+  are manual-band envelopes, parameter edits take the
+  [live parameter](#live-parameters) path, an opening page is a late
+  joiner on [the last-value mirror](#the-last-value-mirror), and charts
+  query the recorder.
+- **Generated from the house's text.** The page is a pure function of
+  the manifests, entity files, `zones.toml`, `dashboard.toml`, the grant
+  table and the bus. Layout state exists nowhere else and there is no
+  browser-side customisation, because hidden UI state is what the
+  project exists to reject. Labels come from `[naming]` (`en` today).
+- **The dashboard owns rendering; adapters never do.** Adapters speak
+  homeostat vocabulary (capability, features,
+  [aspect descriptors](#aspect-descriptors), constraints) and the
+  mapping to controls lives in the dashboard alone. Not per-adapter UI:
+  widgets would drift and the page would stop being a function of the
+  house's text. A device class needing a new control extends the public
+  vocabulary plus one rendering, which every adapter then gets.
 
-  The trap:
-  "pin by git source" reads as "pin to a release", but an adapter copied
-  from main against the newest *tag's* SDK raises AttributeError on
-  whatever the SDK has grown since — adapter and SDK must come from the
-  same commit, so a house vendoring ahead of a release pins `rev`, not
-  `tag`. `examples/starter-house` avoids the question by being a snapshot
-  of the release it pins, regenerated by `scripts/sync_starter.sh` and
-  held there by CI.
-## Name collision status (checked 2026-07-03)
- 
-crates.io: free. PyPI: free. npm: free. Homebrew: free. GitHub username and
-Docker Hub namespace `homeostat` are squatted but empty; publish under
-`freol35241/homeostat` and `ghcr.io/freol35241/homeostat`. `homeostat.dev`
-is parked; `.io`/`.org` unregistered. No trademark risk surfaced (generic
-1948 scientific term).
- 
-## Build sequence
- 
-1. **Key space + manifest parser + validator, no runtime.** CLI reading a
-   repo of manifests and entity files: template expansion, zone expansion,
-   grant-table resolution, `homeostat plan` against an empty world. Pure
-   Rust, serde types, test corpus of manifest files. DONE.
-2. **Supervisor + one trivial (fake) adapter: process spawning, liveliness,
-   restart with backoff, meta key space.** DONE.
-3. First real adapter: Zigbee2MQTT (translating subscriber), plus the
-   Python SDK bootstrap. DONE.
-4. First automation (evening_lights) + clock service + live parameter
-   path end to end. DONE.
-5. Recorder (5a), then plan/apply proper (5b). DONE.
-6. Agent MCP surface (goal and settlements above, under "Agent
-   surface"). DONE.
-7. Dashboard (design settled above; wireframes in `docs/wireframes/`).
-   MVP DONE.
-8. Voice. Deferred — not yet begun.
-Risk lives in steps 1 and 2; everything after is accretion.
- 
-## Open questions (flagged, not settled)
- 
-- Whether `features` should gate command contents beyond SDK constructors.
-  Current lean: no separate layer.
-- Zenoh ACL hardening timeline.
+The unit's model is the whole house, so it declares `inputs = "house"`
+([Change detection](#change-detection)). It also re-parses the house
+on `/api/model` at most every two seconds, keeping the last good model
+when a half-written file fails to parse.
+
+The whole HTTP API sits behind the gates in
+[Local-only access](#local-only-access). `GET /api/model` is the house
+rendered for the browser (each entity marked `commandable`, each unit
+with what it drives and reads, the views, the `driven` bands);
+`GET /ws` sends a snapshot of state, forecasts, holds, health, config
+and descriptors, then live deltas; the writes are `POST /api/cmd`,
+`/api/lights/off` and `/api/param`; the rest are read proxies onto the
+recorder, the log tail and the camera relay, plus the map extract.
+Live state reaches browsers through one bounded outbox per client (256
+messages). A browser that stops reading is closed rather than buffered
+for, and on reconnect takes a fresh snapshot, which is exactly what it
+missed. The unit subscribes before it seeds from the mirror, so a live
+update always supersedes the seed.
+
+#### Commanding
+
+Every command leaves at `priority = "manual"`, so "the family always
+wins" falls out of the [arbiter](#arbitrated-mode), and manual-band
+writers never count toward exclusivity ([Write modes](#write-modes)).
+The manifest declares a blanket `home/cmd/**` publish per capability
+the dashboard may command.
+
+- **The dashboard honours its own grant table.** Nothing on the bus
+  re-checks grants, so a blanket publish granted for `light` could
+  carry a `climate` setpoint. The dashboard derives the capabilities it
+  may command from its own cmd-class publishes, refuses `/api/cmd` for
+  any other, and marks each entity `commandable` so ungranted controls
+  render inert. This is the unit keeping its declaration, not a
+  boundary ([Local-only access](#local-only-access)).
+- **What it may command**: a capability's base aspect or a declared
+  feature (type-checked, so a JSON object never rides an envelope), or
+  an aspect whose descriptor declares a family-editable command
+  (checked against its constraint). Bounds otherwise stay the adapter's.
+- **Group actions fan out at the manual edge.** `POST /api/lights/off`
+  sends one manual-band off per commandable light, lit or not. Not a
+  commandable "scene" entity: its owner would re-publish at the
+  automation band ([Priority bands](#priority-bands)) and be a second
+  automation-band writer on every exclusive light.
+
+#### The stages of a command
+
+A command is a proposal, not a write ([Cmd envelopes](#cmd-envelopes)),
+so the page never paints the request as the device's state: an
+out-of-range setpoint returns `ok` and is then dropped by the adapter.
+The control shows the request as one, with a line naming the stage
+("asked 22.5° · still 21.0°") and then the outcome.
+
+- **Taps build on the request**, not on a readback that has not moved,
+  and settle for 600 ms before one command goes out. Each request
+  replaces the previous one for that aspect.
+- **Unheard is known at once.** `/api/cmd` replies with the envelope's
+  `id` and `heard`: the owning unit holds its liveliness token and
+  something subscribes where it listens (the arbiter's forward key for
+  an arbitrated entity, the command key otherwise). Liveliness comes
+  first because the recorder subscribes to every command.
+- **Outcomes.** The asked value coming back **confirms**. A value held
+  before the first tap, or asked on the way, is progress, because a
+  polling bridge republishes the old value until the device moves. Any
+  other value is **adjusted** (clamped or rounded), shown with both
+  numbers. An arbiter `refuse` carrying the id is **held**, worded as a
+  lost contest since a retry would lose identically. An adapter drop
+  carrying the id shows its reason. Nothing within the wait is **no
+  confirmation from the device**.
+- **Matching is by `id`**, never by key and value, which cross wires
+  exactly when someone taps twice. Values compare at the control's
+  grain, so a bulb rounding by one step of 0–254 is not adjusted.
+- **The wait** is the descriptor's `readback_s` (per command, then per
+  entity), otherwise a generous per-capability guess. A timeout that
+  fires early reports a failure that did not happen.
+
+Not built: a "delivered to the device" event (every adapter would have
+to emit it), and readbacks correlated to commands (each adapter would
+decide which readback answers which command).
+
+#### Charts, forecasts and sources
+
+Charts query the recorder through `/api/history`, asking for `bucket`
+sized to one point per drawn column for a number and `changes` for a
+boolean or enum ([Read path](#read-path)). The descriptor decides
+which, so an enum coded as integers is not averaged. `class=cmd` draws
+a "Commanded" strip under the chart, the page's one view of intent
+against outcome.
+
+Forecasts reach the page live with state rather than from the recorder:
+what the family sees is what the house believes now, and a house with
+no recorder still sees its horizon. The current belief is drawn dashed
+past the now line and captioned with when it was issued. Staleness is
+the consumer's ([Forecasts](#forecasts)), and the dashboard's policy is
+self-scaling: a belief older than the span it has left to say is drawn
+grey and marked `stale`; one whose horizon has run out is no longer
+drawn as the future. In the detail overlay, `forecasts` draws the
+stored issues (`/api/forecasts`, the newest 40) and `sources` draws
+each declared contributor ([Sources](#sources)) with its exclusions
+from `/api/source-events`. Each is its own neutral line while the
+outcome keeps the accent, never an envelope, whose edge traces a path
+nobody predicted. Both are owner work, so they live in the overlay
+rather than as widgets.
+
+#### Controls and the overlay
+
+The page maps descriptor vocabulary to controls and adds no
+vocabulary. A command the family may not edit reads as a value.
+
+- **Grain.** A derived grain is a twentieth of the range, rounded to
+  something a person would say. Where the house knows better,
+  `dashboard.toml` declares a `[[control]]` step, keyed by what is
+  controlled, never by the widget placing it, so one grain holds
+  everywhere. It is not a layout hint: a step says what a control does,
+  not where it sits.
+- **Accidental input.** A family parameter's caption prints its
+  manifest default (`0–60 · default 5`), and range inputs take
+  `touch-action: pan-y` so a scroll starting on a thumb does not
+  command a device.
+- **Parameters.** Every parameter is visible, and an owner-level one
+  off its manifest default counts as a deviation, so a house running
+  off its manifest is distinguishable from one running it. Only
+  `editable_by = "family"` parameters get a control.
+
+Tapping an entity, a reading or a unit opens a detail overlay, whose
+width is a per-viewer `localStorage` preference. Two rules for anyone
+changing it: **a reader's choices live outside the markup**, because
+live state re-renders the panel and a pinned issue or highlighted
+source held only in the DOM silently drops; and **nothing round lives
+inside a chart SVG**, which stretches with
+`preserveAspectRatio="none"`, so value dots are positioned in the
+wrapper by percentage.
+
+#### The page
+
+`dashboard.html` and `dashboard-logic.js` are one artifact, served
+`Cache-Control: no-cache`, because heuristic freshness would pair a new
+page with old cached logic after an upgrade: a page that renders empty
+over a healthy backend. Not versioned asset URLs: the version would
+have to be rewritten into a hand-edited file.
+
+Pure decisions (arithmetic and selection, never markup) live in
+`dashboard-logic.js`, pinned by `node --test tests/js`.
+`tests/browser` drives the real page against canned fixtures, whose
+field names a canary in `tests/dashboard.rs` checks against a real
+`/api/model`; it is a broad net, not a substitute for opening a
+browser on a change.
+
+### Views are text
+
+`dashboard.toml` at the house root lists the views. Each `[[view]]` is
+a nav entry holding either an ordered list of widgets from a closed
+vocabulary or a generated view (`kind = "now" | "setpoints" |
+"rooms"`), never both. [docs/widgets.md](widgets.md) shows each widget
+and [docs/manifest.md](manifest.md) has the fields. The core validates
+the file at `plan` like `zones.toml` and never renders it; it is a
+house-wide input, so a view edit is a visible change that restarts the
+dashboard.
+
+- **The file replaces the nav; it does not augment it**, so a house can
+  say "these three views are the dashboard". Without it the dashboard
+  renders `Now`, `Setpoints` (every family parameter) and `Rooms`.
+- **Nothing becomes unreachable.** Two things are fixed chrome, never
+  in the file: **Health** (unit status and breakers, family-visible by
+  design) and **Not shown**, every entity no widget places, drawn as
+  usable room cards.
+- **A view shows its text.** A read-only **Text** button renders the
+  `[[view]]` block behind a view, a name to say to an agent working in
+  the house repo. The dashboard never writes the house.
+- **Placement is `dashboard.toml`'s alone.** An entity file carries no
+  `[dashboard]` table: one way to place a thing.
+- **`group` composes, one level deep.** Nested groups and per-widget
+  layout hints (`span`, column counts) are refused: either would make
+  the file a layout language, and layout is the dashboard's.
+
+**`Now` shows the error signal, not an inventory**: people, the
+deviations feed and the map. A house in equilibrium renders a nearly
+empty page, deliberately. The `deviations` feed draws from:
+
+- supervision: any unit not running;
+- notable state from the capability vocabulary (lights on, as one row
+  with the "All off" action), any entity with `available = false`
+  ([Availability](#availability)), and any described aspect marked
+  `notable` that reads true: vocabulary, never house configuration;
+- parameters whose live value differs from the manifest default;
+- arbiter holds that displaced somebody.
+
+**A hold is a deviation when it displaced somebody.** The arbiter
+leases every forwarded command, so most holds are the house working. A
+hold is listed when it stands at a band above the lowest band anything
+is granted to command that aspect at (`driven` in `/api/model`). Not
+"once it has refused something": that depends on how often the
+displaced automation publishes, a fact about its author. Not "every
+hold": a family locking a door nothing automates has displaced nobody.
+Possession still shows on the control as **held**.
+
+**The unit card is a pure function of the manifest and the grant
+table**: family setpoints, published entities, and what the unit
+drives (its cmd grants) and reads (its expanded state subscriptions),
+as `{entity, aspect}` rows because a relation is per aspect. If the
+card is wrong, the manifest is.
+
+### Map and people
+
+A person is an entity with `capability = "person"` in the pseudo-room
+`person`, because people move and the key space is room-keyed; which
+room a person is in is state, never structure. Location is scalar
+aspects ([the capability vocabulary](#the-capability-vocabulary)), so
+position history is free. The `people` widget reads `presence` and
+falls back to the age of the last fix.
+
+The `map` widget is a view over every entity with a location. Tiles
+are a self-hosted PMTiles extract named by `HOMEOSTAT_DASHBOARD_TILES`
+and served by the dashboard unit, because a public tile CDN would learn
+family positions from tile coordinates.
+
+### Cameras
+
+Pixels are the media plane; detections are data. The payload
+conventions, the recorder and the mirror all assume small scalar JSON,
+and once video bytes enter a homeostat process as data the small core
+is gone.
+
+- **Event plane: on the bus.** A camera is an entity
+  (`capability = "camera"`) publishing scalar aspects, today `motion`,
+  recorded and automatable exactly like a PIR's `occupancy`. A better
+  detector later changes one adapter and no automation.
+- **Media plane: off the bus, never recorded.** Live viewing rides RTSP
+  into go2rtc, one upstream session per camera whatever the viewer
+  count, restreamed as a pure remux. Stream names equal entity ids.
+- **Browsers never speak go2rtc.** Its API is unauthenticated and can
+  add streams, read back RTSP URLs with credentials and run `exec:`
+  sources. So go2rtc binds to `127.0.0.1` with its other listeners off,
+  and the dashboard relays `/api/camera/{entity}/live` byte for byte to
+  go2rtc's `api/ws` behind its own gates, forwarding only the player's
+  MSE request. Relaying is not processing: the bus, the recorder and
+  the core stay scalar.
+- **MSE, not WebRTC**, whose direct peer connection cannot ride the
+  relay; MSE's 0.5–1.5 s latency is fine for a glance. **No
+  snapshots**: a still from H.264 needs a ~100 MB transcoder the image
+  does not carry. The stream starts only on tap.
+
+**A foreign binary as a unit: the shim owns the token.** A Go binary
+cannot declare a liveliness token, so `adapters/go2rtc.py` renders its
+config from `HOMEOSTAT_CAMERAS` into a `0600` file outside the repo,
+spawns the binary, polls its API until it answers, and only then
+declares ready. Child death is shim exit is supervisor backoff. This
+shim is the general answer for any foreign binary.
+
+**Refused:** an NVR, motion detection, transcoding and frame storage
+inside homeostat; mature tooling does each better, and a detector such
+as Frigate is the growth path, as one more adapter.
+
+### Notifications
+
+Reaching a person is reaching a device the house binds. `notifier` is a
+capability, an entity file per addressee binds it to a delivery
+adapter, and an automation that wants to reach someone declares an
+ordinary cmd-class publish onto that entity. The core adds nothing
+beyond the vocabulary row.
+
+- **Vocabulary.** `message` (base) and `alert` (feature) are
+  commandable strings carrying the text itself. Severity is an aspect,
+  not a payload field, so the two are separately grantable, separately
+  policed by the adapter (quiet hours may withhold `message`, never
+  `alert`) and separately recorded. `delivered` is the epoch time the
+  delivery service acknowledged the last message, never a human's
+  receipt. Chat ids, topics and priorities are the adapter's dialect.
+- **Addressing is the entity**: pseudo-room `person` for one person's
+  phone, `global` for a group channel. A person with two channels is
+  two entities, and switching providers changes no automation.
+- **Gating is the grant table, unchanged.** A new `notifier` publish is
+  a grant delta, so the plan is [structural](#tiers) and shows who may
+  reach whom. Channels are `shared`, so the band is inert; `actor` is
+  what the recorder keeps with every message.
+- **Rate limiting splits in two.** The cooldown is house policy, a
+  family-editable parameter kept by the SDK's `Cooldown`; the adapter's
+  own floor is defence in depth, dropping with `rate-limited`.
+- **Failure is loud.** A delivery adapter verifies its server before
+  `ready()`. An undelivered message is a `drop` with `delivery-failed`
+  and the channel's `available` goes false until the next success, a
+  deviation on `Now`.
+
+**Not used:** an external subscriber (it cannot carry intent: "skipped
+because it rained" is not derivable from state); health events (no
+addressee); a `home/notify/**` class with a routing service (the
+addressee becomes a name the plan cannot check); an SDK facility
+(authority by import); dashboard web push (no secure context, and
+looking at the dashboard is not being told).
+
+### Agent surface (MCP)
+
+`homeostat mcp` is an MCP server through which an agent observes the
+house. It is read-only and a pure bus client: it takes no house root,
+never reads the repo, and never shells out to git. An agent changes the
+house the way everyone does, by editing the house repo and running
+`homeostat plan`, and the owner applies.
+
+| Tool | Reads |
+|---|---|
+| `read_state` | any `home/**` key expression through the core's last-value caches |
+| `read_history` | `home/history/{state\|cmd}/{entity}/{aspect}` with `from`/`to`, `limit`, and the folds `bucket` or `changes` ([Read path](#read-path)) |
+| `read_logs` | a unit's captured output ring buffer |
+| `read_events` | the audit trail at `home/history/events` |
+| `schema` | the manifest contract as JSON Schema |
+| `explain` | the registered paragraph for a validation error code |
+
+`schema` and `explain` let an agent writing manifests read the rules
+the validator enforces rather than its source
+([The manifest is the contract](#the-manifest-is-the-contract)). The
+discovery loop is in [Discovery](#discovery).
+
+- **Transports.** Stdio (`--bus <endpoint>`), launched by an MCP client
+  for local work. HTTP (`--http <addr>`) for a deployed house, as a
+  `service` unit the house opts into, so it is supervised like any
+  unit. HTTP is stateless streamable-HTTP (a POST carries one JSON-RPC
+  message and gets `application/json` back; GET is 405) behind the
+  dashboard's gates ([Local-only access](#local-only-access)).
+- **Hand-rolled protocol**: `initialize`, `tools/list`, `tools/call`
+  and `ping`. An MCP SDK would be the largest dependency in the tree
+  for four methods.
+
+**No write tools.** Every agent in use works in a checkout of the house
+repo, where the CLI already gives it plan/apply with git review. And a
+write path committing into the supervised tree puts unapproved code
+where units spawn from: a pending plan gates the restart, not the file,
+so new code would run at the next crash. A write side would first need
+proposals staged outside that tree and the tier ceiling enforced in
+the supervisor's apply path.
+
+### Voice
+
+Voice is planned, not built. It is held to: a narrow, high-precision
+fast-path intent matcher with the conversational agent as fallback; a
+fast-path grammar generated house-side from manifests and the key
+space at plan/apply time, so the public tool never sees private
+naming; local wake word and speech-to-text, no cloud in the fast path;
+short-lived, satellite-scoped agent sessions. A satellite is a
+manual-band, family-tier surface like the dashboard, fanning group
+commands out at the edge.
+
+## Security model
+
+Homeostat has no accounts, no login and no TLS. A stranger is kept out
+because the house's surfaces are reachable only from its own network; a
+family member cannot rewire the house because no surface they reach
+has a structural path. Every new surface keeps both rules.
+
+### Local-only access
+
+**Reachability is the credential.** The house is reached on its LAN, or
+over WireGuard for phones and remote devices. Anything that can reach a
+surface is treated as the family ([Family tier only](#family-tier-only)),
+so the gates below are structural rather than authentication.
+
+**The bus port matters most.** A cmd envelope's `priority` and `actor`
+are self-declared and checked only for shape
+([Bus payload conventions](#bus-payload-conventions)), and nothing on
+the bus re-checks grants. Anything that can publish on the Zenoh port
+(7447) can command every entity, outbid the arbiter by claiming the
+top band, and forge state. So the bus is never published to the
+network:
+
+- The starter's compose file publishes the dashboard and the MCP port
+  and deliberately not 7447; `plan` and `apply` run through
+  `docker compose exec`. `127.0.0.1:7447` is no boundary either: a
+  container on `network_mode: host` shares the host's loopback.
+- Grants describe what a unit declared, not what it can do: a unit
+  opening its own session can publish anything. Making them constrain
+  takes a bus credential per unit, not a check in each adapter.
+
+**The browser is not local, even when the dashboard is.** A public page
+open in a family member's browser can fire requests at LAN addresses
+(CSRF), and by DNS rebinding can make the browser treat a house address
+as the page's own origin and read the replies. So every HTTP surface
+carries three gates:
+
+| Gate | Dashboard | MCP over HTTP |
+|---|---|---|
+| `Host` is a house-network address or a listed name | every request | every request |
+| `Origin`, when present, passes the same host rule | WebSocket handshakes | every request |
+| `X-Homeostat` header present | every `POST` | every request |
+
+- **`Host`** defeats DNS rebinding: a rebound public domain arrives
+  under its own name and is refused. A house-network address is a
+  private, loopback, link-local or unspecified one (IPv6 unique-local
+  included), where a LAN or a WireGuard tunnel lands. The listed names
+  (`localhost`, `homeostat`, `homeostat.lan`, `homeostat.local`) extend
+  through `HOMEOSTAT_DASHBOARD_HOSTS` and `HOMEOSTAT_MCP_HOSTS`, not the
+  repo. Both implementations are pinned against one table in
+  `tests/fixtures/host_gate.json`.
+- **`Origin`**, sent on a WebSocket handshake and a cross-origin
+  request, fails the host rule for a foreign page or `null`.
+- **`X-Homeostat`** is a header a cross-origin `fetch` cannot add
+  without a CORS preflight, which nothing answers. Without it a
+  cross-origin `text/plain` POST is a "simple request" that reaches the
+  server unpreflighted and could drive a write blind. The MCP server
+  requires it on reads too, because what it serves is the house's
+  private record.
+
+The MCP server refuses before reading a body, never echoes the reason
+to a browser, and bounds what a LAN peer can make it hold; the
+dashboard caps bodies at 64 KiB. A foreign service with an
+unauthenticated API binds to `127.0.0.1` and is reached only through a
+unit's relay, as go2rtc is ([Cameras](#cameras)).
+
+**Plain HTTP, and no PWA.** Service workers need a secure context even
+on private addresses, so the dashboard is plain `http` and a bookmark.
+A private CA is a plausible later path; nothing architectural depends
+on it.
+
+**Secrets never enter the repo**, because a repo is copied, pushed,
+reviewed and read by agents ([Repo split](#repo-split)). A unit sees
+only a fixed base environment plus the variables its manifest names in
+`[runtime] env` ([The unit contract](#the-unit-contract)), so a token
+meant for one unit never reaches another. Per-device secrets live in a
+TOML file outside the checkout named by an environment variable
+(`HOMEOSTAT_CAMERAS`, `HOMEOSTAT_MQTT_CREDENTIALS`), and files a unit
+renders from them are written `0600` outside the repo and deleted on
+exit. A non-secret endpoint is ordinary repo content in `[discovery]`.
+
+### Family tier only
+
+Anyone who can reach the dashboard is `family`. There is no owner mode,
+no admin panel and no approval surface on it, and it never grows one;
+the owner acts through git and the CLI (`plan`, review, `apply`). What
+the dashboard can do is exactly what the family tier may do:
+
+- send manual-band commands within its own grants, checked against the
+  vocabulary or the adapter's declared constraint
+  ([Commanding](#commanding));
+- write `editable_by = "family"` parameters within their constraints
+  ([Live parameters](#live-parameters));
+- read state, history, health and logs.
+
+Nothing structural (a grant, a manifest, an entity binding, a unit's
+code) is reachable from it: a stolen phone inside the perimeter can
+nudge setpoints and switch lights, not rewire the house. The agent
+surface holds the same line by being read-only
+([Agent surface (MCP)](#agent-surface-mcp)), and voice will be
+family-tier on the same terms.
+
+## Distribution
+
+### Repo split
+
+- **Public (`homeostat`, this repo):** the Rust core, the manifest
+  schema ([docs/manifest.md](manifest.md), versioned by each file's
+  `schema` field), the Python SDK, the generic units in `adapters/`,
+  and two example houses: `examples/house`, documented and the plan
+  test corpus, and `examples/starter-house`, the template a new house
+  starts from.
+- **Private (the house repo):** every manifest, entity file and zone,
+  the automations, `dashboard.toml`, pending plans, and house-specific
+  agent instructions. It pins a release (image tag and SDK version),
+  and its CI can run `homeostat plan`, which without a bus plans
+  offline and exits non-zero on any validation error.
+- **Boundary test:** a device address, a family member's name, a room
+  name or a behavioral choice is private; anything identical in a
+  stranger's house is public, and generic automations graduate into
+  SDK helpers or adapters. The public tool never sees a private repo
+  except locally.
+
+### Release artifacts
+
+A release (tag `vX.Y.Z`) publishes, each with a signed build provenance
+attestation: `homeostat` tarballs for `x86_64` and `aarch64` Linux,
+the SDK wheel, and the image `ghcr.io/freol35241/homeostat` (tags
+`X.Y.Z` and `X.Y`, `linux/amd64` and `linux/arm64`), with `SHA256SUMS`
+for the tarballs and wheel.
+
+The binary reports its version and commit at `home/meta/system/about`.
+The version lives in `Cargo.toml`, `sdk/python/pyproject.toml`, the
+starter's compose file and `scripts/sync_starter.sh`, whose check fails
+when they disagree: a wrong version reported is worse than none.
+
+### The container image
+
+The image (`Dockerfile`) is the deployment boundary: one container
+holds the core and every unit as plain processes
+([Process model](#process-model)). It carries the `homeostat` binary;
+`git`, for `plan --save` and apply's commit provenance; `tini` as
+PID 1; `tzdata`; uv with a pre-installed CPython 3.12, so first boot
+downloads no interpreter; the SDK wheel in `/opt/homeostat-wheels`,
+with `UV_FIND_LINKS` pointing there; and the `go2rtc` binary the camera
+unit spawns, checksum-pinned per architecture. Provisioning a binary is
+the image's job, never the house repo's.
+
+It runs as an unprivileged user (uid 1000, or any via `--user`), with
+the house repo at `/house` and `/var/cache/uv` worth a volume so unit
+environments survive container replacement. The default command is
+`up /house --listen tcp/0.0.0.0:7447`, and `HOMEOSTAT_BUS` is preset to
+loopback, so `docker exec <container> homeostat apply /house` needs no
+address. Without Docker, a house runs from the release binary and the
+wheel, with `UV_FIND_LINKS` pointing at the wheel's directory.
+
+Port 7447 is exposed for sibling containers but must not be published
+to the host: reaching the bus is full authority over the house
+([Local-only access](#local-only-access)). Host networking is not
+required, since the bus uses explicit endpoints; an adapter that
+discovers by multicast (mDNS) sees only what reaches the container's
+network and falls back to explicit addresses.
+
+### SDK distribution
+
+A house unit names the SDK by exact version in its PEP 723 block,
+`"homeostat==X.Y.Z"`, with no `[tool.uv.sources]`, and uv resolves it
+from the bundled wheel through `UV_FIND_LINKS`.
+
+- **The pin is in the unit script, so `files_hash` covers it.** An SDK
+  bump is a visible behavioral change in `plan`, restarted by `apply`.
+  Not a vendored SDK copy, nor a floating or path dependency: both sit
+  outside change detection.
+- **No clone and no network** at first boot. Not a git source: it
+  needs both, and "pinned to a tag" invites the same-commit trap below.
+- **The cost:** a house pinning a version the image does not bundle
+  fails to resolve at unit start, the version-floor hazard in its
+  loudest form: the unit never reaches `running` and its log says why.
+
+Inside this repo, `adapters/` and test fixtures use an editable `path`
+source so tests exercise the working-tree SDK, and each adapter script
+has a uv lockfile beside it (`{script}.py.lock`), so a unit resolves
+the dependency versions its release was tested against.
+
+**Adapter and SDK must come from the same commit.** An adapter from
+`main` fails against an older SDK with `AttributeError`, so a house
+copies an adapter from the release it pins.
+
+### The starter house
+
+`examples/starter-house` is a self-contained house repo: copy it out,
+`git init`, and run its compose file (mosquitto, Zigbee2MQTT and the
+image). Its copies of the generic adapters, their lockfiles and the
+dashboard's assets are generated, never edited: `scripts/sync_starter.sh`
+takes each from `adapters/` at the release tag the starter pins
+(`SDK_TAG`) and rewrites the SDK source to the `homeostat==X.Y.Z` pin
+and the lockfile's SDK entry to the bundled wheel. So the starter is a
+snapshot of a release, not of `main`, and CI's `sync_starter.sh
+--check` fails when any copy differs from what that release generates.
+A release bumps `SDK_TAG` with the other version strings; until the
+tag exists the check compares against the working tree, the release
+commit itself. CI checks out full history, or the tag is never found.
+
+## Open questions
+
+Questions the design has named and not answered, and known gaps it
+has not closed.
+
+- **Should `features` gate command contents?** The grant table does not
+  check a command's value or aspect against them; the SDK and the
+  adapter do. The lean is no separate layer. See
+  [The grant table](#the-grant-table).
+- **Access control on the bus.** Reaching the bus is full authority;
+  Zenoh ACLs would make grants a runtime boundary, and when to take
+  that on is open. See [Local-only access](#local-only-access).
+- **`editable_by` is enforced by the dashboard only.** The core's
+  config queryable checks type and constraint, so any bus client may
+  write an owner-tier parameter. See [Live parameters](#live-parameters).
+- **Turning a live edit into a commit.** A family member's live edit
+  is reverted by the next apply unless someone commits it; capturing it
+  automatically is unbuilt. See [Live parameters](#live-parameters).
+- **Handing an arbiter hold back early.** Only expiry ends a hold;
+  whether release belongs on the envelope or on an arbiter surface is
+  open. See [Arbitrated mode](#arbitrated-mode).
+- **A cmd publish with no `priority`** is treated as `automation` by
+  `plan` but refused by the SDK. See [Priority bands](#priority-bands).
+- **Lockfiles are outside change detection.** `files_hash` does not
+  cover a script's `{script}.py.lock`, so a lock-only change neither
+  shows in `plan` nor restarts the unit. See
+  [Change detection](#change-detection).
+- **Forecast uncertainty and corrections to the past** have no
+  representation: a point is one scalar, and `state` keeps no
+  reanalysis. See [Forecasts](#forecasts).
+- **An inhibit class for interlocks**, a condition-held lockout the
+  arbiter honours against every band, is deferred until a second case
+  needs it. See [Burners and interlocks](#burners-and-interlocks).

@@ -1330,7 +1330,7 @@ async fn restart_seeds_missed_state_from_the_mirror() {
 }
 
 /// (l) Forecasts are the one class that does not ride `samples`
-/// (docs/design.md, Forecasts). Two issues about the same future instant
+/// (docs/design.md#forecasts). Two issues about the same future instant
 /// both survive — which is the whole reason the table exists — a point's
 /// declared extent is stored rather than inferred from succession, and
 /// the two verification read shapes answer in issues.

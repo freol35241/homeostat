@@ -10,7 +10,7 @@
 # ///
 """OpenWrt network adapter.
 
-See docs/design.md, "Network presence and connectivity (settled 2026-07-25)".
+See docs/design.md#the-capability-vocabulary.
 
 Named for the dialect it speaks: ubus JSON-RPC over HTTP (uhttpd-mod-ubus,
 rpcd session auth). It polls: each cycle logs in fresh (rpcd expires idle
@@ -18,27 +18,55 @@ sessions; nothing to renew) and asks every configured router two
 questions: `network.interface dump` for WAN state and `get_clients` on
 every hostapd BSS for WiFi sightings. Scope is presence and WAN state
 only; network metrics and tunnel reachability are the monitoring stack's
-job, deliberately (docs/design.md, amended 2026-09-23).
+job, deliberately. There is no tunnel state: a wireguard interface's up
+flag is true whether or not any peer can be reached, which is a false
+assurance, and per-peer state would publish each peer's endpoint, a
+movement trace of whoever carries the device.
+
+Combining WiFi sightings with location into "someone is home" is not this
+adapter's job either: which MAC is whose is house knowledge, and exactly
+one adapter binds each entity, so this one cannot write onto person
+entities. That fusion is an ordinary automation over both.
 
 The manifest's [discovery].endpoint is the HOMEOSTAT_OPENWRT credentials
 file itself: an out-of-repo TOML keyed by router name with `host`
 (optionally `host:port`), `username`, `password` — a dedicated read-only
-rpcd ACL login per router, never root. Entity binding: a `router` entity's
+rpcd ACL login per router, never root; the ACL needs only
+`network.interface` and `hostapd.*`. The login travels over plain HTTP to
+uhttpd's /ubus, so redirects are refused (one would replay the password
+at whatever host the reply names) and a reply larger than 1 MiB is a
+failure, not a memory bill. Entity binding: a `router` entity's
 id is its name in that file (aspect `wan`); a `presence` entity's id is the device MAC,
 lowercase (aspect `presence` — sighted on any BSS of any router, absent
 only after away_delay_s of continuous non-sighting, which also absorbs AP
 reboots, and only while every configured router polled: a silent router is
-a blind spot, not an empty one).
+a blind spot, not an empty one). A presence id that is not lowercase
+drops at startup with "malformed-id" (sightings are lowercased, so it
+would read absent forever), a router id missing from the file with
+"router-unconfigured", any other capability with
+"unsupported-capability".
 
 Aspects publish on transition only, plus each entity's current value after
-its first successful poll; a poll is a read, not an event. An unreachable
-router drops with one "router-unreachable" health event per down
-transition and its aspects go stale rather than false. Read-only by
-design: no cmd surface until a command is actually wanted.
-A bound entity's discovery record carries its aspect descriptor (docs/
-design.md, Aspect descriptors): one boolean per capability, with value
-labels ("up"/"down", "present"/"away") — the whole of what this adapter
-speaks, so a static table, not a generated one.
+its first successful poll; a poll is a read, not an event, so the recorder
+stores exactly the transitions. Failure policy: an unreachable router
+emits one "router-unreachable" health event per down transition
+("router-poll-failed" when it answers with something that does not parse)
+and its aspects go stale rather than false. With every router silent
+nothing publishes; with some silent, a sighting still publishes present
+(evidence is evidence) but an unsighted device holds stale, and each
+change in which routers are silent emits one "presence-partial" event
+naming them, so a long blind spot stays visible after "router-unreachable"
+has latched. A router whose dump has no interface named `wan` emits
+"unknown-interface" once, until one reappears. Read-only by design: no cmd
+surface until a command is actually wanted.
+
+Discovery is built from data the cycle already fetched, republished only
+when it changes: every configured router (with whether it answered) and
+every station seen this cycle as a bare MAC, suggested `presence`, with
+the routers that saw it. A bound entity's discovery record carries its
+aspect descriptor (docs/design.md#aspect-descriptors): one boolean per
+capability, with value labels ("up"/"down", "present"/"away") — the whole
+of what this adapter speaks, so a static table, not a generated one.
 """
 
 import asyncio
@@ -349,7 +377,7 @@ class Adapter:
     }
 
     def publish_discovery(self, sightings) -> None:
-        """Publish the complete current view of the periphery (docs/design.md, Discovery).
+        """Publish the complete current view of the periphery (docs/design.md#discovery).
 
         Built from data the cycle already fetched; republished only when it
         changes.

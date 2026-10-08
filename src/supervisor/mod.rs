@@ -100,11 +100,11 @@ pub async fn run(check: &CheckResult, root: &Path, listen: &str) -> Result<(), S
     // restarting at midday would otherwise have no inputs until tomorrow
     // morning. Note the reply's age is the mirror's, not the forecast's —
     // a forecast carries its own `issued`, which is what a consumer's
-    // staleness policy reads (docs/design.md, Forecasts).
+    // staleness policy reads (docs/design.md#forecasts).
     mirror(&session, "home/forecast/**").await?;
     // The arbiter's holds, for the same late-joiner reason: a browser
     // opening mid-hold must see it, and the arbiter republishes only on
-    // change (docs/design.md, Arbitrated mode).
+    // change (docs/design.md#arbitrated-mode).
     mirror(&session, "home/hold/*").await?;
 
     let mut world = WorldMeta {

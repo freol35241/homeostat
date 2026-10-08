@@ -3,7 +3,7 @@
 Each such adapter bridges an external MQTT broker onto the bus (zigbee2mqtt,
 OwnTracks, ...).
 
-A helper, not a transport layer (docs/design.md, IVT490 heat-pump adapter):
+A helper, not a transport layer (docs/design.md#bus):
 adapters still own their connections — their own `on_message` logic, their
 own topics, their own health-event vocabulary. This module only covers the
 plumbing that is identical across all of them: endpoint parsing, client
@@ -60,7 +60,7 @@ def base_topic(endpoint: ParseResult, default: str) -> str:
     other consumers address it — so the prefix is a deployment fact of the
     same kind as the host, and lives beside it:
     `mqtt://broker:1883/VP52/zigbee2mqtt`. Not a secret, so the repo is
-    the right place for it (docs/design.md, the boundary test).
+    the right place for it (docs/design.md#local-only-access).
 
     Parameters
     ----------
@@ -89,8 +89,9 @@ def credentials(endpoint: ParseResult) -> tuple[str | None, str | None]:
         password = "..."
 
     A broker that needs auth must not force its password into a unit
-    manifest; the file mirrors HOMEOSTAT_ESPHOME_DEVICES (docs/design.md,
-    the boundary test). Unset env var or no entry for this host: anonymous.
+    manifest; the file mirrors HOMEOSTAT_ESPHOME_DEVICES
+    (docs/design.md#local-only-access). Unset env var or no entry for this
+    host: anonymous.
 
     Parameters
     ----------

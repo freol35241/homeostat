@@ -1,7 +1,7 @@
 //! The plan engine: diffs a validated house repo against the world as the
-//! bus reports it (see docs/design.md, step 5b). No state file — desired
-//! state is the repo, actual state is queryable, drift is impossible by
-//! construction.
+//! bus reports it (see docs/design.md#plan-and-apply). No state file —
+//! desired state is the repo, actual state is queryable, drift is
+//! impossible by construction.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -19,8 +19,8 @@ use crate::repo::LoadedUnit;
 use crate::validate::display_value;
 use crate::CheckResult;
 
-/// Plan tiers per docs/design.md, derived mechanically from the diff, never
-/// declared. Any grant-table delta escalates to structural.
+/// Plan tiers per docs/design.md#tiers, derived mechanically from the diff,
+/// never declared. Any grant-table delta escalates to structural.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tier {
     ParameterOnly,
@@ -405,7 +405,7 @@ pub fn walk_steps(diff: &Diff, check: &CheckResult, world: &World) -> Vec<Step> 
 /// owner units must be up before the granting unit. The owner rides in
 /// the grant itself, so edges hold even for entities the repo no longer
 /// declares. Owners are adapters, or automations for commandable virtual
-/// entities (docs/design.md, Commandable virtual entities).
+/// entities (docs/design.md#commandable-virtual-entities).
 fn grant_edges(grants: &[Grant]) -> Vec<(String, String)> {
     let mut edges = Vec::new();
     for grant in grants {

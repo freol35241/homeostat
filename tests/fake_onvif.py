@@ -5,8 +5,8 @@
 # ]
 # ///
 """A minimal, honest ONVIF Profile S pull-point event service, for the
-onvif adapter's integration tests (tests/onvif.rs; see docs/design.md,
-"Cameras (settled 2026-07-19)").
+onvif adapter's integration tests (tests/onvif.rs; see
+docs/design.md#cameras).
 
 Speaks the real SOAP shapes the adapter sends: CreatePullPointSubscription
 (returning a SubscriptionReference address — deliberately with a WRONG,

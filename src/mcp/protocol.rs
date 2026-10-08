@@ -1,6 +1,6 @@
 //! Minimal JSON-RPC / MCP request handling shared by both transports:
 //! initialize, tools/list, tools/call, ping. Hand-rolled on purpose — the
-//! surface this server needs is five methods over JSON-RPC 2.0, stateless,
+//! surface this server needs is four methods over JSON-RPC 2.0, stateless,
 //! one message at a time, and stays that way; an SDK would be the largest
 //! dependency in the tree.
 

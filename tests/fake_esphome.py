@@ -5,12 +5,12 @@
 # ]
 # ///
 """A minimal, honest ESPHome native-API device, for the esphome adapter's
-integration tests (tests/esphome.rs; see docs/design.md, "ESPHome adapter
-(settled 2026-07-16)").
+integration tests (tests/esphome.rs; the adapter's own docstring is its
+spec).
 
 Speaks the real plaintext wire protocol (a zero byte, a varint length, a
-varint message-type id, then the protobuf payload — docs/design.md cites no
-framing detail, but aioesphomeapi's own frame helper does; this mirrors it
+varint message-type id, then the protobuf payload, as aioesphomeapi's own
+frame helper defines it; this mirrors it
 by hand rather than reaching into aioesphomeapi's internals) using the
 protobuf message classes bundled in aioesphomeapi.api_pb2, so the bytes on
 the wire are exactly what a real device would send. Encryption (Noise) is
@@ -36,9 +36,9 @@ import os
 
 from aioesphomeapi import api_pb2
 
-# Message-type ids are a stable, protocol-level fact (docs/design.md leaves
-# framing to the library; these numbers are aioesphomeapi's own
-# core.MESSAGE_TYPE_TO_PROTO for the subset this fake speaks).
+# Message-type ids are a stable, protocol-level fact: these numbers are
+# aioesphomeapi's own core.MESSAGE_TYPE_TO_PROTO for the subset this fake
+# speaks.
 HELLO_REQUEST, HELLO_RESPONSE = 1, 2
 DISCONNECT_REQUEST, DISCONNECT_RESPONSE = 5, 6
 PING_REQUEST, PING_RESPONSE = 7, 8

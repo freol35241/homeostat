@@ -16,7 +16,7 @@ presence = "home/state/global/*/presence"
 
 # The notifier grant: who this unit may reach, and with which severity.
 # Adding or widening it is a grant delta — a structural plan the owner
-# applies (docs/design.md, Notifications).
+# applies (docs/design.md#notifications).
 [bus.publishes]
 alert = { key = "home/cmd/person/alice_phone/alert", capability = "notifier", priority = "automation" }
 

@@ -71,7 +71,7 @@ outside the constraint is refused with the old value still in force.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `constraint` | table | no | Inline table of constraint keys the type understands (`malformed-constraint` otherwise): `min`/`max` for `int` and `float`; `after`/`before` (`"HH:MM"`, may span midnight) for `time`. |
+| `constraint` | table | no | Inline table of constraint keys the type understands (`malformed-constraint` otherwise): `min`/`max` for `int` and `float`; `after`/`before` (`"HH:MM"`, may span midnight) for `time`; `enum` (a non-empty list of strings) for `string`. |
 | `default` | any | yes | A TOML literal of the declared type (`invalid-default` otherwise): `true`, `30`, `0.5` (an integer literal is accepted for `float`), `"text"`, or `"22:00"` for `time`. Must satisfy the constraint. |
 | `editable_by` | [EditableBy](#editableby) | no | Who may change it live. `family` params appear as editable setpoints on the dashboard; anything else is visible there but written only through the repo or the bus. |
 | `type` | [ParamType](#paramtype) | yes |  |
@@ -82,7 +82,7 @@ outside the constraint is refused with the old value still in force.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `command` | string | yes | Shell command, run from the house root with `HOMEOSTAT_UNIT` and `HOMEOSTAT_BUS` set. Typically `uv run units/<name>.py`. |
+| `command` | string | yes | The command line, split on whitespace and run without a shell from the house root, with `HOMEOSTAT_UNIT` and `HOMEOSTAT_BUS` set. Typically `uv run units/<name>.py`. |
 | `env` | list of string | no | Names of the environment variables this unit reads, passed through from the supervisor's environment by exact name (e.g. `["HOMEOSTAT_NTFY_TOKEN"]`). A unit sees nothing else of the supervisor's environment beyond a fixed base set (`PATH`, `HOME`, locale, `TZ`, `UV_*`, `PYTHON*`, CA bundles) and the `HOMEOSTAT_UNIT`/`HOMEOSTAT_BUS` it is given — a secret meant for one unit is never visible to another. |
 | `restart` | [RestartPolicy](#restartpolicy) | yes |  |
 | `shutdown_grace_s` | integer | no | Seconds between SIGTERM and SIGKILL at shutdown. Default 5. |
@@ -181,7 +181,7 @@ a key segment (`invalid-name`).
 | `inputs` | table of name → [InputSource](#inputsource) | no | `[inputs]`: device inputs fed from one source each, keyed by the adapter's own input name (e.g. `indoor_temperature_actual`). A fed input is a continuous signal with one master, not a command: it stops being a command aspect for this entity, never rides the arbiter, and staleness is the device's own validity window. Only a device entity can be fed (`virtual-entity-fed`); the adapter is the authority on which input names exist. |
 | `naming` | [EntityNaming](#entitynaming) | no |  |
 | `schema` | integer | yes | Contract version. Must be 1. |
-| `sources` | table of name → [SourceRef](#sourceref) | no | `[sources]`: the readings this entity's value is DERIVED from, keyed by a short name for each contributor. Declared, not inferred — a unit subscribes many things for many reasons and nothing in its subscriptions says which feed which published aspect. It is what the history overlay draws beside the computed value (docs/design.md, Sources), and it is not `[inputs]`: a device feed carries a runtime contract that does not apply here, and a wired input stops being a command aspect, which would collide on a commandable virtual entity. |
+| `sources` | table of name → [SourceRef](#sourceref) | no | `[sources]`: the readings this entity's value is DERIVED from, keyed by a short name for each contributor. Declared, not inferred — a unit subscribes many things for many reasons and nothing in its subscriptions says which feed which published aspect. It is what the history overlay draws beside the computed value (docs/design.md#sources), and it is not `[inputs]`: a device feed carries a runtime contract that does not apply here, and a wired input stops being a command aspect, which would collide on a commandable virtual entity. |
 | `write_policy` | [WritePolicy](#writepolicy) | yes |  |
 
 ### EntitySection
@@ -221,7 +221,7 @@ and prints the edge, as it does a grant.
 One entry in `[sources]`: a reading that a computed value is derived
 from, named the same way a device feed names its source, because the
 identity layer between a unit and a bus key is the same one
-(docs/design.md, Device feeds).
+(docs/design.md#device-feeds).
 
 | Field | Type | Required | Description |
 |---|---|---|---|
@@ -247,7 +247,7 @@ How commands toward the entity are governed. An automation-owned
 the owner subscribes to its cmd keys (`virtual-entity-commanded`).
 
 - `shared` — Any granted writer may command it; last write wins.
-- `exclusive` — At most one automation-band writer may be granted (`exclusive-write-conflict`); manual-band surfaces sit above.
+- `exclusive` — At most one unit below the manual band may be granted (`exclusive-write-conflict`); manual-band surfaces sit above.
 - `arbitrated` — Commands go through the arbiter (leases, bands, preemption); the house must bind an arbiter-class publish covering it (`arbitrated-uncovered`).
 
 ## Zones (`zones.toml`)
@@ -268,7 +268,7 @@ Optional — without it the dashboard renders its generated views (Now,
 Setpoints, Rooms) — and when present it is the whole nav: Health and
 the list of everything not shown stay reachable as fixed chrome, never
 as views. Layout is text in the repo, never browser-side state
-(docs/design.md, Dashboard).
+(docs/design.md#views-are-text).
 
 | Field | Type | Required | Description |
 |---|---|---|---|
@@ -367,7 +367,7 @@ What an entity of each capability publishes under which names (docs/adapters.md,
 | `cover` | — | — | — | Reserved; no adapter binds it yet. |
 | `light` | `on` | `brightness`, `color_temp` | `on = true` | `brightness` 0–254 (the Zigbee2MQTT scale the dashboard assumes), `color_temp` in mired. |
 | `lock` | `locked` | — | `locked = false` |  |
-| `notifier` | `message` | `alert`, `delivered` | — | A channel that reaches a person: a phone, a group chat. `message` and `alert` are commandable strings — the text itself — and two structurally separate delivery paths, granted and policed apart (an alert overrides quiet hours; a message never will). `delivered` is the epoch time the delivery service acknowledged the last message, never a human's receipt. Room `person` for one person's channel, `global` for a group (docs/design.md, Notifications). |
+| `notifier` | `message` | `alert`, `delivered` | — | A channel that reaches a person: a phone, a group chat. `message` and `alert` are commandable strings — the text itself — and two structurally separate delivery paths, granted and policed apart (an alert overrides quiet hours; a message never will). `delivered` is the epoch time the delivery service acknowledged the last message, never a human's receipt. Room `person` for one person's channel, `global` for a group (docs/design.md#notifications). |
 | `person` | — | `presence`, `lat`, `lon`, `accuracy`, `battery`, `fixed_at` | — | `presence` is whether the person is home (bool), published by whichever adapter knows — a geofence transition, a fused sighting; the dashboard's People tile reads it. Scalar position aspects; `fixed_at` is the fix's epoch timestamp. Room is always `person`. |
 | `presence` | — | `occupancy`, `presence` | — | Either spelling is accepted; adapters pass their native one through. |
 | `router` | — | `wan` | `wan = false` |  |
@@ -376,5 +376,5 @@ What an entity of each capability publishes under which names (docs/adapters.md,
 
 Every capability may also publish:
 
-- `available` — bool, published on transition by the owning adapter when the protocol has a real loss signal; `false` is notable (docs/design.md, Availability).
+- `available` — bool, published on transition by the owning adapter when the protocol has a real loss signal; `false` is notable (docs/design.md#availability).
 - `{aspect}_valid` — bool beside a reading the device itself may stop trusting; the value stands, the flag says stale.

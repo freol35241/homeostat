@@ -1,8 +1,11 @@
 # Writing an adapter
 
 The normative contract for an adapter, stated as it is today. The design
-record ([design.md](design.md)) holds the reasoning and the history; this
-page holds the rules. When they disagree, this page is stale — fix it.
+document ([design.md](design.md)) holds the reasoning, git holds the
+history, and each adapter's module docstring is that adapter's own spec:
+its dialect, its failure policy, its credentials. This page holds the
+rules every adapter follows. When this page and design.md disagree, this
+page is stale — fix it.
 
 An adapter is a unit that puts devices on the bus: it binds entity files
 to things a protocol can reach, publishes their state, and takes their
@@ -87,6 +90,14 @@ serial number) and documents it in its module docstring, because agents
 construct entity files from discovery records and must never guess the
 binding rule. Everything else in the entity file is the house's.
 
+An adapter is named for the dialect it speaks, not the vendor that sells
+the device: `onvif`, not `tapo`; `openwrt`, not the router's brand. Vendor
+facts (a host, a port, a default path) are per-device configuration. A
+vendor adapter exists only once the vendor's own API is needed for
+something the dialect cannot do, and since exactly one adapter binds each
+entity, it then takes those devices over by an ordinary entity-file
+change.
+
 ## 2. Lifecycle
 
 What the supervisor does, and what it expects back:
@@ -122,7 +133,22 @@ What the supervisor does, and what it expects back:
   command subscriptions are declared. The liveliness token it declares is
   what "running" means to the supervisor, not the process. Before it,
   the unit is `starting`; a unit that never calls it never becomes
-  healthy.
+  healthy. Where the far end can be checked cheaply (an HTTP health
+  endpoint), check it before `ready()`, so a wrong URL or a bad token is
+  a visible startup failure rather than a unit that drops everything.
+- **Proof of life.** A subscription that is accepted and matches nothing
+  (a wrong topic prefix) raises no error: the adapter is deaf and
+  reports healthy. Where the protocol delivers something on subscribe
+  (a retained inventory, a retained state topic), treat its absence past
+  a timeout as a health event naming what was subscribed. A topic that
+  is republished only on change proves life at boot only; its later
+  silence says nothing, so mid-run liveness needs a signal that is
+  actually periodic or stateful.
+- **Foreign binaries** join as a thin SDK shim (`adapters/go2rtc.py`): the
+  shim renders the binary's config, spawns it, waits until it answers,
+  declares `ready()`, and exits when the child does, so the supervisor's
+  backoff and process-group sweep apply unchanged. The binary itself is
+  image provisioning, never repo content.
 - **Stop.** The supervisor sends SIGTERM and waits `shutdown_grace_s`
   before SIGKILL. Undeclare subscribers, close the session, close the
   protocol connection, exit. `homeostat.mqtt.wait_for_shutdown()` is the
@@ -148,8 +174,13 @@ Each entity carries `name`, `id`, `capability`, `features`, `room`,
 config channel. Secrets never enter the repo: an MQTT password goes in
 the endpoint's `${VAR}` or in the TOML that `HOMEOSTAT_MQTT_CREDENTIALS`
 names; per-device keys go in a file an adapter-specific variable names
-(`HOMEOSTAT_ESPHOME_DEVICES` is the precedent). Every such variable is
-declared in the unit's `runtime.env`, or the unit does not see it (§2).
+(as `HOMEOSTAT_ESPHOME_DEVICES` and `HOMEOSTAT_CAMERAS` do). Every such
+variable is declared in the unit's `runtime.env`, or the unit does not
+see it (§2). Inline credentials in an endpoint URL win over the file, but
+a raw `@`, `/` or `#` in a password reparses the URL instead of failing,
+which is what the file is for. An HTTP client that sends a secret (a
+login, a bearer token) refuses redirects, which would replay it at
+whatever host the reply names.
 
 ## 3. State
 
@@ -176,6 +207,13 @@ home/state/{room}/{entity}/{aspect}
   `src/manifest.rs`, not an adapter convention.
 - **The bus value is the device's readback**, never an echo of a command
   the adapter just forwarded.
+- **Publish on change when the source repeats itself.** A bridge that
+  republishes every field each poll, a camera that repeats a
+  notification every evaluation tick, a router answering the same
+  question each cycle: forward a value only when it differs from the
+  last one put (and once after start; late joiners read the core's
+  mirror). The recorder stores every put, so forwarding a poll records
+  values that never moved, at the poll's rate.
 - **Never invent.** On loss the last values stand; the adapter publishes
   no nulls, no zeros, and clears no keys. Unknown is not false.
 - **Validity travels beside the value.** A reading the device itself
@@ -218,6 +256,17 @@ Per command:
 A command toward an unavailable device is a per-adapter policy: drop with
 `device-unavailable` if the protocol knows, or send and let the device
 miss it.
+
+**One master per device.** A device this adapter commands must have no
+other writer: a Node-RED flow or a Home Assistant switch publishing to
+the same set topic undoes the arbiter and the audit trail without either
+noticing. Read-only consumers can coexist. Say so as an operational note
+in the module docstring when the dialect's ecosystem routinely wires
+such writers.
+
+An adapter with nothing to command declares no command subscription.
+A command surface is added the day a command is actually wanted, not
+in advance because the protocol could carry one.
 
 ## 5. Discovery
 
@@ -284,7 +333,11 @@ a fixed field list (the heat pump).
 
 An adapter with nothing to enumerate publishes no discovery document.
 An unbound device is a discovery fact, not a dropped message: report it
-once (`unknown-device`) or not at all, never per publish.
+once (`unknown-device`) or not at all, never per publish. When the
+inventory is whatever the wire carries (phones seen on a broker, 433 MHz
+codes from the neighbours), cap the unbound records and coalesce
+republishes, so a busy neighbourhood can neither grow the document
+without bound nor republish it per message.
 
 ## 6. Health events
 
@@ -309,7 +362,9 @@ trace: one JSON object at `home/health/{unit}/event` via
 
 New kinds and reasons are fine (`mdns-unavailable`, `camera-misconfigured`
 exist); keep them to transitions and drops, never per message, and name
-them in the module docstring.
+them in the module docstring. A degraded condition (a silent bridge, an
+unreachable router) is its own event kind, never a `drop`: nothing was
+dropped.
 
 ## 7. Availability
 
@@ -331,7 +386,7 @@ device liveness signal, published on transition by the owning adapter.
 
 A device that asserts and never retracts (433 MHz PIRs, door contacts,
 doorbells) needs its off synthesized, and that is the adapter's job —
-see docs/design.md, One-way senders. Publish `true` on the first
+see [design.md](design.md#one-way-senders). Publish `true` on the first
 assertion and `false` when the hold expires, extend the deadline on a
 repeat burst without publishing, and publish `false` for every bound
 entity at startup: the held value is yours, not the device's, so after a

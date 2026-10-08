@@ -1,14 +1,14 @@
-//! The agent surface (docs/design.md, "Agent surface (MCP)"): an MCP
-//! server through which an agent observes the house. Read-only: an agent
-//! with a filesystem changes the house by editing the house repo and
-//! running the CLI, the same plan/apply path as every other actor.
+//! The agent surface (docs/design.md#agent-surface-mcp): an MCP server
+//! through which an agent observes the house. Read-only: an agent with a
+//! filesystem changes the house by editing the house repo and running the
+//! CLI, the same plan/apply path as every other actor.
 //!
 //! Six tools. `read_state` and `read_history` read the live bus (the
 //! core's last-value caches, the recorder's history queryable); `read_logs`
 //! and `read_events` read the operational exhaust and the durable audit
-//! trail (docs/design.md, "Logs and the audit trail"); `schema` and
-//! `explain` serve the authoring contract — the manifest schema and the
-//! validator's rules — for an agent writing manifests through the repo.
+//! trail (docs/design.md#logs-and-the-audit-trail); `schema` and `explain`
+//! serve the authoring contract — the manifest schema and the validator's
+//! rules — for an agent writing manifests through the repo.
 //!
 //! The server is a bus client like any observer: it needs no house root
 //! and never touches the repo. Run under the supervisor as a service unit

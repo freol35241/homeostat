@@ -1,7 +1,7 @@
 //! Pending plans as files: `plans/pending/{id}.plan` — TOML carrying the
 //! rendered plan text plus what apply needs to enforce staleness. Readable
 //! on a phone as-is; auto-invalidated when the repo moves past the base
-//! commit (docs/design.md, step 5b).
+//! commit (docs/design.md#pending-plans).
 
 use std::fs;
 use std::path::{Path, PathBuf};

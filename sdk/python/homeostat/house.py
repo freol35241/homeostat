@@ -22,7 +22,7 @@ class InputSource:
 
     That is the state key home/state/{room}/{entity}/{aspect}. The room is
     resolved from the source entity's file; the entity file names only
-    entity and aspect (docs/design.md, Device feeds).
+    entity and aspect (docs/design.md#device-feeds).
 
     Attributes
     ----------
@@ -44,7 +44,7 @@ class SourceRef:
     """One `[sources]` entry: a reading a computed value is derived from.
 
     It carries the caveat that belongs to THIS contributor rather than to
-    the aspect (docs/design.md, Sources).
+    the aspect (docs/design.md#sources).
 
     Attributes
     ----------

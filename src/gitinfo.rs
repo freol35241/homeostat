@@ -2,7 +2,7 @@
 //!
 //! `applied_commit` exists only when the house root is itself a git
 //! worktree root: a nested fixture directory must not inherit an enclosing
-//! repo's HEAD (docs/design.md, step 5b).
+//! repo's HEAD (docs/design.md#the-apply-walk).
 
 use std::path::Path;
 use std::process::Command;

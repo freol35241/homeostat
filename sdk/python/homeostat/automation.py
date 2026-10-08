@@ -1,4 +1,4 @@
-"""Automation-side SDK: the Context (see docs/design.md, step 4).
+"""Automation-side SDK: the Context (see docs/design.md#the-sdks-view-of-a-unit).
 
 A Context gives an automation exactly the surface its manifest declares:
 subscriptions by binding name from [bus.subscribes], typed live parameters
@@ -331,7 +331,7 @@ class Context:
         cover is refused: the manifest stays the authority on intent.
 
         A forecast key carries one slot more than the rest — its source,
-        which says WHO is claiming this future (docs/design.md, Sources).
+        which says WHO is claiming this future (docs/design.md#forecasts).
         """
         expr = self._publishes[binding]["key"]
         segments = expr.split("/")
@@ -503,7 +503,7 @@ class Context:
         Never automatic, because the right behaviour is not the same for
         all state and only the unit knows which kind it holds — an rf433
         adapter must publish `false` at startup rather than resurrect an
-        expired motion event (docs/design.md, One-way senders), while a
+        expired motion event (docs/design.md#one-way-senders), while a
         fusion wants its inputs recomputed. So this is a call the unit
         makes, and the age comes with the value: a latch does not care how
         old its decision is, and a fusion very much does.
@@ -516,10 +516,10 @@ class Context:
         when the series has no rows, or when the store answers an error
         (logged as a `restore-failed` health event): a unit must still be
         able to start on its code defaults. Because there is no start order
-        between units (docs/design.md, History / recorder) the recorder may not be
-        answering yet, so this retries until `timeout_s` — call it before
-        `ready()`, where a unit that is not yet able to do its job is
-        exactly what the supervisor should see.
+        between units (docs/design.md#restoring-a-units-own-last-value) the
+        recorder may not be answering yet, so this retries until
+        `timeout_s` — call it before `ready()`, where a unit that is not yet
+        able to do its job is exactly what the supervisor should see.
 
         Parameters
         ----------
@@ -621,7 +621,7 @@ class Context:
     def source_used(self, entity: str, aspect: str, source: str, used: bool) -> None:
         """Report whether one declared source is currently folded into a computed value.
 
-        See docs/design.md, Which sources a computation actually used.
+        See docs/design.md#which-sources-a-computation-actually-used.
 
         Declared sources say what MAY contribute; this says what did. A
         source dropped as stale, failed on a plausibility check, or

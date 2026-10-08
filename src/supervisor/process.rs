@@ -14,7 +14,8 @@ use crate::bus::LogEntry;
 use crate::supervisor::LogMap;
 
 /// Per-unit ring buffer capacity: bounded memory, gone on restart — logs are
-/// operational exhaust, not the durable trail (see docs/design.md).
+/// operational exhaust, not the durable trail (see
+/// docs/design.md#logs-and-the-audit-trail).
 pub const LOG_CAPACITY: usize = 500;
 
 /// Resolves the command a unit is actually exec'd with. For a `uv run`

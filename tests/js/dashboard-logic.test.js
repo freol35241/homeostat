@@ -121,7 +121,7 @@ test('an owner param off its default deviates too, tapping to the unit rather th
   assert.deepEqual(off[0].target, { type: 'unit', unit: 'evening_lights' });
 });
 
-// Arbiter holds (docs/design.md, Arbitrated mode). A lease is taken by
+// Arbiter holds (docs/design.md#views-are-text). A lease is taken by
 // every forwarded command, so what makes one worth a row is displacement:
 // it stands above a band something is granted to drive that aspect at.
 const HOLD_UNTIL = Date.parse('2026-09-25T20:47:00Z');
@@ -419,7 +419,7 @@ test('richer controls: a select past four values, a stepper for non-temperatures
 });
 
 // dashboard.toml's [[control]]: the grain a control moves in, keyed by
-// what it controls (docs/design.md, Dashboard).
+// what it controls (docs/design.md#controls-and-the-overlay).
 test('a declared step is found by what it controls, not by where it is drawn', () => {
   const controls = [
     { entity: 'lamp', aspect: 'brightness', step: 5 },
@@ -1016,7 +1016,7 @@ test('a deviation tap lands on the view that shows its subject, or nowhere', () 
   assert.equal(logic.viewFor({ type: 'rooms' }, generated), 'rooms');
 });
 
-// ---- forecasts (docs/design.md, Forecasts) ----
+// ---- forecasts (docs/design.md#forecasts) ----
 
 const FORECAST_KEY = 'home/forecast/global/spot/price/nordpool';
 
@@ -1122,7 +1122,7 @@ test('a flat horizon summarises to nothing rather than to min = max', () => {
   assert.equal(logic.horizonSummary(null), null);
 });
 
-// Chart geometry (docs/design.md, Dashboard). Asserted on numbers here
+// Chart geometry (docs/design.md#the-page). Asserted on numbers here
 // rather than through a DOM: this is arithmetic, and the browser suite
 // only checks that the right paths exist.
 const W = 400, H = 100, PAD = 3;
@@ -1237,7 +1237,7 @@ test('a contributor with one point is not a line', () => {
 });
 
 // Freshness: the dashboard's own max age, since `issued` is required and
-// the policy belongs to the consumer (docs/design.md, Forecasts).
+// the policy belongs to the consumer (docs/design.md#forecasts).
 const belief = (points, issued) =>
   logic.forecastFor(doc(points, issued), 'global', 'spot', 'price', 'nordpool');
 

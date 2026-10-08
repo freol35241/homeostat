@@ -101,7 +101,7 @@ def state_keyexpr(room: str, entity: str) -> str:
 def forecast_key(room: str, entity: str, aspect: str, source: str) -> str:
     """Return the key of a series' future, keyed like its present plus WHO says so.
 
-    See docs/design.md, Sources. The key has the same room/entity/aspect as
+    See docs/design.md#forecasts. The key has the same room/entity/aspect as
     `state_key`, so a forecast is the same series extended forward and the
     entity's aspect descriptor already labels it, and then the source.
     Several sources may speak about one series — two weather providers, or
@@ -208,8 +208,8 @@ def cmd_keyexpr(room: str, entity: str) -> str:
 def arbiter_key(room: str, entity: str, aspect: str) -> str:
     """Return the key of the arbiter's grant output for an arbitrated entity.
 
-    It has the cmd shape, in its own reserved class (docs/design.md,
-    Arbitrated mode).
+    It has the cmd shape, in its own reserved class
+    (docs/design.md#arbitrated-mode).
 
     Parameters
     ----------
@@ -287,7 +287,7 @@ CMD_PRIORITIES = ("automation", "agent", "family", "manual")
 
 
 def cmd_envelope(value: Any, priority: str, actor: str, *, cmd_id: str | None = None) -> dict:
-    """Build a home/cmd/** payload (docs/design.md, Arbitrated mode).
+    """Build a home/cmd/** payload (docs/design.md#cmd-envelopes).
 
     Every cmd payload is an envelope, priority stamped from the publishing
     unit's manifest declaration, actor the unit name.
@@ -376,7 +376,7 @@ def parse_cmd_envelope(payload: Any) -> Any:
 
 
 def config_key(unit: str, param: str) -> str:
-    """Return the key of a core-owned live parameter value (docs/design.md, step 4).
+    """Return the key of a core-owned live parameter value (docs/design.md#live-parameters).
 
     Parameters
     ----------
@@ -452,7 +452,7 @@ def hold_key(unit: str) -> str:
     One document per arbiter unit, the discovery shape, mirrored by the
     core. State, not the audit trail — the preempt/refuse events answer
     "what happened", this answers "is this aspect held right now?"
-    (docs/design.md, Arbitrated mode).
+    (docs/design.md#arbitrated-mode).
 
     Parameters
     ----------
@@ -475,8 +475,8 @@ def hold_key(unit: str) -> str:
 def discovery_key(unit: str) -> str:
     """Return the key of an adapter's complete current view of its periphery.
 
-    It carries one JSON array of device records (see docs/design.md,
-    Discovery).
+    It carries one JSON array of device records (see
+    docs/design.md#discovery).
 
     Parameters
     ----------

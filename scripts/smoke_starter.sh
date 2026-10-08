@@ -71,9 +71,9 @@ for unit in clock recorder zigbee evening_lights mcp; do
 done
 
 # The agent surface refuses a request without the write header — the
-# shape a cross-origin browser POST can produce (docs/design.md, Agent
-# surface). Asserted before the happy path, so a surface that answered
-# everything could not pass this smoke.
+# shape a cross-origin browser POST can produce
+# (docs/design.md#local-only-access). Asserted before the happy path, so a
+# surface that answered everything could not pass this smoke.
 refused="$(curl -s -m 10 -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:${MCP_PORT}" \
   -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}')"

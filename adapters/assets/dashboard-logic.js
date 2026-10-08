@@ -28,9 +28,8 @@
   }
 
   // Adapters differ on the presence aspect name (z2m passes through
-  // "occupancy", other worlds say "presence") — no schema authority
-  // exists yet, so accept both. See docs/design.md: typed vocabulary is
-  // a known gap.
+  // "occupancy", other worlds say "presence"), and the vocabulary takes
+  // either (docs/design.md#the-capability-vocabulary), so accept both.
   var PRESENCE_ASPECTS = ['occupancy', 'presence'];
 
   function presenceValue(state, entity) {
@@ -122,7 +121,7 @@
     return null;
   }
 
-  /* ---- chart geometry (docs/design.md, Dashboard) ----
+  /* ---- chart geometry (docs/design.md#the-page) ----
    *
    * Where every drawn thing lands in the viewBox: the record, the current
    * belief, the braid of kept issues, the contributing sources. It lives
@@ -137,12 +136,13 @@
   // Geometry for a series and, when the house has one, its future on the
   // same axis — one time domain and one value scale, because a forecast
   // drawn to its own scale beside its history says nothing about whether
-  // the house is about to get colder (docs/design.md, Forecasts).
+  // the house is about to get colder (docs/design.md#forecasts).
   function chartGeometry(points, width, height, pad, win, forecast, issues, contributors) {
     var vals = points.map(function (p) { return p.value; }).filter(function (v) { return typeof v === 'number'; });
     // A forecast key names its source, so an aspect may have several live
     // claims about its future at once — a line each, never an envelope
-    // over them, for the reason the braid gives (docs/design.md, Sources).
+    // over them, for the reason the braid gives
+    // (docs/design.md#charts-forecasts-and-sources).
     //
     // A claim issued hours ago carries what it said about the hours since,
     // and that part is drawn: laid over the record for the same span it is
@@ -153,7 +153,7 @@
         source: b.source, points: b.forecast.points, to: b.forecast.to,
         // Older than the span it has left to say: drawn, because it is
         // still the house's current belief, but not drawn as if it were
-        // fresh (docs/design.md, Forecasts).
+        // fresh (docs/design.md#charts-forecasts-and-sources).
         stale: forecastFreshness(b.forecast, Date.now()).stale
       };
     });
@@ -205,7 +205,7 @@
       // A line per source, never a band across them: an envelope's edge
       // belongs at each instant to whichever sensor happened to be highest,
       // so it traces a path no sensor took. The braid's rule, for the
-      // braid's reason (docs/design.md, Sources).
+      // braid's reason (docs/design.md#sources).
       geo.contributors = contributors.map(function (c) {
         return {
           name: c.name,
@@ -257,7 +257,7 @@
     return geo;
   }
 
-  /* ---- arbiter holds (docs/design.md, Arbitrated mode) ----
+  /* ---- arbiter holds (docs/design.md#arbitrated-mode) ----
    *
    * Each arbiter publishes one document of what it is holding. A lease is
    * taken by EVERY forwarded command, not only by a preemption, so most
@@ -473,7 +473,7 @@
   }
 
 
-  /* ---- aspect descriptors (docs/design.md, Aspect descriptors) ----
+  /* ---- aspect descriptors (docs/design.md#aspect-descriptors) ----
    * An adapter may describe an entity's aspects in its discovery record:
    * { schema, groups: [name...], fields: { aspect: { label, kind, group,
    * unit?, values?, valid?, notable?, command? } } }. The page renders the
@@ -512,7 +512,7 @@
   // An enum with more choices than fit on one segmented row.
   var SELECT_ABOVE = 4;
 
-  /* ---- declared control grain (docs/design.md, Dashboard) ----
+  /* ---- declared control grain (docs/design.md#controls-and-the-overlay) ----
    *
    * `dashboard.toml`'s `[[control]]` entries say how coarse a control is,
    * keyed by what it controls — an entity's aspect, or a unit's parameter
@@ -596,7 +596,7 @@
    * boolean aspect that marks the value stale; that aspect is consumed
    * into the row's `stale` flag rather than listed.
    * Two aspects are schema vocabulary and need no descriptor: `available`
-   * (device liveness, docs/design.md, Availability) renders as a boolean
+   * (device liveness, docs/design.md#availability) renders as a boolean
    * in the descriptor's `status` group when it has one, and any
    * `{aspect}_valid` beside an undescribed `{aspect}` is consumed the
    * same way a declared pointer is.
@@ -853,11 +853,11 @@
   };
   var DEFAULT_COMMAND_TIMEOUT_MS = 20000;
 
-  /* The adapter knows better than the capability (docs/design.md, Aspect
-   * descriptors): a descriptor may declare `readback_s`, the longest the
-   * device takes to report a command back, on one command or for the
-   * whole entity. The per-command figure wins, then the entity's, then
-   * the guess above. Anything not a positive number up to ten minutes is
+  /* The adapter knows better than the capability
+   * (docs/design.md#aspect-descriptors): a descriptor may declare
+   * `readback_s`, the longest the device takes to report a command back,
+   * on one command or for the whole entity. The per-command figure wins,
+   * then the entity's, then the guess above. Anything not a positive number up to ten minutes is
    * ignored rather than trusted: a command pending for an hour is worse
    * than one judged on the guess. */
   var MAX_DECLARED_READBACK_S = 600;
@@ -1074,7 +1074,7 @@
     return entry;
   }
 
-  /* ---- forecasts (docs/design.md, Forecasts) ----
+  /* ---- forecasts (docs/design.md#forecasts) ----
    *
    * What the house believes about a series' future, carried live beside
    * its present. The wire shape is {schema, issued, points:[{t, v, d?}]};
@@ -1087,7 +1087,7 @@
 
   // Every source with a live forecast for one aspect, sorted so a chart
   // and its legend agree on order between renders. A forecast key names
-  // its source (docs/design.md, Sources), so several providers appear
+  // its source (docs/design.md#forecasts), so several providers appear
   // here side by side rather than overwriting one another.
   function forecastSourcesFor(forecasts, room, entity, aspect) {
     var prefix = forecastPrefix(room, entity, aspect);
@@ -1177,7 +1177,7 @@
   }
 
   // How old a claim about the future is, and whether it still has one.
-  // `issued` is the whole staleness story (docs/design.md, Forecasts) and
+  // `issued` is the whole staleness story (docs/design.md#forecasts) and
   // the max age is the CONSUMER's, never a core TTL — so this is the
   // dashboard's policy, stated once, here:
   //   expired — the horizon has run out, so there is nothing ahead to draw
@@ -1203,7 +1203,7 @@
     };
   }
 
-  /* ---- declared sources (docs/design.md, Sources) ----
+  /* ---- declared sources (docs/design.md#sources) ----
    *
    * What a computed value is derived from, as the overlay wants it. The
    * entity file declares contributors house-wide, not per aspect, so a
@@ -1241,7 +1241,7 @@
   }
 
   /* Which declared sources were actually folded in, and when that last
-   * changed (docs/design.md, Which sources a computation actually used).
+   * changed (docs/design.md#which-sources-a-computation-actually-used).
    *
    * Events arrive oldest-first and only on transition, so the last one
    * before the window closes IS the state now. A source with nothing on
@@ -1323,7 +1323,7 @@
 
   /* ---- history shapes ----
    *
-   * The recorder folds a window two ways (docs/design.md, Read path):
+   * The recorder folds a window two ways (docs/design.md#read-path):
    * `bucket` for a line, one point per bucket so a chatty series fills a
    * week instead of showing its last hour, and `changes` for a timeline,
    * the runs of a state. The descriptor decides when there is one: an
@@ -1376,7 +1376,7 @@
     };
   }
 
-  /* ---- views (docs/design.md, Dashboard: views are text) ----
+  /* ---- views (docs/design.md#views-are-text) ----
    *
    * dashboard.toml's [[view]] list is the nav; without the file the
    * generated views stand in. Health and "Not shown" are chrome the page

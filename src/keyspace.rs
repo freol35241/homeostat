@@ -9,9 +9,9 @@ pub const CLASSES: &[&str] = &[
     "cmd",
     "arbiter",
     // A series' future, keyed like its present: same room/entity/aspect, so
-    // a forecast is the same series extended forward (docs/design.md,
-    // Forecasts). The core no more knows what one means than it knows what
-    // `motion` means.
+    // a forecast is the same series extended forward
+    // (docs/design.md#forecasts). The core no more knows what one means than
+    // it knows what `motion` means.
     "forecast",
     "config",
     "meta",
@@ -22,7 +22,7 @@ pub const CLASSES: &[&str] = &[
     // What the arbiter is currently holding: one document per arbiter unit
     // (`home/hold/{unit}`), the discovery shape, mirrored so a late joiner
     // can ask "is this aspect held right now?" — which an event stream
-    // cannot answer (docs/design.md, Arbitrated mode). Held state, not the
+    // cannot answer (docs/design.md#arbitrated-mode). Held state, not the
     // audit trail: the preempt/refuse events stay where they are.
     "hold",
 ];
@@ -133,7 +133,7 @@ impl KeyExpr {
         // one series, so the slot is required rather than optional: two
         // shapes would mean a consumer wildcarding the class could not
         // write one expression that matched every opinion
-        // (docs/design.md, Sources).
+        // (docs/design.md#key-space).
         let min_len = match class {
             "forecast" => 6,
             c if ENTITY_ADDRESSED.contains(&c) => 5,

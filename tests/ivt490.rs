@@ -152,7 +152,7 @@ async fn ivt490_state_translates_to_bus_state() {
     );
 
     // The discovery record carries the entity's aspect descriptor
-    // (docs/design.md, Aspect descriptors): the dashboard's vocabulary for
+    // (docs/design.md#aspect-descriptors): the dashboard's vocabulary for
     // the aspects above, with command bounds straight from the adapter's
     // own COMMANDS table — the family tier gets the setpoint alone (mode
     // is automation-driven at the reporting house), the owner-tier knobs
@@ -413,7 +413,7 @@ async fn setpoint_is_retained_and_the_expiring_offset_is_not() {
     sup.shutdown();
 }
 
-/// (b2) A fed input (docs/design.md, Device feeds): the fixture wires the
+/// (b2) A fed input (docs/design.md#device-feeds): the fixture wires the
 /// heat pump's `indoor_temperature_actual` to the fusion's virtual sensor.
 /// Each source sample is forwarded to the device's set topic as a float,
 /// not retained; while the source is unavailable nothing is forwarded and

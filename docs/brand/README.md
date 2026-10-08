@@ -2,7 +2,8 @@
 
 A house held at a set point: the pine silhouette, the step response cut
 into it, the amber line it settles onto. Home automation is regulation
-(docs/design.md, Motivation; the concept diagram), drawn as one shape.
+([docs/design.md](../design.md#what-homeostat-is); the concept diagram),
+drawn as one shape.
 
 | File | Use |
 |---|---|

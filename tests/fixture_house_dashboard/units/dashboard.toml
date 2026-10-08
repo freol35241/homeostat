@@ -4,7 +4,7 @@ schema = 1
 name = "dashboard"
 kind = "service"
 # The model is a view over the WHOLE house, so any entity or manifest
-# change is a change to this unit (docs/design.md, change detection).
+# change is a change to this unit (docs/design.md#change-detection).
 inputs = "house"
 description = "Family web dashboard"
 

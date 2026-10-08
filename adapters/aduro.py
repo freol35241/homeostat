@@ -10,7 +10,7 @@
 # ///
 """Aduro pellet-burner adapter.
 
-See docs/design.md, "Burners and interlocks (settled 2026-09-09, #37, #38)".
+See docs/design.md#burners-and-interlocks.
 
 The burner speaks the NBE UDP protocol; github.com/freol35241/aduro2mqtt
 bridges it to MQTT. The bridge polls on a fixed interval
@@ -77,11 +77,23 @@ so every command arrives on home/arbiter/{room}/{entity}/{aspect}:
 Anything else — a wrong type, an out-of-enum level, an unknown aspect,
 a malformed or envelope-less payload — DROPS with an "invalid-command"
 (or "malformed-payload") health event and never reaches the device.
+Commands are not retained: every command shares the one {base}/set topic,
+so a retained slot would hold whichever came last, and a misc.start or
+misc.stop replayed on the bridge's reconnect would act, not restore.
+
+Combustion safety is not this adapter's. The burner carries its own alarm
+layer (shaft and boiler temperature limits), and that is where it lives;
+a house-local flue cutout publishing `on = false` is an ordinary,
+contestable automation the house must not rely on.
 
 Discovery is the static one-record-per-entity document (the ivt490
 shape): base-topic id, a suggested `burner` capability stanza with the
 `power_level` feature, the aspect descriptor (ASPECT_FIELDS) and a
-`bound` flag that flips true the first time the base topic is seen.
+`bound` flag that flips true the first time the base topic is seen. The
+descriptor declares readback_s = 75: a command is read back on a poll
+after the burner acted on it, so two default polls and some slack. A
+bridge configured to poll slower outruns it, and the dashboard then says
+"no answer" early.
 
 Availability: the bridge publishes on a cadence, so silence is the loss
 signal — a receive timer flips home/state/{room}/{entity}/available to
@@ -141,7 +153,7 @@ POWER_LEVELS = (10, 50, 100)
 # depends on the value: misc.start / misc.stop).
 COMMANDS = {"on": None, "power_level": "regulation.fixed_power"}
 
-# The aspect descriptor (docs/design.md, Aspect descriptors). The dashboard
+# The aspect descriptor (docs/design.md#aspect-descriptors). The dashboard
 # renders descriptor commands as enums or numbers, so `on` is described as
 # a two-valued enum — a segmented off/on control on the card. Labels keep
 # the firmware field name in parentheses where it differs.
@@ -169,11 +181,11 @@ ASPECT_FIELDS = {
     "state": {"label": "run state (state)", "kind": "number", "group": "status"},
     "substate": {"label": "run substate (substate)", "kind": "number", "group": "status"},
 }
-# How long a command takes to come back (docs/design.md, Aspect
-# descriptors: readback_s). The bridge polls every ADURO_POLL_INTERVAL
-# (30 s by default) and a command is read back on a poll after the burner
-# acted on it: two polls and some slack. A bridge configured to poll slower
-# outruns this, and the page then says "no answer" early.
+# How long a command takes to come back (docs/design.md#aspect-descriptors:
+# readback_s). The bridge polls every ADURO_POLL_INTERVAL (30 s by default)
+# and a command is read back on a poll after the burner acted on it: two
+# polls and some slack. A bridge configured to poll slower outruns this,
+# and the page then says "no answer" early.
 READBACK_S = 75
 ASPECT_DESCRIPTOR = {
     "schema": 1,

@@ -9,7 +9,7 @@
 # ///
 """go2rtc shim: a foreign binary as a unit.
 
-See docs/design.md, "Cameras (settled 2026-07-19)".
+See docs/design.md#cameras.
 
 The unit contract demands a liveliness token a Go binary cannot declare,
 so this thin shim owns it: render the go2rtc config from HOMEOSTAT_CAMERAS
@@ -27,12 +27,23 @@ unauthenticated API with `exec:` sources must not face the LAN. The
 rendered file carries camera credentials, so it lives outside the repo in
 a 0600 temp file, deleted on exit.
 
+go2rtc holds one upstream RTSP session per camera however many browsers
+watch, which matters because a Tapo admits only about two concurrent RTSP
+clients. Restreaming is a pure remux: the image carries no ffmpeg, so
+anything of go2rtc's that transcodes (its frame.jpeg snapshot of an H.264
+source) does not work, and nothing here relies on it. Recording, motion
+detection and frame storage are refused, not missing: they are mature
+tools' territory, and the event plane is adapters/onvif.py's.
+
 Camera entries: `host` (bare, or host:port — the ONVIF port, which is NOT
 the RTSP port; RTSP rides 554), `username`, `password`, and optionally
 `stream`, a full RTSP URL overriding the default
-rtsp://user:pass@host:554/stream1 (Tapo's HD main stream) for cameras
-with a different path. go2rtc's own stdout/stderr ride this unit's, and
-the supervisor tags them (docs/design.md, Logs and the audit trail).
+rtsp://user:pass@host:554/stream1 (Tapo's HD main stream) for cameras with
+a different path. The default URL percent-encodes the username and
+password: a vendor-account password with "/", "?", "#" or "@" in it is
+ordinary and would otherwise break the URL go2rtc parses. go2rtc's own
+stdout/stderr ride this unit's, and the supervisor tags them
+(docs/design.md#logs-and-the-audit-trail).
 """
 
 import json

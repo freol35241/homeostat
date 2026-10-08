@@ -9,7 +9,7 @@
 # ///
 """Arbiter service: the write-token holder for arbitrated entities.
 
-See docs/design.md, Arbitrated mode, "Settled 2026-07-16".
+See docs/design.md#arbitrated-mode.
 
 By plan-time construction an adapter's templated cmd subscription excludes
 its arbitrated entities, so wishes for them never reach an owner adapter
@@ -19,7 +19,7 @@ home/cmd directly. A wish for an arbitrated entity holds a lease per
 (entity, aspect) — the granularity of the cmd key itself, not per entity,
 because one entity can carry orthogonal control dimensions (on the heat
 pump, the family's setpoint must not freeze an automation's
-outdoor_temperature_offset; see docs/design.md, Arbitrated mode):
+outdoor_temperature_offset; see docs/design.md#arbitrated-mode):
 {priority, actor, deadline}, deadline
 `time.monotonic() + hold_minutes * 60`. No active lease, an expired one,
 or an incoming priority at or above the holder's band (band order

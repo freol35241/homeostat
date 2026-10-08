@@ -6,7 +6,7 @@
 //! manage. Thread per connection: agent traffic is a conversation, not a
 //! load profile.
 //!
-//! Reachability is the credential (docs/design.md, Local-only access), and
+//! Reachability is the credential (docs/design.md#local-only-access), and
 //! the browser is NOT local even when the house is: a public page in a
 //! family browser can fire requests at LAN addresses. The surface only
 //! reads, but what it reads — state, history, logs, the audit trail — is

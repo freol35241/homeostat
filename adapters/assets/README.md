@@ -2,8 +2,8 @@
 
 Served by dashboard.py at `/assets/` so the dashboard makes zero external
 fetches at runtime (tile CDNs would leak family positions — see
-docs/design.md, Map and person entities). Update by re-downloading and
-bumping this table.
+[Map and people](../../docs/design.md#map-and-people)). Update by
+re-downloading and bumping this table.
 
 | file | source | sha256 |
 |---|---|---|

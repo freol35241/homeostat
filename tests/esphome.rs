@@ -194,7 +194,7 @@ async fn device_dropout_flips_available() {
     .await;
 
     // A command at the dead device drops with device-unavailable
-    // (docs/design.md, Sensor dropout) instead of silently vanishing.
+    // (docs/design.md#availability) instead of silently vanishing.
     let event_sub = observer
         .declare_subscriber(EVENT_KEY)
         .await
@@ -329,7 +329,7 @@ async fn bound_device_entities_published_as_discovery() {
     assert_eq!(temp["entity"], json!("shed_temp"));
     assert_eq!(temp["suggested"]["capability"], json!("sensor"));
     assert_eq!(temp["description"]["device_class"], json!("temperature"));
-    // The aspect descriptor (docs/design.md, Aspect descriptors) from the
+    // The aspect descriptor (docs/design.md#aspect-descriptors) from the
     // same EntityInfo: the unit picks the kind, the ESPHome name the label.
     assert_eq!(
         temp["aspects"]["fields"]["temperature"],
