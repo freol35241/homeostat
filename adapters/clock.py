@@ -30,15 +30,17 @@ from homeostat import automation
 
 
 def next_boundary(now_utc: datetime.datetime) -> datetime.datetime:
-    """The next whole UTC minute after `now_utc`. Computed in UTC — never
-    the local wall clock — so a DST transition can't turn one iteration's
-    wait into more or less than one real minute: at fall-back, the local
-    clock's `replace(...) + timedelta(minutes=1)` names a wall-clock
-    minute that is really 61 real minutes away (it skips straight past
-    the repeated hour); UTC has no such transitions, so the wait is
-    always exactly one real minute and the local zone (applied only when
-    publishing) shows the repeated hour once each time it actually
-    occurs."""
+    """Return the next whole UTC minute after `now_utc`.
+
+    Computed in UTC — never the local wall clock — so a DST transition
+    can't turn one iteration's wait into more or less than one real minute:
+    at fall-back, the local clock's `replace(...) + timedelta(minutes=1)`
+    names a wall-clock minute that is really 61 real minutes away (it skips
+    straight past the repeated hour); UTC has no such transitions, so the
+    wait is always exactly one real minute and the local zone (applied only
+    when publishing) shows the repeated hour once each time it actually
+    occurs.
+    """
     return now_utc.replace(second=0, microsecond=0) + datetime.timedelta(minutes=1)
 
 

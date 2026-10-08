@@ -113,7 +113,7 @@ class Params(LiveParams):
 
 
 def aspect_for(entity) -> str | None:
-    """The aspect a bound entity publishes, or None when the file cannot say.
+    """Return the aspect a bound entity publishes, or None when the file cannot say.
 
     `presence` has one in the vocabulary; `binary_sensor` is "a boolean
     under its native name" and the radio cannot say which name, so the
@@ -126,7 +126,7 @@ def aspect_for(entity) -> str | None:
 
 
 def code_from(payload: bytes):
-    """The decimal code in a bridge payload, as a string, or None.
+    """Return the decimal code in a bridge payload, as a string, or None.
 
     Two firmware generations: a bare decimal, and JSON carrying `value`.
     Normalized through int so "13951014", " 13951014 " and 13951014 are one
@@ -232,8 +232,10 @@ def main():
         session.put_json(keys.discovery_key(unit), records)
 
     def note(code: str) -> None:
-        """Schedule a discovery republish when a code is heard for the
-        first time — coalesced, so a burst of new codes is one publish."""
+        """Schedule a discovery republish when a code is heard for the first time.
+
+        Coalesced, so a burst of new codes is one publish.
+        """
         with lock:
             if code in by_code:
                 if code in sighted:

@@ -27,24 +27,61 @@ from typing import Any
 
 
 class Freshness:
+    """The latest value per source and the monotonic time it was seen.
+
+    Parameters
+    ----------
+    clock : Callable[[], float], optional
+        Monotonic time source in seconds; `time.monotonic` by default.
+    """
+
     def __init__(self, clock: Callable[[], float] = time.monotonic):
         self._clock = clock
         self._seen: dict[str, tuple[Any, float]] = {}
 
     def seen(self, source: str, value: Any, age_s: float = 0.0) -> None:
-        """Records `value` from `source` (typically the bus key) as seen
-        `age_s` seconds ago — zero for a live sample, the mirror's age for
-        a catch-up delivery, so a restart cannot pass off an hours-old
-        reading as fresh."""
+        """Record `value` from `source` as seen `age_s` seconds ago.
+
+        `age_s` is zero for a live sample and the mirror's age for a
+        catch-up delivery, so a restart cannot pass off an hours-old
+        reading as fresh.
+
+        Parameters
+        ----------
+        source : str
+            Where the value came from, typically the bus key.
+        value : Any
+            The value seen.
+        age_s : float, optional
+            How long ago the value was seen, in seconds.
+        """
         self._seen[source] = (value, self._clock() - age_s)
 
     def fresh(self, max_age_s: float) -> dict[str, Any]:
-        """The latest value per source seen within the last `max_age_s`
-        seconds, keyed by source. A source last seen longer ago than that
-        is left out; it returns the moment it publishes again."""
+        """Return the latest value per source seen within the last `max_age_s` seconds.
+
+        A source last seen longer ago than that is left out; it returns the
+        moment it publishes again.
+
+        Parameters
+        ----------
+        max_age_s : float
+            Maximum age in seconds of a value still counted as fresh.
+
+        Returns
+        -------
+        dict[str, Any]
+            The fresh values, keyed by source.
+        """
         cutoff = self._clock() - max_age_s
         return {source: value for source, (value, at) in self._seen.items() if at >= cutoff}
 
     def forget(self, source: str) -> None:
-        """Drops a source, e.g. on a binding's `available = false`."""
+        """Drop a source, e.g. on a binding's `available = false`.
+
+        Parameters
+        ----------
+        source : str
+            The source to forget; an unknown one is ignored.
+        """
         self._seen.pop(source, None)

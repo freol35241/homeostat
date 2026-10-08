@@ -7,8 +7,10 @@
 # [tool.uv.sources]
 # homeostat = { path = "../sdk/python", editable = true }
 # ///
-"""ntfy notifier adapter (docs/design.md, "Notifications (settled
-2026-09-09, #31)" and "The ntfy adapter").
+"""ntfy notifier adapter.
+
+See docs/design.md, "Notifications (settled 2026-09-09, #31)" and "The ntfy
+adapter".
 
 The first delivery dialect for the `notifier` capability. An ntfy server
 (self-hosted, a compose sidecar beside the MQTT broker — the phones
@@ -104,15 +106,20 @@ ASPECT_DESCRIPTOR = {
 
 
 class Params(LiveParams):
+    """min_interval_s from home/config/{unit}/*, live."""
+
     @property
     def min_interval_s(self) -> float:
         return max(0.0, self.get("min_interval_s"))
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    """Refuses every redirect: urllib's default handler replays the
-    request (Authorization header included) at whatever host the reply
-    names, which would hand the publisher token to it."""
+    """Refuses every redirect.
+
+    urllib's default handler replays the request (Authorization header
+    included) at whatever host the reply names, which would hand the
+    publisher token to it.
+    """
 
     def redirect_request(self, *args, **kwargs):
         return None
@@ -122,7 +129,7 @@ _opener = urllib.request.build_opener(_NoRedirect)
 
 
 def check_health(endpoint: str) -> None:
-    """Raises unless the server answers `/v1/health` healthy."""
+    """Raise unless the server answers `/v1/health` healthy."""
     with _opener.open(f"{endpoint}/v1/health", timeout=HTTP_TIMEOUT_S) as reply:
         body = json.loads(reply.read())
     if not (isinstance(body, dict) and body.get("healthy") is True):
@@ -130,9 +137,12 @@ def check_health(endpoint: str) -> None:
 
 
 def publish(endpoint: str, token: str, topic: str, text: str, priority: int, title: str) -> dict:
-    """One POST to the topic; returns the server's reply document. Raises
-    urllib.error.URLError (HTTPError included) on failure — a redirect
-    included, since the token must reach only the configured endpoint."""
+    """Send one POST to the topic and return the server's reply document.
+
+    Raises urllib.error.URLError (HTTPError included) on failure — a
+    redirect included, since the token must reach only the configured
+    endpoint.
+    """
     request = urllib.request.Request(
         f"{endpoint}/{topic}",
         data=text.encode(),

@@ -7,8 +7,9 @@
 # [tool.uv.sources]
 # homeostat = { path = "../sdk/python", editable = true }
 # ///
-"""go2rtc shim: the first foreign binary as a unit (see docs/design.md,
-"Cameras (settled 2026-07-19)").
+"""go2rtc shim: the first foreign binary as a unit.
+
+See docs/design.md, "Cameras (settled 2026-07-19)".
 
 The unit contract demands a liveliness token a Go binary cannot declare,
 so this thin shim owns it: render the go2rtc config from HOMEOSTAT_CAMERAS
@@ -79,8 +80,10 @@ def stream_url(conf: dict) -> str:
 
 
 def render_config(cameras: dict, listen: str) -> dict:
-    """go2rtc config as JSON (a YAML subset go2rtc accepts): API on
-    localhost, every other listener off, one stream per camera."""
+    """Return the go2rtc config as JSON (a YAML subset go2rtc accepts).
+
+    API on localhost, every other listener off, one stream per camera.
+    """
     return {
         "api": {"listen": listen},
         "rtsp": {"listen": ""},
@@ -91,9 +94,12 @@ def render_config(cameras: dict, listen: str) -> dict:
 
 
 def await_api(listen: str, child: subprocess.Popen, stopping: threading.Event) -> None:
-    """Polls /api/streams until go2rtc answers; a child that dies first, or
-    never answers, is a startup error (visible through the supervisor's
-    backoff) — unless the supervisor itself commanded the stop."""
+    """Poll /api/streams until go2rtc answers.
+
+    A child that dies first, or never answers, is a startup error (visible
+    through the supervisor's backoff) — unless the supervisor itself
+    commanded the stop.
+    """
     deadline = time.monotonic() + READY_TIMEOUT_S
     while time.monotonic() < deadline:
         if child.poll() is not None:

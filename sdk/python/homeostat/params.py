@@ -16,6 +16,16 @@ from . import keys
 
 
 class LiveParams:
+    """Live numeric parameter values for one unit, over adapter-side defaults.
+
+    Parameters
+    ----------
+    session : UnitSession
+        The unit's bus session; its `unit` names the config keys followed.
+    defaults : dict
+        Parameter name to default value. Only these names are tracked.
+    """
+
     def __init__(self, session, defaults: dict):
         self._values = dict(defaults)
         self._live: set[str] = set()
@@ -44,4 +54,21 @@ class LiveParams:
             self._values[name] = value
 
     def get(self, name: str):
+        """Return the current value of parameter `name`.
+
+        Parameters
+        ----------
+        name : str
+            A parameter named in `defaults`.
+
+        Returns
+        -------
+        int or float
+            The latest valid live value, or the default until one arrives.
+
+        Raises
+        ------
+        KeyError
+            If `name` is not in `defaults`.
+        """
         return self._values[name]

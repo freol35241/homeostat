@@ -9,8 +9,9 @@
 # [tool.uv.sources]
 # homeostat = { path = "../sdk/python", editable = true }
 # ///
-"""ESPHome adapter: native API, not MQTT (see docs/design.md, "ESPHome
-adapter (settled 2026-07-16)").
+"""ESPHome adapter: native API, not MQTT.
+
+See docs/design.md, "ESPHome adapter (settled 2026-07-16)".
 
 One aioesphomeapi connection per BOUND device (never to a device with no
 entity file), using the library's own ReconnectLogic — no broker, matching
@@ -112,9 +113,11 @@ BRIGHTNESS_SCALE = 254  # z2m's raw Zigbee scale (see zigbee2mqtt.py / dashboard
 
 
 def load_devices(path: str | None) -> dict:
-    """The optional HOMEOSTAT_ESPHOME_DEVICES TOML: per-device `key`
-    (Noise PSK) / `host` override. Unset env var: every device plaintext
-    at its mDNS default (never a hard requirement)."""
+    """Load the optional HOMEOSTAT_ESPHOME_DEVICES TOML.
+
+    Per-device `key` (Noise PSK) / `host` override. Unset env var: every
+    device plaintext at its mDNS default (never a hard requirement).
+    """
     if not path:
         return {}
     return tomllib.loads(Path(path).read_text())
@@ -131,8 +134,10 @@ def resolve_host_port(device: str, devices: dict) -> tuple[str, int]:
 
 
 def light_features(modes: list) -> list[str]:
-    """Best-effort brightness/color_temp features from a light's
-    supported_color_modes (v1 vocabulary, grown by need)."""
+    """Derive best-effort brightness/color_temp features from a light's supported_color_modes.
+
+    The vocabulary is v1, grown by need.
+    """
     features = []
     if any(m not in (ColorMode.UNKNOWN, ColorMode.ON_OFF) for m in modes):
         features.append("brightness")
@@ -145,15 +150,20 @@ def light_features(modes: list) -> list[str]:
 
 
 def native_aspect(info) -> str:
-    """A sensor/binary_sensor's bus aspect: its device_class if it has
-    one, else its object_id — z2m's field-name pass-through, mirrored."""
+    """Return a sensor/binary_sensor's bus aspect.
+
+    Its device_class if it has one, else its object_id — z2m's field-name
+    pass-through, mirrored.
+    """
     return info.device_class or info.object_id
 
 
 def suggest(info) -> dict | None:
-    """Best-effort entity-file stanza for a discovery record — the
-    adapter suggests, plan/apply review decides (docs/design.md,
-    Discovery)."""
+    """Suggest a best-effort entity-file stanza for a discovery record.
+
+    The adapter suggests, plan/apply review decides (docs/design.md,
+    Discovery).
+    """
     if isinstance(info, SwitchInfo):
         return {"capability": "switch", "features": []}
     if isinstance(info, LightInfo):
@@ -176,17 +186,21 @@ KIND_BY_UNIT = {"°C": "temperature", "%": "percent"}
 
 
 def aspect_label(info, aspect: str) -> str:
-    """The device's own entity name, lowercased, with the aspect in
-    parentheses when the two differ."""
+    """Return the device's own entity name, first letter lowercased, as the label.
+
+    The aspect follows in parentheses when the two differ.
+    """
     name = (getattr(info, "name", "") or aspect).strip()
     label = name[:1].lower() + name[1:]
     return label if label.replace(" ", "_") == aspect else f"{label} ({aspect})"
 
 
 def aspect_descriptor(entity, info) -> dict | None:
-    """The bound entity's aspect descriptor from its EntityInfo, on the
-    capability the entity FILE declares (the translation rule), or None
-    for a kind this adapter publishes nothing for."""
+    """Return the bound entity's aspect descriptor from its EntityInfo.
+
+    Built on the capability the entity FILE declares (the translation
+    rule); None for a kind this adapter publishes nothing for.
+    """
     fields: dict[str, dict] = {}
     if entity.capability == "switch" and isinstance(info, SwitchInfo):
         fields["on"] = {"label": "on", "kind": "boolean", "group": "readings"}
@@ -223,8 +237,11 @@ def aspect_descriptor(entity, info) -> dict | None:
 
 
 def describe(info) -> dict:
-    """The raw ESPHome descriptor, verbatim, so an unmapped device_class
-    or entity kind stays visible instead of disappearing."""
+    """Return the raw ESPHome descriptor, verbatim.
+
+    Verbatim so an unmapped device_class or entity kind stays visible
+    instead of disappearing.
+    """
     body = {"type": type(info).__name__.removesuffix("Info"), "object_id": info.object_id}
     if getattr(info, "device_class", ""):
         body["device_class"] = info.device_class
@@ -236,10 +253,12 @@ def describe(info) -> dict:
 
 
 def state_values(entity, info, state):
-    """Translates one incoming ESPHome EntityState into (aspect, value)
-    pairs on the entity's OWN declared capability/features — translation
-    is driven by what the entity file says the device is, never by
-    re-deriving it from the wire (the z2m pattern)."""
+    """Translate one incoming ESPHome EntityState into (aspect, value) pairs.
+
+    The pairs are on the entity's OWN declared capability/features —
+    translation is driven by what the entity file says the device is, never
+    by re-deriving it from the wire (the z2m pattern).
+    """
     if isinstance(state, (SensorState, BinarySensorState)) and state.missing_state:
         return
     if entity.capability == "switch" and isinstance(state, SwitchState):
@@ -259,10 +278,12 @@ def state_values(entity, info, state):
 
 
 async def run_device(device, bound, devices_conf, session, entity_runtime, entity_lock, bound_discovery, publish_discovery):
-    """One APIClient + ReconnectLogic for one bound device: on every
-    (re)connect, re-enumerates entities (device_info + list_entities, in
-    one round trip), republishes this device's discovery slice, and
-    (re)subscribes to state."""
+    """Start one APIClient + ReconnectLogic for one bound device.
+
+    On every (re)connect, it re-enumerates entities (device_info +
+    list_entities, in one round trip), republishes this device's discovery
+    slice, and (re)subscribes to state.
+    """
     host, port = resolve_host_port(device, devices_conf)
     noise_psk = (devices_conf.get(device) or {}).get("key")
     client = APIClient(host, port, None, client_info="homeostat-esphome", noise_psk=noise_psk)
@@ -350,10 +371,12 @@ async def run_device(device, bound, devices_conf, session, entity_runtime, entit
 
 
 async def mdns_browse(unit, session, by_device, unbound_discovery, publish_discovery):
-    """Best-effort inventory of unbound device names for home/discovery
-    (docs/design.md, Discovery / ESPHome adapter): never a prerequisite
+    """Browse mDNS for a best-effort inventory of unbound device names for home/discovery.
+
+    See docs/design.md, Discovery / ESPHome adapter. Never a prerequisite
     for the bound-device connections, so every failure here is caught and
-    reported as a health event rather than raised."""
+    reported as a health event rather than raised.
+    """
     try:
         aiozc = AsyncZeroconf()
     except Exception as err:

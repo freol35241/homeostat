@@ -316,8 +316,10 @@ def now_us() -> int:
 
 
 def month_start_us(year: int, month: int) -> int:
-    """The first microsecond of a calendar month, UTC; month may run past
-    12 or below 1 and carries into the year."""
+    """Return the first microsecond of a calendar month, UTC.
+
+    The month may run past 12 or below 1 and carries into the year.
+    """
     year, month = year + (month - 1) // 12, (month - 1) % 12 + 1
     start = datetime.datetime(year, month, 1, tzinfo=datetime.timezone.utc)
     return int(start.timestamp()) * 1_000_000
@@ -329,8 +331,11 @@ def month_of(us: int) -> tuple[int, int]:
 
 
 def archive_boundary_us(now: int, months: int) -> int:
-    """Rows stamped before this are in a month that closed more than
-    `months` months ago: with 1, in October everything before September."""
+    """Return the stamp before which rows are in a month closed `months` ago.
+
+    Rows stamped before this are in a month that closed more than `months`
+    months ago: with 1, in October everything before September.
+    """
     year, month = month_of(now)
     return month_start_us(year, month - months)
 
@@ -379,7 +384,7 @@ def month_rows(table: str) -> str:
 
 
 def not_held(aliases: list, table: str) -> str:
-    """True for a row `r` none of the attached archive files holds."""
+    """Return a condition true for a row `r` none of the attached archive files holds."""
     if not aliases:
         return "1"
     return " AND ".join(
@@ -406,9 +411,11 @@ def has_unsealed(conn: sqlite3.Connection, aliases: list, lo: int, hi: int) -> b
 
 
 def closed_months(conn: sqlite3.Connection, boundary: int):
-    """Every month from the hot file's oldest row up to the boundary,
-    oldest first. The tally gives the oldest sample or forecast without a
-    scan, the events index the oldest event."""
+    """Yield every month from the hot file's oldest row up to the boundary.
+
+    Months come oldest first. The tally gives the oldest sample or forecast
+    without a scan, the events index the oldest event.
+    """
     oldest = [
         value
         for value in (
@@ -432,9 +439,11 @@ def iso_utc(us: int) -> str:
 
 
 class Params(LiveParams):
-    """The retention windows and the integrity-check interval from
-    home/config/{unit}/*, live; a change wakes the threads that use them
-    so it applies at once."""
+    """The retention windows and the integrity-check interval, live.
+
+    They come from home/config/{unit}/*; a change wakes the threads that use
+    them so it applies at once.
+    """
 
     def __init__(self, sess: session.UnitSession, on_change):
         self._on_change = on_change
@@ -470,10 +479,12 @@ class Params(LiveParams):
 
 
 class IntegrityChecker:
-    """Runs PRAGMA integrity_check on its own read-only connection every
-    integrity_check_hours, the first one an interval after start so a
-    restart loop never hammers a large file. Read-only, so in WAL mode it
-    never blocks the writer."""
+    """Periodic PRAGMA integrity_check on its own read-only connection.
+
+    Runs every integrity_check_hours, the first one an interval after start
+    so a restart loop never hammers a large file. Read-only, so in WAL mode
+    it never blocks the writer.
+    """
 
     def __init__(self, db_path: Path, sess: session.UnitSession):
         self.db_path = db_path
@@ -525,9 +536,12 @@ class IntegrityChecker:
 
 
 class Writer:
-    """Single writer thread draining a bounded queue, one transaction per
-    flush. Failed batches stay pending and retry on new samples or a timer.
-    Retention purges run here too, so they serialise with flushes."""
+    """Single writer thread draining a bounded queue.
+
+    One transaction per flush. Failed batches stay pending and retry on new
+    samples or a timer. Retention purges run here too, so they serialise
+    with flushes.
+    """
 
     def __init__(self, db_path: Path, sess: session.UnitSession):
         self.db_path = db_path
@@ -566,7 +580,7 @@ class Writer:
             self.cond.notify()
 
     def stop(self) -> None:
-        """Requests a final flush attempt and waits for the thread."""
+        """Request a final flush attempt and wait for the thread."""
         with self.cond:
             self.stopping = True
             self.cond.notify()
@@ -688,9 +702,12 @@ class Writer:
             conn.close()
 
     def _flush_each(self, rows: list) -> list:
-        """One transaction, one statement per row: the rows SQLite's
+        """Insert the rows one statement each, returning those refused.
+
+        One transaction, one statement per row: the rows SQLite's
         constraints refuse are returned as (table, row, error) and the
-        rest commit. Any other sqlite3.Error propagates as an outage."""
+        rest commit. Any other sqlite3.Error propagates as an outage.
+        """
         refused = []
         conn = sqlite3.connect(self.db_path, timeout=2.0)
         try:
@@ -712,10 +729,12 @@ class Writer:
         return refused
 
     def _purge(self) -> None:
-        """Deletes rows older than each table's window and returns the
-        pages to the filesystem. One event per purge that deleted
-        anything; a purge that finds nothing to delete is silent, so
-        retention never fills the events table with its own bookkeeping."""
+        """Delete rows older than each table's window and free their pages.
+
+        The freed pages go back to the filesystem. One event per purge that
+        deleted anything; a purge that finds nothing to delete is silent, so
+        retention never fills the events table with its own bookkeeping.
+        """
         windows = {
             "samples": self.params.retain_samples_days,
             # Measured on issue time, not valid time: what grows without
@@ -815,11 +834,13 @@ class Writer:
         )
 
     def _archive(self) -> bool:
-        """Moves closed months out of the hot file into archive files
-        (docs/design.md, Archive), one month per call; returns True when
+        """Move one closed month out of the hot file into archive files.
+
+        See docs/design.md, Archive. One month per call; returns True when
         it did something, so the writer comes straight back for the next
         month once pending samples have flushed. Off while
-        archive_after_months is 0."""
+        archive_after_months is 0.
+        """
         months = self.params.archive_after_months
         if months <= 0:
             return False
@@ -856,13 +877,16 @@ class Writer:
             conn.close()
 
     def _drop_archives(self) -> None:
-        """Deletes sealed archive files whose month closed more than
-        retain_archives_months ago — whole files only, since a sealed file
-        is never rewritten. Opt-in: 0, the default, keeps them forever, and
-        the retain_*_days windows never reach them. Runs whether or not
+        """Delete sealed archive files older than retain_archives_months.
+
+        A file goes once its month closed more than retain_archives_months
+        ago — whole files only, since a sealed file is never rewritten.
+        Opt-in: 0, the default, keeps them forever, and the retain_*_days
+        windows never reach them. Runs whether or not
         archive_after_months still is, so archives made earlier age out
         too. The file goes before its record: a crash between the two
-        leaves a record of a missing file, which the next pass finishes."""
+        leaves a record of a missing file, which the next pass finishes.
+        """
         months = self.params.retain_archives_months
         if months <= 0:
             return
@@ -891,12 +915,14 @@ class Writer:
             self.sess.health_event("archive-dropped", files=dropped)
 
     def _check_archive_settings(self) -> None:
-        """Says so, once per change, when the archive settings undercut
-        each other. A month is archived once it closed more than
-        archive_after_months ago, so its first rows are by then up to
-        archive_after_months + 1 months old: a retention window shorter
-        than that deletes them before they are archived. And archives kept
-        no longer than archiving waits are dropped as soon as sealed."""
+        """Report, once per change, when the archive settings undercut each other.
+
+        A month is archived once it closed more than archive_after_months
+        ago, so its first rows are by then up to archive_after_months + 1
+        months old: a retention window shorter than that deletes them before
+        they are archived. And archives kept no longer than archiving waits
+        are dropped as soon as sealed.
+        """
         archive = self.params.archive_after_months
         problems = []
         if archive > 0:
@@ -920,11 +946,14 @@ class Writer:
     def _finish_interrupted(
         self, conn: sqlite3.Connection, archive_dir: Path, failures: tuple
     ) -> None:
-        """A 'sealing' row is a seal a crash interrupted. Its file only
-        ever takes its final name after it verified, so a file under that
-        name is complete and is recorded as sealed; without one, nothing
-        was pruned against it yet, so the half-written attempt is
-        discarded and the month is sealed again from the hot rows."""
+        """Finish or discard the seals a crash interrupted.
+
+        A 'sealing' row is a seal a crash interrupted. Its file only ever
+        takes its final name after it verified, so a file under that name
+        is complete and is recorded as sealed; without one, nothing was
+        pruned against it yet, so the half-written attempt is discarded and
+        the month is sealed again from the hot rows.
+        """
         for name, month in conn.execute(
             "SELECT file, month FROM archives WHERE state = 'sealing'"
         ).fetchall():
@@ -942,8 +971,11 @@ class Writer:
                 self.sess.health_event("archive-failed", month=month, error=str(err))
 
     def _archive_month(self, conn: sqlite3.Connection, archive_dir: Path, month) -> bool:
-        """Prunes what the month's sealed files already hold, seals what
-        none of them does, and prunes that too. True when anything moved."""
+        """Prune, seal and prune again one closed month; True when anything moved.
+
+        Prunes what the month's sealed files already hold, seals what none
+        of them does, and prunes that too.
+        """
         label = month_label(month)
         lo, hi = month_start_us(*month), month_start_us(month[0], month[1] + 1)
         if not month_has_rows(conn, lo, hi):
@@ -984,10 +1016,12 @@ class Writer:
         return True
 
     def _seal(self, conn, archive_dir: Path, label: str, aliases: list, lo: int, hi: int) -> dict:
-        """Writes the month's rows that no sealed file holds into a new
-        archive file: the store's own schema, so `sqlite3` or a DuckDB
+        """Write the month's rows that no sealed file holds into a new archive file.
+
+        The file has the store's own schema, so `sqlite3` or a DuckDB
         ATTACH reads it like the store, with the store's series and room
-        ids so a row means the same thing in both."""
+        ids so a row means the same thing in both.
+        """
         archive_dir.mkdir(parents=True, exist_ok=True)
         name = self._free_name(conn, archive_dir, label)
         with conn:
@@ -1046,9 +1080,12 @@ class Writer:
         return self._record_sealed(conn, final)
 
     def _record_sealed(self, conn: sqlite3.Connection, final: Path) -> dict:
-        """Marks a verified, renamed file sealed: what it holds, its size
-        and checksum (an archive never changes again, so the checksum is
-        the whole of a later check), and read-only on disk."""
+        """Mark a verified, renamed file sealed and return its record.
+
+        The record is what it holds, its size and checksum (an archive never
+        changes again, so the checksum is the whole of a later check); the
+        file is made read-only on disk.
+        """
         check = sqlite3.connect(f"file:{final}?mode=ro", uri=True)
         try:
             counts = {
@@ -1085,10 +1122,13 @@ class Writer:
         return record
 
     def _free_name(self, conn: sqlite3.Connection, archive_dir: Path, label: str) -> str:
-        """`<store>-YYYY-MM.db`, then `.2`, `.3`... for rows that reached a
+        """Return the first free archive file name for a month.
+
+        `<store>-YYYY-MM.db`, then `.2`, `.3`... for rows that reached a
         month after it was sealed: a sealed file is never written again. A
         name already on disk that the store has no record of is not this
-        store's to reuse, and is passed over."""
+        store's to reuse, and is passed over.
+        """
         taken = {name for (name,) in conn.execute("SELECT file FROM archives")}
         part = 1
         while True:
@@ -1099,14 +1139,16 @@ class Writer:
             part += 1
 
     def _prune(self, conn: sqlite3.Connection, aliases: list, lo: int, hi: int) -> int:
-        """Deletes the month's hot rows that a sealed file holds, matched
-        on the whole row, except each series' newest sample and newest
-        forecast issue: those stay in the hot file as well, because
-        restore, the seed and every latest-value read find a series' last
-        word there, and a latch decided months ago must still be found
-        after a core restart (#83). Per series, as the purge, so each
-        delete is a range on the primary key and the tally is kept in the
-        same transaction."""
+        """Delete the month's hot rows that a sealed file holds; return how many.
+
+        Rows are matched on the whole row, except each series' newest sample
+        and newest forecast issue: those stay in the hot file as well,
+        because restore, the seed and every latest-value read find a series'
+        last word there, and a latch decided months ago must still be found
+        after a core restart (#83). Per series, as the purge, so each delete
+        is a range on the primary key and the tally is kept in the same
+        transaction.
+        """
         if not aliases:
             return 0
         gone_total = 0
@@ -1140,8 +1182,10 @@ class Writer:
         return gone_total
 
     def _intern(self, conn: sqlite3.Connection, rows: list) -> None:
-        """Ensures every series and room the batch names has an id, so the
-        per-row inserts are id lookups."""
+        """Ensure every series and room the batch names has an id.
+
+        The per-row inserts are then id lookups.
+        """
         conn.executemany(
             "INSERT OR IGNORE INTO series (class, entity, aspect, source)"
             " VALUES (?, ?, ?, ?)",
@@ -1156,8 +1200,11 @@ class Writer:
 
 
 def typed(value):
-    """(kind, stored value) for a scalar JSON value, None for non-scalars
-    and non-finite numbers (SQLite would bind NaN as NULL)."""
+    """Return (kind, stored value) for a scalar JSON value, else None.
+
+    None for non-scalars and non-finite numbers (SQLite would bind NaN as
+    NULL).
+    """
     if isinstance(value, bool):
         return "bool", int(value)
     if isinstance(value, (int, float)):
@@ -1179,6 +1226,8 @@ SEED_TOLERANCE_US = 500_000
 
 
 class Recorder:
+    """Routes received samples into the store's tables and seeds state from the mirror."""
+
     def __init__(self, db_path: Path, sess: session.UnitSession):
         self.db_path = db_path
         self.sess = sess
@@ -1206,11 +1255,12 @@ class Recorder:
             self.writer.enqueue("events", (ts, key, payload))
 
     def seed(self, exprs: list[str]) -> None:
-        """Catch-up from the core's state mirror (#60): whatever was
-        published before this incarnation subscribed — a unit's start
-        publish, a transition during a restart — is otherwise never
-        recorded, and a rarely-changing aspect can have no history at all.
-        Subscribe, then get, merge, as the SDK does for automations.
+        """Catch up from the core's state mirror (#60).
+
+        Whatever was published before this incarnation subscribed — a
+        unit's start publish, a transition during a restart — is otherwise
+        never recorded, and a rarely-changing aspect can have no history at
+        all. Subscribe, then get, merge, as the SDK does for automations.
 
         A mirrored value can be arbitrarily old, so the row is stamped at
         the value's own time (now less the mirror's age), never at recorder
@@ -1218,7 +1268,8 @@ class Recorder:
         store already holds at or after that time (a recorder-only restart,
         the live row written before it went down) is left alone. State
         only: commands, health and config land in the events audit, and a
-        mirrored current value is not an event."""
+        mirrored current value is not an event.
+        """
         replies = [r for expr in exprs for r in self.sess.get_json_aged(expr)]
         with self._live_lock:
             live, self._live = self._live, None
@@ -1280,11 +1331,12 @@ class Recorder:
             self.writer.enqueue("events", (ts, key, raw))
 
     def _record_forecast(self, ts, key, parts, sample) -> None:
-        """One issue becomes one row per point. The document is the unit
-        of issuance; the row is the unit of fact (docs/design.md,
-        Forecasts) — a scalar with its two coordinates, which is why it
-        cannot ride `samples` and why it decomposes so plainly once it has
-        its own table.
+        """Record one forecast issue as one row per point.
+
+        The document is the unit of issuance; the row is the unit of fact
+        (docs/design.md, Forecasts) — a scalar with its two coordinates,
+        which is why it cannot ride `samples` and why it decomposes so
+        plainly once it has its own table.
 
         `ts` — the recorder's receipt — is deliberately NOT what a row is
         stamped with. A forecast states its own `issued`, and that is the
@@ -1295,7 +1347,8 @@ class Recorder:
 
         A whole issue is refused or accepted together: a document with one
         bad point is a producer bug, and half-storing it would leave a
-        forecast that reads as complete and is not."""
+        forecast that reads as complete and is not.
+        """
         # room/entity/aspect/source — six segments with the class and the
         # `home` root. An aspect never spans segments here, because the
         # last one is the source (docs/design.md, Sources).
@@ -1413,9 +1466,10 @@ class Recorder:
             conn.close()
 
     def _answer_forecasts(self, query: zenoh.Query, asked: zenoh.KeyExpr) -> None:
-        """The two verification shapes, replying in issues rather than
-        rows — an issue is the atom here, so it is also the unit `limit`
-        counts and the unit a reply is never cut in half across.
+        """Answer the two verification shapes, replying in issues rather than rows.
+
+        An issue is the atom here, so it is also the unit `limit` counts and
+        the unit a reply is never cut in half across.
 
         `at=<rfc3339>` (the default, at now) is the forecast as it stood
         then: the latest issue at or before that instant. `valid_from`/
@@ -1426,7 +1480,8 @@ class Recorder:
 
         Each issue comes back in the wire's own shape, so a consumer can
         hand it straight to the SDK's decoder rather than learning a
-        second spelling of the same thing."""
+        second spelling of the same thing.
+        """
         try:
             at_us, from_us, to_us, limit = parse_forecast_params(str(query.parameters))
         except ValueError as err:
@@ -1553,12 +1608,15 @@ class Recorder:
 
 
 def rows_per_day(rows: int, oldest: int, newest: int) -> float | None:
-    """A series' long-run write rate, or None for one too short to have
-    one (a single row, or every row inside one microsecond). The reply
-    already carries the three numbers this divides; it does the division
-    because "which series is filling the file" is the question stats gets
-    asked, and an owner choosing a retention window should not have to do
-    arithmetic across 479 entries to answer it."""
+    """Return a series' long-run write rate in rows per day, or None.
+
+    None for a series too short to have one (a single row, or every row
+    inside one microsecond). The reply already carries the three numbers
+    this divides; it does the division because "which series is filling
+    the file" is the question stats gets asked, and an owner choosing a
+    retention window should not have to do arithmetic across 479 entries
+    to answer it.
+    """
     span = newest - oldest
     if span <= 0:
         return None
@@ -1566,11 +1624,14 @@ def rows_per_day(rows: int, oldest: int, newest: int) -> float | None:
 
 
 def store_stats(conn: sqlite3.Connection) -> dict:
-    """What is in the store: sizes from the pager, one aggregate per
-    series and one for the events table. The per-series aggregates are
-    read off `series`, where the insert trigger and _purge maintain them;
-    `row_count > 0` keeps the reply what the old aggregate query made it,
-    a series that has no rows right now having no entry."""
+    """Return what is in the store, for the stats reply.
+
+    Sizes from the pager, one aggregate per series and one for the events
+    table. The per-series aggregates are read off `series`, where the
+    insert trigger and _purge maintain them; `row_count > 0` keeps the
+    reply what the old aggregate query made it, a series that has no rows
+    right now having no entry.
+    """
     page_size = conn.execute("PRAGMA page_size").fetchone()[0]
     page_count = conn.execute("PRAGMA page_count").fetchone()[0]
     freelist = conn.execute("PRAGMA freelist_count").fetchone()[0]
@@ -1615,9 +1676,12 @@ def store_stats(conn: sqlite3.Connection) -> dict:
 
 
 def event_payload(text: str):
-    """Events are recorded raw (any bus client can put on these keys), so
-    a non-JSON row must serve as its string — one poison row must never
-    break every events query that reaches it."""
+    """Return an event's payload parsed as JSON, or as its raw string.
+
+    Events are recorded raw (any bus client can put on these keys), so a
+    non-JSON row must serve as its string — one poison row must never
+    break every events query that reaches it.
+    """
     try:
         return json.loads(text)
     except ValueError:
@@ -1625,9 +1689,10 @@ def event_payload(text: str):
 
 
 def split_selector(raw: str) -> dict[str, str]:
-    """Splits a selector's parameters (zenoh's `a=1;b=2` grammar) into a
-    dict. No URL decoding: RFC3339 offsets contain '+', which must stay
-    literal."""
+    """Split a selector's parameters (zenoh's `a=1;b=2` grammar) into a dict.
+
+    No URL decoding: RFC3339 offsets contain '+', which must stay literal.
+    """
     params = {}
     for part in raw.split(";"):
         if not part:
@@ -1638,8 +1703,11 @@ def split_selector(raw: str) -> dict[str, str]:
 
 
 def parse_params(raw: str) -> tuple[int, int, int, int, bool]:
-    """from/to (RFC3339 with offset), limit, bucket (µs, 0 = raw rows) and
-    changes from a selector's parameters."""
+    """Parse a samples query's parameters from a selector.
+
+    Returns from/to (RFC3339 with offset), limit, bucket (µs, 0 = raw rows)
+    and changes.
+    """
     params = split_selector(raw)
     from_us, to_us, limit = 0, now_us(), DEFAULT_QUERY_LIMIT
     bucket_us, changes = 0, False
@@ -1649,7 +1717,7 @@ def parse_params(raw: str) -> tuple[int, int, int, int, bool]:
         try:
             dt = datetime.datetime.fromisoformat(params[bound])
         except ValueError:
-            raise ValueError(f"{bound}: {params[bound]!r} is not RFC3339")
+            raise ValueError(f"{bound}: {params[bound]!r} is not RFC3339") from None
         if dt.tzinfo is None:
             raise ValueError(f"{bound}: {params[bound]!r} needs a UTC offset")
         us = int(dt.timestamp() * 1e6)
@@ -1678,10 +1746,12 @@ def parse_params(raw: str) -> tuple[int, int, int, int, bool]:
 
 
 def as_issues(rows, limit: int) -> list:
-    """Rows grouped into issues, in the wire's shape. Newest issues kept
-    when there are more than `limit` — the samples path's convention, one
-    level up: there it keeps the newest rows, here the newest issues,
-    because half an issue is not a forecast."""
+    """Group rows into issues, in the wire's shape.
+
+    Newest issues kept when there are more than `limit` — the samples
+    path's convention, one level up: there it keeps the newest rows, here
+    the newest issues, because half an issue is not a forecast.
+    """
     issues: dict = {}
     for issued_ts, valid_ts, valid_end, value in rows:
         point = {"t": iso_utc(valid_ts), "v": value}
@@ -1696,14 +1766,17 @@ def as_issues(rows, limit: int) -> list:
 
 
 def parse_forecast_params(raw: str) -> tuple[int | None, int, int, int]:
-    """`at` or `valid_from`+`valid_to` (RFC3339 with offset, as the
-    samples path spells time), plus `limit` in issues.
+    """Parse a forecast query's parameters from a selector.
+
+    `at` or `valid_from`+`valid_to` (RFC3339 with offset, as the samples
+    path spells time), plus `limit` in issues.
 
     The two are exclusive and the range needs both ends: an unbounded
     verification window over a store of superseded issues is a scan
     nobody meant to ask for, and defaulting one end would be guessing
     which. Neither given means `at` now — the current forecast, which is
-    what a bare read of the key should mean."""
+    what a bare read of the key should mean.
+    """
     params = split_selector(raw)
     limit = parse_limit(params["limit"]) if "limit" in params else DEFAULT_QUERY_LIMIT
     ranged = "valid_from" in params or "valid_to" in params
@@ -1721,23 +1794,26 @@ def parse_forecast_params(raw: str) -> tuple[int | None, int, int, int]:
 
 
 def rfc3339_us(name: str, raw: str) -> int:
-    """An RFC3339 instant with an offset, in µs — the samples path's
-    convention, named here so the forecast path cannot drift from it."""
+    """Parse an RFC3339 instant with an offset, returned in µs.
+
+    The samples path's convention, named here so the forecast path cannot
+    drift from it.
+    """
     try:
         dt = datetime.datetime.fromisoformat(raw)
     except ValueError:
-        raise ValueError(f"{name}: {raw!r} is not RFC3339")
+        raise ValueError(f"{name}: {raw!r} is not RFC3339") from None
     if dt.tzinfo is None:
         raise ValueError(f"{name}: {raw!r} needs a UTC offset")
     return int(dt.timestamp() * 1e6)
 
 
 def parse_bucket(raw: str) -> int:
-    """A positive bucket width in whole seconds, returned in µs."""
+    """Parse a positive bucket width in whole seconds, returned in µs."""
     try:
         seconds = int(raw)
     except ValueError:
-        raise ValueError(f"bucket: {raw!r} is not an integer")
+        raise ValueError(f"bucket: {raw!r} is not an integer") from None
     if seconds < 1:
         raise ValueError(f"bucket: {seconds} is not positive")
     if seconds > INT64_MAX // 1_000_000:
@@ -1746,11 +1822,13 @@ def parse_bucket(raw: str) -> int:
 
 
 def bucketed(rows, bucket_us: int, limit: int) -> list[dict]:
-    """One point per bucket from ascending (ts, room, kind, value) rows —
-    a cursor, folded as it streams, the newest `limit` kept: ts is the
+    """Fold ascending (ts, room, kind, value) rows into one point per bucket.
+
+    A cursor, folded as it streams, the newest `limit` kept: ts is the
     bucket's start, room the last row's; a number bucket's value is the
     mean and carries min and max, any other kind's is the last value seen
-    (a run of bools or enum strings has no mean)."""
+    (a run of bools or enum strings has no mean).
+    """
     points: deque[dict] = deque(maxlen=limit)
     point: dict | None = None
     for ts, room, kind, value in rows:
@@ -1777,10 +1855,12 @@ def bucketed(rows, bucket_us: int, limit: int) -> list[dict]:
 
 
 def changes_only(rows, limit: int) -> list[tuple]:
-    """The rows at which the value changed, the window's first included,
-    the newest `limit` kept: a state's runs, for timelines. Repeats are
-    kept in the store (each is a sighting) and collapsed here, on read,
-    as the cursor streams."""
+    """Return the rows at which the value changed, the window's first included.
+
+    The newest `limit` kept: a state's runs, for timelines. Repeats are
+    kept in the store (each is a sighting) and collapsed here, on read, as
+    the cursor streams.
+    """
     out: deque[tuple] = deque(maxlen=limit)
     last = None
     for row in rows:
@@ -1791,28 +1871,31 @@ def changes_only(rows, limit: int) -> list[tuple]:
 
 
 def parse_limit(raw: str) -> int:
-    """A positive row count, clamped to MAX_QUERY_LIMIT."""
+    """Parse a positive row count, clamped to MAX_QUERY_LIMIT."""
     try:
         limit = int(raw)
     except ValueError:
-        raise ValueError(f"limit: {raw!r} is not an integer")
+        raise ValueError(f"limit: {raw!r} is not an integer") from None
     if limit < 1:
         raise ValueError(f"limit: {limit} is not positive")
     return min(limit, MAX_QUERY_LIMIT)
 
 
 def parse_event_params(raw: str) -> tuple[str | None, int, int, int]:
-    """key (a zenoh key expression filtering recorded event keys, wildcards
-    included; None means all), from/to (integer microseconds UTC — the
-    recorder's own timestamp convention, unlike the RFC3339 samples path)
-    and limit, from a selector's parameters."""
+    """Parse an events query's parameters from a selector.
+
+    Returns key (a zenoh key expression filtering recorded event keys,
+    wildcards included; None means all), from/to (integer microseconds UTC
+    — the recorder's own timestamp convention, unlike the RFC3339 samples
+    path) and limit.
+    """
     params = split_selector(raw)
     key = params.get("key")
     if key is not None:
         try:
             zenoh.KeyExpr(key)
         except zenoh.ZError as err:
-            raise ValueError(f"key: {key!r} is not a valid key expression: {err}")
+            raise ValueError(f"key: {key!r} is not a valid key expression: {err}") from err
     from_us, to_us, limit = 0, now_us(), DEFAULT_EVENTS_LIMIT
     for bound in ("from", "to"):
         if bound not in params:
@@ -1820,7 +1903,7 @@ def parse_event_params(raw: str) -> tuple[str | None, int, int, int]:
         try:
             us = int(params[bound])
         except ValueError:
-            raise ValueError(f"{bound}: {params[bound]!r} is not an integer")
+            raise ValueError(f"{bound}: {params[bound]!r} is not an integer") from None
         if not INT64_MIN <= us <= INT64_MAX:
             raise ValueError(f"{bound}: {us} is outside the 64-bit timestamp range")
         if bound == "from":
@@ -1833,9 +1916,11 @@ def parse_event_params(raw: str) -> tuple[str | None, int, int, int]:
 
 
 def init_store(db_path: Path) -> None:
-    """Creates the store and its schema, or migrates an older layout in
-    place. Must succeed before ready(): a recorder that never had a
-    working store must not claim readiness."""
+    """Create the store and its schema, or migrate an older layout in place.
+
+    Must succeed before ready(): a recorder that never had a working store
+    must not claim readiness.
+    """
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     try:
@@ -1866,8 +1951,10 @@ def init_store(db_path: Path) -> None:
 
 
 def has_samples_table(conn: sqlite3.Connection) -> bool:
-    """Whether this file already holds a store — a fresh one needs no
-    migration, and its `series` is empty either way."""
+    """Return whether this file already holds a store.
+
+    A fresh one needs no migration, and its `series` is empty either way.
+    """
     return bool(list(conn.execute("PRAGMA table_info(samples)")))
 
 
@@ -1877,10 +1964,12 @@ def has_v0_samples(conn: sqlite3.Connection) -> bool:
 
 
 def migrate_v0(conn: sqlite3.Connection) -> None:
-    """Version 0 -> 1: the wide samples table becomes series + rooms +
-    narrow samples. One explicit transaction, so a crash mid-way leaves the
-    version-0 file intact for the next start; the VACUUM after it is what
-    switches an existing file to auto_vacuum."""
+    """Migrate version 0 -> 1: the wide samples table becomes series + rooms + narrow samples.
+
+    One explicit transaction, so a crash mid-way leaves the version-0 file
+    intact for the next start; the VACUUM after it is what switches an
+    existing file to auto_vacuum.
+    """
     conn.execute("BEGIN")
     conn.execute("ALTER TABLE samples RENAME TO samples_v0")
     for statement in SCHEMA.split(";\n"):
@@ -1906,8 +1995,10 @@ def migrate_v0(conn: sqlite3.Connection) -> None:
 
 
 def migrate_v4(conn: sqlite3.Connection) -> None:
-    """Version 4 -> 5: the forecast series migrate_v3 left with an empty
-    source get the reserved name instead (LEGACY_SOURCE).
+    """Migrate version 4 -> 5: give empty-source forecast series the reserved name.
+
+    The forecast series migrate_v3 left with an empty source get the
+    reserved name instead (LEGACY_SOURCE).
 
     migrate_v3 said those rows "stay readable under that empty source",
     and they do not: the source is a segment of the reply key, and an
@@ -1935,10 +2026,11 @@ def migrate_v4(conn: sqlite3.Connection) -> None:
 
 
 def migrate_v3(conn: sqlite3.Connection) -> None:
-    """Version 3 -> 4: `series` gains `source`, and its uniqueness moves
-    from (class, entity, aspect) to (class, entity, aspect, source) so two
-    providers forecasting one aspect are two series rather than one series
-    written twice (docs/design.md, Sources).
+    """Migrate version 3 -> 4: add `source` to `series` and to its uniqueness.
+
+    Its uniqueness moves from (class, entity, aspect) to (class, entity,
+    aspect, source) so two providers forecasting one aspect are two series
+    rather than one series written twice (docs/design.md, Sources).
 
     A column can be added in place, but the old uniqueness cannot be
     removed in place: it is a table-level UNIQUE, so SQLite implements it
@@ -1951,7 +2043,8 @@ def migrate_v3(conn: sqlite3.Connection) -> None:
     not record one, and inventing a provider name for them would be
     fabricating provenance. They stay readable under that empty source; a
     producer republishing under a real one starts a new series beside them
-    rather than appending to them."""
+    rather than appending to them.
+    """
     columns = {row[1] for row in conn.execute("PRAGMA table_info(series)")}
     if "source" in columns:
         return
@@ -1997,17 +2090,19 @@ def migrate_v3(conn: sqlite3.Connection) -> None:
 
 
 def migrate_v1(conn: sqlite3.Connection) -> None:
-    """Version 1 -> 2: the per-series tally arrives, and an existing
-    store's has to be counted once — at startup, where nothing is waiting
-    on a query timeout, instead of on every stats read forever. Each
-    aggregate is a correlated subquery on the clustered primary key
-    rather than one GROUP BY over the table: the counts walk each
-    series' key range, the bounds are seeks to its ends, and nothing
+    """Migrate version 1 -> 2: the per-series tally arrives.
+
+    An existing store's tally has to be counted once — at startup, where
+    nothing is waiting on a query timeout, instead of on every stats read
+    forever. Each aggregate is a correlated subquery on the clustered
+    primary key rather than one GROUP BY over the table: the counts walk
+    each series' key range, the bounds are seeks to its ends, and nothing
     depends on a SQLite newer than the schema already does (measured on a
     synthetic 4.8 M-row store: 0.13 s, against 0.62 s for the aggregate
     query this replaces). A store migrating straight from version 0
     already has the columns — they are in SCHEMA, which built its new
-    tables — and only needs the count."""
+    tables — and only needs the count.
+    """
     columns = {row[1] for row in conn.execute("PRAGMA table_info(series)")}
     if "row_count" not in columns:
         conn.execute("ALTER TABLE series ADD COLUMN row_count INTEGER NOT NULL DEFAULT 0")

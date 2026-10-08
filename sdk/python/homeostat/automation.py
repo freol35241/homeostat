@@ -36,6 +36,25 @@ from .session import QueryError, QueryTimeout, UnitSession
 
 
 def context(root: str | Path = ".") -> "Context":
+    """Return the Context for the unit the supervisor started.
+
+    The unit's name comes from HOMEOSTAT_UNIT.
+
+    Parameters
+    ----------
+    root : str or Path, optional
+        The house root.
+
+    Returns
+    -------
+    Context
+        The automation's bus surface, as its manifest declares it.
+
+    Raises
+    ------
+    KeyError
+        If HOMEOSTAT_UNIT or HOMEOSTAT_BUS is unset.
+    """
     return Context(os.environ[keys.ENV_UNIT], root)
 
 
@@ -54,20 +73,25 @@ _HISTORY_STATS = "home/history/stats"
 
 
 def _dedup(exprs: Iterable[str]) -> list[str]:
-    """Order-preserving unique. Two entities in one room expand a `{room}`-only
-    expression identically, and a duplicate subscription delivers twice."""
+    """Return `exprs` without duplicates, in their original order.
+
+    Two entities in one room expand a `{room}`-only expression identically,
+    and a duplicate subscription delivers twice.
+    """
     return list(dict.fromkeys(exprs))
 
 
 def _expand(
     expr: str, zones: dict[str, list[str]], entities: list[house.Entity]
 ) -> list[str]:
-    """The expression as the core expands it at plan time (src/expand.rs):
-    `{room}`/`{entity}` templates substituted per bound entity, or a zone
-    in the room slot expanded to one expression per member room. The two
-    are exclusive — a template is not a zone name — and only the
+    """Expand an expression as the core does at plan time (src/expand.rs).
+
+    `{room}`/`{entity}` templates are substituted per bound entity, or a
+    zone in the room slot is expanded to one expression per member room.
+    The two are exclusive — a template is not a zone name — and only the
     entity-addressed classes expand at all: those are the ones with a room
-    slot to fill (src/keyspace.rs, ENTITY_ADDRESSED)."""
+    slot to fill (src/keyspace.rs, ENTITY_ADDRESSED).
+    """
     segments = expr.split("/")
     if len(segments) < 3 or segments[1] not in _ENTITY_ADDRESSED:
         return [expr]
@@ -94,11 +118,13 @@ def _expand(
 
 
 def _house_has_recorder(root: str | Path) -> bool:
-    """Whether the house runs a recorder at all, read from the text: it is
-    the unit declaring a publish under home/history/, a class src/grants.rs
-    keeps to a single service. Without one there is nothing for `restore`
-    to wait for, and waiting out its timeout would stall every start in a
-    recorder-less house."""
+    """Return whether the house runs a recorder at all, read from the text.
+
+    The recorder is the unit declaring a publish under home/history/, a
+    class src/grants.rs keeps to a single service. Without one there is
+    nothing for `restore` to wait for, and waiting out its timeout would
+    stall every start in a recorder-less house.
+    """
     return any(
         spec.get("key", "").startswith("home/history/")
         for unit in house.load_house(root).units
@@ -129,6 +155,31 @@ class _Params:
 
 
 class Context:
+    """An automation's bus surface, exactly as its manifest declares it.
+
+    `context()` builds one for the unit the supervisor started.
+
+    Parameters
+    ----------
+    unit : str
+        The automation unit's name; its manifest is units/{unit}.toml.
+    root : str or Path, optional
+        The house root.
+
+    Attributes
+    ----------
+    unit : str
+        The unit's name.
+    params : object
+        The current typed parameter values, one attribute per `[params.*]`
+        entry; a `time` parameter reads as a `datetime.time`.
+
+    Raises
+    ------
+    KeyError
+        If HOMEOSTAT_BUS is unset.
+    """
+
     def __init__(self, unit: str, root: str | Path = "."):
         root = Path(root)
         self._root = root
@@ -198,8 +249,10 @@ class Context:
         return _expand(expr, self._zones, self._entities)
 
     def subscribe(self, binding: str, handler: Callable[..., None]) -> None:
-        """Subscribes a `[bus.subscribes]` binding; the handler receives
-        (key, decoded JSON value). Non-JSON payloads are ignored.
+        """Subscribe a `[bus.subscribes]` binding and deliver its current values.
+
+        The handler receives (key, decoded JSON value). Non-JSON payloads
+        are ignored.
 
         Subscribe, then get, merge — as for config: the current value of
         every matching key is read from the core's state mirror and
@@ -210,6 +263,22 @@ class Context:
         `(key, value, age_s)` receives the age in seconds — zero for a live
         sample — to hand to `Freshness.seen`. A two-argument handler gets
         the catch-up without it, i.e. as though it had just arrived.
+
+        Parameters
+        ----------
+        binding : str
+            A `[bus.subscribes]` binding name.
+        handler : Callable[..., None]
+            Called as `handler(key, value)`, or as `handler(key, value,
+            age_s)` when it takes three or more parameters.
+
+        Raises
+        ------
+        KeyError
+            If `binding` is not declared in `[bus.subscribes]`.
+        QueryError
+            If the catch-up get is answered with an error reply, or times
+            out (QueryTimeout).
         """
         wants_age = len(inspect.signature(handler).parameters) >= 3
         delivered: set[str] = set()
@@ -255,13 +324,15 @@ class Context:
         aspect: str | None,
         source: str | None = None,
     ) -> str:
-        """The one concrete key a `[bus.publishes]` binding addresses.
+        """Return the one concrete key a `[bus.publishes]` binding addresses.
+
         Literal expression segments are defaults, wildcard and template
         segments must be named, and a key the declared expression does not
         cover is refused: the manifest stays the authority on intent.
 
         A forecast key carries one slot more than the rest — its source,
-        which says WHO is claiming this future (docs/design.md, Sources)."""
+        which says WHO is claiming this future (docs/design.md, Sources).
+        """
         expr = self._publishes[binding]["key"]
         segments = expr.split("/")
         if segments[1] in _ENTITY_ADDRESSED:
@@ -278,7 +349,7 @@ class Context:
                     raise ValueError(f"publish {binding!r} takes no source slot")
                 names = ("room", "entity", "aspect")
                 slots = {"room": room, "entity": entity, "aspect": aspect}
-            defaults = dict(zip(names, segments[2 : 2 + len(names)]))
+            defaults = dict(zip(names, segments[2 : 2 + len(names)], strict=False))
             parts = []
             for slot, given in slots.items():
                 part = given if given is not None else defaults.get(slot)
@@ -307,11 +378,34 @@ class Context:
         entity: str | None = None,
         aspect: str | None = None,
     ) -> None:
-        """Publishes through a `[bus.publishes]` expression to one concrete
-        key. Literal expression segments are defaults; wildcard segments
-        must be named via room/entity/aspect. cmd-class publishes are
-        wrapped in the envelope automatically (priority from the manifest's
-        publish declaration, actor this unit)."""
+        """Publish through a `[bus.publishes]` expression to one concrete key.
+
+        Literal expression segments are defaults; wildcard segments must be
+        named via room/entity/aspect. cmd-class publishes are wrapped in the
+        envelope automatically (priority from the manifest's publish
+        declaration, actor this unit).
+
+        Parameters
+        ----------
+        binding : str
+            A `[bus.publishes]` binding name.
+        value : Any
+            The value, JSON-encodable.
+        room : str or None, optional
+            The room slot; required where the expression's is a wildcard.
+        entity : str or None, optional
+            The entity slot; required where the expression's is a wildcard.
+        aspect : str or None, optional
+            The aspect slot; required where the expression's is a wildcard.
+
+        Raises
+        ------
+        KeyError
+            If `binding` is not declared in `[bus.publishes]`.
+        ValueError
+            If the slots do not make one concrete key inside the declared
+            expression, or a cmd publish declares no priority.
+        """
         spec = self._publishes[binding]
         segments = spec["key"].split("/")
         key = self._concrete_key(binding, room=room, entity=entity, aspect=aspect)
@@ -336,8 +430,9 @@ class Context:
         aspect: str | None = None,
         source: str | None = None,
     ) -> None:
-        """Publishes a forecast through a `[bus.publishes]` expression to
-        one concrete key — `publish`, for the forecast class.
+        """Publish a forecast through a `[bus.publishes]` expression to one concrete key.
+
+        This is `publish`, for the forecast class.
 
         The binding is the point. Without this an automation has to reach
         past its own manifest and hand a key to the session, which leaves
@@ -345,7 +440,33 @@ class Context:
         manifest stops being the authority on what this unit publishes.
 
         `points` are what the source said — see homeostat.forecast for the
-        shape and for why the extent and the resampling live there."""
+        shape and for why the extent and the resampling live there.
+
+        Parameters
+        ----------
+        binding : str
+            A `[bus.publishes]` binding name with a forecast key.
+        issued : datetime.datetime
+            When the forecast was issued; must carry a UTC offset.
+        points : iterable of Point or tuple
+            The points, as `homeostat.forecast.encode` accepts them.
+        room : str or None, optional
+            The room slot, as for `publish`.
+        entity : str or None, optional
+            The entity slot, as for `publish`.
+        aspect : str or None, optional
+            The aspect slot, as for `publish`.
+        source : str or None, optional
+            The source slot: who is claiming this future.
+
+        Raises
+        ------
+        KeyError
+            If `binding` is not declared in `[bus.publishes]`.
+        ValueError
+            If the slots do not make one concrete key inside the declared
+            expression.
+        """
         self._session.put_forecast(
             self._concrete_key(
                 binding, room=room, entity=entity, aspect=aspect, source=source
@@ -368,9 +489,10 @@ class Context:
         aspect: str | None = None,
         timeout_s: float = 30.0,
     ) -> tuple[Any, float] | None:
-        """The last value this unit published on `binding`'s key, read back
-        from the recorder as `(value, age_s)` — or None when there is
-        nothing to restore.
+        """Read back the last value this unit published on `binding`'s key.
+
+        It is read from the recorder as `(value, age_s)` — or None when there
+        is nothing to restore.
 
         The core's state mirror is in-memory, so a core restart (every
         version upgrade is one) empties it and `subscribe`'s catch-up has
@@ -398,6 +520,32 @@ class Context:
         answering yet, so this retries until `timeout_s` — call it before
         `ready()`, where a unit that is not yet able to do its job is
         exactly what the supervisor should see.
+
+        Parameters
+        ----------
+        binding : str
+            A `[bus.publishes]` binding name with a state key.
+        room : str or None, optional
+            The room slot, as for `publish`.
+        entity : str or None, optional
+            The entity slot, as for `publish`.
+        aspect : str or None, optional
+            The aspect slot, as for `publish`.
+        timeout_s : float, optional
+            Seconds to keep waiting for the recorder to answer.
+
+        Returns
+        -------
+        tuple of (Any, float) or None
+            ``(value, age_s)``, or None when there is nothing to restore.
+
+        Raises
+        ------
+        KeyError
+            If `binding` is not declared in `[bus.publishes]`.
+        ValueError
+            If the binding is not a state key, or the slots do not make one
+            concrete key inside the declared expression.
         """
         key = self._concrete_key(binding, room=room, entity=entity, aspect=aspect)
         segments = key.split("/")
@@ -459,12 +607,21 @@ class Context:
         return None
 
     def health_event(self, kind: str, **fields: Any) -> None:
+        """Publish a JSON event at home/health/{unit}/event.
+
+        Parameters
+        ----------
+        kind : str
+            The event's `kind`.
+        **fields : Any
+            Further JSON-encodable fields of the event.
+        """
         self._session.health_event(kind, **fields)
 
     def source_used(self, entity: str, aspect: str, source: str, used: bool) -> None:
-        """Reports whether one declared source is currently folded into a
-        computed value (docs/design.md, Which sources a computation
-        actually used).
+        """Report whether one declared source is currently folded into a computed value.
+
+        See docs/design.md, Which sources a computation actually used.
 
         Declared sources say what MAY contribute; this says what did. A
         source dropped as stale, failed on a plausibility check, or
@@ -477,7 +634,19 @@ class Context:
         tick is one nobody can fold into intervals. Call it every time you
         decide, including at startup: the first call for a triple always
         reports, so a consumer starting mid-window does not read silence
-        as agreement."""
+        as agreement.
+
+        Parameters
+        ----------
+        entity : str
+            The computed entity.
+        aspect : str
+            The computed aspect.
+        source : str
+            The contributor's name, as the entity's `[sources]` table keys it.
+        used : bool
+            Whether the source contributed to this computation.
+        """
         triple = (entity, aspect, source)
         if self._sources_used.get(triple) == used:
             return
@@ -490,10 +659,11 @@ class Context:
         )
 
     def ready(self) -> None:
+        """Declare the liveliness token: the unit is able to do its job."""
         self._session.ready()
 
     def run(self) -> None:
-        """Blocks until SIGTERM/SIGINT, then closes the session."""
+        """Block until SIGTERM/SIGINT, then close the session."""
         stop = threading.Event()
         signal.signal(signal.SIGTERM, lambda *_: stop.set())
         signal.signal(signal.SIGINT, lambda *_: stop.set())
@@ -501,6 +671,7 @@ class Context:
         self.close()
 
     def close(self) -> None:
+        """Undeclare this context's subscriptions and close its session."""
         for sub in self._subs:
             sub.undeclare()
         self._subs.clear()

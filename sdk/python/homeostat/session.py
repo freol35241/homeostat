@@ -23,6 +23,21 @@ COMMAND_PREFIXES = ("home/cmd/", "home/arbiter/")
 
 
 def connect() -> "UnitSession":
+    """Open a bus session for the unit the supervisor started.
+
+    The unit name and the router endpoint come from HOMEOSTAT_UNIT and
+    HOMEOSTAT_BUS.
+
+    Returns
+    -------
+    UnitSession
+        The open session; call its `ready()` once the unit can do its job.
+
+    Raises
+    ------
+    KeyError
+        If HOMEOSTAT_UNIT or HOMEOSTAT_BUS is unset.
+    """
     unit = os.environ[keys.ENV_UNIT]
     endpoint = os.environ[keys.ENV_BUS]
     return UnitSession(unit, endpoint)
@@ -33,17 +48,32 @@ class ConfigWriteError(Exception):
 
 
 class QueryError(Exception):
-    """A queryable answered a get with an error reply (the recorder's
-    "limit: 0 is not positive", "store unavailable: ...")."""
+    """A queryable answered a get with an error reply.
+
+    For example the recorder's "limit: 0 is not positive" or "store
+    unavailable: ...".
+    """
 
 
 class QueryTimeout(QueryError):
-    """A get ran out of time before every queryable had answered. Zenoh
-    delivers this as an error reply too, but it is the queryable not
-    answering yet, not the queryable saying no."""
+    """A get ran out of time before every queryable had answered.
+
+    Zenoh delivers this as an error reply too, but it is the queryable not
+    answering yet, not the queryable saying no.
+    """
 
 
 class UnitSession:
+    """A unit's client session on the bus, against the supervisor's router.
+
+    Parameters
+    ----------
+    unit : str
+        The unit's name.
+    endpoint : str
+        The router's zenoh endpoint, as HOMEOSTAT_BUS gives it.
+    """
+
     def __init__(self, unit: str, endpoint: str):
         self.unit = unit
         config = zenoh.Config()
@@ -59,19 +89,28 @@ class UnitSession:
         self._publishers: dict[str, Any] = {}
 
     def ready(self) -> None:
-        """Declares the liveliness token at home/health/{unit}/alive."""
+        """Declare the liveliness token at home/health/{unit}/alive."""
         self._token = self._session.liveliness().declare_token(
             keys.liveliness_key(self.unit)
         )
 
     def put_json(self, key: str, value: Any) -> None:
-        """Publishes a JSON-encoded value.
+        """Publish a JSON-encoded value.
 
         A value carrying a non-finite float (NaN, Infinity — which Python's
         json accepts and re-emits, but JSON has no spelling for) is dropped
         with a "non-finite" health event instead: every consumer would
         otherwise have to guard against it, and the recorder cannot store
-        it (docs/design.md, Bus payload conventions)."""
+        it (docs/design.md, Bus payload conventions).
+
+        Parameters
+        ----------
+        key : str
+            The concrete key to put on. A home/cmd/ or home/arbiter/ key is
+            sent as a command.
+        value : Any
+            A JSON-encodable value.
+        """
         try:
             encoded = json.dumps(value, allow_nan=False)
         except ValueError:
@@ -93,8 +132,7 @@ class UnitSession:
         self._session.put(key, encoded)
 
     def put_forecast(self, key: str, issued, points) -> None:
-        """Publishes a forecast (docs/design.md, Forecasts) at a
-        `home/forecast/{room}/{entity}/{aspect}` key.
+        """Publish a forecast (docs/design.md, Forecasts).
 
         Retained like state, so a consumer restarting mid-horizon has its
         inputs at once rather than waiting for the next issue. A payload
@@ -102,7 +140,17 @@ class UnitSession:
         points at one instant, more points than the guard — drops with an
         "invalid-forecast" health event carrying the reason, the same
         shape as every other producer-side refusal: the unit stays up and
-        the trace names what it published."""
+        the trace names what it published.
+
+        Parameters
+        ----------
+        key : str
+            A concrete `home/forecast/{room}/{entity}/{aspect}/{source}` key.
+        issued : datetime.datetime
+            When the forecast was issued; must carry a UTC offset.
+        points : iterable of Point or tuple
+            The points, as `homeostat.forecast.encode` accepts them.
+        """
         try:
             encoded = forecast.encode(issued, points)
         except ValueError as error:
@@ -111,10 +159,23 @@ class UnitSession:
         self._session.put(key, encoded)
 
     def parse_forecast(self, sample: zenoh.Sample):
-        """A subscribed forecast sample decoded, or None after a
-        "malformed-payload" drop event — the subscriber prologue, matching
-        `parse_command`. What the consumer does about `issued` being old
-        is its own policy, never the SDK's: see homeostat.forecast."""
+        """Decode a subscribed forecast sample, or drop it with a health event.
+
+        Returns None after a "malformed-payload" drop event — the subscriber
+        prologue, matching `parse_command`. What the consumer does about
+        `issued` being old is its own policy, never the SDK's: see
+        homeostat.forecast.
+
+        Parameters
+        ----------
+        sample : zenoh.Sample
+            A sample received on a forecast key.
+
+        Returns
+        -------
+        Forecast or None
+            The decoded forecast, or None if the payload was malformed.
+        """
         key = str(sample.key_expr)
         try:
             return forecast.decode(sample.payload.to_bytes())
@@ -123,15 +184,27 @@ class UnitSession:
             return None
 
     def parse_command(self, sample: zenoh.Sample):
-        """The command prologue every adapter shares (docs/adapters.md, §4):
-        the aspect, the envelope's value and its correlation id, or None
-        after a drop event — "malformed-payload" for a payload that is not
-        JSON, "invalid-command" for one that is not an envelope.
+        """Run the command prologue every adapter shares (docs/adapters.md, §4).
+
+        The result is the aspect, the envelope's value and its correlation
+        id, or None after a drop event — "malformed-payload" for a payload
+        that is not JSON, "invalid-command" for one that is not an envelope.
 
         The id rides along because an adapter's own later validation (out of
         range, no such command) ends the same command, and whoever published
         it is waiting to hear which stage stopped it. A payload that never
-        parsed has no id to report."""
+        parsed has no id to report.
+
+        Parameters
+        ----------
+        sample : zenoh.Sample
+            A sample received on a command key.
+
+        Returns
+        -------
+        tuple of (str, Any, str or None), or None
+            ``(aspect, value, cmd_id)``, or None if the sample was dropped.
+        """
         key = str(sample.key_expr)
         aspect = key.split("/", 4)[4]
         try:
@@ -148,15 +221,30 @@ class UnitSession:
         return aspect, value, cmd_id
 
     def has_subscriber(self, key: str, *, wait_s: float = 0.5) -> bool:
-        """Whether anything on the bus subscribes to `key` — whether a put
-        there reaches anyone at all. A client session filters writes on
-        the publishing side, so a put nobody matches is dropped without a
-        trace; this is the one moment the publisher can know it.
+        """Return whether anything on the bus subscribes to `key`.
+
+        That is, whether a put there reaches anyone at all. A client session
+        filters writes on the publishing side, so a put nobody matches is
+        dropped without a trace; this is the one moment the publisher can
+        know it.
 
         Blocking for up to `wait_s`: a key asked about for the first time
         gets a publisher that has not yet heard from the router, and an
         immediate False from it would report a subscriber missing that is
-        not. Answering True ends the wait at once."""
+        not. Answering True ends the wait at once.
+
+        Parameters
+        ----------
+        key : str
+            The concrete key a put would go to.
+        wait_s : float, optional
+            Longest time in seconds to wait for a match.
+
+        Returns
+        -------
+        bool
+            True if a subscriber matches `key`, False if none did in time.
+        """
         publisher = self._publishers.get(key)
         if publisher is None:
             publisher = self._publishers[key] = self._session.declare_publisher(key)
@@ -168,24 +256,88 @@ class UnitSession:
         return True
 
     def is_alive(self, unit: str, *, timeout_s: float = 2.0) -> bool:
-        """Whether `unit` holds its liveliness token (home/health/{unit}/
-        alive): the supervisor's own test for "up". It answers for the unit
+        """Return whether `unit` holds its liveliness token (home/health/{unit}/alive).
+
+        This is the supervisor's own test for "up". It answers for the unit
         itself, where a subscriber match on a key can be anyone's — the
         recorder subscribes to every command, so a key's match says nothing
-        about the adapter that should act on it."""
+        about the adapter that should act on it.
+
+        Parameters
+        ----------
+        unit : str
+            The unit to ask about.
+        timeout_s : float, optional
+            Seconds to wait for liveliness replies.
+
+        Returns
+        -------
+        bool
+            True if the unit's token is declared.
+        """
         replies = self._session.liveliness().get(keys.liveliness_key(unit), timeout=timeout_s)
         return any(reply.ok is not None for reply in replies)
 
     def subscribe(self, keyexpr: str, callback: Callable[[zenoh.Sample], None]):
+        """Declare a subscriber that calls `callback` for each sample on `keyexpr`.
+
+        Parameters
+        ----------
+        keyexpr : str
+            The key expression to subscribe to.
+        callback : Callable[[zenoh.Sample], None]
+            Called with each sample, on zenoh's thread.
+
+        Returns
+        -------
+        zenoh.Subscriber
+            The subscriber; undeclare it to stop.
+        """
         return self._session.declare_subscriber(keyexpr, callback)
 
     def declare_queryable(self, keyexpr: str, callback: Callable[[zenoh.Query], None]):
+        """Declare a queryable that calls `callback` for each get on `keyexpr`.
+
+        Parameters
+        ----------
+        keyexpr : str
+            The key expression to answer for.
+        callback : Callable[[zenoh.Query], None]
+            Called with each query, on zenoh's thread.
+
+        Returns
+        -------
+        zenoh.Queryable
+            The queryable; undeclare it to stop.
+        """
         return self._session.declare_queryable(keyexpr, callback)
 
     def get_json(
         self, selector: str, *, timeout_s: float | None = None
     ) -> list[tuple[str, Any]]:
-        """Queries the bus, returning (key, decoded JSON) per ok reply."""
+        """Query the bus, returning (key, decoded JSON) per ok reply.
+
+        As `get_json_aged`, without the ages.
+
+        Parameters
+        ----------
+        selector : str
+            The key expression to query, optionally with parameters.
+        timeout_s : float or None, optional
+            Bound on the wait for replies; zenoh's default (10 s) when None.
+
+        Returns
+        -------
+        list of tuple of (str, Any)
+            ``(key, value)`` per ok reply with a JSON payload.
+
+        Raises
+        ------
+        QueryTimeout
+            If the wait for replies runs out.
+        QueryError
+            If a queryable answers with an error reply.
+        """
         return [
             (key, value)
             for key, value, _ in self.get_json_aged(selector, timeout_s=timeout_s)
@@ -194,12 +346,33 @@ class UnitSession:
     def get_json_aged(
         self, selector: str, *, timeout_s: float | None = None
     ) -> list[tuple[str, Any, float]]:
-        """Queries the bus, returning (key, decoded JSON, age in seconds)
-        per ok reply. The age is the reply's attachment as the core's
-        last-value mirrors write it; a reply without one is age zero.
-        Non-JSON payloads are ignored, as a subscriber ignores them.
-        `timeout_s` bounds the wait for replies (zenoh's default, 10 s,
-        when None); running out raises QueryTimeout."""
+        """Query the bus, returning (key, decoded JSON, age in seconds) per ok reply.
+
+        The age is the reply's attachment as the core's last-value mirrors
+        write it; a reply without one is age zero. Non-JSON payloads are
+        ignored, as a subscriber ignores them. `timeout_s` bounds the wait
+        for replies (zenoh's default, 10 s, when None); running out raises
+        QueryTimeout.
+
+        Parameters
+        ----------
+        selector : str
+            The key expression to query, optionally with parameters.
+        timeout_s : float or None, optional
+            Bound on the wait for replies, in seconds.
+
+        Returns
+        -------
+        list of tuple of (str, Any, float)
+            ``(key, value, age_s)`` per ok reply with a JSON payload.
+
+        Raises
+        ------
+        QueryTimeout
+            If the wait for replies runs out.
+        QueryError
+            If a queryable answers with an error reply.
+        """
         values = []
         for reply in self._session.get(selector, timeout=timeout_s):
             sample = reply.ok
@@ -230,12 +403,31 @@ class UnitSession:
         return values
 
     def write_config(self, unit: str, param: str, value: Any) -> Any:
-        """Writes a parameter through the core's validating config queryable.
+        """Write a parameter through the core's validating config queryable.
 
         A GET with payload against the concrete key: the core validates the
         value against the manifest constraint, stores it, republishes it, and
         replies the stored value. A rejected write raises ConfigWriteError
         with the core's message; a plain put would bypass validation.
+
+        Parameters
+        ----------
+        unit : str
+            The unit whose parameter to write.
+        param : str
+            The parameter's name, as declared in the unit's manifest.
+        value : Any
+            The new value, JSON-encodable.
+
+        Returns
+        -------
+        Any
+            The value as the core stored it.
+
+        Raises
+        ------
+        ConfigWriteError
+            If the core rejects the write, or nothing replies.
         """
         key = keys.config_key(unit, param)
         for reply in self._session.get(key, payload=json.dumps(value)):
@@ -252,10 +444,19 @@ class UnitSession:
         raise ConfigWriteError(f"no reply for {key} — is the core running?")
 
     def health_event(self, kind: str, **fields: Any) -> None:
-        """Publishes a JSON event at home/health/{unit}/event."""
+        """Publish a JSON event at home/health/{unit}/event.
+
+        Parameters
+        ----------
+        kind : str
+            The event's `kind`.
+        **fields : Any
+            Further JSON-encodable fields of the event.
+        """
         self.put_json(keys.health_event_key(self.unit), {"kind": kind, **fields})
 
     def close(self) -> None:
+        """Undeclare the liveliness token, if declared, and close the session."""
         if self._token is not None:
             self._token.undeclare()
             self._token = None

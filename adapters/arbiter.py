@@ -7,8 +7,9 @@
 # [tool.uv.sources]
 # homeostat = { path = "../sdk/python", editable = true }
 # ///
-"""Arbiter service: the write-token holder for arbitrated entities (see
-docs/design.md, Arbitrated mode, "Settled 2026-07-16").
+"""Arbiter service: the write-token holder for arbitrated entities.
+
+See docs/design.md, Arbitrated mode, "Settled 2026-07-16".
 
 By plan-time construction an adapter's templated cmd subscription excludes
 its arbitrated entities, so wishes for them never reach an owner adapter
@@ -77,8 +78,10 @@ class Params(LiveParams):
 
 
 def iso(epoch: float) -> str:
-    """An epoch second as RFC3339 UTC, the spelling every other timestamp
-    on this bus uses."""
+    """Format an epoch second as RFC3339 UTC.
+
+    That is the spelling every other timestamp on this bus uses.
+    """
     return (
         datetime.datetime.fromtimestamp(epoch, datetime.timezone.utc)
         .isoformat(timespec="seconds")
@@ -102,9 +105,11 @@ def main():
     changed = threading.Condition(lock)
 
     def publish_holds_locked() -> None:
-        """The leases still in force, oldest first. Called with the lock
-        held, from whoever changed them; the document replaces its
-        predecessor, so a consumer never merges two of them."""
+        """Publish the leases still in force, ordered by room, entity and aspect.
+
+        Called with the lock held, from whoever changed them; the document
+        replaces its predecessor, so a consumer never merges two of them.
+        """
         now = time.monotonic()
         wall = time.time()
         holds = []
@@ -130,8 +135,11 @@ def main():
         session.put_json(hold_key, {"schema": 1, "holds": holds})
 
     def prune_locked() -> bool:
-        """Drops expired leases. True when something went, so the caller
-        knows whether the document changed."""
+        """Drop expired leases.
+
+        True when something went, so the caller knows whether the document
+        changed.
+        """
         now = time.monotonic()
         expired = [k for k, lease in leases.items() if lease["deadline"] <= now]
         for k in expired:
@@ -140,9 +148,11 @@ def main():
 
     def expiry_loop(stop: threading.Event) -> None:
         """One thread for every lease, waiting on the earliest deadline.
+
         Expiry is otherwise lazy — evaluated on the next wish for that key —
         which is correct for arbitration and wrong for a published
-        document, which would go on claiming a hold that had ended."""
+        document, which would go on claiming a hold that had ended.
+        """
         while not stop.is_set():
             with changed:
                 if prune_locked():

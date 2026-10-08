@@ -1,9 +1,10 @@
 """Forecasts: a series' future, on the bus (docs/design.md, Forecasts).
 
-A forecast rides `home/forecast/{room}/{entity}/{aspect}` — the same
-room/entity/aspect as `home/state`, because it is the same series extended
-forward. The entity's aspect descriptor therefore already supplies its
-label, kind and unit, and past and future share one chart axis.
+A forecast rides `home/forecast/{room}/{entity}/{aspect}/{source}` — the
+same room/entity/aspect as `home/state`, because it is the same series
+extended forward, then the source that claims it. The entity's aspect
+descriptor therefore already supplies its label, kind and unit, and past
+and future share one chart axis.
 
 The payload is what the source actually said:
 
@@ -55,10 +56,12 @@ MAX_POINTS = 2048
 
 
 def _parse_ts(value) -> datetime.datetime:
-    """An RFC3339 timestamp with an offset, as the recorder's samples path
-    uses. A naive one is refused rather than guessed at: "09:00" means
+    """Parse an RFC3339 timestamp with an offset, as the recorder's samples path uses.
+
+    A naive one is refused rather than guessed at: "09:00" means
     different instants in different places, and a forecast that is an hour
-    wrong is worse than one that is absent."""
+    wrong is worse than one that is absent.
+    """
     if not isinstance(value, str):
         raise ValueError(f"timestamp must be a string, got {value!r}")
     parsed = datetime.datetime.fromisoformat(value)
@@ -83,6 +86,15 @@ class Point:
     as a spike at that instant, and a held value's length can otherwise
     only be guessed from the gap to the next point, which fails at the end
     of a horizon, where there is no next point.
+
+    Attributes
+    ----------
+    t : datetime.datetime
+        The instant the value is for, or the start of its interval.
+    v : float
+        The predicted value.
+    d : float or None
+        The extent in seconds, or None for an instant.
     """
 
     t: datetime.datetime
@@ -90,9 +102,21 @@ class Point:
     d: float | None = None
 
     def covers(self, when: datetime.datetime) -> bool:
-        """Whether this point speaks for `when`. An instant speaks only for
-        itself; an interval for `[t, t + d)`, half-open so abutting
-        intervals do not both claim their shared edge."""
+        """Return whether this point speaks for `when`.
+
+        An instant speaks only for itself; an interval for `[t, t + d)`,
+        half-open so abutting intervals do not both claim their shared edge.
+
+        Parameters
+        ----------
+        when : datetime.datetime
+            The instant asked about.
+
+        Returns
+        -------
+        bool
+            True if this point's value holds at `when`.
+        """
         if self.d is None:
             return when == self.t
         return self.t <= when < self.t + datetime.timedelta(seconds=self.d)
@@ -100,16 +124,27 @@ class Point:
 
 @dataclass(frozen=True)
 class Forecast:
-    """A decoded forecast: when it was issued, and what it says."""
+    """A decoded forecast: when it was issued, and what it says.
+
+    Attributes
+    ----------
+    issued : datetime.datetime
+        When the source issued the forecast.
+    points : tuple of Point
+        The points, strictly ascending in time.
+    """
 
     issued: datetime.datetime
     points: tuple[Point, ...]
 
     @property
     def horizon_end(self) -> datetime.datetime | None:
-        """The end of what this forecast covers — the last point's instant,
-        or the end of its interval where it declares one. Without this an
-        interval-valued final point would be unreadable past its start."""
+        """The end of what this forecast covers, or None if it has no points.
+
+        That is the last point's instant, or the end of its interval where
+        it declares one. Without this an interval-valued final point would
+        be unreadable past its start.
+        """
         if not self.points:
             return None
         last = self.points[-1]
@@ -118,14 +153,26 @@ class Forecast:
         return last.t + datetime.timedelta(seconds=last.d)
 
     def age_s(self, now: datetime.datetime | None = None) -> float:
-        """Seconds since this forecast was issued — what a consumer checks
-        against its own tolerance before acting on it."""
+        """Return the seconds since this forecast was issued.
+
+        This is what a consumer checks against its own tolerance before
+        acting on it.
+
+        Parameters
+        ----------
+        now : datetime.datetime or None, optional
+            The current time; the system clock, in UTC, when None.
+
+        Returns
+        -------
+        float
+            The forecast's age in seconds.
+        """
         now = now or datetime.datetime.now(datetime.timezone.utc)
         return (now - self.issued).total_seconds()
 
     def at(self, when: datetime.datetime, mode: str, max_gap_s: float) -> float | None:
-        """The value predicted for `when`, or None if the forecast does not
-        cover it.
+        """Return the value predicted for `when`, or None if the forecast does not cover it.
 
         `mode` is the reading the series carries and has no default,
         because guessing it is exactly the mistake a regular grid would
@@ -148,6 +195,27 @@ class Forecast:
         the source declared to span a window is not a sample to interpolate
         between, and quietly averaging two accumulations is the kind of
         invention this helper exists to refuse.
+
+        Parameters
+        ----------
+        when : datetime.datetime
+            The instant to read.
+        mode : str
+            "step" or "linear", as above.
+        max_gap_s : float
+            The widest gap in seconds between two instant points to read
+            across.
+
+        Returns
+        -------
+        float or None
+            The predicted value, or None where the forecast says nothing.
+
+        Raises
+        ------
+        ValueError
+            If `mode` is neither "step" nor "linear", or "linear" is asked
+            across an interval-valued point.
         """
         if mode not in ("step", "linear"):
             raise ValueError(f"mode must be 'step' or 'linear', got {mode!r}")
@@ -194,10 +262,36 @@ class Forecast:
         mode: str,
         max_gap_s: float,
     ) -> list[float | None]:
-        """`count` values on a regular grid from `start`, for a consumer
-        that wants one — an optimiser's horizon, say. A slot the forecast
-        does not cover is None rather than a fabricated number, so a
-        controller can refuse instead of optimising against invention."""
+        """Return `count` values on a regular grid from `start`.
+
+        For a consumer that wants one — an optimiser's horizon, say. A slot
+        the forecast does not cover is None rather than a fabricated number,
+        so a controller can refuse instead of optimising against invention.
+
+        Parameters
+        ----------
+        start : datetime.datetime
+            The first slot's instant.
+        step_s : float
+            The grid's spacing in seconds; must be positive.
+        count : int
+            The number of slots; must not be negative.
+        mode : str
+            "step" or "linear", as for `at`.
+        max_gap_s : float
+            As for `at`.
+
+        Returns
+        -------
+        list of float or None
+            One value per slot, None where the forecast says nothing.
+
+        Raises
+        ------
+        ValueError
+            If `step_s` is not positive, `count` is negative, or `at`
+            refuses `mode`.
+        """
         if step_s <= 0:
             raise ValueError("step_s must be positive")
         if count < 0:
@@ -209,10 +303,12 @@ class Forecast:
 
 
 def _extent(d) -> float | None:
-    """A point's declared extent in seconds, validated — or None for an
-    instant. Zero is refused along with the negatives: a window of no
+    """Return a point's declared extent in seconds, validated, or None for an instant.
+
+    Zero is refused along with the negatives: a window of no
     length is not an interval, and admitting it would give `covers` an
-    empty range that nothing could ever read."""
+    empty range that nothing could ever read.
+    """
     if d is None:
         return None
     if isinstance(d, bool) or not isinstance(d, (int, float)):
@@ -224,18 +320,35 @@ def _extent(d) -> float | None:
 
 
 def encode(issued: datetime.datetime, points) -> bytes:
-    """The wire payload for `points`, sorted and checked.
+    """Return the wire payload for `points`, sorted and checked.
 
     A point is `Point(t, v, d=None)` or a `(t, v)` / `(t, v, d)` tuple,
     where `d` is the optional extent described on `Point`. `d` is written
     only where a producer gave one, so a series of instants is unchanged
     on the wire.
 
-    Raises ValueError on anything a consumer could not trust: a naive
-    timestamp, a non-finite or non-numeric value or extent, a duplicated
-    instant, or more points than MAX_POINTS. Sorting is done here rather
-    than demanded of the producer — ascending order is a cheap invariant
-    that makes every reader simpler, and it is shape, not meaning.
+    Sorting is done here rather than demanded of the producer — ascending
+    order is a cheap invariant that makes every reader simpler, and it is
+    shape, not meaning.
+
+    Parameters
+    ----------
+    issued : datetime.datetime
+        When the forecast was issued; must carry a UTC offset.
+    points : iterable of Point or tuple
+        The points, in any order; a tuple's `t` may be an RFC3339 string.
+
+    Returns
+    -------
+    bytes
+        The JSON payload, UTF-8 encoded.
+
+    Raises
+    ------
+    ValueError
+        On anything a consumer could not trust: a naive timestamp, a
+        non-finite or non-numeric value or extent, a duplicated instant, or
+        more points than MAX_POINTS.
     """
     if issued.tzinfo is None:
         raise ValueError("issued has no UTC offset")
@@ -278,9 +391,25 @@ def encode(issued: datetime.datetime, points) -> bytes:
 
 
 def decode(payload: bytes) -> Forecast:
-    """Parses a wire payload. Raises ValueError on anything malformed —
-    the codebase's uniform "bad input" sentinel, so a subscriber drops it
-    with a malformed-payload health event like any other."""
+    """Parse a wire payload into a `Forecast`.
+
+    Parameters
+    ----------
+    payload : bytes
+        The payload as received.
+
+    Returns
+    -------
+    Forecast
+        The decoded forecast, its points strictly ascending.
+
+    Raises
+    ------
+    ValueError
+        On anything malformed — the codebase's uniform "bad input"
+        sentinel, so a subscriber drops it with a malformed-payload health
+        event like any other.
+    """
     parsed = json.loads(payload)
     if not isinstance(parsed, dict):
         raise ValueError("forecast payload is not an object")

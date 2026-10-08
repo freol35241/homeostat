@@ -219,13 +219,15 @@ FORECAST_ISSUE_MAX = 200
 
 
 def granted_capabilities(publishes: dict) -> set[str]:
-    """The capabilities this unit's [bus.publishes] grants it: the ones on
-    its cmd-class publishes, which is exactly what `plan` resolves into the
-    grant table. A capability COMMANDABLE knows but this manifest does not
+    """Return the capabilities this unit's [bus.publishes] grants it.
+
+    They are the ones on its cmd-class publishes, which is exactly what
+    `plan` resolves into the grant table. A capability COMMANDABLE knows but this manifest does not
     name is refused at /api/cmd and rendered read-only, so the running
     dashboard cannot do what its own grant table says it cannot. Grants
     resolve at plan time (docs/design.md, Grants), so this is the unit
-    honouring its declaration, not a boundary against a unit that lies."""
+    honouring its declaration, not a boundary against a unit that lies.
+    """
     return {
         spec["capability"]
         for spec in publishes.values()
@@ -292,10 +294,13 @@ def build_model(model: house.HouseModel, granted: set[str]) -> dict:
 
 
 def commandable_aspects(entity: dict, descriptor: dict | None) -> set[str]:
-    """The aspects an entity takes commands on: its capability's vocabulary
-    (the base aspect plus the features it declares) and whatever its
-    descriptor declares a command for — the same two sources /api/cmd
-    accepts, so the card can name no field the page would refuse."""
+    """Return the aspects an entity takes commands on.
+
+    They are its capability's vocabulary (the base aspect plus the features
+    it declares) and whatever its descriptor declares a command for — the
+    same two sources /api/cmd accepts, so the card can name no field the
+    page would refuse.
+    """
     allowed = COMMANDABLE.get(entity["capability"], set())
     base = BASE_ASPECT.get(entity["capability"])
     aspects = {a for a in allowed if a == base or a in entity["features"]}
@@ -306,11 +311,13 @@ def commandable_aspects(entity: dict, descriptor: dict | None) -> set[str]:
 
 
 def key_expr(key: str):
-    """A zenoh key expression, or None when the string is not one. A
-    manifest expression is only as well-formed as the core's own parser
+    """Return a zenoh key expression, or None when the string is not one.
+
+    A manifest expression is only as well-formed as the core's own parser
     demands, which admits shapes zenoh refuses (`**/**`, a `$`), and the
-    model is re-read mid-edit — so a bad expression is skipped, never a
-    500 for every browser."""
+    model is re-read mid-edit — so a bad expression is skipped, never a 500
+    for every browser.
+    """
     try:
         return zenoh.KeyExpr(key)
     except zenoh.ZError:
@@ -318,15 +325,17 @@ def key_expr(key: str):
 
 
 def driven_aspects(model: dict, grants: list, descriptors: dict[str, dict]) -> dict[str, str]:
-    """Per commandable aspect, the LOWEST band any unit is granted to
-    command it at — "room/entity/aspect" -> band.
+    """Map each commandable aspect to the LOWEST band any unit is granted to command it at.
+
+    Keyed "room/entity/aspect" -> band.
 
     This is what makes an arbiter hold a deviation or not: a hold displaces
     somebody when it stands above a band some unit normally writes at. The
     grant table is the only honest source for that, because it says who may
     command what and at which band, resolved at plan time — where guessing
     from an automation's last refusal would instead depend on how often
-    that automation happens to publish (docs/design.md, Arbitrated mode)."""
+    that automation happens to publish (docs/design.md, Arbitrated mode).
+    """
     entities = {e["name"]: e for e in model["entities"]}
     lowest: dict[str, str] = {}
     for g in grants:
@@ -361,9 +370,10 @@ def driven_aspects(model: dict, grants: list, descriptors: dict[str, dict]) -> d
 def unit_relations(
     model: dict, grants: list, state_keys, descriptors: dict[str, dict]
 ) -> dict[str, dict]:
-    """Per unit, the FIELDS it drives and the fields it reads — the unit
-    card's Drives and From sections, read back from what the manifest
-    already declares. Each is an {entity, aspect} pair, because a relation
+    """Return, per unit, the FIELDS it drives and the fields it reads.
+
+    These are the unit card's Drives and From sections, read back from what
+    the manifest already declares. Each is an {entity, aspect} pair, because a relation
     is per aspect and an entity is routinely both driven and read (an
     automation commands a lamp's `on` and subscribes to it): naming whole
     entities made one card say the same thing twice and say neither
@@ -381,7 +391,8 @@ def unit_relations(
     through the zones exactly as the core expands it, intersected with the
     concrete state keys on the bus — not with `{room}/{entity}/**`, which
     would make every entity in a room a source of a `*/presence`
-    subscription."""
+    subscription.
+    """
     zones = model["zones"]
     entities = {e["name"]: e for e in model["entities"]}
     # Keys the bus delivered are well-formed.
@@ -437,11 +448,13 @@ def field_order(field: tuple[str, str | None]) -> tuple[str, str]:
 
 
 def descriptors_in(inventory) -> dict[str, dict]:
-    """The aspect descriptors a discovery document carries, by entity
-    name: records binding an entity (`entity` set) that describe its
-    aspects (`aspects`, a {schema, groups, fields} object). Anything else
-    in the document — unbound devices, raw protocol descriptions — is the
-    agent's business, not the page's."""
+    """Return the aspect descriptors a discovery document carries, by entity name.
+
+    They come from records binding an entity (`entity` set) that describe
+    its aspects (`aspects`, a {schema, groups, fields} object). Anything
+    else in the document — unbound devices, raw protocol descriptions — is the
+    agent's business, not the page's.
+    """
     if not isinstance(inventory, list):
         return {}
     return {
@@ -454,9 +467,11 @@ def descriptors_in(inventory) -> dict[str, dict]:
 
 
 def descriptor_command(descriptor: dict | None, aspect: str) -> dict | None:
-    """The family-editable command a descriptor declares for `aspect`, with
-    the field's `values` folded in for enums — or None: undescribed, no
-    command, or a tier the family may not write (the /api/param rule)."""
+    """Return the family-editable command a descriptor declares for `aspect`, or None.
+
+    The field's `values` are folded in for enums. None means undescribed,
+    no command, or a tier the family may not write (the /api/param rule).
+    """
     field = ((descriptor or {}).get("fields") or {}).get(aspect)
     if not isinstance(field, dict):
         return None
@@ -473,10 +488,12 @@ def descriptor_command(descriptor: dict | None, aspect: str) -> dict | None:
 
 
 def command_value_ok(command: dict, value) -> bool:
-    """Whether `value` satisfies a descriptor command: a member of an
-    enum's values, or a number within the float/int constraint. A
-    courtesy check before the bus — the adapter's own bounds are the
-    enforcement (docs/design.md, IVT490: bounds live in the adapter)."""
+    """Return whether `value` satisfies a descriptor command.
+
+    It must be a member of an enum's values, or a number within the
+    float/int constraint. A courtesy check before the bus — the adapter's own bounds are the
+    enforcement (docs/design.md, IVT490: bounds live in the adapter).
+    """
     if command.get("type") == "enum":
         return any(isinstance(v, dict) and v.get("value") == value for v in command["values"])
     if command.get("type") == "bool":
@@ -495,8 +512,9 @@ def command_value_ok(command: dict, value) -> bool:
 
 
 def reachable(session, spec: dict, aspect: str) -> bool:
-    """Whether a command for `aspect` of the entity can reach its device:
-    the owning unit holds its liveliness token, and something subscribes
+    """Return whether a command for `aspect` of the entity can reach its device.
+
+    It can when the owning unit holds its liveliness token, and something subscribes
     to the key that unit listens on — the arbiter's forward for an
     arbitrated entity, the command key otherwise. A command that cannot
     reach anyone is dropped without a trace, so without this the page
@@ -504,7 +522,8 @@ def reachable(session, spec: dict, aspect: str) -> bool:
 
     Liveliness first, because a match on the command key alone proves
     little: the recorder subscribes to every command, and the arbiter to
-    every one it arbitrates. Blocking; /api/cmd runs it off the loop."""
+    every one it arbitrates. Blocking; /api/cmd runs it off the loop.
+    """
     if not session.is_alive(spec["owner"]):
         return False
     room, entity = spec["room"], spec["name"]
@@ -514,7 +533,7 @@ def reachable(session, spec: dict, aspect: str) -> bool:
 
 
 def host_of(value: str) -> str:
-    """The host part of a Host header value.
+    """Return the host part of a Host header value.
 
     A port is stripped only when it is all digits, and a bracketed IPv6
     literal is unwrapped — the same parse as the MCP server's (src/mcp/http.rs).
@@ -545,8 +564,10 @@ def host_allowed(host_header: str) -> bool:
 
 
 def mse_request(text: str) -> bool:
-    """Whether a browser frame is the player's MSE request — the one
-    go2rtc message type the relay forwards."""
+    """Return whether a browser frame is the player's MSE request.
+
+    That is the one go2rtc message type the relay forwards.
+    """
     try:
         message = json.loads(text)
     except ValueError:
@@ -555,8 +576,10 @@ def mse_request(text: str) -> bool:
 
 
 def tiles_path() -> Path | None:
-    """The house's self-hosted PMTiles extract, if HOMEOSTAT_DASHBOARD_TILES
-    is set and points at a real file."""
+    """Return the house's self-hosted PMTiles extract, or None.
+
+    Only if HOMEOSTAT_DASHBOARD_TILES is set and points at a real file.
+    """
     raw = os.environ.get(ENV_TILES)
     if not raw:
         return None
@@ -565,8 +588,11 @@ def tiles_path() -> Path | None:
 
 
 class Hub:
-    """Bus-facing caches plus WebSocket fan-out. Zenoh callbacks arrive on
-    zenoh threads; deltas cross into asyncio via call_soon_threadsafe."""
+    """Bus-facing caches plus WebSocket fan-out.
+
+    Zenoh callbacks arrive on zenoh threads; deltas cross into asyncio via
+    call_soon_threadsafe.
+    """
 
     def __init__(self, session):
         self.session = session
@@ -644,16 +670,19 @@ class Hub:
                 self.grants = value
 
     def about(self) -> dict:
-        """Where this page is served from: the core's `about` (its version
-        and build commit, the house commit last applied) plus this unit's
-        own SDK version, which is the release its dashboard.html was copied
-        from — a house pins the two together (scripts/sync_starter.sh), so
-        a core and a dashboard from different releases show as such.
+        """Return where this page is served from.
+
+        The core's `about` (its version and build commit, the house commit
+        last applied) plus this unit's own SDK version, which is the release
+        its dashboard.html was copied from — a house pins the two together
+        (scripts/sync_starter.sh), so a core and a dashboard from different
+        releases show as such.
 
         Blocking (a bus query), so it runs off the event loop, and at most
         once per MODEL_TTL_S: the house commit moves on an apply that
         restarts nothing here, so it is re-read rather than cached for the
-        unit's life. A query that fails keeps the last answer."""
+        unit's life. A query that fails keeps the last answer.
+        """
         if time.monotonic() - self._about_at >= MODEL_TTL_S:
             # A footer line is never worth failing /api/model over: a query
             # error or a session in trouble keeps the last answer.
@@ -722,9 +751,11 @@ class Hub:
         self._emit({"type": "forecast", "key": key, "value": value})
 
     def _apply_discovery(self, unit: str, value) -> None:
-        """Diffs a unit's discovery record against what it described
-        before: a descriptor it no longer carries is retired (value null
-        on the wire), a new or changed one replaces the old."""
+        """Diff a unit's discovery record against what it described before.
+
+        A descriptor it no longer carries is retired (value null on the
+        wire); a new or changed one replaces the old.
+        """
         found = descriptors_in(value)
         changes: list[tuple[str, dict | None]] = []
         with self.lock:
@@ -850,10 +881,12 @@ class Model:
             return None
 
     async def refresh(self) -> None:
-        """Re-parses the house off the event loop, at most once per
-        MODEL_TTL_S: a burst of page loads costs one parse, and the loop
-        keeps serving deltas meanwhile. The swap happens back on the loop,
-        so a request never sees half a rebuild."""
+        """Re-parse the house off the event loop, at most once per MODEL_TTL_S.
+
+        A burst of page loads costs one parse, and the loop keeps serving
+        deltas meanwhile. The swap happens back on the loop, so a request
+        never sees half a rebuild.
+        """
         if time.monotonic() - self._loaded_at < MODEL_TTL_S:
             return
         async with self._refresh_lock:
@@ -1054,14 +1087,16 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         )
 
     async def api_forecasts(request: web.Request) -> web.Response:
-        """The forecasts the recorder kept for one aspect over a window —
-        what the house SAID, as against what it now believes.
+        """Return the forecasts the recorder kept for one aspect over a window.
+
+        That is what the house SAID, as against what it now believes.
 
         Its own route rather than a class on /api/history because the
         reply is a different shape: history answers in rows, this answers
         in issues, and one endpoint returning two shapes would have every
         caller sniff which it got. `limit` counts issues, as the recorder
-        counts them, so a reply is never half an issue."""
+        counts them, so a reply is never half an issue.
+        """
         entity = request.query.get("entity", "")
         aspect = request.query.get("aspect", "")
         if not entity or not aspect:
@@ -1113,7 +1148,8 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         (docs/design.md, Which sources a computation actually used). The
         window read is WIDER than the window drawn, because a source
         excluded before the chart opens has no transition inside it and
-        would otherwise read as live for the whole span."""
+        would otherwise read as live for the whole span.
+        """
         entity = request.query.get("entity", "")
         aspect = request.query.get("aspect", "")
         if entity not in model.entities:
@@ -1183,8 +1219,10 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         return web.json_response(entries)
 
     def camera_stream(request: web.Request) -> str | None:
-        """The go2rtc stream name for a bound camera entity, or None for an
-        unknown or non-camera entity (the proxy's 404)."""
+        """Return the go2rtc stream name for a bound camera entity, or None.
+
+        None for an unknown or non-camera entity (the proxy's 404).
+        """
         spec = model.entities.get(request.match_info["entity"])
         if spec is None or spec["capability"] != "camera":
             return None

@@ -8,8 +8,9 @@
 # [tool.uv.sources]
 # homeostat = { path = "../sdk/python", editable = true }
 # ///
-"""ONVIF camera adapter (see docs/design.md, "Cameras (settled
-2026-07-19)").
+"""ONVIF camera adapter.
+
+See docs/design.md, "Cameras (settled 2026-07-19)".
 
 Named for the dialect it speaks, not the vendor: Profile S pull-point
 events only — no PTZ, no imaging service, no capability negotiation. The
@@ -132,9 +133,11 @@ WSNT_NS = "http://docs.oasis-open.org/wsn/b-2"
 
 
 def load_cameras(path: str | None) -> dict:
-    """The HOMEOSTAT_CAMERAS TOML: per-camera host/username/password keyed
-    by entity id. Unset env var: every camera unconfigured (each drops
-    with a health event; the unit stays up)."""
+    """Load the HOMEOSTAT_CAMERAS TOML: per-camera host/username/password keyed by entity id.
+
+    Unset env var: every camera unconfigured (each drops with a health
+    event; the unit stays up).
+    """
     if not path:
         return {}
     return tomllib.loads(Path(path).read_text())
@@ -149,8 +152,10 @@ def resolve_host_port(conf: dict) -> tuple[str, int]:
 
 
 def security_header(username: str, password: str) -> str:
-    """WS-Security UsernameToken with PasswordDigest — what Tapo demands:
-    Base64(SHA1(nonce + created + password))."""
+    """Build a WS-Security UsernameToken with PasswordDigest — what Tapo demands.
+
+    The digest is Base64(SHA1(nonce + created + password)).
+    """
     nonce = os.urandom(16)
     created = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     digest = base64.b64encode(
@@ -182,9 +187,11 @@ class SoapError(Exception):
 
 
 def fault_detail(text: str) -> str:
-    """The fault's Reason/Text, or a bounded excerpt of whatever the
-    camera actually said. A bare status code cannot distinguish which of
-    four calls a camera objected to, or why."""
+    """Return the fault's Reason/Text, or a bounded excerpt of whatever the camera actually said.
+
+    A bare status code cannot distinguish which of four calls a camera
+    objected to, or why.
+    """
     with contextlib.suppress(ElementTree.ParseError):
         root = ElementTree.fromstring(text)
         reason = root.find(f".//{{{SOAP_ENV}}}Reason/{{{SOAP_ENV}}}Text")
@@ -209,10 +216,13 @@ async def soap_call(
     password: str,
     op: str,
 ) -> ElementTree.Element:
-    """`op` names the call in every error it can raise: a camera that
+    """Make one SOAP call and return the reply's root, raising SoapError on any failure.
+
+    `op` names the call in every error it can raise: a camera that
     accepts CreatePullPointSubscription and rejects Renew is a completely
     different problem from one that rejects the subscribe, and "HTTP 400"
-    alone cannot tell them apart from outside the process."""
+    alone cannot tell them apart from outside the process.
+    """
     try:
         async with http.post(
             url,
@@ -250,8 +260,10 @@ async def soap_call(
 
 
 def subscription_url(root: ElementTree.Element, base_url: str) -> str:
-    """The SubscriptionReference address, with only its path and query
-    trusted — the netloc stays the configured one."""
+    """Return the SubscriptionReference address, with only its path and query trusted.
+
+    The netloc stays the configured one.
+    """
     address = root.find(".//{*}SubscriptionReference/{*}Address")
     if address is None or not (address.text or "").strip():
         raise SoapError("no subscription reference in response")
@@ -261,9 +273,12 @@ def subscription_url(root: ElementTree.Element, base_url: str) -> str:
 
 
 def motion_values(root: ElementTree.Element):
-    """(value, error) per motion notification in a PullMessages response:
-    topic must mention Motion (CellMotionDetector/Motion, MotionAlarm —
-    the C200's vocabulary), value from the IsMotion/State SimpleItem."""
+    """Yield (value, error) per motion notification in a PullMessages response.
+
+    The topic must mention Motion (CellMotionDetector/Motion, MotionAlarm —
+    the C200's vocabulary); the value comes from the IsMotion/State
+    SimpleItem.
+    """
     for message in root.iter(f"{{{WSNT_NS}}}NotificationMessage"):
         topic = message.find(".//{*}Topic")
         if topic is None or "Motion" not in (topic.text or ""):
@@ -281,9 +296,11 @@ def motion_values(root: ElementTree.Element):
 
 
 async def run_camera(entity, conf: dict, session, http: aiohttp.ClientSession, stop: asyncio.Event) -> None:
-    """One pull-point event stream for one camera: subscribe, long-poll,
-    renew, forever; any fault recreates the subscription from scratch
-    after a delay (one health event per down transition)."""
+    """Run one pull-point event stream for one camera: subscribe, long-poll, renew, forever.
+
+    Any fault recreates the subscription from scratch after a delay (one
+    health event per down transition).
+    """
     motion_key = keys.state_key(entity.room, entity.name, "motion")
     available_key = keys.state_key(entity.room, entity.name, "available")
     try:
