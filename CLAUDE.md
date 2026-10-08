@@ -70,7 +70,7 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 | `sdk/python/` | The Python SDK every unit is built on. |
 | `adapters/` | The generic units (adapters and services), one script each, with a lockfile beside it. |
 | `examples/starter-house/` | A house to copy. The adapters in its `units/` are **generated** copies of `adapters/` at the release tag: never edit them by hand. `evening_lights.py` is the house's own. |
-| `tests/` | Rust integration tests against real processes, a real broker and a real SQLite store. `tests/fixtures/` holds the houses they run; `tests/corpus/` pairs broken houses with their exact error lists. |
+| `tests/` | Rust integration tests against real processes, a real broker and a real SQLite store. `tests/fixtures/` holds the houses they run; `tests/corpus/` pairs broken houses with their exact error lists; `tests/adapters/` unit-tests adapter logic in Python, without a bus. |
 | `docs/` | `design.md` (how the system works and why), `adapters.md` (the adapter contract), and two generated files. |
 
 ### Running what CI runs
@@ -81,7 +81,8 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 uv run --no-project --with-editable sdk/python --with 'paho-mqtt>=2,<3' python -m unittest discover sdk/python/tests
 uv run --no-project --with-editable sdk/python --with 'paho-mqtt>=2,<3' --with pyright==1.1.414 pyright sdk/python/homeostat
-uvx ruff@0.16.7 check adapters sdk scripts tests/browser
+uv run --no-project --with-editable sdk/python python -m unittest discover tests/adapters
+uvx ruff@0.16.7 check adapters sdk scripts tests/adapters tests/browser
 node --test tests/js/*.test.js
 scripts/sync_starter.sh --check
 uv run --script tests/browser/run.py

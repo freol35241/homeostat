@@ -89,31 +89,72 @@ def iso(epoch: float) -> str:
     )
 
 
-def main():
-    unit = os.environ[keys.ENV_UNIT]
-    model = house.load_house(".")
-    arbitrated = {(e.room, e.name) for e in model.entities if e.write_mode == "arbitrated"}
-    own = next(u for u in model.units if u.name == unit)
+class Leases:
+    """The holds in force, one per (room, entity, aspect), and the rule.
 
-    session = homeostat.connect()
-    params = Params(session, {PARAM: float(own.params[PARAM]["default"])})
-    lock = threading.Lock()
-    leases: dict[tuple[str, str, str], dict] = {}
-    hold_key = keys.hold_key(unit)
-    # Wakes the expiry thread when the earliest deadline moves — a new
-    # lease, or one pruned — so it never sleeps past a hold's end.
-    changed = threading.Condition(lock)
+    Pure bookkeeping: no bus, no threads. The caller serialises access and
+    does the publishing; `clock` is time.monotonic in the unit and a fake
+    in tests.
+    """
 
-    def publish_holds_locked() -> None:
-        """Publish the leases still in force, ordered by room, entity and aspect.
+    def __init__(self, clock=time.monotonic):
+        self._clock = clock
+        self._held: dict[tuple[str, str, str], dict] = {}
 
-        Called with the lock held, from whoever changed them; the document
-        replaces its predecessor, so a consumer never merges two of them.
+    def wish(self, target: tuple[str, str, str], priority: str, actor: str, hold_s: float):
+        """Arbitrate one wish for `target` at `priority` from `actor`.
+
+        Returns
+        -------
+        tuple of (str, dict or None)
+            The action, "forward", "preempt" or "refuse", and the lease that
+            was in force when the wish arrived (None if none was). Forward
+            and preempt take or refresh the lease for `hold_s` seconds; a
+            refusal counts against the holder instead.
         """
-        now = time.monotonic()
-        wall = time.time()
+        now = self._clock()
+        lease = self._held.get(target)
+        holder = dict(lease) if lease is not None and now < lease["deadline"] else None
+        incoming = keys.CMD_PRIORITIES.index(priority)
+        if holder is not None and incoming < keys.CMD_PRIORITIES.index(holder["priority"]):
+            # What the hold cost, carried on the hold itself: a consumer
+            # can say "this override has turned an automation away twice"
+            # without replaying the event log.
+            self._held[target]["refused"] += 1
+            return "refuse", holder
+        preempts = holder is not None and incoming > keys.CMD_PRIORITIES.index(holder["priority"])
+        self._held[target] = {
+            "priority": priority,
+            "actor": actor,
+            "deadline": now + hold_s,
+            "taken": now,
+            # A refreshed hold starts its tally again: the count belongs to
+            # the hold in force, not to the aspect.
+            "refused": 0,
+        }
+        return ("preempt" if preempts else "forward"), holder
+
+    def prune(self) -> bool:
+        """Drop expired leases; True when something went."""
+        now = self._clock()
+        expired = [k for k, lease in self._held.items() if lease["deadline"] <= now]
+        for k in expired:
+            del self._held[k]
+        return bool(expired)
+
+    def next_deadline(self) -> float | None:
+        """Return the earliest deadline in force, or None with no leases."""
+        return min((lease["deadline"] for lease in self._held.values()), default=None)
+
+    def document(self, wall: float) -> dict:
+        """Return the holds document, ordered by room, entity and aspect.
+
+        `wall` is time.time() at the same moment the clock is read, so the
+        published `since` and `until` are the monotonic lease in wall time.
+        """
+        now = self._clock()
         holds = []
-        for (room, entity, aspect), lease in sorted(leases.items()):
+        for (room, entity, aspect), lease in sorted(self._held.items()):
             if lease["deadline"] <= now:
                 continue
             holds.append(
@@ -132,19 +173,28 @@ def main():
                     "refused": lease["refused"],
                 }
             )
-        session.put_json(hold_key, {"schema": 1, "holds": holds})
+        return {"schema": 1, "holds": holds}
 
-    def prune_locked() -> bool:
-        """Drop expired leases.
 
-        True when something went, so the caller knows whether the document
-        changed.
-        """
-        now = time.monotonic()
-        expired = [k for k, lease in leases.items() if lease["deadline"] <= now]
-        for k in expired:
-            del leases[k]
-        return bool(expired)
+def main():
+    unit = os.environ[keys.ENV_UNIT]
+    model = house.load_house(".")
+    arbitrated = {(e.room, e.name) for e in model.entities if e.write_mode == "arbitrated"}
+    own = next(u for u in model.units if u.name == unit)
+
+    session = homeostat.connect()
+    params = Params(session, {PARAM: float(own.params[PARAM]["default"])})
+    leases = Leases()
+    hold_key = keys.hold_key(unit)
+    # Guards `leases`, and wakes the expiry thread when the earliest
+    # deadline moves (a new lease, or one pruned) so it never sleeps past a
+    # hold's end.
+    changed = threading.Condition(threading.Lock())
+
+    def publish_holds_locked() -> None:
+        # The document replaces its predecessor, so a consumer never merges
+        # two of them.
+        session.put_json(hold_key, leases.document(time.time()))
 
     def expiry_loop(stop: threading.Event) -> None:
         """One thread for every lease, waiting on the earliest deadline.
@@ -155,11 +205,10 @@ def main():
         """
         while not stop.is_set():
             with changed:
-                if prune_locked():
+                if leases.prune():
                     publish_holds_locked()
-                deadlines = [lease["deadline"] for lease in leases.values()]
-                now = time.monotonic()
-                timeout = max(0.05, min(deadlines) - now) if deadlines else None
+                deadline = leases.next_deadline()
+                timeout = None if deadline is None else max(0.05, deadline - time.monotonic())
                 changed.wait(timeout=timeout)
 
     def cmd_handler(sample):
@@ -189,33 +238,10 @@ def main():
             return
         cmd_id = keys.cmd_envelope_id(envelope)
 
-        incoming = keys.CMD_PRIORITIES.index(priority)
         with changed:
-            now = time.monotonic()
-            lease = leases.get((room, entity, aspect))
-            holder = lease if lease is not None and now < lease["deadline"] else None
-            if holder is not None and incoming < keys.CMD_PRIORITIES.index(holder["priority"]):
-                action = "refuse"
-                # What the hold cost, carried on the hold itself: a
-                # consumer can say "this override has turned an automation
-                # away twice" without replaying the event log.
-                holder["refused"] += 1
-            else:
-                action = (
-                    "preempt"
-                    if holder is not None
-                    and incoming > keys.CMD_PRIORITIES.index(holder["priority"])
-                    else "forward"
-                )
-                leases[(room, entity, aspect)] = {
-                    "priority": priority,
-                    "actor": actor,
-                    "deadline": now + params.hold_minutes * 60,
-                    "taken": now,
-                    # A refreshed hold starts its tally again: the count
-                    # belongs to the hold in force, not to the aspect.
-                    "refused": 0,
-                }
+            action, holder = leases.wish(
+                (room, entity, aspect), priority, actor, params.hold_minutes * 60
+            )
             publish_holds_locked()
             # The earliest deadline has moved either way — a fresh lease
             # pushes it out, and the expiry thread must not sleep on the

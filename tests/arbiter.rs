@@ -88,17 +88,26 @@ async fn holds_are_published_as_state() {
     config_write(&observer, HOLD_MINUTES_KEY, json!(0.05))
         .await
         .expect("hold_minutes write");
-    put_cmd(&observer, &envelope(json!(true), "manual", "owner")).await;
+    // The core accepts the write; the arbiter applies it when its config
+    // subscription delivers, which can be after a wish sent now. A hold
+    // taken at the old value runs 30 minutes, so wish again (a same-band
+    // wish retakes the hold at the current value) until one is short. The
+    // startup document may also arrive first, carrying no hold.
     let mut held: Option<Value> = None;
-    // The startup document may already have been mirrored before this
-    // subscriber existed, so take the first one that carries the hold.
-    for _ in 0..5 {
-        let Some(doc) = next_json(&hold_sub, Duration::from_secs(10)).await else {
-            break;
-        };
-        assert_eq!(doc["schema"], json!(1));
-        if doc["holds"].as_array().is_some_and(|h| !h.is_empty()) {
-            held = Some(doc);
+    'wish: for _ in 0..10 {
+        put_cmd(&observer, &envelope(json!(true), "manual", "owner")).await;
+        for _ in 0..5 {
+            let Some(doc) = next_json(&hold_sub, Duration::from_secs(10)).await else {
+                break 'wish;
+            };
+            assert_eq!(doc["schema"], json!(1));
+            let Some(hold) = doc["holds"].get(0) else {
+                continue;
+            };
+            if hold_seconds(hold) <= 10 {
+                held = Some(doc);
+                break 'wish;
+            }
             break;
         }
     }
@@ -133,6 +142,51 @@ async fn holds_are_published_as_state() {
 
     assert_unit_contract(&mut sup, &observer, "arbiter").await;
     sup.shutdown();
+}
+
+/// How long a published hold runs, from its RFC3339 `since` and `until`
+/// (`...THH:MM:SSZ`); a hold is shorter than a day.
+fn hold_seconds(hold: &Value) -> i64 {
+    let second_of_day = |field: &str| -> i64 {
+        let stamp = hold[field].as_str().expect("an RFC3339 stamp");
+        stamp[11..19]
+            .split(':')
+            .map(|part| part.parse::<i64>().expect("HH:MM:SS"))
+            .fold(0, |acc, part| acc * 60 + part)
+    };
+    (second_of_day("until") - second_of_day("since")).rem_euclid(86_400)
+}
+
+/// Waits until the arbiter takes holds at the `hold_minutes` just written.
+/// The core accepts a write before the arbiter's config subscription
+/// delivers it, so a wish sent straight after can be held at the old
+/// value. This probes a sibling aspect the caller does not use, re-wishing
+/// (each wish retakes the hold at the current value) until the hold it
+/// gets runs at most `max_s` seconds.
+async fn await_hold_minutes_applied(observer: &zenoh::Session, max_s: i64) {
+    const PROBE: &str = "home/cmd/hallway/front_door/auto_relock_delay";
+    let hold_sub = observer
+        .declare_subscriber(HOLD_KEY)
+        .await
+        .expect("hold subscriber");
+    for _ in 0..20 {
+        observer
+            .put(PROBE, envelope(json!(1), "manual", "probe").to_string())
+            .await
+            .expect("probe put");
+        while let Some(doc) = next_json(&hold_sub, Duration::from_secs(2)).await {
+            let probe = doc["holds"]
+                .as_array()
+                .and_then(|holds| holds.iter().find(|h| h["actor"] == json!("probe")));
+            if let Some(hold) = probe {
+                if hold_seconds(hold) <= max_s {
+                    return;
+                }
+                break;
+            }
+        }
+    }
+    panic!("the arbiter never took a hold at the written hold_minutes");
 }
 
 /// A hold counts what it refuses: the tally rides the hold itself, so a
@@ -212,6 +266,7 @@ async fn forward_preempt_refuse_and_expiry() {
         .await
         .expect("write accepted");
     assert_eq!(written, json!(0.01));
+    await_hold_minutes_applied(&observer, 5).await;
 
     // (b) A manual wish preempts the still-active (strictly lower)
     // automation holder: preempt event, then the forward.
