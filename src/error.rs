@@ -8,7 +8,7 @@ use std::fmt;
 /// `error[<code>] <subject>: <message> (<file>)`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidationError {
-    pub code: &'static str,
+    pub code: Code,
     pub subject: String,
     pub message: String,
     /// House-relative path, when the error is attributable to one file.
@@ -16,9 +16,9 @@ pub struct ValidationError {
 }
 
 impl ValidationError {
-    /// An error with `code`, a key in [`CODES`], about `subject`.
+    /// An error with `code` about `subject`.
     pub fn new(
-        code: &'static str,
+        code: Code,
         subject: impl Into<String>,
         message: impl Into<String>,
         file: Option<String>,
@@ -53,428 +53,353 @@ pub fn render_sorted(errors: &[ValidationError]) -> Vec<String> {
     lines
 }
 
-/// Every error code the pipeline can emit, with the paragraph a reader (or
-/// an agent) needs to fix it: what the rule is and why it exists. The
-/// only registry — `homeostat explain`, the MCP `explain` tool, and the
-/// explanations appended to refused plans all read from here, and a test
-/// asserts every code emitted in the source has an entry and vice versa.
-pub const CODES: &[(&str, &str)] = &[
-    (
-        "parse-error",
+/// Defines [`Code`] from one table: each variant, the code it renders as,
+/// and the paragraph explaining it.
+macro_rules! codes {
+    ($($variant:ident => $code:literal: $why:literal,)*) => {
+        /// Every error code the pipeline can emit, each with the paragraph a
+        /// reader (or an agent) needs to fix it: what the rule is and why it
+        /// exists. The only registry: `homeostat explain`, the MCP `explain`
+        /// tool, and the explanations appended to refused plans all read
+        /// from here.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum Code {
+            $(#[doc = $why] $variant,)*
+        }
+
+        impl Code {
+            /// Every code, in registry order.
+            pub const ALL: &[Code] = &[$(Code::$variant),*];
+
+            /// The code as `error[<code>]` renders it.
+            pub fn as_str(self) -> &'static str {
+                match self {
+                    $(Code::$variant => $code,)*
+                }
+            }
+
+            /// What the rule is and why it exists.
+            pub fn explanation(self) -> &'static str {
+                match self {
+                    $(Code::$variant => $why,)*
+                }
+            }
+        }
+    };
+}
+
+codes! {
+    ParseError => "parse-error":
         "A file under units/, an entities dir, or zones.toml could not be read \
-         or is not valid TOML; the subject is the file and the message is the \
-         parser's. Nothing else in that file is checked until it parses.",
-    ),
-    (
-        "unsupported-schema",
+        or is not valid TOML; the subject is the file and the message is the \
+        parser's. Nothing else in that file is checked until it parses.",
+    UnsupportedSchema => "unsupported-schema":
         "Every manifest, entity file and zones.toml begins with `schema = N`. \
-         This core supports schema 1 only; a file from a newer or older \
-         contract is refused rather than half-read.",
-    ),
-    (
-        "missing-units-dir",
+        This core supports schema 1 only; a file from a newer or older \
+        contract is refused rather than half-read.",
+    MissingUnitsDir => "missing-units-dir":
         "A house repo is a directory with a `units/` subdirectory holding one \
-         TOML manifest per unit. Without it the path is not a house.",
-    ),
-    (
-        "missing-entities-dir",
+        TOML manifest per unit. Without it the path is not a house.",
+    MissingEntitiesDir => "missing-entities-dir":
         "An adapter's or automation's `[entities] dir` names a directory, \
-         relative to the house root, that does not exist. Each entity the \
-         unit binds is one `<name>.toml` file in it; the file stem is the \
-         entity's name.",
-    ),
-    (
-        "invalid-name",
+        relative to the house root, that does not exist. Each entity the \
+        unit binds is one `<name>.toml` file in it; the file stem is the \
+        entity's name.",
+    InvalidName => "invalid-name":
         "Unit, parameter, entity, room and zone names become bus key segments \
-         (`home/state/{room}/{entity}/...`, `home/config/{unit}/{param}`), so \
-         each must be non-empty ASCII letters, digits, `_`, `-` or `.`, and \
-         not `.` or `..`.",
-    ),
-    (
-        "reserved-unit-name",
+        (`home/state/{room}/{entity}/...`, `home/config/{unit}/{param}`), so \
+        each must be non-empty ASCII letters, digits, `_`, `-` or `.`, and \
+        not `.` or `..`.",
+    ReservedUnitName => "reserved-unit-name":
         "`system` is the core's own unit name: it serves `home/meta/system/**` \
-         itself, so no manifest may claim it.",
-    ),
-    (
-        "reserved-room-name",
+        itself, so no manifest may claim it.",
+    ReservedRoomName => "reserved-room-name":
         "A room may not be `home` or a key class (state, cmd, arbiter, forecast, \
-         config, meta, health, clock, history, discovery, hold), since rooms sit \
-         in the key path right after the class. The pseudo-rooms `global` and \
-         `person` are the exception: an entity with no place in the house lives in one of \
-         those.",
-    ),
-    (
-        "reserved-zone-name",
+        config, meta, health, clock, history, discovery, hold), since rooms sit \
+        in the key path right after the class. The pseudo-rooms `global` and \
+        `person` are the exception: an entity with no place in the house lives in one of \
+        those.",
+    ReservedZoneName => "reserved-zone-name":
         "A zone name may not be `home`, a key class, or a pseudo-room \
-         (`global`, `person`). Zones expand in the room slot of key \
-         expressions, and pseudo-rooms are not places, so here there is no \
-         exception.",
-    ),
-    (
-        "zone-room-collision",
+        (`global`, `person`). Zones expand in the room slot of key \
+        expressions, and pseudo-rooms are not places, so here there is no \
+        exception.",
+    ZoneRoomCollision => "zone-room-collision":
         "A zone and a room share a name. A zone reference in a key expression \
-         expands to its member rooms, so a name cannot mean both a place and \
-         a set of places.",
-    ),
-    (
-        "zone-pseudo-room",
+        expands to its member rooms, so a name cannot mean both a place and \
+        a set of places.",
+    ZonePseudoRoom => "zone-pseudo-room":
         "A zone lists `global` or `person` as a member. Pseudo-rooms hold \
-         entities that have no place; a zone is a set of places.",
-    ),
-    (
-        "zone-unknown-room",
+        entities that have no place; a zone is a set of places.",
+    ZoneUnknownRoom => "zone-unknown-room":
         "A zone lists a room no entity is bound to. Rooms exist by being named \
-         in entity files; zones.toml groups them and cannot invent one.",
-    ),
-    (
-        "duplicate-unit-name",
+        in entity files; zones.toml groups them and cannot invent one.",
+    DuplicateUnitName => "duplicate-unit-name":
         "Two manifests declare the same `[unit] name`. The name is the unit's \
-         identity on the bus (`home/health/{unit}`, `home/config/{unit}/*`) and \
-         in the supervisor, so it must be unique across the house.",
-    ),
-    (
-        "unit-name-mismatch",
+        identity on the bus (`home/health/{unit}`, `home/config/{unit}/*`) and \
+        in the supervisor, so it must be unique across the house.",
+    UnitNameMismatch => "unit-name-mismatch":
         "A manifest's file stem differs from its `[unit] name`. A running unit \
-         finds its own manifest at `units/{unit}.toml` by name, so the file \
-         must be named after the unit it declares.",
-    ),
-    (
-        "duplicate-entity-name",
+        finds its own manifest at `units/{unit}.toml` by name, so the file \
+        must be named after the unit it declares.",
+    DuplicateEntityName => "duplicate-entity-name":
         "Two entity files, possibly under different adapters, share a file \
-         stem. Entity names are house-global (`home/state/{room}/{entity}/...` \
-         is addressed by name, not by owner), so the stem must be unique.",
-    ),
-    (
-        "duplicate-entity-id",
+        stem. Entity names are house-global (`home/state/{room}/{entity}/...` \
+        is addressed by name, not by owner), so the stem must be unique.",
+    DuplicateEntityId => "duplicate-entity-id":
         "Two entity files bound to the same adapter share an `id`. The id is the \
-         adapter-native address (a zigbee2mqtt topic segment, an ESPHome node), \
-         and one device cannot be two entities of one adapter.",
-    ),
-    (
-        "invalid-manifest",
+        adapter-native address (a zigbee2mqtt topic segment, an ESPHome node), \
+        and one device cannot be two entities of one adapter.",
+    InvalidManifest => "invalid-manifest":
         "The manifest parsed, but its sections do not fit its `kind`. Adapters \
-         require `[entities]` and `[discovery]`; `[entities]` is valid only for \
-         adapters and automations; `[discovery]` only for adapters and \
-         services; discovery mode `static` needs `endpoint`, mode `mdns` needs \
-         `service`.",
-    ),
-    (
-        "unknown-capability",
+        require `[entities]` and `[discovery]`; `[entities]` is valid only for \
+        adapters and automations; `[discovery]` only for adapters and \
+        services; discovery mode `static` needs `endpoint`, mode `mdns` needs \
+        `service`.",
+    UnknownCapability => "unknown-capability":
         "An entity file's `capability`, or a cmd publish's `capability`, is not \
-         one the core knows (`homeostat schema entity` lists them). The \
-         vocabulary is fixed because grants, the arbiter and the dashboard key \
-         on it.",
-    ),
-    (
-        "entity-id-required",
+        one the core knows (`homeostat schema entity` lists them). The \
+        vocabulary is fixed because grants, the arbiter and the dashboard key \
+        on it.",
+    EntityIdRequired => "entity-id-required":
         "An adapter-owned entity file has no `[entity] id`. The id is the \
-         adapter-native address — a zigbee2mqtt friendly name, an ESPHome \
-         node — and an adapter binds periphery, so it needs one. An \
-         automation-owned entity may omit it: a computed value has no \
-         device behind it to address.",
-    ),
-    (
-        "write-mode-required",
+        adapter-native address — a zigbee2mqtt friendly name, an ESPHome \
+        node — and an adapter binds periphery, so it needs one. An \
+        automation-owned entity may omit it: a computed value has no \
+        device behind it to address.",
+    WriteModeRequired => "write-mode-required":
         "An entity whose capability takes commands must state `[write_policy] \
-         mode`. The mode governs how commands are resolved, so it is optional \
-         only on the capabilities that take none (sensor, camera, router and \
-         the rest with no base aspect), where it would govern nothing.",
-    ),
-    (
-        "missing-owner-unit",
+        mode`. The mode governs how commands are resolved, so it is optional \
+        only on the capabilities that take none (sensor, camera, router and \
+        the rest with no base aspect), where it would govern nothing.",
+    MissingOwnerUnit => "missing-owner-unit":
         "An entity file's `[write_policy] owner` names a unit that does not \
-         exist in units/.",
-    ),
-    (
-        "owner-mismatch",
+        exist in units/.",
+    OwnerMismatch => "owner-mismatch":
         "An entity file's `[write_policy] owner` names a unit other than the one \
-         whose `[entities] dir` the file sits in. The binding unit is the owner \
-         by construction; the field must agree with the file's location.",
-    ),
-    (
-        "virtual-entity-arbitrated",
+        whose `[entities] dir` the file sits in. The binding unit is the owner \
+        by construction; the field must agree with the file's location.",
+    VirtualEntityArbitrated => "virtual-entity-arbitrated":
         "An entity bound by an automation is virtual. If it takes commands it \
-         is a latch: a command sets its state and last write wins, with no \
-         device to contend for and no hold to expire, so arbitration has \
-         nothing to order. A physical button's press travels at the \
-         automation band yet is family intent, and arbitration would rank \
-         it below the dashboard. Use `shared` or `exclusive`.",
-    ),
-    (
-        "virtual-entity-commanded",
+        is a latch: a command sets its state and last write wins, with no \
+        device to contend for and no hold to expire, so arbitration has \
+        nothing to order. A physical button's press travels at the \
+        automation band yet is family intent, and arbitration would rank \
+        it below the dashboard. Use `shared` or `exclusive`.",
+    VirtualEntityCommanded => "virtual-entity-commanded":
         "A cmd-class publish grant resolves onto an entity bound by an \
-         automation that does not subscribe to that entity's cmd keys \
-         (`home/cmd/{room}/{entity}/**`), so the command would reach nobody. \
-         Either the owner is a read-only virtual sensor — narrow the publish \
-         key or its capability — or it is meant to be a latch and needs the \
-         subscription in its `[bus.subscribes]`.",
-    ),
-    (
-        "grant-cycle",
+        automation that does not subscribe to that entity's cmd keys \
+        (`home/cmd/{room}/{entity}/**`), so the command would reach nobody. \
+        Either the owner is a read-only virtual sensor — narrow the publish \
+        key or its capability — or it is meant to be a latch and needs the \
+        subscription in its `[bus.subscribes]`.",
+    GrantCycle => "grant-cycle":
         "Automations that bind commandable virtual entities are walk-order \
-         edge sources like adapters: an owner starts before the units \
-         commanding its entities. These units each command an entity another \
-         of them binds, so no order exists. A latch must not command its own \
-         commanders; break the loop by making one side a state subscription.",
-    ),
-    (
-        "invalid-default",
+        edge sources like adapters: an owner starts before the units \
+        commanding its entities. These units each command an entity another \
+        of them binds, so no order exists. A latch must not command its own \
+        commanders; break the loop by making one side a state subscription.",
+    InvalidDefault => "invalid-default":
         "A parameter's `default` does not fit its declared `type`, or violates \
-         the parameter's own constraint. Types: bool, int, float (an integer \
-         literal is accepted), string, time (an ISO string such as \
-         \"22:00\").",
-    ),
-    (
-        "malformed-constraint",
+        the parameter's own constraint. Types: bool, int, float (an integer \
+        literal is accepted), string, time (an ISO string such as \
+        \"22:00\").",
+    MalformedConstraint => "malformed-constraint":
         "A parameter's `constraint` uses a key the type does not understand \
-         (min/max on int and float, after/before on time), gives it a value \
-         of the wrong type, or has min greater than max.",
-    ),
-    (
-        "key-outside-schema",
+        (min/max on int and float, after/before on time), gives it a value \
+        of the wrong type, or has min greater than max.",
+    KeyOutsideSchema => "key-outside-schema":
         "A `[bus]` key expression must be `home/{class}/...`: it starts with \
-         `home/`, names a known class literally (state, cmd, arbiter, forecast, \
-         config, meta, health, clock, history, discovery, hold), and has at \
-         least one segment after the class.",
-    ),
-    (
-        "template-outside-binding-unit",
+        `home/`, names a known class literally (state, cmd, arbiter, forecast, \
+        config, meta, health, clock, history, discovery, hold), and has at \
+        least one segment after the class.",
+    TemplateOutsideBindingUnit => "template-outside-binding-unit":
         "A `[bus]` key uses `{room}` or `{entity}` templates, which expand per \
-         bound entity and so are valid only in units that bind entities: \
-         adapters and automations. A service names concrete keys or \
-         wildcards.",
-    ),
-    (
-        "template-without-entities",
+        bound entity and so are valid only in units that bind entities: \
+        adapters and automations. A service names concrete keys or \
+        wildcards.",
+    TemplateWithoutEntities => "template-without-entities":
         "A `[bus]` key uses `{room}` or `{entity}` templates, but the unit \
-         declares no `[entities]` table, so the expansion is empty and the \
-         unit binds nothing: it would subscribe to nothing, publish nothing it \
-         is allowed to, and still report healthy. Add the table, or name the \
-         key concretely.",
-    ),
-    (
-        "publish-missing-priority",
+        declares no `[entities]` table, so the expansion is empty and the \
+        unit binds nothing: it would subscribe to nothing, publish nothing it \
+        is allowed to, and still report healthy. Add the table, or name the \
+        key concretely.",
+    PublishMissingPriority => "publish-missing-priority":
         "A publish under `home/cmd/` must declare `priority`, the band its \
-         commands leave at. The SDK stamps it into every envelope and refuses \
-         to send without one, so a plan that assumed a band would describe \
-         commands the unit can never send.",
-    ),
-    (
-        "publish-missing-capability",
+        commands leave at. The SDK stamps it into every envelope and refuses \
+        to send without one, so a plan that assumed a band would describe \
+        commands the unit can never send.",
+    PublishMissingCapability => "publish-missing-capability":
         "A publish under `home/cmd/` must declare `capability`. The grant table \
-         resolves a cmd publish onto the entities of that capability its key \
-         covers, and a plan prints the result; without the capability there \
-         is nothing to resolve.",
-    ),
-    (
-        "exclusive-write-conflict",
+        resolves a cmd publish onto the entities of that capability its key \
+        covers, and a plan prints the result; without the capability there \
+        is nothing to resolve.",
+    ExclusiveWriteConflict => "exclusive-write-conflict":
         "An entity with `write_policy.mode = \"exclusive\"` is covered by the \
-         automation-band cmd grants of more than one unit (a writer is a unit; \
-         two bindings of one unit are one writer). Exclusivity constrains the \
-         automation band only: manual-band units (the dashboard, voice) sit \
-         above it by construction and do not count.",
-    ),
-    (
-        "arbitrated-uncovered",
+        automation-band cmd grants of more than one unit (a writer is a unit; \
+        two bindings of one unit are one writer). Exclusivity constrains the \
+        automation band only: manual-band units (the dashboard, voice) sit \
+        above it by construction and do not count.",
+    ArbitratedUncovered => "arbitrated-uncovered":
         "An entity with `write_policy.mode = \"arbitrated\"` has no unit \
-         publishing under `home/arbiter/` whose key covers it. Arbitration is \
-         a unit (adapters/arbiter.py), not core machinery: the house must \
-         bind one before the first arbitrated entity plans.",
-    ),
-    (
-        "virtual-entity-fed",
+        publishing under `home/arbiter/` whose key covers it. Arbitration is \
+        a unit (adapters/arbiter.py), not core machinery: the house must \
+        bind one before the first arbitrated entity plans.",
+    VirtualEntityFed => "virtual-entity-fed":
         "An `[inputs]` block sits on an entity bound by an automation. A fed \
-         input is a device's control input (docs/design.md#device-feeds); a \
-         virtual entity has no device behind it and nothing to feed.",
-    ),
-    (
-        "input-unknown-entity",
+        input is a device's control input (docs/design.md#device-feeds); a \
+        virtual entity has no device behind it and nothing to feed.",
+    InputUnknownEntity => "input-unknown-entity":
         "An `[inputs]` entry names a source entity that no unit binds. The \
-         source is referenced by entity name and aspect — the identity the \
-         bus keys derive from — so the entity must exist in the house.",
-    ),
-    (
-        "input-unpublished-aspect",
+        source is referenced by entity name and aspect — the identity the \
+        bus keys derive from — so the entity must exist in the house.",
+    InputUnpublishedAspect => "input-unpublished-aspect":
         "An `[inputs]` entry reads an aspect of an automation-owned entity \
-         that the automation's `[bus.publishes]` does not cover. Virtual \
-         sensors name their aspects literally in the publish key, so a feed \
-         from one is checked at plan time; nothing would ever arrive on the \
-         key otherwise.",
-    ),
-    (
-        "reserved-class-publish",
+        that the automation's `[bus.publishes]` does not cover. Virtual \
+        sensors name their aspects literally in the publish key, so a feed \
+        from one is checked at plan time; nothing would ever arrive on the \
+        key otherwise.",
+    ReservedClassPublish => "reserved-class-publish":
         "A `[bus.publishes]` key sits in a class the unit may not write. \
-         `home/config/` and `home/meta/` are the core's alone. `home/health/`, \
-         `home/discovery/` and `home/hold/` are per unit: a publish there must \
-         sit under the publishing unit's own name (`home/health/{unit}/...`, \
-         `home/discovery/{unit}`, `home/hold/{unit}`). `home/arbiter/`, `home/clock/` and \
-         `home/history/` are each one service's output: only a `kind = \
-         \"service\"` unit may publish them, and at most one per class. The \
-         SDK only checks a published key against the declared expression, so \
-         this is where a forged post-arbitration command, a forged discovery \
-         record or hold, or a second clock is refused.",
-    ),
-    (
-        "dashboard-duplicate-view",
+        `home/config/` and `home/meta/` are the core's alone. `home/health/`, \
+        `home/discovery/` and `home/hold/` are per unit: a publish there must \
+        sit under the publishing unit's own name (`home/health/{unit}/...`, \
+        `home/discovery/{unit}`, `home/hold/{unit}`). `home/arbiter/`, `home/clock/` and \
+        `home/history/` are each one service's output: only a `kind = \
+        \"service\"` unit may publish them, and at most one per class. The \
+        SDK only checks a published key against the declared expression, so \
+        this is where a forged post-arbitration command, a forged discovery \
+        record or hold, or a second clock is refused.",
+    DashboardDuplicateView => "dashboard-duplicate-view":
         "Two `[[view]]` entries in `dashboard.toml` share a name. The name is \
-         the nav entry's identity (and its URL fragment), so it must be \
-         unique.",
-    ),
-    (
-        "dashboard-reserved-view",
+        the nav entry's identity (and its URL fragment), so it must be \
+        unique.",
+    DashboardReservedView => "dashboard-reserved-view":
         "A `[[view]]` in `dashboard.toml` is named `health` or `notshown`. \
-         Those are the dashboard's fixed chrome — Health and the list of \
-         everything no view places — reachable whatever the file says and \
-         never views in it, so a view of that name could never be shown.",
-    ),
-    (
-        "dashboard-view-shape",
+        Those are the dashboard's fixed chrome — Health and the list of \
+        everything no view places — reachable whatever the file says and \
+        never views in it, so a view of that name could never be shown.",
+    DashboardViewShape => "dashboard-view-shape":
         "A `[[view]]` in `dashboard.toml` has both a `kind` and `widgets`, or \
-         neither. A view is either a generated view kept as is (`kind = \
-         \"rooms\"`) or a composition of widgets — the generated views are \
-         not widget hosts, and an empty view has nothing to show.",
-    ),
-    (
-        "dashboard-nested-group",
+        neither. A view is either a generated view kept as is (`kind = \
+        \"rooms\"`) or a composition of widgets — the generated views are \
+        not widget hosts, and an empty view has nothing to show.",
+    DashboardNestedGroup => "dashboard-nested-group":
         "A `group` widget in `dashboard.toml` holds another `group`. A group \
-         is one card over its members — a dial with the traces that explain \
-         it — and one level is what that needs; nesting them would make the \
-         file a layout language, which is exactly what the dashboard owns \
-         instead.",
-    ),
-    (
-        "dashboard-widget-capability",
+        is one card over its members — a dial with the traces that explain \
+        it — and one level is what that needs; nesting them would make the \
+        file a layout language, which is exactly what the dashboard owns \
+        instead.",
+    DashboardWidgetCapability => "dashboard-widget-capability":
         "A capability widget in `dashboard.toml` names an entity of another \
-         capability: a `burner` widget draws the `burner` vocabulary — the \
-         two commands and the two temperatures an interlock reads — which \
-         an entity that does not speak it has nothing to fill. Place that \
-         entity with `entity`, `tile` or `chart` instead.",
-    ),
-    (
-        "dashboard-widget-fields",
+        capability: a `burner` widget draws the `burner` vocabulary — the \
+        two commands and the two temperatures an interlock reads — which \
+        an entity that does not speak it has nothing to fill. Place that \
+        entity with `entity`, `tile` or `chart` instead.",
+    DashboardWidgetFields => "dashboard-widget-fields":
         "A widget in `dashboard.toml` is missing a field its kind needs, or \
-         carries one it does not take: `tile`, `chart`, `entity` and `dial` \
-         name an `entity` (`chart` also an `aspect`, optionally `hours`; \
-         `tile` and `dial` optionally an `aspect`), `room` a `room`, `unit` and `params` a \
-         `unit`; `group` a list of `widgets` and optionally a `label`; \
-         `burner` an `entity`; `people`, `deviations` and `map` take \
-         nothing. The set is \
-         closed so a typo is refused, not ignored.",
-    ),
-    (
-        "dashboard-unknown-entity",
+        carries one it does not take: `tile`, `chart`, `entity` and `dial` \
+        name an `entity` (`chart` also an `aspect`, optionally `hours`; \
+        `tile` and `dial` optionally an `aspect`), `room` a `room`, `unit` and `params` a \
+        `unit`; `group` a list of `widgets` and optionally a `label`; \
+        `burner` an `entity`; `people`, `deviations` and `map` take \
+        nothing. The set is \
+        closed so a typo is refused, not ignored.",
+    DashboardUnknownEntity => "dashboard-unknown-entity":
         "A widget in `dashboard.toml` names an entity no unit binds. Widgets \
-         place what the house already has; the entity must exist under some \
-         unit's `[entities]` dir.",
-    ),
-    (
-        "dashboard-invalid-aspect",
+        place what the house already has; the entity must exist under some \
+        unit's `[entities]` dir.",
+    DashboardInvalidAspect => "dashboard-invalid-aspect":
         "A widget's `aspect` in `dashboard.toml` is not a single key segment. \
-         It becomes the last slot of a state key, so wildcards and \
-         separators cannot appear in it.",
-    ),
-    (
-        "dashboard-unknown-room",
+        It becomes the last slot of a state key, so wildcards and \
+        separators cannot appear in it.",
+    DashboardUnknownRoom => "dashboard-unknown-room":
         "A `room` widget in `dashboard.toml` names a room no entity is in. \
-         Rooms exist by being named in entity files; a room with no entities \
-         has no card.",
-    ),
-    (
-        "dashboard-unknown-unit",
+        Rooms exist by being named in entity files; a room with no entities \
+        has no card.",
+    DashboardUnknownUnit => "dashboard-unknown-unit":
         "A `unit` or `params` widget in `dashboard.toml` names a unit with no \
-         manifest under `units/`.",
-    ),
-    (
-        "dashboard-control-target",
+        manifest under `units/`.",
+    DashboardControlTarget => "dashboard-control-target":
         "A `[[control]]` in `dashboard.toml` does not name exactly one thing \
-         to control: `entity` with `aspect`, or `unit` with `param`. A \
-         control is keyed by what it commands, never by the widget that \
-         places it — the same control is drawn on a room card, on a view \
-         and in the detail overlay, and a grain that differed between them \
-         would read as a bug.",
-    ),
-    (
-        "dashboard-control-step",
+        to control: `entity` with `aspect`, or `unit` with `param`. A \
+        control is keyed by what it commands, never by the widget that \
+        places it — the same control is drawn on a room card, on a view \
+        and in the detail overlay, and a grain that differed between them \
+        would read as a bug.",
+    DashboardControlStep => "dashboard-control-step":
         "A `[[control]]`'s `step` is not a positive number. It is the \
-         distance the slider moves and the nudge its ± buttons make, so \
-         zero or a negative is not a coarser control but no control at all.",
-    ),
-    (
-        "dashboard-unknown-param",
+        distance the slider moves and the nudge its ± buttons make, so \
+        zero or a negative is not a coarser control but no control at all.",
+    DashboardUnknownParam => "dashboard-unknown-param":
         "A `[[control]]` in `dashboard.toml` names a parameter the unit's \
-         manifest does not declare. The control tunes something the house \
-         already has; a typo here would silently leave the derived step in \
-         place.",
-    ),
-    (
-        "state-publish-unbound",
+        manifest does not declare. The control tunes something the house \
+        already has; a typo here would silently leave the derived step in \
+        place.",
+    StatePublishUnbound => "state-publish-unbound":
         "A publish under `home/state/` must name, literally, the room and entity \
-         of an entity this unit binds (or use `{room}`/`{entity}` templates). \
-         State keys belong to the binding unit; an automation that wants to \
-         publish a derived value needs an entity file for it, which also puts \
-         the value in front of the recorder and the dashboard.",
-    ),
-    (
-        "forecast-publish-unbound",
+        of an entity this unit binds (or use `{room}`/`{entity}` templates). \
+        State keys belong to the binding unit; an automation that wants to \
+        publish a derived value needs an entity file for it, which also puts \
+        the value in front of the recorder and the dashboard.",
+    ForecastPublishUnbound => "forecast-publish-unbound":
         "A publish under `home/forecast/` must name, literally, the room and \
-         entity of an entity that EXISTS in the house (or use \
-         `{room}`/`{entity}` templates, which resolve over this unit's own \
-         bound entities). Unlike `home/state/`, the entity need not be one \
-         this unit binds: a forecast is a source's claim about a series' \
-         future values, and the competent source is routinely not the binder \
-         — a weather service forecasts a sensor it does not own, and a \
-         controller forecasts a device it commands and therefore cannot \
-         bind. The entity must still exist, which is what gives the value \
-         its label, unit and place on a chart.",
-    ),
-    (
-        "source-unknown-entity",
+        entity of an entity that EXISTS in the house (or use \
+        `{room}`/`{entity}` templates, which resolve over this unit's own \
+        bound entities). Unlike `home/state/`, the entity need not be one \
+        this unit binds: a forecast is a source's claim about a series' \
+        future values, and the competent source is routinely not the binder \
+        — a weather service forecasts a sensor it does not own, and a \
+        controller forecasts a device it commands and therefore cannot \
+        bind. The entity must still exist, which is what gives the value \
+        its label, unit and place on a chart.",
+    SourceUnknownEntity => "source-unknown-entity":
         "An entity's `[sources]` names a contributing entity that does not \
-         exist. A declared source is what the history overlay draws beside \
-         the computed value, so it must resolve to a real series.",
-    ),
-    (
-        "source-unpublished-aspect",
+        exist. A declared source is what the history overlay draws beside \
+        the computed value, so it must resolve to a real series.",
+    SourceUnpublishedAspect => "source-unpublished-aspect":
         "An entity's `[sources]` names an aspect of an automation-owned \
-         entity that its owner does not publish. Same rule as a device \
-         feed: where the owner names its aspects literally, the reference \
-         is checked against them.",
-    ),
-    (
-        "forecast-publish-conflict",
+        entity that its owner does not publish. Same rule as a device \
+        feed: where the owner names its aspects literally, the reference \
+        is checked against them.",
+    ForecastPublishConflict => "forecast-publish-conflict":
         "Two units publish forecasts that land on the same key. The mirror \
-         keeps only the last document per key, so the second does not add an \
-         opinion — it overwrites one. Several providers CAN forecast one \
-         aspect: that is what the source segment is for, and under their own \
-         sources they coexist. A publish that wildcards its aspect or source \
-         slot accepts anything there, so it collides with a publish that \
-         names one (docs/design.md#forecasts).",
-    ),
-];
+        keeps only the last document per key, so the second does not add an \
+        opinion — it overwrites one. Several providers CAN forecast one \
+        aspect: that is what the source segment is for, and under their own \
+        sources they coexist. A publish that wildcards its aspect or source \
+        slot accepts anything there, so it collides with a publish that \
+        names one (docs/design.md#forecasts).",
+}
+
+impl Code {
+    /// The code `error[<code>]` renders as `code`, if there is one.
+    pub fn parse(code: &str) -> Option<Code> {
+        Code::ALL.iter().copied().find(|c| c.as_str() == code)
+    }
+}
+
+impl fmt::Display for Code {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
 
 /// The explanation registered for `code`, if any.
 pub fn explain(code: &str) -> Option<&'static str> {
-    CODES
-        .iter()
-        .find(|(c, _)| *c == code)
-        .map(|(_, text)| *text)
+    Code::parse(code).map(Code::explanation)
 }
 
 /// One `code: explanation` paragraph per distinct code in `errors`, in code
 /// order — appended wherever a refused plan is reported so the reader has
 /// the rule next to the failure.
 pub fn explanations(errors: &[ValidationError]) -> Vec<String> {
-    let mut codes: Vec<&str> = errors.iter().map(|e| e.code).collect();
-    codes.sort_unstable();
+    let mut codes: Vec<Code> = errors.iter().map(|e| e.code).collect();
+    codes.sort_unstable_by_key(|c| c.as_str());
     codes.dedup();
     codes
         .into_iter()
-        .map(|code| {
-            format!(
-                "{code}: {}",
-                explain(code).unwrap_or("(no explanation registered)")
-            )
-        })
+        .map(|code| format!("{code}: {}", code.explanation()))
         .collect()
 }
 
@@ -482,58 +407,38 @@ pub fn explanations(errors: &[ValidationError]) -> Vec<String> {
 mod tests {
     use super::*;
 
-    /// The codes the source can emit: every string literal passed as the
-    /// first argument to `ValidationError::new(` or the local `err(`
-    /// closures in the modules that produce validation errors.
-    fn emitted_codes() -> Vec<String> {
+    /// A code is emitted by naming its variant, so every variant must be
+    /// named somewhere outside this registry, or it explains a rule
+    /// nothing checks.
+    #[test]
+    fn every_code_is_emitted_and_renders_distinctly() {
         let sources = [
             include_str!("repo.rs"),
             include_str!("validate.rs"),
             include_str!("expand.rs"),
             include_str!("grants.rs"),
         ];
-        let mut codes = Vec::new();
-        for src in sources {
-            for marker in ["ValidationError::new(", "err("] {
-                for (at, _) in src.match_indices(marker) {
-                    let rest = src[at + marker.len()..].trim_start();
-                    if let Some(lit) = rest.strip_prefix('"') {
-                        if let Some(end) = lit.find('"') {
-                            codes.push(lit[..end].to_string());
-                        }
-                    }
-                }
-            }
-        }
-        codes.sort();
-        codes.dedup();
-        codes
-    }
-
-    #[test]
-    fn every_emitted_code_is_explained_and_vice_versa() {
-        let emitted = emitted_codes();
-        let mut registered: Vec<&str> = CODES.iter().map(|(c, _)| *c).collect();
-        registered.sort_unstable();
-        let unexplained: Vec<&String> = emitted.iter().filter(|c| explain(c).is_none()).collect();
-        assert!(
-            unexplained.is_empty(),
-            "codes emitted without an entry in CODES: {unexplained:?}"
-        );
-        let dead: Vec<&&str> = registered
+        let dead: Vec<Code> = Code::ALL
             .iter()
-            .filter(|c| !emitted.contains(&c.to_string()))
+            .copied()
+            .filter(|code| {
+                let named = format!("Code::{code:?}");
+                !sources.iter().any(|src| src.contains(&named))
+            })
             .collect();
-        assert!(dead.is_empty(), "CODES entries nothing emits: {dead:?}");
-        assert_eq!(registered.len(), CODES.len(), "duplicate code in CODES");
+        assert!(dead.is_empty(), "codes nothing emits: {dead:?}");
+        let mut rendered: Vec<&str> = Code::ALL.iter().map(|c| c.as_str()).collect();
+        rendered.sort_unstable();
+        rendered.dedup();
+        assert_eq!(rendered.len(), Code::ALL.len(), "two codes render alike");
     }
 
     #[test]
     fn explanations_are_one_per_distinct_code_in_code_order() {
         let errors = vec![
-            ValidationError::new("zone-unknown-room", "z", "m", None),
-            ValidationError::new("invalid-name", "a", "m", None),
-            ValidationError::new("invalid-name", "b", "m", None),
+            ValidationError::new(Code::ZoneUnknownRoom, "z", "m", None),
+            ValidationError::new(Code::InvalidName, "a", "m", None),
+            ValidationError::new(Code::InvalidName, "b", "m", None),
         ];
         let lines = explanations(&errors);
         assert_eq!(lines.len(), 2);

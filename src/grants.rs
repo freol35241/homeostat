@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::ValidationError;
+use crate::error::{Code, ValidationError};
 use crate::expand::{Direction, ExpandedKey};
 use crate::keyspace::{KeyExpr, Segment};
 use crate::manifest::{Priority, UnitKind, WriteMode, CAPABILITIES};
@@ -95,7 +95,7 @@ pub fn resolve_feeds(house: &House, expanded: &[ExpandedKey]) -> (Vec<Feed>, Vec
             .is_some_and(|u| u.manifest.unit.kind == UnitKind::Automation);
         if owner_is_automation {
             errors.push(ValidationError::new(
-                "virtual-entity-fed",
+                Code::VirtualEntityFed,
                 &entity.name,
                 "automation-owned entities have no device inputs to feed",
                 file.clone(),
@@ -106,7 +106,7 @@ pub fn resolve_feeds(house: &House, expanded: &[ExpandedKey]) -> (Vec<Feed>, Vec
             let subject = format!("{}.{input}", entity.name);
             let Some(src) = house.entities.iter().find(|e| e.name == source.entity) else {
                 errors.push(ValidationError::new(
-                    "input-unknown-entity",
+                    Code::InputUnknownEntity,
                     subject,
                     format!("source entity \"{}\" does not exist", source.entity),
                     file.clone(),
@@ -130,7 +130,7 @@ pub fn resolve_feeds(house: &House, expanded: &[ExpandedKey]) -> (Vec<Feed>, Vec
                 });
                 if !published {
                     errors.push(ValidationError::new(
-                        "input-unpublished-aspect",
+                        Code::InputUnpublishedAspect,
                         subject,
                         format!(
                             "\"{}\" does not publish {key}; a fed aspect must be in its owner's [bus.publishes]",
@@ -192,7 +192,7 @@ pub fn resolve_sources(
             let subject = format!("{}.{name}", entity.name);
             let Some(src) = house.entities.iter().find(|e| e.name == source.entity) else {
                 errors.push(ValidationError::new(
-                    "source-unknown-entity",
+                    Code::SourceUnknownEntity,
                     subject,
                     format!("contributing entity \"{}\" does not exist", source.entity),
                     file.clone(),
@@ -215,7 +215,7 @@ pub fn resolve_sources(
                 });
                 if !published {
                     errors.push(ValidationError::new(
-                        "source-unpublished-aspect",
+                        Code::SourceUnpublishedAspect,
                         subject,
                         format!(
                             "\"{}\" does not publish {key}; a declared source must be in its owner's [bus.publishes]",
@@ -356,7 +356,7 @@ fn build_grants(
 
         let Some(capability) = spec.capability.clone() else {
             errors.push(ValidationError::new(
-                "publish-missing-capability",
+                Code::PublishMissingCapability,
                 subject,
                 format!("cmd publish \"{}\" must declare a capability", key.source),
                 Some(unit.path.clone()),
@@ -365,7 +365,7 @@ fn build_grants(
         };
         if !CAPABILITIES.contains(&capability.as_str()) {
             errors.push(ValidationError::new(
-                "unknown-capability",
+                Code::UnknownCapability,
                 subject,
                 format!("unknown capability \"{capability}\""),
                 Some(unit.path.clone()),
@@ -374,7 +374,7 @@ fn build_grants(
         }
         let Some(priority) = spec.priority else {
             errors.push(ValidationError::new(
-                "publish-missing-priority",
+                Code::PublishMissingPriority,
                 subject,
                 format!("cmd publish \"{}\" must declare a priority", key.source),
                 Some(unit.path.clone()),
@@ -454,7 +454,7 @@ fn check_exclusive_writers(house: &House, grants: &[Grant], errors: &mut Vec<Val
             if writers.len() > 1 {
                 let bindings: Vec<&str> = writers.values().flatten().map(String::as_str).collect();
                 errors.push(ValidationError::new(
-                    "exclusive-write-conflict",
+                    Code::ExclusiveWriteConflict,
                     &entity.name,
                     format!(
                         "exclusive entity has {} writers: {}",
@@ -496,7 +496,7 @@ fn check_arbitrated_coverage(
         });
         if !covered {
             errors.push(ValidationError::new(
-                "arbitrated-uncovered",
+                Code::ArbitratedUncovered,
                 &entity.name,
                 format!(
                     "arbitrated entity \"{}\" has no arbiter-class publish covering it",
@@ -543,7 +543,7 @@ fn check_commanded_virtuals(
             });
             if !listens {
                 errors.push(ValidationError::new(
-                    "virtual-entity-commanded",
+                    Code::VirtualEntityCommanded,
                     name,
                     format!(
                         "\"{name}\" is bound by automation \"{}\", which subscribes to no home/cmd/{room}/{name} keys (cmd publish {}.{})",
@@ -587,7 +587,7 @@ fn check_grant_cycle(grants: &[Grant], errors: &mut Vec<ValidationError>) {
     if !remaining.is_empty() {
         let members: Vec<&str> = remaining.into_iter().collect();
         errors.push(ValidationError::new(
-            "grant-cycle",
+            Code::GrantCycle,
             members.join(", "),
             "each of these units commands an entity another of them binds, so no apply order exists",
             None,
@@ -614,12 +614,12 @@ fn check_entity_keys_bound(
             let Some(class @ ("state" | "forecast")) = expr.class() else {
                 continue;
             };
-            // The two pushes below name their code literally rather than
-            // through `class`: src/error.rs scans this crate for the
-            // string after `ValidationError::new(` to prove every code has
-            // an explanation and every explanation a site, and a variable
-            // there makes both codes invisible to it.
             let forecast = class == "forecast";
+            let code = if forecast {
+                Code::ForecastPublishUnbound
+            } else {
+                Code::StatePublishUnbound
+            };
             let unit = house
                 .unit(&key.unit)
                 .expect("expanded key from loaded unit");
@@ -631,12 +631,12 @@ fn check_entity_keys_bound(
                     "{class} publish \"{}\" needs literal room and entity segments (or {{room}}/{{entity}} templates)",
                     key.source
                 );
-                let where_ = Some(unit.path.clone());
-                errors.push(if forecast {
-                    ValidationError::new("forecast-publish-unbound", subject, message, where_)
-                } else {
-                    ValidationError::new("state-publish-unbound", subject, message, where_)
-                });
+                errors.push(ValidationError::new(
+                    code,
+                    subject,
+                    message,
+                    Some(unit.path.clone()),
+                ));
                 continue;
             };
             // State needs the BINDING unit: one master per entity, which
@@ -667,12 +667,12 @@ fn check_entity_keys_bound(
                         key.unit
                     )
                 };
-                let where_ = Some(unit.path.clone());
-                errors.push(if forecast {
-                    ValidationError::new("forecast-publish-unbound", subject, message, where_)
-                } else {
-                    ValidationError::new("state-publish-unbound", subject, message, where_)
-                });
+                errors.push(ValidationError::new(
+                    code,
+                    subject,
+                    message,
+                    Some(unit.path.clone()),
+                ));
             }
         }
     }
@@ -737,7 +737,7 @@ fn check_forecast_conflicts(expanded: &[ExpandedKey], errors: &mut Vec<Validatio
                 continue;
             }
             errors.push(ValidationError::new(
-                "forecast-publish-conflict",
+                Code::ForecastPublishConflict,
                 format!("home/forecast/{}/{}", a.1, a.2),
                 format!(
                     "{} and {} publish forecasts that land on the same key; \
@@ -828,7 +828,7 @@ fn check_reserved_classes(
         };
         if let Some(message) = message {
             errors.push(ValidationError::new(
-                "reserved-class-publish",
+                Code::ReservedClassPublish,
                 format!("{}.{}", key.unit, key.entry),
                 message,
                 Some(unit.path.clone()),
@@ -1145,8 +1145,8 @@ mod tests {
         assert!(expand_errors.is_empty(), "{expand_errors:?}");
 
         let (_grants, _warnings, errors) = resolve(&house, &expanded);
-        let codes: Vec<&str> = errors.iter().map(|e| e.code).collect();
-        assert_eq!(codes, vec!["virtual-entity-commanded"], "{errors:?}");
+        let codes: Vec<Code> = errors.iter().map(|e| e.code).collect();
+        assert_eq!(codes, vec![Code::VirtualEntityCommanded], "{errors:?}");
     }
 
     /// The key expression is part of a grant's identity: widening `/lock`
@@ -1267,7 +1267,7 @@ mod tests {
         let (_, _, errors) = resolve(&house, &expanded);
         assert_eq!(
             errors.iter().map(|e| e.code).collect::<Vec<_>>(),
-            vec!["forecast-publish-conflict"],
+            vec![Code::ForecastPublishConflict],
         );
     }
 
@@ -1350,7 +1350,7 @@ mod tests {
         let (_, _, errors) = resolve(&house, &expanded);
         assert_eq!(
             errors.iter().map(|e| e.code).collect::<Vec<_>>(),
-            vec!["forecast-publish-unbound"],
+            vec![Code::ForecastPublishUnbound],
         );
     }
 
@@ -1380,7 +1380,7 @@ mod tests {
         let (_, _, errors) = resolve(&house, &expanded);
         let conflict = errors
             .iter()
-            .find(|e| e.code == "forecast-publish-conflict")
+            .find(|e| e.code == Code::ForecastPublishConflict)
             .expect("two forecasters on one series must conflict");
         assert!(
             conflict.message.contains("smhi") && conflict.message.contains("yr"),
@@ -1525,7 +1525,7 @@ mod tests {
         let (_, _, errors) = resolve_sources(&house, &expanded);
         assert_eq!(
             errors.iter().map(|e| e.code).collect::<Vec<_>>(),
-            vec!["source-unknown-entity"],
+            vec![Code::SourceUnknownEntity],
         );
     }
 
@@ -1601,7 +1601,9 @@ mod tests {
         let (expanded, _, _) = expand(&house);
         let (_, _, errors) = resolve(&house, &expanded);
         assert!(
-            !errors.iter().any(|e| e.code == "exclusive-write-conflict"),
+            !errors
+                .iter()
+                .any(|e| e.code == Code::ExclusiveWriteConflict),
             "{errors:?}"
         );
     }
@@ -1633,7 +1635,7 @@ mod tests {
         assert!(
             errors
                 .iter()
-                .any(|e| e.code == "arbitrated-uncovered" && e.subject == "lock"),
+                .any(|e| e.code == Code::ArbitratedUncovered && e.subject == "lock"),
             "{errors:?}"
         );
     }

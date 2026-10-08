@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::error::ValidationError;
+use crate::error::{Code, ValidationError};
 use crate::keyspace::{is_reserved_word, PSEUDO_ROOMS};
 use crate::manifest::{
     ControlSpec, DiscoveryMode, ParamSpec, ParamType, UnitKind, WidgetKind, WidgetSpec, WriteMode,
@@ -60,14 +60,14 @@ fn check_names(house: &House, errors: &mut Vec<ValidationError>) {
         let file = Some(unit.path.clone());
         if !valid_segment(name) {
             errors.push(ValidationError::new(
-                "invalid-name",
+                Code::InvalidName,
                 name,
                 segment_message("unit name", name),
                 file.clone(),
             ));
         } else if name == "system" {
             errors.push(ValidationError::new(
-                "reserved-unit-name",
+                Code::ReservedUnitName,
                 name,
                 "unit name \"system\" is reserved for the core's meta keys",
                 file.clone(),
@@ -77,7 +77,7 @@ fn check_names(house: &House, errors: &mut Vec<ValidationError>) {
             for param in params.keys() {
                 if !valid_segment(param) {
                     errors.push(ValidationError::new(
-                        "invalid-name",
+                        Code::InvalidName,
                         format!("{name}.{param}"),
                         segment_message("parameter name", param),
                         file.clone(),
@@ -90,7 +90,7 @@ fn check_names(house: &House, errors: &mut Vec<ValidationError>) {
         let file = Some(entity.path.clone());
         if !valid_segment(&entity.name) {
             errors.push(ValidationError::new(
-                "invalid-name",
+                Code::InvalidName,
                 &entity.name,
                 segment_message("entity name", &entity.name),
                 file.clone(),
@@ -99,7 +99,7 @@ fn check_names(house: &House, errors: &mut Vec<ValidationError>) {
         let room = &entity.file.entity.room;
         if !valid_segment(room) {
             errors.push(ValidationError::new(
-                "invalid-name",
+                Code::InvalidName,
                 &entity.name,
                 segment_message("room", room),
                 file,
@@ -109,7 +109,7 @@ fn check_names(house: &House, errors: &mut Vec<ValidationError>) {
     for zone in house.zones.keys() {
         if !valid_segment(zone) {
             errors.push(ValidationError::new(
-                "invalid-name",
+                Code::InvalidName,
                 zone,
                 segment_message("zone name", zone),
                 Some("zones.toml".to_string()),
@@ -119,7 +119,7 @@ fn check_names(house: &House, errors: &mut Vec<ValidationError>) {
     for view in house.dashboard.iter().flat_map(|d| &d.view) {
         if !valid_segment(&view.name) {
             errors.push(ValidationError::new(
-                "invalid-name",
+                Code::InvalidName,
                 &view.name,
                 segment_message("view name", &view.name),
                 Some("dashboard.toml".to_string()),
@@ -140,7 +140,7 @@ fn check_duplicates(house: &House, errors: &mut Vec<ValidationError>) {
         if paths.len() > 1 {
             paths.sort_unstable();
             errors.push(ValidationError::new(
-                "duplicate-unit-name",
+                Code::DuplicateUnitName,
                 name,
                 format!("defined in {}", paths.join(" and ")),
                 None,
@@ -159,7 +159,7 @@ fn check_duplicates(house: &House, errors: &mut Vec<ValidationError>) {
         if paths.len() > 1 {
             paths.sort_unstable();
             errors.push(ValidationError::new(
-                "duplicate-entity-name",
+                Code::DuplicateEntityName,
                 name,
                 format!("defined in {}", paths.join(" and ")),
                 None,
@@ -184,7 +184,7 @@ fn check_duplicates(house: &House, errors: &mut Vec<ValidationError>) {
         if paths.len() > 1 {
             paths.sort_unstable();
             errors.push(ValidationError::new(
-                "duplicate-entity-id",
+                Code::DuplicateEntityId,
                 id,
                 format!("bound to \"{owner}\" by {}", paths.join(" and ")),
                 None,
@@ -209,7 +209,7 @@ fn check_manifest_shape(house: &House, errors: &mut Vec<ValidationError>) {
             };
             if let Some(message) = missing {
                 errors.push(ValidationError::new(
-                    "invalid-manifest",
+                    Code::InvalidManifest,
                     name,
                     message,
                     file.clone(),
@@ -219,7 +219,7 @@ fn check_manifest_shape(house: &House, errors: &mut Vec<ValidationError>) {
         if unit.manifest.unit.kind == UnitKind::Adapter {
             if unit.manifest.entities.is_none() {
                 errors.push(ValidationError::new(
-                    "invalid-manifest",
+                    Code::InvalidManifest,
                     name,
                     "adapter requires an [entities] section",
                     file.clone(),
@@ -227,7 +227,7 @@ fn check_manifest_shape(house: &House, errors: &mut Vec<ValidationError>) {
             }
             if unit.manifest.discovery.is_none() {
                 errors.push(ValidationError::new(
-                    "invalid-manifest",
+                    Code::InvalidManifest,
                     name,
                     "adapter requires a [discovery] section",
                     file.clone(),
@@ -238,7 +238,7 @@ fn check_manifest_shape(house: &House, errors: &mut Vec<ValidationError>) {
             // have no need to and are refused until one does.
             if unit.manifest.entities.is_some() && unit.manifest.unit.kind != UnitKind::Automation {
                 errors.push(ValidationError::new(
-                    "invalid-manifest",
+                    Code::InvalidManifest,
                     name,
                     "[entities] is only valid for adapters and automations",
                     file.clone(),
@@ -248,7 +248,7 @@ fn check_manifest_shape(house: &House, errors: &mut Vec<ValidationError>) {
             // store) and use [discovery] the same way adapters do.
             if unit.manifest.discovery.is_some() && unit.manifest.unit.kind != UnitKind::Service {
                 errors.push(ValidationError::new(
-                    "invalid-manifest",
+                    Code::InvalidManifest,
                     name,
                     "[discovery] is only valid for adapters and services",
                     file.clone(),
@@ -264,7 +264,7 @@ fn check_entities(house: &House, errors: &mut Vec<ValidationError>) {
         let capability = &entity.file.entity.capability;
         if !CAPABILITIES.contains(&capability.as_str()) {
             errors.push(ValidationError::new(
-                "unknown-capability",
+                Code::UnknownCapability,
                 &entity.name,
                 format!("unknown capability \"{capability}\""),
                 file.clone(),
@@ -281,7 +281,7 @@ fn check_entities(house: &House, errors: &mut Vec<ValidationError>) {
                 .any(|c| c.name == capability && c.base.is_some())
         {
             errors.push(ValidationError::new(
-                "write-mode-required",
+                Code::WriteModeRequired,
                 &entity.name,
                 format!(
                     "capability \"{capability}\" takes commands, so [write_policy] needs a mode"
@@ -298,7 +298,7 @@ fn check_entities(house: &House, errors: &mut Vec<ValidationError>) {
             .is_some_and(|u| u.manifest.unit.kind == UnitKind::Adapter);
         if owner_is_adapter && entity.file.entity.id.is_none() {
             errors.push(ValidationError::new(
-                "entity-id-required",
+                Code::EntityIdRequired,
                 &entity.name,
                 "an adapter-owned entity needs an [entity] id: its adapter-native address",
                 file.clone(),
@@ -308,7 +308,7 @@ fn check_entities(house: &House, errors: &mut Vec<ValidationError>) {
         let room = &entity.file.entity.room;
         if is_reserved_word(room) && !PSEUDO_ROOMS.contains(&room.as_str()) {
             errors.push(ValidationError::new(
-                "reserved-room-name",
+                Code::ReservedRoomName,
                 &entity.name,
                 format!("room \"{room}\" is a reserved word"),
                 file.clone(),
@@ -318,7 +318,7 @@ fn check_entities(house: &House, errors: &mut Vec<ValidationError>) {
         let owner = &entity.file.write_policy.owner;
         match house.unit(owner) {
             None => errors.push(ValidationError::new(
-                "missing-owner-unit",
+                Code::MissingOwnerUnit,
                 &entity.name,
                 format!("owner unit \"{owner}\" does not exist"),
                 file.clone(),
@@ -330,7 +330,7 @@ fn check_entities(house: &House, errors: &mut Vec<ValidationError>) {
                 ) =>
             {
                 errors.push(ValidationError::new(
-                    "missing-owner-unit",
+                    Code::MissingOwnerUnit,
                     &entity.name,
                     format!("owner \"{owner}\" is not an adapter or automation"),
                     file.clone(),
@@ -338,7 +338,7 @@ fn check_entities(house: &House, errors: &mut Vec<ValidationError>) {
             }
             Some(_) if owner != &entity.owner => {
                 errors.push(ValidationError::new(
-                    "owner-mismatch",
+                    Code::OwnerMismatch,
                     &entity.name,
                     format!("owner \"{owner}\" but bound by unit \"{}\"", entity.owner),
                     file.clone(),
@@ -353,7 +353,7 @@ fn check_entities(house: &House, errors: &mut Vec<ValidationError>) {
                 // contend for, no hold to expire, so arbitration has nothing
                 // to order.
                 errors.push(ValidationError::new(
-                    "virtual-entity-arbitrated",
+                    Code::VirtualEntityArbitrated,
                     &entity.name,
                     "automation-owned entities are latches and cannot be arbitrated; use shared or exclusive",
                     file.clone(),
@@ -370,7 +370,7 @@ fn check_zones(house: &House, errors: &mut Vec<ValidationError>) {
     for (zone, members) in &house.zones {
         if is_reserved_word(zone) {
             errors.push(ValidationError::new(
-                "reserved-zone-name",
+                Code::ReservedZoneName,
                 zone,
                 format!("zone name \"{zone}\" is a reserved word"),
                 file.clone(),
@@ -379,7 +379,7 @@ fn check_zones(house: &House, errors: &mut Vec<ValidationError>) {
         }
         if rooms.contains(&zone.as_str()) {
             errors.push(ValidationError::new(
-                "zone-room-collision",
+                Code::ZoneRoomCollision,
                 zone,
                 format!("zone name \"{zone}\" collides with a room name"),
                 file.clone(),
@@ -388,14 +388,14 @@ fn check_zones(house: &House, errors: &mut Vec<ValidationError>) {
         for room in members {
             if PSEUDO_ROOMS.contains(&room.as_str()) {
                 errors.push(ValidationError::new(
-                    "zone-pseudo-room",
+                    Code::ZonePseudoRoom,
                     zone,
                     format!("zone includes pseudo-room \"{room}\""),
                     file.clone(),
                 ));
             } else if !rooms.contains(&room.as_str()) {
                 errors.push(ValidationError::new(
-                    "zone-unknown-room",
+                    Code::ZoneUnknownRoom,
                     zone,
                     format!("zone references unknown room \"{room}\""),
                     file.clone(),
@@ -419,7 +419,7 @@ fn check_params(house: &House, errors: &mut Vec<ValidationError>) {
 
 fn check_param(subject: &str, spec: &ParamSpec, path: &str, errors: &mut Vec<ValidationError>) {
     let before = errors.len();
-    let mut err = |code: &'static str, message: String| {
+    let mut err = |code: Code, message: String| {
         errors.push(ValidationError::new(
             code,
             subject,
@@ -439,7 +439,7 @@ fn check_param(subject: &str, spec: &ParamSpec, path: &str, errors: &mut Vec<Val
     };
     if !default_ok {
         err(
-            "invalid-default",
+            Code::InvalidDefault,
             format!(
                 "default {} does not match type \"{t}\"",
                 display_value(&spec.default)
@@ -457,7 +457,7 @@ fn check_param(subject: &str, spec: &ParamSpec, path: &str, errors: &mut Vec<Val
             "enum" => t == ParamType::String,
             _ => {
                 err(
-                    "malformed-constraint",
+                    Code::MalformedConstraint,
                     format!("unknown constraint \"{key}\""),
                 );
                 continue;
@@ -465,7 +465,7 @@ fn check_param(subject: &str, spec: &ParamSpec, path: &str, errors: &mut Vec<Val
         };
         if !valid_for_type {
             err(
-                "malformed-constraint",
+                Code::MalformedConstraint,
                 format!("constraint \"{key}\" is not valid for type \"{t}\""),
             );
             continue;
@@ -489,7 +489,7 @@ fn check_param(subject: &str, spec: &ParamSpec, path: &str, errors: &mut Vec<Val
                 _ => "a non-empty array of strings",
             };
             err(
-                "malformed-constraint",
+                Code::MalformedConstraint,
                 format!("constraint \"{key}\" must be {expected}"),
             );
         }
@@ -501,7 +501,7 @@ fn check_param(subject: &str, spec: &ParamSpec, path: &str, errors: &mut Vec<Val
     ) {
         if min > max {
             err(
-                "malformed-constraint",
+                Code::MalformedConstraint,
                 format!(
                     "min ({}) is greater than max ({})",
                     display_value(&constraint["min"]),
@@ -520,7 +520,7 @@ fn check_param(subject: &str, spec: &ParamSpec, path: &str, errors: &mut Vec<Val
     if errors.len() == before {
         if let Err(message) = crate::config::default_within_constraint(spec) {
             errors.push(ValidationError::new(
-                "invalid-default",
+                Code::InvalidDefault,
                 subject,
                 format!("default {}: {message}", display_value(&spec.default)),
                 Some(path.to_string()),
@@ -566,7 +566,7 @@ fn check_dashboard(house: &House, errors: &mut Vec<ValidationError>) {
     for view in &dashboard.view {
         if matches!(view.name.as_str(), "health" | "notshown") {
             errors.push(ValidationError::new(
-                "dashboard-reserved-view",
+                Code::DashboardReservedView,
                 &view.name,
                 format!(
                     "view name \"{}\" belongs to the dashboard's fixed chrome",
@@ -577,7 +577,7 @@ fn check_dashboard(house: &House, errors: &mut Vec<ValidationError>) {
         }
         if seen.contains(&view.name.as_str()) {
             errors.push(ValidationError::new(
-                "dashboard-duplicate-view",
+                Code::DashboardDuplicateView,
                 &view.name,
                 format!("view \"{}\" is declared more than once", view.name),
                 file.clone(),
@@ -586,7 +586,7 @@ fn check_dashboard(house: &House, errors: &mut Vec<ValidationError>) {
         seen.push(&view.name);
         if view.kind.is_some() == !view.widgets.is_empty() {
             errors.push(ValidationError::new(
-                "dashboard-view-shape",
+                Code::DashboardViewShape,
                 &view.name,
                 "a view is a generated `kind` or a list of `widgets`, never both or neither",
                 file.clone(),
@@ -602,7 +602,7 @@ fn check_dashboard(house: &House, errors: &mut Vec<ValidationError>) {
                 let subject = format!("{subject}[{j}]");
                 if member.kind == WidgetKind::Group {
                     errors.push(ValidationError::new(
-                        "dashboard-nested-group",
+                        Code::DashboardNestedGroup,
                         &subject,
                         "a group holds widgets, never another group",
                         file.clone(),
@@ -643,7 +643,7 @@ fn check_control(
     };
     if !complete {
         errors.push(ValidationError::new(
-            "dashboard-control-target",
+            Code::DashboardControlTarget,
             subject,
             "a control names one target: `entity` with `aspect`, or `unit` with `param`",
             file.map(str::to_string),
@@ -652,7 +652,7 @@ fn check_control(
     }
     if !(control.step.is_finite() && control.step > 0.0) {
         errors.push(ValidationError::new(
-            "dashboard-control-step",
+            Code::DashboardControlStep,
             subject,
             format!("`step` must be a positive number, not {}", control.step),
             file.map(str::to_string),
@@ -661,7 +661,7 @@ fn check_control(
     if let (Some(entity), Some(aspect)) = (&control.entity, &control.aspect) {
         if !house.entities.iter().any(|e| &e.name == entity) {
             errors.push(ValidationError::new(
-                "dashboard-unknown-entity",
+                Code::DashboardUnknownEntity,
                 subject,
                 format!("control names unknown entity \"{entity}\""),
                 file.map(str::to_string),
@@ -669,7 +669,7 @@ fn check_control(
         }
         if !valid_segment(aspect) {
             errors.push(ValidationError::new(
-                "dashboard-invalid-aspect",
+                Code::DashboardInvalidAspect,
                 subject,
                 format!("aspect \"{aspect}\" must be a single key segment"),
                 file.map(str::to_string),
@@ -679,7 +679,7 @@ fn check_control(
     if let (Some(unit), Some(param)) = (&control.unit, &control.param) {
         match house.unit(unit) {
             None => errors.push(ValidationError::new(
-                "dashboard-unknown-unit",
+                Code::DashboardUnknownUnit,
                 subject,
                 format!("control names unknown unit \"{unit}\""),
                 file.map(str::to_string),
@@ -694,7 +694,7 @@ fn check_control(
                     .is_some_and(|p| p.contains_key(param)) =>
             {
                 errors.push(ValidationError::new(
-                    "dashboard-unknown-param",
+                    Code::DashboardUnknownParam,
                     subject,
                     format!("control names unknown parameter \"{param}\" on unit \"{unit}\""),
                     file.map(str::to_string),
@@ -717,7 +717,7 @@ fn check_widget(
 ) {
     if let Some(message) = widget_fields_message(widget) {
         errors.push(ValidationError::new(
-            "dashboard-widget-fields",
+            Code::DashboardWidgetFields,
             subject,
             message,
             file.map(str::to_string),
@@ -727,7 +727,7 @@ fn check_widget(
     if let Some(entity) = &widget.entity {
         match house.entities.iter().find(|e| &e.name == entity) {
             None => errors.push(ValidationError::new(
-                "dashboard-unknown-entity",
+                Code::DashboardUnknownEntity,
                 subject,
                 format!("widget names unknown entity \"{entity}\""),
                 file.map(str::to_string),
@@ -738,7 +738,7 @@ fn check_widget(
                 if widget.kind == WidgetKind::Burner && e.file.entity.capability != "burner" =>
             {
                 errors.push(ValidationError::new(
-                    "dashboard-widget-capability",
+                    Code::DashboardWidgetCapability,
                     subject,
                     format!(
                         "a `burner` widget needs a burner; \"{entity}\" is a {}",
@@ -753,7 +753,7 @@ fn check_widget(
     if let Some(aspect) = &widget.aspect {
         if !valid_segment(aspect) {
             errors.push(ValidationError::new(
-                "dashboard-invalid-aspect",
+                Code::DashboardInvalidAspect,
                 subject,
                 format!("aspect \"{aspect}\" must be a single key segment"),
                 file.map(str::to_string),
@@ -763,7 +763,7 @@ fn check_widget(
     if let Some(room) = &widget.room {
         if !rooms.contains(&room.as_str()) {
             errors.push(ValidationError::new(
-                "dashboard-unknown-room",
+                Code::DashboardUnknownRoom,
                 subject,
                 format!("widget names unknown room \"{room}\""),
                 file.map(str::to_string),
@@ -773,7 +773,7 @@ fn check_widget(
     if let Some(unit) = &widget.unit {
         if house.unit(unit).is_none() {
             errors.push(ValidationError::new(
-                "dashboard-unknown-unit",
+                Code::DashboardUnknownUnit,
                 subject,
                 format!("widget names unknown unit \"{unit}\""),
                 file.map(str::to_string),

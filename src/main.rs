@@ -166,8 +166,8 @@ fn explain_command(code: Option<String>) -> ExitCode {
             ExitCode::FAILURE
         }
     } else {
-        for (code, text) in homeostat::error::CODES {
-            println!("{code}: {text}\n");
+        for code in homeostat::error::Code::ALL {
+            println!("{code}: {}\n", code.explanation());
         }
         ExitCode::SUCCESS
     }

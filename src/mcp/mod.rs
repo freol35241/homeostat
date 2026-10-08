@@ -326,9 +326,9 @@ fn explain(args: &Value) -> Result<String, String> {
         Some(code) => crate::error::explain(code)
             .map(|text| format!("{code}: {text}"))
             .ok_or_else(|| format!("unknown error code \"{code}\"")),
-        None => Ok(crate::error::CODES
+        None => Ok(crate::error::Code::ALL
             .iter()
-            .map(|(code, text)| format!("{code}: {text}"))
+            .map(|code| format!("{code}: {}", code.explanation()))
             .collect::<Vec<_>>()
             .join("\n\n")),
     }
