@@ -185,10 +185,6 @@ class RecorderPresenceTest(unittest.TestCase):
         self.assertFalse(_house_has_recorder(FIXTURES / "fixture_house_templates"))
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class RestoreWaitTest(unittest.TestCase):
     """How `restore` waits for the recorder. The recorder answers one
     query at a time, so a get that gives up and asks again queues a second
@@ -324,3 +320,7 @@ class SourceUsedTest(unittest.TestCase):
             ctx.emitted[-1],
             ("source-dropped", {"entity": "fused", "aspect": "temperature", "source": "shed"}),
         )
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -408,7 +408,7 @@ cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test
 uv run --no-project --with-editable sdk/python --with 'paho-mqtt>=2,<3' python -m unittest discover sdk/python/tests
-uvx ruff@0.16.7 check adapters sdk tests/browser
+uvx ruff@0.16.7 check adapters sdk scripts tests/browser
 node --test tests/js/*.test.js
 scripts/sync_starter.sh --check
 uv run --script tests/browser/run.py

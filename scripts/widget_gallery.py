@@ -5,10 +5,11 @@
 #     "playwright>=1.49,<2",
 # ]
 # ///
-"""Writes docs/widgets.md and its pictures: every widget kind of
-dashboard.toml, with what it says, the line that places it, and what it
-looks like — the vocabulary a person (or an agent) uses to say how the
-dashboard should look.
+"""Write docs/widgets.md and its pictures.
+
+Every widget kind of dashboard.toml, with what it says, the line that
+places it, and what it looks like: the vocabulary a person (or an agent)
+uses to say how the dashboard should look.
 
 The pictures are the real page drawing the browser tests' fixture house
 (tests/browser/fixtures, as the Pages demo edits it: people placed on the
@@ -67,8 +68,11 @@ KEY_ORDER = ["kind", "entity", "aspect", "room", "unit", "label", "hours"]
 
 
 def toml_widget(widget: dict, indent: str = "") -> str:
-    """The widget as dashboard.toml writes it — the same shape the page's
-    "Text" overlay prints (dashboard-logic.js, viewText)."""
+    """Return the widget as dashboard.toml writes it.
+
+    The same shape the page's "Text" overlay prints (dashboard-logic.js,
+    viewText).
+    """
     fields = [
         f"{k} = {json.dumps(widget[k])}"
         for k in sorted(
@@ -83,8 +87,10 @@ def toml_widget(widget: dict, indent: str = "") -> str:
 
 
 def kinds_from_manifest() -> list[tuple[str, str]]:
-    """(kind, description) in the parser's order, from the WidgetKind
-    section of docs/manifest.md."""
+    """Return (kind, description) pairs from docs/manifest.md's WidgetKind section.
+
+    In the parser's order.
+    """
     text = (DOCS / "manifest.md").read_text()
     section = text.split("### WidgetKind", 1)[1].split("\n## ", 1)[0]
     return re.findall(r"^- `([a-z]+)` — (.+)$", section, re.MULTILINE)
