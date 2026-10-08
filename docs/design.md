@@ -45,6 +45,23 @@ not the general long tail. No Home Assistant bridge in v1.
   supervises everything else. Revisit only if the plugin gains a
   documented retain story and the deployment is too constrained for a
   broker process.
+  Commands are puts, not queries — settled 2026-10-08, after the
+  question came up; pub/sub had been their shape since Step 1 without a
+  stated reason. A reply can only say what the replier knows while the
+  query is open, and the answer a command waits for, the device's
+  readback, comes seconds to a minute later (75 s on the burner).
+  Everything else a reply would carry already arrives: whether anything
+  listens (liveliness and matching status, `/api/cmd`'s `heard`), an
+  arbiter refusal and an adapter's out-of-range drop (events echoing
+  the envelope's `cmd_id`). Queries would cost the recorder's audit of
+  every command (a subscriber never sees a query), the arbiter's
+  invisibility to writers (it would have to answer, query the adapter
+  and relay the reply), and fire-and-forget automations. Left uncovered
+  is "delivered to the device", which only slow devices make visible
+  and which changes nothing the family does but wait; if living with it
+  says otherwise, that is an adapter event, not a query (Dashboard, a
+  command's stages). Queries stay the shape where one owner answers in
+  full while the query is open: parameter writes and `apply`.
 - **Units:** every running thing is a unit: `adapter`, `automation`, or
   `service`. Uniform manifest schema, uniform supervision. Python units are
   uv-run scripts with PEP 723 inline dependencies (one hermetic venv per
