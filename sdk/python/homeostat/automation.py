@@ -349,7 +349,7 @@ class Context:
                     raise ValueError(f"publish {binding!r} takes no source slot")
                 names = ("room", "entity", "aspect")
                 slots = {"room": room, "entity": entity, "aspect": aspect}
-            defaults = dict(zip(names, segments[2 : 2 + len(names)], strict=False))
+            defaults: dict[str, str] = dict(zip(names, segments[2 : 2 + len(names)], strict=False))
             parts = []
             for slot, given in slots.items():
                 part = given if given is not None else defaults.get(slot)

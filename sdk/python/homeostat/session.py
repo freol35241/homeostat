@@ -249,7 +249,8 @@ class UnitSession:
         if publisher is None:
             publisher = self._publishers[key] = self._session.declare_publisher(key)
         deadline = time.monotonic() + wait_s
-        while not publisher.matching_status.matching:
+        # zenoh's stub types matching_status as bool; it is a MatchingStatus.
+        while not publisher.matching_status.matching:  # pyright: ignore[reportAttributeAccessIssue]
             if time.monotonic() >= deadline:
                 return False
             time.sleep(0.02)
