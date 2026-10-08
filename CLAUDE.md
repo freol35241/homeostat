@@ -59,3 +59,51 @@ For multi-step tasks, state a brief plan:
 ```
 
 Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
+
+## 5. This repository
+
+### Layout
+
+| Path | What it is |
+|---|---|
+| `src/` | The Rust core: manifest parsing and validation, plan/apply, the supervisor, the MCP server. |
+| `sdk/python/` | The Python SDK every unit is built on. |
+| `adapters/` | The generic units (adapters and services), one script each, with a lockfile beside it. |
+| `examples/starter-house/` | A house to copy. The adapters in its `units/` are **generated** copies of `adapters/` at the release tag: never edit them by hand. `evening_lights.py` is the house's own. |
+| `tests/` | Rust integration tests against real processes, a real broker and a real SQLite store; `tests/corpus/` pairs broken houses with their exact error lists. |
+| `docs/` | `design.md` (how the system works and why), `adapters.md` (the adapter contract), and two generated files. |
+
+### Running what CI runs
+
+```
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test
+uv run --no-project --with-editable sdk/python --with 'paho-mqtt>=2,<3' python -m unittest discover sdk/python/tests
+uvx ruff@0.16.7 check adapters sdk tests/browser
+node --test tests/js/*.test.js
+scripts/sync_starter.sh --check
+uv run --script tests/browser/run.py
+```
+
+The integration tests need `mosquitto`, `uv` and `node`; the browser suite needs `scripts/install_browser.sh`.
+
+### Generated files
+
+Edit the source, then regenerate. Tests refuse a stale copy.
+
+| File | Regenerate with |
+|---|---|
+| `docs/manifest.md` | `cargo run -- schema --markdown > docs/manifest.md` |
+| `docs/widgets.md` and `docs/widgets/*.png` | `uv run --script scripts/widget_gallery.py` |
+| `examples/starter-house/units/` | `scripts/sync_starter.sh` (at a release) |
+| `*.py.lock` beside a unit script | `uv lock --script <script>` |
+
+### Writing comments and docs
+
+- **Present tense.** A comment says what the code does and why. History (what it used to do, when it changed, which issue prompted it) belongs in the commit message. Test: would the sentence still be true had the code been written this way from day one? If not, rewrite or delete it.
+- **Rationale stays.** "X, because Y" is a rule. So is "not X, because Y" when X is the alternative people keep proposing.
+- **No dates, issue numbers or "settled"/"precedent" wording** in code, comments or `design.md`.
+- **Python docstrings follow the NumPy convention**: a one-line summary, a blank line, then the body. The SDK's public API also gets `Parameters`, `Returns` and `Raises` sections; adapter scripts do not need them.
+- **Rust**: every module opens with a `//!` doc saying what it is for, and every public type, function and constant has a doc comment. A field gets one when its name and type don't already say it. Doc comments on manifest structs become `docs/manifest.md`, which manifest authors read, so they describe the file format, not the Rust API.
+- **`docs/design.md` describes the system as it is.** When a change makes a sentence there untrue, the same change fixes the sentence.
