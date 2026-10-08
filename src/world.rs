@@ -17,6 +17,9 @@ pub async fn connect(endpoint: &str) -> Result<Session, String> {
         .map_err(|e| format!("cannot reach a supervisor at {endpoint}: {e}"))
 }
 
+/// Reads the world from the supervisor's last-value queryables: every
+/// unit's applied manifest and hashes, the applied grants and commit, and
+/// the live parameter values.
 pub async fn read(session: &Session, endpoint: &str) -> Result<World, String> {
     let mut world = World {
         label: endpoint.to_string(),

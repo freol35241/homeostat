@@ -17,6 +17,7 @@ use crate::supervisor::{HealthMap, LogMap};
 
 const DEFAULT_GRACE_S: u32 = 5;
 
+/// Everything a supervision task needs to run one unit.
 pub struct UnitSpec {
     pub name: String,
     pub command: String,
@@ -32,10 +33,12 @@ pub struct UnitSpec {
 }
 
 impl UnitSpec {
+    /// The SIGTERM-to-SIGKILL grace from `shutdown_grace_s`; 5 s when unset.
     pub fn grace_from_manifest(grace_s: Option<u32>) -> Duration {
         Duration::from_secs(u64::from(grace_s.unwrap_or(DEFAULT_GRACE_S)))
     }
 
+    /// The spec for a loaded unit, run from the house root against `endpoint`.
     pub fn from_loaded(
         unit: &crate::repo::LoadedUnit,
         root: &std::path::Path,

@@ -1,11 +1,17 @@
+//! The house's text as types: unit manifests, entity files, `zones.toml`
+//! and `dashboard.toml`, plus the capability vocabulary. These structs are
+//! the manifest contract. `deny_unknown_fields` makes them complete, and
+//! their doc comments become `docs/manifest.md` and the JSON Schema that
+//! `homeostat schema` serves.
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
 
-/// Capabilities known to the core. DESIGN.md does not enumerate these; this
-/// list grows with adapters. The aspect vocabulary of each is `VOCABULARY`
-/// below; a test keeps the two in step.
+/// Capabilities known to the core; the list grows with adapters. The
+/// aspect vocabulary of each is `VOCABULARY` below, and a test keeps the
+/// two in step.
 pub const CAPABILITIES: &[&str] = &[
     "binary_sensor",
     "burner",
@@ -42,6 +48,7 @@ pub struct Capability {
     pub note: &'static str,
 }
 
+/// The aspect vocabulary: one entry per capability in [`CAPABILITIES`].
 pub const VOCABULARY: &[Capability] = &[
     Capability {
         name: "binary_sensor",
@@ -144,6 +151,7 @@ pub const COMMON_ASPECTS: &[(&str, &str)] = &[
     ("{aspect}_valid", "bool beside a reading the device itself may stop trusting; the value stands, the flag says stale."),
 ];
 
+/// The `schema` version every house file must declare.
 pub const SUPPORTED_SCHEMA: u32 = 1;
 
 // The structs below ARE the manifest contract: `deny_unknown_fields` makes
@@ -338,9 +346,14 @@ pub struct PublishSpec {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Priority {
+    /// Automations. The lowest band.
     Automation,
+    /// Above `automation`.
     Agent,
+    /// Above `agent`.
     Family,
+    /// The family's own surfaces (dashboard, voice). The highest band, and
+    /// exempt from exclusive-write checks.
     Manual,
 }
 

@@ -1,3 +1,8 @@
+//! Structural validation of a loaded house: names, uniqueness, manifest
+//! shape, entity ownership, zones, parameters and `dashboard.toml`.
+//! Checks that need expanded keys or the grant table live in `expand` and
+//! `grants`.
+
 use std::collections::BTreeMap;
 
 use crate::error::ValidationError;

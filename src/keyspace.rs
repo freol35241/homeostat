@@ -1,3 +1,6 @@
+//! The bus key space: the classes under `home/`, the shape each class
+//! takes, and key expressions as parsed segments.
+
 use std::fmt;
 
 /// `home/{class}/...` — the classes the core owns.
@@ -38,6 +41,7 @@ pub fn is_reserved_word(word: &str) -> bool {
     word == "home" || CLASSES.contains(&word) || PSEUDO_ROOMS.contains(&word)
 }
 
+/// One segment of a key expression.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Segment {
     Literal(String),
@@ -63,10 +67,12 @@ impl fmt::Display for Segment {
     }
 }
 
+/// A key expression as segments: literals, wildcards and templates.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyExpr(pub Vec<Segment>);
 
 impl KeyExpr {
+    /// Splits `raw` on `/`. An empty key or an empty segment is an error.
     pub fn parse(raw: &str) -> Result<KeyExpr, String> {
         if raw.is_empty() {
             return Err("key is empty".to_string());
@@ -85,6 +91,7 @@ impl KeyExpr {
         Ok(KeyExpr(segments))
     }
 
+    /// The class segment (`state`, `cmd`, …), when it is a literal.
     pub fn class(&self) -> Option<&str> {
         match self.0.get(1) {
             Some(Segment::Literal(c)) => Some(c.as_str()),
@@ -92,6 +99,7 @@ impl KeyExpr {
         }
     }
 
+    /// Whether the expression uses a `{room}` or `{entity}` template.
     pub fn has_template(&self) -> bool {
         self.0
             .iter()

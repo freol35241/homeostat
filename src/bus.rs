@@ -15,6 +15,7 @@
 use serde::{Deserialize, Serialize};
 use zenoh::Config;
 
+/// The endpoint `homeostat up` listens on without `--listen`.
 pub const DEFAULT_LISTEN: &str = "tcp/127.0.0.1:7447";
 
 /// Environment variable carrying the unit's name into its process.
@@ -22,31 +23,42 @@ pub const ENV_UNIT: &str = "HOMEOSTAT_UNIT";
 /// Environment variable carrying the bus connect endpoint into a unit.
 pub const ENV_BUS: &str = "HOMEOSTAT_BUS";
 
+/// `home/health/{unit}`: the supervisor's JSON health status for a unit.
 pub fn health_key(unit: &str) -> String {
     format!("home/health/{unit}")
 }
 
+/// `home/health/{unit}/alive`: the liveliness token a unit declares once it
+/// can do its job.
 pub fn liveliness_key(unit: &str) -> String {
     format!("home/health/{unit}/alive")
 }
 
+/// `home/meta/{unit}/manifest_hash`: sha256 of the unit's manifest as
+/// applied.
 pub fn manifest_hash_key(unit: &str) -> String {
     format!("home/meta/{unit}/manifest_hash")
 }
 
+/// `home/meta/{unit}/files_hash`: sha256 of the unit's other repo inputs
+/// as applied.
 pub fn files_hash_key(unit: &str) -> String {
     format!("home/meta/{unit}/files_hash")
 }
 
+/// `home/meta/{unit}/manifest`: the unit's manifest bytes as applied.
 pub fn manifest_key(unit: &str) -> String {
     format!("home/meta/{unit}/manifest")
 }
 
+/// `home/meta/{unit}/log`: the ring buffer of the unit's captured output.
 pub fn log_key(unit: &str) -> String {
     format!("home/meta/{unit}/log")
 }
 
+/// The grant table as applied, as JSON.
 pub const GRANTS_KEY: &str = "home/meta/system/grants";
+/// The house commit last applied.
 pub const APPLIED_COMMIT_KEY: &str = "home/meta/system/applied_commit";
 /// What is running, as one JSON document: this binary's version and the
 /// commit it was built from (when the build was told), and the house
@@ -72,6 +84,7 @@ pub fn about(applied_commit: Option<&str>) -> serde_json::Value {
 /// (the same query-as-command pattern as config writes).
 pub const APPLY_KEY: &str = "home/meta/system/apply";
 
+/// `home/config/{unit}/{param}`: a live parameter's current value.
 pub fn config_key(unit: &str, param: &str) -> String {
     format!("home/config/{unit}/{param}")
 }
@@ -130,6 +143,7 @@ pub enum HealthStatus {
     Stopped,
 }
 
+/// A unit's health as the supervisor reports it at `home/health/{unit}`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Health {
     pub status: HealthStatus,
@@ -165,6 +179,7 @@ pub struct ApplyRequest {
     pub base_commit: Option<String>,
 }
 
+/// A parameter an apply set to its repo default.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApplyParam {
     pub unit: String,
@@ -172,6 +187,7 @@ pub struct ApplyParam {
     pub value: serde_json::Value,
 }
 
+/// One unit step of an apply walk and how it ended.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApplyStep {
     pub unit: String,
@@ -231,7 +247,7 @@ pub struct ApplyResult {
 }
 
 impl ApplyResult {
-    /// The per-item lines the CLI and the MCP surface both render.
+    /// The per-item lines the CLI prints after an apply.
     pub fn detail_lines(&self) -> Vec<String> {
         let mut lines = Vec::new();
         for param in &self.params {

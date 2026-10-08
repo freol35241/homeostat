@@ -1,3 +1,12 @@
+//! The homeostat core: the manifest model and its validation, key
+//! expansion, the grant table, plan and apply, the process supervisor and
+//! the MCP server. The `homeostat` binary is built on it, and the
+//! integration tests drive it directly.
+//!
+//! Every command starts from [`check`], the plan-time pipeline: load the
+//! house repo, validate it, expand its key expressions, and resolve its
+//! grants, feeds and sources.
+
 pub mod bus;
 pub mod config;
 pub mod content;
@@ -20,6 +29,10 @@ use std::path::Path;
 
 pub use error::ValidationError;
 
+/// Everything the plan-time pipeline learned about a house: the loaded
+/// files, the expanded keys, the resolved grants, feeds and sources, and
+/// every warning and error found on the way. A house with no errors may be
+/// planned and applied.
 pub struct CheckResult {
     pub house: repo::House,
     pub expanded: Vec<expand::ExpandedKey>,

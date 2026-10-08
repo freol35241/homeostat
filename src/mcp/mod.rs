@@ -25,6 +25,8 @@ use zenoh::Session;
 use crate::bus::{self, LogEntry};
 use crate::world;
 
+/// A running MCP server: the bus session its tools read, and the runtime
+/// that drives it.
 pub struct Server {
     session: Session,
     runtime: tokio::runtime::Runtime,
@@ -288,6 +290,7 @@ fn str_arg<'a>(args: &'a Value, name: &str) -> Result<&'a str, String> {
         .ok_or_else(|| format!("missing \"{name}\" (string)"))
 }
 
+/// The tools the server offers, by name.
 pub const TOOL_NAMES: &[&str] = &[
     "read_state",
     "read_history",

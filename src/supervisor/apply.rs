@@ -19,6 +19,7 @@ use crate::plan::{self, StepAction, Tier};
 use crate::supervisor::unit::UnitSpec;
 use crate::supervisor::Core;
 
+/// Declares the apply queryable and serves each request in its own task.
 pub async fn serve(core: Arc<Core>) -> Result<(), String> {
     let queryable = core
         .session

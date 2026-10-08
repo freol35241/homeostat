@@ -93,6 +93,8 @@ fn on_house_network(ip: &std::net::IpAddr) -> bool {
     }
 }
 
+/// Serves MCP over HTTP on `addr` until the process exits: one thread per
+/// connection, at most `MAX_CONNECTIONS` at a time.
 pub fn serve(server: Arc<Server>, addr: &str) -> Result<(), String> {
     let listener = TcpListener::bind(addr).map_err(|e| format!("cannot listen on {addr}: {e}"))?;
     eprintln!("[homeostat] mcp listening on http://{addr}");

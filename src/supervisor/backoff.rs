@@ -3,17 +3,23 @@
 
 use std::time::Duration;
 
+/// The first restart delay.
 pub const BASE_MS: u64 = 100;
+/// Each further consecutive quick exit multiplies the delay by this.
 pub const FACTOR: u64 = 2;
+/// The longest restart delay.
 pub const MAX_MS: u64 = 30_000;
 /// A run that survives this long resets the consecutive-failure counter.
 pub const STABLE_MS: u64 = 5_000;
 /// Consecutive quick exits before the breaker opens.
 pub const BREAKER_THRESHOLD: u32 = 5;
 
+/// What the supervisor does after a unit exits.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Decision {
+    /// Restart the unit after `delay`.
     Restart { delay: Duration },
+    /// Stop restarting: the breaker is open.
     Open,
 }
 
@@ -24,6 +30,7 @@ pub struct Breaker {
 }
 
 impl Breaker {
+    /// A breaker with no exits counted.
     pub fn new() -> Self {
         Self::default()
     }
