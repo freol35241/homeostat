@@ -21,6 +21,7 @@ from urllib.parse import ParseResult, unquote, urlparse
 
 import paho.mqtt.client as mqtt
 import tomllib
+from paho.mqtt.enums import CallbackAPIVersion
 
 ENV_CREDENTIALS = "HOMEOSTAT_MQTT_CREDENTIALS"
 
@@ -212,6 +213,8 @@ def connect(
 
     Raises
     ------
+    ValueError
+        If the endpoint names no host.
     TimeoutError
         If the broker never acks a subscription within `timeout` seconds.
     ConnectionError
@@ -222,7 +225,7 @@ def connect(
     """
     subscribed = threading.Event()
     refused: list = []  # a failed CONNACK's reason code, if one arrives
-    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+    client = mqtt.Client(CallbackAPIVersion.VERSION2)
 
     def on_connect(client, userdata, flags, reason_code, properties=None):
         # paho calls on_connect on a failed CONNACK too (bad credentials,
@@ -244,6 +247,8 @@ def connect(
         client.username_pw_set(username, password)
     if endpoint.scheme == "mqtts":
         client.tls_set()  # system CA store; the broker's own if trusted there
+    if not endpoint.hostname:
+        raise ValueError(f"endpoint names no host: {endpoint.geturl()}")
     default_port = 8883 if endpoint.scheme == "mqtts" else 1883
     client.connect(endpoint.hostname, endpoint.port or default_port)
     client.loop_start()

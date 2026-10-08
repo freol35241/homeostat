@@ -408,6 +408,7 @@ cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test
 uv run --no-project --with-editable sdk/python --with 'paho-mqtt>=2,<3' python -m unittest discover sdk/python/tests
+uv run --no-project --with-editable sdk/python --with 'paho-mqtt>=2,<3' --with pyright==1.1.414 pyright sdk/python/homeostat
 uvx ruff@0.16.7 check adapters sdk scripts tests/browser
 node --test tests/js/*.test.js
 scripts/sync_starter.sh --check

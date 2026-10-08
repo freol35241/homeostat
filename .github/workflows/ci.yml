@@ -51,6 +51,9 @@ jobs:
       # the MQTT adapters bring their own paho for — but its message guard
       # is tested here, so the runner needs it.
       - run: uv run --no-project --with-editable sdk/python --with 'paho-mqtt>=2,<3' python -m unittest discover sdk/python/tests
+      # The SDK ships py.typed, so units type-check against it; this keeps
+      # what it promises true.
+      - run: uv run --no-project --with-editable sdk/python --with 'paho-mqtt>=2,<3' --with pyright==1.1.414 pyright sdk/python/homeostat
       - run: uvx ruff@0.16.7 check adapters sdk scripts tests/browser
       # The dashboard's extracted decision logic (adapters/assets/
       # dashboard-logic.js): Node's built-in runner, no packages. The

@@ -220,9 +220,9 @@ class Forecast:
         if mode not in ("step", "linear"):
             raise ValueError(f"mode must be 'step' or 'linear', got {mode!r}")
         points = self.points
-        if not points or when < points[0].t:
+        end = self.horizon_end  # None exactly when there are no points
+        if end is None or when < points[0].t:
             return None
-        end = self.horizon_end
         # An interval ends half-open, so its own end instant is past it.
         if when > end or (when == end and points[-1].d is not None):
             return None
