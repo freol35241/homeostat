@@ -14,7 +14,7 @@ use zenoh::pubsub::Subscriber;
 
 use common::{assert_unit_contract, await_health, config_write, health_watch, Supervisor};
 
-const FIXTURE: &str = "tests/fixture_house_arbiter";
+const FIXTURE: &str = "tests/fixtures/house_arbiter";
 const CMD_KEY: &str = "home/cmd/hallway/front_door/locked";
 const ARBITER_KEY: &str = "home/arbiter/hallway/front_door/locked";
 const EVENT_KEY: &str = "home/health/arbiter/event";

@@ -15,7 +15,7 @@ use zenoh::sample::SampleKind;
 
 use common::{await_mirror, expect_drop_event, expect_states, Mosquitto, Mqtt, Supervisor};
 
-const FIXTURE: &str = "tests/fixture_house_rf433";
+const FIXTURE: &str = "tests/fixtures/house_rf433";
 const PORT_ENV: &str = "HOMEOSTAT_TEST_MQTT_PORT";
 const EVENTS: &str = "rf/SRFBtoMQTT";
 const LWT: &str = "rf/LWT";

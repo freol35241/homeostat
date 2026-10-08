@@ -1,0 +1,39 @@
+schema = 1
+
+[unit]
+name = "evening_lights"
+kind = "automation"
+description = "Turns downstairs lights off after off_time when nobody is present"
+
+[runtime]
+command = "uv run ../house_evening/units/evening_lights.py"
+restart = "on-failure"
+shutdown_grace_s = 5
+
+[bus.subscribes]
+presence = "home/state/downstairs/*/presence"
+light_state = "home/state/downstairs/*/on"
+clock = "home/clock/minute"
+
+[bus.publishes]
+lights = { key = "home/cmd/downstairs/*/on", capability = "light", priority = "automation" }
+
+[params.off_time]
+type = "time"
+default = "22:00"
+constraint = { after = "20:00", before = "02:00" }
+editable_by = "family"
+
+# An owner-level tuning constant: visible on the dashboard, never writable
+# from it (#10).
+[params.grace_minutes]
+type = "int"
+default = 5
+constraint = { min = 0, max = 60 }
+editable_by = "owner"
+
+[naming]
+sv = "kvällsbelysning"
+en = "evening lights"
+aliases = []
+room = "downstairs"

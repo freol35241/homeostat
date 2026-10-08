@@ -28,7 +28,7 @@ use serde_json::json;
 
 use common::{await_health, await_states, health_watch, matched_publisher, Supervisor};
 
-const FIXTURE: &str = "tests/fixture_house_templates";
+const FIXTURE: &str = "tests/fixtures/house_templates";
 
 #[tokio::test(flavor = "multi_thread")]
 async fn templated_binding_reaches_every_bound_entity() {

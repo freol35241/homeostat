@@ -142,7 +142,7 @@ the `evening_lights` automation:
 
 ```
 cargo build
-PATH="$PWD/target/debug:$PATH" cargo run -- up tests/fixture_house_evening
+PATH="$PWD/target/debug:$PATH" cargo run -- up tests/fixtures/house_evening
 ```
 
 (The `PATH` prefix is only for fixtures, whose adapters are test binaries
@@ -161,11 +161,11 @@ against the manifest constraint with the old value still in force.
 and let the engine work out what it means:
 
 ```
-PATH="$PWD/target/debug:$PATH" target/debug/homeostat up tests/fixture_house_apply &
-target/debug/homeostat plan tests/fixture_house_apply --bus tcp/127.0.0.1:7447
+PATH="$PWD/target/debug:$PATH" target/debug/homeostat up tests/fixtures/house_apply &
+target/debug/homeostat plan tests/fixtures/house_apply --bus tcp/127.0.0.1:7447
 # -> No changes. The world matches the repo.
-sed -i 's/default = 1/default = 5/' tests/fixture_house_apply/units/probe.toml
-target/debug/homeostat apply tests/fixture_house_apply --bus tcp/127.0.0.1:7447
+sed -i 's/default = 1/default = 5/' tests/fixtures/house_apply/units/probe.toml
+target/debug/homeostat apply tests/fixtures/house_apply --bus tcp/127.0.0.1:7447
 # -> Plan tier: parameter-only (1 parameter change) ... Applied.
 ```
 
@@ -408,7 +408,7 @@ cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test
 uv run --no-project --with-editable sdk/python --with 'paho-mqtt>=2,<3' python -m unittest discover sdk/python/tests
-uvx ruff@0.16.7 check adapters sdk tests/browser
+uvx ruff@0.16.7 check adapters sdk scripts tests/browser
 node --test tests/js/*.test.js
 scripts/sync_starter.sh --check
 uv run --script tests/browser/run.py

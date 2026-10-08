@@ -18,7 +18,7 @@ use common::{
     temp_house, StateSub, Supervisor,
 };
 
-const FIXTURE: &str = "tests/fixture_house_ntfy";
+const FIXTURE: &str = "tests/fixtures/house_ntfy";
 const PORT_ENV: &str = "HOMEOSTAT_TEST_NTFY_PORT";
 const TOKEN_ENV: &str = "HOMEOSTAT_NTFY_TOKEN";
 const TOKEN: &str = "tk_test_publisher";

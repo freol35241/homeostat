@@ -1,0 +1,29 @@
+schema = 1
+
+[unit]
+name = "dashboard"
+kind = "service"
+# The model is a view over the WHOLE house, so any entity or manifest
+# change is a change to this unit (docs/design.md#change-detection).
+watches = "house"
+description = "Family web dashboard"
+
+[runtime]
+command = "uv run ../../../adapters/dashboard.py --host 127.0.0.1"
+restart = "always"
+shutdown_grace_s = 5
+env = ["HOMEOSTAT_DASHBOARD_PORT", "HOMEOSTAT_DASHBOARD_TILES", "HOMEOSTAT_DASHBOARD_HOSTS", "HOMEOSTAT_GO2RTC"]
+
+[bus.subscribes]
+state = "home/state/**"
+# A series' future, drawn on the same axis as its past.
+forecast = "home/forecast/**"
+health = "home/health/**"
+config = "home/config/*/*"
+discovery = "home/discovery/*"
+grants = "home/meta/system/grants"
+
+[bus.publishes]
+lights = { key = "home/cmd/**", capability = "light", priority = "manual" }
+locks = { key = "home/cmd/**", capability = "lock", priority = "manual" }
+climate = { key = "home/cmd/**", capability = "climate", priority = "manual" }

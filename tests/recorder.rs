@@ -30,7 +30,7 @@ use common::{
     Supervisor,
 };
 
-const FIXTURE: &str = "tests/fixture_house_recorder";
+const FIXTURE: &str = "tests/fixtures/house_recorder";
 
 type Sub = Subscriber<FifoChannelHandler<Sample>>;
 
@@ -386,8 +386,8 @@ async fn entity_move_is_a_tag_transition() {
     sup.shutdown();
 }
 
-/// (c) The backend-outage policy is observable: make the store unwritable
-/// (what "the backend is down" means for an embedded engine), publish
+/// (c) The backend-outage policy is observable: make the store refuse
+/// writes (what "the backend is down" means for an embedded engine), publish
 /// state, restore it — samples buffer with their receive-time timestamps,
 /// health events mark the outage and the recovery, nothing is lost.
 #[tokio::test(flavor = "multi_thread")]
@@ -409,9 +409,13 @@ async fn backend_outage_buffers_and_flushes() {
     )
     .await;
 
-    // Kill the backend: the store file becomes unwritable.
-    std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o444))
-        .expect("chmod store read-only");
+    // Kill the backend: hold the store's write lock, so each write the
+    // recorder tries fails as "database is locked" once its busy timeout
+    // runs out. A read-only file mode would do the same for anyone but
+    // root, who writes through it.
+    let lock = Connection::open(&db).expect("open store");
+    lock.execute_batch("BEGIN EXCLUSIVE")
+        .expect("take the write lock");
 
     let before_put = now_us();
     put(&gauge, json!(2)).await;
@@ -433,8 +437,9 @@ async fn backend_outage_buffers_and_flushes() {
     put(&gauge, json!(3)).await;
 
     // Restore the backend.
-    std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o644))
-        .expect("chmod store writable");
+    lock.execute_batch("COMMIT")
+        .expect("release the write lock");
+    drop(lock);
     let restored = await_event(&events, Duration::from_secs(30), |e| {
         e["kind"] == "backend-restored"
     })

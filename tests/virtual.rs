@@ -24,7 +24,7 @@ use common::{
     await_health, await_matching, config_write, health_watch, matched_publisher, Supervisor,
 };
 
-const FIXTURE: &str = "tests/fixture_house_virtual";
+const FIXTURE: &str = "tests/fixtures/house_virtual";
 const FUSED_STATE: &str = "home/state/global/downstairs_temperature/temperature";
 const LIVINGROOM_STATE: &str = "home/state/livingroom/thermo/temperature";
 const OFFICE_STATE: &str = "home/state/office/thermo/temperature";

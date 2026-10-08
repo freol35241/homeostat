@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Builds the static dashboard demo (demo-site/README.md) into a directory
-GitHub Pages can serve as it is.
+"""Build the static dashboard demo (demo-site/README.md) for GitHub Pages.
 
-The page is the real adapters/dashboard.html with its real assets; the
-house behind it is the browser tests' fixture house (tests/browser/
-fixtures), answered in the page by demo-site/shim.js instead of by the
-dashboard unit. Three edits make that possible, and each is checked so a
-change to the page fails the build instead of shipping a broken demo:
+The output is a directory Pages can serve as it is. The page is the real
+adapters/dashboard.html with its real assets; the house behind it is the
+browser tests' fixture house (tests/browser/fixtures), answered in the
+page by demo-site/shim.js instead of by the dashboard unit. Three edits
+make that possible, and each is checked so a change to the page fails the
+build instead of shipping a broken demo:
 
   - asset paths become relative, because Pages serves the site under
     /<repo>/ and an absolute /assets/... would point outside it;

@@ -15,7 +15,7 @@ use zenoh::sample::SampleKind;
 
 use common::{free_port, Supervisor};
 
-const FIXTURE: &str = "tests/fixture_house_go2rtc";
+const FIXTURE: &str = "tests/fixtures/house_go2rtc";
 const CAMERAS_ENV: &str = "HOMEOSTAT_CAMERAS";
 const LISTEN_ENV: &str = "HOMEOSTAT_GO2RTC_LISTEN";
 

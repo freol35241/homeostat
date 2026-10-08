@@ -18,7 +18,7 @@ use common::{
     next_event, StateSub, Supervisor,
 };
 
-const FIXTURE: &str = "tests/fixture_house_onvif";
+const FIXTURE: &str = "tests/fixtures/house_onvif";
 const CAMERAS_ENV: &str = "HOMEOSTAT_CAMERAS";
 const EVENT_KEY: &str = "home/health/onvif/event";
 const MOTION_KEY: &str = "home/state/hallway/hallway_cam/motion";

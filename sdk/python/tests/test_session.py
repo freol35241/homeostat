@@ -142,10 +142,6 @@ class ParseCommandTest(unittest.TestCase):
         self.assertEqual(session._session.puts[0][1]["cmd_id"], "badbeef0")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class HasSubscriberTest(unittest.TestCase):
     def test_answers_from_the_publishers_matching_status(self):
         session = stub_session()
@@ -189,3 +185,7 @@ class IsAliveTest(unittest.TestCase):
         session._session.alive.add("home/health/zigbee/alive")
         self.assertTrue(session.is_alive("zigbee"))
         self.assertFalse(session.is_alive("esphome"))
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -15,7 +15,7 @@ use common::{
     health_watch, next_event, temp_house, Mosquitto, Mqtt, Supervisor,
 };
 
-const FIXTURE: &str = "tests/fixture_house_z2m";
+const FIXTURE: &str = "tests/fixtures/house_z2m";
 const PORT_ENV: &str = "HOMEOSTAT_TEST_MQTT_PORT";
 const EVENT_KEY: &str = "home/health/zigbee/event";
 const LOCK_CMD_KEY: &str = "home/cmd/hallway/front_door/locked";
@@ -613,7 +613,7 @@ async fn manual_lock_command_reaches_mqtt_via_arbiter() {
 /// endpoint path (and optionally a short inventory timeout), so one
 /// fixture serves the default and non-default prefixes alike. The
 /// fixture's relative command has to become absolute: the copy lives in
-/// a temp dir, not two levels under the repo.
+/// a temp dir, not three levels under the repo.
 fn house_with_base(tag: &str, base: &str, inventory_timeout_s: Option<f64>) -> std::path::PathBuf {
     let house = temp_house(FIXTURE, tag);
     let path = house.join("units/zigbee.toml");
@@ -624,7 +624,7 @@ fn house_with_base(tag: &str, base: &str, inventory_timeout_s: Option<f64>) -> s
         &format!("${{HOMEOSTAT_TEST_MQTT_PORT}}/{base}\""),
     );
     manifest = manifest.replace(
-        "uv run ../../adapters/",
+        "uv run ../../../adapters/",
         &format!("uv run {}/adapters/", repo.display()),
     );
     if let Some(timeout) = inventory_timeout_s {

@@ -15,7 +15,7 @@ use common::{
     health_watch, Mosquitto, Mqtt, Supervisor,
 };
 
-const FIXTURE: &str = "tests/fixture_house_aduro";
+const FIXTURE: &str = "tests/fixtures/house_aduro";
 const PORT_ENV: &str = "HOMEOSTAT_TEST_MQTT_PORT";
 const BASE: &str = "aduro2mqtt"; // the fixture entity's base topic (its `id`)
 const EVENT_KEY: &str = "home/health/aduro/event";
