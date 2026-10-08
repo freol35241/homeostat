@@ -607,10 +607,10 @@ video-rtc video { width: 100%; display: block; }
 
 // Tab icons by generated view; a file's own view gets the generic one.
 var TAB_ICONS = {
-  view: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3.5" y="4" width="17" height="16" rx="2"/><line x1="3.5" y1="9.5" x2="20.5" y2="9.5"/><line x1="9" y1="9.5" x2="9" y2="20"/></svg>',
-  now: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 12 8 12 10 6 14 18 16 12 21 12"/></svg>',
-  setpoints: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="6" y1="4" x2="6" y2="20"/><circle cx="6" cy="9" r="2.2" fill="currentColor" stroke="none"/><line x1="12" y1="4" x2="12" y2="20"/><circle cx="12" cy="16" r="2.2" fill="currentColor" stroke="none"/><line x1="18" y1="4" x2="18" y2="20"/><circle cx="18" cy="11" r="2.2" fill="currentColor" stroke="none"/></svg>',
-  rooms: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><rect x="3.5" y="3.5" width="7.5" height="7.5" rx="1.4"/><rect x="13" y="3.5" width="7.5" height="7.5" rx="1.4"/><rect x="3.5" y="13" width="7.5" height="7.5" rx="1.4"/><rect x="13" y="13" width="7.5" height="7.5" rx="1.4"/></svg>'
+  view: html`<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3.5" y="4" width="17" height="16" rx="2"/><line x1="3.5" y1="9.5" x2="20.5" y2="9.5"/><line x1="9" y1="9.5" x2="9" y2="20"/></svg>`,
+  now: html`<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 12 8 12 10 6 14 18 16 12 21 12"/></svg>`,
+  setpoints: html`<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="6" y1="4" x2="6" y2="20"/><circle cx="6" cy="9" r="2.2" fill="currentColor" stroke="none"/><line x1="12" y1="4" x2="12" y2="20"/><circle cx="12" cy="16" r="2.2" fill="currentColor" stroke="none"/><line x1="18" y1="4" x2="18" y2="20"/><circle cx="18" cy="11" r="2.2" fill="currentColor" stroke="none"/></svg>`,
+  rooms: html`<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><rect x="3.5" y="3.5" width="7.5" height="7.5" rx="1.4"/><rect x="13" y="3.5" width="7.5" height="7.5" rx="1.4"/><rect x="3.5" y="13" width="7.5" height="7.5" rx="1.4"/><rect x="13" y="13" width="7.5" height="7.5" rx="1.4"/></svg>`
 };
 var RANGE_PRESETS = [{ label: '1h', hours: 1 }, { label: '6h', hours: 6 }, { label: '24h', hours: 24 }, { label: '7d', hours: 168 }];
 var CHART_VBW = 400; // internal viewBox width used for coordinate math; visual width is CSS 100%
@@ -693,6 +693,36 @@ function esc(s) {
     return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
   });
 }
+
+/* Markup is written with the `html` tag, which escapes by default:
+ * html`<b>${name}</b>` escapes every interpolated value unless it is
+ * itself markup (another html`` result), and joins an array of either. A
+ * forgotten escape is therefore not a way in for a label from the house.
+ * All five of & < > " ' are escaped, so a value is safe in text and in a
+ * QUOTED attribute alike; an unquoted attribute is not, so every
+ * attribute here is quoted. A line break in the template and the
+ * indentation after it are dropped, so markup can be laid out over lines
+ * without putting whitespace between elements. The result is a Markup,
+ * which becomes its text wherever a string is wanted (innerHTML,
+ * insertAdjacentHTML) — and is then an ordinary string, so markup is
+ * composed by interpolating it, never with `+`. */
+function Markup(text) { this.text = text; }
+Markup.prototype.toString = function () { return this.text; };
+
+function html(strings) {
+  var out = unlaid(strings[0]);
+  for (var i = 1; i < strings.length; i++) out += markupOf(arguments[i]) + unlaid(strings[i]);
+  return new Markup(out);
+}
+
+function unlaid(text) { return text.replace(/\n\s*/g, ''); }
+
+function markupOf(value) {
+  if (value instanceof Markup) return value.text;
+  if (Array.isArray(value)) return value.map(markupOf).join('');
+  return esc(value);
+}
+
 var titleCase = logic.titleCase;
 var entityKey = logic.entityKey;
 
@@ -1313,7 +1343,7 @@ function statusGlyph(status) {
 }
 
 function statusChipHtml(status) {
-  return '<span class="status-badge"><span class="status-glyph status-' + esc(status) + '">' + statusGlyph(status) + '</span>' + esc(status) + '</span>';
+  return html`<span class="status-badge"><span class="status-glyph status-${status}">${statusGlyph(status)}</span>${status}</span>`;
 }
 
 function healthTooltip(h) {
@@ -1345,24 +1375,23 @@ function renderShell() {
   var notShownCount = unplaced.entities.length + unplaced.params.length;
 
   var nav = byId('rail-nav');
-  nav.innerHTML = views.map(function (v) {
-    return '<button data-view="' + esc(v.name) + '" class="' + (current === v.name ? 'active' : '') + '">' + esc(v.label) + '</button>';
-  }).join('');
+  nav.innerHTML = html`${views.map(function (v) {
+    return html`<button data-view="${v.name}" class="${current === v.name ? 'active' : ''}">${v.label}</button>`;
+  })}`;
 
   // The phone's bottom bar is the house's views and nothing else: every
   // slot there is one the file named. Health and Not shown are behind the
   // top bar's status button instead (renderStatusSheet).
   var tabs = byId('tabs-row');
   var tabHtml = views.map(function (v) {
-    return '<button data-view="' + esc(v.name) + '" class="' + (current === v.name ? 'active' : '') + '">' +
-      (TAB_ICONS[v.kind] || TAB_ICONS.view) + '<span class="tab-label">' + esc(v.label) + '</span></button>';
+    return html`<button data-view="${v.name}" class="${current === v.name ? 'active' : ''}">${TAB_ICONS[v.kind] || TAB_ICONS.view}<span class="tab-label">${v.label}</span></button>`;
   });
   // Rebuilding the scroller would reset its scroll position on every
   // render; only the active marks change between renders of the same nav.
   var viewsRow = tabs.querySelector('.tabs-views');
   var same = viewsRow && viewsRow.getAttribute('data-views') === views.map(function (v) { return v.name; }).join('\n');
   if (!same) {
-    tabs.innerHTML = '<div class="tabs-views" data-views="' + esc(views.map(function (v) { return v.name; }).join('\n')) + '">' + tabHtml.join('') + '</div>';
+    tabs.innerHTML = html`<div class="tabs-views" data-views="${views.map(function (v) { return v.name; }).join('\n')}">${tabHtml}</div>`;
   } else {
     tabs.querySelectorAll('button[data-view]').forEach(function (b) {
       b.classList.toggle('active', b.getAttribute('data-view') === current);
@@ -1375,21 +1404,21 @@ function renderShell() {
   var pin = byId('health-pin');
   var healthRows;
   if (hw.total === 0) {
-    healthRows = '<div class="row faint">no units yet</div>';
+    healthRows = html`<div class="row faint">no units yet</div>`;
   } else {
     var worstLine = hw.worst.status === 'running'
       ? ''
-      : '<div class="row"><span class="status-glyph status-' + esc(hw.worst.status) + '">' + statusGlyph(hw.worst.status) + '</span>&nbsp;' +
-        esc(titleCase(unitNameFromHealthKey(hw.worst.key))) + ' · ' + esc(hw.worst.status) + '</div>';
-    healthRows = worstLine +
-      '<div class="row"><span class="status-glyph status-running">●</span> ' + hw.ok + '/' + hw.total + ' ok</div>';
+      : html`<div class="row"><span class="status-glyph status-${hw.worst.status}">${statusGlyph(hw.worst.status)}</span>&nbsp;
+        ${titleCase(unitNameFromHealthKey(hw.worst.key))} · ${hw.worst.status}</div>`;
+    healthRows = html`${worstLine}
+      <div class="row"><span class="status-glyph status-running">●</span> ${hw.ok}/${hw.total} ok</div>`;
   }
-  var chrome = '<button class="pin-btn' + (current === 'health' ? ' active' : '') + '" data-view="health"><div class="label">Health</div>' + healthRows + '</button>' +
-    '<button class="pin-btn' + (current === 'notshown' ? ' active' : '') + '" data-view="notshown"><div class="label">Not shown</div>' +
-    '<div class="row">' + (notShownCount
-      ? esc(unplaced.entities.length + (unplaced.entities.length === 1 ? ' entity' : ' entities') +
-        (unplaced.params.length ? ' · ' + unplaced.params.length + (unplaced.params.length === 1 ? ' setpoint' : ' setpoints') : ''))
-      : 'everything is on a view') + '</div></button>';
+  var chrome = html`<button class="pin-btn${current === 'health' ? ' active' : ''}" data-view="health"><div class="label">Health</div>${healthRows}</button>
+    <button class="pin-btn${current === 'notshown' ? ' active' : ''}" data-view="notshown"><div class="label">Not shown</div>
+    <div class="row">${notShownCount
+      ? unplaced.entities.length + (unplaced.entities.length === 1 ? ' entity' : ' entities') +
+        (unplaced.params.length ? ' · ' + unplaced.params.length + (unplaced.params.length === 1 ? ' setpoint' : ' setpoints') : '')
+      : 'everything is on a view'}</div></button>`;
   pin.innerHTML = chrome;
   var about = aboutHtml();
   byId('rail-about').innerHTML = about;
@@ -1398,13 +1427,13 @@ function renderShell() {
   // opening the same chrome and the same about lines as the rail.
   var statusBtn = byId('topbar-status');
   var glyphStatus = hw.worst ? hw.worst.status : 'running';
-  statusBtn.innerHTML = '<span class="status-glyph status-' + esc(glyphStatus) + '">' + statusGlyph(glyphStatus) + '</span>' +
-    esc(hw.total ? hw.ok + '/' + hw.total : 'health') + (notShownCount ? '<span class="faint">· ' + notShownCount + ' not shown</span>' : '');
+  statusBtn.innerHTML = html`<span class="status-glyph status-${glyphStatus}">${statusGlyph(glyphStatus)}</span>
+    ${hw.total ? hw.ok + '/' + hw.total : 'health'}${notShownCount ? html`<span class="faint">· ${notShownCount} not shown</span>` : ''}`;
   statusBtn.setAttribute('aria-label', 'Health, Not shown and about');
   statusBtn.classList.toggle('active', current === 'health' || current === 'notshown' || statusSheetOpen);
   statusBtn.setAttribute('aria-expanded', String(statusSheetOpen));
   var sheet = byId('status-sheet');
-  sheet.innerHTML = chrome + '<div class="about">' + about + '</div>';
+  sheet.innerHTML = html`${chrome}<div class="about">${about}</div>`;
   sheet.classList.toggle('show', statusSheetOpen);
 
   updateBanner();
@@ -1417,14 +1446,14 @@ var statusSheetOpen = false;
 function aboutHtml() {
   var lines = logic.aboutLines(store.model && store.model.about);
   var link = function (href, text) {
-    return '<a href="' + esc(href) + '" target="_blank" rel="noopener">' + esc(text) + '</a>';
+    return html`<a href="${href}" target="_blank" rel="noopener">${text}</a>`;
   };
-  return lines.map(function (l) {
-    return '<div>' + esc(l.label) + ' ' + (l.href ? link(l.href, l.text) : esc(l.text)) +
-      (l.commit ? ' · ' + link(l.commitHref, l.commit) : '') +
-      (l.note ? ' <span class="about-note">' + esc(l.note) + '</span>' : '') + '</div>';
-  }).join('') +
-    '<div class="about-links">' + logic.ABOUT_LINKS.map(function (l) { return link(l.href, l.label); }).join('') + '</div>';
+  return html`${lines.map(function (l) {
+    return html`<div>${l.label} ${l.href ? link(l.href, l.text) : l.text}
+      ${l.commit ? html` · ${link(l.commitHref, l.commit)}` : ''}
+      ${l.note ? html` <span class="about-note">${l.note}</span>` : ''}</div>`;
+  })}
+    <div class="about-links">${logic.ABOUT_LINKS.map(function (l) { return link(l.href, l.label); })}</div>`;
 }
 
 document.addEventListener('click', function (e) {
@@ -1564,7 +1593,7 @@ function buildChart(chartId, points, opts) {
   var inner;
   if (!geo) {
     chartRegistry[chartId] = null;
-    inner = '<div class="chart-empty">no history yet</div>';
+    inner = html`<div class="chart-empty">no history yet</div>`;
   } else {
     // The forecast's points join the hover registry, so a scrub reads
     // straight across the now-rule and "what will it be at 03:00" is the
@@ -1579,15 +1608,14 @@ function buildChart(chartId, points, opts) {
       width: CHART_VBW, height: height, aspect: opts.aspect, window: opts.window
     };
     var d = chartPathData(geo.coords);
-    var dotHtml = '';
     // A forecast alone is enough to draw, so the recorded past can be
     // empty here — a detail overlay renders before its history arrives,
     // and a house that has a horizon but no recorder never has one.
     var last = geo.coords.length ? geo.coords[geo.coords.length - 1] : null;
-    var svg = '<svg viewBox="0 0 ' + CHART_VBW + ' ' + height + '" preserveAspectRatio="none">';
+    var marks = [];
     if (opts.gridlines) {
       [pad, height / 2, height - pad].forEach(function (y) {
-        svg += '<line class="chart-grid" x1="0" y1="' + y.toFixed(1) + '" x2="' + CHART_VBW + '" y2="' + y.toFixed(1) + '"/>';
+        marks.push(html`<line class="chart-grid" x1="0" y1="${y.toFixed(1)}" x2="${CHART_VBW}" y2="${y.toFixed(1)}"/>`);
       });
     }
     // An area fill is for ONE series. Its baseline here is the smallest
@@ -1600,24 +1628,22 @@ function buildChart(chartId, points, opts) {
     var alone = !(geo.forecast || geo.issues || geo.contributors);
     if (opts.area && last && alone) {
       var areaD = d + ' L ' + last.x.toFixed(1) + ' ' + (height - pad) + ' L ' + geo.coords[0].x.toFixed(1) + ' ' + (height - pad) + ' Z';
-      svg += '<path class="chart-area" d="' + areaD + '"/>';
+      marks.push(html`<path class="chart-area" d="${areaD}"/>`);
     }
     if (geo.issues) {
       geo.issues.forEach(function (f, n) {
         var d2 = chartPathData(f.coords);
         var pinned = opts.pinned !== undefined && opts.pinned !== null && f.issued === opts.pinned;
-        svg += '<path class="chart-issue-hit" data-issue="' + n + '" d="' + d2 + '"/>';
-        svg += '<path class="chart-issue' + (pinned ? ' pinned' : '') + '" data-issue="' + n +
-          '" d="' + d2 + '" stroke="' + (pinned ? '' : issueInk(f.age)) + '"/>';
+        marks.push(html`<path class="chart-issue-hit" data-issue="${n}" d="${d2}"/>`);
+        marks.push(html`<path class="chart-issue${pinned ? ' pinned' : ''}" data-issue="${n}" d="${d2}" stroke="${pinned ? '' : issueInk(f.age)}"/>`);
       });
     }
     if (geo.contributors) {
       geo.contributors.forEach(function (c) {
-        svg += '<path class="chart-contributor" data-source="' + esc(c.name) + '" d="' +
-          chartPathData(c.coords) + '"/>';
+        marks.push(html`<path class="chart-contributor" data-source="${c.name}" d="${chartPathData(c.coords)}"/>`);
       });
     }
-    svg += '<path class="chart-line" d="' + d + '"/>';
+    marks.push(html`<path class="chart-line" d="${d}"/>`);
     if (geo.forecast && geo.forecast.length) {
       // Dashed, and starting from the last recorded point so the eye
       // follows one line: the change in stroke is what says "from here
@@ -1634,35 +1660,29 @@ function buildChart(chartId, points, opts) {
         // ever drew.
         var head = f.coords[0];
         var joined = last && head && last.x <= head.x ? [last].concat(f.coords) : f.coords;
-        svg += '<path class="chart-forecast' + (f.stale ? ' stale' : '') +
-          '" data-source="' + esc(f.source) + '" d="' + chartPathData(joined) + '"/>';
+        marks.push(html`<path class="chart-forecast${f.stale ? ' stale' : ''}" data-source="${f.source}" d="${chartPathData(joined)}"/>`);
       });
     }
     if (geo.nowX !== undefined) {
-      svg += '<line class="chart-now" x1="' + geo.nowX.toFixed(1) + '" y1="0" x2="' +
-        geo.nowX.toFixed(1) + '" y2="' + height + '"/>';
+      marks.push(html`<line class="chart-now" x1="${geo.nowX.toFixed(1)}" y1="0" x2="${geo.nowX.toFixed(1)}" y2="${height}"/>`);
     }
     // The dot marks the latest RECORDED value, so there is none to mark
     // when nothing has been recorded.
-    if (last) {
-      dotHtml = '<div class="chart-dot" style="left:' + (last.x / CHART_VBW * 100).toFixed(2) +
-        '%; top:' + (last.y / height * 100).toFixed(2) + '%;"></div>';
-    }
-    svg += '<line class="chart-crosshair" x1="0" y1="0" x2="0" y2="' + height + '" style="display:none;"/>';
-    dotHtml += '<div class="chart-crosshair-dot" style="display:none;"></div>';
-    svg += '</svg>';
-    inner = svg + dotHtml;
-    if (opts.yLabels) {
-      inner += '<div class="chart-ylabel chart-ylabel-top">' + esc(formatChartValue(opts.aspect, geo.max)) + '</div>' +
-        '<div class="chart-ylabel chart-ylabel-bottom">' + esc(formatChartValue(opts.aspect, geo.min)) + '</div>';
-    }
+    var dot = last
+      ? html`<div class="chart-dot" style="left:${(last.x / CHART_VBW * 100).toFixed(2)}%; top:${(last.y / height * 100).toFixed(2)}%;"></div>`
+      : '';
+    inner = html`<svg viewBox="0 0 ${CHART_VBW} ${height}" preserveAspectRatio="none">${marks}
+      <line class="chart-crosshair" x1="0" y1="0" x2="0" y2="${height}" style="display:none;"/></svg>
+      ${dot}<div class="chart-crosshair-dot" style="display:none;"></div>
+      ${opts.yLabels ? html`<div class="chart-ylabel chart-ylabel-top">${formatChartValue(opts.aspect, geo.max)}</div>
+        <div class="chart-ylabel chart-ylabel-bottom">${formatChartValue(opts.aspect, geo.min)}</div>` : ''}`;
   }
-  var wrap = '<div class="chart-wrap ' + sizeClass + '" data-chart-id="' + esc(chartId) + '">' + inner + '</div>';
   // A chart with no time axis leaves the reader to guess how far back it
   // goes; the range chip says "24h" but never where the window starts or
   // ends, and with a horizon drawn the right edge is not even now. The
   // middle slot names the now-rule when one is drawn, which is the only
   // instant on the axis a reader has to find rather than read.
+  var axis = '';
   if (opts.yLabels && geo && geo.from && geo.to > geo.from) {
     var span = geo.to - geo.from;
     // The near end dates the axis; the far end only needs the clock,
@@ -1672,14 +1692,14 @@ function buildChart(chartId, points, opts) {
     // Crowded against either end it would collide with the label there,
     // and the rule itself already says where now is.
     var nowLabel = nowPct !== null && nowPct > 14 && nowPct < 86
-      ? '<span class="chart-xnow" style="left:' + nowPct.toFixed(1) + '%">now</span>'
+      ? html`<span class="chart-xnow" style="left:${nowPct.toFixed(1)}%">now</span>`
       : '';
-    wrap += '<div class="chart-xaxis">' +
-      '<span>' + esc(formatChartTime(geo.from, span)) + '</span>' + nowLabel +
-      '<span>' + esc(sameDay ? formatChartClock(geo.to, span) : formatChartTime(geo.to, span)) + '</span>' +
-      '</div>';
+    axis = html`<div class="chart-xaxis">
+      <span>${formatChartTime(geo.from, span)}</span>${nowLabel}
+      <span>${sameDay ? formatChartClock(geo.to, span) : formatChartTime(geo.to, span)}</span>
+      </div>`;
   }
-  return wrap;
+  return html`<div class="chart-wrap ${sizeClass}" data-chart-id="${chartId}">${inner}</div>${axis}`;
 }
 
 // A timeline: one band per run of a bool or string state over the window
@@ -1693,22 +1713,20 @@ function buildTimeline(chartId, points, opts) {
   var inner;
   if (runs.length === 0) {
     chartRegistry[chartId] = null;
-    inner = '<div class="chart-empty">no history yet</div>';
+    inner = html`<div class="chart-empty">no history yet</div>`;
   } else {
     var span = opts.window.to - opts.window.from;
     chartRegistry[chartId] = { runs: runs, window: opts.window, width: CHART_VBW, height: height, aspect: opts.aspect, field: opts.field };
-    var svg = '<svg viewBox="0 0 ' + CHART_VBW + ' ' + height + '" preserveAspectRatio="none">';
-    runs.forEach(function (r, i) {
+    var bands = runs.map(function (r, i) {
       var x = (r.start - opts.window.from) / span * CHART_VBW;
       var w = Math.max(1, (r.end - r.start) / span * CHART_VBW);
       var cls = r.value === true ? 'tl-on' : r.value === false ? 'tl-off' : (i % 2 ? 'tl-b' : 'tl-a');
-      svg += '<rect class="' + cls + '" x="' + x.toFixed(1) + '" y="2" width="' + w.toFixed(1) + '" height="' + (height - 4) + '"/>';
+      return html`<rect class="${cls}" x="${x.toFixed(1)}" y="2" width="${w.toFixed(1)}" height="${height - 4}"/>`;
     });
-    svg += '<line class="chart-crosshair" x1="0" y1="0" x2="0" y2="' + height + '" style="display:none;"/>';
-    svg += '</svg>';
-    inner = svg;
+    inner = html`<svg viewBox="0 0 ${CHART_VBW} ${height}" preserveAspectRatio="none">${bands}
+      <line class="chart-crosshair" x1="0" y1="0" x2="0" y2="${height}" style="display:none;"/></svg>`;
   }
-  return '<div class="chart-wrap ' + sizeClass + '" data-chart-id="' + esc(chartId) + '">' + inner + '</div>';
+  return html`<div class="chart-wrap ${sizeClass}" data-chart-id="${chartId}">${inner}</div>`;
 }
 
 function minMaxCaption(points) {
@@ -1969,25 +1987,25 @@ function controlDisabled(entity) { return !entity.commandable; }
 function widgetForLight(entity) {
   var on = !!stateValue(entity.room, entity.name, 'on');
   var inert = controlDisabled(entity);
-  var html = '<div class="entity-row row-clickable" data-action="entity-detail" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '">' +
-    '<span class="entity-name" title="' + esc(entity.label) + '">' + esc(entity.label) + '</span>' +
-    '<span class="toggle ' + (on ? 'on' : '') + (inert ? ' disabled' : '') + '"' + (inert ? '' : ' data-action="toggle-light"') + ' data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '" data-value="' + (!on) + '"><span class="knob"></span></span>' +
-    '</div>';
+  var rows = [html`<div class="entity-row row-clickable" data-action="entity-detail" data-room="${entity.room}" data-entity="${entity.name}">
+    <span class="entity-name" title="${entity.label}">${entity.label}</span>
+    <span class="toggle ${on ? 'on' : ''}${inert ? ' disabled' : ''}"${inert ? '' : html` data-action="toggle-light"`} data-room="${entity.room}" data-entity="${entity.name}" data-value="${!on}"><span class="knob"></span></span>
+    </div>`];
 
   if (entity.features && entity.features.indexOf('brightness') !== -1) {
     var b = stateValue(entity.room, entity.name, 'brightness');
     var bkey = entity.room + '/' + entity.name + '/brightness';
     var pct = typeof b === 'number' ? Math.round((b / 254) * 100) : 0;
     if (localState.sliderDrag[bkey] !== undefined) pct = localState.sliderDrag[bkey];
-    var nudgeAttrs = ' data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '"' + (inert || typeof b !== 'number' ? ' disabled' : '');
+    var nudgeAttrs = html` data-room="${entity.room}" data-entity="${entity.name}"${inert || typeof b !== 'number' ? html` disabled` : ''}`;
     // This is a percent the house may want in fives; the bespoke light
     // controls read the same [[control]] entries as every other slider.
     var bstep = logic.declaredStep(houseControls(), { entity: entity.name, aspect: 'brightness' });
-    html += '<div class="slider-row entity-sub"><span class="slabel">brightness</span>' +
-      '<button class="step-btn" data-action="brightness-step"' + nudgeAttrs + ' data-delta="' + esc(-(bstep || 10)) + '" aria-label="dimmer">&minus;</button>' +
-      '<input type="range" min="0" max="100"' + (bstep ? ' step="' + esc(bstep) + '"' : '') + ' value="' + pct + '"' + (inert ? ' disabled' : '') + ' data-action="slider" data-kind="brightness" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '">' +
-      '<span class="sval">' + pct + '%</span>' +
-      '<button class="step-btn" data-action="brightness-step"' + nudgeAttrs + ' data-delta="' + esc(bstep || 10) + '" aria-label="brighter">+</button></div>';
+    rows.push(html`<div class="slider-row entity-sub"><span class="slabel">brightness</span>
+      <button class="step-btn" data-action="brightness-step"${nudgeAttrs} data-delta="${-(bstep || 10)}" aria-label="dimmer">&minus;</button>
+      <input type="range" min="0" max="100"${bstep ? html` step="${bstep}"` : ''} value="${pct}"${inert ? html` disabled` : ''} data-action="slider" data-kind="brightness" data-room="${entity.room}" data-entity="${entity.name}">
+      <span class="sval">${pct}%</span>
+      <button class="step-btn" data-action="brightness-step"${nudgeAttrs} data-delta="${bstep || 10}" aria-label="brighter">+</button></div>`);
   }
   if (entity.features && entity.features.indexOf('color_temp') !== -1) {
     var ct = stateValue(entity.room, entity.name, 'color_temp');
@@ -1995,11 +2013,11 @@ function widgetForLight(entity) {
     var mired = typeof ct === 'number' ? ct : 300;
     if (localState.sliderDrag[ctkey] !== undefined) mired = localState.sliderDrag[ctkey];
     var kelvin = Math.round(1e6 / mired / 100) * 100;
-    html += '<div class="slider-row entity-sub"><span class="slabel">color temp</span>' +
-      '<input type="range" min="150" max="500" value="' + mired + '"' + (inert ? ' disabled' : '') + ' data-action="slider" data-kind="color_temp" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '">' +
-      '<span class="sval">' + kelvin + ' K</span></div>';
+    rows.push(html`<div class="slider-row entity-sub"><span class="slabel">color temp</span>
+      <input type="range" min="150" max="500" value="${mired}"${inert ? html` disabled` : ''} data-action="slider" data-kind="color_temp" data-room="${entity.room}" data-entity="${entity.name}">
+      <span class="sval">${kelvin} K</span></div>`);
   }
-  return html;
+  return html`${rows}`;
 }
 
 function widgetForPresence(entity) {
@@ -2007,20 +2025,20 @@ function widgetForPresence(entity) {
   var seenKey = entity.room + '/' + entity.name;
   var lastSeen = store.lastSeen[seenKey];
   var label = occ ? 'Motion' : 'Clear';
-  var extra = lastSeen ? '<span class="faint" title="' + esc(new Date(lastSeen).toLocaleString()) + '"> &middot; ' + esc(relTime(lastSeen)) + '</span>' : '';
-  return '<div class="entity-row row-clickable" data-action="entity-detail" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '">' +
-    '<span class="entity-name" title="' + esc(entity.label) + '">' + esc(entity.label) + '</span>' +
-    '<span><span class="status-dot ' + (occ ? 'dot-on' : 'dot-off') + '"></span>' + esc(label) + extra + '</span>' +
-    '</div>';
+  var extra = lastSeen ? html`<span class="faint" title="${new Date(lastSeen).toLocaleString()}"> &middot; ${relTime(lastSeen)}</span>` : '';
+  return html`<div class="entity-row row-clickable" data-action="entity-detail" data-room="${entity.room}" data-entity="${entity.name}">
+    <span class="entity-name" title="${entity.label}">${entity.label}</span>
+    <span><span class="status-dot ${occ ? 'dot-on' : 'dot-off'}"></span>${label}${extra}</span>
+    </div>`;
 }
 
 function widgetForLock(entity) {
   var locked = !!stateValue(entity.room, entity.name, 'locked');
-  var badge = entity.write_mode === 'arbitrated' ? '<span class="badge-arbitrated">ARBITRATED</span>' : '';
-  return '<div class="entity-row row-clickable" data-action="entity-detail" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '">' +
-    '<span class="entity-name" title="' + esc(entity.label) + '">' + esc(entity.label) + badge + '</span>' +
-    '<span class="toggle ' + (locked ? 'on' : '') + (controlDisabled(entity) ? ' disabled' : '') + '"' + (controlDisabled(entity) ? '' : ' data-action="toggle-lock"') + ' data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '" data-value="' + (!locked) + '"><span class="knob"></span></span>' +
-    '</div>';
+  var badge = entity.write_mode === 'arbitrated' ? html`<span class="badge-arbitrated">ARBITRATED</span>` : '';
+  return html`<div class="entity-row row-clickable" data-action="entity-detail" data-room="${entity.room}" data-entity="${entity.name}">
+    <span class="entity-name" title="${entity.label}">${entity.label}${badge}</span>
+    <span class="toggle ${locked ? 'on' : ''}${controlDisabled(entity) ? ' disabled' : ''}"${controlDisabled(entity) ? '' : html` data-action="toggle-lock"`} data-room="${entity.room}" data-entity="${entity.name}" data-value="${!locked}"><span class="knob"></span></span>
+    </div>`;
 }
 
 function widgetForClimate(entity, big) {
@@ -2032,25 +2050,26 @@ function widgetForClimate(entity, big) {
   var nowParts = [];
   if (typeof indoor === 'number') nowParts.push(indoor.toFixed(1) + '° now');
   if (typeof feed === 'number') nowParts.push(feed.toFixed(1) + '° feed');
-  var badge = entity.write_mode === 'arbitrated' ? '<span class="badge-arbitrated">ARBITRATED</span>' : '';
-  var disabledAttr = hasSetpoint && !controlDisabled(entity) ? '' : ' disabled';
+  var badge = entity.write_mode === 'arbitrated' ? html`<span class="badge-arbitrated">ARBITRATED</span>` : '';
+  var disabled = !(hasSetpoint && !controlDisabled(entity));
   if (big) {
     // the overlay and the dial widget: the vocabulary's setpoint on a
     // dial, bounds the capability's usual (the adapter enforces its own)
-    return renderDial('climate-step', ' data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '"', {
+    return renderDial('climate-step', html` data-room="${entity.room}" data-entity="${entity.name}"`, {
       value: setpoint, display: readout, min: 5, max: 30, step: 0.5,
-      disabled: !!disabledAttr, current: nowParts.join(' · ')
+      disabled: disabled, current: nowParts.join(' · ')
     });
   }
-  return '<div class="entity-row row-clickable" data-action="entity-detail" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '">' +
-    '<span class="entity-name" title="' + esc(entity.label) + '">' + esc(entity.label) + badge + '</span>' +
-    '<span style="display:flex;align-items:center;gap:10px;">' +
-    (nowParts.length ? '<span class="faint">' + esc(nowParts.join(' · ')) + '</span>' : '') +
-    '<span class="stepper">' +
-    '<button class="step-btn" data-action="climate-step" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '" data-delta="-0.5"' + disabledAttr + '>&minus;</button>' +
-    '<span class="stepper-value">' + esc(readout) + '</span>' +
-    '<button class="step-btn" data-action="climate-step" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '" data-delta="0.5"' + disabledAttr + '>+</button>' +
-    '</span></span></div>';
+  var disabledAttr = disabled ? html` disabled` : '';
+  return html`<div class="entity-row row-clickable" data-action="entity-detail" data-room="${entity.room}" data-entity="${entity.name}">
+    <span class="entity-name" title="${entity.label}">${entity.label}${badge}</span>
+    <span style="display:flex;align-items:center;gap:10px;">
+    ${nowParts.length ? html`<span class="faint">${nowParts.join(' · ')}</span>` : ''}
+    <span class="stepper">
+    <button class="step-btn" data-action="climate-step" data-room="${entity.room}" data-entity="${entity.name}" data-delta="-0.5"${disabledAttr}>&minus;</button>
+    <span class="stepper-value">${readout}</span>
+    <button class="step-btn" data-action="climate-step" data-room="${entity.room}" data-entity="${entity.name}" data-delta="0.5"${disabledAttr}>+</button>
+    </span></span></div>`;
 }
 
 // A sensor's card: one sparkline row per reading, each tapping through to
@@ -2063,27 +2082,27 @@ function widgetForClimate(entity, big) {
 function widgetForSensor(entity, withHead) {
   var rows = logic.sensorCardPlan(entity, store.state, store.aspects[entity.name]);
   if (rows.length === 0) {
-    return '<div class="entity-row"><span class="entity-name">' + esc(entity.label) + '</span><span class="faint">no data</span></div>';
+    return html`<div class="entity-row"><span class="entity-name">${entity.label}</span><span class="faint">no data</span></div>`;
   }
   var multi = rows.length > 1;
-  var attrs = ' data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '"';
+  var attrs = html` data-room="${entity.room}" data-entity="${entity.name}"`;
   var head = multi && withHead !== false
-    ? '<div class="entity-row row-clickable" data-action="entity-detail"' + attrs + '>' +
-      '<span class="entity-name" title="' + esc(entity.label) + '">' + esc(entity.label) + '</span></div>'
+    ? html`<div class="entity-row row-clickable" data-action="entity-detail"${attrs}>
+      <span class="entity-name" title="${entity.label}">${entity.label}</span></div>`
     : '';
-  return head + rows.map(function (r) {
+  return html`${head}${rows.map(function (r) {
     var sk = entity.name + '|' + r.aspect;
     ensureHistory(entity.name, r.aspect); // fetched once (guarded), on first render while visible
     var s = localState.sparklines[sk];
-    var sparkHtml = s && s.loaded ? buildChart('room-' + sk, s.points, { height: 28, sizeClass: 'chart-row', aspect: r.aspect, area: true, window: s.window }) : '';
+    var spark = s && s.loaded ? buildChart('room-' + sk, s.points, { height: 28, sizeClass: 'chart-row', aspect: r.aspect, area: true, window: s.window }) : null;
     var name = multi ? r.label : entity.label;
-    return '<div class="entity-row row-clickable' + (multi ? ' sensor-reading' : '') + '" data-action="history-detail"' + attrs + ' data-aspect="' + esc(r.aspect) + '">' +
-      '<span class="entity-name" title="' + esc(name) + '">' + esc(name) + '</span>' +
-      '<span style="display:flex;align-items:center;gap:8px;">' +
-      (sparkHtml ? '<span style="width:80px;">' + sparkHtml + '</span>' : '') +
-      '<span class="muted' + (r.stale ? ' stale' : '') + '">' + esc(r.display) + '</span></span>' +
-      '</div>';
-  }).join('');
+    return html`<div class="entity-row row-clickable${multi ? ' sensor-reading' : ''}" data-action="history-detail"${attrs} data-aspect="${r.aspect}">
+      <span class="entity-name" title="${name}">${name}</span>
+      <span style="display:flex;align-items:center;gap:8px;">
+      ${spark ? html`<span style="width:80px;">${spark}</span>` : ''}
+      <span class="muted${r.stale ? ' stale' : ''}">${r.display}</span></span>
+      </div>`;
+  })}`;
 }
 
 function widgetGeneric(entity) {
@@ -2092,12 +2111,12 @@ function widgetGeneric(entity) {
   Object.keys(store.state).forEach(function (k) {
     if (k.indexOf(prefix) === 0) {
       var aspect = k.slice(prefix.length);
-      rows.push('<div class="aspect-row">' + esc(aspect) + ': ' + esc(logic.formatAspect(aspect, null, store.state[k])) + '</div>');
+      rows.push(html`<div class="aspect-row">${aspect}: ${logic.formatAspect(aspect, null, store.state[k])}</div>`);
     }
   });
-  if (rows.length === 0) rows.push('<div class="aspect-row faint">no data</div>');
-  return '<div class="entity-row row-clickable" data-action="entity-detail" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '" style="flex-direction:column;align-items:flex-start;">' +
-    '<span class="entity-name" title="' + esc(entity.label) + '">' + esc(entity.label) + '</span>' + rows.join('') + '</div>';
+  if (rows.length === 0) rows.push(html`<div class="aspect-row faint">no data</div>`);
+  return html`<div class="entity-row row-clickable" data-action="entity-detail" data-room="${entity.room}" data-entity="${entity.name}" style="flex-direction:column;align-items:flex-start;">
+    <span class="entity-name" title="${entity.label}">${entity.label}</span>${rows}</div>`;
 }
 
 function widgetForCamera(entity) {
@@ -2109,12 +2128,12 @@ function widgetForCamera(entity) {
   // from the event plane, which is the part that matters at a glance. The
   // live view opens in the detail overlay — never N always-on streams.
   var motion = stateValue(entity.room, entity.name, 'motion');
-  var badge = motion === true ? '<span class="badge-motion">MOTION</span>' : '';
-  return '<div class="entity-row row-clickable" data-action="entity-detail" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '" style="flex-direction:column;align-items:stretch;gap:6px;">' +
-    '<span style="display:flex;justify-content:space-between;align-items:center;">' +
-    '<span class="entity-name" title="' + esc(entity.label) + '">' + esc(entity.label) + '</span>' + badge + '</span>' +
-    '<span class="camera-tap">&#9654; tap to view</span>' +
-    '</div>';
+  var badge = motion === true ? html`<span class="badge-motion">MOTION</span>` : '';
+  return html`<div class="entity-row row-clickable" data-action="entity-detail" data-room="${entity.room}" data-entity="${entity.name}" style="flex-direction:column;align-items:stretch;gap:6px;">
+    <span style="display:flex;justify-content:space-between;align-items:center;">
+    <span class="entity-name" title="${entity.label}">${entity.label}</span>${badge}</span>
+    <span class="camera-tap">&#9654; tap to view</span>
+    </div>`;
 }
 
 // The room-card row for an entity whose adapter published an aspect
@@ -2124,18 +2143,18 @@ function widgetForCamera(entity) {
 // readings are headline is dashboard-logic.js's cardPlan.
 function widgetForDescribed(entity) {
   var plan = logic.cardPlan(entity, store.state, store.aspects[entity.name], !controlDisabled(entity), houseControls());
-  var badge = entity.write_mode === 'arbitrated' ? '<span class="badge-arbitrated">ARBITRATED</span>' : '';
+  var badge = entity.write_mode === 'arbitrated' ? html`<span class="badge-arbitrated">ARBITRATED</span>` : '';
   var control = plan.controls.length ? renderAspectControl(entity, plan.controls[0]) : '';
-  var readings = plan.readings.map(function (r) {
-    return '<span class="card-reading' + (r.stale ? ' stale' : '') + '" title="' + esc(r.aspect) + '">' +
-      esc(r.label) + ' <b>' + esc(r.display) + '</b></span>';
-  }).join('<span class="sep">&middot;</span>');
+  var readings = plan.readings.map(function (r, i) {
+    return html`${i ? html`<span class="sep">&middot;</span>` : ''}<span class="card-reading${r.stale ? ' stale' : ''}" title="${r.aspect}">
+      ${r.label} <b>${r.display}</b></span>`;
+  });
   // The badge rides the readings line: inside the ellipsed name it clips
   // to a stub in a narrow column, and the head line belongs to the control.
-  return '<div class="entity-row described-card row-clickable" data-action="entity-detail" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '">' +
-    '<div class="described-head"><span class="entity-name" title="' + esc(entity.label) + '">' + esc(entity.label) + '</span>' + control + '</div>' +
-    (readings || badge ? '<div class="described-readings">' + readings + (badge ? '<span class="card-badge">' + badge + '</span>' : '') + '</div>' : '') +
-    '</div>';
+  return html`<div class="entity-row described-card row-clickable" data-action="entity-detail" data-room="${entity.room}" data-entity="${entity.name}">
+    <div class="described-head"><span class="entity-name" title="${entity.label}">${entity.label}</span>${control}</div>
+    ${readings.length || badge ? html`<div class="described-readings">${readings}${badge ? html`<span class="card-badge">${badge}</span>` : ''}</div>` : ''}
+    </div>`;
 }
 
 function widgetForEntity(entity) {
@@ -2201,7 +2220,8 @@ function mapThemeName() {
 function personDivIcon(entity) {
   return L.divIcon({
     className: 'person-marker',
-    html: '<div class="person-marker-dot"></div><div class="person-marker-label">' + esc(entity.label) + '</div>',
+    // Leaflet takes a string here (and a popup's content below), not markup
+    html: String(html`<div class="person-marker-dot"></div><div class="person-marker-label">${entity.label}</div>`),
     iconSize: [12, 12],
     iconAnchor: [6, 6]
   });
@@ -2213,7 +2233,7 @@ function personPopupHtml(entity) {
   var parts = [];
   if (typeof battery === 'number') parts.push('battery ' + Math.round(battery) + '%');
   if (typeof fixedAt === 'number') parts.push(relTime(fixedAt * 1000));
-  return '<b>' + esc(entity.label) + '</b>' + (parts.length ? '<br>' + esc(parts.join(' · ')) : '');
+  return String(html`<b>${entity.label}</b>${parts.length ? html`<br>${parts.join(' · ')}` : ''}`);
 }
 
 function ensureMap() {
@@ -2297,12 +2317,12 @@ function mountMap(persons) {
 
 function renderMapCard(persons) {
   var noFix = persons.filter(function (e) { return !personLatLon(e); });
-  var hint = store.model.tiles ? '' : '<div class="map-hint">no tile extract configured</div>';
+  var hint = store.model.tiles ? '' : html`<div class="map-hint">no tile extract configured</div>`;
   var noFixHtml = noFix.length
-    ? '<div class="map-nofix">' + noFix.map(function (e) { return esc(e.label); }).join(', ') + ' &mdash; no fix yet</div>'
+    ? html`<div class="map-nofix">${noFix.map(function (e) { return e.label; }).join(', ')} &mdash; no fix yet</div>`
     : '';
-  return '<div class="card span-all"><div class="card-label">Map</div>' +
-    '<div id="map-slot"></div>' + hint + noFixHtml + '</div>';
+  return html`<div class="card span-all"><div class="card-label">Map</div>
+    <div id="map-slot"></div>${hint}${noFixHtml}</div>`;
 }
 
 // ---- widgets ----
@@ -2317,7 +2337,7 @@ function renderMapCard(persons) {
 function widgetTiles(entity, aspect) {
   var rows = logic.sensorCardPlan(entity, store.state, store.aspects[entity.name]);
   if (aspect) rows = rows.filter(function (r) { return r.aspect === aspect; });
-  return rows.map(function (r) {
+  return html`${rows.map(function (r) {
     var sk = entity.name + '|' + r.aspect;
     ensureHistory(entity.name, r.aspect);
     var s = localState.sparklines[sk];
@@ -2342,15 +2362,14 @@ function widgetTiles(entity, aspect) {
     // With no belief to draw — or several, which a tile has no room to
     // tell apart — the caption is today's range.
     if (!caption && s && s.loaded) caption = minMaxCaption(s.points);
-    // The separator is the character, not the entity: the whole label is
-    // upper-cased below, and "&MIDDOT;" is not one.
-    var tileLabel = esc(entity.label) + (rows.length > 1 ? ' \u00b7 ' + esc(r.label) : '');
-    return '<div class="card tile clickable" data-action="history-detail" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '" data-aspect="' + esc(r.aspect) + '">' +
-      '<div class="card-label" title="' + esc(entity.label) + '">' + tileLabel.toUpperCase() + '</div>' +
-      '<div class="big' + (r.stale ? ' stale' : '') + '">' + esc(r.display) + '</div>' + spark +
-      '<div class="caption">' + esc(caption) +
-      (aged ? '<span class="stale-mark">stale</span>' : '') + '</div></div>';
-  }).join('');
+    // The separator is the character, not the entity: the label is text,
+    // escaped whole, so "&middot;" here would print as itself.
+    var tileLabel = entity.label + (rows.length > 1 ? ' \u00b7 ' + r.label : '');
+    return html`<div class="card tile clickable" data-action="history-detail" data-room="${entity.room}" data-entity="${entity.name}" data-aspect="${r.aspect}">
+      <div class="card-label" title="${entity.label}">${tileLabel.toUpperCase()}</div>
+      <div class="big${r.stale ? ' stale' : ''}">${r.display}</div>${spark}
+      <div class="caption">${caption}${aged ? html`<span class="stale-mark">stale</span>` : ''}</div></div>`;
+  })}`;
 }
 
 // One aspect's history over a window, as a card.
@@ -2378,13 +2397,13 @@ function widgetChart(entity, aspect, hours) {
   // The same rule as a tile: a drawn belief says when it was said. One
   // line for one source; with several, the overlay names each.
   var beliefCaption = beliefs.length === 1
-    ? '<div class="caption">' + esc(issuedCaption(beliefs[0].forecast)) +
-      (logic.forecastFreshness(beliefs[0].forecast, Date.now()).stale
-        ? '<span class="stale-mark">stale</span>' : '') + '</div>'
+    ? html`<div class="caption">${issuedCaption(beliefs[0].forecast)}
+      ${logic.forecastFreshness(beliefs[0].forecast, Date.now()).stale
+        ? html`<span class="stale-mark">stale</span>` : ''}</div>`
     : '';
-  return '<div class="card tile clickable span-all" data-action="history-detail" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '" data-aspect="' + esc(aspect) + '">' +
-    '<div class="card-label">' + esc(entity.label + ' · ' + ((field && field.label) || aspect)).toUpperCase() + ' <span class="faint">' + esc(hours >= 48 ? Math.round(hours / 24) + 'd' : hours + 'h') + '</span></div>' +
-    '<div class="big">' + esc(logic.formatAspect(aspect, field, value)) + '</div>' + chart + beliefCaption + '</div>';
+  return html`<div class="card tile clickable span-all" data-action="history-detail" data-room="${entity.room}" data-entity="${entity.name}" data-aspect="${aspect}">
+    <div class="card-label">${(entity.label + ' · ' + ((field && field.label) || aspect)).toUpperCase()} <span class="faint">${hours >= 48 ? Math.round(hours / 24) + 'd' : hours + 'h'}</span></div>
+    <div class="big">${logic.formatAspect(aspect, field, value)}</div>${chart}${beliefCaption}</div>`;
 }
 
 // People: the person entities, home or away from their presence aspect;
@@ -2396,11 +2415,11 @@ function widgetPeople(persons) {
     var st = logic.personStatus(store.state, e);
     var detail = st.home === true ? 'Home' : st.home === false ? 'Away'
       : st.seenAt !== undefined ? 'last fix ' + relTime(st.seenAt) : 'no signal';
-    return '<div class="row-clickable" data-action="entity-detail" data-room="' + esc(e.room) + '" data-entity="' + esc(e.name) + '" style="display:flex;align-items:center;gap:6px;padding:3px 0;">' +
-      '<span class="status-dot ' + (st.home === true ? 'dot-on' : 'dot-off') + '"></span>' +
-      '<span>' + esc(e.label) + ' &middot; ' + esc(detail) + '</span></div>';
-  }).join('');
-  return '<div class="card tile"><div class="card-label">People</div>' + pRows + '</div>';
+    return html`<div class="row-clickable" data-action="entity-detail" data-room="${e.room}" data-entity="${e.name}" style="display:flex;align-items:center;gap:6px;padding:3px 0;">
+      <span class="status-dot ${st.home === true ? 'dot-on' : 'dot-off'}"></span>
+      <span>${e.label} &middot; ${detail}</span></div>`;
+  });
+  return html`<div class="card tile"><div class="card-label">People</div>${pRows}</div>`;
 }
 
 // Out of the ordinary — the rules live in dashboard-logic.js; here each
@@ -2417,32 +2436,30 @@ function widgetDeviations() {
 
   function deviationAttrs(target) {
     if (target.type === 'unit') {
-      return 'data-action="unit-detail" data-unit="' + esc(target.unit) + '"';
+      return html`data-action="unit-detail" data-unit="${target.unit}"`;
     }
     if (target.type === 'entity') {
-      return 'data-action="entity-detail" data-room="' + esc(target.room) +
-        '" data-entity="' + esc(target.entity) + '"';
+      return html`data-action="entity-detail" data-room="${target.room}" data-entity="${target.entity}"`;
     }
     if (target.type === 'setpoint') {
-      return 'data-action="goto-setpoint" data-unit="' + esc(target.unit) +
-        '" data-param="' + esc(target.param) + '"';
+      return html`data-action="goto-setpoint" data-unit="${target.unit}" data-param="${target.param}"`;
     }
-    return 'data-action="goto-rooms"';
+    return html`data-action="goto-rooms"`;
   }
 
   var devHtml;
   if (deviations.length === 0) {
-    devHtml = '<div class="equilibrium"><span class="eq-dot"></span>In equilibrium.</div>';
+    devHtml = html`<div class="equilibrium"><span class="eq-dot"></span>In equilibrium.</div>`;
   } else {
     devHtml = deviations.map(function (d) {
-      return '<div class="dev-row row-clickable" ' + deviationAttrs(d.target) + '>' +
-        '<div class="dev-main"><div class="title" title="' + esc(d.title) + '">' + esc(d.title) + '</div>' +
-        (d.detail ? '<div class="detail">' + esc(d.detail) + '</div>' : '') + '</div>' +
-        (d.button ? '<button class="dev-btn" data-action="' + d.button.action + '">' + esc(d.button.label) + '</button>' : '') +
-        '<div class="dev-tag">' + esc(d.tag) + '</div></div>';
-    }).join('');
+      return html`<div class="dev-row row-clickable" ${deviationAttrs(d.target)}>
+        <div class="dev-main"><div class="title" title="${d.title}">${d.title}</div>
+        ${d.detail ? html`<div class="detail">${d.detail}</div>` : ''}</div>
+        ${d.button ? html`<button class="dev-btn" data-action="${d.button.action}">${d.button.label}</button>` : ''}
+        <div class="dev-tag">${d.tag}</div></div>`;
+    });
   }
-  return '<div class="card span-all"><div class="card-label">Out of the ordinary' + (deviations.length ? ' — ' + deviations.length : '') + '</div>' + devHtml + '</div>';
+  return html`<div class="card span-all"><div class="card-label">Out of the ordinary${deviations.length ? ' — ' + deviations.length : ''}</div>${devHtml}</div>`;
 }
 
 // A unit's family-editable parameters as one card.
@@ -2450,8 +2467,8 @@ function widgetParams(unit) {
   var params = unit.params || {};
   var rows = Object.keys(params).filter(function (p) { return familyEditable(params[p]); })
     .map(function (p) { return renderParamRow(unit.name, p, params[p], true); });
-  return '<div class="card"><div class="card-label">' + esc(unit.label) + '</div>' +
-    (rows.length ? rows.join('') : '<div class="empty-hint">No family-editable parameters.</div>') + '</div>';
+  return html`<div class="card"><div class="card-label">${unit.label}</div>
+    ${rows.length ? rows : html`<div class="empty-hint">No family-editable parameters.</div>`}</div>`;
 }
 
 // A thermostat dial as a card: the described temperature command named
@@ -2466,8 +2483,8 @@ function widgetDial(entity, aspect) {
   var body = row ? renderAspectControl(entity, row, true)
     : entity.capability === 'climate' ? widgetForClimate(entity, true)
     : widgetForEntity(entity);
-  return '<div class="card clickable" data-action="entity-detail" data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '">' +
-    '<div class="card-label" title="' + esc(entity.label) + '">' + esc(entity.label).toUpperCase() + (row ? ' &middot; ' + esc(row.label).toUpperCase() : '') + '</div>' + body + '</div>';
+  return html`<div class="card clickable" data-action="entity-detail" data-room="${entity.room}" data-entity="${entity.name}">
+    <div class="card-label" title="${entity.label}">${entity.label.toUpperCase()}${row ? html` &middot; ${row.label.toUpperCase()}` : ''}</div>${body}</div>`;
 }
 
 // ---- widget: burner ----
@@ -2499,9 +2516,9 @@ function widgetBurner(entity) {
   var controls = BURNER_COMMANDS.map(function (aspect) {
     var r = rows[aspect];
     if (!r) return '';
-    return '<div class="burner-control"><span>' + esc(shortLabel(r.label)) + '</span>' +
-      (r.control ? renderAspectControl(entity, r) : aspectValueSpan(r)) + '</div>';
-  }).join('');
+    return html`<div class="burner-control"><span>${shortLabel(r.label)}</span>
+      ${r.control ? renderAspectControl(entity, r) : aspectValueSpan(r)}</div>`;
+  });
 
   var readings = BURNER_READINGS.map(function (aspect) {
     var r = rows[aspect];
@@ -2512,25 +2529,23 @@ function widgetBurner(entity) {
     var spark = hist && hist.loaded
       ? buildChart('burner-' + sk, hist.points, { height: 36, sizeClass: 'chart-tile', aspect: aspect, area: true, window: hist.window })
       : '';
-    return '<div class="burner-reading row-clickable" data-action="history-detail" data-room="' + esc(entity.room) +
-      '" data-entity="' + esc(entity.name) + '" data-aspect="' + esc(aspect) + '">' +
-      '<div class="burner-reading-head"><span>' + esc(shortLabel(r.label)) + '</span><b>' + esc(r.display) + '</b></div>' +
-      spark + '</div>';
-  }).join('');
+    return html`<div class="burner-reading row-clickable" data-action="history-detail" data-room="${entity.room}" data-entity="${entity.name}" data-aspect="${aspect}">
+      <div class="burner-reading-head"><span>${shortLabel(r.label)}</span><b>${r.display}</b></div>
+      ${spark}</div>`;
+  });
 
   // The head taps through to the entity: the run-state codes and the
   // device's own readings live there, and the card does not repeat them.
-  return '<div class="card burner-card">' +
-    '<div class="burner-head row-clickable" data-action="entity-detail" data-room="' + esc(entity.room) +
-    '" data-entity="' + esc(entity.name) + '">' +
-    '<div class="card-label" style="margin:0;" title="' + esc(entity.label) + '">' + esc(entity.label).toUpperCase() + '</div>' +
-    '<span class="burner-state' + (lit ? ' lit' : '') + '">' + esc(state) + '</span></div>' +
-    controls + readings + '</div>';
+  return html`<div class="card burner-card">
+    <div class="burner-head row-clickable" data-action="entity-detail" data-room="${entity.room}" data-entity="${entity.name}">
+    <div class="card-label" style="margin:0;" title="${entity.label}">${entity.label.toUpperCase()}</div>
+    <span class="burner-state${lit ? ' lit' : ''}">${state}</span></div>
+    ${controls}${readings}</div>`;
 }
 
 // An entity's own row — its control or its readings — as a card.
 function widgetEntity(entity) {
-  return '<div class="card">' + widgetForEntity(entity) + '</div>';
+  return html`<div class="card">${widgetForEntity(entity)}</div>`;
 }
 
 // A unit's card (dashboard-logic.js, unitCardPlan): head, then the
@@ -2543,17 +2558,16 @@ function widgetUnit(unitName) {
   var u = plan.unit;
   var h = store.health['home/health/' + u.name] || {};
   var status = h.status || 'stopped';
-  var html = '<div class="card unit-card">' +
-    '<div class="unit-head row-clickable" data-action="unit-detail" data-unit="' + esc(u.name) + '">' +
-    '<div><div class="unit-name" title="' + esc(u.label) + '">' + esc(u.label) + '</div>' +
-    (u.description ? '<div class="unit-desc">' + esc(u.description) + '</div>' : '') + '</div>' +
-    '<span class="status-badge" title="' + esc(healthTooltip(h)) + '"><span class="status-glyph status-' + esc(status) + '">' + statusGlyph(status) + '</span>' + esc(status) + '</span></div>';
-  var section = function (label, body) {
-    return body ? '<div class="section-label">' + label + '</div>' + body : '';
+  var parts = [html`<div class="unit-head row-clickable" data-action="unit-detail" data-unit="${u.name}">
+    <div><div class="unit-name" title="${u.label}">${u.label}</div>
+    ${u.description ? html`<div class="unit-desc">${u.description}</div>` : ''}</div>
+    <span class="status-badge" title="${healthTooltip(h)}"><span class="status-glyph status-${status}">${statusGlyph(status)}</span>${status}</span></div>`];
+  var section = function (label, rows) {
+    return rows.length ? html`<div class="section-label">${label}</div>${rows}` : '';
   };
   // its own card: the param name alone, the unit is the head
-  html += section('Setpoints', plan.params.map(function (p) { return renderParamRow(u.name, p, u.params[p], true); }).join(''));
-  html += section('Publishes', plan.publishes.map(widgetForEntity).join(''));
+  parts.push(section('Setpoints', plan.params.map(function (p) { return renderParamRow(u.name, p, u.params[p], true); })));
+  parts.push(section('Publishes', plan.publishes.map(widgetForEntity)));
   // Drives and From are the unit's wiring, not its surface: a line saying
   // how much of it there is, and the fields themselves when asked for.
   var wiring = plan.drives.length + plan.sources.length;
@@ -2562,14 +2576,14 @@ function widgetUnit(unitName) {
     var summary = [];
     if (plan.drives.length) summary.push('drives ' + plan.drives.length);
     if (plan.sources.length) summary.push('reads ' + plan.sources.length);
-    html += '<button class="group-toggle" data-action="toggle-relations" data-unit="' + esc(u.name) + '">' +
-      esc(summary.join(' · ')) + ' ' + (open ? '&#9662;' : '&#9656;') + '</button>';
+    parts.push(html`<button class="group-toggle" data-action="toggle-relations" data-unit="${u.name}">
+      ${summary.join(' · ')} ${open ? '\u25be' : '\u25b8'}</button>`);
     if (open) {
-      html += section('Drives', plan.drives.map(relationRow).join(''));
-      html += section('From', plan.sources.map(relationRow).join(''));
+      parts.push(section('Drives', plan.drives.map(relationRow)));
+      parts.push(section('From', plan.sources.map(relationRow)));
     }
   }
-  return html + '</div>';
+  return html`<div class="card unit-card">${parts}</div>`;
 }
 
 // One relation: an entity's field and what it reads right now. The card
@@ -2582,16 +2596,15 @@ function relationRow(f) {
   var value = f.aspect
     ? logic.formatAspect(f.aspect, field, stateValue(e.room, e.name, f.aspect))
     : '';
-  return '<div class="rel-row row-clickable" data-action="entity-detail" data-room="' + esc(e.room) +
-    '" data-entity="' + esc(e.name) + '"><span>' + esc(label) + '</span>' +
-    '<span class="rel-value">' + esc(value) + '</span></div>';
+  return html`<div class="rel-row row-clickable" data-action="entity-detail" data-room="${e.room}" data-entity="${e.name}"><span>${label}</span>
+    <span class="rel-value">${value}</span></div>`;
 }
 
 // The room card: every entity in the room, controls first.
 function renderRoomCard(room, ents) {
   var sorted = ents.slice().sort(function (a, b) { return capRank(a) - capRank(b); });
   var title = room === 'global' ? 'House' : titleCase(room);
-  return '<div class="card room-card"><h3 title="' + esc(title) + '">' + esc(title) + '</h3>' + sorted.map(widgetForEntity).join('') + '</div>';
+  return html`<div class="card room-card"><h3 title="${title}">${title}</h3>${sorted.map(widgetForEntity)}</div>`;
 }
 
 function entitiesInRoom(room) {
@@ -2646,10 +2659,9 @@ function renderWidgets(title, widgets) {
     if (w.kind === 'group') return widgetGroup(w, card);
     return '';
   }
-  var cards = widgets.map(card).join('');
-  var html = '<h1 class="view-title">' + esc(title) + '</h1>';
-  html += cards ? '<div class="grid">' + cards + '</div>' : '<div class="card"><div class="empty-hint">Nothing to show yet.</div></div>';
-  byId('view').innerHTML = html;
+  var cards = html`${widgets.map(card)}`;
+  byId('view').innerHTML = html`<h1 class="view-title">${title}</h1>
+    ${String(cards) ? html`<div class="grid">${cards}</div>` : html`<div class="card"><div class="empty-hint">Nothing to show yet.</div></div>`}`;
   if (wantMap) mountMap(persons);
 }
 
@@ -2658,11 +2670,11 @@ function renderWidgets(title, widgets) {
 // traces that explain it reads as one thing. One level deep; the core
 // refuses a group inside a group.
 function widgetGroup(w, card) {
-  var body = (w.widgets || []).map(card).join('');
-  if (!body) return '';
-  return '<div class="card group-card">' +
-    (w.label ? '<div class="card-label">' + esc(w.label).toUpperCase() + '</div>' : '') +
-    body + '</div>';
+  var body = html`${(w.widgets || []).map(card)}`;
+  if (!String(body)) return '';
+  return html`<div class="card group-card">
+    ${w.label ? html`<div class="card-label">${w.label.toUpperCase()}</div>` : ''}
+    ${body}</div>`;
 }
 
 function findEntityByName(name) {
@@ -2697,14 +2709,13 @@ function renderNotShown() {
   });
   var cards = rooms.map(function (room) { return renderRoomCard(room, byRoom[room]); });
   if (unplaced.params.length) {
-    cards.push('<div class="card"><h3>Setpoints</h3>' + unplaced.params.map(function (p) {
+    cards.push(html`<div class="card"><h3>Setpoints</h3>${unplaced.params.map(function (p) {
       return renderParamRow(p.unit, p.param, p.spec);
-    }).join('') + '</div>');
+    })}</div>`);
   }
-  var html = '<h1 class="view-title">Not shown</h1>';
-  html += '<div class="muted" style="margin:-8px 0 16px;max-width:62ch;">Everything no view in <code>dashboard.toml</code> places. Placing it there removes it from here.</div>';
-  html += cards.length ? '<div class="grid">' + cards.join('') + '</div>' : '<div class="card"><div class="empty-hint">Every entity and setpoint is on a view.</div></div>';
-  byId('view').innerHTML = html;
+  byId('view').innerHTML = html`<h1 class="view-title">Not shown</h1>
+    <div class="muted" style="margin:-8px 0 16px;max-width:62ch;">Everything no view in <code>dashboard.toml</code> places. Placing it there removes it from here.</div>
+    ${cards.length ? html`<div class="grid">${cards}</div>` : html`<div class="card"><div class="empty-hint">Every entity and setpoint is on a view.</div></div>`}`;
 }
 
 // ---- view: Setpoints ----
@@ -2729,21 +2740,21 @@ function renderParamControl(unitName, pname, p) {
   var value = currentParamValue(unitName, pname, p);
   var id = 'param-' + unitName + '-' + pname;
   if (p.type === 'time') {
-    return '<input type="time" id="' + id + '" value="' + esc(value) + '" data-action="param-time" data-unit="' + esc(unitName) + '" data-param="' + esc(pname) + '">';
+    return html`<input type="time" id="${id}" value="${value}" data-action="param-time" data-unit="${unitName}" data-param="${pname}">`;
   }
   if (p.type === 'bool') {
     var on = !!value;
-    return '<span class="toggle ' + (on ? 'on' : '') + '" data-action="param-toggle" data-unit="' + esc(unitName) + '" data-param="' + esc(pname) + '" data-value="' + (!on) + '"><span class="knob"></span></span>';
+    return html`<span class="toggle ${on ? 'on' : ''}" data-action="param-toggle" data-unit="${unitName}" data-param="${pname}" data-value="${!on}"><span class="knob"></span></span>`;
   }
   if (p.type === 'enum' && p.values && p.values.length > logic.SELECT_ABOVE) {
-    return '<select class="control" id="' + id + '" data-action="param-select" data-unit="' + esc(unitName) + '" data-param="' + esc(pname) + '">' + p.values.map(function (v) {
-      return '<option value="' + esc(v) + '"' + (v === value ? ' selected' : '') + '>' + esc(v) + '</option>';
-    }).join('') + '</select>';
+    return html`<select class="control" id="${id}" data-action="param-select" data-unit="${unitName}" data-param="${pname}">${p.values.map(function (v) {
+      return html`<option value="${v}"${v === value ? html` selected` : ''}>${v}</option>`;
+    })}</select>`;
   }
   if (p.type === 'enum' && p.values) {
-    return '<div class="seg">' + p.values.map(function (v) {
-      return '<button data-action="param-enum" data-unit="' + esc(unitName) + '" data-param="' + esc(pname) + '" data-value="' + esc(v) + '" class="' + (v === value ? 'active' : '') + '">' + esc(v) + '</button>';
-    }).join('') + '</div>';
+    return html`<div class="seg">${p.values.map(function (v) {
+      return html`<button data-action="param-enum" data-unit="${unitName}" data-param="${pname}" data-value="${v}" class="${v === value ? 'active' : ''}">${v}</button>`;
+    })}</div>`;
   }
   if (p.type === 'int' || p.type === 'float') {
     var c = p.constraint || {};
@@ -2753,12 +2764,12 @@ function renderParamControl(unitName, pname, p) {
     var step = declared ? String(declared) : (p.type === 'float' ? 'any' : '1');
     var slideKey = unitName + '|' + pname;
     var shown = localState.sliderDrag[slideKey] !== undefined ? localState.sliderDrag[slideKey] : value;
-    return '<div class="slider-row" style="padding-left:0;">' +
-      '<input type="range" min="' + esc(min) + '" max="' + esc(max) + '" step="' + step + '" value="' + esc(shown) + '" data-action="param-slider" data-unit="' + esc(unitName) + '" data-param="' + esc(pname) + '">' +
-      '<span class="sval">' + esc(shown) + '</span></div>';
+    return html`<div class="slider-row" style="padding-left:0;">
+      <input type="range" min="${min}" max="${max}" step="${step}" value="${shown}" data-action="param-slider" data-unit="${unitName}" data-param="${pname}">
+      <span class="sval">${shown}</span></div>`;
   }
   // string fallback
-  return '<input type="text" id="' + id + '" value="' + esc(value === undefined ? '' : value) + '" data-action="param-text" data-unit="' + esc(unitName) + '" data-param="' + esc(pname) + '">';
+  return html`<input type="text" id="${id}" value="${value === undefined ? '' : value}" data-action="param-text" data-unit="${unitName}" data-param="${pname}">`;
 }
 
 // What the manifest says this parameter is, so a value nudged off it can
@@ -2779,20 +2790,19 @@ function familyEditable(p) { return p.editable_by === 'family'; }
 function renderParamRow(unitName, pname, p, bare) {
   var body;
   if (familyEditable(p)) {
-    body = '<div>' + renderParamControl(unitName, pname, p) + '</div>';
+    body = html`<div>${renderParamControl(unitName, pname, p)}</div>`;
   } else {
     var value = currentParamValue(unitName, pname, p);
     var offDefault = JSON.stringify(value) !== JSON.stringify(p.default);
-    body = '<div class="param-readonly">' + esc(String(value)) +
-      (offDefault ? ' <span class="faint">(default ' + esc(String(p.default)) + ')</span>' : '') +
-      ' <span class="tier-badge">' + esc(p.editable_by || 'owner') + '</span></div>';
+    body = html`<div class="param-readonly">${String(value)}
+      ${offDefault ? html` <span class="faint">(default ${String(p.default)})</span>` : ''} <span class="tier-badge">${p.editable_by || 'owner'}</span></div>`;
   }
-  return '<div class="param-row" id="paramrow-' + unitName + '-' + pname + '"><div class="param-head">' +
-    '<span class="name" title="' + esc(unitLabel(unitName)) + ' · ' + esc(pname) + '">' + (bare ? '' : esc(unitLabel(unitName)) + ' · ') + esc(pname) + '</span></div>' +
-    body +
-    '<div class="param-caption" title="' + esc(JSON.stringify(p.constraint || {})) + '">' +
-    esc([paramConstraintCaption(p), paramDefaultCaption(p)].filter(Boolean).join(' \u00b7 ')) +
-    '</div></div>';
+  return html`<div class="param-row" id="paramrow-${unitName}-${pname}"><div class="param-head">
+    <span class="name" title="${unitLabel(unitName)} · ${pname}">${bare ? '' : unitLabel(unitName) + ' · '}${pname}</span></div>
+    ${body}
+    <div class="param-caption" title="${JSON.stringify(p.constraint || {})}">
+    ${[paramConstraintCaption(p), paramDefaultCaption(p)].filter(Boolean).join(' \u00b7 ')}
+    </div></div>`;
 }
 
 // Setpoints is the family's levers: family-editable params only. Owner
@@ -2805,13 +2815,10 @@ function renderSetpoints() {
       if (familyEditable(params[pname])) rows.push(renderParamRow(u.name, pname, params[pname]));
     });
   });
-  var html = '<h1 class="view-title">Setpoints</h1>';
-  if (rows.length === 0) {
-    html += '<div class="card"><div class="empty-hint">No family-editable parameters.</div></div>';
-  } else {
-    html += '<div class="card">' + rows.join('') + '</div>';
-  }
-  byId('view').innerHTML = html;
+  byId('view').innerHTML = html`<h1 class="view-title">Setpoints</h1>
+    ${rows.length === 0
+      ? html`<div class="card"><div class="empty-hint">No family-editable parameters.</div></div>`
+      : html`<div class="card">${rows}</div>`}`;
 }
 
 function flashParamRow(unitName, pname) {
@@ -2840,9 +2847,9 @@ function roomsInZone(zone) {
 
 function renderRooms() {
   var zones = allZoneNames();
-  var chips = ['<button class="chip ' + (store.roomsFilter === 'all' ? 'active' : '') + '" data-action="zone-filter" data-zone="all">Whole house</button>'];
+  var chips = [html`<button class="chip ${store.roomsFilter === 'all' ? 'active' : ''}" data-action="zone-filter" data-zone="all">Whole house</button>`];
   zones.forEach(function (z) {
-    chips.push('<button class="chip ' + (store.roomsFilter === z ? 'active' : '') + '" data-action="zone-filter" data-zone="' + esc(z) + '">' + esc(titleCase(z)) + '</button>');
+    chips.push(html`<button class="chip ${store.roomsFilter === z ? 'active' : ''}" data-action="zone-filter" data-zone="${z}">${titleCase(z)}</button>`);
   });
 
   var allowedRooms = null;
@@ -2862,14 +2869,11 @@ function renderRooms() {
   var roomNames = Object.keys(byRoom).sort();
   var cards = roomNames.map(function (room) { return renderRoomCard(room, byRoom[room]); });
 
-  var html = '<h1 class="view-title">Rooms</h1>';
-  html += '<div class="chips">' + chips.join('') + '</div>';
-  if (cards.length === 0) {
-    html += '<div class="card"><div class="empty-hint">No rooms with entities yet.</div></div>';
-  } else {
-    html += '<div class="grid">' + cards.join('') + '</div>';
-  }
-  byId('view').innerHTML = html;
+  byId('view').innerHTML = html`<h1 class="view-title">Rooms</h1>
+    <div class="chips">${chips}</div>
+    ${cards.length === 0
+      ? html`<div class="card"><div class="empty-hint">No rooms with entities yet.</div></div>`
+      : html`<div class="grid">${cards}</div>`}`;
 }
 
 // ---- view: Health ----
@@ -2881,9 +2885,8 @@ function renderEventRow(ev) {
   var t = new Date((ev.ts || 0) * 1000);
   var tStr = isNaN(t.getTime()) ? '' : t.toLocaleTimeString();
   var tFull = isNaN(t.getTime()) ? '' : t.toLocaleString();
-  return '<div class="event-row"><span class="ts" title="' + esc(tFull) + '">' + esc(tStr) + '</span>' +
-    esc(unitLabel(unit)) + ' — ' + esc((ev.value && ev.value.kind) || 'event') +
-    (extra ? ' (' + esc(extra) + ')' : '') + '</div>';
+  return html`<div class="event-row"><span class="ts" title="${tFull}">${tStr}</span>
+    ${unitLabel(unit)} — ${(ev.value && ev.value.kind) || 'event'}${extra ? ' (' + extra + ')' : ''}</div>`;
 }
 
 function renderLogLine(entry) {
@@ -2891,8 +2894,7 @@ function renderLogLine(entry) {
   var tStr = isNaN(t.getTime()) ? '' : t.toLocaleTimeString();
   var tFull = isNaN(t.getTime()) ? '' : t.toLocaleString();
   var cls = entry.stream === 'stderr' ? 'log-line stderr' : 'log-line';
-  return '<div class="' + cls + '"><span class="ts" title="' + esc(tFull) + '">' + esc(tStr) + '</span>' +
-    esc(entry.line) + '</div>';
+  return html`<div class="${cls}"><span class="ts" title="${tFull}">${tStr}</span>${entry.line}</div>`;
 }
 
 function renderHealth() {
@@ -2904,22 +2906,21 @@ function renderHealth() {
     var meta = [];
     if (h.restarts !== undefined && h.restarts !== null) meta.push('restarts: ' + h.restarts);
     if (h.last_exit_code !== undefined && h.last_exit_code !== null) meta.push('last exit: ' + h.last_exit_code);
-    return '<div class="card health-card clickable" data-action="unit-detail" data-unit="' + esc(u.name) + '"><div class="health-head">' +
-      '<span class="name" title="' + esc(u.label) + '">' + esc(u.label) + '</span>' +
-      '<span class="status-badge" title="' + esc(healthTooltip(h)) + '"><span class="status-glyph status-' + esc(status) + '">' + statusGlyph(status) + '</span>' + esc(status) + '</span></div>' +
-      (meta.length ? '<div class="health-meta">' + esc(meta.join(' · ')) + '</div>' : '') +
-      '</div>';
+    return html`<div class="card health-card clickable" data-action="unit-detail" data-unit="${u.name}"><div class="health-head">
+      <span class="name" title="${u.label}">${u.label}</span>
+      <span class="status-badge" title="${healthTooltip(h)}"><span class="status-glyph status-${status}">${statusGlyph(status)}</span>${status}</span></div>
+      ${meta.length ? html`<div class="health-meta">${meta.join(' · ')}</div>` : ''}
+      </div>`;
   });
 
   var events = store.events.slice().sort(function (a, b) { return b.ts - a.ts; });
   var eventRows = events.map(renderEventRow);
 
-  var html = '<h1 class="view-title">Health</h1>';
-  html += '<div class="grid">' + cards.join('') + '</div>';
-  html += '<div class="card event-feed"><div class="card-label">Events</div>';
-  html += eventRows.length ? eventRows.join('') : '<div class="empty-hint">No events yet this session.</div>';
-  html += '</div>';
-  byId('view').innerHTML = html;
+  byId('view').innerHTML = html`<h1 class="view-title">Health</h1>
+    <div class="grid">${cards}</div>
+    <div class="card event-feed"><div class="card-label">Events</div>
+    ${eventRows.length ? eventRows : html`<div class="empty-hint">No events yet this session.</div>`}
+    </div>`;
 }
 
 // ---- view dispatch ----
@@ -2937,8 +2938,7 @@ function renderView() {
   // button opens that text. Health and Not shown are chrome, never text.
   var title = byId('view').querySelector('h1.view-title');
   if (view && title && logic.viewText(store.model, view.name)) {
-    title.insertAdjacentHTML('beforeend', '<button class="view-text-btn" data-action="view-text" data-view-name="' +
-      esc(view.name) + '" title="The text in dashboard.toml that makes this view">Text</button>');
+    title.insertAdjacentHTML('beforeend', html`<button class="view-text-btn" data-action="view-text" data-view-name="${view.name}" title="The text in dashboard.toml that makes this view">Text</button>`);
   }
   wireChartInteractions(byId('view'));
 }
@@ -3190,13 +3190,9 @@ function renderViewTextBody() {
   var docs = 'https://github.com/freol35241/homeostat/blob/main/docs/';
   return {
     title: (view ? view.label : overlay.viewName) + ' · as text',
-    body: '<div class="view-text-note">This view is this block of <code>dashboard.toml</code> at the house root, ' +
-      'rendered from what the house parsed (its comments are not kept).</div>' +
-      '<pre class="view-text">' + esc(text) + '</pre>' +
-      '<div class="view-text-note">Change it in the file, yourself or with an agent in the house repo; ' +
-      '<code>homeostat plan</code> checks it before anything changes. ' +
-      '<a href="' + docs + 'widgets.md" target="_blank" rel="noopener">What each widget looks like</a> · ' +
-      '<a href="' + docs + 'manifest.md#dashboard-views-dashboardtoml" target="_blank" rel="noopener">every field</a></div>'
+    body: html`<div class="view-text-note">This view is this block of <code>dashboard.toml</code> at the house root, rendered from what the house parsed (its comments are not kept).</div>
+      <pre class="view-text">${text}</pre>
+      <div class="view-text-note">Change it in the file, yourself or with an agent in the house repo; <code>homeostat plan</code> checks it before anything changes. <a href="${docs}widgets.md" target="_blank" rel="noopener">What each widget looks like</a> · <a href="${docs}manifest.md#dashboard-views-dashboardtoml" target="_blank" rel="noopener">every field</a></div>`
   };
 }
 
@@ -3284,7 +3280,7 @@ function statItem(label, value, aspect) {
 }
 
 function statText(label, text) {
-  return '<div class="stat-item"><div class="stat-value">' + esc(text) + '</div><div class="stat-label">' + label + '</div></div>';
+  return html`<div class="stat-item"><div class="stat-value">${text}</div><div class="stat-label">${label}</div></div>`;
 }
 
 function fmtDuration(ms) {
@@ -3314,8 +3310,8 @@ function renderHistoryDetailBody() {
   var label = entity.label + (multi ? ' · ' + titleCase(aspect) : '');
 
   var chips = RANGE_PRESETS.map(function (rp) {
-    return '<button data-action="range-chip" data-hours="' + rp.hours + '" class="' + (overlay.range === rp.hours ? 'active' : '') + '">' + rp.label + '</button>';
-  }).join('');
+    return html`<button data-action="range-chip" data-hours="${rp.hours}" class="${overlay.range === rp.hours ? 'active' : ''}">${rp.label}</button>`;
+  });
   // One row for what is drawn beside the record: the several opinions
   // behind the value's past, or the several claims about its future.
   // Both are owner work, which is why they live here and not on a tile —
@@ -3332,10 +3328,9 @@ function renderHistoryDetailBody() {
     layers.push({ id: 'forecasts', label: 'forecasts' });
   }
   var layerChips = layers.length > 1
-    ? '<div class="seg" style="margin-top:8px;">' + layers.map(function (l) {
-      return '<button data-action="chart-layer" data-layer="' + l.id + '" class="' +
-        (overlay.layer === l.id ? 'active' : '') + '">' + l.label + '</button>';
-    }).join('') + '</div>'
+    ? html`<div class="seg" style="margin-top:8px;">${layers.map(function (l) {
+      return html`<button data-action="chart-layer" data-layer="${l.id}" class="${overlay.layer === l.id ? 'active' : ''}">${l.label}</button>`;
+    })}</div>`
     : '';
 
   var rd = overlay.rangeData[overlay.range];
@@ -3351,10 +3346,10 @@ function renderHistoryDetailBody() {
   if (overlay.shape === 'timeline') {
     chartHtml = buildTimeline('detail-chart', points, { height: wide ? 96 : 64, sizeClass: wide ? 'chart-timeline-wide' : 'chart-timeline', aspect: aspect, field: field, window: win });
     var tl = logic.timelineStats(logic.timelineRuns(points, win.from, win.to));
-    statsHtml = '<div class="stat-row">' +
-      statText('Now', tl.latest === null ? '—' : logic.formatAspect(aspect, field, tl.latest)) +
-      (tl.onMs === null ? '' : statText('On', fmtDuration(tl.onMs) + ' of ' + fmtDuration(win.to - win.from))) +
-      statText('Changes', String(tl.changes)) + '</div>';
+    statsHtml = html`<div class="stat-row">
+      ${statText('Now', tl.latest === null ? '—' : logic.formatAspect(aspect, field, tl.latest))}
+      ${tl.onMs === null ? '' : statText('On', fmtDuration(tl.onMs) + ' of ' + fmtDuration(win.to - win.from))}
+      ${statText('Changes', String(tl.changes))}</div>`;
   } else {
     chartHtml = buildChart('detail-chart', points, {
       height: wide ? 440 : 220, sizeClass: wide ? 'chart-detail-wide' : 'chart-detail',
@@ -3369,9 +3364,9 @@ function renderHistoryDetailBody() {
       contributors: overlay.layer === 'forecasts' ? null : drawnSources(entity, aspect, overlay.range)
     });
     var stats = rangeStats(points);
-    statsHtml = '<div class="stat-row">' +
-      statItem('Latest', stats.latest, aspect) + statItem('Min', stats.min, aspect) +
-      statItem('Max', stats.max, aspect) + statItem('Avg', stats.avg, aspect) + '</div>';
+    statsHtml = html`<div class="stat-row">
+      ${statItem('Latest', stats.latest, aspect)}${statItem('Min', stats.min, aspect)}
+      ${statItem('Max', stats.max, aspect)}${statItem('Avg', stats.avg, aspect)}</div>`;
   }
 
   // The four stats describe the RECORDED window the chips select, so a
@@ -3385,27 +3380,25 @@ function renderHistoryDetailBody() {
     var beliefs = forecastsOf(entity, aspect);
     horizonHtml = beliefs.map(function (b) {
       var fresh = logic.forecastFreshness(b.forecast, Date.now());
-      var who = beliefs.length > 1 ? esc(b.source) + ' · ' : '';
+      var who = beliefs.length > 1 ? b.source + ' · ' : '';
       var issued = issuedCaption(b.forecast);
       // A claim whose horizon has run out is not drawn here, so this note
       // is the only thing that distinguishes "this producer stopped" from
       // "this aspect has no forecast" — the braid beside it is where the
       // spent claim itself can still be read.
       if (fresh.expired) {
-        return '<div class="chart-note">spent · ' + who + 'ran out ' +
-          esc(formatChartTime(b.forecast.to)) + (issued ? ' · ' + esc(issued) : '') + '</div>';
+        return html`<div class="chart-note">spent · ${who}ran out ${formatChartTime(b.forecast.to)}${issued ? ' · ' + issued : ''}</div>`;
       }
       var ahead = horizonCaption(aspect, field, b.forecast, Date.now());
       if (!ahead && !issued) return '';
-      return '<div class="chart-note">ahead · ' + who +
-        (ahead ? esc(ahead) + (issued ? ' · ' : '') : '') + esc(issued) +
-        (fresh.stale ? '<span class="stale-mark">stale</span>' : '') + '</div>';
-    }).join('');
+      return html`<div class="chart-note">ahead · ${who}${ahead ? ahead + (issued ? ' · ' : '') : ''}${issued}
+        ${fresh.stale ? html`<span class="stale-mark">stale</span>` : ''}</div>`;
+    });
   }
   var braidHtml = '';
   if (overlay.layer === 'forecasts') {
-    braidHtml = '<div class="chart-note" id="braid-column"></div>' +
-      '<div class="chart-note">' + esc(
+    braidHtml = html`<div class="chart-note" id="braid-column"></div>
+      <div class="chart-note">${
         overlay.issuesLoading ? 'reading the forecasts\u2026'
           : overlay.issues.length
             ? overlay.issues.length + ' forecast' + (overlay.issues.length === 1 ? '' : 's') +
@@ -3421,7 +3414,7 @@ function renderHistoryDetailBody() {
               ' kept for this window' + (overlay.issues.length >= BRAID_ISSUES ? ' (newest ' + BRAID_ISSUES + ')' : '') +
               (overlay.pinned ? ' \u00b7 one pinned \u2014 tap it again to release' : ' \u00b7 tap a line to pin it')
             : 'nothing kept for this window \u2014 the recorder may not subscribe home/forecast/**'
-      ) + '</div>';
+      }</div>`;
   }
   // The legend doubles as the scrub readout: with no cursor it names the
   // sources, with one it says what each read at that instant. Colour
@@ -3432,7 +3425,7 @@ function renderHistoryDetailBody() {
   if (drawn) {
     var usage = sourceUsageNow(entity, aspect, overlay.range,
                                contributorsOf(entity, aspect));
-    legendHtml = '<div class="chart-note source-legend" id="sources-legend">' +
+    legendHtml = html`<div class="chart-note source-legend" id="sources-legend">${
       drawn.map(function (c) {
         // A contributor that has dropped out still draws — the line
         // stopping IS the diagnosis — but it must not read as live.
@@ -3444,20 +3437,19 @@ function renderHistoryDetailBody() {
         var since = excluded && use.since
           ? ' since ' + formatChartClock(use.since / 1000)
           : '';
-        return '<span data-source="' + esc(c.name) + '"' +
-          (c.note ? ' title="' + esc(c.note) + '"' : '') + '>' +
-          esc(c.label) +
-          (down ? ' \u00b7 unavailable' : '') +
-          (excluded ? ' \u00b7 not used' + since : '') +
-          (c.note ? ' \u00b7 ' + esc(c.note) : '') + '</span>';
-      }).join('') + '</div>' +
-      '<div class="chart-note" id="sources-column"></div>';
+        return html`<span data-source="${c.name}"${c.note ? html` title="${c.note}"` : ''}>
+          ${c.label}
+          ${down ? ' \u00b7 unavailable' : ''}
+          ${excluded ? ' \u00b7 not used' + since : ''}
+          ${c.note ? ' \u00b7 ' + c.note : ''}</span>`;
+      })}</div>
+      <div class="chart-note" id="sources-column"></div>`;
   } else if (overlay.layer === 'sources' && contributorsOf(entity, aspect).length) {
-    legendHtml = '<div class="chart-note">reading the sources\u2026</div>';
+    legendHtml = html`<div class="chart-note">reading the sources\u2026</div>`;
   }
-  var body = '<div class="seg">' + chips + '</div>' + layerChips +
-    '<div class="' + (loaded ? '' : 'chart-loading') + '">' + chartHtml + statsHtml + horizonHtml + '</div>' +
-    legendHtml + braidHtml + commandStrip(aspect, field, win);
+  var body = html`<div class="seg">${chips}</div>${layerChips}
+    <div class="${loaded ? '' : 'chart-loading'}">${chartHtml}${statsHtml}${horizonHtml}</div>
+    ${legendHtml}${braidHtml}${commandStrip(aspect, field, win)}`;
   return { title: label, body: body };
 }
 
@@ -3469,10 +3461,10 @@ function commandStrip(aspect, field, win) {
   if (!cd || !cd.loaded || !cd.points.length) return '';
   var runs = logic.timelineRuns(cd.points, win.from, win.to);
   var latest = cd.points[cd.points.length - 1];
-  return '<div class="card-label" style="margin-top:20px;">Commanded</div>' +
-    buildTimeline('detail-cmd', cd.points, { height: 28, sizeClass: 'chart-commands', aspect: aspect, field: field, window: win }) +
-    '<div class="chart-note">' + esc(runs.length + (runs.length === 1 ? ' command' : ' commands') +
-      ' · last ' + logic.formatAspect(aspect, field, latest.value) + ' at ' + formatChartTime(latest.ts)) + '</div>';
+  return html`<div class="card-label" style="margin-top:20px;">Commanded</div>
+    ${buildTimeline('detail-cmd', cd.points, { height: 28, sizeClass: 'chart-commands', aspect: aspect, field: field, window: win })}
+    <div class="chart-note">${runs.length + (runs.length === 1 ? ' command' : ' commands') +
+      ' · last ' + logic.formatAspect(aspect, field, latest.value) + ' at ' + formatChartTime(latest.ts)}</div>`;
 }
 
 // One planned row of an entity's detail: the label and the value, plus the
@@ -3480,7 +3472,7 @@ function commandStrip(aspect, field, win) {
 // /api/cmd instead of /api/param. A numeric row without a control taps
 // through to its history.
 function renderAspectRow(entity, r) {
-  var attrs = ' data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '" data-aspect="' + esc(r.aspect) + '"';
+  var attrs = html` data-room="${entity.room}" data-entity="${entity.name}" data-aspect="${r.aspect}"`;
   var value = aspectValueSpan(r);
   // Possession, wherever the aspect is: an arbiter lease is in force here,
   // so an automation's wish for it is being refused. `Now` says so only
@@ -3489,12 +3481,12 @@ function renderAspectRow(entity, r) {
   // house is not driving it (docs/design.md#views-are-text).
   var hold = logic.holdOn(store.holds, entity.room, entity.name, r.aspect, Date.now());
   var heldMark = hold
-    ? '<span class="stale-mark" title="' + esc('held by ' + hold.actor + ' at the ' + hold.priority + ' band') + '">held</span>'
+    ? html`<span class="stale-mark" title="${'held by ' + hold.actor + ' at the ' + hold.priority + ' band'}">held</span>`
     : '';
   if (!r.control) {
     // a chart for a number, a timeline for a bool or a string
-    return '<div class="aspect-row described row-clickable" data-action="history-detail"' + attrs + '>' +
-      '<span class="aspect-label">' + esc(r.label) + '</span>' + value + heldMark + '</div>';
+    return html`<div class="aspect-row described row-clickable" data-action="history-detail"${attrs}>
+      <span class="aspect-label">${r.label}</span>${value}${heldMark}</div>`;
   }
   // The label taps through to history even though the row carries a
   // control. A commanded aspect is exactly the one whose past a reader
@@ -3502,14 +3494,14 @@ function renderAspectRow(entity, r) {
   // the only way to reach it. The control's own buttons still win:
   // closest('[data-action]') takes the innermost.
   var dial = r.control.kind === 'dial';
-  return '<div class="aspect-row described' + (dial ? ' dial-row' : '') + '">' +
-    '<span class="aspect-label linked" data-action="history-detail"' + attrs + '>' + esc(r.label) + heldMark + '</span>' +
-    renderAspectControl(entity, r, true) + '</div>';
+  return html`<div class="aspect-row described${dial ? ' dial-row' : ''}">
+    <span class="aspect-label linked" data-action="history-detail"${attrs}>${r.label}${heldMark}</span>
+    ${renderAspectControl(entity, r, true)}</div>`;
 }
 
 function aspectValueSpan(r) {
-  return '<span class="aspect-value' + (r.stale ? ' stale' : '') + '" title="' + esc(r.aspect) + '">' + esc(r.display) + '</span>' +
-    (r.stale ? '<span class="stale-mark">stale</span>' : '');
+  return html`<span class="aspect-value${r.stale ? ' stale' : ''}" title="${r.aspect}">${r.display}</span>
+    ${r.stale ? html`<span class="stale-mark">stale</span>` : ''}`;
 }
 
 // A thermostat dial: the target on a 240° arc from min to max, the
@@ -3529,17 +3521,17 @@ function renderDial(action, attrs, o) {
   };
   var end = -210 + 240 * f;
   var knob = point(end);
-  var disabled = o.disabled ? ' disabled' : '';
-  return '<div class="dial">' +
-    '<svg viewBox="0 0 120 120" aria-hidden="true"><path class="dial-track" d="' + arc(-210, 30) + '"/>' +
-    (f > 0 ? '<path class="dial-arc" d="' + arc(-210, end) + '"/>' : '') +
-    '<circle class="dial-knob" cx="' + knob.x.toFixed(1) + '" cy="' + knob.y.toFixed(1) + '" r="6"/></svg>' +
-    '<div class="dial-readout"><div class="dial-target">' + esc(o.display) + '</div>' +
-    (o.current ? '<div class="dial-current">' + esc(o.current) + '</div>' : '') + '</div>' +
-    '<div class="dial-buttons">' +
-    '<button class="step-btn" data-action="' + action + '"' + attrs + ' data-delta="' + esc(-o.step) + '"' + disabled + ' aria-label="lower">&minus;</button>' +
-    '<button class="step-btn" data-action="' + action + '"' + attrs + ' data-delta="' + esc(o.step) + '"' + disabled + ' aria-label="raise">+</button>' +
-    '</div></div>';
+  var disabled = o.disabled ? html` disabled` : '';
+  return html`<div class="dial">
+    <svg viewBox="0 0 120 120" aria-hidden="true"><path class="dial-track" d="${arc(-210, 30)}"/>
+    ${f > 0 ? html`<path class="dial-arc" d="${arc(-210, end)}"/>` : ''}
+    <circle class="dial-knob" cx="${knob.x.toFixed(1)}" cy="${knob.y.toFixed(1)}" r="6"/></svg>
+    <div class="dial-readout"><div class="dial-target">${o.display}</div>
+    ${o.current ? html`<div class="dial-current">${o.current}</div>` : ''}</div>
+    <div class="dial-buttons">
+    <button class="step-btn" data-action="${action}"${attrs} data-delta="${-o.step}"${disabled} aria-label="lower">&minus;</button>
+    <button class="step-btn" data-action="${action}"${attrs} data-delta="${o.step}"${disabled} aria-label="raise">+</button>
+    </div></div>`;
 }
 
 // The first temperature reading the entity has that is not itself the
@@ -3561,41 +3553,41 @@ function currentTemperatureOf(entity, except) {
 // shapes wired to /api/cmd. `big` is the overlay and the dial widget; a
 // room card gets every control's compact form (a dial's is a stepper).
 function renderAspectControl(entity, r, big) {
-  var attrs = ' data-room="' + esc(entity.room) + '" data-entity="' + esc(entity.name) + '" data-aspect="' + esc(r.aspect) + '"';
+  var attrs = html` data-room="${entity.room}" data-entity="${entity.name}" data-aspect="${r.aspect}"`;
   var value = aspectValueSpan(r);
   var c = r.control;
   var control;
-  var disabledAttr = c.disabled ? ' disabled' : '';
+  var disabledAttr = c.disabled ? html` disabled` : '';
   if (c.kind === 'readonly') {
-    control = value + '<span class="tier-badge">' + esc(c.tier) + '</span>';
+    control = html`${value}<span class="tier-badge">${c.tier}</span>`;
   } else if (c.kind === 'dial' && big) {
     control = renderDial('aspect-step', attrs, {
       value: r.value, display: r.display, min: c.min, max: c.max, step: c.step,
       disabled: c.disabled || !r.numeric, current: currentTemperatureOf(entity, r.aspect)
     });
   } else if (c.kind === 'select') {
-    control = '<select class="control" data-action="aspect-select"' + attrs + disabledAttr + '>' + c.values.map(function (v) {
-      return '<option value="' + esc(JSON.stringify(v.value)) + '"' + (v.value === r.value ? ' selected' : '') + '>' + esc(v.label) + '</option>';
-    }).join('') + '</select>';
+    control = html`<select class="control" data-action="aspect-select"${attrs}${disabledAttr}>${c.values.map(function (v) {
+      return html`<option value="${JSON.stringify(v.value)}"${v.value === r.value ? html` selected` : ''}>${v.label}</option>`;
+    })}</select>`;
   } else if (c.kind === 'stepper' || c.kind === 'dial') {
-    var canStep = r.numeric && !c.disabled;
-    control = '<span class="stepper">' +
-      '<button class="step-btn" data-action="aspect-step"' + attrs + ' data-delta="' + esc(-c.step) + '"' + (canStep ? '' : ' disabled') + '>&minus;</button>' +
-      '<span class="stepper-value">' + esc(r.display) + '</span>' +
-      '<button class="step-btn" data-action="aspect-step"' + attrs + ' data-delta="' + esc(c.step) + '"' + (canStep ? '' : ' disabled') + '>+</button></span>';
+    var stepOff = r.numeric && !c.disabled ? '' : html` disabled`;
+    control = html`<span class="stepper">
+      <button class="step-btn" data-action="aspect-step"${attrs} data-delta="${-c.step}"${stepOff}>&minus;</button>
+      <span class="stepper-value">${r.display}</span>
+      <button class="step-btn" data-action="aspect-step"${attrs} data-delta="${c.step}"${stepOff}>+</button></span>`;
   } else if (c.kind === 'segment') {
-    control = '<div class="seg">' + c.values.map(function (v) {
-      return '<button data-action="aspect-enum"' + attrs + ' data-value="' + esc(JSON.stringify(v.value)) + '" class="' + (v.value === r.value ? 'active' : '') + '"' + disabledAttr + '>' + esc(v.label) + '</button>';
-    }).join('') + '</div>';
+    control = html`<div class="seg">${c.values.map(function (v) {
+      return html`<button data-action="aspect-enum"${attrs} data-value="${JSON.stringify(v.value)}" class="${v.value === r.value ? 'active' : ''}"${disabledAttr}>${v.label}</button>`;
+    })}</div>`;
   } else if (c.kind === 'slider') {
     var slideKey = entity.name + '|' + r.aspect;
     var shown = localState.sliderDrag[slideKey] !== undefined ? localState.sliderDrag[slideKey] : r.value;
-    var nudge = c.coarse && r.numeric && !c.disabled;
-    control = '<div class="slider-row" style="padding-left:0;">' +
-      '<button class="step-btn" data-action="aspect-step"' + attrs + ' data-delta="' + esc(-c.coarse) + '"' + (nudge ? '' : ' disabled') + ' aria-label="lower">&minus;</button>' +
-      '<input type="range" min="' + esc(c.min) + '" max="' + esc(c.max) + '" step="' + esc(c.step) + '" value="' + esc(shown) + '" data-action="aspect-slider"' + attrs + disabledAttr + '>' +
-      '<span class="sval">' + esc(shown) + '</span>' +
-      '<button class="step-btn" data-action="aspect-step"' + attrs + ' data-delta="' + esc(c.coarse) + '"' + (nudge ? '' : ' disabled') + ' aria-label="raise">+</button></div>';
+    var nudgeOff = c.coarse && r.numeric && !c.disabled ? '' : html` disabled`;
+    control = html`<div class="slider-row" style="padding-left:0;">
+      <button class="step-btn" data-action="aspect-step"${attrs} data-delta="${-c.coarse}"${nudgeOff} aria-label="lower">&minus;</button>
+      <input type="range" min="${c.min}" max="${c.max}" step="${c.step}" value="${shown}" data-action="aspect-slider"${attrs}${disabledAttr}>
+      <span class="sval">${shown}</span>
+      <button class="step-btn" data-action="aspect-step"${attrs} data-delta="${c.coarse}"${nudgeOff} aria-label="raise">+</button></div>`;
   } else {
     control = value;
   }
@@ -3606,8 +3598,8 @@ function renderEntityDetailBody() {
   var entity = overlay.entity;
   var meta = titleCase(entity.room) + ' · ' + titleCase(entity.capability) +
     ((entity.features && entity.features.length) ? ' · ' + entity.features.map(titleCase).join(', ') : '');
-  var badge = entity.write_mode === 'arbitrated' ? '<span class="badge-arbitrated">ARBITRATED</span>' : '';
-  var ownerLine = 'Owned by ' + esc(unitLabel(entity.owner)) + ' · ' + esc(entity.write_mode) + badge;
+  var badge = entity.write_mode === 'arbitrated' ? html`<span class="badge-arbitrated">ARBITRATED</span>` : '';
+  var ownerLine = html`Owned by ${unitLabel(entity.owner)} · ${entity.write_mode}${badge}`;
 
   // Sections come from the adapter's aspect descriptor when it published
   // one (dashboard-logic.js, aspectPlan); an undescribed entity gets the
@@ -3618,38 +3610,38 @@ function renderEntityDetailBody() {
   var sections = plan.map(function (section) {
     var open = !section.collapsed || overlay.expanded[section.group];
     var head = section.collapsed
-      ? '<button class="group-toggle" data-action="toggle-group" data-group="' + esc(section.group) + '">' +
-        esc(section.label) + ' (' + section.rows.length + ') ' + (open ? '&#9662;' : '&#9656;') + '</button>'
-      : '<div class="card-label" style="margin-top:20px;">' + esc(section.label) + '</div>';
-    return head + (open ? section.rows.map(function (r) { return renderAspectRow(entity, r); }).join('') : '');
+      ? html`<button class="group-toggle" data-action="toggle-group" data-group="${section.group}">
+        ${section.label} (${section.rows.length}) ${open ? '\u25be' : '\u25b8'}</button>`
+      : html`<div class="card-label" style="margin-top:20px;">${section.label}</div>`;
+    return html`${head}${open ? section.rows.map(function (r) { return renderAspectRow(entity, r); }) : ''}`;
   });
-  if (sections.length === 0) sections.push('<div class="card-label" style="margin-top:20px;">State</div><div class="aspect-row faint">no data</div>');
+  if (sections.length === 0) sections.push(html`<div class="card-label" style="margin-top:20px;">State</div><div class="aspect-row faint">no data</div>`);
 
   // A camera's detail is the live view (mounted imperatively in
   // renderOverlayContent — a custom element can't ride innerHTML), not a
   // Controls row: cameras take no commands. Its sections move to `rest`,
   // below the mount, so the player keeps its place above them.
-  var middle = '', rest = sections.join(''), camera = null;
+  var middle = '', rest = html`${sections}`, camera = null;
   if (entity.capability === 'camera') {
     camera = entity.name;
-    middle = '<div class="card-label" style="margin-top:20px;">Live</div>';
+    middle = html`<div class="card-label" style="margin-top:20px;">Live</div>`;
   } else if (entity.capability === 'sensor') {
     // A described sensor's readings are its sections, each tapping through
     // to its history; an undescribed one keeps the sparkline rows here.
-    if (!descriptor) middle = '<div class="card-label" style="margin-top:20px;">Controls</div>' + widgetForSensor(entity, false);
+    if (!descriptor) middle = html`<div class="card-label" style="margin-top:20px;">Controls</div>${widgetForSensor(entity, false)}`;
   } else if (!descriptor || BESPOKE_WIDGET[entity.capability]) {
     // A capability with its own widget (a toggle, a slider) keeps it here
     // whether or not the adapter described the rest of its aspects: the
     // descriptor never declares commands for the capability's vocabulary.
-    middle = '<div class="card-label" style="margin-top:20px;">Controls</div>' +
-      (entity.capability === 'climate' ? widgetForClimate(entity, true) : widgetForEntity(entity));
+    middle = html`<div class="card-label" style="margin-top:20px;">Controls</div>
+      ${entity.capability === 'climate' ? widgetForClimate(entity, true) : widgetForEntity(entity)}`;
   }
-  var head = '<div class="muted" style="margin-top:2px;">' + esc(meta) + '</div>' +
-    '<div class="muted" style="margin-top:6px;">' + ownerLine + '</div>' + middle;
+  var head = html`<div class="muted" style="margin-top:2px;">${meta}</div>
+    <div class="muted" style="margin-top:6px;">${ownerLine}</div>${middle}`;
   // Without a camera everything is one half and the mount stays empty.
   return camera
     ? { title: entity.label, body: head, rest: rest, camera: camera }
-    : { title: entity.label, body: head + rest };
+    : { title: entity.label, body: html`${head}${rest}` };
 }
 
 function renderUnitDetailBody() {
@@ -3658,34 +3650,33 @@ function renderUnitDetailBody() {
   var h = store.health[hkey] || {};
   var status = h.status || 'stopped';
 
-  var fieldRows =
-    '<div class="aspect-row"><span class="muted">status:</span> ' + statusChipHtml(status) + '</div>' +
-    '<div class="aspect-row"><span class="muted">pid:</span> ' + esc(fmtOrDash(h.pid)) + '</div>' +
-    '<div class="aspect-row"><span class="muted">restarts:</span> ' + esc(fmtOrDash(h.restarts)) + '</div>' +
-    '<div class="aspect-row"><span class="muted">backoff_ms:</span> ' + esc(fmtOrDash(h.backoff_ms)) + '</div>' +
-    '<div class="aspect-row"><span class="muted">last_exit_code:</span> ' + esc(fmtOrDash(h.last_exit_code)) + '</div>';
+  var fieldRows = html`<div class="aspect-row"><span class="muted">status:</span> ${statusChipHtml(status)}</div>
+    <div class="aspect-row"><span class="muted">pid:</span> ${fmtOrDash(h.pid)}</div>
+    <div class="aspect-row"><span class="muted">restarts:</span> ${fmtOrDash(h.restarts)}</div>
+    <div class="aspect-row"><span class="muted">backoff_ms:</span> ${fmtOrDash(h.backoff_ms)}</div>
+    <div class="aspect-row"><span class="muted">last_exit_code:</span> ${fmtOrDash(h.last_exit_code)}</div>`;
 
   var params = unit.params || {};
   var paramRows = Object.keys(params).map(function (pname) {
     return renderParamRow(unit.name, pname, params[pname]);
-  }).join('');
-  var paramsHtml = paramRows || '<div class="empty-hint">No parameters.</div>';
+  });
+  var paramsHtml = paramRows.length ? paramRows : html`<div class="empty-hint">No parameters.</div>`;
 
   var events = store.events.filter(function (ev) { return unitNameFromHealthKey(ev.key) === unit.name; });
-  var eventRows = events.map(renderEventRow).join('');
-  var eventsHtml = eventRows || '<div class="empty-hint">No events yet this session.</div>';
+  var eventRows = events.map(renderEventRow);
+  var eventsHtml = eventRows.length ? eventRows : html`<div class="empty-hint">No events yet this session.</div>`;
 
   var log = overlay.log || { lines: [], loaded: false, loading: false };
-  var logRows = log.lines.map(renderLogLine).join('');
-  var logHtml = log.loading ? '<div class="empty-hint">Loading&hellip;</div>' :
-    (logRows || '<div class="empty-hint">No output captured.</div>');
+  var logRows = log.lines.map(renderLogLine);
+  var logHtml = log.loading ? html`<div class="empty-hint">Loading&hellip;</div>` :
+    (logRows.length ? logRows : html`<div class="empty-hint">No output captured.</div>`);
 
-  var body = '<div class="muted">' + esc(titleCase(unit.kind || '')) + '</div>' +
-    (unit.description ? '<div style="margin-top:4px;">' + esc(unit.description) + '</div>' : '') +
-    '<div class="card-label" style="margin-top:20px;">Health</div>' + fieldRows +
-    '<div class="card-label" style="margin-top:20px;">Params</div>' + paramsHtml +
-    '<div class="card-label" style="margin-top:20px;">Events</div><div class="event-feed">' + eventsHtml + '</div>' +
-    '<div class="card-label" style="margin-top:20px;">Log</div><div class="log-feed">' + logHtml + '</div>';
+  var body = html`<div class="muted">${titleCase(unit.kind || '')}</div>
+    ${unit.description ? html`<div style="margin-top:4px;">${unit.description}</div>` : ''}
+    <div class="card-label" style="margin-top:20px;">Health</div>${fieldRows}
+    <div class="card-label" style="margin-top:20px;">Params</div>${paramsHtml}
+    <div class="card-label" style="margin-top:20px;">Events</div><div class="event-feed">${eventsHtml}</div>
+    <div class="card-label" style="margin-top:20px;">Log</div><div class="log-feed">${logHtml}</div>`;
   return { title: unit.label, body: body };
 }
 
