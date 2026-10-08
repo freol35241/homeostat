@@ -190,9 +190,9 @@ impl Drop for Supervisor {
 /// script's parent, so the tree is `test -> uv -> python3` and the handle
 /// the fixture holds is uv's. `Child::kill` sends SIGKILL, which uv can
 /// neither catch nor forward: uv dies, the interpreter is reparented to
-/// init, and the fake server keeps listening for the life of the machine
-/// (#140). Exec'ing the interpreter makes the process the fixture holds
-/// the process that has to die.
+/// init, and the fake server keeps listening for the life of the machine.
+/// Exec'ing the interpreter makes the process the fixture holds the
+/// process that has to die.
 ///
 /// Falls back to the command as given when uv cannot resolve the script,
 /// exactly as `process::resolve` does — a fixture that cannot start is a
@@ -582,7 +582,7 @@ pub async fn expect_drop_event(sub: &StateSub, reason: &str) -> Value {
 }
 
 /// Reads health events until one matches the expected kind — degraded
-/// conditions publish kind = condition (the backend-outage precedent),
+/// conditions (a recorder backend outage, say) publish kind = condition,
 /// unlike dropped-input events.
 #[allow(dead_code)] // each test binary uses its own subset of the harness
 pub async fn expect_event_kind(sub: &StateSub, kind: &str) {
@@ -906,9 +906,9 @@ pub fn assert_cli_ok(output: &Output) {
 ///
 /// Every test here spawns its own supervisor, and cargo runs a binary's
 /// tests in parallel, so five four-unit houses resolve and start together.
-/// On a two-core runner the slowest starved past its health deadline and
-/// the suite failed on a test the PR had not touched (#23). Parallelism was
-/// paying for very little: measured on the dashboard suite, the five tests
+/// On a two-core runner the slowest starves past its health deadline and
+/// fails a test that nothing about it broke. Parallelism pays for very
+/// little: measured on the dashboard suite, the five tests
 /// take 23.3 s run serially and 12.9 s in parallel on sixteen cores, but
 /// 23.5 s versus 20.7 s on two — the tests wait on fixed delays, not on the
 /// CPU. Two at a time keeps what parallelism is worth on a developer's

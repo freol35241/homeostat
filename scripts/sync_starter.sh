@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # The starter house ships copies of the generic adapters, because a house
 # repo is self-contained (its README says `cp -r examples/starter-house
-# ~/house`). Hand-maintained copies drift silently — three of them had
-# already been edited past the release they claim — so they are generated.
+# ~/house`). Hand-maintained copies drift silently from the release they
+# claim, so they are generated.
 #
 #   scripts/sync_starter.sh          rewrite the copies
 #   scripts/sync_starter.sh --check  fail if any copy is stale (CI)
@@ -18,10 +18,10 @@
 # The starter is therefore a snapshot of SDK_TAG, not of main: --check
 # compares against adapters/ AS OF that tag, which is the invariant that
 # holds continuously on main. Cutting a release means bumping SDK_TAG,
-# sdk/python/pyproject.toml and the compose image, rerunning this, and
-# tagging the result. While the new tag does not exist yet the check
-# falls back to the working tree — that is the release commit itself.
-# (CI must check out with fetch-depth: 0 or the tag is never found.)
+# Cargo.toml, sdk/python/pyproject.toml and the compose image, rerunning
+# this, and tagging the result. While the new tag does not exist yet the
+# check falls back to the working tree — that is the release commit
+# itself. (CI must check out with fetch-depth: 0 or the tag is never found.)
 set -euo pipefail
 
 # Bumped with the starter's compose image at each release.
@@ -72,8 +72,8 @@ pin_sdk() {
   # Matches an unpinned "homeostat", AND an already-pinned
   # "homeostat==X.Y.Z", -- the starter-only units are rewritten in place,
   # so a pattern that only matched the unpinned form would silently leave
-  # them on the previous release. It did, and --check could not see it:
-  # the check compares against this same transform.
+  # them on the previous release, and --check could not see it: the check
+  # compares against this same transform.
   sed -e 's|^\(# *\)"homeostat[^"]*",|\1"homeostat=='"$PY_VERSION"'",|' \
       -e '/^# \[tool\.uv\.sources\]$/d' \
       -e '/^# homeostat = /d' \
@@ -125,9 +125,10 @@ stale=""
 tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT
 
-# The release's adapters/, or the working tree while that release is being
-# prepared — only then. Any other failure to read the tag is an error: a
-# silently substituted working tree is the drift this check exists for.
+# The release's adapters/ when the tag is in this clone, and the working
+# tree otherwise, which is right only while that release is being prepared.
+# A clone without the tag (a shallow checkout) compares against the working
+# tree without saying so, which is why CI fetches full history.
 if git -C "$REPO" rev-parse -q --verify "$SDK_TAG^{commit}" >/dev/null; then
   at_tag=1
 else
@@ -197,10 +198,10 @@ if [ -n "$stale" ]; then
   exit 1
 fi
 
-# The release version lives in four places and they must agree. Cargo's was
-# left at 0.1.0 through eight releases, so every published binary reported
-# 0.1.0 -- a habit is not enough, and a version nobody can trust is worse
-# than no version at all.
+# The release version lives in four places and they must agree. It is
+# checked here rather than left to habit, because a missed bump makes every
+# published binary report the wrong version, and a version nobody can trust
+# is worse than no version at all.
 bad=""
 check_version() {
   grep -qF "$2" "$REPO/$1" || bad="$bad\n  $1: expected $2"

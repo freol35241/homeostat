@@ -23,7 +23,7 @@ class CooldownTest(unittest.TestCase):
 
     def test_first_firing_is_ready_and_repeats_inside_the_window_are_not(self):
         self.assertTrue(self.cooldown.ready("intrusion", 600))
-        # 417 samples in 56 seconds (#3): every one of them refused.
+        # 417 samples in 56 seconds: every one of them refused.
         for _ in range(417):
             self.clock.now += 56 / 417
             self.assertFalse(self.cooldown.ready("intrusion", 600))

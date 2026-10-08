@@ -62,9 +62,9 @@ def context(root: str | Path = ".") -> "Context":
 # — so they are the ones with slots to fill and the ones that expand.
 # Mirrors ENTITY_ADDRESSED in src/keyspace.rs; `arbiter` is left out
 # because it is an adapter's class and adapters use UnitSession directly,
-# not a Context. Adding a class in the core without adding it here is what
-# made a templated forecast publish unaddressable through `ctx` while
-# `plan` validated it happily.
+# not a Context. A class added in the core but not here leaves its
+# templated publishes unaddressable through `ctx` while `plan` validates
+# them happily.
 _ENTITY_ADDRESSED = ("state", "cmd", "forecast")
 
 # The recorder's store description: the one history selector that answers
@@ -567,10 +567,10 @@ class Context:
         # recorder answers queries one at a time (zenoh runs a queryable's
         # callback serially), so a get that gives up and asks again leaves
         # its question queued: once an answer takes longer than the get,
-        # every later answer reaches an asker who has already left, and the
-        # loop never hears one however long it waits (#121). A get nobody
-        # serves returns at once with no replies -- the recorder not up
-        # yet -- and only that is asked again.
+        # every later answer reaches an asker who has already left, and such
+        # a loop never hears one however long it waits. A get nobody serves
+        # returns at once with no replies -- the recorder not up yet -- and
+        # only that is asked again.
         deadline = time.monotonic() + timeout_s
         while True:
             remaining = max(deadline - time.monotonic(), 0.1)

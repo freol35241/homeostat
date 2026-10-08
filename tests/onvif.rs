@@ -28,8 +28,8 @@ const PASSWORD: &str = "secret123";
 
 /// A fake ONVIF camera (`tests/fake_onvif.py`) on a free port, killed on
 /// drop. Spawned the same way the units themselves are: the interpreter
-/// of the script's own uv environment, exec'd directly (`fixture_command`,
-/// and #140 for what spawning `uv run` itself leaks).
+/// of the script's own uv environment, exec'd directly (`fixture_command`
+/// says what spawning `uv run` itself leaks).
 struct FakeOnvif {
     child: Child,
     port: u16,
@@ -112,7 +112,7 @@ impl Drop for FakeOnvif {
     }
 }
 
-/// Writes a `HOMEOSTAT_CAMERAS` file (outside the repo, per the settlement)
+/// Writes a `HOMEOSTAT_CAMERAS` file (outside the repo: it holds credentials)
 /// giving the fixture's `hallway_cam` the fake camera's host and the
 /// camera-account credentials.
 fn cameras_file(port: u16) -> PathBuf {
@@ -164,15 +164,14 @@ async fn setup() -> (FakeOnvif, PathBuf, Supervisor, zenoh::Session) {
 /// event during an outage) — so every test drives triggers through a
 /// retry, never one-shot.
 ///
-/// The retry alone is not enough now that `motion` publishes on change. A
+/// The retry alone is not enough, because `motion` publishes on change. A
 /// subscription propagates to the publishing peer asynchronously after
 /// `declare_subscriber().await` returns locally, so a sample published
 /// inside that window is simply gone — and re-triggering the same value
-/// can no longer produce another, because the adapter has already
-/// published it. Retrying used to self-correct only because every
-/// notification was republished. So each miss also asks the core's
-/// last-value mirror (`home/state/**`), which is request/response and
-/// immune to the race: it settles whether the edge happened at all.
+/// cannot produce another, because the adapter has already published it.
+/// So each miss also asks the core's last-value mirror (`home/state/**`),
+/// which is request/response and immune to the race: it answers whether
+/// the edge happened at all.
 async fn trigger_until_motion(
     camera: &FakeOnvif,
     sub: &StateSub,
@@ -238,7 +237,7 @@ async fn motion_events_translate_to_bus_state() {
     sup.shutdown();
 }
 
-/// (b) The Tapo-regression contract: a broken subscription (every pull
+/// (b) The broken-subscription contract: a broken subscription (every pull
 /// faults) emits one "event-stream-lost" health event and the adapter
 /// resubscribes from scratch — events flow again without a restart.
 #[tokio::test(flavor = "multi_thread")]
@@ -311,8 +310,8 @@ async fn malformed_motion_value_drops_with_health_event() {
 /// (d) The VP52 shape, diagnosed on real hardware: a Tapo answers
 /// `CreatePullPointSubscription` and `PullMessages` with 200 and Renew with
 /// 400, because it implements no WS-BaseNotification `SubscriptionManager`.
-/// The pull stream is FINE, so this must not read as a stream loss — the
-/// old behaviour tore the subscription down and flapped `available`
+/// The pull stream is FINE, so this must not read as a stream loss —
+/// treating it as one tears the subscription down and flaps `available`
 /// roughly every 17 s, indefinitely, against a live camera.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_camera_without_a_subscription_manager_keeps_streaming() {
@@ -409,7 +408,7 @@ async fn a_camera_without_a_subscription_manager_rotates_its_subscription() {
     sup.shutdown();
 }
 
-/// (f) The other cause of a Renew fault, and the one CI caught as a race:
+/// (f) The other cause of a Renew fault, which races with the first:
 /// the subscription is genuinely GONE, and Renew is merely the call that
 /// discovers it. Concluding "no `SubscriptionManager`" from the fault alone
 /// would mark a perfectly capable camera as renew-less forever. The next
@@ -445,7 +444,7 @@ async fn a_renew_fault_from_a_lost_subscription_is_still_a_loss() {
 
 /// (g) A notification is not a transition. A Tapo C200 re-asserts motion on
 /// every evaluation tick — one real episode against VP52's cameras arrived
-/// as 417 identical `true`s in 56 seconds, 456 recorded rows for two edges —
+/// as 417 identical `true`s in 56 seconds for two edges —
 /// so `motion` publishes on CHANGE and the next sample on the key is always
 /// the next edge.
 #[tokio::test(flavor = "multi_thread")]
@@ -504,10 +503,9 @@ async fn repeated_notifications_publish_one_transition() {
 /// firmware answers with `Transfer-Encoding: chunked`, and aiohttp's
 /// `content.read(n)` hands back only what is buffered — the first chunk —
 /// so a single read truncates the envelope mid-document and every reply
-/// fails to parse. Every other test here passes against a body that
-/// arrives in one piece, which is exactly why the one-shot read looked
-/// correct; VP52's two cameras failed continuously on v0.12.0 with
-/// "unparseable response: unclosed token: line 2, column 0".
+/// fails to parse ("unparseable response: unclosed token: line 2, column
+/// 0"). Every other test here passes against a body that arrives in one
+/// piece, so a one-shot read would pass them all; this one does not.
 ///
 /// The chunking is switched on mid-run, after motion has already been
 /// proved to work, so the assertion is about the framing and nothing else.

@@ -62,7 +62,7 @@ pub const VOCABULARY: &[Capability] = &[
         base: Some("on"),
         aspects: &["power_level", "flue_temperature", "boiler_temperature"],
         notable: None,
-        note: "`on` is the family lever, read back from the device's run state, never echoed from the command. `power_level` is the output setting as the device enumerates it (a constraint the adapter describes); the two temperatures in °C are what an interlock reads. Run-phase codes pass through raw until a second burner adapter exists to generalise against (#37).",
+        note: "`on` is the family lever, read back from the device's run state, never echoed from the command. `power_level` is the output setting as the device enumerates it (a constraint the adapter describes); the two temperatures in °C are what an interlock reads. Run-phase codes pass through raw until a second burner adapter exists to generalise against.",
     },
     Capability {
         name: "camera",
@@ -157,7 +157,7 @@ pub const SUPPORTED_SCHEMA: u32 = 1;
 // The structs below ARE the manifest contract: `deny_unknown_fields` makes
 // them complete, and `JsonSchema` makes them readable without the source —
 // `homeostat schema`, the MCP `schema` tool, and the generated
-// docs/manifest.md all derive from here (#4). Doc comments become field
+// docs/manifest.md all derive from here. Doc comments become field
 // descriptions, so a rule worth knowing while authoring belongs on the
 // field it constrains, and a rule the validator enforces beyond the shape
 // names its error code.

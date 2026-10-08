@@ -16,23 +16,23 @@ its arbitrated entities, so wishes for them never reach an owner adapter
 directly; this service subscribes every wish on home/cmd/** instead. A
 wish for a non-arbitrated entity is ignored — its own adapter consumes
 home/cmd directly. A wish for an arbitrated entity holds a lease per
-(entity, aspect) — the granularity of the cmd key itself, amended from
-per-entity when the heat pump showed orthogonal control dimensions
-sharing one entity (the family's setpoint must not freeze an
-automation's outdoor_temperature_offset; see docs/design.md, Arbitrated
-mode): {priority, actor, deadline}, deadline
+(entity, aspect) — the granularity of the cmd key itself, not per entity,
+because one entity can carry orthogonal control dimensions (on the heat
+pump, the family's setpoint must not freeze an automation's
+outdoor_temperature_offset; see docs/design.md, Arbitrated mode):
+{priority, actor, deadline}, deadline
 `time.monotonic() + hold_minutes * 60`. No active lease, an expired one,
 or an incoming priority at or above the holder's band (band order
 keys.CMD_PRIORITIES, manual highest — THE FAMILY ALWAYS WINS OVER
 AUTOMATIONS) forwards the envelope unchanged to
 home/arbiter/{room}/{entity}/{aspect} (keys.arbiter_key) and takes or
-refreshes the lease at the incoming band/actor; a takeover from a
-strictly lower active holder additionally publishes a "preempt" event; an
-incoming priority strictly below the holder is refused with a "refuse"
-event and no forward. Expiry reopens the aspect to automations, so a
-forgotten override self-heals. A malformed envelope drops with an
-"invalid-command" event, like any adapter. Events land at
-home/health/arbiter/event, recorded like any health event.
+refreshes the lease at the incoming band/actor; a takeover from a strictly
+lower active holder additionally publishes a "preempt" event; an incoming
+priority strictly below the holder is refused with a "refuse" event and no
+forward. Expiry reopens the aspect to automations, so a forgotten override
+self-heals. A malformed envelope drops with an "invalid-command" event,
+like any adapter. Events land at home/health/arbiter/event, recorded like
+any health event.
 
 What it is holding is published as one document per arbiter unit at
 home/hold/{unit}, the home/discovery/{unit} shape, mirrored by the core.

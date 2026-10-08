@@ -235,7 +235,7 @@ fn check_manifest_shape(house: &House, errors: &mut Vec<ValidationError>) {
             }
         } else {
             // Automations may bind entities (virtual sensors); services
-            // have never needed to and stay refused until one does.
+            // have no need to and are refused until one does.
             if unit.manifest.entities.is_some() && unit.manifest.unit.kind != UnitKind::Automation {
                 errors.push(ValidationError::new(
                     "invalid-manifest",
@@ -292,7 +292,7 @@ fn check_entities(house: &House, errors: &mut Vec<ValidationError>) {
 
         // An adapter binds periphery, so its entity files address it. An
         // automation's do not: a computed value has no device behind it,
-        // and requiring an `id` there only made units invent one.
+        // and requiring an `id` there would only make units invent one.
         let owner_is_adapter = house
             .unit(&entity.file.write_policy.owner)
             .is_some_and(|u| u.manifest.unit.kind == UnitKind::Adapter);

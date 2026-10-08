@@ -273,9 +273,9 @@ async fn dashboard_serves_the_family_surface() {
     // All bus subscribers are declared up front, before the health waits —
     // never right before the POST that exercises them: a subscriber's
     // interest needs to propagate through the router to the publishing
-    // session, and a put racing that propagation is silently dropped (this
-    // test has flaked exactly there, repeatedly, under CI load). The
-    // multi-second startup below is the settle window.
+    // session, and a put racing that propagation is silently dropped
+    // (routinely, under CI load). The multi-second startup below is the
+    // settle window.
     let cmd_sub = observer
         .declare_subscriber(LAMP_CMD)
         .await
@@ -352,7 +352,7 @@ async fn dashboard_serves_the_family_surface() {
     assert_eq!(evening["params"]["off_time"]["editable_by"], "family");
     // Owner params are in the model too, carrying their tier, so the page
     // can show them read-only and count them as deviations when off their
-    // default (#10). Visibility is house-wide; only the write is gated.
+    // default. Visibility is house-wide; only the write is gated.
     assert_eq!(evening["params"]["grace_minutes"]["default"], json!(5));
     assert_eq!(evening["params"]["grace_minutes"]["editable_by"], "owner");
 
@@ -493,7 +493,7 @@ async fn dashboard_serves_the_family_surface() {
     );
     // The browser gets that same id back, which is the whole point of it:
     // the control can show the command pending and then resolve it against
-    // the event that ends it (issue #94).
+    // the event that ends it.
     assert_eq!(
         reply,
         json!({"ok": true, "id": cmd_id, "heard": true}),
@@ -617,7 +617,7 @@ async fn dashboard_serves_the_family_surface() {
         "a mistyped or oversized command must never reach the bus"
     );
 
-    // A lock command is accepted: COMMANDABLE now maps lock -> {"locked"}.
+    // A lock command is accepted: COMMANDABLE maps lock -> {"locked"}.
     // The wish still just goes to home/cmd at manual band, stamped the same
     // way as any other command — for a real arbitrated entity, the arbiter
     // (not exercised by this fixture) is what enforces the family always
@@ -649,7 +649,7 @@ async fn dashboard_serves_the_family_surface() {
     // A switch command is refused: the capability is in COMMANDABLE, but
     // this dashboard's manifest (units/dashboard.toml) grants light, lock
     // and climate and NOT switch — the grant table `plan` prints is what
-    // the unit honours (#11). The model says so too, so the page renders
+    // the unit honours. The model says so too, so the page renders
     // the relay read-only rather than as a toggle that silently works.
     let (status, model) = http_request(&addr, "GET", "/api/model", &[], None);
     assert_eq!(status, 200, "{model}");
@@ -685,7 +685,7 @@ async fn dashboard_serves_the_family_surface() {
         "an ungranted command must never reach the bus"
     );
 
-    // A climate command is accepted: COMMANDABLE now maps climate ->
+    // A climate command is accepted: COMMANDABLE maps climate ->
     // {"setpoint"}, the family-facing base aspect (docs/design.md, IVT490
     // heat-pump adapter, "Climate vocabulary"). Setpoint is a float — the
     // envelope must carry it through unmodified, same as any other value.
@@ -1091,7 +1091,7 @@ impl FakeGo2rtc {
     async fn spawn(streams: &str) -> Self {
         let port = common::free_port();
         // Not through `uv run`: it would stay alive as the script's parent
-        // and the handle below would kill it rather than the server (#140).
+        // and the handle below would kill it rather than the server.
         let (program, args) = common::fixture_command(&format!(
             "uv run tests/fake_go2rtc.py --listen 127.0.0.1:{port} --streams {streams}"
         ))
@@ -1194,7 +1194,7 @@ async fn dashboard_proxies_camera_media() {
     // transcoding, and the media plane is a pure remux, so the room card
     // says "tap to view" rather than showing a frame that never arrives.
     let (status, _) = http_request(&addr, "GET", "/api/camera/porch_cam/snapshot", &[], None);
-    assert_eq!(status, 404, "the snapshot proxy is retired");
+    assert_eq!(status, 404, "there is no snapshot proxy");
 
     // Unknown and non-camera entities 404 — the live proxy is model-gated.
     let (status, _) = http_request(&addr, "GET", "/api/camera/no_such_cam/live", &[], None);

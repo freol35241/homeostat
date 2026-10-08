@@ -182,7 +182,7 @@ async fn unbound_codes_reach_discovery_not_the_health_feed() {
     sup.shutdown();
 }
 
-/// (e2) M26: an estate hears neighbours' remotes and RF noise all day —
+/// (e2) An estate hears neighbours' remotes and RF noise all day —
 /// unbound is unbounded traffic, not a fixed handful. Only the most
 /// recently first-heard `MAX_UNBOUND=200` stay in discovery; the oldest is
 /// evicted, and the flood coalesces into the one publish this test reads

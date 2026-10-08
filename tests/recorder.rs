@@ -86,7 +86,7 @@ fn read_rows(db: &Path, sql: &str) -> Vec<Vec<SqlValue>> {
 /// over `samples` says. It is maintained incrementally — by a trigger on
 /// insert, by `_purge` on delete — so drift is the one failure mode a
 /// denormalized count has, and every test that writes or purges checks
-/// for it here rather than trusting the read that now depends on it.
+/// for it here rather than trusting the stats read that depends on it.
 fn assert_tally_matches_samples(db: &Path) {
     let tally = read_rows(
         db,
@@ -213,8 +213,8 @@ async fn state_lands_typed_in_store() {
 
     // Commands are recorded in the same table under class 'cmd' — the
     // envelope's value unwrapped into samples, the full envelope into
-    // events: the "who" audit design.md anticipated, priority and actor
-    // now travel with every command.
+    // events: the "who" audit, since priority and actor travel with every
+    // command.
     let cmd = matched_publisher(&observer, "home/cmd/attic/probe/on").await;
     put(
         &cmd,
@@ -249,8 +249,8 @@ async fn state_lands_typed_in_store() {
         "the full envelope lands in events, not just the unwrapped value"
     );
 
-    // An envelope-less cmd payload (the pre-envelope bare-value shape) is
-    // invalid traffic: dropped with a health event, never a samples row.
+    // An envelope-less cmd payload (a bare value) is invalid traffic:
+    // dropped with a health event, never a samples row.
     let bad_cmd = matched_publisher(&observer, "home/cmd/attic/probe/brightness").await;
     put(&bad_cmd, json!(42)).await;
     let event = await_event(&events, Duration::from_secs(10), |e| {
@@ -302,7 +302,7 @@ async fn state_lands_typed_in_store() {
         "non-scalar payload became a row"
     );
 
-    // H4, defense in depth: a raw NaN on the bus (serde_json::Value can't
+    // Defense in depth: a raw NaN on the bus (serde_json::Value can't
     // hold it, so this publishes the literal bytes directly — the shape a
     // publisher that skips the SDK's put_json guard, or a future one,
     // could still produce) is dropped as "non-finite", never a row — and
@@ -612,8 +612,8 @@ async fn retention_purges_old_rows() {
         "the audit trail is untouched"
     );
     // A series purged empty keeps no bounds from the rows that are gone,
-    // and stats stops listing it — what the old aggregate query did by
-    // joining.
+    // and stats stops listing it, as an aggregate joined over the rows
+    // would.
     assert_tally_matches_samples(&db);
     let replies = history_get(&observer, "home/history/stats").await;
     assert_eq!(
@@ -1246,7 +1246,7 @@ async fn v1_store_backfills_its_tally() {
     sup.shutdown();
 }
 
-/// (h) The recorder catches up from the core's state mirror (#60): a
+/// (h) The recorder catches up from the core's state mirror: a
 /// value published while it is down is in the store once it is back,
 /// stamped at the value's own time rather than at recorder start, and a
 /// series the previous incarnation recorded live is not duplicated. The
@@ -1481,11 +1481,11 @@ async fn forecasts_keep_every_issue_and_answer_in_issues() {
 /// (e4) A version-4 store carries forecast series with no source: the
 /// segment did not exist when they were recorded, and that migration left
 /// them empty. Empty is not a key segment, so building the reply key for
-/// one raised inside the query callback — which sends no reply at all,
-/// and the caller reads that as "no data". The `SELECT` is unfiltered, so
-/// the one legacy series took down the answer for every OTHER forecast
-/// series in the store, including correctly-sourced ones with rows.
-/// Found on a house upgraded to 0.15.0.
+/// one would raise inside the query callback — which sends no reply at
+/// all, and the caller reads that as "no data". The `SELECT` is
+/// unfiltered, so one legacy series would take down the answer for every
+/// OTHER forecast series in the store, including correctly-sourced ones
+/// with rows.
 #[tokio::test(flavor = "multi_thread")]
 async fn v4_store_names_the_sources_it_left_empty() {
     let db = store_path("migrate-v4");
@@ -1540,7 +1540,7 @@ async fn v4_store_names_the_sources_it_left_empty() {
         "the sourceless forecast gets the reserved name, the state series none"
     );
 
-    // The regression itself: the sourced series answers, rather than
+    // The failure this pins: the sourced series answers, rather than
     // being hidden behind the legacy one the loop reaches first.
     let replies = history_get(
         &observer,
@@ -1762,7 +1762,7 @@ fn count(db: &Path, sql: &str) -> i64 {
     }
 }
 
-/// Archiving (#138): a month that closed more than `archive_after_months`
+/// Archiving: a month that closed more than `archive_after_months`
 /// ago is sealed into its own SQLite file beside the store and leaves the
 /// hot file — every row of it, and nothing the archive does not hold. A
 /// series' last word stays in the hot file as well, because `restore`

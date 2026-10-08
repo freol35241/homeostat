@@ -202,8 +202,8 @@ pub struct ApplyStep {
 /// refused or halted apply); the `ApplyResult` carries the detail either way.
 /// `planned_steps` is the caller's preview walk length: the reply timeout
 /// scales with it, since every step may legitimately take up to the
-/// supervisor's 60s readiness deadline — a fixed timeout misreported a
-/// long-but-succeeding walk as "no reply".
+/// supervisor's 60s readiness deadline — a fixed timeout would misreport
+/// a long-but-succeeding walk as "no reply".
 pub async fn request_apply(
     session: &zenoh::Session,
     request: &ApplyRequest,

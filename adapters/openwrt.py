@@ -13,13 +13,12 @@
 See docs/design.md, "Network presence and connectivity (settled 2026-07-25)".
 
 Named for the dialect it speaks: ubus JSON-RPC over HTTP (uhttpd-mod-ubus,
-rpcd session auth). The first polling adapter — each cycle logs in fresh
-(rpcd expires idle sessions; nothing to renew) and asks every configured
-router two questions: `network.interface dump` for WAN state and
-`get_clients` on every hostapd BSS for WiFi sightings. Scope is presence
-and WAN state only; network metrics are the monitoring stack's job,
-deliberately, and tunnel state left with the `vpn` capability
-(docs/design.md, amended 2026-09-23).
+rpcd session auth). It polls: each cycle logs in fresh (rpcd expires idle
+sessions; nothing to renew) and asks every configured router two
+questions: `network.interface dump` for WAN state and `get_clients` on
+every hostapd BSS for WiFi sightings. Scope is presence and WAN state
+only; network metrics and tunnel reachability are the monitoring stack's
+job, deliberately (docs/design.md, amended 2026-09-23).
 
 The manifest's [discovery].endpoint is the HOMEOSTAT_OPENWRT credentials
 file itself: an out-of-repo TOML keyed by router name with `host`
@@ -89,14 +88,12 @@ async def ubus_rpc(http: aiohttp.ClientSession, url: str, method: str, params: l
         ) as response:
             if response.status != 200:
                 raise UbusError(f"HTTP {response.status}")
-            # ⚠️ READ UNTIL EOF, NOT ONCE. `content.read(n)` returns
-            # whatever is buffered, up to n -- for a chunked reply that is
-            # the FIRST CHUNK, so a single read truncates the document and
-            # every decode fails. rpcd here does answer chunked (OpenWrt
-            # 23.x, bodies of 1.4-5.7 kB), and a single read took VP52's
-            # AP off the air for two days (#144) -- this was never the
-            # insurance it was first described as. The cap is still enforced,
-            # now after each chunk, which is also where it belongs -- it
+            # ⚠️ READ UNTIL EOF, NOT ONCE. `content.read(n)` returns whatever
+            # is buffered, up to n -- for a chunked reply that is the FIRST
+            # CHUNK, so a single read truncates the document and every decode
+            # fails. rpcd here does answer chunked (OpenWrt 23.x, bodies of
+            # 1.4-5.7 kB), so this is load-bearing, not insurance. The cap is
+            # enforced after each chunk, which is also where it belongs -- it
             # must not depend on how the body happens to be framed.
             raw = bytearray()
             async for chunk in response.content.iter_chunked(RESPONSE_CHUNK_BYTES):
@@ -238,8 +235,8 @@ class Adapter:
     def note(self, key: tuple, kind: str, **fields) -> None:
         """One health event per down transition of a degraded condition.
 
-        Degraded conditions publish kind = condition (the recorder's
-        backend-outage precedent) — nothing was dropped.
+        Degraded conditions publish under their own event kind, never as
+        a `drop` — nothing was dropped.
         """
         if key not in self.noted:
             self.session.health_event(kind, **fields)

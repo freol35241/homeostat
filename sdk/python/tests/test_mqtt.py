@@ -35,7 +35,7 @@ class GuardTest(unittest.TestCase):
         self.assertEqual(self.events, [])
 
     def test_an_undecodable_topic_is_a_typed_drop_carrying_the_bytes(self):
-        # The byte observed at VP52: 0x82 is not a valid UTF-8 start byte.
+        # 0x82 is not a valid UTF-8 start byte.
         guard(self.on_message, self.health)(None, None, message(b"ivt490/\x82state"))
         self.assertEqual(self.seen, [])  # never reaches the adapter
         self.assertEqual(len(self.events), 1)

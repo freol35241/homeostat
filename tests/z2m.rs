@@ -154,7 +154,7 @@ async fn bad_input_drops_with_health_event() {
     sup.shutdown();
 }
 
-/// (c2) H4: a non-finite field (NaN — which Python's json.loads accepts,
+/// (c2) A non-finite field (NaN — which Python's json.loads accepts,
 /// though JSON has no literal for it) drops with a "non-finite" event
 /// instead of publishing; a finite field in the SAME payload still
 /// publishes normally, proving the adapter processes fields independently
@@ -191,7 +191,7 @@ async fn non_finite_field_drops_without_publishing_or_killing_the_message() {
     sup.shutdown();
 }
 
-/// (c3) H5: a device-chosen field name that is not a legal key segment
+/// (c3) A device-chosen field name that is not a legal key segment
 /// (here "**", which would put on a wildcard and fan out to every aspect
 /// subscriber if it reached `keys.state_key` unvalidated) drops with
 /// "malformed-payload" and names the offending field; a legal field in
@@ -380,7 +380,7 @@ async fn bridge_inventory_published_as_discovery() {
             {"type": "EndDevice", "friendly_name": "motion_new", "ieee_address": "0x02",
              "definition": {"vendor": "Aqara", "model": "RTCGQ11LM", "description": "motion",
                 "exposes": [{"type": "binary", "property": "occupancy"}]}},
-            // z2m before 1.34: no `category` on any expose, battery first (#53)
+            // z2m before 1.34: no `category` on any expose, battery first
             {"type": "EndDevice", "friendly_name": "shed_thermometer", "ieee_address": "0x03",
              "definition": {"vendor": "SONOFF", "model": "SNZB-02", "description": "thermometer",
                 "exposes": [
@@ -527,7 +527,7 @@ async fn envelope_less_command_drops_with_health_event() {
     let mut mqtt = Mqtt::connect(mosquitto.port, "test-no-envelope").await;
     mqtt.subscribe("zigbee2mqtt/+/set").await;
 
-    // A bare value (the pre-envelope shape) on a cmd key is not an envelope.
+    // A bare value on a cmd key is not an envelope.
     observer
         .put("home/cmd/kitchen/kitchen_lamp/on", "true")
         .await
@@ -561,7 +561,7 @@ async fn envelope_less_command_drops_with_health_event() {
 /// (g) Arbitrated lock command, end to end (docs/design.md, Arbitrated
 /// mode): the fixture's `front_door` lock is arbitrated and the house runs
 /// an arbiter unit. A manual-band wish on home/cmd forwards through the
-/// arbiter to home/arbiter, which z2m now subscribes to and translates
+/// arbiter to home/arbiter, which z2m subscribes to and translates
 /// into z2m's LOCK/UNLOCK set vocabulary. While that manual lease holds, a
 /// direct automation-band wish on the same home/cmd key is refused
 /// upstream and never reaches MQTT — which is also the structural proof
@@ -700,8 +700,8 @@ async fn a_non_default_base_topic_translates_both_directions() {
     )
     .await;
 
-    // Availability: the topic now has one more slash than the default
-    // prefix produces, which the old fixed-position parse mis-read.
+    // Availability: the topic has one more slash than the default
+    // prefix produces, which a fixed-position parse would mis-read.
     mqtt.publish(
         "VP52/zigbee2mqtt/lamp_kitchen_1/availability",
         r#"{"state":"online"}"#,

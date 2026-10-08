@@ -12,12 +12,11 @@ dashboard should look.
 
 The pictures are the real page drawing the browser tests' fixture house
 (tests/browser/fixtures, as the Pages demo edits it: people placed on the
-map), one view per widget, so they show the dashboard
-as it is rather than as it was once mocked up. The words come from
-docs/manifest.md, which is generated from the parser itself; this script
-adds no description of its own. src/schema.rs pins that every widget kind
-the parser accepts has a section here, so a new kind cannot ship without
-its picture.
+map), one view per widget, so they show the dashboard as it renders rather
+than a mock-up of it. The words come from docs/manifest.md, which is
+generated from the parser itself; this script adds no description of its
+own. src/schema.rs pins that every widget kind the parser accepts has a
+section here, so a new kind cannot ship without its picture.
 
 Usage: uv run --script scripts/widget_gallery.py [--chromium PATH]
 """

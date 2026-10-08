@@ -1,4 +1,4 @@
-//! go2rtc shim integration tests: the first foreign binary as a unit. A
+//! go2rtc shim integration tests: a foreign binary as a unit. A
 //! fake go2rtc (`tests/fake_go2rtc.py`) sits on PATH under the real binary
 //! name via a wrapper script; the shim must render its config from
 //! `HOMEOSTAT_CAMERAS`, spawn it, poll its API, own the liveliness token,

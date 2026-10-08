@@ -1,12 +1,12 @@
-//! `{room}`/`{entity}` template expansion in the Python SDK (#68).
+//! `{room}`/`{entity}` template expansion in the Python SDK.
 //!
-//! Adapters build their keys themselves, so until commandable virtual
-//! entities there was no automation binding entities through templates and
-//! no coverage of `Context` expanding them. Both halves were broken, and
-//! asymmetrically: a templated publish raised (the coverage check compared
-//! the concrete key against a literal `{room}` chunk), while a templated
-//! subscribe handed zenoh that chunk verbatim, matched nothing, and said
-//! nothing — a unit reporting healthy and deaf to every command.
+//! Adapters build their keys themselves, so only an automation binding
+//! entities through templates exercises `Context` expanding them. The two
+//! halves fail asymmetrically: an unexpanded templated publish raises (the
+//! coverage check compares the concrete key against a literal `{room}`
+//! chunk), while an unexpanded templated subscribe hands zenoh that chunk
+//! verbatim, matches nothing, and says nothing — a unit reporting healthy
+//! and deaf to every command.
 //!
 //! `latches` binds two entities in two rooms through one subscribe and one
 //! publish expression. Commanding either latch and seeing its state come

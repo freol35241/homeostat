@@ -151,7 +151,7 @@ except importlib.metadata.PackageNotFoundError:
 #
 # `no-cache` is "cache it, but revalidate before use": the ETag makes the
 # revalidation a 304 on a LAN or a tunnel, and the heuristic is gone. The
-# alternative — versioned asset URLs, cached hard — was not taken: the
+# alternative — versioned asset URLs, cached hard — is not used: the
 # version would have to reach three `src` attributes in a file the design
 # keeps hand-editable, either by a serve-time rewrite or by hand at every
 # release, and a hand-edited version is the drift that sync_starter.sh
@@ -277,7 +277,7 @@ def build_model(model: house.HouseModel, granted: set[str]) -> dict:
                 # Every param, owner-level included: visibility is
                 # house-wide, so a tuning constant off its default shows
                 # as a deviation and reads in the unit overlay. Only the
-                # WRITE is family-gated, at /api/param (#10).
+                # WRITE is family-gated, at /api/param.
                 "params": u.params,
                 "subscribes": u.subscribes,
             }
@@ -376,8 +376,8 @@ def unit_relations(
     the manifest already declares. Each is an {entity, aspect} pair, because a relation
     is per aspect and an entity is routinely both driven and read (an
     automation commands a lamp's `on` and subscribes to it): naming whole
-    entities made one card say the same thing twice and say neither
-    precisely.
+    entities would make one card say the same thing twice and say
+    neither precisely.
 
     Drives: the entities on the unit's cmd-class rows of the grant table
     (home/meta/system/grants), each of their commandable aspects whose cmd
@@ -994,7 +994,7 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         hub.session.put_json(key, envelope)
         # The id goes back to the browser so the control can show the command
         # as pending and then resolve it against whatever ends it — a
-        # readback, an arbiter refusal, or an adapter's drop (issue #94).
+        # readback, an arbiter refusal, or an adapter's drop.
         return web.json_response({"ok": True, "id": envelope["id"], "heard": heard})
 
     async def api_lights_off(request: web.Request) -> web.Response:

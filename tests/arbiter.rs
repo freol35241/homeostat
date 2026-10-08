@@ -369,7 +369,7 @@ async fn malformed_envelope_drops_with_health_event() {
         .await
         .expect("event subscriber");
 
-    // A bare value (the pre-envelope shape) is not an envelope.
+    // A bare value is not an envelope.
     observer.put(CMD_KEY, "true").await.expect("cmd put");
     let event = next_json(&event_sub, Duration::from_secs(10))
         .await

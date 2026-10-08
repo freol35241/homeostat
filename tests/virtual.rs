@@ -121,8 +121,8 @@ async fn restart_automation(observer: &zenoh::Session, pid: u32) -> Health {
     .await
 }
 
-/// A restarted automation is not blind until its sources publish again
-/// (#36): `ctx.subscribe` reads each source's current value from the core
+/// A restarted automation is not blind until its sources publish again:
+/// `ctx.subscribe` reads each source's current value from the core
 /// mirror, so the fusion is published at once. The catch-up carries the
 /// mirrored value's age, so a source older than the staleness policy is
 /// left out of that first mean rather than passed off as fresh.

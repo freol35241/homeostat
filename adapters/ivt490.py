@@ -423,7 +423,7 @@ RESERVED_ASPECTS = frozenset({"available", *ASPECT_OVERRIDES.values()})
 def state_aspect(source: str, field: str) -> str | None:
     """Map one firmware field (`source` "state" or "controller") to a bus aspect name.
 
-    The name is one of the three settled normalizations, or the firmware
+    The name is one of the three normalizations, or the firmware
     name passed through, prefixed `controller_` on a name collision between
     the two namespaces (see module docstring) — or None for a raw field
     that would mint a reserved name (callers drop it with
@@ -731,8 +731,8 @@ def main():
             now = time.monotonic()
             for entity in config.entities:
                 if now - last_rx[entity.id] > timeout and set_available(entity, False):
-                    # A degraded condition, not dropped input: kind =
-                    # condition, the recorder's backend-outage precedent.
+                    # A degraded condition, not dropped input: its own
+                    # event kind, never a `drop`.
                     session.health_event("device-silent", topic=entity.id)
 
     watchdog_thread = threading.Thread(target=watchdog, daemon=True)

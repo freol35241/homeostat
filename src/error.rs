@@ -97,10 +97,10 @@ pub const CODES: &[(&str, &str)] = &[
     ),
     (
         "reserved-room-name",
-        "A room may not be `home` or a key class (state, cmd, arbiter, config, \
-         meta, health, clock, history, discovery), since rooms sit in the key \
-         path right after the class. The pseudo-rooms `global` and `person` are \
-         the exception: an entity with no place in the house lives in one of \
+        "A room may not be `home` or a key class (state, cmd, arbiter, forecast, \
+         config, meta, health, clock, history, discovery, hold), since rooms sit \
+         in the key path right after the class. The pseudo-rooms `global` and \
+         `person` are the exception: an entity with no place in the house lives in one of \
          those.",
     ),
     (
@@ -155,9 +155,9 @@ pub const CODES: &[(&str, &str)] = &[
     (
         "unknown-capability",
         "An entity file's `capability`, or a cmd publish's `capability`, is not \
-         one the core knows. The vocabulary is fixed (binary_sensor, camera, \
-         climate, cover, light, lock, person, presence, router, sensor, \
-         switch) because grants, the arbiter and the dashboard key on it.",
+         one the core knows (`homeostat schema entity` lists them). The \
+         vocabulary is fixed because grants, the arbiter and the dashboard key \
+         on it.",
     ),
     (
         "entity-id-required",
@@ -227,9 +227,9 @@ pub const CODES: &[(&str, &str)] = &[
     (
         "key-outside-schema",
         "A `[bus]` key expression must be `home/{class}/...`: it starts with \
-         `home/`, names a known class literally (state, cmd, arbiter, config, \
-         meta, health, clock, history, discovery), and has at least one \
-         segment after the class.",
+         `home/`, names a known class literally (state, cmd, arbiter, forecast, \
+         config, meta, health, clock, history, discovery, hold), and has at \
+         least one segment after the class.",
     ),
     (
         "template-outside-binding-unit",

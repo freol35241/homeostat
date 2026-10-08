@@ -613,7 +613,7 @@ pub fn render(check: &CheckResult, root: &Path, repo_label: &str, world: &World)
     }
 
     // Device feeds: printed only when the house wires any, so a house
-    // without them renders exactly as before.
+    // without them gets no empty section.
     if !check.feeds.is_empty() {
         out.push_str("\nFeeds:\n\n");
         for feed in &check.feeds {

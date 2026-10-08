@@ -9,9 +9,10 @@ minutes to stage on a live house and are a few lines of JSON here, and a
 test can decide exactly when a delta arrives and therefore when the page
 re-renders.
 
-What is NOT canned: the page, its assets, and the shapes. Anything the
-fixtures get wrong about what the real unit emits, the canary test in
-run.py (a real supervised house, booted once) is there to catch.
+What is NOT canned: the page and its assets. The canary test in
+tests/dashboard.rs (a real supervised house, booted once) checks that
+model.json carries the same fields as the real unit's /api/model; nothing
+checks snapshot.json that way, so it holds only shapes the unit emits.
 
 Time-relative data — history, forecasts — is GENERATED per request rather
 than stored, because a canned timestamp goes stale: a forecast frozen into
