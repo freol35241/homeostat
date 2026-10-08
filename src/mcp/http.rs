@@ -1,22 +1,20 @@
 //! The HTTP transport: MCP streamable-HTTP in its stateless shape. A POST
-//! carries one JSON-RPC message and gets the JSON response in the body
-//! (the spec allows `application/json` in place of an SSE stream); a
-//! notification gets 202 with no body; GET is 405 — this server never
-//! initiates messages, so there is no stream to open and no session to
-//! manage. Thread per connection: agent traffic is a conversation, not a
-//! load profile.
+//! carries one JSON-RPC message and gets the JSON response in the body; the
+//! spec allows `application/json` in place of an SSE stream. A notification
+//! gets 202 with no body. GET gets 405, because this server does not initiate
+//! messages, so there is no stream to open and no session to manage. Each
+//! connection gets a thread, since agent traffic is light.
 //!
-//! Reachability is the credential (docs/design.md#local-only-access), and
-//! the browser is NOT local even when the house is: a public page in a
-//! family browser can fire requests at LAN addresses. The surface only
-//! reads, but what it reads — state, history, logs, the audit trail — is
-//! the house's private record, so it carries the dashboard's three gates.
-//! `Host` must be a house-network address or a known name, which stops a
-//! DNS-rebound page from reading replies as same-origin. `Origin` must be
-//! absent (no browser sent it) or allowed. And every request must carry
-//! `X-Homeostat`, which a cross-origin `fetch` cannot add without a
-//! preflight the 405 on OPTIONS refuses, so no browser-initiated request is
-//! ever served.
+//! Reachability is the credential (docs/design.md#local-only-access). The
+//! browser is not local even when the house is: a public page in a family
+//! browser can send requests to LAN addresses. The surface only reads, but
+//! what it reads (state, history, logs, the audit trail) is the house's
+//! private record. So it applies the dashboard's three gates. `Host` must be a
+//! house-network address or a known name, which stops a DNS-rebound page from
+//! reading replies as same-origin. `Origin` must be absent (no browser sent
+//! it) or allowed. Every request must carry `X-Homeostat`. A cross-origin
+//! `fetch` cannot add that header without a preflight, and the 405 on OPTIONS
+//! refuses the preflight, so no browser-initiated request is served.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -34,10 +32,10 @@ const ALLOWED_NAMES: [&str; 4] = ["localhost", "homeostat", "homeostat.lan", "ho
 const WRITE_HEADER: &str = "x-homeostat";
 const ENV_HOSTS: &str = "HOMEOSTAT_MCP_HOSTS";
 
-/// Bounds on what a LAN peer can make this process hold or wait for. A
-/// request body is one JSON-RPC message; a tools/call argument list is
-/// never near a megabyte. A declared `Content-Length` is only ever
-/// allocated after the gate passed and only up to this cap.
+/// Bounds on what a LAN peer can make this process hold or wait for. A request
+/// body is one JSON-RPC message, and a tools/call argument list is far below a
+/// megabyte. A declared `Content-Length` is allocated only after the gate
+/// passed, and only up to this cap.
 const MAX_BODY: usize = 1024 * 1024;
 const MAX_HEADER_LINE: u64 = 8 * 1024;
 const MAX_HEADERS: usize = 64;
@@ -137,11 +135,10 @@ fn read_line(reader: &mut BufReader<TcpStream>) -> std::io::Result<Result<Option
     Ok(Ok(Some(line)))
 }
 
-/// Serves requests on one connection until the peer hangs up or asks to
-/// close (keep-alive is HTTP/1.1's default and real MCP clients use it).
-/// Every refusal closes the connection without reading the body: the
-/// declared length is never trusted before the gate passed, and never
-/// beyond the cap after it.
+/// Serves requests on one connection until the peer hangs up or asks to close.
+/// Keep-alive is HTTP/1.1's default and real MCP clients use it. Every refusal
+/// closes the connection without reading the body. The declared length is not
+/// trusted before the gate passed, or beyond the cap after it.
 fn connection(server: &Server, stream: TcpStream) -> std::io::Result<()> {
     stream.set_read_timeout(Some(READ_TIMEOUT))?;
     let mut reader = BufReader::new(stream.try_clone()?);
@@ -200,9 +197,8 @@ fn connection(server: &Server, stream: TcpStream) -> std::io::Result<()> {
             }
         }
 
-        // Refused before the body is read, let alone parsed: a rejected
-        // request must not reach a tool, and the reason is never echoed to
-        // a browser.
+        // Refused before the body is read or parsed. A rejected request must
+        // not reach a tool, and the reason is not echoed to a browser.
         if let Some(refusal) = gate(host.as_deref(), origin.as_deref(), write_header) {
             return respond(&mut stream, "403 Forbidden", &[], refusal.as_bytes());
         }
@@ -253,9 +249,9 @@ fn connection(server: &Server, stream: TcpStream) -> std::io::Result<()> {
     }
 }
 
-/// The three gates, or None when the request may proceed. An `Origin` at
-/// all means a browser sent this; it is allowed only from the house's own
-/// addresses, and `X-Homeostat` is required either way.
+/// The three gates, or None when the request may proceed. Any `Origin` header
+/// means a browser sent the request. It is allowed only from the house's own
+/// addresses. `X-Homeostat` is required either way.
 fn gate(host: Option<&str>, origin: Option<&str>, write_header: bool) -> Option<String> {
     if !host.is_some_and(host_allowed) {
         return Some("Host not allowed\n".to_string());

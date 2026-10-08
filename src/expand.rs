@@ -36,8 +36,8 @@ pub struct ExpandedKey {
     pub direction: Direction,
     /// The expression as written in the manifest.
     pub source: String,
-    /// Whether the source used {room}/{entity} templates — carried here so
-    /// consumers never re-parse `source` to recover it.
+    /// Whether the source used {room}/{entity} templates. Stored here so
+    /// consumers do not re-parse `source` to recover it.
     pub templated: bool,
     /// Zone name, when the room slot referenced a zone.
     pub zone: Option<String>,
@@ -45,9 +45,9 @@ pub struct ExpandedKey {
 }
 
 /// Expands every bus entry of every unit. Keys that fail to parse or fall
-/// outside the key-space schema produce errors and no expansion; a zone
-/// reference that expands to no rooms produces a warning — the entry is
-/// silently dead otherwise.
+/// outside the key-space schema produce errors and no expansion. A zone
+/// reference that expands to no rooms produces a warning, because otherwise
+/// the entry would be dead without anyone noticing.
 pub fn expand(house: &House) -> (Vec<ExpandedKey>, Vec<String>, Vec<ValidationError>) {
     let mut expanded = Vec::new();
     let mut warnings = Vec::new();
@@ -96,12 +96,11 @@ pub fn expand(house: &House) -> (Vec<ExpandedKey>, Vec<String>, Vec<ValidationEr
                     ));
                     continue;
                 }
-                // An adapter physically lacks a cmd path to an arbitrated
-                // entity: its templated cmd expands only over the
-                // non-arbitrated entities it binds, and a templated
-                // arbiter-class expression (receiving the arbiter's
-                // forwarded, post-arbitration commands) only over the
-                // arbitrated ones.
+                // An adapter has no cmd path to an arbitrated entity. Its
+                // templated cmd expands only over the non-arbitrated entities
+                // it binds. A templated arbiter-class expression, which
+                // receives the arbiter's forwarded post-arbitration commands,
+                // expands only over the arbitrated ones.
                 house
                     .entities
                     .iter()
@@ -136,15 +135,15 @@ pub fn expand(house: &House) -> (Vec<ExpandedKey>, Vec<String>, Vec<ValidationEr
                         .iter()
                         .any(|e| e.owner == unit.manifest.unit.name)
                 {
-                    // A template over nothing is the same silent death as the
-                    // zone case: the unit subscribes to nothing, may publish
-                    // nothing, and reports healthy. Only when the unit binds
-                    // no entities at all, though — a templated cmd that
+                    // A template over nothing fails quietly, as in the zone
+                    // case: the unit subscribes to nothing, may publish
+                    // nothing, and reports healthy. This applies only when the
+                    // unit binds no entities at all. A templated cmd that
                     // expands to nothing because every bound entity is
-                    // arbitrated is correct, and the arbiter carries those.
-                    // A missing `[entities]` table can only ever be a
-                    // mistake, so it is an error; a table that is present but
-                    // yields nothing is a house being built up, so it warns.
+                    // arbitrated is correct, since the arbiter carries those.
+                    // A missing `[entities]` table is always a mistake, so it
+                    // is an error. A table that is present but yields nothing
+                    // is a house being built up, so it warns.
                     if unit.manifest.entities.is_none() {
                         errors.push(ValidationError::new(
                             Code::TemplateWithoutEntities,
@@ -320,10 +319,10 @@ mod tests {
         assert!(cmd.exprs.is_empty());
     }
 
-    /// A templated key in a unit that binds nothing fails silently: it
-    /// plans clean, applies clean, and the unit is deaf. The
-    /// `[entities]` table is the tell — forgotten outright is a mistake,
-    /// present but empty is a house part-way built.
+    /// A templated key in a unit that binds nothing fails quietly: it plans
+    /// clean, applies clean, and the unit hears nothing. The `[entities]`
+    /// table tells the cases apart. A missing table is a mistake. A present
+    /// but empty one is a house part-way built.
     #[test]
     fn a_template_in_a_unit_with_no_entities_table_is_an_error() {
         let mut subscribes = BTreeMap::new();

@@ -1,12 +1,12 @@
 //! The live parameter path: an in-memory last-value store for
-//! `home/config/{unit}/{param}`, seeded from manifest defaults and served
-//! over the bus by a queryable (see docs/design.md#the-write-path).
+//! `home/config/{unit}/{param}`, seeded from manifest defaults and served over
+//! the bus by a queryable (see docs/design.md#the-write-path).
 //!
-//! Only the core ever puts on `home/config/**`. A GET without payload reads
-//! the current value; a GET with payload is a write request: the payload is
-//! validated against the manifest's type and constraint, then either stored
-//! and put on the key (subscribers see it live) and echoed in an ok reply,
-//! or refused with an error reply — the old value stands.
+//! Only the core puts on `home/config/**`. A GET without payload reads the
+//! current value. A GET with payload is a write request. The payload is
+//! validated against the manifest's type and constraint. A valid value is
+//! stored, put on the key so subscribers see it, and echoed in an ok reply. An
+//! invalid one gets an error reply and the old value stands.
 
 use std::collections::BTreeMap;
 use std::sync::Mutex;
@@ -36,7 +36,7 @@ struct Constraint {
 
 impl Constraint {
     /// Builds from a manifest constraint table. The table already passed
-    /// plan-time validation; anything unusable is simply not enforced.
+    /// plan-time validation, so anything unusable here is not enforced.
     fn from_spec(spec: &ParamSpec) -> Constraint {
         let Some(table) = &spec.constraint else {
             return Constraint::default();
@@ -72,11 +72,11 @@ impl Constraint {
 /// constraint its manifest declares.
 pub struct ConfigStore {
     params: Mutex<BTreeMap<(String, String), StoredParam>>,
-    /// Serializes every {store mutation + its bus put} pair. Without it a
-    /// config write landing between apply's store swap and apply's puts
-    /// would be overwritten on the bus by the older repo value while the
-    /// store kept the newer one — subscribers and readers disagreeing
-    /// until the next write.
+    /// Serializes each store mutation with its bus put. Without it, a config
+    /// write landing between apply's store swap and apply's puts would be
+    /// overwritten on the bus by the older repo value, while the store kept
+    /// the newer one. Subscribers and readers would disagree until the next
+    /// write.
     write_order: tokio::sync::Mutex<()>,
 }
 
@@ -94,12 +94,12 @@ impl ConfigStore {
         self.write_order.lock().await
     }
 
-    /// Rebuilds the store from a new house — on apply, every parameter is
-    /// set to its repo default (the repo is the system of record; live
-    /// drift resets, and the plan showed it). Returns the params whose
-    /// effective value changed so the caller can put them on the bus for
-    /// live subscribers; params of new units need no put (they seed via
-    /// get at startup).
+    /// Rebuilds the store from a new house. On apply every parameter is set to
+    /// its repo default: the repo is the system of record, so live drift
+    /// resets, and the plan showed that. Returns the params whose effective
+    /// value changed, so the caller can put them on the bus for live
+    /// subscribers. Params of new units need no put, because they read their
+    /// values with a get at startup.
     pub fn replace_from_house(&self, house: &House) -> Vec<(String, String, Value)> {
         let mut params = self.params.lock().expect("config store lock");
         let fresh = build(house);
@@ -127,17 +127,17 @@ impl ConfigStore {
             .collect()
     }
 
-    /// Validates and stores a write. On success the new value is returned
-    /// (the caller puts it on the bus); on rejection the old value stands.
+    /// Validates and stores a write. On success it returns the new value,
+    /// which the caller puts on the bus. On rejection the old value stands.
     pub fn write(&self, unit: &str, param: &str, value: Value) -> Result<Value, String> {
         let mut params = self.params.lock().expect("config store lock");
         let Some(stored) = params.get_mut(&(unit.to_string(), param.to_string())) else {
             return Err(format!("unknown parameter {unit}/{param}"));
         };
         check(stored.param_type, &stored.constraint, &value)?;
-        // An integer written to a float param is stored as the float it
-        // means, as `default_value` canonicalizes the repo default:
-        // serde_json's 5 != 5.0 would otherwise plan as perpetual drift.
+        // An integer written to a float param is stored as the float it means,
+        // as `default_value` does for the repo default. Otherwise serde_json's
+        // 5 != 5.0 would plan as permanent drift.
         let value = match stored.param_type {
             ParamType::Float => Value::from(value.as_f64().expect("checked as float")),
             _ => value,
@@ -167,9 +167,9 @@ fn build(house: &House) -> BTreeMap<(String, String), StoredParam> {
     params
 }
 
-/// Whether the spec's default satisfies its own constraint — the plan-time
-/// check behind the repo-edit parameter path: a default outside the
-/// constraint must fail validation, never reach a running unit (see
+/// Whether the spec's default satisfies its own constraint. This is the
+/// plan-time check behind the repo-edit parameter path: a default outside the
+/// constraint must fail validation before it reaches a running unit (see
 /// docs/design.md#repo-and-live-values). A malformed constraint enforces
 /// nothing here; plan-time validation reports it separately.
 pub fn default_within_constraint(spec: &ParamSpec) -> Result<(), String> {
@@ -184,10 +184,9 @@ pub fn default_within_constraint(spec: &ParamSpec) -> Result<(), String> {
 pub fn default_value(spec: &ParamSpec) -> Value {
     match &spec.default {
         toml::Value::Boolean(b) => Value::from(*b),
-        // An integer default on a float param canonicalizes to the float
-        // it means: serde_json's Number(5) != Number(5.0), so leaving it
-        // integral makes every decimal write of the same value plan as
-        // perpetual drift.
+        // An integer default on a float param becomes the float it means.
+        // serde_json's Number(5) != Number(5.0), so an integral default would
+        // make every decimal write of the same value plan as permanent drift.
         toml::Value::Integer(i) if spec.param_type == ParamType::Float => Value::from(*i as f64),
         toml::Value::Integer(i) => Value::from(*i),
         toml::Value::Float(f) => Value::from(*f),

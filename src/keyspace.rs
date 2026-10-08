@@ -3,15 +3,15 @@
 
 use std::fmt;
 
-/// `home/{class}/...` — the classes the core owns.
+/// `home/{class}/...`: the classes the core owns.
 pub const CLASSES: &[&str] = &[
     "state",
     "cmd",
     "arbiter",
-    // A series' future, keyed like its present: same room/entity/aspect, so
-    // a forecast is the same series extended forward
-    // (docs/design.md#forecasts). The core no more knows what one means than
-    // it knows what `motion` means.
+    // A series' future, keyed like its present: the same room/entity/aspect,
+    // so a forecast extends the same series forward
+    // (docs/design.md#forecasts). The core does not interpret it, just as it
+    // does not interpret `motion`.
     "forecast",
     "config",
     "meta",
@@ -19,17 +19,17 @@ pub const CLASSES: &[&str] = &[
     "clock",
     "history",
     "discovery",
-    // What the arbiter is currently holding: one document per arbiter unit
-    // (`home/hold/{unit}`), the discovery shape, mirrored so a late joiner
-    // can ask "is this aspect held right now?" — which an event stream
-    // cannot answer (docs/design.md#arbitrated-mode). Held state, not the
-    // audit trail: the preempt/refuse events stay where they are.
+    // What the arbiter is holding now: one document per arbiter unit
+    // (`home/hold/{unit}`), in the discovery shape. It is mirrored so a late
+    // joiner can ask whether an aspect is held right now, which an event
+    // stream cannot answer (docs/design.md#arbitrated-mode). This is held
+    // state. The audit trail of preempt and refuse events stays where it is.
     "hold",
 ];
 
-/// The classes addressed per entity — `home/{class}/{room}/{entity}/{aspect}`
-/// — rather than by some other shape under the class. `forecast` is one of
-/// them and takes a sixth segment, its source; see `check_schema`.
+/// The classes addressed per entity, as
+/// `home/{class}/{room}/{entity}/{aspect}`. `forecast` is one of them and
+/// takes a sixth segment, its source; see `check_schema`.
 const ENTITY_ADDRESSED: &[&str] = &["state", "cmd", "arbiter", "forecast"];
 
 /// Reserved pseudo-rooms for non-spatial entities.
@@ -45,13 +45,13 @@ pub fn is_reserved_word(word: &str) -> bool {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Segment {
     Literal(String),
-    /// `*` — exactly one segment.
+    /// `*`: one segment.
     Any,
-    /// `**` — zero or more segments.
+    /// `**`: zero or more segments.
     AnyRec,
-    /// `{room}` — expanded per bound entity, entity-binding units only.
+    /// `{room}`: expanded per bound entity, in entity-binding units only.
     RoomTemplate,
-    /// `{entity}` — expanded per bound entity, entity-binding units only.
+    /// `{entity}`: expanded per bound entity, in entity-binding units only.
     EntityTemplate,
 }
 
@@ -128,12 +128,11 @@ impl KeyExpr {
                 ))
             }
         };
-        // A forecast carries one more: WHO says so. Every forecast has a
-        // source — the unit publishing it — and several may speak about
-        // one series, so the slot is required rather than optional: two
-        // shapes would mean a consumer wildcarding the class could not
-        // write one expression that matched every opinion
-        // (docs/design.md#key-space).
+        // A forecast has one more segment: its source, the unit publishing it.
+        // Several sources may forecast one series, so the slot is required.
+        // With an optional slot there would be two shapes, and a consumer
+        // wildcarding the class could not write one expression that matched
+        // every source (docs/design.md#key-space).
         let min_len = match class {
             "forecast" => 6,
             c if ENTITY_ADDRESSED.contains(&c) => 5,
@@ -265,9 +264,9 @@ mod tests {
 
     #[test]
     fn forecast_is_addressed_like_state_plus_its_source() {
-        // The series it extends, plus WHO says so: room/entity/aspect and
-        // then the source. It keeps state's room slot, and `forecast` is a
-        // reserved word so no room can be called one.
+        // The series it extends, then its source: room/entity/aspect and then
+        // the source. It keeps state's room slot. `forecast` is a reserved
+        // word, so no room can have that name.
         let s = "home/forecast/global/spot_price/price/nordpool";
         expr(s).check_schema(s).unwrap();
         assert_eq!(expr(s).to_string(), s);
@@ -279,13 +278,13 @@ mod tests {
             .check_schema("home/forecast/{room}/{entity}/**")
             .unwrap();
         assert!(is_reserved_word("forecast"));
-        // Short of an aspect it is refused, as state is.
+        // Without an aspect it is refused, as state is.
         assert!(expr("home/forecast/global")
             .check_schema("home/forecast/global")
             .is_err());
-        // And short of a SOURCE it is refused, which state is not: every
-        // forecast has an author, and leaving the slot optional would mean
-        // no single expression matched every opinion about one series.
+        // Without a source it is also refused, which state is not. Every
+        // forecast has a source, and an optional slot would mean no single
+        // expression matched every forecast of one series.
         let bare = "home/forecast/global/spot_price/price";
         assert!(expr(bare).check_schema(bare).is_err());
         let state = "home/state/global/spot_price/price";

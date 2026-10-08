@@ -1,7 +1,7 @@
-//! Pending plans as files: `plans/pending/{id}.plan` — TOML carrying the
-//! rendered plan text plus what apply needs to enforce staleness. Readable
-//! on a phone as-is; auto-invalidated when the repo moves past the base
-//! commit (docs/design.md#pending-plans).
+//! Pending plans as files: `plans/pending/{id}.plan`, TOML carrying the
+//! rendered plan text plus what apply needs to detect staleness. The file
+//! reads well on a phone as it is. A plan is invalid once the repo moves past
+//! its base commit (docs/design.md#pending-plans).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -38,9 +38,9 @@ pub fn save(
     if !plan.ends_with('\n') {
         plan.push('\n');
     }
-    // The plan block stays a literal multi-line string for phone
-    // readability, unless the text itself contains the delimiter; the
-    // actor is arbitrary --actor input, so it is always escaped.
+    // The plan block stays a literal multi-line string so it reads well on a
+    // phone, unless the text itself contains the delimiter. The actor comes
+    // from arbitrary --actor input, so it is always escaped.
     let plan_field = if plan.contains("'''") {
         toml::Value::String(plan).to_string()
     } else {
@@ -67,8 +67,8 @@ pub fn load(path: &Path) -> Result<PendingPlan, String> {
     toml::from_str(&text).map_err(|e| format!("{} is not a pending plan: {e}", path.display()))
 }
 
-/// Current UTC time as (RFC3339, compact id form). Whole-second precision;
-/// no date-time dependency for two format strings.
+/// Current UTC time as (RFC3339, compact id form), to the whole second. Two
+/// format strings do not justify a date-time dependency.
 fn utc_now() -> (String, String) {
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)

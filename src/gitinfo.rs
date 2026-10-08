@@ -1,8 +1,9 @@
-//! Git facts about a house repo, by shelling out — no libgit dependency.
+//! Git facts about a house repo, read by running git, so there is no libgit
+//! dependency.
 //!
-//! `applied_commit` exists only when the house root is itself a git
-//! worktree root: a nested fixture directory must not inherit an enclosing
-//! repo's HEAD (docs/design.md#the-apply-walk).
+//! `applied_commit` exists only when the house root is itself a git worktree
+//! root. A nested fixture directory must not inherit an enclosing repo's HEAD
+//! (docs/design.md#the-apply-walk).
 
 use std::path::Path;
 use std::process::Command;
@@ -11,9 +12,9 @@ use std::process::Command;
 /// changes. None when `root` is not itself the top level of a git worktree
 /// (not a repo, a nested directory, or a repo without commits).
 ///
-/// Entries under `plans/` never count toward dirty: a saved pending plan is
-/// a review artifact of the commit it was planned against and must not
-/// invalidate itself.
+/// Entries under `plans/` do not count toward dirty. A saved pending plan is a
+/// review record of the commit it was planned against, and must not invalidate
+/// itself.
 pub fn head_commit(root: &Path) -> Option<String> {
     let toplevel = git(root, &["rev-parse", "--show-toplevel"])?;
     let toplevel = Path::new(&toplevel).canonicalize().ok()?;
@@ -21,9 +22,9 @@ pub fn head_commit(root: &Path) -> Option<String> {
         return None;
     }
     let head = git(root, &["rev-parse", "HEAD"])?;
-    // core.quotePath would C-quote any non-ASCII path ("plans/hus-\303\245"),
-    // which then fails the plans/ test below and lets a saved plan dirty
-    // the very commit it was planned against.
+    // core.quotePath would C-quote any non-ASCII path ("plans/hus-\303\245").
+    // The quoted path then fails the plans/ test below, and a saved plan would
+    // dirty the commit it was planned against.
     let dirty = git(
         root,
         &["-c", "core.quotePath=false", "status", "--porcelain"],
@@ -33,9 +34,9 @@ pub fn head_commit(root: &Path) -> Option<String> {
 }
 
 /// Whether a `status --porcelain` line's path is under `plans/`. A rename
-/// counts only when both sides are; paths git still quotes even with
-/// quotePath off (a literal quote or newline in the name) never match and
-/// so still count as dirty.
+/// counts only when both sides are. Git still quotes some paths with quotePath
+/// off (a literal quote or newline in the name). Those do not match, so they
+/// count as dirty.
 fn under_plans(line: &str) -> bool {
     line.get(3..)
         .is_some_and(|path| path.split(" -> ").all(|p| p.starts_with("plans/")))

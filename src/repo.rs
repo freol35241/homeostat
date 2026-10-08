@@ -1,7 +1,7 @@
-//! Loading a house repo from disk into a [`House`]: every unit manifest,
-//! the entity files each binding unit points at, `zones.toml` and
+//! Loading a house repo from disk into a [`House`]: every unit manifest, the
+//! entity files each binding unit points at, `zones.toml` and
 //! `dashboard.toml`. A file that fails to parse is reported and skipped, so
-//! one bad file never hides the errors in the others.
+//! one bad file does not hide the errors in the others.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -62,8 +62,8 @@ impl House {
     }
 }
 
-/// Reads a house repo. Parse failures never abort the walk: the result is a
-/// typed model of everything that parsed plus a complete error list.
+/// Reads a house repo. A parse failure does not abort the walk. The result is
+/// a typed model of everything that parsed plus a complete error list.
 pub fn load(root: &Path) -> (House, Vec<ValidationError>) {
     let mut house = House::default();
     let mut errors = Vec::new();

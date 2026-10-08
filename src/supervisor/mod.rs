@@ -29,8 +29,8 @@ use crate::CheckResult;
 /// lets late subscribers see current state without a republish loop.
 pub type HealthMap = Arc<Mutex<BTreeMap<String, Health>>>;
 
-/// Captured stdout/stderr per unit, shared between the capture tasks
-/// (writers) and the meta queryable (reader) — the ring buffer served at
+/// Captured stdout/stderr per unit, shared between the capture tasks (writers)
+/// and the meta queryable (reader). This is the ring buffer served at
 /// `home/meta/{unit}/log`. A unit with no captured output yet has no entry.
 pub type LogMap = Arc<Mutex<BTreeMap<String, VecDeque<LogEntry>>>>;
 
@@ -40,8 +40,8 @@ const READY_DEADLINE: Duration = Duration::from_mins(1);
 
 /// What the supervisor knows to be applied: the world it serves at
 /// `home/meta/**`. Unit entries update only when a unit reaches `running`
-/// during an apply (or at startup), so a halted walk re-plans the
-/// remaining work instead of pretending it landed.
+/// during an apply or at startup. A halted walk therefore re-plans the
+/// remaining work instead of reporting it as done.
 #[derive(Default)]
 pub struct WorldMeta {
     pub units: BTreeMap<String, WorldUnit>,
@@ -66,19 +66,19 @@ pub struct Core {
     world: Mutex<WorldMeta>,
     units: tokio::sync::Mutex<BTreeMap<String, UnitHandle>>,
     apply_lock: tokio::sync::Mutex<()>,
-    /// Set (under the units lock) when shutdown begins: `launch` refuses
-    /// and an in-flight apply walk halts, so no unit can slip into the
-    /// drained units map and miss the shutdown signal.
+    /// Set under the units lock when shutdown begins. `launch` then refuses
+    /// and an in-flight apply walk halts, so no unit can enter the drained
+    /// units map and miss the shutdown signal.
     shutting_down: AtomicBool,
 }
 
 /// Runs the supervisor until SIGTERM/SIGINT. Assumes the house already
 /// passed plan-time validation.
 pub async fn run(check: &CheckResult, root: &Path, listen: &str) -> Result<(), String> {
-    // Before anything that takes time: the bus socket accepts connections
-    // before `zenoh::open` returns, and a SIGTERM that lands while the core
-    // is still starting must take the graceful path below, not the default
-    // disposition that kills the process outright.
+    // Install signal handlers before anything that takes time. The bus socket
+    // accepts connections before `zenoh::open` returns. A SIGTERM that lands
+    // while the core is still starting must take the graceful path below, and
+    // not the default disposition that kills the process.
     let stop = stop_signal();
     let session = zenoh::open(bus::listen_config(listen))
         .await
@@ -86,7 +86,7 @@ pub async fn run(check: &CheckResult, root: &Path, listen: &str) -> Result<(), S
     println!("[homeostat] bus listening on {listen}");
 
     // The last-value queryables are up before any unit spawns, so a unit's
-    // first get always finds them.
+    // first get finds them.
     let store = Arc::new(ConfigStore::from_house(&check.house));
     serve_config(&session, store.clone()).await?;
     let health: HealthMap = Arc::default();
@@ -95,16 +95,16 @@ pub async fn run(check: &CheckResult, root: &Path, listen: &str) -> Result<(), S
     mirror(&session, "home/clock/*").await?;
     mirror(&session, "home/state/**").await?;
     mirror(&session, "home/discovery/*").await?;
-    // Forecasts are mirrored for the same reason as state, and more
-    // urgently: a day-ahead curve is published once a day, so a consumer
-    // restarting at midday would otherwise have no inputs until tomorrow
-    // morning. Note the reply's age is the mirror's, not the forecast's —
-    // a forecast carries its own `issued`, which is what a consumer's
-    // staleness policy reads (docs/design.md#forecasts).
+    // Forecasts are mirrored for the same reason as state. It matters more
+    // here: a day-ahead curve is published once a day, so a consumer
+    // restarting at midday would otherwise have no inputs until the next
+    // morning. The reply's age is the mirror's, not the forecast's. A forecast
+    // carries its own `issued`, and a consumer's staleness policy reads that
+    // (docs/design.md#forecasts).
     mirror(&session, "home/forecast/**").await?;
-    // The arbiter's holds, for the same late-joiner reason: a browser
-    // opening mid-hold must see it, and the arbiter republishes only on
-    // change (docs/design.md#arbitrated-mode).
+    // The arbiter's holds, for the same late-joiner reason. A browser opening
+    // during a hold must see it, and the arbiter republishes only on change
+    // (docs/design.md#arbitrated-mode).
     mirror(&session, "home/hold/*").await?;
 
     let mut world = WorldMeta {
@@ -142,8 +142,8 @@ pub async fn run(check: &CheckResult, root: &Path, listen: &str) -> Result<(), S
     println!("[homeostat] shutting down");
     let handles: Vec<UnitHandle> = {
         let mut units = core.units.lock().await;
-        // Flagged under the lock: a concurrent launch either sees the flag
-        // and refuses, or inserted before the drain and gets the signal.
+        // Set under the lock. A concurrent launch either sees the flag and
+        // refuses, or inserted before the drain and gets the signal.
         core.shutting_down.store(true, Ordering::SeqCst);
         std::mem::take(&mut *units).into_values().collect()
     };
@@ -181,11 +181,11 @@ impl Core {
         }
     }
 
-    /// Spawns a fresh supervision task for `spec`. The health entry is set
-    /// to `starting` synchronously so a reader never sees the previous
-    /// incarnation's terminal state after this returns. A no-op once
-    /// shutdown began — a unit spawned into a closing supervisor would
-    /// never receive the shutdown signal.
+    /// Spawns a fresh supervision task for `spec`. The health entry is set to
+    /// `starting` synchronously, so after this returns a reader does not see
+    /// the previous incarnation's terminal state. A no-op once shutdown began,
+    /// because a unit spawned into a closing supervisor would not receive the
+    /// shutdown signal.
     async fn launch(&self, spec: UnitSpec) {
         let name = spec.name.clone();
         let mut units = self.units.lock().await;
@@ -196,9 +196,9 @@ impl Core {
             .lock()
             .expect("health map lock")
             .insert(name.clone(), initial_health());
-        // The log entry exists for the unit's whole lifetime (capture only
-        // appends to an existing entry), so a destroyed unit's final lines
-        // cannot resurrect it in the served meta space.
+        // The log entry exists for the unit's whole lifetime, and capture only
+        // appends to an existing entry. So a destroyed unit's final lines
+        // cannot bring it back into the served meta space.
         self.log
             .lock()
             .expect("log map lock")
@@ -221,7 +221,7 @@ impl Core {
         );
     }
 
-    /// Stops a unit's supervision task (graceful per the unit contract) and
+    /// Stops a unit's supervision task (gracefully, per the unit contract) and
     /// waits for it to finish. No-op when the unit is not running.
     async fn stop(&self, name: &str) {
         let handle = self.units.lock().await.remove(name);
@@ -231,8 +231,8 @@ impl Core {
         }
     }
 
-    /// Stops a destroyed unit and removes every trace: health entry, meta
-    /// entries, world membership.
+    /// Stops a destroyed unit and removes its health entry, meta entries and
+    /// world membership.
     async fn destroy(&self, name: &str) {
         self.stop(name).await;
         self.health.lock().expect("health map lock").remove(name);
@@ -353,9 +353,9 @@ fn intersects(query: &zenoh::query::Query, key: &str) -> bool {
         .is_ok_and(|k| query.key_expr().intersects(&k))
 }
 
-/// Serves the meta space to late joiners: manifest hashes and bytes per
-/// unit, the resolved grant table, the applied commit, and `about`. This is what
-/// `homeostat plan --bus` reads as the world.
+/// Serves the meta space to late joiners: manifest hashes and bytes per unit,
+/// the resolved grant table, the applied commit, and `about`.
+/// `homeostat plan --bus` reads this as the world.
 async fn serve_meta(core: Arc<Core>) -> Result<(), String> {
     let queryable = core
         .session
@@ -401,7 +401,7 @@ async fn serve_meta(core: Arc<Core>) -> Result<(), String> {
             };
             {
                 // A unit with no captured output yet has no entry here, so a
-                // query for it gets no reply — same as an unknown unit's
+                // query for it gets no reply, the same as an unknown unit's
                 // manifest_hash above.
                 let log = core.log.lock().expect("log map lock");
                 for (name, buffer) in log.iter() {
@@ -445,7 +445,8 @@ async fn serve_config(session: &Session, store: Arc<ConfigStore>) -> Result<(), 
 
 async fn handle_config_query(store: &ConfigStore, session: &Session, query: zenoh::query::Query) {
     let Some(payload) = query.payload() else {
-        // Read: reply the current value of every parameter the selector covers.
+        // Read: reply with the current value of every parameter the selector
+        // covers.
         for (unit, param, value) in
             store.read(|unit, param| intersects(&query, &bus::config_key(unit, param)))
         {
@@ -456,7 +457,7 @@ async fn handle_config_query(store: &ConfigStore, session: &Session, query: zeno
         return;
     };
 
-    // Write request: exactly one concrete parameter key.
+    // Write request: one concrete parameter key.
     let key = query.key_expr().as_str().to_string();
     let segments: Vec<&str> = key.split('/').collect();
     let (unit, param) = match segments[..] {
@@ -474,7 +475,7 @@ async fn handle_config_query(store: &ConfigStore, session: &Session, query: zeno
         reply_config_err(&query, "payload is not JSON").await;
         return;
     };
-    // Store mutation and bus put as one ordered unit (see write_lock).
+    // Store mutation and bus put happen together, in order (see write_lock).
     let guard = store.write_lock().await;
     match store.write(unit, param, value) {
         Ok(stored) => {
@@ -495,7 +496,7 @@ async fn reply_config_err(query: &zenoh::query::Query, message: &str) {
     let _ = query.reply_err(payload).await;
 }
 
-/// Serves current health at `home/health/{unit}` to late joiners; the
+/// Serves current health at `home/health/{unit}` to late joiners. The
 /// supervision tasks publish transitions and keep the map current.
 async fn serve_health(session: &Session, health: HealthMap) -> Result<(), String> {
     let queryable = session
@@ -522,23 +523,23 @@ async fn serve_health(session: &Session, health: HealthMap) -> Result<(), String
     Ok(())
 }
 
-/// Mirrors a published key space into a last-value cache served by a
-/// queryable. Clock: a late joiner sees the current minute/date instead of
-/// waiting out the next boundary. State: a late joiner (or a bus read, e.g.
-/// the MCP surface's `read_state`) sees every entity's current value without
-/// waiting for the next publish. Forecast: the same, for a class whose
-/// publishes can be a day apart.
-///
-/// Every reply carries the value's age — seconds since the mirror received
-/// it, as a decimal string in the attachment — because a mirrored value
-/// can be arbitrarily old and a late joiner cannot otherwise tell a
-/// catch-up from a fresh publish (the SDK's `subscribe` feeds it to
-/// `Freshness`). Age rather than a wall-clock stamp: the mirror's monotonic
-/// clock is the only one involved, and the reply is read the moment it is
-/// made.
 /// A mirrored value's last-put payload and receipt time, by key.
 type MirrorCache = BTreeMap<String, (Vec<u8>, Instant)>;
 
+/// Mirrors a published key space into a last-value cache served by a
+/// queryable. For the clock, a late joiner sees the current minute and date
+/// instead of waiting for the next boundary. For state, a late joiner or a
+/// bus read (such as the MCP surface's `read_state`) sees every entity's
+/// current value without waiting for the next publish. Forecast works the
+/// same way, for a class whose publishes can be a day apart.
+///
+/// Every reply carries the value's age in the attachment: seconds since the
+/// mirror received it, as a decimal string. A mirrored value can be very
+/// old, and without the age a late joiner cannot tell a catch-up from a
+/// fresh publish. The SDK's `subscribe` feeds the age to `Freshness`. The
+/// reply carries an age and not a wall-clock stamp, because the mirror's
+/// monotonic clock is the only one involved and the reply is read as soon
+/// as it is made.
 async fn mirror(session: &Session, keyexpr: &'static str) -> Result<(), String> {
     let cache: Arc<Mutex<MirrorCache>> = Arc::default();
     let sub = session
@@ -594,8 +595,8 @@ async fn mirror(session: &Session, keyexpr: &'static str) -> Result<(), String> 
     Ok(())
 }
 
-/// Installs the SIGTERM/SIGINT handlers now and returns the wait for
-/// either. A signal delivered between the two is held, not lost.
+/// Installs the SIGTERM/SIGINT handlers now and returns a future that waits
+/// for either. A signal delivered between the two is held until the wait.
 fn stop_signal() -> impl std::future::Future<Output = ()> {
     use tokio::signal::unix::{signal, SignalKind};
     let mut term = signal(SignalKind::terminate()).expect("SIGTERM handler");

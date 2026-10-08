@@ -1,9 +1,9 @@
-//! The grant table and the checks that need it. A grant is a unit's
-//! publish resolved against the entities it reaches; the table is both the
-//! permission record that `plan` shows and the dependency graph that orders
-//! an apply. Device feeds (`[inputs]`) and declared sources (`[sources]`)
-//! resolve here too, since they ask the same question: which unit
-//! publishes the key an entity names.
+//! The grant table and the checks that need it. A grant is a unit's publish
+//! resolved against the entities it reaches. The table is the permission
+//! record that `plan` shows. It is also the dependency graph that orders an
+//! apply. Device feeds (`[inputs]`) and declared sources (`[sources]`) resolve
+//! here too, because they ask the same question: which unit publishes the key
+//! an entity names.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -16,10 +16,10 @@ use crate::manifest::{Priority, UnitKind, WriteMode, CAPABILITIES};
 use crate::repo::House;
 
 /// One resolved grant: a publish expression resolved against the concrete
-/// entity set. A cmd-class row is a writer (a non-adapter's cmd publish,
-/// with its capability and band); a state-class row is a binding (a
-/// binding unit's state publish over the entities it embodies). The table
-/// doubles as the dependency graph (unit -> entities -> owner units).
+/// entity set. A cmd-class row is a writer: a non-adapter's cmd publish, with
+/// its capability and band. A state-class row is a binding: a binding unit's
+/// state publish over the entities it binds. The table is also the dependency
+/// graph (unit -> entities -> owner units).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Grant {
     pub unit: String,
@@ -30,9 +30,9 @@ pub struct Grant {
     /// The band a cmd publish leaves at; none on a state row.
     #[serde(default)]
     pub priority: Option<Priority>,
-    /// The resolved key expressions, sorted. Part of the grant's identity:
-    /// widening `.../on` to `.../**` is a grant delta even when the same
-    /// entities match.
+    /// The resolved key expressions, sorted. They are part of the grant's
+    /// identity, so widening `.../on` to `.../**` is a grant delta even when
+    /// the same entities match.
     #[serde(default)]
     pub keys: Vec<String>,
     /// Granted entities (key match + capability match), sorted by name.
@@ -46,12 +46,11 @@ impl Grant {
     }
 }
 
-/// A granted entity with the policy facts the grant table is the record
-/// of. Because these live in the table — and every bound entity sits in
-/// its owner's state row — an entity move, a write-mode flip, a
-/// capability change or a re-binding IS a grant-table delta, and any grant
-/// delta escalates the plan to structural (docs/design.md#tiers), with the
-/// owner shown exactly what changed.
+/// A granted entity with the policy facts the grant table records. Every bound
+/// entity sits in its owner's state row. So an entity move, a write-mode flip,
+/// a capability change or a re-binding is a grant-table delta. Any grant delta
+/// escalates the plan to structural (docs/design.md#tiers), and the owner sees
+/// what changed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GrantEntity {
     pub name: String,
@@ -59,15 +58,15 @@ pub struct GrantEntity {
     #[serde(default)]
     pub capability: String,
     pub write: WriteMode,
-    /// The binding unit — the walk-order edge source. An adapter, or an
-    /// automation for a commandable virtual entity.
+    /// The binding unit, which is the source of the walk-order edge. An
+    /// adapter, or an automation for a commandable virtual entity.
     pub owner: String,
 }
 
 /// One resolved feed: a device input wired to a source aspect
-/// (docs/design.md#device-feeds). Rendered in the plan next to the grant
-/// table; not a walk-order edge — a control loop that reads a device and
-/// feeds a term back is legitimately cyclic.
+/// (docs/design.md#device-feeds). The plan renders it next to the grant table.
+/// A feed is not a walk-order edge, because a control loop that reads a device
+/// and feeds a term back to it is a legitimate cycle.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Feed {
     /// The fed entity and its adapter's input name.
@@ -80,8 +79,9 @@ pub struct Feed {
     pub key: String,
 }
 
-/// Resolves every `[inputs]` block: the source exists, the target is a
-/// device, and an automation-owned source actually publishes the aspect.
+/// Resolves every `[inputs]` block. It checks that the source exists, that the
+/// target is a device, and that an automation-owned source publishes the
+/// aspect.
 pub fn resolve_feeds(house: &House, expanded: &[ExpandedKey]) -> (Vec<Feed>, Vec<ValidationError>) {
     let mut feeds = Vec::new();
     let mut errors = Vec::new();
@@ -169,13 +169,12 @@ pub struct Source {
     pub note: Option<String>,
 }
 
-/// Resolves every `[sources]` block: the contributor exists, and an
-/// automation-owned contributor actually publishes the aspect — the same
-/// two checks `[inputs]` makes, for the same reason. The warning is the
-/// part that makes the declaration a checked fact rather than
-/// documentation: a unit that does not subscribe a source it claims to
-/// derive from is either mis-declared or has dead code, and the overlay
-/// would draw a line that never participates.
+/// Resolves every `[sources]` block. It makes the same two checks as
+/// `[inputs]`, for the same reason: the contributor exists, and an
+/// automation-owned contributor publishes the aspect. It also warns when the
+/// unit does not subscribe a source it claims to derive from. Such a unit is
+/// either mis-declared or has dead code, and the overlay would draw a line
+/// that plays no part in the value.
 pub fn resolve_sources(
     house: &House,
     expanded: &[ExpandedKey],
@@ -251,8 +250,8 @@ pub fn resolve_sources(
     (sources, warnings, errors)
 }
 
-/// One slot of a forecast publish (aspect or source): a literal, or
-/// anything at all when the expression wildcards it.
+/// One slot of a forecast publish (aspect or source): a literal, or any value
+/// when the expression wildcards it.
 #[derive(PartialEq)]
 enum Slot {
     Exact(String),
@@ -302,9 +301,9 @@ fn build_grants(
         if key.direction != Direction::Publishes {
             continue;
         }
-        // Classify by the source: a templated publish that expanded to
-        // nothing has no exprs to betray its class, and it still gets the
-        // capability checks and the "matches no entities" warning.
+        // Classify by the source. A templated publish that expanded to nothing
+        // has no exprs to show its class, and it still gets the capability
+        // checks and the "matches no entities" warning.
         let class = key.source.split('/').nth(1).unwrap_or_default();
         let unit = house
             .unit(&key.unit)
@@ -314,13 +313,12 @@ fn build_grants(
         let mut keys: Vec<String> = key.exprs.iter().map(ToString::to_string).collect();
         keys.sort();
 
-        // A binding unit's state or forecast publish: the record of what
-        // it embodies, so a change to any bound entity is a grant delta.
-        // Forecast counts for the same reason state does — it is the same
-        // series extended forward, onto the same entity — and leaving it
-        // out would not be merely cosmetic: a unit publishing ONLY a
-        // forecast onto an entity it owns would produce no row at all, so
-        // a change to that entity would not read as a grant delta and
+        // A binding unit's state or forecast publish records what it binds, so
+        // a change to any bound entity is a grant delta. Forecast counts for
+        // the same reason as state: it is the same series extended forward,
+        // onto the same entity. Leaving it out would break apply. A unit
+        // publishing only a forecast onto an entity it owns would produce no
+        // row, so a change to that entity would not read as a grant delta and
         // apply would not see it.
         if class == "state" || class == "forecast" {
             let mut bound: Vec<GrantEntity> = house
@@ -404,9 +402,9 @@ fn build_grants(
         if granted.is_empty() {
             warnings.push(format!("publish {subject} matches no entities"));
         }
-        // The manual band is the family's (dashboard, voice) and is exempt
-        // from exclusive-write checks; an automation claiming it is worth a
-        // look in the plan, though nothing forbids it.
+        // The manual band belongs to the family's surfaces (dashboard, voice)
+        // and is exempt from exclusive-write checks. Nothing forbids an
+        // automation from claiming it, but the plan warns about it.
         if priority == Priority::Manual && unit.manifest.unit.kind != UnitKind::Service {
             warnings.push(format!(
                 "publish {subject} declares priority \"manual\" on {} \"{}\"; the manual band is the family's and is exempt from exclusive-write checks",
@@ -428,9 +426,9 @@ fn build_grants(
 }
 
 /// Write-policy enforcement: two writers on an exclusive entity is an error.
-/// Exclusivity constrains the automation band only; manual-band units
-/// (dashboard, voice) sit above it by construction and never count. A
-/// writer is a unit, not a binding: authority is per process.
+/// Exclusivity constrains only the bands below manual. Manual-band units
+/// (dashboard, voice) sit above it and do not count. A writer is a unit rather
+/// than a binding, because authority is per process.
 fn check_exclusive_writers(house: &House, grants: &[Grant], errors: &mut Vec<ValidationError>) {
     let mut writers: BTreeMap<&str, BTreeMap<&str, Vec<String>>> = BTreeMap::new();
     for grant in grants {
@@ -468,11 +466,11 @@ fn check_exclusive_writers(house: &House, grants: &[Grant], errors: &mut Vec<Val
     }
 }
 
-/// Arbitration coverage: an arbitrated entity with no arbiter-class
-/// publish reaching it would silently never receive a write token — the
-/// arbiter service has no path to it. Mirrors `check_exclusive_writers`
-/// but over `expanded` directly, since arbiter-class publishes never form
-/// cmd-class grants.
+/// Arbitration coverage. An arbitrated entity that no arbiter-class publish
+/// reaches would never receive a write token, because the arbiter service has
+/// no path to it. This mirrors `check_exclusive_writers`, but works over
+/// `expanded` directly, since arbiter-class publishes do not form cmd-class
+/// grants.
 fn check_arbitrated_coverage(
     house: &House,
     expanded: &[ExpandedKey],
@@ -509,11 +507,10 @@ fn check_arbitrated_coverage(
 }
 
 /// A commandable virtual entity is a latch
-/// (docs/design.md#commandable-virtual-entities): its owning automation
-/// subscribes to the entity's cmd keys and sets its own state. A
-/// cmd-class grant onto an automation-owned entity nobody subscribes for
-/// would hand commands to a producer that never receives them, so it
-/// stays refused.
+/// (docs/design.md#commandable-virtual-entities). Its owning automation
+/// subscribes to the entity's cmd keys and sets its own state. A cmd-class
+/// grant onto an automation-owned entity whose owner does not subscribe would
+/// send commands that nobody receives, so it is refused.
 fn check_commanded_virtuals(
     house: &House,
     expanded: &[ExpandedKey],
@@ -556,11 +553,11 @@ fn check_commanded_virtuals(
     }
 }
 
-/// Edges (owner, dependent) from a grant table: the granted entities'
-/// owner units must be up before the granting unit. The owner rides in
-/// the grant itself, so edges hold even for entities the repo no longer
-/// declares. Owners are adapters, or automations for commandable virtual
-/// entities (docs/design.md#commandable-virtual-entities).
+/// Edges (owner, dependent) from a grant table: the granted entities' owner
+/// units must be up before the granting unit. The owner is stored in the grant
+/// itself, so edges hold even for entities the repo no longer declares. Owners
+/// are adapters, or automations for commandable virtual entities
+/// (docs/design.md#commandable-virtual-entities).
 pub fn grant_edges(grants: &[Grant]) -> Vec<(String, String)> {
     let mut edges = Vec::new();
     for grant in grants {
@@ -573,9 +570,9 @@ pub fn grant_edges(grants: &[Grant]) -> Vec<(String, String)> {
     edges
 }
 
-/// The nodes of `remaining` that no edge reaches from another node still
-/// in `remaining`: the next layer of a topological peel. Empty while
-/// `remaining` is not means every node left is on, or behind, a cycle.
+/// The nodes of `remaining` that no other node still in `remaining` has an
+/// edge to: the next layer of a topological sort. An empty result while
+/// `remaining` is not empty means every node left is on, or behind, a cycle.
 pub fn free_nodes(remaining: &BTreeSet<String>, edges: &[(String, String)]) -> Vec<String> {
     remaining
         .iter()
@@ -588,10 +585,10 @@ pub fn free_nodes(remaining: &BTreeSet<String>, edges: &[(String, String)]) -> V
         .collect()
 }
 
-/// Grant edges run owner -> granting unit, and with automations as owners
-/// a cycle is possible: A commands an entity B binds while B commands one
-/// A binds. The apply walk needs an order, so refuse the house at plan
-/// time rather than start units in a silently arbitrary one.
+/// Grant edges run from owner to granting unit. With automations as owners a
+/// cycle is possible: A commands an entity B binds while B commands one A
+/// binds. The apply walk needs an order, so the house is refused at plan time
+/// instead of starting units in an arbitrary order.
 fn check_grant_cycle(grants: &[Grant], errors: &mut Vec<ValidationError>) {
     let edges = grant_edges(grants);
     let mut remaining: BTreeSet<String> = edges
@@ -618,12 +615,12 @@ fn check_grant_cycle(grants: &[Grant], errors: &mut Vec<ValidationError>) {
     }
 }
 
-/// An entity-addressed key belongs to a bound entity: a templated publish
-/// is bound by construction; a concrete one must name a bound entity's
-/// room and name literally. Closes the free-form-key hole that virtual
-/// sensors would otherwise ride through. `forecast` is held to the same
-/// rule as `state` for the same reason — it is the same series extended
-/// forward, so it is the same entity's key space.
+/// An entity-addressed key must belong to a bound entity. A templated publish
+/// always does. A concrete one must name a bound entity's room and name
+/// literally. Without this check a virtual sensor could publish under any
+/// free-form key. `forecast` follows the same rule as `state`, because a
+/// forecast extends the same series forward and so uses the same entity's key
+/// space.
 fn check_entity_keys_bound(
     house: &House,
     expanded: &[ExpandedKey],
@@ -662,15 +659,14 @@ fn check_entity_keys_bound(
                 ));
                 continue;
             };
-            // State needs the BINDING unit: one master per entity, which
-            // is what the registry exists to say. A forecast does not —
-            // it is a source's claim about a series' future values, and
-            // the competent source is routinely not the binder. A weather
-            // service forecasts an outdoor sensor it does not own; a
-            // controller forecasts the trajectory of a device it commands
-            // and, by the grant graph, therefore cannot bind. The entity
-            // must still EXIST, which is what keeps the value in front of
-            // the recorder and the dashboard.
+            // State needs the binding unit, because each entity has one master
+            // and the registry records it. A forecast does not. It is a
+            // source's claim about a series' future values, and the best
+            // source is often not the binder. A weather service forecasts an
+            // outdoor sensor it does not own. A controller forecasts the
+            // trajectory of a device it commands, and the grant graph means it
+            // cannot also bind that device. The entity must still exist, so
+            // that the recorder and the dashboard show the value.
             let declared = house
                 .entities
                 .iter()
@@ -701,16 +697,14 @@ fn check_entity_keys_bound(
     }
 }
 
-/// One forecast series, one publisher — where "series" includes the
-/// SOURCE. Several providers may speak about one aspect, which is what
-/// the source segment is for; what must not happen is two units writing
-/// the same source's key, because the mirror keeps only the last
-/// document per key, so the second overwrites rather than adds.
+/// Each forecast series has one publisher, where "series" includes the source.
+/// Several providers may forecast one aspect, which is what the source segment
+/// is for. Two units must not write the same source's key: the mirror keeps
+/// only the last document per key, so the second would overwrite the first.
 ///
-/// A publish may wildcard its aspect or source slot, so entries are
-/// compared pairwise for compatibility rather than bucketed by an exact
-/// key: two publishes collide when, at every slot, they agree or one of
-/// them accepts anything.
+/// A publish may wildcard its aspect or source slot, so entries are compared
+/// pairwise instead of grouped by key. Two publishes collide when, at every
+/// slot, they agree or one of them accepts anything.
 fn check_forecast_conflicts(expanded: &[ExpandedKey], errors: &mut Vec<ValidationError>) {
     let slot = |expr: &KeyExpr, i: usize| -> Slot {
         // `**` anywhere from the aspect slot on stands for every slot
@@ -773,14 +767,13 @@ fn check_forecast_conflicts(expanded: &[ExpandedKey], errors: &mut Vec<Validatio
     }
 }
 
-/// Reserved classes (docs/design.md#reserved-classes): `config` and
-/// `meta` are the core's alone; `health`, `discovery` and `hold` are per
-/// unit, under the publishing unit's own name; `arbiter`, `clock` and
-/// `history` are one service's output each. The SDK only checks that a published
-/// key is within a declared expression, so without this an automation
-/// could declare `home/arbiter/**` and forge post-arbitration commands,
-/// or another unit's discovery record or holds, with an empty grant
-/// table.
+/// Reserved classes (docs/design.md#reserved-classes). `config` and `meta`
+/// belong to the core. `health`, `discovery` and `hold` are per unit, under
+/// the publishing unit's own name. `arbiter`, `clock` and `history` are each
+/// one service's output. The SDK only checks that a published key is within a
+/// declared expression. Without this check an automation could declare
+/// `home/arbiter/**` and forge post-arbitration commands, or another unit's
+/// discovery record or holds, with an empty grant table.
 fn check_reserved_classes(
     house: &House,
     expanded: &[ExpandedKey],
@@ -1033,10 +1026,9 @@ mod tests {
         );
     }
 
-    /// The tier-escalation property behind the "entity moves, write-policy
-    /// changes" structural rule (docs/design.md#tiers): a room move or a
-    /// write-mode flip changes the resolved grant table, so it diffs as a
-    /// grant delta.
+    /// A room move or a write-mode flip changes the resolved grant table, so
+    /// it diffs as a grant delta. This is what makes entity moves and
+    /// write-policy changes structural (docs/design.md#tiers).
     #[test]
     fn entity_move_and_policy_flip_change_the_grant_table() {
         let arbiter_bus = || {
@@ -1061,7 +1053,7 @@ mod tests {
         let mut moved = house_with_lock(arbiter_bus());
         moved.entities[1].file.entity.room = "porch".to_string();
         // The publish key still names the old room, so re-expansion changes
-        // the granted set — either way the tables differ.
+        // the granted set. The tables differ either way.
         let (expanded, _, _) = expand(&moved);
         let (moved_grants, _, _) = resolve(&moved, &expanded);
         assert_ne!(
@@ -1148,7 +1140,7 @@ mod tests {
         assert!(errors.is_empty(), "{errors:?}");
         assert!(warnings.is_empty(), "{warnings:?}");
         let buttons = grants.iter().find(|g| g.unit == "buttons").unwrap();
-        // The owner is the automation: it becomes the walk-order edge source.
+        // The owner is the automation, so the walk-order edge starts there.
         assert_eq!(
             buttons.entities,
             vec![GrantEntity {
@@ -1172,9 +1164,9 @@ mod tests {
         assert_eq!(codes, vec![Code::VirtualEntityCommanded], "{errors:?}");
     }
 
-    /// The key expression is part of a grant's identity: widening `/lock`
-    /// to `/**` matches the same entity yet is a different authority, so it
-    /// must diff as a grant delta and render in the plan.
+    /// The key expression is part of a grant's identity. Widening `/lock` to
+    /// `/**` matches the same entity but grants a different authority, so it
+    /// must diff as a grant delta and show in the plan.
     #[test]
     fn widening_a_key_expression_changes_the_grant_table() {
         let house = house_with_lock(None);
@@ -1205,12 +1197,12 @@ mod tests {
         );
     }
 
-    /// A forecast publish binds its entity as a state publish does — it
-    /// is the same series extended forward onto the same entity. Load
-    /// bearing beyond what `plan` prints: the grant table IS the
-    /// dependency graph, so a unit whose only publish onto an entity is a
-    /// forecast would otherwise produce no row, and a change to that
-    /// entity would not read as a grant delta for apply to act on.
+    /// A forecast publish binds its entity as a state publish does, because it
+    /// is the same series extended forward onto the same entity. This matters
+    /// beyond what `plan` prints. The grant table is the dependency graph, so
+    /// a unit whose only publish onto an entity is a forecast would otherwise
+    /// produce no row. A change to that entity would then not read as a grant
+    /// delta for apply to act on.
     #[test]
     fn a_forecast_publish_binds_its_entity() {
         let mut publishes = BTreeMap::new();
@@ -1257,8 +1249,8 @@ mod tests {
         );
     }
 
-    /// The point of the segment: two providers, one aspect, no conflict.
-    /// Without the source in the key, the two would write one key.
+    /// Two providers can forecast one aspect without conflict. Without the
+    /// source in the key, the two would write one key.
     #[test]
     fn two_providers_may_forecast_one_aspect_under_their_own_sources() {
         let house = house_forecasting(
@@ -1337,12 +1329,12 @@ mod tests {
         }
     }
 
-    /// A forecast may name an entity this unit does NOT bind, which state
-    /// may not. A forecast is a source's claim about a series' future
-    /// values, and the competent source is routinely not the binder: a
-    /// weather service forecasts a sensor an adapter owns, and a
-    /// controller forecasts a device it commands and therefore — the
-    /// grant graph runs automation to device — cannot bind.
+    /// A forecast may name an entity this unit does not bind; state may not. A
+    /// forecast is a source's claim about a series' future values, and the
+    /// best source is often not the binder. A weather service forecasts a
+    /// sensor an adapter owns. A controller forecasts a device it commands,
+    /// and because the grant graph runs from automation to device, it cannot
+    /// also bind it.
     #[test]
     fn a_forecast_may_name_an_entity_another_unit_owns() {
         let house = house_forecasting(
@@ -1358,10 +1350,9 @@ mod tests {
         assert!(errors.is_empty(), "{errors:?}");
     }
 
-    /// The entity must still EXIST. Not requiring ownership does not
-    /// open the free-form-key hole: a forecast under a name no
-    /// entity describes would be recorded and invisible to every
-    /// generated surface.
+    /// The entity must still exist. Dropping the ownership rule does not allow
+    /// free-form keys: a forecast under a name no entity describes would be
+    /// recorded but would not appear on any generated surface.
     #[test]
     fn a_forecast_for_no_entity_is_still_refused() {
         let house = house_forecasting(
@@ -1377,12 +1368,12 @@ mod tests {
         );
     }
 
-    /// One source, one publisher. Ownership would guarantee this
-    /// structurally — one binder per entity — but a forecast does not
-    /// require it, so the property is checked directly: the mirror keeps
-    /// only the last document per key, so a second publisher on the SAME
-    /// source overwrites rather than adds. Two providers under their own
-    /// source segments are the case this exists to permit, covered below.
+    /// One source, one publisher. Ownership would guarantee this, since each
+    /// entity has one binder, but a forecast does not require ownership. So
+    /// the property is checked directly. The mirror keeps only the last
+    /// document per key, so a second publisher on the same source would
+    /// overwrite the first. Two providers under their own source segments are
+    /// allowed; a test below covers that.
     #[test]
     fn two_units_may_not_publish_one_forecast_source() {
         let house = house_forecasting(
@@ -1412,9 +1403,9 @@ mod tests {
         );
     }
 
-    /// A house where `fusion` owns a computed entity derived from one
-    /// sensor an adapter owns. `subscribes` decides whether the fusion
-    /// actually reads what it claims to.
+    /// A house where `fusion` owns a computed entity derived from one sensor
+    /// an adapter owns. `subscribes` decides whether the fusion reads what it
+    /// claims to.
     fn house_with_sources(source_aspect: &str, subscribes: Option<&str>) -> House {
         let mut publishes = BTreeMap::new();
         publishes.insert(
@@ -1480,9 +1471,9 @@ mod tests {
         }
     }
 
-    /// A declared source resolves to the contributor's own state key —
-    /// the entity keeps publishing where it always did, and the
-    /// declaration is a reference, never a second place for the value.
+    /// A declared source resolves to the contributor's own state key. The
+    /// entity keeps publishing where it did, and the declaration only refers
+    /// to it. It is not a second place for the value.
     #[test]
     fn a_declared_source_resolves_to_the_contributors_key() {
         let house = house_with_sources(
@@ -1507,10 +1498,9 @@ mod tests {
         );
     }
 
-    /// The declaration is a checked fact, not documentation. A unit that
-    /// claims to derive from a reading it never subscribes is either
-    /// mis-declared or has dead code, and the overlay would otherwise draw
-    /// a contributor line that never participates.
+    /// The declaration is checked. A unit that claims to derive from a reading
+    /// it does not subscribe is either mis-declared or has dead code, and the
+    /// overlay would draw a contributor line that plays no part.
     #[test]
     fn a_source_the_owner_does_not_subscribe_warns() {
         let house = house_with_sources("temperature", None);
@@ -1552,10 +1542,10 @@ mod tests {
         );
     }
 
-    /// Every bound entity sits in its owner's state row, so a change to an
-    /// entity nobody is granted onto — the lamp here — is still a grant
-    /// delta (docs/design.md#the-grant-table: entity moves and write-policy
-    /// changes are structural).
+    /// Every bound entity sits in its owner's state row. So a change to an
+    /// entity nobody is granted onto, the lamp here, is still a grant delta
+    /// (docs/design.md#the-grant-table: entity moves and write-policy changes
+    /// are structural).
     #[test]
     fn a_change_to_an_ungranted_entity_changes_the_grant_table() {
         let with_state = || {
@@ -1631,8 +1621,8 @@ mod tests {
         );
     }
 
-    /// The manual band is the family's; an automation claiming it plans,
-    /// but the plan says so.
+    /// The manual band belongs to the family's surfaces. An automation that
+    /// claims it still plans, with a warning.
     #[test]
     fn manual_band_on_an_automation_is_a_plan_warning() {
         let mut house = house_with_lock(None);

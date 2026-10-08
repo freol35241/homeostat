@@ -1,17 +1,17 @@
-//! The apply engine (docs/design.md#the-apply-walk): the CLI commands the
-//! running supervisor through a control queryable at
-//! `home/meta/system/apply` — a GET with payload is an apply request. The
-//! supervisor re-reads the repo, derives its own diff against its in-memory
-//! world, and executes the walk per-unit and rolling: parameters first (no
-//! restarts), removals in reverse grant order, creates/restarts in grant
-//! order, awaiting health `running` after each. Failure halts the walk in
+//! The apply engine (docs/design.md#the-apply-walk). The CLI commands the
+//! running supervisor through a control queryable at `home/meta/system/apply`,
+//! where a GET with payload is an apply request. The supervisor re-reads the
+//! repo, derives its own diff against its in-memory world, and executes the
+//! walk one unit at a time. Parameters come first and restart nothing. Then
+//! removals run in reverse grant order, and creates and restarts in grant
+//! order, each waiting for health `running`. A failure halts the walk in
 //! place.
 //!
-//! The supervisor holds the apply lock — one apply at a time. Parameter-only
-//! applies bypass it (the fast path). A deliberate apply restart spawns a
-//! fresh supervision task, so the unit gets a fresh breaker: new code earns
-//! a fresh failure budget, and a unit stuck in backoff/open can be replaced
-//! mid-cycle.
+//! The supervisor holds the apply lock, so only one apply runs at a time.
+//! Parameter-only applies skip the lock. An apply restart spawns a fresh
+//! supervision task, so the unit gets a fresh breaker. New code starts with a
+//! fresh failure budget, and a unit stuck in backoff or with its breaker open
+//! can be replaced mid-cycle.
 
 use std::sync::Arc;
 
@@ -29,8 +29,8 @@ pub async fn serve(core: Arc<Core>) -> Result<(), String> {
         .map_err(|e| format!("failed to declare apply queryable: {e}"))?;
     tokio::spawn(async move {
         while let Ok(query) = queryable.recv_async().await {
-            // Each request runs in its own task so a parameter-only apply
-            // is never queued behind a structural walk.
+            // Each request runs in its own task so a parameter-only apply does
+            // not queue behind a structural walk.
             let core = core.clone();
             tokio::spawn(async move { handle(core, query).await });
         }
@@ -107,14 +107,15 @@ async fn execute(core: &Arc<Core>, request: ApplyRequest) -> ApplyResult {
         }
     };
 
-    // Parameters first: the repo is the system of record, live values
-    // reset to repo defaults, every subscribed unit sees the put — no
-    // restart. A unit restarted later in the walk seeds via get anyway.
+    // Parameters first. The repo is the system of record, so live values reset
+    // to repo defaults. Every subscribed unit sees the put, and nothing
+    // restarts. A unit restarted later in the walk reads its values with a get
+    // anyway.
     let mut params = Vec::new();
     {
-        // Swap and puts as one ordered unit: a config write racing this
-        // block would otherwise validate against the new store yet see its
-        // bus put overwritten by the older repo value below.
+        // Swap and puts happen together, in order. Otherwise a config write
+        // racing this block could validate against the new store and then have
+        // its bus put overwritten by the older repo value below.
         let _write_guard = core.store.write_lock().await;
         for (unit, param, value) in core.store.replace_from_house(&check.house) {
             let _ = core
@@ -125,10 +126,10 @@ async fn execute(core: &Arc<Core>, request: ApplyRequest) -> ApplyResult {
         }
     }
 
-    // Parameter-level manifest changes (default/constraint/editable_by):
-    // the store rebuild above already enforces the new spec; recording the
-    // unit refreshes the served meta so later plans and manifest readers
-    // see the new manifest without a restart.
+    // Parameter-level manifest changes (default/constraint/editable_by). The
+    // store rebuild above already enforces the new spec. Recording the unit
+    // refreshes the served meta, so later plans and manifest readers see the
+    // new manifest without a restart.
     let mut refreshes = Vec::new();
     for refresh in &diff.refreshes {
         let loaded = check
@@ -207,8 +208,8 @@ async fn execute(core: &Arc<Core>, request: ApplyRequest) -> ApplyResult {
 
     let ok = halted_at.is_none();
     if ok {
-        // The grant table and the applied commit advance only on a fully
-        // applied plan: a halted walk re-plans exactly the remaining work.
+        // The grant table and the applied commit advance only when the whole
+        // plan applied, so a halted walk re-plans the remaining work.
         core.record_grants(check.grants.clone()).await;
         if let Some(commit) = request.base_commit {
             core.record_applied_commit(commit).await;

@@ -1,7 +1,6 @@
 //! The manifest contract as data: JSON Schema derived from the structs in
-//! manifest.rs (which `deny_unknown_fields` makes complete), and a Markdown
-//! rendering of it for docs/manifest.md. One source; a test pins the
-//! checked-in document to the rendering so it cannot drift.
+//! manifest.rs, and a Markdown rendering of it for docs/manifest.md. A test
+//! pins the checked-in document to the rendering so the two stay in step.
 
 use schemars::schema_for;
 use serde_json::{json, Value};
@@ -92,10 +91,10 @@ pub fn markdown() -> String {
     out
 }
 
-/// The capability vocabulary (manifest.rs, VOCABULARY): the base aspect,
-/// the named optional aspects, and the notable reading per capability,
-/// plus the aspects every capability shares. What docs/adapters.md points
-/// at instead of carrying its own copy.
+/// The capability vocabulary (manifest.rs, VOCABULARY): the base aspect, the
+/// named optional aspects, and the notable reading per capability, plus the
+/// aspects every capability shares. docs/adapters.md points here instead of
+/// carrying its own copy.
 fn render_vocabulary(out: &mut String) {
     out.push_str("## Capability vocabulary\n\n");
     out.push_str(
@@ -133,8 +132,8 @@ fn render_vocabulary(out: &mut String) {
 
 fn render_file(schema: &Value, out: &mut String) {
     let defs = schema.get("$defs").cloned().unwrap_or(json!({}));
-    // Root first, then every definition in order of first reference — the
-    // order a reader meets them in a file.
+    // Root first, then every definition in order of first reference, which is
+    // the order a reader meets them in a file.
     let mut queue: Vec<(String, Value)> = vec![(String::new(), schema.clone())];
     let mut seen: Vec<String> = Vec::new();
     while !queue.is_empty() {
@@ -307,9 +306,9 @@ mod tests {
     }
 
     /// docs/widgets.md is the dashboard's vocabulary with pictures
-    /// (`scripts/widget_gallery.py`). Pixels are not pinned — they differ
-    /// by renderer — but its sections are: a widget kind the parser
-    /// accepts and the gallery does not show is a word nobody can look up.
+    /// (`scripts/widget_gallery.py`). The pixels differ by renderer, so they
+    /// are not pinned. Its sections are. A widget kind the parser accepts must
+    /// have a section in the gallery, or nobody can look it up.
     #[test]
     fn docs_widgets_md_shows_every_widget_kind() {
         let gallery = include_str!("../docs/widgets.md");

@@ -35,9 +35,9 @@ impl Breaker {
         Self::default()
     }
 
-    /// Report a process exit with the given uptime; returns what to do.
-    /// Any exit counts — a clean-exit loop is as much a crash loop as a
-    /// panic loop.
+    /// Report a process exit with the given uptime; returns what to do. Any
+    /// exit counts, because a loop of clean exits is as much a crash loop as a
+    /// loop of panics.
     pub fn on_exit(&mut self, uptime: Duration) -> Decision {
         if uptime >= Duration::from_millis(STABLE_MS) {
             self.consecutive = 0;

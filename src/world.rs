@@ -1,7 +1,7 @@
-//! Reads the actual world from a running supervisor's bus, through the
-//! core's last-value queryables — meta (manifest hashes and bytes, grants,
-//! applied commit) and config (current parameter values). No second
-//! channel: this is the same surface any observer gets.
+//! Reads the actual world from a running supervisor's bus, through the core's
+//! last-value queryables: meta (manifest hashes and bytes, grants, applied
+//! commit) and config (current parameter values). This is the same surface any
+//! observer gets; there is no second channel.
 
 use zenoh::Session;
 
@@ -10,7 +10,7 @@ use crate::grants::Grant;
 use crate::plan::{World, WorldUnit};
 
 /// Opens a client session against a supervisor's endpoint. An unreachable
-/// endpoint is a hard error — never a silent empty world.
+/// endpoint is an error, so it cannot pass for an empty world.
 pub async fn connect(endpoint: &str) -> Result<Session, String> {
     zenoh::open(bus::connect_config(endpoint))
         .await
@@ -44,8 +44,8 @@ pub async fn read(session: &Session, endpoint: &str) -> Result<World, String> {
             ["home", "meta", "system", "applied_commit"] => {
                 world.applied_commit = Some(String::from_utf8_lossy(&payload).to_string());
             }
-            // Only the unit-identity fields define a world unit; a stray
-            // `log` reply must not conjure one up.
+            // Only the unit-identity fields define a world unit. A stray `log`
+            // reply must not create one.
             ["home", "meta", unit, field @ ("manifest" | "manifest_hash" | "files_hash")] => {
                 let entry = world
                     .units
