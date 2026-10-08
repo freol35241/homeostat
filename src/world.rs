@@ -55,7 +55,7 @@ pub async fn read(session: &Session, endpoint: &str) -> Result<World, String> {
                 match field {
                     "manifest" => entry.manifest = payload,
                     "manifest_hash" => {
-                        entry.manifest_hash = String::from_utf8_lossy(&payload).to_string()
+                        entry.manifest_hash = String::from_utf8_lossy(&payload).to_string();
                     }
                     _ => entry.files_hash = String::from_utf8_lossy(&payload).to_string(),
                 }

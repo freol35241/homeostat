@@ -43,7 +43,7 @@ async fn setup() -> (Mosquitto, Supervisor, zenoh::Session) {
         .history(true)
         .await
         .expect("liveliness subscriber");
-    let token = tokio::time::timeout(Duration::from_secs(60), token_sub.recv_async())
+    let token = tokio::time::timeout(Duration::from_mins(1), token_sub.recv_async())
         .await
         .expect("adapter liveliness token within 60s")
         .expect("liveliness stream open");
@@ -184,9 +184,9 @@ async fn unbound_codes_reach_discovery_not_the_health_feed() {
 
 /// (e2) M26: an estate hears neighbours' remotes and RF noise all day —
 /// unbound is unbounded traffic, not a fixed handful. Only the most
-/// recently first-heard MAX_UNBOUND=200 stay in discovery; the oldest is
+/// recently first-heard `MAX_UNBOUND=200` stay in discovery; the oldest is
 /// evicted, and the flood coalesces into the one publish this test reads
-/// (the adapter debounces republish for DISCOVERY_COALESCE_S=5s).
+/// (the adapter debounces republish for `DISCOVERY_COALESCE_S=5s`).
 #[tokio::test(flavor = "multi_thread")]
 async fn unbound_discovery_stays_capped_at_two_hundred() {
     let (mosquitto, mut sup, observer) = setup().await;

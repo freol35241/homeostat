@@ -24,7 +24,7 @@ pub struct UnitSpec {
     pub grace: Duration,
     /// House repo root; the unit's cwd.
     pub cwd: PathBuf,
-    /// Bus endpoint handed to the unit via HOMEOSTAT_BUS.
+    /// Bus endpoint handed to the unit via `HOMEOSTAT_BUS`.
     pub endpoint: String,
     /// Environment variable names the manifest declares (`runtime.env`);
     /// passed through from the supervisor's environment, nothing else is.
@@ -33,7 +33,7 @@ pub struct UnitSpec {
 
 impl UnitSpec {
     pub fn grace_from_manifest(grace_s: Option<u32>) -> Duration {
-        Duration::from_secs(grace_s.unwrap_or(DEFAULT_GRACE_S) as u64)
+        Duration::from_secs(u64::from(grace_s.unwrap_or(DEFAULT_GRACE_S)))
     }
 
     pub fn from_loaded(
@@ -326,7 +326,7 @@ async fn wait_backoff(
 /// Sleeps for `delay`; returns true if shutdown arrived first.
 async fn backoff_interrupted(delay: Duration, shutdown: &mut watch::Receiver<bool>) -> bool {
     tokio::select! {
-        _ = tokio::time::sleep(delay) => false,
+        () = tokio::time::sleep(delay) => false,
         _ = shutdown.changed() => true,
     }
 }

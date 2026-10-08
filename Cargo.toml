@@ -24,3 +24,26 @@ rumqttc = "0.25.1"
 # "bundled" so the recorder tests can assert on the store without a system
 # libsqlite3; the recorder itself uses Python's stdlib sqlite3.
 rusqlite = { version = "0.40", features = ["bundled"] }
+
+# Pedantic lints chosen for what they catch here: unclear docs, lossy
+# casts, needless allocation and clones, and unidiomatic control flow. CI
+# denies warnings, so each one listed is enforced.
+[lints.clippy]
+cast_lossless = "warn"
+cast_possible_wrap = "warn"
+doc_markdown = "warn"
+duration_suboptimal_units = "warn"
+format_collect = "warn"
+ignored_unit_patterns = "warn"
+implicit_clone = "warn"
+items_after_statements = "warn"
+manual_let_else = "warn"
+map_unwrap_or = "warn"
+match_same_arms = "warn"
+needless_continue = "warn"
+redundant_closure_for_method_calls = "warn"
+ref_option = "warn"
+semicolon_if_nothing_returned = "warn"
+single_match_else = "warn"
+stable_sort_primitive = "warn"
+uninlined_format_args = "warn"

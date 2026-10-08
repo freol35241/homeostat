@@ -8,6 +8,7 @@
 //!   expressions referenced a zone. A house-wide unit (`inputs = "house"`)
 //!   also takes every manifest, every entity file and `dashboard.toml`.
 
+use std::fmt::Write as _;
 use std::fs;
 use std::path::Path;
 
@@ -17,10 +18,16 @@ use crate::expand::ExpandedKey;
 use crate::repo::{House, LoadedUnit};
 
 pub fn sha256_hex(bytes: &[u8]) -> String {
-    Sha256::digest(bytes)
+    hex(&Sha256::digest(bytes))
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes
         .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
+        .fold(String::with_capacity(bytes.len() * 2), |mut out, b| {
+            let _ = write!(out, "{b:02x}");
+            out
+        })
 }
 
 pub fn manifest_hash(manifest_bytes: &[u8]) -> String {
@@ -70,11 +77,7 @@ pub fn files_hash(root: &Path, unit: &LoadedUnit, house: &House, unit_uses_zone:
         }
         feed("zones.toml");
         feed("dashboard.toml");
-        return hasher
-            .finalize()
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect();
+        return hex(&hasher.finalize());
     }
     for entity in house.entities.iter().filter(|e| &e.owner == name) {
         feed(&entity.path);
@@ -83,11 +86,7 @@ pub fn files_hash(root: &Path, unit: &LoadedUnit, house: &House, unit_uses_zone:
         feed("zones.toml");
     }
 
-    hasher
-        .finalize()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
+    hex(&hasher.finalize())
 }
 
 #[cfg(test)]

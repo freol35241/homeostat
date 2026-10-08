@@ -260,7 +260,7 @@ fn check_range(n: f64, constraint: &Constraint) -> Result<(), String> {
 /// `after`/`before` form an inclusive window that may span midnight:
 /// `after 20:00, before 02:00` admits 20:00..=23:59 and 00:00..=02:00.
 fn check_window(t: (u8, u8), constraint: &Constraint) -> Result<(), String> {
-    let minutes = |(h, m): (u8, u8)| h as u16 * 60 + m as u16;
+    let minutes = |(h, m): (u8, u8)| u16::from(h) * 60 + u16::from(m);
     let v = minutes(t);
     let err = |bound: &str, (h, m): (u8, u8)| {
         Err(format!(

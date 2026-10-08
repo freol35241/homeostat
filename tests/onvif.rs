@@ -1,5 +1,5 @@
 //! ONVIF adapter integration tests: each scenario spawns a fake ONVIF
-//! pull-point event service (tests/fake_onvif.py — real SOAP shapes, real
+//! pull-point event service (`tests/fake_onvif.py` — real SOAP shapes, real
 //! WS-Security digest checking, a genuine long poll) on a free port plus
 //! the real supervisor on the onvif fixture house, and asserts on the bus.
 
@@ -26,9 +26,9 @@ const AVAILABLE_KEY: &str = "home/state/hallway/hallway_cam/available";
 const USERNAME: &str = "homeostat";
 const PASSWORD: &str = "secret123";
 
-/// A fake ONVIF camera (tests/fake_onvif.py) on a free port, killed on
+/// A fake ONVIF camera (`tests/fake_onvif.py`) on a free port, killed on
 /// drop. Spawned the same way the units themselves are: the interpreter
-/// of the script's own uv environment, exec'd directly (fixture_command,
+/// of the script's own uv environment, exec'd directly (`fixture_command`,
 /// and #140 for what spawning `uv run` itself leaks).
 struct FakeOnvif {
     child: Child,
@@ -50,7 +50,7 @@ impl FakeOnvif {
             .spawn()
             .expect("spawn fake onvif camera (is uv installed?)");
         // First run resolves the fake camera's own uv env: generous.
-        let deadline = Instant::now() + Duration::from_secs(60);
+        let deadline = Instant::now() + Duration::from_mins(1);
         while std::net::TcpStream::connect(("127.0.0.1", port)).is_err() {
             assert!(
                 Instant::now() < deadline,
@@ -112,8 +112,8 @@ impl Drop for FakeOnvif {
     }
 }
 
-/// Writes a HOMEOSTAT_CAMERAS file (outside the repo, per the settlement)
-/// giving the fixture's "hallway_cam" the fake camera's host and the
+/// Writes a `HOMEOSTAT_CAMERAS` file (outside the repo, per the settlement)
+/// giving the fixture's `hallway_cam` the fake camera's host and the
 /// camera-account credentials.
 fn cameras_file(port: u16) -> PathBuf {
     let path = std::env::temp_dir().join(format!("homeostat-cameras-{port}.toml"));
@@ -309,8 +309,8 @@ async fn malformed_motion_value_drops_with_health_event() {
 }
 
 /// (d) The VP52 shape, diagnosed on real hardware: a Tapo answers
-/// CreatePullPointSubscription and PullMessages with 200 and Renew with
-/// 400, because it implements no WS-BaseNotification SubscriptionManager.
+/// `CreatePullPointSubscription` and `PullMessages` with 200 and Renew with
+/// 400, because it implements no WS-BaseNotification `SubscriptionManager`.
 /// The pull stream is FINE, so this must not read as a stream loss — the
 /// old behaviour tore the subscription down and flapped `available`
 /// roughly every 17 s, indefinitely, against a live camera.
@@ -363,7 +363,7 @@ async fn a_camera_without_a_subscription_manager_keeps_streaming() {
 }
 
 /// (e) ...and the subscription is ROTATED before it expires, which is what
-/// keeps such a camera working past InitialTerminationTime. Without a
+/// keeps such a camera working past `InitialTerminationTime`. Without a
 /// working Renew the stream would otherwise simply stop after PT60S.
 /// Slow by nature: the rotation is a real wall-clock interval.
 #[tokio::test(flavor = "multi_thread")]
@@ -411,7 +411,7 @@ async fn a_camera_without_a_subscription_manager_rotates_its_subscription() {
 
 /// (f) The other cause of a Renew fault, and the one CI caught as a race:
 /// the subscription is genuinely GONE, and Renew is merely the call that
-/// discovers it. Concluding "no SubscriptionManager" from the fault alone
+/// discovers it. Concluding "no `SubscriptionManager`" from the fault alone
 /// would mark a perfectly capable camera as renew-less forever. The next
 /// pull disambiguates — here it fails, so this is an ordinary loss.
 #[tokio::test(flavor = "multi_thread")]
@@ -468,7 +468,10 @@ async fn repeated_notifications_publish_one_transition() {
     assert!(
         repeat.is_err(),
         "motion republished with no transition: {:?}",
-        repeat.map(|s| s.map(|s| s.payload().try_to_string().map(|c| c.into_owned())))
+        repeat.map(|s| s.map(|s| s
+            .payload()
+            .try_to_string()
+            .map(std::borrow::Cow::into_owned)))
     );
 
     // ...and a real edge still gets through. Asserting on the VALUE rather

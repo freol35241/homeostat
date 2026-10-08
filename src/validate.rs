@@ -133,7 +133,7 @@ fn check_duplicates(house: &House, errors: &mut Vec<ValidationError>) {
     }
     for (name, mut paths) in unit_paths {
         if paths.len() > 1 {
-            paths.sort();
+            paths.sort_unstable();
             errors.push(ValidationError::new(
                 "duplicate-unit-name",
                 name,
@@ -152,7 +152,7 @@ fn check_duplicates(house: &House, errors: &mut Vec<ValidationError>) {
     }
     for (name, mut paths) in entity_paths {
         if paths.len() > 1 {
-            paths.sort();
+            paths.sort_unstable();
             errors.push(ValidationError::new(
                 "duplicate-entity-name",
                 name,
@@ -177,7 +177,7 @@ fn check_duplicates(house: &House, errors: &mut Vec<ValidationError>) {
     }
     for ((owner, id), mut paths) in entity_ids {
         if paths.len() > 1 {
-            paths.sort();
+            paths.sort_unstable();
             errors.push(ValidationError::new(
                 "duplicate-entity-id",
                 id,
@@ -424,10 +424,10 @@ fn check_param(subject: &str, spec: &ParamSpec, path: &str, errors: &mut Vec<Val
     let t = spec.param_type;
 
     let default_ok = match (t, &spec.default) {
-        (ParamType::Bool, toml::Value::Boolean(_)) => true,
-        (ParamType::Int, toml::Value::Integer(_)) => true,
-        (ParamType::Float, toml::Value::Float(_) | toml::Value::Integer(_)) => true,
-        (ParamType::String, toml::Value::String(_)) => true,
+        (ParamType::Bool, toml::Value::Boolean(_))
+        | (ParamType::Int, toml::Value::Integer(_))
+        | (ParamType::Float, toml::Value::Float(_) | toml::Value::Integer(_))
+        | (ParamType::String, toml::Value::String(_)) => true,
         (ParamType::Time, toml::Value::String(s)) => parse_time(s).is_some(),
         _ => false,
     };
@@ -472,7 +472,7 @@ fn check_param(subject: &str, spec: &ParamSpec, path: &str, errors: &mut Vec<Val
             "enum" => matches!(
                 value,
                 toml::Value::Array(items)
-                    if !items.is_empty() && items.iter().all(|i| i.is_str())
+                    if !items.is_empty() && items.iter().all(toml::Value::is_str)
             ),
             _ => unreachable!(),
         };
@@ -588,7 +588,7 @@ fn check_dashboard(house: &House, errors: &mut Vec<ValidationError>) {
         }
         for (i, widget) in view.widgets.iter().enumerate() {
             let subject = format!("{}[{i}]", view.name);
-            check_widget(house, &rooms, widget, &subject, &file, errors);
+            check_widget(house, &rooms, widget, &subject, file.as_deref(), errors);
             // A group's members are widgets like any other, and take the
             // same checks. One level only: a group of groups is a layout
             // language, which the file is deliberately not.
@@ -603,12 +603,18 @@ fn check_dashboard(house: &House, errors: &mut Vec<ValidationError>) {
                     ));
                     continue;
                 }
-                check_widget(house, &rooms, member, &subject, &file, errors);
+                check_widget(house, &rooms, member, &subject, file.as_deref(), errors);
             }
         }
     }
     for (i, control) in dashboard.control.iter().enumerate() {
-        check_control(house, control, &format!("control[{i}]"), &file, errors);
+        check_control(
+            house,
+            control,
+            &format!("control[{i}]"),
+            file.as_deref(),
+            errors,
+        );
     }
 }
 
@@ -619,7 +625,7 @@ fn check_control(
     house: &House,
     control: &ControlSpec,
     subject: &str,
-    file: &Option<String>,
+    file: Option<&str>,
     errors: &mut Vec<ValidationError>,
 ) {
     let entity_target = control.entity.is_some() || control.aspect.is_some();
@@ -634,7 +640,7 @@ fn check_control(
             "dashboard-control-target",
             subject,
             "a control names one target: `entity` with `aspect`, or `unit` with `param`",
-            file.clone(),
+            file.map(str::to_string),
         ));
         return;
     }
@@ -643,7 +649,7 @@ fn check_control(
             "dashboard-control-step",
             subject,
             format!("`step` must be a positive number, not {}", control.step),
-            file.clone(),
+            file.map(str::to_string),
         ));
     }
     if let (Some(entity), Some(aspect)) = (&control.entity, &control.aspect) {
@@ -652,7 +658,7 @@ fn check_control(
                 "dashboard-unknown-entity",
                 subject,
                 format!("control names unknown entity \"{entity}\""),
-                file.clone(),
+                file.map(str::to_string),
             ));
         }
         if !valid_segment(aspect) {
@@ -660,7 +666,7 @@ fn check_control(
                 "dashboard-invalid-aspect",
                 subject,
                 format!("aspect \"{aspect}\" must be a single key segment"),
-                file.clone(),
+                file.map(str::to_string),
             ));
         }
     }
@@ -670,7 +676,7 @@ fn check_control(
                 "dashboard-unknown-unit",
                 subject,
                 format!("control names unknown unit \"{unit}\""),
-                file.clone(),
+                file.map(str::to_string),
             )),
             // A step is the grain of a control, so it must name a
             // parameter that gets one: the unit's own, by name.
@@ -685,8 +691,8 @@ fn check_control(
                     "dashboard-unknown-param",
                     subject,
                     format!("control names unknown parameter \"{param}\" on unit \"{unit}\""),
-                    file.clone(),
-                ))
+                    file.map(str::to_string),
+                ));
             }
             Some(_) => {}
         }
@@ -700,7 +706,7 @@ fn check_widget(
     rooms: &[&str],
     widget: &WidgetSpec,
     subject: &str,
-    file: &Option<String>,
+    file: Option<&str>,
     errors: &mut Vec<ValidationError>,
 ) {
     if let Some(message) = widget_fields_message(widget) {
@@ -708,7 +714,7 @@ fn check_widget(
             "dashboard-widget-fields",
             subject,
             message,
-            file.clone(),
+            file.map(str::to_string),
         ));
         return;
     }
@@ -718,7 +724,7 @@ fn check_widget(
                 "dashboard-unknown-entity",
                 subject,
                 format!("widget names unknown entity \"{entity}\""),
-                file.clone(),
+                file.map(str::to_string),
             )),
             // A capability widget draws that capability's vocabulary, so
             // it is only meaningful over an entity that speaks it.
@@ -732,8 +738,8 @@ fn check_widget(
                         "a `burner` widget needs a burner; \"{entity}\" is a {}",
                         e.file.entity.capability
                     ),
-                    file.clone(),
-                ))
+                    file.map(str::to_string),
+                ));
             }
             Some(_) => {}
         }
@@ -744,7 +750,7 @@ fn check_widget(
                 "dashboard-invalid-aspect",
                 subject,
                 format!("aspect \"{aspect}\" must be a single key segment"),
-                file.clone(),
+                file.map(str::to_string),
             ));
         }
     }
@@ -754,7 +760,7 @@ fn check_widget(
                 "dashboard-unknown-room",
                 subject,
                 format!("widget names unknown room \"{room}\""),
-                file.clone(),
+                file.map(str::to_string),
             ));
         }
     }
@@ -764,7 +770,7 @@ fn check_widget(
                 "dashboard-unknown-unit",
                 subject,
                 format!("widget names unknown unit \"{unit}\""),
-                file.clone(),
+                file.map(str::to_string),
             ));
         }
     }
@@ -775,9 +781,8 @@ fn check_widget(
 fn widget_fields_message(widget: &WidgetSpec) -> Option<String> {
     let (required, optional): (&[&str], &[&str]) = match widget.kind {
         WidgetKind::Tile | WidgetKind::Dial => (&["entity"], &["aspect"]),
-        WidgetKind::Burner => (&["entity"], &[]),
+        WidgetKind::Burner | WidgetKind::Entity => (&["entity"], &[]),
         WidgetKind::Chart => (&["entity", "aspect"], &["hours"]),
-        WidgetKind::Entity => (&["entity"], &[]),
         WidgetKind::Room => (&["room"], &[]),
         WidgetKind::Unit | WidgetKind::Params => (&["unit"], &[]),
         WidgetKind::People | WidgetKind::Deviations | WidgetKind::Map => (&[], &[]),

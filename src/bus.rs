@@ -183,7 +183,7 @@ pub struct ApplyStep {
 
 /// Sends an apply request to the running supervisor and decodes its reply.
 /// The bool is false when the supervisor replied with an error reply (a
-/// refused or halted apply); the ApplyResult carries the detail either way.
+/// refused or halted apply); the `ApplyResult` carries the detail either way.
 /// `planned_steps` is the caller's preview walk length: the reply timeout
 /// scales with it, since every step may legitimately take up to the
 /// supervisor's 60s readiness deadline — a fixed timeout misreported a

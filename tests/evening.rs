@@ -1,4 +1,4 @@
-//! Step-4 integration tests: the clock service, the evening_lights
+//! Step-4 integration tests: the clock service, the `evening_lights`
 //! automation, and the live parameter path, each scenario on a real
 //! supervisor.
 //!
@@ -45,7 +45,7 @@ async fn setup_sim() -> (Supervisor, zenoh::Session, Publisher, Publisher) {
     let sup = Supervisor::spawn(SIM_FIXTURE);
     let observer = sup.observer().await;
     let mut automation = health_watch(&observer, "evening_lights").await;
-    await_health(&mut automation, Duration::from_secs(60), |h| {
+    await_health(&mut automation, Duration::from_mins(1), |h| {
         h.status == HealthStatus::Running
     })
     .await;
@@ -154,7 +154,7 @@ async fn clock_payloads_match_schema() {
     let observer = sup.observer().await;
 
     let minute =
-        cache_read_eventually(&observer, "home/clock/minute", Duration::from_secs(60)).await;
+        cache_read_eventually(&observer, "home/clock/minute", Duration::from_mins(1)).await;
     let Value::String(minute) = minute else {
         panic!("minute payload is not a JSON string: {minute}");
     };
@@ -183,7 +183,7 @@ async fn clock_payloads_match_schema() {
     sup.shutdown();
 }
 
-/// (b) Presence + time crossing off_time drives the light command: no
+/// (b) Presence + time crossing `off_time` drives the light command: no
 /// command before the crossing or while someone is present; lights-off on
 /// the crossing, and on presence leaving after it.
 #[tokio::test(flavor = "multi_thread")]
@@ -282,7 +282,7 @@ async fn off_time_edit_applies_live_and_survives_restart() {
     unsafe {
         libc::kill(pid_before as i32, libc::SIGKILL);
     }
-    let restarted = await_health(&mut watch, Duration::from_secs(60), |h| {
+    let restarted = await_health(&mut watch, Duration::from_mins(1), |h| {
         h.status == HealthStatus::Running && h.pid != Some(pid_before as u32)
     })
     .await;

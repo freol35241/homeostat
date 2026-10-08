@@ -39,7 +39,7 @@ fn invalid_corpus_produces_expected_error_lists() {
     let invalid_root = manifest_dir().join("tests/corpus/invalid");
     let mut cases: Vec<PathBuf> = fs::read_dir(&invalid_root)
         .expect("tests/corpus/invalid exists")
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .map(|e| e.path())
         .filter(|p| p.is_dir())
         .collect();

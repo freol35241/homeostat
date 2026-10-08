@@ -24,7 +24,7 @@ pub struct Supervisor {
 
 impl Supervisor {
     /// Spawns `homeostat up <fixture> --listen <fresh port>` with the
-    /// fake_adapter binary's directory on PATH, and waits until the bus
+    /// `fake_adapter` binary's directory on PATH, and waits until the bus
     /// endpoint accepts connections.
     #[allow(dead_code)] // each test binary uses its own subset of the harness
     pub fn spawn(fixture: &str) -> Self {
@@ -47,9 +47,8 @@ impl Supervisor {
     #[allow(dead_code)] // each test binary uses its own subset of the harness
     pub fn spawn_at(house: &std::path::Path, envs: &[(&str, &str)]) -> Self {
         for _ in 0..5 {
-            match Self::try_spawn(house, envs) {
-                Some(sup) => return sup,
-                None => continue,
+            if let Some(sup) = Self::try_spawn(house, envs) {
+                return sup;
             }
         }
         panic!("supervisor kept exiting before listening");
@@ -122,7 +121,7 @@ impl Supervisor {
     }
 
     pub fn pid(&self) -> i32 {
-        self.child.id() as i32
+        i32::try_from(self.child.id()).expect("a pid fits i32")
     }
 
     pub fn signal(&self, signal: i32) {
@@ -217,7 +216,9 @@ pub async fn fixture_command(command: &str) -> (String, Vec<String>) {
 /// the process is enough: cargo runs test binaries one at a time.
 pub fn free_port() -> u16 {
     static HANDED_OUT: Mutex<BTreeSet<u16>> = Mutex::new(BTreeSet::new());
-    let mut handed_out = HANDED_OUT.lock().unwrap_or_else(|e| e.into_inner());
+    let mut handed_out = HANDED_OUT
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     loop {
         let port = TcpListener::bind("127.0.0.1:0")
             .expect("bind ephemeral port")
@@ -528,7 +529,7 @@ pub async fn expect_state(sub: &StateSub, expected: Value) {
 /// (connect-time availability, first states) are only observable here.
 #[allow(dead_code)] // each test binary uses its own subset of the harness
 pub async fn await_mirror(observer: &zenoh::Session, key: &str, expected: &serde_json::Value) {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    let deadline = tokio::time::Instant::now() + Duration::from_mins(1);
     loop {
         let replies = observer.get(key).await.expect("mirror get");
         while let Ok(reply) = replies.recv_async().await {
@@ -799,7 +800,7 @@ pub async fn running_pid(session: &zenoh::Session, unit: &str) -> u64 {
 #[allow(dead_code)] // each test binary uses its own subset of the harness
 pub async fn await_base_units(session: &zenoh::Session) -> (u64, u64) {
     let mut probe = health_watch(session, "probe").await;
-    await_health(&mut probe, Duration::from_secs(120), |h| {
+    await_health(&mut probe, Duration::from_mins(2), |h| {
         h.status == HealthStatus::Running
     })
     .await;

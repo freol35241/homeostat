@@ -21,7 +21,7 @@ enum Command {
         /// Path to the house repo.
         #[arg(default_value = ".")]
         path: PathBuf,
-        /// Bus endpoint of the running supervisor (or HOMEOSTAT_BUS).
+        /// Bus endpoint of the running supervisor (or `HOMEOSTAT_BUS`).
         /// Without one, the plan runs offline against the empty world.
         #[arg(long)]
         bus: Option<String>,
@@ -37,7 +37,7 @@ enum Command {
         /// Path to the house repo.
         #[arg(default_value = ".")]
         path: PathBuf,
-        /// Bus endpoint of the running supervisor (or HOMEOSTAT_BUS).
+        /// Bus endpoint of the running supervisor (or `HOMEOSTAT_BUS`).
         #[arg(long)]
         bus: Option<String>,
         /// Apply a saved pending plan; refused when its base commit is no
@@ -49,7 +49,7 @@ enum Command {
     /// house bus. Stdio by default (an MCP client launches it); --http for
     /// the deployed house, where it runs as a supervised service unit.
     Mcp {
-        /// Bus endpoint of the running supervisor (or HOMEOSTAT_BUS).
+        /// Bus endpoint of the running supervisor (or `HOMEOSTAT_BUS`).
         #[arg(long)]
         bus: Option<String>,
         /// Serve MCP over HTTP on this address (e.g. 127.0.0.1:8642)
@@ -138,15 +138,16 @@ fn schema_command(file: Option<String>, markdown: bool) -> ExitCode {
     }
     let value = match file {
         None => schema::all(),
-        Some(name) => match schema::File::parse(&name) {
-            Some(file) => schema::json(file),
-            None => {
+        Some(name) => {
+            if let Some(file) = schema::File::parse(&name) {
+                schema::json(file)
+            } else {
                 eprintln!(
                     "unknown file kind \"{name}\": expected unit, entity, zones or dashboard"
                 );
                 return ExitCode::FAILURE;
             }
-        },
+        }
     };
     println!(
         "{}",
@@ -156,27 +157,23 @@ fn schema_command(file: Option<String>, markdown: bool) -> ExitCode {
 }
 
 fn explain_command(code: Option<String>) -> ExitCode {
-    match code {
-        Some(code) => match homeostat::error::explain(&code) {
-            Some(text) => {
-                println!("{code}: {text}");
-                ExitCode::SUCCESS
-            }
-            None => {
-                eprintln!("unknown error code \"{code}\"; `homeostat explain` lists them");
-                ExitCode::FAILURE
-            }
-        },
-        None => {
-            for (code, text) in homeostat::error::CODES {
-                println!("{code}: {text}\n");
-            }
+    if let Some(code) = code {
+        if let Some(text) = homeostat::error::explain(&code) {
+            println!("{code}: {text}");
             ExitCode::SUCCESS
+        } else {
+            eprintln!("unknown error code \"{code}\"; `homeostat explain` lists them");
+            ExitCode::FAILURE
         }
+    } else {
+        for (code, text) in homeostat::error::CODES {
+            println!("{code}: {text}\n");
+        }
+        ExitCode::SUCCESS
     }
 }
 
-/// The endpoint from --bus, falling back to HOMEOSTAT_BUS.
+/// The endpoint from --bus, falling back to `HOMEOSTAT_BUS`.
 fn endpoint(flag: Option<String>) -> Option<String> {
     flag.or_else(|| std::env::var(homeostat::bus::ENV_BUS).ok())
         .filter(|e| !e.is_empty())

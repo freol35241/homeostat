@@ -71,7 +71,7 @@ async fn virtual_sensor_publishes_fused_state() {
     let observer = sup.observer().await;
 
     let mut automation = health_watch(&observer, "fused_temperature").await;
-    await_health(&mut automation, Duration::from_secs(120), |h| {
+    await_health(&mut automation, Duration::from_mins(2), |h| {
         h.status == HealthStatus::Running
     })
     .await;
@@ -113,9 +113,9 @@ const MAX_AGE_KEY: &str = "home/config/fused_temperature/source_max_age_s";
 async fn restart_automation(observer: &zenoh::Session, pid: u32) -> Health {
     let mut watch = health_watch(observer, "fused_temperature").await;
     unsafe {
-        libc::kill(pid as i32, libc::SIGKILL);
+        libc::kill(i32::try_from(pid).expect("a pid fits i32"), libc::SIGKILL);
     }
-    await_health(&mut watch, Duration::from_secs(60), |h| {
+    await_health(&mut watch, Duration::from_mins(1), |h| {
         h.status == HealthStatus::Running && h.pid != Some(pid)
     })
     .await
@@ -132,7 +132,7 @@ async fn restarted_automation_catches_up_from_the_mirror() {
     let observer = sup.observer().await;
 
     let mut automation = health_watch(&observer, "fused_temperature").await;
-    let running = await_health(&mut automation, Duration::from_secs(120), |h| {
+    let running = await_health(&mut automation, Duration::from_mins(2), |h| {
         h.status == HealthStatus::Running
     })
     .await;

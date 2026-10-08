@@ -1,7 +1,7 @@
 //! go2rtc shim integration tests: the first foreign binary as a unit. A
-//! fake go2rtc (tests/fake_go2rtc.py) sits on PATH under the real binary
+//! fake go2rtc (`tests/fake_go2rtc.py`) sits on PATH under the real binary
 //! name via a wrapper script; the shim must render its config from
-//! HOMEOSTAT_CAMERAS, spawn it, poll its API, own the liveliness token,
+//! `HOMEOSTAT_CAMERAS`, spawn it, poll its API, own the liveliness token,
 //! and translate child death into its own exit (supervisor restart).
 
 mod common;
@@ -20,7 +20,7 @@ const CAMERAS_ENV: &str = "HOMEOSTAT_CAMERAS";
 const LISTEN_ENV: &str = "HOMEOSTAT_GO2RTC_LISTEN";
 
 /// A temp dir whose `go2rtc` executable is a wrapper around the fake
-/// (tests/fake_go2rtc.py) — prepended to PATH so the shim's bare-name
+/// (`tests/fake_go2rtc.py`) — prepended to PATH so the shim's bare-name
 /// spawn resolves to it, exactly as image provisioning would.
 fn fake_binary_dir() -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
@@ -135,7 +135,7 @@ async fn shim_owns_the_token_for_the_foreign_binary() {
         .expect("token drop within 30s of child death")
         .expect("liveliness stream open");
     assert_eq!(dropped.kind(), SampleKind::Delete);
-    let restored = tokio::time::timeout(Duration::from_secs(60), token_sub.recv_async())
+    let restored = tokio::time::timeout(Duration::from_mins(1), token_sub.recv_async())
         .await
         .expect("token restored within 60s (restart)")
         .expect("liveliness stream open");

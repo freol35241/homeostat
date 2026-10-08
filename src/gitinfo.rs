@@ -38,8 +38,7 @@ pub fn head_commit(root: &Path) -> Option<String> {
 /// so still count as dirty.
 fn under_plans(line: &str) -> bool {
     line.get(3..)
-        .map(|path| path.split(" -> ").all(|p| p.starts_with("plans/")))
-        .unwrap_or(false)
+        .is_some_and(|path| path.split(" -> ").all(|p| p.starts_with("plans/")))
 }
 
 fn git(root: &Path, args: &[&str]) -> Option<String> {

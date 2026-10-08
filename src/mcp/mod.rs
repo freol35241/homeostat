@@ -186,7 +186,7 @@ impl Server {
     }
 
     /// Reads a unit's captured stdout/stderr ring buffer over the bus and
-    /// renders it as one "ts_us stream line" row per captured line —
+    /// renders it as one `ts_us stream line` row per captured line —
     /// operational exhaust for debugging, gone on supervisor restart.
     fn read_logs(&self, args: &Value) -> Result<String, String> {
         let unit = str_arg(args, "unit")?;

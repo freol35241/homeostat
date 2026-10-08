@@ -51,7 +51,7 @@ async fn a_forecast_is_published_and_mirrored_for_a_late_joiner() {
     let observer = sup.observer().await;
 
     let mut seer = health_watch(&observer, "seer").await;
-    await_health(&mut seer, Duration::from_secs(120), |h| {
+    await_health(&mut seer, Duration::from_mins(2), |h| {
         h.status == HealthStatus::Running
     })
     .await;
@@ -151,7 +151,7 @@ async fn a_core_restart_empties_the_mirror_and_only_a_producer_refills_it() {
     let mut restarted = Supervisor::spawn(FIXTURE);
     let observer = restarted.observer().await;
     let mut seer = health_watch(&observer, "seer").await;
-    await_health(&mut seer, Duration::from_secs(120), |h| {
+    await_health(&mut seer, Duration::from_mins(2), |h| {
         h.status == HealthStatus::Running
     })
     .await;

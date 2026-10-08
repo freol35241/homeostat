@@ -380,8 +380,7 @@ pub fn walk_steps(diff: &Diff, check: &CheckResult, world: &World) -> Vec<Step> 
         check
             .house
             .unit(name)
-            .map(|u| kind_order(u.manifest.unit.kind))
-            .unwrap_or(3)
+            .map_or(3, |u| kind_order(u.manifest.unit.kind))
     }) {
         let action = if creates.contains(&unit) {
             StepAction::Start
@@ -835,12 +834,11 @@ mod tests {
     fn ordered_respects_edges_then_kind_then_name() {
         let set: BTreeSet<String> = ["watcher", "beacon", "zed"]
             .iter()
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
             .collect();
         let edges = vec![edge("beacon", "watcher")];
         let kind_of = |name: &str| match name {
-            "beacon" => 0,
-            "zed" => 0,
+            "beacon" | "zed" => 0,
             _ => 1,
         };
         assert_eq!(
@@ -858,7 +856,10 @@ mod tests {
     /// it, even where kind and name order would put it second.
     #[test]
     fn ordered_puts_a_latch_owner_before_its_commander() {
-        let set: BTreeSet<String> = ["buttons", "modes"].iter().map(|s| s.to_string()).collect();
+        let set: BTreeSet<String> = ["buttons", "modes"]
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect();
         let edges = vec![edge("modes", "buttons")];
         assert_eq!(
             ordered(&set, &edges, |_| 1),

@@ -534,10 +534,10 @@ pub struct EntitySection {
     /// otherwise have to invent a name for a device that does not exist.
     #[serde(default)]
     pub id: Option<String>,
-    /// One of: binary_sensor, burner, camera, climate, cover, light, lock,
-    /// notifier, person, presence, router, sensor, switch
-    /// (`unknown-capability`). Decides
-    /// the base aspect, the dashboard widget and which cmd grants apply.
+    /// One of: `binary_sensor`, `burner`, `camera`, `climate`, `cover`,
+    /// `light`, `lock`, `notifier`, `person`, `presence`, `router`,
+    /// `sensor`, `switch` (`unknown-capability`). Decides the base aspect,
+    /// the dashboard widget and which cmd grants apply.
     pub capability: String,
     /// Optional aspects beyond the capability's base, as the adapter
     /// names them (`brightness`, `color_temp` on a light). For a sensor it

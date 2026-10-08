@@ -44,7 +44,7 @@ async fn setup() -> (Mosquitto, Supervisor, zenoh::Session) {
         .history(true)
         .await
         .expect("liveliness subscriber");
-    let token = tokio::time::timeout(Duration::from_secs(60), token_sub.recv_async())
+    let token = tokio::time::timeout(Duration::from_mins(1), token_sub.recv_async())
         .await
         .expect("adapter liveliness token within 60s")
         .expect("liveliness stream open");
@@ -272,7 +272,7 @@ async fn a_null_controller_value_is_absent_not_a_sample() {
 }
 
 /// (a2) The receive-timer availability: a routed message flips
-/// available = true, availability_timeout_s (5 s in the fixture) of
+/// available = true, `availability_timeout_s` (5 s in the fixture) of
 /// silence flips it false with a "device-silent" health event, and the
 /// next message flips it back.
 #[tokio::test(flavor = "multi_thread")]
@@ -312,7 +312,7 @@ async fn silence_flips_available() {
 async fn manual_setpoint_reaches_mqtt_via_arbiter_then_automation_refused() {
     let (mosquitto, mut sup, observer) = setup().await;
     let mut arbiter_watch = health_watch(&observer, "arbiter").await;
-    await_health(&mut arbiter_watch, Duration::from_secs(60), |h| {
+    await_health(&mut arbiter_watch, Duration::from_mins(1), |h| {
         h.status == HealthStatus::Running
     })
     .await;
@@ -351,7 +351,7 @@ async fn manual_setpoint_reaches_mqtt_via_arbiter_then_automation_refused() {
 /// (b1) The retain flag is per aspect, and the two directions are asserted
 /// in one run against one broker so neither can pass for the other.
 ///
-/// The setpoint is RETAINED: the firmware gives indoor_temperature_target no
+/// The setpoint is RETAINED: the firmware gives `indoor_temperature_target` no
 /// validity predicate and defaults it to 20 degC on reboot, so the retained
 /// slot is what restores a deliberate setting after the board restarts or
 /// after a write is lost. A late subscriber must therefore be handed it.
@@ -365,7 +365,7 @@ async fn manual_setpoint_reaches_mqtt_via_arbiter_then_automation_refused() {
 async fn setpoint_is_retained_and_the_expiring_offset_is_not() {
     let (mosquitto, mut sup, observer) = setup().await;
     let mut arbiter_watch = health_watch(&observer, "arbiter").await;
-    await_health(&mut arbiter_watch, Duration::from_secs(60), |h| {
+    await_health(&mut arbiter_watch, Duration::from_mins(1), |h| {
         h.status == HealthStatus::Running
     })
     .await;
@@ -414,7 +414,7 @@ async fn setpoint_is_retained_and_the_expiring_offset_is_not() {
 }
 
 /// (b2) A fed input (docs/design.md, Device feeds): the fixture wires the
-/// heat pump's indoor_temperature_actual to the fusion's virtual sensor.
+/// heat pump's `indoor_temperature_actual` to the fusion's virtual sensor.
 /// Each source sample is forwarded to the device's set topic as a float,
 /// not retained; while the source is unavailable nothing is forwarded and
 /// the topic's retained slot is cleared once; a command naming the fed
@@ -444,7 +444,7 @@ async fn fed_input_follows_its_source_and_stops_on_loss() {
     // Not retained: a fresh subscriber sees nothing.
     let mut late = Mqtt::connect(mosquitto.port, "test-feed-late").await;
     late.subscribe(FEED_SET_TOPIC).await;
-    let retained = late.next_message(Duration::from_millis(1000)).await;
+    let retained = late.next_message(Duration::from_secs(1)).await;
     assert!(
         retained.is_none(),
         "a fed value must not be retained: {retained:?}"
@@ -506,7 +506,7 @@ async fn fed_input_follows_its_source_and_stops_on_loss() {
         .await
         .expect("arbiter put");
     expect_drop_event(&event_sub, "invalid-command").await;
-    let silence = mqtt.next_message(Duration::from_millis(1000)).await;
+    let silence = mqtt.next_message(Duration::from_secs(1)).await;
     assert!(
         silence.is_none(),
         "command on a fed input reached MQTT: {silence:?}"
@@ -521,7 +521,7 @@ async fn fed_input_follows_its_source_and_stops_on_loss() {
 async fn out_of_range_setpoint_drops_with_invalid_command_event() {
     let (mosquitto, mut sup, observer) = setup().await;
     let mut arbiter_watch = health_watch(&observer, "arbiter").await;
-    await_health(&mut arbiter_watch, Duration::from_secs(60), |h| {
+    await_health(&mut arbiter_watch, Duration::from_mins(1), |h| {
         h.status == HealthStatus::Running
     })
     .await;
@@ -569,7 +569,7 @@ async fn out_of_range_setpoint_drops_with_invalid_command_event() {
 async fn offset_bound_admits_the_flow_and_refuses_nonsense() {
     let (mosquitto, mut sup, observer) = setup().await;
     let mut arbiter_watch = health_watch(&observer, "arbiter").await;
-    await_health(&mut arbiter_watch, Duration::from_secs(60), |h| {
+    await_health(&mut arbiter_watch, Duration::from_mins(1), |h| {
         h.status == HealthStatus::Running
     })
     .await;
@@ -614,7 +614,7 @@ async fn offset_bound_admits_the_flow_and_refuses_nonsense() {
     sup.shutdown();
 }
 
-/// (c') operating_mode is strictly the integer 1, 2 or 3: a valid mode
+/// (c') `operating_mode` is strictly the integer 1, 2 or 3: a valid mode
 /// rides the arbiter to MQTT as an integer string, an out-of-enum integer
 /// and a non-integer both drop with the invalid-command event and never
 /// reach MQTT. (Manual band throughout: equal bands pass the arbiter, so
@@ -623,7 +623,7 @@ async fn offset_bound_admits_the_flow_and_refuses_nonsense() {
 async fn operating_mode_enum_enforced() {
     let (mosquitto, mut sup, observer) = setup().await;
     let mut arbiter_watch = health_watch(&observer, "arbiter").await;
-    await_health(&mut arbiter_watch, Duration::from_secs(60), |h| {
+    await_health(&mut arbiter_watch, Duration::from_mins(1), |h| {
         h.status == HealthStatus::Running
     })
     .await;

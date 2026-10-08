@@ -1,5 +1,5 @@
 //! OpenWrt adapter integration tests: each scenario spawns a fake ubus
-//! endpoint (tests/fake_openwrt.py — real JSON-RPC shapes, real session-id
+//! endpoint (`tests/fake_openwrt.py` — real JSON-RPC shapes, real session-id
 //! enforcement) on a free port plus the real supervisor on the openwrt
 //! fixture house, and asserts on the bus. The fixture polls every second
 //! with a 2s presence away-delay, so transitions land within the timeouts.
@@ -26,9 +26,9 @@ const PHONE_MAC: &str = "aa:bb:cc:dd:ee:ff";
 const USERNAME: &str = "homeostat";
 const PASSWORD: &str = "secret123";
 
-/// A fake ubus endpoint (tests/fake_openwrt.py) on a free port, killed on
+/// A fake ubus endpoint (`tests/fake_openwrt.py`) on a free port, killed on
 /// drop. Spawned the same way the units themselves are: out of the
-/// script's own uv environment, exec'd directly (fixture_command, #140),
+/// script's own uv environment, exec'd directly (`fixture_command`, #140),
 /// so the handle held here is the interpreter's and not uv's.
 struct FakeOpenwrt {
     child: Child,
@@ -50,7 +50,7 @@ impl FakeOpenwrt {
             .spawn()
             .expect("spawn fake openwrt router (is uv installed?)");
         // First run resolves the fake router's own uv env: generous.
-        let deadline = Instant::now() + Duration::from_secs(60);
+        let deadline = Instant::now() + Duration::from_mins(1);
         while std::net::TcpStream::connect(("127.0.0.1", port)).is_err() {
             assert!(
                 Instant::now() < deadline,
@@ -91,21 +91,22 @@ impl Drop for FakeOpenwrt {
     }
 }
 
-/// Writes a HOMEOSTAT_OPENWRT file (outside the repo, per the settlement)
+/// Writes a `HOMEOSTAT_OPENWRT` file (outside the repo, per the settlement)
 /// giving each named router a fake endpoint's host and the read-only rpcd
 /// credentials. The fixture binds entities on "gw"; any further router is
 /// configured but unbound, which is all a second AP needs to be polled.
 fn routers_file(routers: &[(&str, u16)]) -> PathBuf {
     let tag: Vec<String> = routers.iter().map(|(_, port)| port.to_string()).collect();
     let path = std::env::temp_dir().join(format!("homeostat-openwrt-{}.toml", tag.join("-")));
-    let body: String = routers
+    let body = routers
         .iter()
         .map(|(name, port)| {
             format!(
                 "[{name}]\nhost = \"127.0.0.1:{port}\"\nusername = \"{USERNAME}\"\npassword = \"{PASSWORD}\"\n"
             )
         })
-        .collect();
+        .collect::<Vec<_>>()
+        .concat();
     std::fs::write(&path, body).expect("write routers file");
     path
 }
