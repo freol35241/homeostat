@@ -196,7 +196,7 @@ mod tests {
                     name: name.to_string(),
                     kind: UnitKind::Adapter,
                     description: None,
-                    inputs: None,
+                    watches: None,
                 },
                 runtime: RuntimeSection {
                     command: "true".to_string(),

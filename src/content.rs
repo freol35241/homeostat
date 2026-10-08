@@ -5,9 +5,10 @@
 //! - `manifest_hash`: sha256 of the manifest file bytes.
 //! - `files_hash`: sha256 over the unit's non-manifest repo inputs — command
 //!   tokens that resolve to files (the `uv run units/foo.py` script) and
-//!   their `.lock` files, the unit's bound entity files, and `zones.toml` when any of the unit's key
-//!   expressions referenced a zone. A house-wide unit (`inputs = "house"`)
-//!   also takes every manifest, every entity file and `dashboard.toml`.
+//!   their `.lock` files, the unit's bound entity files, and `zones.toml`
+//!   when any of the unit's key expressions referenced a zone. A
+//!   house-wide unit (`watches = "house"`) also takes every manifest,
+//!   every entity file and `dashboard.toml`.
 
 use std::fmt::Write as _;
 use std::fs;
@@ -68,7 +69,7 @@ pub fn files_hash(root: &Path, unit: &LoadedUnit, house: &House, unit_uses_zone:
         }
     }
     let name = &unit.manifest.unit.name;
-    if unit.manifest.unit.inputs == Some(crate::manifest::UnitInputs::House) {
+    if unit.manifest.unit.watches == Some(crate::manifest::UnitWatches::House) {
         // A house-wide unit reads every manifest, every entity file and
         // the zones: all of them are its inputs, so all of them must be
         // able to mark it changed. Sorted, since the hash is order-fed.
@@ -119,7 +120,7 @@ mod tests {
         .unwrap();
         fs::write(
             dir.join("units/dash.toml"),
-            "schema = 1\n\n[unit]\nname = \"dash\"\nkind = \"service\"\ninputs = \"house\"\n\n\
+            "schema = 1\n\n[unit]\nname = \"dash\"\nkind = \"service\"\nwatches = \"house\"\n\n\
              [runtime]\ncommand = \"dash\"\nrestart = \"always\"\n",
         )
         .unwrap();
@@ -155,6 +156,20 @@ mod tests {
         let before = hash_of(&dir, "dash");
         entity(&dir, "second_lamp");
         assert_ne!(hash_of(&dir, "dash"), before, "a new entity must reach it");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn inputs_is_still_read_as_watches() {
+        // The starter house runs on the released image until the next
+        // release, so its manifests keep the older spelling.
+        let dir = house_dir("inputs-spelling");
+        let dash = dir.join("units/dash.toml");
+        let manifest = fs::read_to_string(&dash).unwrap();
+        fs::write(&dash, manifest.replace("watches = ", "inputs = ")).unwrap();
+        let before = hash_of(&dir, "dash");
+        entity(&dir, "second_lamp");
+        assert_ne!(hash_of(&dir, "dash"), before, "still house-wide");
         let _ = fs::remove_dir_all(&dir);
     }
 

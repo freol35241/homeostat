@@ -845,7 +845,7 @@ class Model:
     Its inputs are every manifest and every entity file of every unit, so
     a binding added to another adapter changes what this page should show
     while changing none of this unit's own files. The manifest declares
-    `inputs = "house"` so `apply` restarts it, and this rebuild means a
+    `watches = "house"` so `apply` restarts it, and this rebuild means a
     browser refresh is enough even without one — the failure being avoided
     is a dashboard that renders confidently and omits a room that exists.
     """

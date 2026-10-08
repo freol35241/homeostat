@@ -914,7 +914,7 @@ A unit is unchanged when two hashes match the world's:
   not followed: a module the script imports is an input only if the
   command names it.
 
-**`[unit] inputs = "house"`** makes every manifest, entity file,
+**`[unit] watches = "house"`** makes every manifest, entity file,
 `zones.toml` and `dashboard.toml` a unit's inputs. The dashboard is a
 view over the whole house: an entity bound to another adapter changes
 what it renders while changing none of its own files, and without the
@@ -1858,7 +1858,7 @@ client-rendered because live state push is the dashboard's whole job.
   house's text. A device class needing a new control extends the public
   vocabulary plus one rendering, which every adapter then gets.
 
-The unit's model is the whole house, so it declares `inputs = "house"`
+The unit's model is the whole house, so it declares `watches = "house"`
 ([Change detection](#change-detection)). It also re-parses the house
 on `/api/model` at most every two seconds, keeping the last good model
 when a half-written file fails to parse.

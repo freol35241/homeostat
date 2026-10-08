@@ -94,9 +94,9 @@ outside the constraint is refused with the old value still in force.
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `description` | string | no |  |
-| `inputs` | [UnitInputs](#unitinputs) | no | Which repo files are this unit's inputs. Absent means `own` — the unit's command, its own entity files, its zone if it uses one. |
 | `kind` | [UnitKind](#unitkind) | yes |  |
 | `name` | string | yes | Unique across the house; a bus key segment (`home/health/{unit}`, `home/config/{unit}/*`), so letters, digits, `_`, `-`, `.` only, and not `.` or `..`. `system` is reserved for the core. |
+| `watches` | [UnitWatches](#unitwatches) | no | Which repo files restart this unit when they change. Absent means `own`: the unit's command, its own entity files, its zone if it uses one. `inputs` is accepted as an older spelling. |
 
 ### PublishSpec
 
@@ -141,16 +141,6 @@ backoff and a circuit breaker; the policy only says which exits count.
 - `on-failure` — Restart only after a non-zero exit or a signal.
 - `never` — Never restart; a stopped unit stays stopped until the next apply.
 
-### UnitInputs
-
-A unit whose model spans the WHOLE house (the dashboard) is changed by
-any entity or manifest anywhere, not just by files it owns. Per-unit
-change detection cannot infer that, so the unit declares it: otherwise
-`apply` reports success while leaving the unit confidently stale.
-
-- `own` — The unit's own files: its command, its entity files, its zone.
-- `house` — Every manifest and entity file in the house.
-
 ### UnitKind
 
 What a unit is, which decides the sections it may carry and how it is
@@ -159,6 +149,16 @@ ordered in an apply walk.
 - `adapter` — Puts devices on the bus: binds entities, needs `[discovery]` and `[entities]`, publishes their state, takes their commands.
 - `automation` — Regulates: subscribes state, publishes commands at the automation band, and may bind read-only virtual entities via `[entities]`.
 - `service` — Infrastructure with no entities (the recorder, the dashboard, the arbiter, the clock). May carry `[discovery]`.
+
+### UnitWatches
+
+A unit whose model spans the WHOLE house (the dashboard) is changed by
+any entity or manifest anywhere, not just by files it owns. Per-unit
+change detection cannot infer that, so the unit declares it: otherwise
+`apply` reports success while leaving the unit confidently stale.
+
+- `own` — The unit's own files: its command, its entity files, its zone.
+- `house` — Every manifest and entity file in the house.
 
 ### Priority
 

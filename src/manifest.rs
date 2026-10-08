@@ -200,9 +200,11 @@ pub struct UnitSection {
     pub name: String,
     pub kind: UnitKind,
     pub description: Option<String>,
-    /// Which repo files are this unit's inputs. Absent means `own` — the
-    /// unit's command, its own entity files, its zone if it uses one.
-    pub inputs: Option<UnitInputs>,
+    /// Which repo files restart this unit when they change. Absent means
+    /// `own`: the unit's command, its own entity files, its zone if it
+    /// uses one. `inputs` is accepted as an older spelling.
+    #[serde(alias = "inputs")]
+    pub watches: Option<UnitWatches>,
 }
 
 /// A unit whose model spans the WHOLE house (the dashboard) is changed by
@@ -211,7 +213,7 @@ pub struct UnitSection {
 /// `apply` reports success while leaving the unit confidently stale.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
-pub enum UnitInputs {
+pub enum UnitWatches {
     /// The unit's own files: its command, its entity files, its zone.
     Own,
     /// Every manifest and entity file in the house.
