@@ -88,6 +88,12 @@ echo "$init" | grep -q '"name":"homeostat"' \
   || fail "MCP initialize did not answer over HTTP: $init"
 echo "agent surface answers on :${MCP_PORT}, and refuses an un-headered POST"
 
+# The owner tool the image ships reads the recorder's stats over the bus.
+profile="$(docker exec "$(compose ps -q homeostat)" uv run /opt/homeostat/store_profile.py 2>&1)" \
+  || fail "store_profile.py failed in the image: $profile"
+echo "$profile" | grep -q "^store " || fail "store_profile.py printed no store line: $profile"
+echo "store_profile.py reads the recorder's stats"
+
 # Every unit resolved from its committed lockfile: uv rewrites a lock it
 # finds stale, and a house repo dirtied by its own boot means the lock
 # shipped by sync_starter.sh does not match the script beside it.

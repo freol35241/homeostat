@@ -6,4 +6,6 @@ target
 docs
 examples
 scripts
+!scripts/store_profile.py
+!scripts/store_profile.py.lock
 tests
