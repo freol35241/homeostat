@@ -307,6 +307,14 @@ their original timestamps and reports itself as health events; recovery
 flushes the buffer. Details:
 [design record §History](docs/design.md#history-and-the-recorder).
 
+To see what is filling the store, `scripts/store_profile.py` ranks
+entities by rows and series by write rate from `home/history/stats`. The
+image ships it, already pointed at the house's bus:
+
+```
+docker exec <container> uv run /opt/homeostat/store_profile.py
+```
+
 ### Plan / apply
 
 `homeostat plan --bus <endpoint>` reads the live world through the core's

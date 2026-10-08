@@ -116,6 +116,11 @@ RUN uv build --wheel /tmp/sdk -o /opt/homeostat-wheels \
 COPY --from=build /homeostat /usr/local/bin/homeostat
 COPY --from=build /go2rtc /usr/local/bin/go2rtc
 
+# An owner tool: which series fill the history store. It reads the bus
+# from HOMEOSTAT_BUS below, so `docker exec <container> uv run
+# /opt/homeostat/store_profile.py` needs no arguments.
+COPY scripts/store_profile.py scripts/store_profile.py.lock /opt/homeostat/
+
 # The supervisor's bus endpoint; units and sibling containers connect
 # here over the container network. Publishing it to the host hands every
 # reachable client full authority — see the note at the top.
