@@ -4,9 +4,8 @@
 #     "aiohttp>=3.9,<4",
 # ]
 # ///
-"""A minimal, honest OpenWrt ubus endpoint, for the openwrt adapter's
-integration tests (tests/openwrt.rs; the adapter's own docstring is its
-spec).
+"""A minimal OpenWrt ubus endpoint for the openwrt adapter's integration
+tests in tests/openwrt.rs.
 
 Speaks the slice of the ubus JSON-RPC surface the adapter touches: POST
 /ubus with `session.login` (rpcd credential check, real session id

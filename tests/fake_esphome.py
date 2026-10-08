@@ -4,9 +4,8 @@
 #     "aioesphomeapi>=45,<46",
 # ]
 # ///
-"""A minimal, honest ESPHome native-API device, for the esphome adapter's
-integration tests (tests/esphome.rs; the adapter's own docstring is its
-spec).
+"""A minimal ESPHome native-API device for the esphome adapter's integration
+tests in tests/esphome.rs.
 
 Speaks the real plaintext wire protocol (a zero byte, a varint length, a
 varint message-type id, then the protobuf payload, as aioesphomeapi's own
