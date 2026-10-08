@@ -13,7 +13,7 @@ use serde_json::Value;
 use crate::config::default_value;
 use crate::content;
 use crate::expand::ExpandedKey;
-use crate::grants::Grant;
+use crate::grants::{free_nodes, grant_edges, Grant};
 use crate::manifest::UnitKind;
 use crate::repo::LoadedUnit;
 use crate::validate::display_value;
@@ -401,23 +401,6 @@ pub fn walk_steps(diff: &Diff, check: &CheckResult, world: &World) -> Vec<Step> 
     steps
 }
 
-/// Edges (owner, dependent) from a grant table: the granted entities'
-/// owner units must be up before the granting unit. The owner rides in
-/// the grant itself, so edges hold even for entities the repo no longer
-/// declares. Owners are adapters, or automations for commandable virtual
-/// entities (docs/design.md#commandable-virtual-entities).
-fn grant_edges(grants: &[Grant]) -> Vec<(String, String)> {
-    let mut edges = Vec::new();
-    for grant in grants {
-        for entity in &grant.entities {
-            if entity.owner != grant.unit {
-                edges.push((entity.owner.clone(), grant.unit.clone()));
-            }
-        }
-    }
-    edges
-}
-
 /// Topological order over `set` under `edges` (owner before dependent),
 /// each layer sorted by (kind, name). A cyclic grant table is refused at
 /// check time (`grant-cycle`), so one cannot reach a plan; a malformed
@@ -429,15 +412,7 @@ where
     let mut remaining: BTreeSet<String> = set.clone();
     let mut out = Vec::new();
     while !remaining.is_empty() {
-        let mut layer: Vec<String> = remaining
-            .iter()
-            .filter(|unit| {
-                !edges
-                    .iter()
-                    .any(|(a, d)| d == *unit && a != *unit && remaining.contains(a))
-            })
-            .cloned()
-            .collect();
+        let mut layer = free_nodes(&remaining, edges);
         if layer.is_empty() {
             layer = remaining.iter().cloned().collect();
         }
@@ -473,9 +448,9 @@ fn world_kind_order(unit: &WorldUnit) -> Option<u8> {
     })
 }
 
-/// Renders the full plan text. Only call on an error-free check result.
-pub fn render(check: &CheckResult, root: &Path, repo_label: &str, world: &World) -> String {
-    let diff = diff(check, root, world);
+/// Renders the full plan text for `diff`, the result of [`diff`] over the
+/// same check and world. Only call on an error-free check result.
+pub fn render(check: &CheckResult, diff: &Diff, repo_label: &str, world: &World) -> String {
     let mut out = String::new();
     let mut units: Vec<&LoadedUnit> = check.house.units.iter().collect();
     units.sort_by_key(|u| {
@@ -661,8 +636,8 @@ pub fn render(check: &CheckResult, root: &Path, repo_label: &str, world: &World)
     } else {
         out.push_str(&format!(
             "\nPlan tier: {} ({})\n",
-            derive_tier(&diff),
-            summarize(&diff)
+            derive_tier(diff),
+            summarize(diff)
         ));
     }
 

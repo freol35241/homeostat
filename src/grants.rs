@@ -556,36 +556,59 @@ fn check_commanded_virtuals(
     }
 }
 
+/// Edges (owner, dependent) from a grant table: the granted entities'
+/// owner units must be up before the granting unit. The owner rides in
+/// the grant itself, so edges hold even for entities the repo no longer
+/// declares. Owners are adapters, or automations for commandable virtual
+/// entities (docs/design.md#commandable-virtual-entities).
+pub fn grant_edges(grants: &[Grant]) -> Vec<(String, String)> {
+    let mut edges = Vec::new();
+    for grant in grants {
+        for entity in &grant.entities {
+            if entity.owner != grant.unit {
+                edges.push((entity.owner.clone(), grant.unit.clone()));
+            }
+        }
+    }
+    edges
+}
+
+/// The nodes of `remaining` that no edge reaches from another node still
+/// in `remaining`: the next layer of a topological peel. Empty while
+/// `remaining` is not means every node left is on, or behind, a cycle.
+pub fn free_nodes(remaining: &BTreeSet<String>, edges: &[(String, String)]) -> Vec<String> {
+    remaining
+        .iter()
+        .filter(|unit| {
+            !edges
+                .iter()
+                .any(|(a, d)| d == *unit && a != *unit && remaining.contains(a))
+        })
+        .cloned()
+        .collect()
+}
+
 /// Grant edges run owner -> granting unit, and with automations as owners
 /// a cycle is possible: A commands an entity B binds while B commands one
 /// A binds. The apply walk needs an order, so refuse the house at plan
 /// time rather than start units in a silently arbitrary one.
 fn check_grant_cycle(grants: &[Grant], errors: &mut Vec<ValidationError>) {
-    let edges: BTreeSet<(&str, &str)> = grants
+    let edges = grant_edges(grants);
+    let mut remaining: BTreeSet<String> = edges
         .iter()
-        .flat_map(|g| {
-            g.entities
-                .iter()
-                .map(move |e| (e.owner.as_str(), g.unit.as_str()))
-        })
-        .filter(|(owner, unit)| owner != unit)
+        .flat_map(|(a, d)| [a.clone(), d.clone()])
         .collect();
-    let mut remaining: BTreeSet<&str> = edges.iter().flat_map(|(a, d)| [*a, *d]).collect();
     loop {
-        let free: Vec<&str> = remaining
-            .iter()
-            .filter(|u| !edges.iter().any(|(a, d)| d == *u && remaining.contains(a)))
-            .copied()
-            .collect();
+        let free = free_nodes(&remaining, &edges);
         if free.is_empty() {
             break;
         }
         for unit in free {
-            remaining.remove(unit);
+            remaining.remove(&unit);
         }
     }
     if !remaining.is_empty() {
-        let members: Vec<&str> = remaining.into_iter().collect();
+        let members: Vec<String> = remaining.into_iter().collect();
         errors.push(ValidationError::new(
             Code::GrantCycle,
             members.join(", "),

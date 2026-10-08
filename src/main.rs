@@ -207,11 +207,11 @@ fn plan_command(path: PathBuf, bus: Option<String>, save: bool, actor: String) -
         None => World::empty(),
     };
 
-    let text = homeostat::plan::render(&result, &path, &path.display().to_string(), &world);
+    let diff = homeostat::plan::diff(&result, &path, &world);
+    let text = homeostat::plan::render(&result, &diff, &path.display().to_string(), &world);
     print!("{text}");
 
     if save {
-        let diff = homeostat::plan::diff(&result, &path, &world);
         if diff.is_empty() {
             eprintln!("nothing to save: the world matches the repo");
             return ExitCode::FAILURE;
@@ -317,7 +317,7 @@ fn apply_command(path: PathBuf, bus: Option<String>, plan_file: Option<PathBuf>)
         let diff = homeostat::plan::diff(&result, &path, &world);
         print!(
             "{}",
-            homeostat::plan::render(&result, &path, &path.display().to_string(), &world)
+            homeostat::plan::render(&result, &diff, &path.display().to_string(), &world)
         );
         if diff.is_empty() {
             return ExitCode::SUCCESS;
