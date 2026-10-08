@@ -95,6 +95,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from dataclasses import dataclass
 
 import homeostat
 from homeostat import house, keys
@@ -175,6 +176,73 @@ def publish(endpoint: str, token: str, topic: str, text: str, priority: int, tit
         return json.loads(reply.read())
 
 
+@dataclass(frozen=True)
+class Send:
+    """One admitted wish: what to send, at which aspect's priority, titled how."""
+
+    aspect: str
+    text: str
+    title: str
+    cmd_id: str | None
+
+
+class Gate:
+    """Which wishes become sends.
+
+    The envelope must parse, the aspect be `message` or `alert`, the text a
+    non-blank string; a `message` inside `min_interval_s` of the last one
+    to the same entity is rate-limited, an `alert` never is (quiet hours
+    and rate limits withhold message, never alert;
+    docs/design.md#notifications). No bus, and the clock is injectable, so
+    tests drive it directly.
+    """
+
+    def __init__(self, unit: str, min_interval_s, clock=time.monotonic):
+        self.unit = unit
+        self.min_interval_s = min_interval_s
+        self.clock = clock
+        self.last_attempt: dict[tuple[str, str], float] = {}
+
+    def admit(self, entity_name: str, key: str, raw: bytes) -> Send | dict:
+        """Return the Send for one cmd sample, or its drop event's fields."""
+        aspect = key.split("/", 4)[4]
+        try:
+            payload = json.loads(raw)
+        except ValueError:
+            return {"reason": "malformed-payload", "key": key}
+        cmd_id = keys.cmd_envelope_id(payload)
+        try:
+            value = keys.parse_cmd_envelope(payload)
+        except ValueError:
+            return {"reason": "invalid-command", "key": key, "cmd_id": cmd_id}
+        if aspect not in PRIORITIES or not isinstance(value, str) or not value.strip():
+            return {
+                "reason": "invalid-command",
+                "key": key,
+                "cmd_id": cmd_id,
+                "aspect": aspect,
+                "value": value,
+            }
+        if aspect != "alert":
+            now = self.clock()
+            floor = self.min_interval_s()
+            last = self.last_attempt.get((entity_name, aspect))
+            if last is not None and now - last < floor:
+                return {"reason": "rate-limited", "key": key, "cmd_id": cmd_id, "min_interval_s": floor}
+            self.last_attempt[(entity_name, aspect)] = now
+        actor = payload.get("actor")
+        # A control character (CR/LF especially — header injection) or a
+        # non-Latin-1 actor would make the HTTP client raise inside
+        # publish(), misreporting a bad actor string as a dead server; fall
+        # back to the unit name instead of ever reaching that.
+        title = (
+            actor
+            if isinstance(actor, str) and actor and actor.isprintable() and actor.isascii()
+            else self.unit
+        )
+        return Send(aspect, value, title, cmd_id)
+
+
 def main():
     unit = os.environ[keys.ENV_UNIT]
     config = house.load_adapter(unit)
@@ -202,7 +270,6 @@ def main():
     # queueing forever; an item that waited past MAX_QUEUE_AGE_S is stale
     # by the time the server recovers and is dropped rather than sent.
     outbox: queue.Queue = queue.Queue(maxsize=MAX_QUEUE_SIZE)
-    last_attempt: dict[tuple[str, str], float] = {}
 
     def sender():
         while True:
@@ -226,61 +293,20 @@ def main():
                 session.put_json(keys.state_key(entity.room, entity.name, "delivered"), delivered)
             set_available(entity, True)
 
+    gate = Gate(unit, lambda: params.min_interval_s)
+
     def cmd_handler(entity):
         def handler(sample):
             key = str(sample.key_expr)
-            aspect = key.split("/", 4)[4]
-            try:
-                payload = json.loads(sample.payload.to_bytes())
-            except ValueError:
-                session.health_event("drop", reason="malformed-payload", key=key)
+            send = gate.admit(entity.name, key, sample.payload.to_bytes())
+            if not isinstance(send, Send):
+                session.health_event("drop", **send)
                 return
-            cmd_id = keys.cmd_envelope_id(payload)
+            item = (entity, send.aspect, key, send.text, send.title, send.cmd_id, time.monotonic())
             try:
-                value = keys.parse_cmd_envelope(payload)
-            except ValueError:
-                session.health_event("drop", reason="invalid-command", key=key, cmd_id=cmd_id)
-                return
-            if aspect not in PRIORITIES or not isinstance(value, str) or not value.strip():
-                session.health_event(
-                    "drop",
-                    reason="invalid-command",
-                    key=key,
-                    cmd_id=cmd_id,
-                    aspect=aspect,
-                    value=value,
-                )
-                return
-            if aspect != "alert":
-                # The floor never applies to alert: quiet hours and rate
-                # limits withhold message, never alert
-                # (docs/design.md#notifications).
-                now = time.monotonic()
-                last = last_attempt.get((entity.name, aspect))
-                if last is not None and now - last < params.min_interval_s:
-                    session.health_event(
-                        "drop",
-                        reason="rate-limited",
-                        key=key,
-                        cmd_id=cmd_id,
-                        min_interval_s=params.min_interval_s,
-                    )
-                    return
-                last_attempt[(entity.name, aspect)] = now
-            actor = payload.get("actor")
-            # A control character (CR/LF especially — header injection) or
-            # a non-Latin-1 actor would make the HTTP client raise inside
-            # publish(), misreporting a bad actor string as a dead server;
-            # fall back to the unit name instead of ever reaching that.
-            title = (
-                actor
-                if isinstance(actor, str) and actor and actor.isprintable() and actor.isascii()
-                else unit
-            )
-            try:
-                outbox.put_nowait((entity, aspect, key, value, title, cmd_id, time.monotonic()))
+                outbox.put_nowait(item)
             except queue.Full:
-                session.health_event("drop", reason="queue-full", key=key, cmd_id=cmd_id)
+                session.health_event("drop", reason="queue-full", key=key, cmd_id=send.cmd_id)
 
         return handler
 
