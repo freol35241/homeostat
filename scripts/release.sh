@@ -6,8 +6,9 @@
 #   scripts/release.sh 0.17.0-rc1
 #
 # It edits the working tree and stops there. Review the diff, commit it as
-# "Release X.Y.Z", merge, then tag the merge commit vX.Y.Z. The tag
-# triggers the release workflow.
+# "Release X.Y.Z" and merge. Then push a vX.Y.Z tag on the merge commit,
+# or publish a release with that tag on github.com. The tag triggers the
+# release workflow.
 set -euo pipefail
 
 VERSION="${1:-}"

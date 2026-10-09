@@ -434,8 +434,10 @@ and SDK wheel on a host without Docker.
 
 To cut a release, run `scripts/release.sh X.Y.Z` on a clean tree. It bumps
 the version everywhere, relocks the unit scripts and regenerates the starter
-house. Commit that, merge it, and tag the merge commit `vX.Y.Z`; the tag
-builds the binaries, the wheel and the image.
+house. Commit that and merge it. Then either push a `vX.Y.Z` tag on the
+merge commit, or publish a release with that tag on github.com. Either way
+the tag builds the binaries, the wheel and the image, and attaches them to
+the release.
 
 ## License
 
