@@ -4,7 +4,8 @@ name: Dashboard demo
 # It is rebuilt at each release, so it shows the dashboard that shipped. It
 # can also be run by hand to refresh the page between releases. The
 # repository's Pages source must be set to "GitHub Actions" (Settings >
-# Pages).
+# Pages), and the github-pages environment must allow deployments from
+# v* tags (Settings > Environments > github-pages).
 on:
   push:
     tags: ["v*"]

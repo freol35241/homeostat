@@ -122,6 +122,21 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          image="Container image: \`docker pull ghcr.io/$GITHUB_REPOSITORY:${GITHUB_REF_NAME#v}\`"
+          # A release published on github.com creates its tag, and that tag
+          # runs this workflow. The release then already exists: keep its
+          # notes and attach the files.
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" homeostat-*.tar.gz homeostat-*.whl SHA256SUMS \
+              --repo "$GITHUB_REPOSITORY" --clobber
+            body="$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json body --jq .body)"
+            case "$body" in
+              *"docker pull"*) ;;
+              *) gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+                   --notes "$body"$'\n\n'"$image" ;;
+            esac
+            exit 0
+          fi
           # A semver prerelease (v0.14.0-rc1) must not become the repo's
           # "Latest" release. The front page offers that release, and a house
           # reads it when choosing a version to pin. A hyphen in the tag marks
@@ -134,4 +149,4 @@ jobs:
             $prerelease \
             --title "$GITHUB_REF_NAME" \
             --generate-notes \
-            --notes "Container image: \`docker pull ghcr.io/$GITHUB_REPOSITORY:${GITHUB_REF_NAME#v}\`"
+            --notes "$image"
