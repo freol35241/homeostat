@@ -1,42 +1,36 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "homeostat==0.16.1",
+#     "homeostat==0.17.0",
 # ]
 # ///
-"""Arbiter service: the write-token holder for arbitrated entities (see
-docs/design.md, Arbitrated mode, "Settled 2026-07-16").
+"""Arbiter service: holds the write lease for arbitrated entities.
 
-By plan-time construction an adapter's templated cmd subscription excludes
-its arbitrated entities, so wishes for them never reach an owner adapter
-directly; this service subscribes every wish on home/cmd/** instead. A
-wish for a non-arbitrated entity is ignored — its own adapter consumes
-home/cmd directly. A wish for an arbitrated entity holds a lease per
-(entity, aspect) — the granularity of the cmd key itself, amended from
-per-entity when the heat pump showed orthogonal control dimensions
-sharing one entity (the family's setpoint must not freeze an
-automation's outdoor_temperature_offset; see docs/design.md, Arbitrated
-mode): {priority, actor, deadline}, deadline
-`time.monotonic() + hold_minutes * 60`. No active lease, an expired one,
-or an incoming priority at or above the holder's band (band order
-keys.CMD_PRIORITIES, manual highest — THE FAMILY ALWAYS WINS OVER
-AUTOMATIONS) forwards the envelope unchanged to
-home/arbiter/{room}/{entity}/{aspect} (keys.arbiter_key) and takes or
-refreshes the lease at the incoming band/actor; a takeover from a
-strictly lower active holder additionally publishes a "preempt" event; an
-incoming priority strictly below the holder is refused with a "refuse"
-event and no forward. Expiry reopens the aspect to automations, so a
-forgotten override self-heals. A malformed envelope drops with an
-"invalid-command" event, like any adapter. Events land at
-home/health/arbiter/event, recorded like any health event.
+See docs/design.md#arbitrated-mode. Plan-time expansion leaves an
+adapter's arbitrated entities out of its home/cmd subscription, so this
+service subscribes home/cmd/** and decides which wishes go through. A
+wish for a non-arbitrated entity is ignored, since its own adapter
+consumes it.
 
-hold_minutes is a family-editable parameter, kept live by the SDK's
-LiveParams (subscribe-then-get, seeded from the manifest default) rather
-than routed through automation.Context, whose Context.publish only knows
-the state/cmd key-slot shape and has no notion of this service's
-arbitrary, per-wish home/arbiter/{room}/{entity}/{aspect} forwarding keys.
+A wish for an arbitrated entity is checked against the lease on its
+(entity, aspect) (`Leases.wish`). If it wins, the envelope is forwarded
+unchanged to home/arbiter/{room}/{entity}/{aspect} and the lease is taken
+or refreshed for hold_minutes. The manual band is highest, so the family
+wins over automations. Expiry reopens the aspect, so a forgotten override
+clears itself.
+
+The leases in force are published as one document at home/hold/{unit}
+(`Leases.document`), mirrored by the core.
+
+Configuration: the live parameter hold_minutes (family-editable), seeded
+from the manifest default.
+
+Health events at home/health/{unit}/event: `drop` (off-schema-key,
+invalid-command), `preempt` when a wish takes over from a lower band, and
+`refuse` when a wish below the holder's band is turned away.
 """
 
+import datetime
 import json
 import os
 import signal
@@ -51,11 +45,139 @@ PARAM = "hold_minutes"
 
 
 class Params(LiveParams):
-    """hold_minutes from home/config/{unit}/*, live."""
+    """hold_minutes from home/config/{unit}/*, live.
+
+    LiveParams (subscribe-then-get, seeded from the manifest default) and
+    not automation.Context, because Context.publish only knows the
+    state/cmd key-slot shape, and this service forwards to a different
+    home/arbiter key for each wish.
+    """
 
     @property
     def hold_minutes(self) -> float:
         return self.get(PARAM)
+
+
+def iso(epoch: float) -> str:
+    """Format an epoch second as RFC3339 UTC.
+
+    That is the spelling every other timestamp on this bus uses.
+    """
+    return (
+        datetime.datetime.fromtimestamp(epoch, datetime.timezone.utc)
+        .isoformat(timespec="seconds")
+        .replace("+00:00", "Z")
+    )
+
+
+class Leases:
+    """The holds in force, one per (room, entity, aspect), and the rule.
+
+    A lease is per (entity, aspect), the granularity of the cmd key, and
+    not per entity. One entity can carry independent controls: on the
+    heat pump, the family's setpoint must not freeze an automation's
+    outdoor_temperature_offset.
+
+    Enforcement uses time.monotonic(), which a clock step cannot shorten
+    or stretch. The published `until` is its wall-clock equivalent,
+    because another process can only use a wall-clock deadline. If the
+    clock is stepped the two disagree, and only the displayed countdown
+    is off.
+
+    Pure bookkeeping: no bus, no threads. The caller serialises access and
+    does the publishing; `clock` is time.monotonic in the unit and a fake
+    in tests.
+    """
+
+    def __init__(self, clock=time.monotonic):
+        self._clock = clock
+        self._held: dict[tuple[str, str, str], dict] = {}
+
+    def wish(self, target: tuple[str, str, str], priority: str, actor: str, hold_s: float):
+        """Arbitrate one wish for `target` at `priority` from `actor`.
+
+        With no lease in force, or an incoming priority at or above the
+        holder's band (in keys.CMD_PRIORITIES order), the wish is forwarded
+        and takes the lease at its own band and actor. Taking over from a
+        strictly lower holder is a preempt. A priority strictly below the
+        holder's is refused and not forwarded.
+
+        Returns
+        -------
+        tuple of (str, dict or None)
+            The action, "forward", "preempt" or "refuse", and the lease that
+            was in force when the wish arrived (None if none was). Forward
+            and preempt take or refresh the lease for `hold_s` seconds; a
+            refusal counts against the holder instead.
+        """
+        now = self._clock()
+        lease = self._held.get(target)
+        holder = dict(lease) if lease is not None and now < lease["deadline"] else None
+        incoming = keys.CMD_PRIORITIES.index(priority)
+        if holder is not None and incoming < keys.CMD_PRIORITIES.index(holder["priority"]):
+            # The count lives on the hold, so a consumer can say "this
+            # override has turned an automation away twice" without
+            # replaying the event log.
+            self._held[target]["refused"] += 1
+            return "refuse", holder
+        preempts = holder is not None and incoming > keys.CMD_PRIORITIES.index(holder["priority"])
+        self._held[target] = {
+            "priority": priority,
+            "actor": actor,
+            "deadline": now + hold_s,
+            "taken": now,
+            # A refreshed hold starts its count again, because the count
+            # belongs to the hold in force.
+            "refused": 0,
+        }
+        return ("preempt" if preempts else "forward"), holder
+
+    def prune(self) -> bool:
+        """Drop expired leases; True when something went."""
+        now = self._clock()
+        expired = [k for k, lease in self._held.items() if lease["deadline"] <= now]
+        for k in expired:
+            del self._held[k]
+        return bool(expired)
+
+    def next_deadline(self) -> float | None:
+        """Return the earliest deadline in force, or None with no leases."""
+        return min((lease["deadline"] for lease in self._held.values()), default=None)
+
+    def document(self, wall: float) -> dict:
+        """Return the holds document, ordered by room, entity and aspect.
+
+        The document answers "is this aspect held right now?". The
+        preempt and refuse events cannot: they are an audit trail, and a
+        consumer that joins during a hold has missed them. It is one
+        document per arbiter, shaped like home/discovery/{unit}, and not a
+        key per lease. A restart then publishes one empty list, expiry
+        needs one timer, and a reader always sees a consistent set.
+
+        `wall` is time.time() at the same moment the clock is read, so the
+        published `since` and `until` are the monotonic lease in wall time.
+        """
+        now = self._clock()
+        holds = []
+        for (room, entity, aspect), lease in sorted(self._held.items()):
+            if lease["deadline"] <= now:
+                continue
+            holds.append(
+                {
+                    "room": room,
+                    "entity": entity,
+                    "aspect": aspect,
+                    "priority": lease["priority"],
+                    "actor": lease["actor"],
+                    "since": iso(wall - (now - lease["taken"])),
+                    # Arbitration enforces the monotonic deadline; a
+                    # countdown is drawn from this.
+                    "until": iso(wall + (lease["deadline"] - now)),
+                    # How many wishes this hold has refused.
+                    "refused": lease["refused"],
+                }
+            )
+        return {"schema": 1, "holds": holds}
 
 
 def main():
@@ -66,8 +188,32 @@ def main():
 
     session = homeostat.connect()
     params = Params(session, {PARAM: float(own.params[PARAM]["default"])})
-    lock = threading.Lock()
-    leases: dict[tuple[str, str, str], dict] = {}
+    leases = Leases()
+    hold_key = keys.hold_key(unit)
+    # Guards `leases`, and wakes the expiry thread when the earliest
+    # deadline moves (a new lease, or one pruned) so it does not sleep past
+    # a hold's end.
+    changed = threading.Condition(threading.Lock())
+
+    def publish_holds_locked() -> None:
+        # Each document replaces the previous one, so a consumer does not
+        # merge two.
+        session.put_json(hold_key, leases.document(time.time()))
+
+    def expiry_loop(stop: threading.Event) -> None:
+        """One thread for every lease, waiting on the earliest deadline.
+
+        Expiry is otherwise lazy, evaluated on the next wish for that key.
+        That is enough for arbitration, but the published document would
+        go on showing a hold that had ended.
+        """
+        while not stop.is_set():
+            with changed:
+                if leases.prune():
+                    publish_holds_locked()
+                deadline = leases.next_deadline()
+                timeout = None if deadline is None else max(0.05, deadline - time.monotonic())
+                changed.wait(timeout=timeout)
 
     def cmd_handler(sample):
         key = str(sample.key_expr)
@@ -96,32 +242,19 @@ def main():
             return
         cmd_id = keys.cmd_envelope_id(envelope)
 
-        incoming = keys.CMD_PRIORITIES.index(priority)
-        with lock:
-            now = time.monotonic()
-            lease = leases.get((room, entity, aspect))
-            holder = lease if lease is not None and now < lease["deadline"] else None
-            if holder is not None and incoming < keys.CMD_PRIORITIES.index(holder["priority"]):
-                action = "refuse"
-            else:
-                action = (
-                    "preempt"
-                    if holder is not None
-                    and incoming > keys.CMD_PRIORITIES.index(holder["priority"])
-                    else "forward"
-                )
-                leases[(room, entity, aspect)] = {
-                    "priority": priority,
-                    "actor": actor,
-                    "deadline": now + params.hold_minutes * 60,
-                }
+        with changed:
+            action, holder = leases.wish(
+                (room, entity, aspect), priority, actor, params.hold_minutes * 60
+            )
+            publish_holds_locked()
+            # The earliest deadline may have moved, and the expiry thread
+            # must not sleep on the old one.
+            changed.notify_all()
 
         if action == "refuse":
-            # The one outcome that is neither success nor failure: the
-            # command was well-formed and reached the arbiter, and a higher
-            # band simply holds the aspect. `cmd_id` is what lets whoever
-            # published it say so, instead of waiting out a timeout it was
-            # never going to win.
+            # The command was well-formed and reached the arbiter, but a
+            # higher band holds the aspect. `cmd_id` lets the publisher
+            # report that at once instead of waiting for its timeout.
             session.health_event(
                 "refuse",
                 room=room,
@@ -149,13 +282,25 @@ def main():
 
     cmd_sub = session.subscribe("home/cmd/**", cmd_handler)
 
+    # Leases are in memory, so a restart holds nothing, while the mirror
+    # still has what the last process published. One empty document
+    # replaces it; with one key per hold there would be a set to find and
+    # clear.
+    with changed:
+        publish_holds_locked()
+
     session.ready()
 
     stop = threading.Event()
     signal.signal(signal.SIGTERM, lambda *_: stop.set())
     signal.signal(signal.SIGINT, lambda *_: stop.set())
+    expiry = threading.Thread(target=expiry_loop, args=(stop,), daemon=True)
+    expiry.start()
     stop.wait()
 
+    with changed:
+        changed.notify_all()  # let the expiry thread see the stop flag
+    expiry.join(timeout=2)
     cmd_sub.undeclare()
     session.close()
 

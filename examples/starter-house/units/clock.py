@@ -1,21 +1,21 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "homeostat==0.16.1",
+#     "homeostat==0.17.0",
 # ]
 # ///
-"""Clock service: civil time on the bus (see docs/design.md).
+"""Clock service: civil time on the bus (see docs/design.md#unit-kinds).
 
-Publishes home/clock/minute (RFC3339 local time with offset, on the minute)
-and home/clock/date (at local midnight). The current minute and date are
-published immediately at startup — late-joiner catch-up, so a restarted
-subscriber never runs blind for up to 59 seconds.
+Publishes home/clock/minute (RFC3339 local time with offset, on the
+minute) and home/clock/date (at local midnight). Both are also published
+at startup, so a restarted subscriber does not wait up to 59 seconds for
+the time.
 
-The service owns timezone and DST: subscribers never do naive time
+The service owns the timezone and DST, so subscribers do no naive time
 arithmetic. The timezone is the `timezone` manifest parameter and follows
-live edits; an invalid live value leaves a health event and the last good
-zone in effect (an invalid value at startup is a startup error, made
-visible by the supervisor's backoff).
+live edits. An invalid live value leaves a `drop` health event (reason
+invalid-timezone) and keeps the last good zone. An invalid value at
+startup is a startup error, visible through the supervisor's backoff.
 """
 
 import datetime
@@ -27,15 +27,16 @@ from homeostat import automation
 
 
 def next_boundary(now_utc: datetime.datetime) -> datetime.datetime:
-    """The next whole UTC minute after `now_utc`. Computed in UTC — never
-    the local wall clock — so a DST transition can't turn one iteration's
-    wait into more or less than one real minute: at fall-back, the local
-    clock's `replace(...) + timedelta(minutes=1)` names a wall-clock
-    minute that is really 61 real minutes away (it skips straight past
-    the repeated hour); UTC has no such transitions, so the wait is
-    always exactly one real minute and the local zone (applied only when
-    publishing) shows the repeated hour once each time it actually
-    occurs."""
+    """Return the next whole UTC minute after `now_utc`.
+
+    Computed in UTC, not the local wall clock, so a DST transition cannot
+    make one wait longer or shorter than a real minute. At fall-back, the
+    local clock's `replace(...) + timedelta(minutes=1)` names a wall-clock
+    minute 61 real minutes away, skipping the repeated hour. UTC has no
+    such transitions, so the wait is one real minute, and the local zone,
+    applied only when publishing, shows the repeated hour each time it
+    occurs.
+    """
     return now_utc.replace(second=0, microsecond=0) + datetime.timedelta(minutes=1)
 
 
@@ -66,17 +67,17 @@ def main():
         if stop.wait(timeout=(boundary_utc - now_utc).total_seconds()):
             break
         if datetime.datetime.now(datetime.timezone.utc) < boundary_utc:
-            # Event.wait measures monotonic time; NTP slewing the clock
-            # back would republish the previous minute (and fire
-            # minute-tick automations twice). Wait out the remainder — in
-            # UTC, so a local DST fall-back's repeated hour is never
+            # Event.wait measures monotonic time, so after NTP slews the
+            # clock back this would republish the previous minute and fire
+            # minute-tick automations twice. Wait out the remainder. The
+            # check is in UTC, so a DST fall-back's repeated hour is not
             # mistaken for a slew (see next_boundary).
             continue
         try:
             zone = ZoneInfo(ctx.params.timezone)
         except (ZoneInfoNotFoundError, TypeError, ValueError):
-            # A live, family/owner-editable string: an unknown key, a
-            # malformed one, or a non-string value from a raw bus write.
+            # A live, editable string: an unknown key, a malformed one, or
+            # a non-string value from a raw bus write.
             ctx.health_event("drop", reason="invalid-timezone", value=ctx.params.timezone)
         publish(datetime.datetime.now(zone))
 
