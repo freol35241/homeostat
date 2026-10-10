@@ -63,8 +63,9 @@ house/
 ```
 
 An entity file sets the device's write policy (`shared`, `exclusive` or
-`arbitrated`) and its `room`; nothing else does. `examples/house/` is a
-complete, commented example.
+`arbitrated`) and its `room`; nothing else does.
+[`examples/starter-house/`](examples/starter-house/) is a complete house
+you can copy.
 
 `homeostat up` validates the repo, then runs every unit as a supervised
 process, all talking over a well-defined key space on the bus:
@@ -110,7 +111,7 @@ To build it yourself, you need a Rust toolchain, and
 
 ```
 git clone https://github.com/freol35241/homeostat && cd homeostat
-cargo run -- plan examples/house
+cargo run -- plan examples/starter-house
 ```
 
 On a valid repo this prints every unit to create, the expanded key space
@@ -119,24 +120,33 @@ non-zero, so the same command works as a house repo's CI check:
 
 ```
 Homeostat plan
-  repo:  examples/house
+  repo:  examples/starter-house
   world: empty
 
-Units to create (4):
+Units to create (10):
 
 + adapter zigbee (units/zigbee.toml)
+    command: uv run units/zigbee.py
+    entities (3):
+      front_door       lock      room=hallway     write=arbitrated
+      hallway_motion   presence  room=hallway     write=shared
+      livingroom_lamp  light     room=livingroom  write=shared
     ...
 + automation evening_lights (units/evening_lights.toml)
+    command: uv run units/evening_lights.py
     params:
-      off_time  type=time  default=23:00  constraint={after=20:00, before=02:00}  editable_by=family
+      off_time  type=time  default=22:00  constraint={after=20:00, before=02:00}  editable_by=family
+    ...
 
 Grant table:
 
   evening_lights.lights  capability=light  priority=automation
-    -> kitchen_ceiling  (room=kitchen, write=shared, owner=zigbee)
+    key: home/cmd/hallway/*/on
+    key: home/cmd/livingroom/*/on
+    -> livingroom_lamp  (room=livingroom, capability=light, write=shared, owner=zigbee)
     ...
 
-Plan tier: structural (4 units created, 1 grant added)
+Plan tier: structural (10 units created, 9 grants added)
 ```
 
 **Run a live house.** The integration-test fixtures work as small demos.

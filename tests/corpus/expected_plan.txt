@@ -1,5 +1,5 @@
 Homeostat plan
-  repo:  examples/house
+  repo:  tests/fixtures/house_reference
   world: empty
 
 Units to create (11):
