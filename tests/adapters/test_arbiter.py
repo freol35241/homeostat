@@ -1,4 +1,7 @@
-"""The arbiter's rule, without a bus: who holds an aspect, and for how long."""
+"""The arbiter's rule, without a bus: who holds an aspect, and for how long.
+
+Also which entities it arbitrates, read from the grant table.
+"""
 
 import sys
 import unittest
@@ -6,7 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "adapters"))
 
-from arbiter import Leases
+from arbiter import Leases, bindings
 
 LAMP = ("hall", "lamp", "on")
 HOLD_S = 60.0
@@ -89,10 +92,36 @@ class LeasesTest(unittest.TestCase):
         self.assertEqual(doc["holds"][0]["since"], "2023-11-14T22:13:05Z")
         self.assertEqual(doc["holds"][0]["until"], "2023-11-14T22:14:05Z")
 
+    def test_retain_drops_holds_on_entities_no_longer_arbitrated(self):
+        self.wish("manual", target=("a", "x", "on"))
+        self.wish("manual", target=("a", "x", "level"))
+        self.wish("manual", target=("b", "y", "on"))
+        self.assertFalse(self.leases.retain(frozenset({("a", "x"), ("b", "y")})))
+        self.assertTrue(self.leases.retain(frozenset({("b", "y")})))
+        doc = self.leases.document(wall=0.0)
+        self.assertEqual([(h["room"], h["entity"]) for h in doc["holds"]], [("b", "y")])
+
     def test_the_document_leaves_out_an_ended_hold_before_it_is_pruned(self):
         self.wish("manual")
         self.clock.now += HOLD_S
         self.assertEqual(self.leases.document(wall=0.0)["holds"], [])
+
+
+def entity(room, name, write):
+    return {"name": name, "room": room, "capability": "lock", "write": write, "owner": "z"}
+
+
+class BindingsTest(unittest.TestCase):
+    def test_arbitrated_and_bound_come_from_every_row(self):
+        door = entity("hall", "door", "arbitrated")
+        lamp = entity("hall", "lamp", "shared")
+        grants = [
+            {"unit": "dashboard", "publish": "locks", "entities": [door]},
+            {"unit": "z", "publish": "state", "entities": [door, lamp]},
+        ]
+        arbitrated, bound = bindings(grants)
+        self.assertEqual(arbitrated, {("hall", "door")})
+        self.assertEqual(bound, {("hall", "door"), ("hall", "lamp")})
 
 
 if __name__ == "__main__":

@@ -733,7 +733,8 @@ its capability, rebinding it, or widening a publish from `.../on` to
 The table is the permission record. `plan` prints it: the whole table
 offline, or the delta against a live world. The supervisor serves the
 applied table at `home/meta/system/grants`. The dashboard reads it
-there to show which units drive which entities at which band.
+there to show which units drive which entities at which band. The
+arbiter reads it to know which entities it arbitrates.
 
 The table is also the dependency graph. An entity's owner runs before
 the units granted onto it ([apply walk](#the-apply-walk)). Owners can
@@ -795,9 +796,16 @@ skipping it:
 
 - Writers do not need to know about it. Every writer publishes to
   `home/cmd/{room}/{entity}/{aspect}`. The arbiter subscribes to
-  `home/cmd/**` and ignores non-arbitrated entities. It forwards a
+  `home/cmd/**` and ignores bound, non-arbitrated entities. It forwards a
   granted wish, with the envelope unchanged, to the same path under
   `home/arbiter/`.
+- The arbiter learns which entities are arbitrated from the grant table
+  at `home/meta/system/grants`, and follows it live. Flipping an
+  entity's write mode restarts the entity's adapter but not the
+  arbiter, whose own files are unchanged. A hold on an entity that stops
+  being arbitrated is released. A wish for an entity that no unit binds
+  reaches no adapter either, so the arbiter drops it with an `unbound`
+  event.
 - Adapters cannot hear a wish. Their templated `home/cmd/`
   subscriptions expand only over non-arbitrated entities
   ([Key expansion](#key-expansion)). An arbitrated entity that no

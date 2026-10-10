@@ -107,6 +107,7 @@ Expanded keys:
   arbiter publishes arbiter: home/arbiter/**
   arbiter publishes holds: home/hold/arbiter
   arbiter subscribes cmd: home/cmd/**
+  arbiter subscribes grants: home/meta/system/grants
   dashboard publishes lights: home/cmd/**
   dashboard publishes locks: home/cmd/**
   dashboard subscribes config: home/config/*/*
