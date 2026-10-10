@@ -92,6 +92,15 @@ class LeasesTest(unittest.TestCase):
         self.assertEqual(doc["holds"][0]["since"], "2023-11-14T22:13:05Z")
         self.assertEqual(doc["holds"][0]["until"], "2023-11-14T22:14:05Z")
 
+    def test_retain_drops_holds_on_entities_no_longer_arbitrated(self):
+        self.wish("manual", target=("a", "x", "on"))
+        self.wish("manual", target=("a", "x", "level"))
+        self.wish("manual", target=("b", "y", "on"))
+        self.assertFalse(self.leases.retain(frozenset({("a", "x"), ("b", "y")})))
+        self.assertTrue(self.leases.retain(frozenset({("b", "y")})))
+        doc = self.leases.document(wall=0.0)
+        self.assertEqual([(h["room"], h["entity"]) for h in doc["holds"]], [("b", "y")])
+
     def test_the_document_leaves_out_an_ended_hold_before_it_is_pruned(self):
         self.wish("manual")
         self.clock.now += HOLD_S
@@ -104,9 +113,11 @@ def entity(room, name, write):
 
 class BindingsTest(unittest.TestCase):
     def test_arbitrated_and_bound_come_from_every_row(self):
+        door = entity("hall", "door", "arbitrated")
+        lamp = entity("hall", "lamp", "shared")
         grants = [
-            {"unit": "z", "publish": "state", "entities": [entity("hall", "door", "arbitrated")]},
-            {"unit": "z", "publish": "state", "entities": [entity("hall", "lamp", "shared")]},
+            {"unit": "dashboard", "publish": "locks", "entities": [door]},
+            {"unit": "z", "publish": "state", "entities": [door, lamp]},
         ]
         arbitrated, bound = bindings(grants)
         self.assertEqual(arbitrated, {("hall", "door")})

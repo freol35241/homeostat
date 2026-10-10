@@ -796,15 +796,16 @@ skipping it:
 
 - Writers do not need to know about it. Every writer publishes to
   `home/cmd/{room}/{entity}/{aspect}`. The arbiter subscribes to
-  `home/cmd/**` and ignores non-arbitrated entities. It forwards a
+  `home/cmd/**` and ignores bound, non-arbitrated entities. It forwards a
   granted wish, with the envelope unchanged, to the same path under
   `home/arbiter/`.
 - The arbiter learns which entities are arbitrated from the grant table
   at `home/meta/system/grants`, and follows it live. Flipping an
   entity's write mode restarts the entity's adapter but not the
-  arbiter, whose own files are unchanged. A wish for an entity that no
-  unit binds reaches no adapter either, so the arbiter drops it with an
-  `unbound` event.
+  arbiter, whose own files are unchanged. A hold on an entity that stops
+  being arbitrated is released. A wish for an entity that no unit binds
+  reaches no adapter either, so the arbiter drops it with an `unbound`
+  event.
 - Adapters cannot hear a wish. Their templated `home/cmd/`
   subscriptions expand only over non-arbitrated entities
   ([Key expansion](#key-expansion)). An arbitrated entity that no

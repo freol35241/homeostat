@@ -90,13 +90,18 @@ class Bindings:
     The core puts the table again when an apply completes. This follows the
     LiveParams read pattern: subscribe, then seed with a get, and a table
     the subscription has already delivered wins over the seed.
+
+    `on_change` is called with the new arbitrated set on each live table.
+    The seed does not call it, because nothing is held before the first
+    wish.
     """
 
-    def __init__(self, session):
+    def __init__(self, session, on_change):
         # Both sets in one attribute, replaced in one assignment, so a
         # reader never pairs sets from different tables.
         self._sets: tuple[frozenset, frozenset] = (frozenset(), frozenset())
         self._live = False
+        self._on_change = on_change
         self._sub = session.subscribe(GRANTS_KEY, self._on_grants)
         for _key, value in session.get_json(GRANTS_KEY):
             if not self._live:
@@ -105,6 +110,7 @@ class Bindings:
     def _on_grants(self, sample) -> None:
         self._live = True
         self._sets = bindings(json.loads(sample.payload.to_bytes()))
+        self._on_change(self._sets[0])
 
     def route(self, target: tuple[str, str]) -> str:
         """Return "arbitrated", "bound" or "unbound" for a (room, entity)."""
@@ -196,6 +202,17 @@ class Leases:
             del self._held[k]
         return bool(expired)
 
+    def retain(self, arbitrated: frozenset) -> bool:
+        """Drop leases on entities outside `arbitrated`; True when something went.
+
+        An entity that stops being arbitrated is commanded by its adapter
+        directly, so a hold on it no longer holds anything.
+        """
+        gone = [k for k in self._held if k[:2] not in arbitrated]
+        for k in gone:
+            del self._held[k]
+        return bool(gone)
+
     def next_deadline(self) -> float | None:
         """Return the earliest deadline in force, or None with no leases."""
         return min((lease["deadline"] for lease in self._held.values()), default=None)
@@ -242,7 +259,6 @@ def main():
 
     session = homeostat.connect()
     params = Params(session, {PARAM: float(own.params[PARAM]["default"])})
-    routes = Bindings(session)
     leases = Leases()
     hold_key = keys.hold_key(unit)
     # Guards `leases`, and wakes the expiry thread when the earliest
@@ -254,6 +270,14 @@ def main():
         # Each document replaces the previous one, so a consumer does not
         # merge two.
         session.put_json(hold_key, leases.document(time.time()))
+
+    def on_arbitrated(arbitrated: frozenset) -> None:
+        with changed:
+            if leases.retain(arbitrated):
+                publish_holds_locked()
+                changed.notify_all()
+
+    routes = Bindings(session, on_arbitrated)
 
     def expiry_loop(stop: threading.Event) -> None:
         """One thread for every lease, waiting on the earliest deadline.

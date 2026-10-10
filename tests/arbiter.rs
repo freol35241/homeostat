@@ -502,7 +502,7 @@ async fn wish_for_an_unbound_entity_drops_with_health_event() {
 /// An apply that makes an entity arbitrated restarts its adapter but not
 /// the arbiter, whose files are unchanged. The arbiter follows the grant
 /// table the core republishes, so the next wish forwards without a
-/// restart.
+/// restart. Flipping the entity back releases the hold that wish took.
 #[tokio::test(flavor = "multi_thread")]
 async fn an_entity_made_arbitrated_by_apply_forwards_without_a_restart() {
     let house = temp_house(FIXTURE, "arbiter-flip");
@@ -570,6 +570,32 @@ async fn an_entity_made_arbitrated_by_apply_forwards_without_a_restart() {
         running_pid(&observer, "arbiter").await,
         arbiter_pid,
         "the arbiter was not restarted"
+    );
+
+    // The forwarded wish took a 30-minute hold. Once the entity is shared
+    // again its adapter takes commands directly, so the hold must go.
+    let hold_sub = observer
+        .declare_subscriber(HOLD_KEY)
+        .await
+        .expect("hold subscriber");
+    edit(
+        &house,
+        "entities/reflector/front_door.toml",
+        "mode = \"arbitrated\"",
+        "mode = \"shared\"",
+    );
+    let apply = cli(&["apply", house_arg, "--bus", &sup.endpoint]);
+    assert_cli_ok(&apply);
+    let mut released = false;
+    while let Some(doc) = next_json(&hold_sub, Duration::from_secs(10)).await {
+        if doc["holds"].as_array().is_some_and(std::vec::Vec::is_empty) {
+            released = true;
+            break;
+        }
+    }
+    assert!(
+        released,
+        "the hold should be released when the entity is shared"
     );
 
     sup.shutdown();
