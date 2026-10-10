@@ -5,14 +5,16 @@
 
 pub mod apply;
 pub mod backoff;
+pub mod mirror;
 pub mod process;
+pub mod replay;
 pub mod unit;
 
 use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use tokio::sync::watch;
 use zenoh::Session;
@@ -21,6 +23,7 @@ use crate::bus::{self, Health, HealthStatus, LogEntry};
 use crate::config::ConfigStore;
 use crate::grants::Grant;
 use crate::plan::WorldUnit;
+use crate::supervisor::mirror::mirror;
 use crate::supervisor::unit::UnitSpec;
 use crate::CheckResult;
 
@@ -93,7 +96,7 @@ pub async fn run(check: &CheckResult, root: &Path, listen: &str) -> Result<(), S
     serve_health(&session, health.clone()).await?;
     let log: LogMap = Arc::default();
     mirror(&session, "home/clock/*").await?;
-    mirror(&session, "home/state/**").await?;
+    let state = mirror(&session, "home/state/**").await?;
     mirror(&session, "home/discovery/*").await?;
     // Forecasts are mirrored for the same reason as state. It matters more
     // here: a day-ahead curve is published once a day, so a consumer
@@ -136,6 +139,9 @@ pub async fn run(check: &CheckResult, root: &Path, listen: &str) -> Result<(), S
 
     for unit in &check.house.units {
         core.launch(UnitSpec::from_loaded(unit, root, listen)).await;
+    }
+    if let Some(recorder) = recorder_unit(check) {
+        tokio::spawn(replay::replay_when_running(core.clone(), recorder, state));
     }
 
     stop.await;
@@ -523,76 +529,17 @@ async fn serve_health(session: &Session, health: HealthMap) -> Result<(), String
     Ok(())
 }
 
-/// A mirrored value's last-put payload and receipt time, by key.
-type MirrorCache = BTreeMap<String, (Vec<u8>, Instant)>;
-
-/// Mirrors a published key space into a last-value cache served by a
-/// queryable. For the clock, a late joiner sees the current minute and date
-/// instead of waiting for the next boundary. For state, a late joiner or a
-/// bus read (such as the MCP surface's `read_state`) sees every entity's
-/// current value without waiting for the next publish. Forecast works the
-/// same way, for a class whose publishes can be a day apart.
-///
-/// Every reply carries the value's age in the attachment: seconds since the
-/// mirror received it, as a decimal string. A mirrored value can be very
-/// old, and without the age a late joiner cannot tell a catch-up from a
-/// fresh publish. The SDK's `subscribe` feeds the age to `Freshness`. The
-/// reply carries an age and not a wall-clock stamp, because the mirror's
-/// monotonic clock is the only one involved and the reply is read as soon
-/// as it is made.
-async fn mirror(session: &Session, keyexpr: &'static str) -> Result<(), String> {
-    let cache: Arc<Mutex<MirrorCache>> = Arc::default();
-    let sub = session
-        .declare_subscriber(keyexpr)
-        .await
-        .map_err(|e| format!("failed to subscribe to {keyexpr}: {e}"))?;
-    let queryable = session
-        .declare_queryable(keyexpr)
-        .await
-        .map_err(|e| format!("failed to declare {keyexpr} queryable: {e}"))?;
-    {
-        let cache = cache.clone();
-        tokio::spawn(async move {
-            while let Ok(sample) = sub.recv_async().await {
-                let mut cache = cache.lock().expect("mirror cache lock");
-                match sample.kind() {
-                    zenoh::sample::SampleKind::Put => {
-                        cache.insert(
-                            sample.key_expr().as_str().to_string(),
-                            (sample.payload().to_bytes().to_vec(), Instant::now()),
-                        );
-                    }
-                    zenoh::sample::SampleKind::Delete => {
-                        cache.remove(sample.key_expr().as_str());
-                    }
-                }
-            }
-        });
-    }
-    tokio::spawn(async move {
-        while let Ok(query) = queryable.recv_async().await {
-            let entries: Vec<(String, Vec<u8>, f64)> = cache
-                .lock()
-                .expect("mirror cache lock")
-                .iter()
-                .filter(|(key, _)| intersects(&query, key))
-                .map(|(key, (payload, received))| {
-                    (
-                        key.clone(),
-                        payload.clone(),
-                        received.elapsed().as_secs_f64(),
-                    )
-                })
-                .collect();
-            for (key, payload, age_s) in entries {
-                let _ = query
-                    .reply(key, payload)
-                    .attachment(age_s.to_string())
-                    .await;
-            }
-        }
-    });
-    Ok(())
+/// The unit that publishes under `home/history/`: the house's recorder, of
+/// which validation allows one (docs/design.md#reserved-classes).
+fn recorder_unit(check: &CheckResult) -> Option<String> {
+    check
+        .expanded
+        .iter()
+        .find(|k| {
+            k.direction == crate::expand::Direction::Publishes
+                && k.source.starts_with("home/history/")
+        })
+        .map(|k| k.unit.clone())
 }
 
 /// Installs the SIGTERM/SIGINT handlers now and returns a future that waits
