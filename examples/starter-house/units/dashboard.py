@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "homeostat==0.17.0",
+#     "homeostat==0.18.0",
 #     "aiohttp>=3.12.14,<4",
 # ]
 # ///
@@ -64,7 +64,7 @@ from pathlib import Path
 import aiohttp
 import zenoh
 from aiohttp import WSMsgType, web
-from homeostat import ConfigWriteError, connect, house, keys
+from homeostat import ConfigWriteError, Newest, connect, house, keys
 from homeostat.session import QueryError
 
 ENV_HOSTS = "HOMEOSTAT_DASHBOARD_HOSTS"
@@ -599,6 +599,10 @@ class Hub:
         # avoids a task per message per client.
         self.clients: dict[web.WebSocketResponse, asyncio.Queue] = {}
         self._subs = []
+        # The newest stamp per state key. A value the core replays after a
+        # restart is older than a live one for the same key and must not
+        # replace it on the page, whichever arrives first.
+        self.state_stamps = Newest()
         self._about: dict = {}
         self._about_at = -MODEL_TTL_S
 
@@ -614,9 +618,10 @@ class Hub:
             self.session.subscribe("home/config/*/*", self._on_config),
             self.session.subscribe("home/discovery/*", self._on_discovery),
         ]
-        for key, value in self.session.get_json("home/state/**"):
+        for key, value, _age, stamp in self.session.get_json_stamped("home/state/**"):
             with self.lock:
-                self.state.setdefault(key, value)
+                if self.state_stamps.admit(key, stamp, catch_up=True):
+                    self.state[key] = value
         for key, value in self.session.get_json("home/forecast/**"):
             with self.lock:
                 self.forecasts.setdefault(key, value)
@@ -701,6 +706,8 @@ class Hub:
             return
         key, value = decoded
         with self.lock:
+            if not self.state_stamps.admit(key, getattr(sample, "timestamp", None)):
+                return
             self.state[key] = value
         self._emit({"type": "state", "key": key, "value": value})
 

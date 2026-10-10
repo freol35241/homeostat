@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "homeostat==0.17.0",
+#     "homeostat==0.18.0",
 # ]
 # ///
 """Recorder service: writes the bus to a SQLite store and answers history reads.
@@ -17,9 +17,9 @@ envelopes raw in `events`.
 
 Reads: one queryable on the manifest's `history` key (home/history/**).
 It answers home/history/{state|cmd}/{entity}/{aspect},
-home/history/forecast/{entity}/{aspect}/{source}, home/history/events and
-home/history/stats. Each path's parameters and reply shape are documented
-on the method that answers it.
+home/history/forecast/{entity}/{aspect}/{source}, home/history/events,
+home/history/stats and home/history/latest. Each path's parameters and
+reply shape are documented on the method that answers it.
 
 Live parameters (home/config/{unit}/*):
 
@@ -56,6 +56,7 @@ import tomllib
 import zenoh
 from homeostat import forecast, house, keys, session
 from homeostat.params import LiveParams
+from homeostat.stamps import stamp_us
 
 BUFFER_LIMIT = 10_000
 # Closed months move here, beside the store: data/history.db archives into
@@ -87,6 +88,7 @@ MAX_QUERY_LIMIT = 10_000
 INT64_MIN, INT64_MAX = -(2**63), 2**63 - 1
 EVENTS_KEY = zenoh.KeyExpr("home/history/events")
 STATS_KEY = zenoh.KeyExpr("home/history/stats")
+LATEST_KEY = zenoh.KeyExpr("home/history/latest")
 FORECAST_KEY = zenoh.KeyExpr("home/history/forecast/**")
 
 # Store layout, stamped in PRAGMA user_version. init_store migrates older
@@ -1179,20 +1181,28 @@ class Recorder:
     def record(self, sample: zenoh.Sample) -> None:
         """Stamp a received sample and queue it for its table.
 
-        The stamp is the recorder's receive time (µs, UTC), taken before
-        any buffering, so a backend outage does not distort history. State
-        and cmd go to `samples`, forecasts to `forecasts`. Every other key
-        (health, config) lands raw in `events`, the audit table that
-        home/history/events reads.
+        A live sample is stamped with the recorder's receive time (µs,
+        UTC), taken before any buffering, so a backend outage does not
+        distort history. A sample whose publisher set its own stamp, such as
+        state the core replays after a restart, is stamped with that, and a
+        state sample is skipped when the store already holds its series at
+        or after it. A replay then never duplicates the row it came from.
+
+        State and cmd go to `samples`, forecasts to `forecasts`. Every
+        other key (health, config) lands raw in `events`, the audit table
+        that home/history/events reads.
         """
-        ts = now_us()
+        live = self.sess.is_live(sample)
+        ts = now_us() if live else stamp_us(sample.timestamp)
         key = str(sample.key_expr)
         parts = key.split("/")
         if len(parts) > 1 and parts[1] in ("state", "cmd"):
-            if parts[1] == "state":
+            if parts[1] == "state" and live:
                 with self._live_lock:
                     if self._live is not None:
                         self._live.add(key)
+            elif parts[1] == "state" and len(parts) >= 5 and self._holds(parts, ts):
+                return
             self._record_sample(ts, key, parts, sample)
         elif len(parts) > 1 and parts[1] == "forecast":
             self._record_forecast(ts, key, parts, sample)
@@ -1230,18 +1240,30 @@ class Recorder:
                 if kind_value is None:
                     continue  # the live path reports these; a seed stays quiet
                 ts = now_us() - int(age_s * 1_000_000)
-                entity, aspect = parts[3], "/".join(parts[4:])
-                latest = conn.execute(
-                    "SELECT MAX(ts) FROM samples WHERE series_id ="
-                    " (SELECT id FROM series WHERE class = 'state' AND entity = ? AND aspect = ?)",
-                    (entity, aspect),
-                ).fetchone()[0]
-                if latest is not None and latest >= ts - SEED_TOLERANCE_US:
+                if holds_state_at(conn, parts[3], "/".join(parts[4:]), ts):
                     continue
                 kind, stored = kind_value
                 self.writer.enqueue(
-                    "samples", (ts, "state", parts[2], entity, aspect, KINDS.index(kind), stored)
+                    "samples",
+                    (ts, "state", parts[2], parts[3], "/".join(parts[4:]), KINDS.index(kind), stored),
                 )
+        finally:
+            conn.close()
+
+    def _holds(self, parts: list[str], ts: int) -> bool:
+        """Return whether the store holds this state series at or after `ts`.
+
+        False when the store cannot be read: the sample is then recorded,
+        and a backend outage costs at most a duplicate row.
+        """
+        try:
+            conn = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True, timeout=2.0)
+        except sqlite3.Error:
+            return False
+        try:
+            return holds_state_at(conn, parts[3], "/".join(parts[4:]), ts)
+        except sqlite3.Error:
+            return False
         finally:
             conn.close()
 
@@ -1360,6 +1382,8 @@ class Recorder:
             self._answer_events(query)
         elif STATS_KEY.includes(asked):
             self._answer_stats(query)
+        elif LATEST_KEY.includes(asked):
+            self._answer_latest(query)
         elif FORECAST_KEY.includes(asked):
             # Same rule as events: the forecast path takes different
             # parameters and replies with issues instead of rows, so a
@@ -1566,6 +1590,25 @@ class Recorder:
         finally:
             conn.close()
 
+    def _answer_latest(self, query: zenoh.Query) -> None:
+        """Answer home/history/latest with every state series' newest row.
+
+        One message, a JSON array of {key, value, ts}: the state key the
+        row was recorded under, its value, and its stamp in integer µs.
+        The core reads it after a restart to replay what its mirror lost
+        (docs/design.md#replay-after-a-core-restart).
+        """
+        try:
+            conn = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True, timeout=2.0)
+        except sqlite3.Error as err:
+            query.reply_err(json.dumps(f"store unavailable: {err}"))
+            return
+        try:
+            query.reply(str(LATEST_KEY), json.dumps(latest_state(conn)))
+        except sqlite3.Error as err:
+            query.reply_err(json.dumps(f"store unavailable: {err}"))
+        finally:
+            conn.close()
 
     def _answer_stats(self, query: zenoh.Query) -> None:
         """Answer home/history/stats with one message describing the store.
@@ -1589,6 +1632,39 @@ class Recorder:
             query.reply_err(json.dumps(f"store unavailable: {err}"))
         finally:
             conn.close()
+
+
+def holds_state_at(conn: sqlite3.Connection, entity: str, aspect: str, ts: int) -> bool:
+    """Return whether the store holds a state series' row at or after `ts`.
+
+    Within SEED_TOLERANCE_US, because a value's time read back from the
+    mirror or from a stamp can differ from its row by a little.
+    """
+    newest = conn.execute(
+        "SELECT newest_ts FROM series WHERE class = 'state' AND entity = ? AND aspect = ?",
+        (entity, aspect),
+    ).fetchone()
+    return newest is not None and newest[0] is not None and newest[0] >= ts - SEED_TOLERANCE_US
+
+
+def latest_state(conn: sqlite3.Connection) -> list[dict]:
+    """Return every state series' newest row, as the latest reply lists it.
+
+    The newest row of each series stays in the hot file when its month is
+    archived (see Writer._prune), so this reads the hot file only.
+    """
+    rows = conn.execute(
+        "SELECT rooms.name, s.entity, s.aspect, x.kind, x.value, x.ts"
+        " FROM series AS s"
+        " JOIN samples AS x ON x.series_id = s.id AND x.ts = s.newest_ts"
+        " JOIN rooms ON rooms.id = x.room_id"
+        " WHERE s.class = 'state'"
+        " ORDER BY s.entity, s.aspect"
+    ).fetchall()
+    return [
+        {"key": f"home/state/{room}/{entity}/{aspect}", "value": decode(kind, value), "ts": ts}
+        for room, entity, aspect, kind, value, ts in rows
+    ]
 
 
 def rows_per_day(rows: int, oldest: int, newest: int) -> float | None:
