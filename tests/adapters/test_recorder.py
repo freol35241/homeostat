@@ -1,6 +1,11 @@
 """The recorder's read path and calendar, without a store or a bus."""
 
+import datetime
+import sqlite3
 import sys
+import tempfile
+import threading
+import types
 import unittest
 from pathlib import Path
 
@@ -9,11 +14,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "adapters"))
 from recorder import (
     KINDS,
     MAX_QUERY_LIMIT,
+    SEED_TOLERANCE_US,
+    Recorder,
     archive_boundary_us,
     as_issues,
     bucketed,
     changes_only,
     event_payload,
+    holds_state_at,
+    init_store,
+    latest_state,
     month_start_us,
     parse_event_params,
     parse_forecast_params,
@@ -140,3 +150,137 @@ class FoldTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StoreTest(unittest.TestCase):
+    """A real store in a temporary file, filled with SQL, without the writer."""
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.db = Path(self.dir.name) / "store.db"
+        init_store(self.db)
+        self.conn = sqlite3.connect(self.db)
+
+    def tearDown(self):
+        self.conn.close()
+        self.dir.cleanup()
+
+    def row(self, space, room, entity, aspect, ts, value):
+        conn = self.conn
+        conn.execute("INSERT OR IGNORE INTO rooms (name) VALUES (?)", (room,))
+        conn.execute(
+            "INSERT OR IGNORE INTO series (class, entity, aspect) VALUES (?, ?, ?)",
+            (space, entity, aspect),
+        )
+        (series_id,) = conn.execute(
+            "SELECT id FROM series WHERE class = ? AND entity = ? AND aspect = ? AND source = ''",
+            (space, entity, aspect),
+        ).fetchone()
+        (room_id,) = conn.execute("SELECT id FROM rooms WHERE name = ?", (room,)).fetchone()
+        kind, stored = typed(value)
+        conn.execute(
+            "INSERT INTO samples VALUES (?, ?, ?, ?, ?)",
+            (series_id, ts, room_id, KINDS.index(kind), stored),
+        )
+        conn.commit()
+
+
+class LatestStateTest(StoreTest):
+    def test_each_state_series_gives_its_newest_row_typed(self):
+        self.row("state", "livingroom", "lamp", "on", 1 * S, False)
+        self.row("state", "livingroom", "lamp", "on", 2 * S, True)
+        self.row("state", "kitchen", "temp", "temperature", 5 * S, 21.5)
+        self.row("state", "hall", "door", "mode", 3 * S, "away")
+        self.assertEqual(
+            latest_state(self.conn),
+            [
+                {"key": "home/state/hall/door/mode", "value": "away", "ts": 3 * S},
+                {"key": "home/state/livingroom/lamp/on", "value": True, "ts": 2 * S},
+                {"key": "home/state/kitchen/temp/temperature", "value": 21.5, "ts": 5 * S},
+            ],
+        )
+
+    def test_the_room_is_the_newest_rows(self):
+        # An entity that moved is listed under the room it was last
+        # recorded in. The core decides whether that is still where it is.
+        self.row("state", "kitchen", "lamp", "on", 1 * S, True)
+        self.row("state", "hallway", "lamp", "on", 2 * S, False)
+        self.assertEqual(
+            latest_state(self.conn),
+            [{"key": "home/state/hallway/lamp/on", "value": False, "ts": 2 * S}],
+        )
+
+    def test_commands_are_not_listed(self):
+        self.row("cmd", "livingroom", "lamp", "on", 1 * S, True)
+        self.assertEqual(latest_state(self.conn), [])
+
+    def test_an_empty_store_lists_nothing(self):
+        self.assertEqual(latest_state(self.conn), [])
+
+
+class HoldsStateTest(StoreTest):
+    def test_a_row_at_or_after_the_time_is_held_within_the_tolerance(self):
+        self.row("state", "livingroom", "lamp", "on", 10 * S, True)
+        self.assertTrue(holds_state_at(self.conn, "lamp", "on", 10 * S))
+        self.assertTrue(holds_state_at(self.conn, "lamp", "on", 10 * S + SEED_TOLERANCE_US))
+        self.assertFalse(
+            holds_state_at(self.conn, "lamp", "on", 10 * S + SEED_TOLERANCE_US + 1)
+        )
+
+    def test_an_unknown_series_is_not_held(self):
+        self.assertFalse(holds_state_at(self.conn, "lamp", "on", 1))
+
+
+class StampedRecordTest(StoreTest):
+    """`record` for a sample whose publisher set the stamp: the core's replay."""
+
+    KEY = "home/state/livingroom/lamp/on"
+
+    def recorder(self, live):
+        rec = Recorder.__new__(Recorder)
+        rec.db_path = self.db
+        rec.sess = types.SimpleNamespace(is_live=lambda sample: live)
+        rec.queued = []
+        rec.writer = types.SimpleNamespace(enqueue=lambda table, row: rec.queued.append((table, row)))
+        rec._live = set()
+        rec._live_lock = threading.Lock()
+        return rec
+
+    def sample(self, payload: bytes, ts_us: int):
+        when = datetime.datetime(1970, 1, 1, tzinfo=datetime.UTC) + datetime.timedelta(
+            microseconds=ts_us
+        )
+        return types.SimpleNamespace(
+            key_expr=self.KEY,
+            payload=types.SimpleNamespace(to_bytes=lambda: payload),
+            timestamp=types.SimpleNamespace(get_time=lambda: when),
+        )
+
+    def test_the_replay_of_a_recorded_row_is_not_recorded_again(self):
+        self.row("state", "livingroom", "lamp", "on", 10 * S, True)
+        rec = self.recorder(live=False)
+        rec.record(self.sample(b"true", 10 * S))
+        self.assertEqual(rec.queued, [])
+
+    def test_a_stamped_value_newer_than_the_store_is_recorded_at_its_stamp(self):
+        self.row("state", "livingroom", "lamp", "on", 10 * S, True)
+        rec = self.recorder(live=False)
+        rec.record(self.sample(b"false", 20 * S))
+        self.assertEqual(
+            rec.queued,
+            [("samples", (20 * S, "state", "livingroom", "lamp", "on", KINDS.index("bool"), 0))],
+        )
+
+    def test_a_replay_does_not_count_as_live_for_the_seed(self):
+        rec = self.recorder(live=False)
+        rec.record(self.sample(b"true", 20 * S))
+        self.assertEqual(rec._live, set())
+
+    def test_a_live_sample_is_stamped_on_receipt(self):
+        rec = self.recorder(live=True)
+        before = datetime.datetime.now(datetime.UTC).timestamp() * S
+        rec.record(self.sample(b"true", 1 * S))
+        (table, row), = rec.queued
+        self.assertEqual(table, "samples")
+        self.assertGreaterEqual(row[0], before)
+        self.assertEqual(rec._live, {self.KEY})

@@ -589,11 +589,17 @@ class Feed:
         self.source_available = True
         self.dropped = False
 
-    def on_sample(self, key: str, raw: bytes) -> None:
-        """Handle one sample from the source entity's state keys."""
+    def on_sample(self, key: str, raw: bytes, *, live: bool = True) -> None:
+        """Handle one sample from the source entity's state keys.
+
+        A replayed sample (`live` false) is ignored. The core replays the
+        last recorded value after a restart, and that value can be old. The
+        pump is fed readings, not history, so it waits for the source to
+        publish again.
+        """
         session = self.session
-        if key not in (self.value_key, self.available_key):
-            return  # another aspect of the source entity
+        if not live or key not in (self.value_key, self.available_key):
+            return  # a replay, or another aspect of the source entity
         try:
             payload = json.loads(raw)
         except ValueError:
@@ -694,7 +700,9 @@ def main():
                 session.subscribe(
                     keys.state_keyexpr(source.room, source.entity),
                     lambda sample, feed=feed: feed.on_sample(
-                        str(sample.key_expr), sample.payload.to_bytes()
+                        str(sample.key_expr),
+                        sample.payload.to_bytes(),
+                        live=session.is_live(sample),
                     ),
                 )
             )

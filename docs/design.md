@@ -373,14 +373,50 @@ in full at once: parameter writes and apply.
 
 A read query is a GET without payload. A write is a GET with a JSON
 payload. A refused write gets an error reply (`{"error": "<message>"}`
-from the config queryable). Mirror replies carry the value's age
-([The last-value mirror](#the-last-value-mirror)).
+from the config queryable). Mirror replies carry the value's stamp and
+age ([The last-value mirror](#the-last-value-mirror)).
 
 A class whose value is not one scalar carries one JSON document per
 key: health status, a discovery record array, the arbiter's
 `{"schema": 1, "holds": [...]}`, or a [forecast](#forecasts) issue
 `{"schema": 1, "issued": ..., "points": [...]}`. Health events are
 objects with a `kind` ([Health events](#health-events)).
+
+### Timestamps
+
+Every sample on the bus carries a Zenoh timestamp. The core's router
+stamps each sample that arrives without one (`timestamping` in
+`src/bus.rs`), so every subscriber sees the same stamp for a sample.
+A stamp is the core's wall-clock time plus the ID of whoever set it,
+and stamps order totally: by time, then by ID.
+
+A publisher may set its own stamp to say when its value was true. Only
+the core does this, when it
+[replays recorded state after a restart](#replay-after-a-core-restart).
+Its replays carry the ID `1`. The router's stamps carry the router's
+own ID, which is random, so a consumer can tell a live sample from a
+replay.
+
+- Values are ordered by stamp. A value older than the one already held
+  for its key never replaces it. The mirror, the SDK's `subscribe` and
+  the dashboard all apply this, so a replay cannot overwrite a live
+  value whichever arrives first.
+- A live sample's age is zero. Its stamp is not used for age, because
+  a unit on another host would then see every live value aged by the
+  difference between the two clocks.
+- A replay's age is the time since its stamp
+  (`UnitSession.sample_age`).
+- The mirror counts age on its monotonic clock from when a value
+  arrived, plus how old it was then. A clock step after arrival does
+  not change it.
+
+Stamps come from the wall clock. On a host without a hardware clock,
+such as a Raspberry Pi, the clock is wrong after a boot until NTP sets
+it. Stamps taken in that window are wrong too, and when NTP steps the
+clock forward, values from before the step look older than they are.
+Order on one host is still consistent, because Zenoh's hybrid logical
+clock never goes backwards. Replay ages depend on the wall clock
+anyway, since the recorder's rows are wall-clock times.
 
 ## Units and manifests
 
@@ -1287,20 +1323,22 @@ credential, and each store stays private to its owner.
 ### The last-value mirror
 
 The core keeps an in-memory last-value cache in the supervisor process
-(`src/supervisor/mod.rs`, `mirror`). For each mirrored key space it
-declares a subscriber and a queryable on the same expression. A put
-replaces the key's entry and a delete removes it. A GET replies once
-per matching key with the last payload, byte for byte. The mirrored
+(`src/supervisor/mirror.rs`). For each mirrored key space it declares a
+subscriber and a queryable on the same expression. A put replaces the
+key's entry unless the entry has a newer stamp
+([Timestamps](#timestamps)), and a delete removes it. A GET replies
+once per matching key with the last payload, byte for byte, and with
+its stamp. The mirrored
 spaces are `home/state/**`, `home/forecast/**`, `home/clock/*`,
 `home/discovery/*` and `home/hold/*`. `home/config/*/*` and
 `home/health/*` have last-value queryables of their own
 ([Live parameters](#live-parameters), [Supervision](#supervision)).
 All are up before any unit spawns.
 
-- Every reply carries the value's age. The age is read off the
-  mirror's monotonic clock rather than from a wall-clock stamp
-  (`get_json_aged`; see
-  [Bus payload conventions](#bus-payload-conventions)).
+- Every reply carries the value's age in its attachment. The age counts
+  on the mirror's monotonic clock from when the value arrived, plus how
+  old it was then: zero for a live sample, the time since its stamp for
+  a replay (`get_json_aged`; see [Timestamps](#timestamps)).
 - The read pattern everywhere is subscribe, then get, then merge.
   `ctx.subscribe` does this for every binding. It delivers each key's
   catch-up value, with its age, before any live sample for that key
@@ -1309,9 +1347,9 @@ All are up before any unit spawns.
   know a producer's cadence, so whether a value is too old is for the
   consumer to decide ([Availability](#availability)).
 - It is not durable. A core restart empties it, and every upgrade is a
-  core restart. A decision nobody can recompute is restored from
-  history
-  ([Restoring a unit's own last value](#restoring-a-units-own-last-value)).
+  core restart. The core then replays the recorder's last value of
+  every state series
+  ([Replay after a core restart](#replay-after-a-core-restart)).
 
 ### History and the recorder
 
@@ -1360,11 +1398,14 @@ by `PRAGMA user_version` and migrated in place.
 - Each series carries its own tally (rows, oldest, newest). Without it,
   `stats` would scan a store that grows with the problem it diagnoses,
   and `ctx.restore`, which polls `stats`, would time out.
-- The timestamp is the recorder's receive time (µs, UTC), assigned
-  before any buffering, so an outage does not distort history. Zenoh
-  timestamps are optional for client sessions, and one clock is better
-  than mixed provenance. Two samples for one series in the same
-  microsecond collide, and the later one is dropped.
+- A live sample's timestamp is the recorder's receive time (µs, UTC),
+  assigned before any buffering, so an outage does not distort history.
+  A sample whose publisher set its own stamp, which today is only the
+  core's replay, is recorded at that stamp instead. A state sample is
+  then skipped when the series already has a row at or after the stamp,
+  within half a second, so a replay never duplicates the row it came
+  from. Two samples for one series in the same microsecond collide, and
+  the later one is dropped.
 - Repeats are kept. A republished value is still a sighting. Dropping
   repeats would help with a device that republishes, but not with a
   jittering float or an honest 1 Hz sensor. [Retention](#retention) and
@@ -1439,6 +1480,12 @@ slot.
   of each series, of the events table and of each archive. It reads the
   tallies and does not scan. Choosing a retention window means knowing
   which series fills the file, and a host may lack `sqlite3`.
+- Latest: `home/history/latest` gives every state series' newest row as
+  one array of `{key, value, ts}`, with the state key it was recorded
+  under and `ts` in integer µs. The core reads it to
+  [replay after a restart](#replay-after-a-core-restart). It reads the
+  hot file only: each series' newest row stays there when its month is
+  archived.
 
 Every path clamps `limit` to 10,000, keeps the newest rows, and replies
 oldest first. Anything malformed or unexpected gets an error reply, and
@@ -1570,12 +1617,61 @@ aspect ([Sources](#sources)).
   separate sources is the tempting misuse. One issue's percentiles are
   one claim.
 
+### Replay after a core restart
+
+The mirror is in memory, so a core restart empties it, and every
+upgrade is a core restart. Without a replay, a value published on change
+is missing from the bus until its source publishes again. A fused
+indoor temperature, for example, waited for both of its thermometers,
+which report every 10 to 30 minutes. The recorder held every one of
+those values all along.
+
+When the recorder first reaches `running` after the core starts, the
+core reads `home/history/latest` and publishes each entry again on its
+state key (`src/supervisor/replay.rs`).
+
+- The stamp is the row's recorded time with the replay ID
+  ([Timestamps](#timestamps)). A consumer sees the value with the age it
+  really has.
+- Only entities bound in the applied grant table, in the room they are
+  bound in, are replayed. An entity removed or moved since its value was
+  recorded does not come back under its old key.
+- A key the mirror already holds is skipped, since a value published
+  since the core started is newer. If one arrives after the replay
+  instead, its newer stamp wins in the mirror and in every subscriber.
+- It runs once per core start. A failed read is logged and not retried,
+  and the house then starts with an empty mirror, as it would without a
+  recorder.
+- Only state is replayed. A forecast is a document rebuilt from rows,
+  not one row, and its source publishes again on its own schedule.
+
+The core publishes the replay rather than the recorder. Only an
+entity's binding unit publishes its state
+([Capabilities, grants and write policy](#capabilities-grants-and-write-policy)),
+and a recorder declaring a publish on every state key would break that.
+The core is not a unit and already publishes `home/config` and
+`home/meta`.
+
+What each consumer does with a replay:
+
+- `subscribe` delivers it with its age, unless a newer value for the
+  key was already delivered. A fusion sees an old input with its age
+  and decides with `Freshness`, instead of seeing nothing.
+- The dashboard shows it until a newer value arrives.
+- The recorder skips it, since it holds the row the replay came from.
+- `ivt490`'s device feeds ignore it
+  ([Device feeds](#device-feeds)). A pump is fed readings, not history.
+- A one-way sender still publishes `false` at start
+  ([One-way senders](#one-way-senders)). Its live `false` is newer than a
+  replayed `true`, so it wins whichever arrives first.
+
 ### Restoring a unit's own last value
 
-The mirror survives a unit restart but not a core restart. After an
-upgrade a latch would come back at its code default and disagree with
-what the family set. A fusion that needs every input would be blind
-until its slowest source publishes. The right behaviour depends on the
+The mirror survives a unit restart. After a core restart the core
+replays recorded state ([Replay after a core restart](#replay-after-a-core-restart)),
+but a unit may start before that replay. A latch that started on its
+code default would then disagree with what the family set, at least
+until the replay arrived. The right behaviour on start depends on the
 kind of state, and only the unit knows which kind it holds. So
 restoring is a call the unit makes, and the framework does not do it
 automatically:
@@ -1609,10 +1705,9 @@ automatically:
   publish bindings.
 
 Persisting unit state in the SDK or the supervisor was rejected. It
-would be the same framework guess, and it would bring back a one-way
-sender's expired motion event. A file beside the unit was also
-rejected. It would be a second store with its own retention, backup and
-corruption problems.
+would be the same framework guess, made without the value's age. A file
+beside the unit was also rejected. It would be a second store with its
+own retention, backup and corruption problems.
 
 ## Derived values
 
@@ -1691,8 +1786,9 @@ indoor_temperature_actual = { entity = "indoor_temperature", aspect = "temperatu
   dialect knowledge. It refuses to start, visibly, on an input it does
   not know. For an entity with a feed, it drops the corresponding
   command aspect, so the input keeps one master.
-- Staleness is handled by the device. The adapter forwards source
-  samples while the source's `available` is not false. After that, the
+- Staleness is handled by the device. The adapter forwards live source
+  samples while the source's `available` is not false. A replay after
+  a core restart is not forwarded, since its value can be old. After that, the
   device's own validity window expires the term and the device falls
   back on its own control. There is no timeout or refresh in the
   adapter. A source that publishes only on transition and is quieter
@@ -1891,9 +1987,9 @@ cadence), so availability is decided in the adapter.
 
 A TTL on the mirror would not work, because the core cannot know a
 producer's cadence, and a lock can correctly stay silent for months.
-Timestamps would not work either. Age without cadence answers "when",
-not "should I trust this", and a value published on transition is
-supposed to be old.
+The samples' stamps do not settle it either. Age without cadence
+answers "when", not "should I trust this", and a value published on
+transition is supposed to be old.
 
 `available` has a real limitation. It reports device liveness, not
 data freshness. A bridge's passive check on a battery device can take
@@ -1912,10 +2008,11 @@ age anywhere, and no adapter invents one on a consumer's behalf.
   `fresh(max_age_s)` returns what is within the automation's window at
   recompute time. `forget()` drops a source, for example on
   `available = false`.
-- A catch-up value carries the mirror's age, so a six-hour-old reading
-  is not averaged in as new after a restart. A live trigger has age
-  zero, so only a handler reachable from a catch-up must handle an
-  empty set.
+- A catch-up value carries the mirror's age, and a replayed value its
+  age since it was recorded, so a six-hour-old reading is not averaged
+  in as new after a restart. A live trigger has age zero, so only a
+  handler reachable from a catch-up or a replay must handle an empty
+  set.
 - The helper has no timer. To react to silence, subscribe to
   `home/clock/minute` and call the same `fresh()`.
 - The same rule holds for every class. A forecast's consumer checks

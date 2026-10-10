@@ -35,6 +35,7 @@ import zenoh
 
 from . import house, keys
 from .session import QueryError, QueryTimeout, UnitSession
+from .stamps import Newest
 
 
 def context(root: str | Path = ".") -> "Context":
@@ -263,10 +264,16 @@ class Context:
         inputs without waiting for its sources to publish again.
 
         A mirrored value can be any age, and a handler cannot otherwise
-        tell a catch-up from a new publish. A handler declared as
-        `(key, value, age_s)` receives the age in seconds, which is zero for
-        a live sample, to pass to `Freshness.seen`. A two-argument handler
-        gets the catch-up without the age, as though it had just arrived.
+        tell a catch-up from a new publish. The same holds for a value the
+        core replays after a restart, which arrives as a sample stamped with
+        when it was recorded. A handler declared as `(key, value, age_s)`
+        receives the age in seconds, which is zero for a live sample, to
+        pass to `Freshness.seen`. A two-argument handler gets the value
+        without the age, as though it had just arrived.
+
+        Values are ordered by their stamps. One older than the value
+        already delivered for its key is dropped, so a catch-up or a replay
+        never replaces a newer live value.
 
         Parameters
         ----------
@@ -285,7 +292,7 @@ class Context:
             out (QueryTimeout).
         """
         wants_age = len(inspect.signature(handler).parameters) >= 3
-        delivered: set[str] = set()
+        newest = Newest()
         # Orders catch-up against live samples. It is a separate lock from
         # `self._lock` because the handler runs under it and may read
         # `params`.
@@ -304,20 +311,20 @@ class Context:
                 return
             key = str(sample.key_expr)
             with order:
-                delivered.add(key)
-            deliver(key, value, 0.0)
+                if not newest.admit(key, getattr(sample, "timestamp", None)):
+                    return
+            deliver(key, value, self._session.sample_age(sample))
 
         exprs = self._variants(self._subscribes[binding])
         for expr in exprs:
             self._subs.append(self._session.subscribe(expr, callback))
         for expr in exprs:
-            for key, value, age_s in self._session.get_json_aged(expr):
+            for key, value, age_s, stamp in self._session.get_json_stamped(expr):
                 # Under the lock, so a live sample for the same key, which
                 # is newer, is delivered after the catch-up and not before.
                 with order:
-                    if key in delivered:
+                    if not newest.admit(key, stamp, catch_up=True):
                         continue
-                    delivered.add(key)
                     deliver(key, value, age_s)
 
     def _concrete_key(

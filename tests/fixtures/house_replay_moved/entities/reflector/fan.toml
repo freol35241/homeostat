@@ -1,0 +1,14 @@
+schema = 1
+
+[entity]
+id = "fan-1"
+capability = "switch"
+features = []
+room = "bedroom"
+
+[naming]
+en = "bedroom fan"
+
+[write_policy]
+mode = "shared"
+owner = "reflector"

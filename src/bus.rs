@@ -80,6 +80,12 @@ pub fn about(applied_commit: Option<&str>) -> serde_json::Value {
         "house": { "commit": applied_commit },
     })
 }
+/// The recorder's newest row of every state series, as one JSON array of
+/// `{key, value, ts}` (`ts` in integer µs UTC). The core reads it once after
+/// a restart to replay state the mirror lost
+/// (docs/design.md#replay-after-a-core-restart).
+pub const HISTORY_LATEST_KEY: &str = "home/history/latest";
+
 /// The apply control queryable: a GET with payload is an apply request
 /// (the same query-as-command pattern as config writes).
 pub const APPLY_KEY: &str = "home/meta/system/apply";
@@ -92,11 +98,18 @@ pub fn config_key(unit: &str, param: &str) -> String {
 /// Supervisor-side session config: a router listening on `endpoint`, no
 /// scouting. Router mode makes the supervisor the hub that routes between
 /// the units and any observer connected to it.
+///
+/// The router stamps every sample that arrives without a timestamp, so every
+/// sample on the bus carries one and consumers can order values by it
+/// (docs/design.md#timestamps). A publisher that sets its own stamp keeps it.
 pub fn listen_config(endpoint: &str) -> Config {
     let mut config = base_config("router");
     config
         .insert_json5("listen/endpoints", &format!("[\"{endpoint}\"]"))
         .expect("valid listen endpoint config");
+    config
+        .insert_json5("timestamping/enabled", "{ router: true }")
+        .expect("valid timestamping config");
     config
 }
 
