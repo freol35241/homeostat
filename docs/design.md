@@ -978,6 +978,13 @@ A unit is unchanged when two hashes match the world's:
   content, so a rename is a change. Imports are not followed. A module
   the script imports is an input only if the command names it.
 
+This is why each unit in `adapters/` is a single script, the recorder's
+2,000 lines included. Splitting one into modules would let an edit to a
+module go unnoticed by `plan`, and the unit would keep running the old
+code after `apply`. Allowing it would take a manifest field that names
+a unit's other files, and the size of one script has not been reason
+enough to add one.
+
 `[unit] watches = "house"` makes every manifest, entity file,
 `zones.toml` and `dashboard.toml` an input of the unit. The dashboard
 needs this because it is a view over the whole house. An entity bound
@@ -2512,9 +2519,9 @@ on the same terms.
 - The public repo (`homeostat`, this repo) holds the Rust core, the
   manifest schema ([docs/manifest.md](manifest.md), versioned by each
   file's `schema` field), the Python SDK, the generic units in
-  `adapters/`, and two example houses. `examples/house` is documented
-  and is the plan test corpus. `examples/starter-house` is the template
-  a new house starts from.
+  `adapters/`, and `examples/starter-house`, the template a new house
+  starts from. The plan test corpus, a larger house of manifests
+  without code, is `tests/fixtures/house_reference`.
 - The private house repo holds every manifest, entity file and zone,
   the automations, `dashboard.toml`, pending plans, and house-specific
   agent instructions. It pins a release (image tag and SDK version).

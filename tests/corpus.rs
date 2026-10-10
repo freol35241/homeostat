@@ -3,27 +3,32 @@ use std::path::{Path, PathBuf};
 
 use homeostat::error::render_sorted;
 
+/// The reference house: every unit kind and write policy, as manifests
+/// without code. Its plan is pinned in `corpus/expected_plan.txt`.
+const REFERENCE: &str = "tests/fixtures/house_reference";
+
 fn manifest_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
 #[test]
 fn valid_house_produces_no_errors_and_golden_plan() {
-    let result = homeostat::check(&manifest_dir().join("examples/house"));
+    let root = manifest_dir().join(REFERENCE);
+    let result = homeostat::check(&root);
     assert!(
         result.errors.is_empty(),
-        "examples/house should be valid, got:\n{}",
+        "{REFERENCE} should be valid, got:\n{}",
         render_sorted(&result.errors).join("\n")
     );
     assert!(
         result.warnings.is_empty(),
-        "examples/house should have no warnings, got:\n{}",
+        "{REFERENCE} should have no warnings, got:\n{}",
         result.warnings.join("\n")
     );
 
     let world = homeostat::plan::World::empty();
-    let diff = homeostat::plan::diff(&result, &manifest_dir().join("examples/house"), &world);
-    let plan = homeostat::plan::render(&result, &diff, "examples/house", &world);
+    let diff = homeostat::plan::diff(&result, &root, &world);
+    let plan = homeostat::plan::render(&result, &diff, REFERENCE, &world);
     let expected = include_str!("corpus/expected_plan.txt");
     assert_eq!(
         plan, expected,

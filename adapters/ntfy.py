@@ -18,7 +18,7 @@ UnifiedPush, the transport a homeostat app would use.
 The server is a compose sidecar beside the MQTT broker, not a unit,
 because the phones connect to it. ntfy 2.12 and later provisions users,
 access rules and tokens from its config on every start
-(examples/house/ntfy/server.yml). The publisher may only write; each
+(tests/fixtures/house_reference/ntfy/server.yml). The publisher may only write; each
 person reads only their own topic and the group's. That access list
 repeats the entity files by hand: rendering it from them would make ntfy
 a unit, and the sidecar must not restart when a unit does. A phone
