@@ -12,7 +12,10 @@ use serde_json::{json, Value};
 use zenoh::handlers::FifoChannelHandler;
 use zenoh::pubsub::Subscriber;
 
-use common::{assert_unit_contract, await_health, config_write, health_watch, Supervisor};
+use common::{
+    assert_cli_ok, assert_unit_contract, await_health, cli, config_write, health_watch,
+    running_pid, stdout, temp_house, Supervisor,
+};
 
 const FIXTURE: &str = "tests/fixtures/house_arbiter";
 const CMD_KEY: &str = "home/cmd/hallway/front_door/locked";
@@ -466,6 +469,119 @@ async fn malformed_envelope_drops_with_health_event() {
     assert_eq!(forwarded, ok_wish);
 
     sup.shutdown();
+}
+
+/// A wish for an entity no unit binds drops with an "unbound" health
+/// event. No adapter consumes it either, so without the event it would
+/// vanish without a trace.
+#[tokio::test(flavor = "multi_thread")]
+async fn wish_for_an_unbound_entity_drops_with_health_event() {
+    let (mut sup, observer) = setup().await;
+    let event_sub = observer
+        .declare_subscriber(EVENT_KEY)
+        .await
+        .expect("event subscriber");
+
+    observer
+        .put(
+            "home/cmd/hallway/back_door/locked",
+            envelope(json!(true), "automation", "scheduler").to_string(),
+        )
+        .await
+        .expect("cmd put");
+    let event = next_json(&event_sub, Duration::from_secs(10))
+        .await
+        .expect("unbound event");
+    assert_eq!(event["kind"], json!("drop"));
+    assert_eq!(event["reason"], json!("unbound"));
+    assert_eq!(event["cmd_id"], json!("c0ffee01"));
+
+    sup.shutdown();
+}
+
+/// An apply that makes an entity arbitrated restarts its adapter but not
+/// the arbiter, whose files are unchanged. The arbiter follows the grant
+/// table the core republishes, so the next wish forwards without a
+/// restart.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_entity_made_arbitrated_by_apply_forwards_without_a_restart() {
+    let house = temp_house(FIXTURE, "arbiter-flip");
+    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("adapters/arbiter.py");
+    edit(
+        &house,
+        "units/arbiter.toml",
+        "uv run ../../../adapters/arbiter.py",
+        &format!("uv run {}", script.display()),
+    );
+    edit(
+        &house,
+        "entities/reflector/front_door.toml",
+        "mode = \"arbitrated\"",
+        "mode = \"shared\"",
+    );
+    let mut sup = Supervisor::spawn_at(&house, &[]);
+    let observer = sup.observer().await;
+    let mut watch = health_watch(&observer, "arbiter").await;
+    await_health(&mut watch, Duration::from_mins(1), |h| {
+        h.status == HealthStatus::Running
+    })
+    .await;
+    let arbiter_pid = running_pid(&observer, "arbiter").await;
+    let arbiter_sub = observer
+        .declare_subscriber(ARBITER_KEY)
+        .await
+        .expect("arbiter subscriber");
+
+    // Shared: the adapter consumes the wish, and the arbiter stays out.
+    put_cmd(&observer, &envelope(json!(true), "automation", "scheduler")).await;
+    expect_silence(
+        &arbiter_sub,
+        Duration::from_millis(1500),
+        "forward of a shared entity's wish",
+    )
+    .await;
+
+    edit(
+        &house,
+        "entities/reflector/front_door.toml",
+        "mode = \"shared\"",
+        "mode = \"arbitrated\"",
+    );
+    let house_arg = house.to_str().expect("utf-8 path");
+    let apply = cli(&["apply", house_arg, "--bus", &sup.endpoint]);
+    assert_cli_ok(&apply);
+    let text = stdout(&apply);
+    assert!(text.contains("restart reflector: ok"), "{text}");
+    assert!(!text.contains("restart arbiter"), "{text}");
+
+    // The core puts the table before apply returns, but the arbiter's
+    // subscription delivers it asynchronously, so wish until one forwards.
+    let wish = envelope(json!(true), "automation", "scheduler");
+    let mut forwarded = None;
+    for _ in 0..20 {
+        put_cmd(&observer, &wish).await;
+        forwarded = next_json(&arbiter_sub, Duration::from_millis(500)).await;
+        if forwarded.is_some() {
+            break;
+        }
+    }
+    assert_eq!(forwarded, Some(wish), "the wish should forward after apply");
+    assert_eq!(
+        running_pid(&observer, "arbiter").await,
+        arbiter_pid,
+        "the arbiter was not restarted"
+    );
+
+    sup.shutdown();
+    let _ = std::fs::remove_dir_all(&house);
+}
+
+/// Replaces `from` with `to` in a house file; the pattern must be present.
+fn edit(house: &std::path::Path, rel: &str, from: &str, to: &str) {
+    let path = house.join(rel);
+    let text = std::fs::read_to_string(&path).expect("read house file");
+    assert!(text.contains(from), "{rel} does not contain {from:?}");
+    std::fs::write(&path, text.replace(from, to)).expect("write house file");
 }
 
 /// (e) The arbiter honors the unit contract: liveliness token when

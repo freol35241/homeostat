@@ -1,4 +1,7 @@
-"""The arbiter's rule, without a bus: who holds an aspect, and for how long."""
+"""The arbiter's rule, without a bus: who holds an aspect, and for how long.
+
+Also which entities it arbitrates, read from the grant table.
+"""
 
 import sys
 import unittest
@@ -6,7 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "adapters"))
 
-from arbiter import Leases
+from arbiter import Leases, bindings
 
 LAMP = ("hall", "lamp", "on")
 HOLD_S = 60.0
@@ -93,6 +96,21 @@ class LeasesTest(unittest.TestCase):
         self.wish("manual")
         self.clock.now += HOLD_S
         self.assertEqual(self.leases.document(wall=0.0)["holds"], [])
+
+
+def entity(room, name, write):
+    return {"name": name, "room": room, "capability": "lock", "write": write, "owner": "z"}
+
+
+class BindingsTest(unittest.TestCase):
+    def test_arbitrated_and_bound_come_from_every_row(self):
+        grants = [
+            {"unit": "z", "publish": "state", "entities": [entity("hall", "door", "arbitrated")]},
+            {"unit": "z", "publish": "state", "entities": [entity("hall", "lamp", "shared")]},
+        ]
+        arbitrated, bound = bindings(grants)
+        self.assertEqual(arbitrated, {("hall", "door")})
+        self.assertEqual(bound, {("hall", "door"), ("hall", "lamp")})
 
 
 if __name__ == "__main__":
