@@ -17,6 +17,7 @@ from typing import Any
 import zenoh
 
 from . import forecast, keys
+from .stamps import stamp_us
 
 # The classes that carry commands: a request (home/cmd) and the arbiter's
 # forward of it (home/arbiter). put_json sends both as commands.
@@ -89,6 +90,9 @@ class UnitSession:
         # told it. Each key's publisher is therefore declared once and
         # reused.
         self._publishers: dict[str, Any] = {}
+        # The router's ID, as the stamps it sets carry it. Read on first use,
+        # once the session has reached the router.
+        self._router_ids: set[str] = set()
 
     def ready(self) -> None:
         """Declare the liveliness token at home/health/{unit}/alive."""
@@ -298,6 +302,56 @@ class UnitSession:
         """
         return self._session.declare_subscriber(keyexpr, callback)
 
+    def is_live(self, sample: zenoh.Sample) -> bool:
+        """Return whether a sample is a live publish rather than a replay.
+
+        The core's router stamps a sample on arrival unless its publisher
+        set a stamp. A sample with the router's stamp, or with none, is
+        live: its value is true now. A sample whose publisher set the stamp
+        says when its value was true, which can be long ago. The core does
+        that when it replays recorded state after a restart
+        (docs/design.md#replay-after-a-core-restart).
+
+        Parameters
+        ----------
+        sample : zenoh.Sample
+            A received sample.
+
+        Returns
+        -------
+        bool
+            True for a live sample.
+        """
+        stamp = getattr(sample, "timestamp", None)
+        if stamp is None:
+            return True
+        if not self._router_ids:
+            self._router_ids = {str(zid) for zid in self._session.info.routers_zid()}
+        # With no router known, every sample is taken as live, as before
+        # the core stamped samples.
+        return not self._router_ids or str(stamp.get_id()) in self._router_ids
+
+    def sample_age(self, sample: zenoh.Sample) -> float:
+        """Return how old a sample's value is, in seconds.
+
+        Zero for a live sample. For a replay, the time since the stamp its
+        publisher set, and never negative.
+
+        Parameters
+        ----------
+        sample : zenoh.Sample
+            A received sample.
+
+        Returns
+        -------
+        float
+            The value's age in seconds.
+        """
+        stamped = None if self.is_live(sample) else stamp_us(sample.timestamp)
+        if stamped is None:
+            return 0.0
+        return max(0.0, (time.time_ns() // 1000 - stamped) / 1e6)
+
     def declare_queryable(self, keyexpr: str, callback: Callable[[zenoh.Query], None]):
         """Declare a queryable that calls `callback` for each get on `keyexpr`.
 
@@ -351,11 +405,7 @@ class UnitSession:
     ) -> list[tuple[str, Any, float]]:
         """Query the bus, returning (key, decoded JSON, age in seconds) per ok reply.
 
-        The age is read from the reply's attachment, which the core's
-        last-value mirrors write. A reply without one has age zero. Non-JSON
-        payloads are ignored, as a subscriber ignores them. `timeout_s`
-        bounds the wait for replies, with zenoh's default of 10 s when None.
-        Running out raises QueryTimeout.
+        As `get_json_stamped`, without the stamps.
 
         Parameters
         ----------
@@ -368,6 +418,42 @@ class UnitSession:
         -------
         list of tuple of (str, Any, float)
             ``(key, value, age_s)`` per ok reply with a JSON payload.
+
+        Raises
+        ------
+        QueryTimeout
+            If the wait for replies runs out.
+        QueryError
+            If a queryable answers with an error reply.
+        """
+        return [
+            (key, value, age_s)
+            for key, value, age_s, _ in self.get_json_stamped(selector, timeout_s=timeout_s)
+        ]
+
+    def get_json_stamped(
+        self, selector: str, *, timeout_s: float | None = None
+    ) -> list[tuple[str, Any, float, Any]]:
+        """Query the bus, returning (key, decoded JSON, age, stamp) per ok reply.
+
+        The age is read from the reply's attachment, which the core's
+        last-value mirrors write. A reply without one has age zero. The
+        stamp is the reply's timestamp: the mirrored value's own, or None.
+        Non-JSON payloads are ignored, as a subscriber ignores them.
+        `timeout_s` bounds the wait for replies, with zenoh's default of
+        10 s when None. Running out raises QueryTimeout.
+
+        Parameters
+        ----------
+        selector : str
+            The key expression to query, optionally with parameters.
+        timeout_s : float or None, optional
+            Bound on the wait for replies, in seconds.
+
+        Returns
+        -------
+        list of tuple of (str, Any, float, zenoh.Timestamp or None)
+            ``(key, value, age_s, stamp)`` per ok reply with a JSON payload.
 
         Raises
         ------
@@ -402,7 +488,8 @@ class UnitSession:
                 continue
             attachment = sample.attachment
             age_s = float(attachment.to_bytes()) if attachment is not None else 0.0
-            values.append((str(sample.key_expr), value, age_s))
+            stamp = getattr(sample, "timestamp", None)
+            values.append((str(sample.key_expr), value, age_s, stamp))
         return values
 
     def write_config(self, unit: str, param: str, value: Any) -> Any:

@@ -175,6 +175,20 @@ class FeedTest(unittest.TestCase):
         self.sample("home/state/living/thermo/humidity", 50)
         self.assertEqual((self.sent, self.session.events), ([], []))
 
+    def test_a_replayed_reading_is_not_forwarded(self):
+        # The core replays the last recorded value after a restart. It can
+        # be old, and the pump is fed readings, not history.
+        self.feed.on_sample(self.VALUE, b"21", live=False)
+        self.assertEqual((self.sent, self.session.events), ([], []))
+        self.sample(self.VALUE, 22)
+        self.assertEqual(self.sent, [("ivt/controller/set/indoor_temperature_actual", "22.0", False)])
+
+    def test_a_replayed_availability_does_not_clear_the_slot(self):
+        self.feed.on_sample(self.AVAILABLE, b"false", live=False)
+        self.assertEqual((self.sent, self.session.events), ([], []))
+        self.sample(self.VALUE, 21)
+        self.assertEqual(len(self.sent), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
