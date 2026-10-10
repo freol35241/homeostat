@@ -1,0 +1,14 @@
+schema = 1
+
+[unit]
+name = "probe"
+kind = "automation"
+description = "Reports the lamp's value and age as subscribe delivered them"
+
+[runtime]
+command = "uv run units/probe.py"
+restart = "on-failure"
+shutdown_grace_s = 5
+
+[bus.subscribes]
+lamp = "home/state/livingroom/lamp/on"

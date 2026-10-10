@@ -1,0 +1,14 @@
+schema = 1
+
+[entity]
+id = "lamp-1"
+capability = "light"
+features = []
+room = "livingroom"
+
+[naming]
+en = "living room lamp"
+
+[write_policy]
+mode = "shared"
+owner = "reflector"
