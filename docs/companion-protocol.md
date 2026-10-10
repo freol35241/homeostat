@@ -7,7 +7,7 @@ and the adapter are changed together, in this repo, and the app
 implements against it. A change the app needs is an issue here, not a
 decision on the phone side.
 
-[docs/design.md](design.md), "The companion app", holds the reasoning —
+[docs/design.md](design.md#the-companion-app) holds the reasoning —
 why the broker and not ntfy, why the phone never touches the bus, why
 presence rather than a map. [docs/adapters.md](adapters.md) holds the
 rules the adapter itself obeys.
@@ -187,9 +187,9 @@ Three things, all text:
 
    - `dashboard` is the dashboard unit's base URL, exactly as a family
      browser would bookmark it, and is what the app's WebView loads
-     (design.md, "The companion app": same page, same unit, no new bus
-     surface). Plain `http://` over the tunnel, per the Dashboard
-     settlement — no TLS and no login, and the unit's `Host` validation
+     ([design.md](design.md#the-companion-app): same page, same unit, no
+     new bus surface). Plain `http://` over the tunnel
+     ([design.md](design.md#local-only-access)) — no TLS and no login, and the unit's `Host` validation
      means this must be the address it expects. A house that has not
      deployed the dashboard, or does not want it on a particular phone,
      omits the key and the app shows no dashboard.

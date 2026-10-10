@@ -13,12 +13,12 @@
 The wire contract this implements — every topic, every payload, and what
 the app owes about sessions, retention and wills — is
 docs/companion-protocol.md, which is normative and is what homeostat-app
-implements against; docs/design.md, "The companion app", holds the
+implements against; docs/design.md#the-companion-app holds the
 reasoning.
 
 The membrane that makes a family phone a described part of the house. The
 phone never touches the bus — it is a device, and devices speak a dialect
-to an adapter (docs/design.md, Bus). Unlike every other dialect this one
+to an adapter (docs/design.md#bus). Unlike every other dialect this one
 is ours, so the app already speaks homeostat vocabulary and there is
 nothing to rename; what this adapter provides is the ownership, the
 grants and the plan visibility that a phone publishing for itself would
@@ -45,7 +45,7 @@ Published state:
 
 - `presence` (bool) on the person, from the platform's geofence
   transitions. The app registers ONE geofence, `home`; continuous position
-  is opt-in per phone and off by default (#51), so a phone that never
+  is opt-in per phone and off by default, so a phone that never
   publishes `position` is the normal case, not a degraded one.
 - `lat`, `lon` and — when the fix carries them — `accuracy`, `battery`,
   `fixed_at`: scalar aspects, never one composite fix, so the recorder
@@ -54,10 +54,9 @@ Published state:
   publish (QoS 1 PUBACK), which is what ntfy's `delivered` also means: the
   delivery path took it, not that anyone saw it.
 - `acknowledged` (epoch seconds) when the person dismissed the
-  notification in the app. This is the far-end receipt the notifications
-  settlement said only an app could give; whether an unacknowledged
-  `alert` escalates is the automation's policy over this aspect, never
-  this adapter's.
+  notification in the app. This is the far-end receipt only an app can
+  give; whether an unacknowledged `alert` escalates is the automation's
+  policy over this aspect, never this adapter's.
 - `available` (bool) on both of a phone's entities, from the app's
   retained birth message and its last will. A phone out of coverage is
   unreachable, and an automation that escalates should be able to see it.
@@ -115,7 +114,7 @@ NOTIFIER_DESCRIPTOR = {
 
 
 def _number(value):
-    """The value if it is a JSON number, else None — bools are not."""
+    """Return the value if it is a JSON number, else None; bools are not."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
     return value
