@@ -468,7 +468,7 @@ class UnitOverlay(PageTest):
         await self.page.wait_for_timeout(400)
         rows = self.page.locator("#overlay-panel .timeline-row")
         text = "\n".join(await rows.all_inner_texts())
-        self.assertEqual(await rows.count(), 5, text)
+        self.assertEqual(await rows.count(), 3, text)
         self.assertIn("(applied)", text, "the lamp's state answered the command")
         self.assertIn("off_time set to 22:30", text)
         self.assertIn("paused", text)

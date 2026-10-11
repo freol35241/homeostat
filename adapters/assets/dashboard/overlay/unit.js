@@ -99,10 +99,7 @@ function renderTimelineRow(entry) {
   var tStr = isNaN(t.getTime()) ? '' : t.toLocaleTimeString();
   var tFull = isNaN(t.getTime()) ? '' : t.toLocaleString();
   var tag, text;
-  if (entry.type === 'input') {
-    tag = 'read';
-    text = fieldLabel(entry.entity, entry.aspect) + ' → ' + show(entry.value);
-  } else if (entry.type === 'param') {
+  if (entry.type === 'param') {
     tag = 'set';
     text = entry.param + ' set to ' + show(entry.value);
   } else if (entry.type === 'command') {

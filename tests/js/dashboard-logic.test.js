@@ -1669,7 +1669,6 @@ function timelineRaw(overrides) {
     value: { value, priority: 'automation', actor: 'evening_lights', id },
   });
   return Object.assign({
-    inputs: [{ entity: 'presence', aspect: 'presence', points: [{ ts: 100, value: true }, { ts: 200, value: false }] }],
     params: [{ ts: 150, key: 'home/config/evening_lights/off_time', value: '22:30' }],
     commands: [cmd(300, false, 'c1')],
     answers: [],
@@ -1679,10 +1678,10 @@ function timelineRaw(overrides) {
 }
 const timelineModel = { entities: [{ name: 'lamp', room: 'livingroom', capability: 'light' }] };
 
-test('the timeline lists reads, writes, commands and events newest first', () => {
+test('the timeline lists writes, commands and events newest first', () => {
   const t = logic.unitTimeline(timelineRaw(), timelineModel, {}, 'evening_lights');
   assert.deepEqual(t.map((e) => [e.type, e.ts]),
-    [['event', 400], ['command', 300], ['input', 200], ['param', 150], ['input', 100]]);
+    [['event', 400], ['command', 300], ['param', 150]]);
   assert.equal(t.find((e) => e.type === 'param').param, 'off_time');
 });
 

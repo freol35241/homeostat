@@ -1333,6 +1333,10 @@ async fn dashboard_gathers_an_automations_timeline() {
         "the oldest answer row kept: {reply}"
     );
     assert_eq!(reply["truncated"], true, "{reply}");
+    assert!(
+        reply.get("inputs").is_none(),
+        "the aspects it reads are not gathered: {reply}"
+    );
 
     let (status, reply) = http_request(&addr, "GET", "/api/unit-timeline?unit=nobody", &[], None);
     assert_eq!(status, 404, "{reply}");

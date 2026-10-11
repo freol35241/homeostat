@@ -2473,7 +2473,6 @@ An automation's overlay shows a timeline of the last day, newest first.
 It answers "does it do what I think" from what is already recorded, and
 asks nothing of the automation.
 
-- Read: each change to an aspect it reads, its From fields.
 - Set: each write to one of its parameters.
 - Sent: each command it sent, with what came of it. An event naming the
   command's `cmd_id` says refused (the arbiter, with the holder) or
@@ -2493,10 +2492,19 @@ asks nothing of the automation.
   what it would have done.
 - Event: its other health events, `paused` and `resumed` among them.
 
+The aspects it reads are not listed. A sensor that reports every few
+seconds would bury the rest. Each one is a tap away in the card's From
+rows, where its own overlay charts it. A question about a pattern, such
+as why a light flaps every evening, goes to an agent. It reads the same
+records through the [agent surface](#agent-surface-mcp) and plots the
+few series the question needs. The overlay does not chart every input,
+command and decision together, because a fixed chart cannot know which
+of them the question is about.
+
 `/api/unit-timeline` gathers the rows from the recorder and
 `unitTimeline` in `dashboard-logic.js` puts them in order. The commands
 and events of the whole house are read newest first up to a cap, and so
-are the changes of each aspect. A busy day can push the oldest rows out,
+are the changes of each aspect it commanded. A busy day can push the oldest rows out,
 and the overlay says when it did. An answer to an older command may be
 among the rows cut, so a command older than what a capped query kept
 reads "outcome unknown". The overlay shows the newest few hundred rows.
