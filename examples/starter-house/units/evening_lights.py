@@ -12,8 +12,9 @@ window (off_time until 05:00, which may span midnight) with nobody
 present, every light that is on gets turned off. Lights are known from
 their state keys; commands go back through the manifest's publish
 expression. off_time is a live parameter: an edit applies at the next
-evaluation, with no restart. Each evaluation reports its outcome with
-ctx.decision, which the dashboard shows on the automation's timeline.
+evaluation, with no restart. Once the clock is known, each evaluation
+reports its outcome with ctx.decision, and the automation's timeline in
+the dashboard shows each change.
 """
 
 import datetime
