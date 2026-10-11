@@ -1661,3 +1661,114 @@ test('an event that repeats later is not mistaken for the recorded one', () => {
   assert.equal(merged.length, 2);
   assert.deepEqual(logic.mergeUnitEvents(null, null), []);
 });
+
+// An automation's timeline (docs/design.md#unit-timeline).
+function timelineRaw(overrides) {
+  const cmd = (ts, value, id, aspect) => ({
+    ts, key: 'home/cmd/livingroom/lamp/' + (aspect || 'on'),
+    value: { value, priority: 'automation', actor: 'evening_lights', id },
+  });
+  return Object.assign({
+    inputs: [{ entity: 'presence', aspect: 'presence', points: [{ ts: 100, value: true }, { ts: 200, value: false }] }],
+    params: [{ ts: 150, key: 'home/config/evening_lights/off_time', value: '22:30' }],
+    commands: [cmd(300, false, 'c1')],
+    answers: [],
+    readbacks: [{ entity: 'lamp', aspect: 'on', points: [{ ts: 50, value: true }, { ts: 302, value: false }] }],
+    events: [{ ts: 400, key: 'home/health/evening_lights/event', value: { kind: 'paused' } }],
+  }, overrides || {});
+}
+const timelineModel = { entities: [{ name: 'lamp', room: 'livingroom', capability: 'light' }] };
+
+test('the timeline lists reads, writes, commands and events newest first', () => {
+  const t = logic.unitTimeline(timelineRaw(), timelineModel, {}, 'evening_lights');
+  assert.deepEqual(t.map((e) => [e.type, e.ts]),
+    [['event', 400], ['command', 300], ['input', 200], ['param', 150], ['input', 100]]);
+  assert.equal(t.find((e) => e.type === 'param').param, 'off_time');
+});
+
+test('a command the state reached within its wait is applied, one it did not is unanswered', () => {
+  const applied = logic.unitTimeline(timelineRaw(), timelineModel, {}, 'evening_lights');
+  assert.equal(applied.find((e) => e.type === 'command').outcome, 'applied');
+  const late = logic.unitTimeline(timelineRaw({
+    readbacks: [{ entity: 'lamp', aspect: 'on', points: [{ ts: 50, value: true }, { ts: 900, value: false }] }],
+  }), timelineModel, {}, 'evening_lights');
+  assert.equal(late.find((e) => e.type === 'command').outcome, 'no answer', 'after the light wait of 8 s');
+});
+
+test('a command to a value the aspect already had says so, and is not called applied', () => {
+  const t = logic.unitTimeline(timelineRaw({
+    readbacks: [{ entity: 'lamp', aspect: 'on', points: [{ ts: 50, value: false }] }],
+  }), timelineModel, {}, 'evening_lights');
+  assert.equal(t.find((e) => e.type === 'command').outcome, 'already');
+});
+
+test('a change after the command lands does not undo its outcome', () => {
+  const cmd = (ts, value, id) => ({
+    ts, key: 'home/cmd/livingroom/lamp/on',
+    value: { value, priority: 'automation', actor: 'evening_lights', id },
+  });
+  const quick = logic.unitTimeline(timelineRaw({
+    commands: [cmd(300, false, 'c1'), cmd(302, true, 'c2')],
+    readbacks: [{ entity: 'lamp', aspect: 'on', points: [{ ts: 50, value: true }, { ts: 301, value: false }, { ts: 303, value: true }] }],
+  }), timelineModel, {}, 'evening_lights');
+  assert.deepEqual(quick.filter((e) => e.type === 'command').map((e) => e.outcome), ['applied', 'applied']);
+  const taken = logic.unitTimeline(timelineRaw({
+    answers: [{ ts: 305, key: 'home/health/arbiter/event', value: { kind: 'preempt', entity: 'lamp', aspect: 'on',
+      from_actor: 'evening_lights', to_actor: 'dashboard', to_priority: 'manual' } }],
+    readbacks: [{ entity: 'lamp', aspect: 'on', points: [{ ts: 50, value: true }, { ts: 301, value: false }, { ts: 306, value: true }] }],
+  }), timelineModel, {}, 'evening_lights');
+  assert.equal(taken.find((e) => e.type === 'command').outcome, 'applied', 'it held until taken over');
+});
+
+test('a brightness one step off matches, as it does for the page', () => {
+  const t = logic.unitTimeline(timelineRaw({
+    commands: [{ ts: 300, key: 'home/cmd/livingroom/lamp/brightness',
+      value: { value: 128, priority: 'automation', actor: 'evening_lights', id: 'c1' } }],
+    readbacks: [{ entity: 'lamp', aspect: 'brightness', points: [{ ts: 50, value: 10 }, { ts: 301, value: 127 }] }],
+  }), timelineModel, {}, 'evening_lights');
+  assert.equal(t.find((e) => e.type === 'command').outcome, 'applied');
+});
+
+test('a command older than what a capped query kept is not judged', () => {
+  const answersCut = logic.unitTimeline(timelineRaw({ answers_from: 310 }), timelineModel, {}, 'evening_lights');
+  assert.equal(answersCut.find((e) => e.type === 'command').outcome, 'unknown');
+  const stateCut = logic.unitTimeline(timelineRaw({
+    readbacks: [{ entity: 'lamp', aspect: 'on', from: 310, points: [{ ts: 310, value: false }] }],
+  }), timelineModel, {}, 'evening_lights');
+  assert.equal(stateCut.find((e) => e.type === 'command').outcome, 'unknown');
+  const answered = logic.unitTimeline(timelineRaw({
+    answers_from: 310,
+    answers: [{ ts: 301, key: 'home/health/arbiter/event', value: { kind: 'refuse', cmd_id: 'c1' } }],
+  }), timelineModel, {}, 'evening_lights');
+  assert.equal(answered.find((e) => e.type === 'command').outcome, 'refused', 'a kept answer still counts');
+});
+
+test('events naming the command say refused or dropped, and by whom', () => {
+  const refused = logic.unitTimeline(timelineRaw({
+    answers: [{ ts: 301, key: 'home/health/arbiter/event',
+      value: { kind: 'refuse', cmd_id: 'c1', holder_actor: 'dashboard', holder_priority: 'manual' } }],
+  }), timelineModel, {}, 'evening_lights');
+  const r = refused.find((e) => e.type === 'command');
+  assert.equal(r.outcome, 'refused');
+  assert.deepEqual([r.by, r.priority], ['dashboard', 'manual']);
+  const dropped = logic.unitTimeline(timelineRaw({
+    answers: [{ ts: 301, key: 'home/health/zigbee/event',
+      value: { kind: 'drop', cmd_id: 'c1', reason: 'invalid-command' } }],
+  }), timelineModel, {}, 'evening_lights');
+  const d = dropped.find((e) => e.type === 'command');
+  assert.deepEqual([d.outcome, d.by, d.reason], ['dropped', 'zigbee', 'invalid-command']);
+});
+
+test('a later command that displaced its hold is listed as taken over', () => {
+  const t = logic.unitTimeline(timelineRaw({
+    answers: [
+      { ts: 500, key: 'home/health/arbiter/event', value: { kind: 'preempt', entity: 'lamp', aspect: 'on',
+        from_actor: 'evening_lights', to_actor: 'dashboard', to_priority: 'manual' } },
+      { ts: 600, key: 'home/health/arbiter/event', value: { kind: 'preempt', entity: 'lamp', aspect: 'on',
+        from_actor: 'someone_else', to_actor: 'dashboard', to_priority: 'manual' } },
+    ],
+  }), timelineModel, {}, 'evening_lights');
+  const over = t.filter((e) => e.type === 'taken-over');
+  assert.equal(over.length, 1, 'only holds this unit had');
+  assert.deepEqual([over[0].by, over[0].priority], ['dashboard', 'manual']);
+});

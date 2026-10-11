@@ -87,6 +87,7 @@ class FakeHouse:
         app.router.add_get("/api/source-events", self.api_source_events)
         app.router.add_get("/api/logs", self.api_logs)
         app.router.add_get("/api/unit-events", self.api_unit_events)
+        app.router.add_get("/api/unit-timeline", self.api_unit_timeline)
         app.router.add_post("/api/cmd", self.api_cmd)
         app.router.add_post("/api/param", self.api_param)
         app.router.add_post("/api/lights/off", self.api_lights_off)
@@ -235,6 +236,45 @@ class FakeHouse:
                         "value": {"kind": "recorded-before-load"},
                     }
                 ]
+            }
+        )
+
+    async def api_unit_timeline(self, request: web.Request) -> web.Response:
+        # The unit's shape: the recorder rows the page assembles. One of
+        # each kind, the command answered by the lamp's state.
+        unit = request.query.get("unit", "")
+        now = time.time()
+        envelope = {"value": False, "priority": "automation", "actor": unit, "id": "c1"}
+        return web.json_response(
+            {
+                "events": [
+                    {"ts": now - 60, "key": f"home/health/{unit}/event", "value": {"kind": "paused"}}
+                ],
+                "params": [
+                    {"ts": now - 3000, "key": f"home/config/{unit}/off_time", "value": "22:30"}
+                ],
+                "commands": [
+                    {"ts": now - 600, "key": "home/cmd/livingroom/livingroom_lamp/on", "value": envelope}
+                ],
+                "answers": [],
+                "answers_from": None,
+                "readbacks": [
+                    {
+                        "entity": "livingroom_lamp",
+                        "aspect": "on",
+                        "from": None,
+                        "points": [{"ts": now - 7200, "value": True}, {"ts": now - 599, "value": False}],
+                    }
+                ],
+                "inputs": [
+                    {
+                        "entity": "livingroom_presence",
+                        "aspect": "presence",
+                        "from": None,
+                        "points": [{"ts": now - 7200, "value": True}, {"ts": now - 900, "value": False}],
+                    }
+                ],
+                "truncated": False,
             }
         )
 

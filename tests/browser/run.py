@@ -462,6 +462,17 @@ class UnitOverlay(PageTest):
         self.assertEqual(await lines.count(), 1)
         self.assertIn("staged", await lines.first.inner_text())
 
+    async def test_an_automation_shows_its_timeline(self):
+        await self.view("health")
+        await self.page.locator('[data-action="unit-detail"][data-unit="evening_lights"]').first.click()
+        await self.page.wait_for_timeout(400)
+        rows = self.page.locator("#overlay-panel .timeline-row")
+        text = "\n".join(await rows.all_inner_texts())
+        self.assertEqual(await rows.count(), 5, text)
+        self.assertIn("(applied)", text, "the lamp's state answered the command")
+        self.assertIn("off_time set to 22:30", text)
+        self.assertIn("paused", text)
+
     async def test_its_recorded_events_are_listed(self):
         # The page opened after the event, so only the recorder has it.
         await self.view("health")

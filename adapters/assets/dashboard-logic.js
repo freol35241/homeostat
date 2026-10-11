@@ -947,6 +947,12 @@
     return entry ? entry.value : current;
   }
 
+  /* How far a readback may be from a command and still match it. The
+   * brightness scale (0–254) is finer than the percent its control shows. */
+  function cmdTolerance(aspect) {
+    return aspect === 'brightness' ? 254 / 200 : 0;
+  }
+
   function sameValue(a, b, tolerance) {
     if (typeof a === 'number' && typeof b === 'number') {
       return Math.abs(a - b) <= Math.max(tolerance || 0, 1e-6 * Math.max(1, Math.abs(a)));
@@ -1438,6 +1444,80 @@
     return out.sort(function (a, b) { return (b.ts || 0) - (a.ts || 0); });
   }
 
+  /* An automation's timeline (docs/design.md#unit-timeline), newest first,
+   * built from what /api/unit-timeline gathers from the recorder:
+   * - `input`: a change to an aspect it reads.
+   * - `param`: a write to one of its parameters.
+   * - `command`: a command it sent, with what came of it. An event naming
+   *   its cmd_id says refused (the arbiter) or dropped (the adapter). Else
+   *   a recorded state matching it within the readback wait says applied,
+   *   and a matching state from before it says the aspect already had the
+   *   value. Else nothing answered. A command older than what a capped
+   *   query kept is not judged: its answer may have been cut.
+   * - `taken-over`: another actor's command displaced its hold.
+   * - `event`: one of its own health events. */
+  function unitTimeline(raw, model, aspects, unitName) {
+    raw = raw || {};
+    var byName = {};
+    ((model && model.entities) || []).forEach(function (e) { byName[e.name] = e; });
+    var out = [];
+    (raw.inputs || []).forEach(function (series) {
+      (series.points || []).forEach(function (p) {
+        out.push({ ts: p.ts, type: 'input', entity: series.entity, aspect: series.aspect, value: p.value });
+      });
+    });
+    (raw.params || []).forEach(function (p) {
+      out.push({ ts: p.ts, type: 'param', param: String(p.key).split('/').pop(), value: p.value });
+    });
+    var readbacks = {};
+    (raw.readbacks || []).forEach(function (s) { readbacks[s.entity + '/' + s.aspect] = s; });
+    var answers = raw.answers || [];
+    var cut = function (ts, from) { return from !== null && from !== undefined && ts < from; };
+    (raw.commands || []).forEach(function (c) {
+      var parts = String(c.key).split('/');
+      var entity = parts[3];
+      var aspect = parts.slice(4).join('/');
+      var envelope = c.value || {};
+      var entry = { ts: c.ts, type: 'command', entity: entity, aspect: aspect, value: envelope.value, outcome: 'no answer' };
+      var answer = envelope.id ? answers.filter(function (a) { return a.value && a.value.cmd_id === envelope.id; })[0] : null;
+      var series = readbacks[entity + '/' + aspect] || { points: [] };
+      if (answer) {
+        if (answer.value.kind === 'refuse') {
+          entry.outcome = 'refused';
+          entry.by = answer.value.holder_actor || null;
+          entry.priority = answer.value.holder_priority || null;
+        } else {
+          entry.outcome = 'dropped';
+          entry.by = unitNameFromHealthKey(answer.key);
+          entry.reason = answer.value.reason || null;
+        }
+      } else if (cut(c.ts, raw.answers_from) || cut(c.ts, series.from)) {
+        entry.outcome = 'unknown';
+      } else {
+        var e = byName[entity] || {};
+        var waitS = commandTimeoutMs(e.capability, aspects && aspects[entity], aspect) / 1000;
+        var tol = cmdTolerance(aspect);
+        var before = null;
+        var reached = (series.points || []).some(function (p) {
+          if (p.ts <= c.ts) before = p;
+          return p.ts > c.ts && p.ts <= c.ts + waitS && sameValue(p.value, envelope.value, tol);
+        });
+        if (reached) entry.outcome = 'applied';
+        else if (before && sameValue(before.value, envelope.value, tol)) entry.outcome = 'already';
+      }
+      out.push(entry);
+    });
+    answers.forEach(function (a) {
+      var v = a.value || {};
+      if (v.kind !== 'preempt' || v.from_actor !== unitName) return;
+      out.push({ ts: a.ts, type: 'taken-over', entity: v.entity, aspect: v.aspect, by: v.to_actor, priority: v.to_priority });
+    });
+    (raw.events || []).forEach(function (ev) {
+      out.push({ ts: ev.ts, type: 'event', kind: (ev.value && ev.value.kind) || 'event', fields: ev.value });
+    });
+    return out.sort(function (a, b) { return (b.ts || 0) - (a.ts || 0); });
+  }
+
   /* The family's parameters of a unit, without an automation's pause
    * switch, which its card shows in its head instead. */
   function familyParams(unit) {
@@ -1586,6 +1666,8 @@
     familyParams: familyParams,
     pauseParam: pauseParam,
     mergeUnitEvents: mergeUnitEvents,
+    unitTimeline: unitTimeline,
+    cmdTolerance: cmdTolerance,
     isPaused: isPaused,
     viewFor: viewFor,
     historyShape: historyShape,
