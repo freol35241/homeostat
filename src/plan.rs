@@ -14,7 +14,7 @@ use crate::config::{default_value, keeps_live};
 use crate::content;
 use crate::expand::ExpandedKey;
 use crate::grants::{free_nodes, grant_edges, Grant};
-use crate::manifest::{ParamSpec, UnitKind};
+use crate::manifest::{implicit_enabled, ParamSpec, UnitKind, ENABLED_PARAM};
 use crate::repo::LoadedUnit;
 use crate::validate::display_value;
 use crate::CheckResult;
@@ -278,16 +278,21 @@ pub fn diff(check: &CheckResult, root: &Path, world: &World, reset_params: bool)
     diff
 }
 
-/// A parameter's default in the manifest the world is running. `None` when
-/// the manifest does not parse or does not declare the parameter.
+/// A parameter's default in the manifest the world is running, the implicit
+/// `enabled` of an automation included. `None` when the manifest does not
+/// parse or does not have the parameter.
 fn world_default(unit: &WorldUnit, param: &str) -> Option<Value> {
     let manifest: toml::Value = toml::from_str(std::str::from_utf8(&unit.manifest).ok()?).ok()?;
-    let spec: ParamSpec = manifest
-        .get("params")?
-        .get(param)?
-        .clone()
-        .try_into()
-        .ok()?;
+    let declared = manifest.get("params").and_then(|p| p.get(param));
+    let spec: ParamSpec = match declared {
+        Some(spec) => spec.clone().try_into().ok()?,
+        None if param == ENABLED_PARAM
+            && manifest.get("unit")?.get("kind")?.as_str()? == "automation" =>
+        {
+            implicit_enabled()
+        }
+        None => return None,
+    };
     Some(default_value(&spec))
 }
 
@@ -871,6 +876,37 @@ mod tests {
 
     fn edge(a: &str, d: &str) -> (String, String) {
         (a.to_string(), d.to_string())
+    }
+
+    fn world_unit(kind: &str, params: &str) -> WorldUnit {
+        let manifest = format!(
+            "schema = 1\n[unit]\nname = \"porch\"\nkind = \"{kind}\"\n\
+             [runtime]\ncommand = \"true\"\n{params}"
+        );
+        WorldUnit {
+            manifest: manifest.into_bytes(),
+            manifest_hash: String::new(),
+            files_hash: String::new(),
+        }
+    }
+
+    #[test]
+    fn the_world_default_of_an_undeclared_enabled_is_true_for_an_automation() {
+        // A pause must read as a live edit under an unchanged default, or
+        // the next apply would undo it.
+        assert_eq!(
+            world_default(&world_unit("automation", ""), ENABLED_PARAM),
+            Some(Value::Bool(true))
+        );
+        assert_eq!(
+            world_default(&world_unit("adapter", ""), ENABLED_PARAM),
+            None
+        );
+        let declared = "[params.enabled]\ntype = \"bool\"\ndefault = false\n";
+        assert_eq!(
+            world_default(&world_unit("automation", declared), ENABLED_PARAM),
+            Some(Value::Bool(false))
+        );
     }
 
     #[test]

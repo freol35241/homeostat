@@ -1,0 +1,14 @@
+schema = 1
+
+[unit]
+name = "porch"
+kind = "automation"
+
+[runtime]
+command = "uv run units/porch.py"
+restart = "always"
+
+[params.enabled]
+type = "string"
+default = "yes"
+editable_by = "family"
