@@ -15,6 +15,35 @@ from pathlib import Path
 
 import tomllib
 
+ENABLED_PARAM = "enabled"
+"""The parameter that pauses an automation (docs/design.md#pausing-an-automation)."""
+
+
+def params_of(manifest: dict) -> dict:
+    """Return a manifest's parameters, with the ones a unit has undeclared.
+
+    Every automation has `enabled`: a family-editable `bool` that defaults
+    to true. A declared `[params.enabled]` takes its place. The core adds
+    the same parameter, so the two agree on what a unit has.
+
+    Parameters
+    ----------
+    manifest : dict
+        A parsed unit manifest.
+
+    Returns
+    -------
+    dict
+        The `[params]` table by name.
+    """
+    params = dict(manifest.get("params", {}))
+    if manifest["unit"]["kind"] == "automation":
+        params.setdefault(
+            ENABLED_PARAM,
+            {"type": "bool", "default": True, "editable_by": "family"},
+        )
+    return params
+
 
 @dataclass
 class InputSource:
@@ -206,7 +235,7 @@ class UnitInfo:
     naming : dict
         The manifest's `[naming]` table.
     params : dict
-        `[params]`, as declared.
+        `[params]` with the parameters a unit has undeclared (`params_of`).
     publishes : dict
         `[bus.publishes]`, as declared.
     subscribes : dict
@@ -293,7 +322,7 @@ def load_house(root: str | Path = ".") -> HouseModel:
                 kind=unit["kind"],
                 description=unit.get("description", ""),
                 naming=dict(manifest.get("naming", {})),
-                params=dict(manifest.get("params", {})),
+                params=params_of(manifest),
                 publishes=dict(manifest.get("bus", {}).get("publishes", {})),
                 subscribes=dict(manifest.get("bus", {}).get("subscribes", {})),
             )

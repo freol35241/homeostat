@@ -5,7 +5,9 @@ A Context gives an automation the bus access its manifest declares:
 - subscriptions by binding name from [bus.subscribes];
 - typed live parameters from [params.*], seeded by a bus get and kept
   current by a config subscription;
-- publishing through [bus.publishes] expressions.
+- publishing through [bus.publishes] expressions;
+- pausing: while the automation's `enabled` parameter is false its
+  commands are dropped (docs/design.md#pausing-an-automation).
 
 Publishes go to concrete keys only. A put on a `**` expression would give
 adapters a wildcard key they cannot parse. Literal segments of the publish
@@ -193,7 +195,7 @@ class Context:
             name: {"key": spec["key"], "priority": spec.get("priority")}
             for name, spec in bus.get("publishes", {}).items()
         }
-        self._param_specs: dict[str, dict] = manifest.get("params", {})
+        self._param_specs: dict[str, dict] = house.params_of(manifest)
         self._zones: dict[str, list[str]] = {}
         zones_path = root / "zones.toml"
         if zones_path.exists():
@@ -217,6 +219,8 @@ class Context:
         self._lock = threading.Lock()
         self._param_values: dict[str, Any] = {}
         self._subs: list = []
+        # One per subscribe: delivers the binding's current values again.
+        self._redeliveries: list[Callable[[], None]] = []
         self._recorder: bool | None = None
         self._session = UnitSession(unit, os.environ[keys.ENV_BUS])
         # (entity, aspect, source) -> last reported participation, so
@@ -247,7 +251,44 @@ class Context:
         except ValueError:
             return
         with self._lock:
+            was_paused = self._is_paused()
             self._param_values[param] = value
+            paused = self._is_paused()
+        if paused == was_paused:
+            return
+        self._session.health_event("paused" if paused else "resumed")
+        if not paused:
+            # Outside the zenoh callback, which must not block on a get.
+            threading.Thread(target=self._redeliver, daemon=True).start()
+
+    def _is_paused(self) -> bool:
+        """Whether `enabled` is false. Called with `self._lock` held."""
+        if house.ENABLED_PARAM not in self._param_specs:
+            return False
+        return self._param_values.get(house.ENABLED_PARAM) is False
+
+    @property
+    def paused(self) -> bool:
+        """Whether the automation is paused: its `enabled` parameter is false.
+
+        While it is, `publish` drops commands. The automation keeps
+        deciding and may read this to say what it would have done.
+        """
+        with self._lock:
+            return self._is_paused()
+
+    def _redeliver(self) -> None:
+        """Deliver every subscribed binding's current values again.
+
+        On resume an automation that acts only on a change has missed the
+        changes made while it was paused. Delivering the current values, as
+        at startup, lets it act on the state the house is in now.
+        """
+        for redeliver in list(self._redeliveries):
+            try:
+                redeliver()
+            except QueryError as err:
+                self._session.health_event("redeliver-failed", error=str(err))
 
     def _variants(self, expr: str) -> list[str]:
         return _expand(expr, self._zones, self._entities)
@@ -274,6 +315,10 @@ class Context:
         Values are ordered by their stamps. One older than the value
         already delivered for its key is dropped, so a catch-up or a replay
         never replaces a newer live value.
+
+        When a paused automation resumes, the current values are delivered
+        again in the same way, so a handler sees each one at least once
+        after the pause.
 
         Parameters
         ----------
@@ -326,6 +371,16 @@ class Context:
                     if not newest.admit(key, stamp, catch_up=True):
                         continue
                     deliver(key, value, age_s)
+
+        def redeliver() -> None:
+            for expr in exprs:
+                for key, value, age_s, stamp in self._session.get_json_stamped(expr):
+                    with order:
+                        if newest.older(key, stamp):
+                            continue
+                        deliver(key, value, age_s)
+
+        self._redeliveries.append(redeliver)
 
     def _concrete_key(
         self,
@@ -395,7 +450,8 @@ class Context:
         Literal expression segments are defaults. Wildcard segments must be
         named with room/entity/aspect. cmd-class publishes are wrapped in the
         envelope automatically. The priority comes from the manifest's
-        publish declaration, and the actor is this unit.
+        publish declaration, and the actor is this unit. While the
+        automation is paused, a cmd-class publish is dropped.
 
         Parameters
         ----------
@@ -428,6 +484,8 @@ class Context:
                     f"publish {binding!r} is a cmd publish with no priority "
                     "declared in the manifest"
                 )
+            if self.paused:
+                return
             value = keys.cmd_envelope(value, priority, self.unit)
         self._session.put_json(key, value)
 

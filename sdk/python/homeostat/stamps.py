@@ -82,3 +82,22 @@ class Newest:
                 return False
             self._stamps[key] = stamp
             return True
+
+    def older(self, key: str, stamp: Any) -> bool:
+        """Return whether `stamp` is older than the one delivered for `key`.
+
+        Parameters
+        ----------
+        key : str
+            The sample's key.
+        stamp : zenoh.Timestamp or None
+            The sample's timestamp.
+
+        Returns
+        -------
+        bool
+            True when both stamps are known and `stamp` is the older one.
+        """
+        with self._lock:
+            previous = self._stamps.get(key)
+            return previous is not None and stamp is not None and stamp < previous
