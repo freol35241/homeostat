@@ -35,7 +35,7 @@ One aspect's history over a window.
 
 ## `entity`
 
-An entity's own row — its control or its readings — as a card.
+An entity's own row (its control or its readings) as a card.
 
 ```toml
 { kind = "entity", entity = "livingroom_lamp" }
@@ -65,7 +65,7 @@ A room's card: every entity in the room.
 
 ## `unit`
 
-A unit's card: its family setpoints, the entities it publishes, the entities it drives (from the grant table) and the entities it reads (from its subscriptions) — a pure function of its manifest.
+A unit's card: its family setpoints, the entities it publishes, the entities it drives (from the grant table) and the entities it reads (from its subscriptions). All of it derives from its manifest. An automation's card also carries its pause switch.
 
 ```toml
 { kind = "unit", unit = "evening_lights" }
@@ -115,7 +115,7 @@ The map over every entity with a location.
 
 ## `group`
 
-Several widgets as one card — a dial with the traces that explain it, a setpoint beside what it drives. One level deep.
+Several widgets as one card, such as a dial with the traces that explain it, or a setpoint beside what it drives. Groups do not nest.
 
 ```toml
 { kind = "group", label = "Heating", widgets = [
@@ -128,7 +128,7 @@ Several widgets as one card — a dial with the traces that explain it, a setpoi
 
 ## `burner`
 
-A burner's card: its two commands and the two temperatures an interlock reads — the `burner` vocabulary, nothing dialectal.
+A burner's card: its two commands and the two temperatures an interlock reads. It uses only the `burner` vocabulary, with nothing adapter-specific.
 
 ```toml
 { kind = "burner", entity = "stove" }

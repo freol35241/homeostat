@@ -255,6 +255,11 @@
    "kind": "automation",
    "description": "Turns downstairs lights off after off_time when nobody is present",
    "params": {
+    "enabled": {
+     "type": "bool",
+     "default": true,
+     "editable_by": "family"
+    },
     "off_time": {
      "type": "time",
      "default": "22:00",
@@ -305,7 +310,13 @@
    "label": "downstairs temperature fusion",
    "kind": "automation",
    "description": "Fuses the downstairs temperatures into one virtual sensor, and forecasts it",
-   "params": {},
+   "params": {
+    "enabled": {
+     "type": "bool",
+     "default": true,
+     "editable_by": "family"
+    }
+   },
    "subscribes": {
     "temperatures": "home/state/downstairs/*/temperature"
    },
