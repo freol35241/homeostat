@@ -491,7 +491,7 @@ def main():
 
     def cmd_handler(entity):
         def handler(sample):
-            parsed = session.parse_command(sample)
+            parsed = session.parse_command_with_options(sample)
             if parsed is None:
                 return
             aspect, value, cmd_id, options = parsed

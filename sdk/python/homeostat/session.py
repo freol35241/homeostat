@@ -191,15 +191,35 @@ class UnitSession:
     def parse_command(self, sample: zenoh.Sample):
         """Run the command prologue every adapter shares (docs/adapters.md, §4).
 
-        The result is the aspect, the envelope's value, its correlation id
-        and its options (docs/design.md#command-options). It is None after
-        a drop event: "malformed-payload" for a payload that is not JSON,
-        and "invalid-command" for one that is not an envelope.
+        The result is the aspect, the envelope's value and its correlation
+        id. It is None after a drop event: "malformed-payload" for a payload
+        that is not JSON, and "invalid-command" for one that is not an
+        envelope. An adapter that honours command options calls
+        `parse_command_with_options` instead.
 
         The id is returned because the adapter's own later validation (out
         of range, no such command) can end the same command. The publisher
         is waiting to hear which stage stopped it. A payload that did not
         parse has no id to report.
+
+        Parameters
+        ----------
+        sample : zenoh.Sample
+            A sample received on a command key.
+
+        Returns
+        -------
+        tuple of (str, Any, str or None), or None
+            ``(aspect, value, cmd_id)``, or None if the sample was dropped.
+        """
+        parsed = self.parse_command_with_options(sample)
+        return None if parsed is None else parsed[:3]
+
+    def parse_command_with_options(self, sample: zenoh.Sample):
+        """Run the command prologue and also return the envelope's options.
+
+        It drops what `parse_command` drops, and an envelope whose options
+        are not an object (docs/design.md#command-options).
 
         Parameters
         ----------

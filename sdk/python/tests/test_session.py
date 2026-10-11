@@ -96,7 +96,7 @@ class ParseCommandTest(unittest.TestCase):
                 {"value": 200, "priority": "manual", "actor": "test", "id": "c0ffee01"}
             ).encode(),
         )
-        self.assertEqual(session.parse_command(sample), ("brightness", 200, "c0ffee01", {}))
+        self.assertEqual(session.parse_command(sample), ("brightness", 200, "c0ffee01"))
         self.assertEqual(session._session.puts, [])
 
     def test_an_envelope_without_an_id_still_parses(self):
@@ -107,7 +107,7 @@ class ParseCommandTest(unittest.TestCase):
             "home/cmd/kitchen/lamp/brightness",
             json.dumps({"value": 200, "priority": "manual", "actor": "test"}).encode(),
         )
-        self.assertEqual(session.parse_command(sample), ("brightness", 200, None, {}))
+        self.assertEqual(session.parse_command(sample), ("brightness", 200, None))
 
     def test_an_envelope_hands_back_its_options(self):
         session = stub_session()
@@ -118,8 +118,11 @@ class ParseCommandTest(unittest.TestCase):
             ).encode(),
         )
         self.assertEqual(
-            session.parse_command(sample), ("brightness", 200, None, {"transition": 1.5})
+            session.parse_command_with_options(sample),
+            ("brightness", 200, None, {"transition": 1.5}),
         )
+        # parse_command leaves the options out, so a three-value unpack works.
+        self.assertEqual(session.parse_command(sample), ("brightness", 200, None))
 
     def test_options_that_are_not_an_object_are_invalid_command(self):
         session = stub_session()

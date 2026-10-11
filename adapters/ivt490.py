@@ -654,7 +654,7 @@ def main():
             parsed = session.parse_command(sample)
             if parsed is None:
                 return
-            aspect, value, cmd_id, _options = parsed
+            aspect, value, cmd_id = parsed
             command = command_payload(entity, aspect, value)
             if command is None:
                 session.health_event(

@@ -346,7 +346,7 @@ def main():
             parsed = session.parse_command(sample)
             if parsed is None:
                 return
-            aspect, value, cmd_id, _options = parsed
+            aspect, value, cmd_id = parsed
             body = command_body(aspect, value) if aspect in COMMANDS else None
             if body is None:
                 session.health_event(

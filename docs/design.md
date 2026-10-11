@@ -827,7 +827,8 @@ for the device, so the envelope's governance stays at its top level:
 adapter.
 
 The SDK's `publish` takes `options=` on a command publish, and
-`parse_command` hands an adapter the options with the value. The
+`parse_command_with_options` hands an adapter the options with the
+value. The
 dashboard's commands carry none.
 
 ### Arbitrated mode

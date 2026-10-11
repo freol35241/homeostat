@@ -249,9 +249,11 @@ Per command:
 1. Decode JSON; on failure drop with `malformed-payload`.
 2. `keys.parse_cmd_envelope(payload)`; on `ValueError` drop with
    `invalid-command`. `session.parse_command(sample)` does steps 1-2 and
-   hands back `(aspect, value, cmd_id, options)`; carry that `cmd_id`
-   into every drop below, because each one ends a command someone is
-   waiting on.
+   hands back `(aspect, value, cmd_id)`; carry that `cmd_id` into every
+   drop below, because each one ends a command someone is waiting on.
+   An adapter that honours command options calls
+   `session.parse_command_with_options(sample)`, which also hands back
+   the envelope's `options`.
 3. Check the aspect is one the entity takes: the capability's base
    aspect, its declared `features`, or a dialect knob this adapter
    documents. Anything else drops with `invalid-command`.
