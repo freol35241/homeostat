@@ -12,7 +12,9 @@ window (off_time until 05:00, which may span midnight) with nobody
 present, every light that is on gets turned off. Lights are known from
 their state keys; commands go back through the manifest's publish
 expression. off_time is a live parameter: an edit applies at the next
-evaluation, with no restart.
+evaluation, with no restart. Once the clock is known, each evaluation
+reports its outcome with ctx.decision, and the automation's timeline in
+the dashboard shows each change.
 """
 
 import datetime
@@ -38,11 +40,16 @@ def main():
 
     def evaluate():
         with lock:
-            if minute is None or present:
+            if minute is None:
+                return
+            if present:
+                ctx.decision("night_off", "waiting: someone is home")
                 return
             if not in_night_window(minute, ctx.params.off_time):
+                ctx.decision("night_off", "outside the night window")
                 return
             targets = [key for key, on in lights_on.items() if on]
+            ctx.decision("night_off", "turning lights off" if targets else "lights already off")
         for room, entity in targets:
             ctx.publish("lights", False, room=room, entity=entity)
 
