@@ -1139,13 +1139,16 @@ async fn dashboard_serves_a_units_recorded_events() {
                  "payload": {"kind": "paused"}},
                 {"ts": 1_700_000_060_500_000_u64, "key": "home/health/evening_lights/event",
                  "payload": {"kind": "resumed"}},
+                // Not JSON on the wire: the recorder keeps the raw text.
+                {"ts": 1_700_000_070_000_000_u64, "key": "home/health/evening_lights/event",
+                 "payload": "not json"},
             ]);
             let _ = query.reply("home/history/events", rows.to_string()).await;
         }
     });
 
     // The stand-in's queryable reaches the dashboard's session after a
-    // moment, until then the get finds no recorder and answers no events.
+    // moment. Until then the get finds no recorder and answers no events.
     let deadline = Instant::now() + Duration::from_secs(10);
     let reply = loop {
         let (status, reply) = http_request(
@@ -1171,7 +1174,7 @@ async fn dashboard_serves_a_units_recorded_events() {
             {"ts": 1_700_000_000.0, "key": "home/health/evening_lights/event", "value": {"kind": "paused"}},
             {"ts": 1_700_000_060.5, "key": "home/health/evening_lights/event", "value": {"kind": "resumed"}},
         ]),
-        "ts in seconds, the shape of a live event"
+        "ts in seconds, the shape of a live event, and a raw text row skipped"
     );
     let selector = asked.recv().await.expect("a selector");
     assert!(

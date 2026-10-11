@@ -2135,8 +2135,10 @@ Logs are a by-product. Events are the audit trail.
   `home/history/events`, MCP's `read_events`
   ([Agent surface (MCP)](#agent-surface-mcp)) and the dashboard. A
   unit's overlay lists its recorded events of the last day with those
-  the page saw live, so a reload does not empty it. Without an answer
-  from the recorder it lists the live ones and says so.
+  the page saw live, so a reload does not empty it. When the recorder
+  answers with an error it lists the live ones and says so. A house
+  without a recorder has no recorded events, and the list holds the
+  live ones.
 
 Homeostat has no log sink. Tagged stdout is the standard export
 surface. Durability, retention and indexing are deployment

@@ -12,10 +12,12 @@ function fetchUnitLog(unitName) {
   fetch('/api/logs?unit=' + encodeURIComponent(unitName) + '&lines=100')
     .then(function (r) { return r.json(); })
     .then(function (data) {
+      if (overlay.unit !== unitName) return; // the overlay moved on to another unit
       overlay.log = { lines: data || [], loaded: true, loading: false };
       if (overlay.open && overlay.type === 'unit') renderOverlayContent();
     })
     .catch(function () {
+      if (overlay.unit !== unitName) return;
       overlay.log = { lines: [], loaded: true, loading: false };
       if (overlay.open && overlay.type === 'unit') renderOverlayContent();
     });
@@ -29,11 +31,13 @@ function renderLogLine(entry) {
   return html`<div class="${cls}"><span class="ts" title="${tFull}">${tStr}</span>${entry.line}</div>`;
 }
 
-// The unit's recorded events, so a reload does not empty the list. Without
-// an answer from the recorder the overlay shows what this page saw live.
+// The unit's recorded events, so a reload does not empty the list. When the
+// recorder answers with an error the overlay shows what this page saw live.
+// The empty wording below matches the route's default window of 24 hours.
 function fetchUnitEvents(unitName) {
   overlay.unitEvents = { rows: [], loaded: false, loading: true, failed: false };
   var done = function (rows, failed) {
+    if (overlay.unit !== unitName) return; // the overlay moved on to another unit
     overlay.unitEvents = { rows: rows, loaded: true, loading: false, failed: failed };
     if (overlay.open && overlay.type === 'unit') renderOverlayContent();
   };

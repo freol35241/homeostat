@@ -452,7 +452,7 @@ class SmokePhone(Smoke):
 
 class UnitOverlay(PageTest):
     """A unit's overlay lists its captured log, read in the shape the unit
-    serves: a list of the core's log entries."""
+    serves (a list of the core's log entries), and its recorded events."""
 
     async def test_a_units_log_is_listed(self):
         await self.view("health")

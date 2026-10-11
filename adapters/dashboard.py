@@ -1239,9 +1239,10 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         """GET /api/unit-events?unit=..&hours=24: a unit's recorded health events.
 
         The unit overlay lists them, so a reload does not lose what the
-        page saw live. Oldest first, the newest UNIT_EVENT_MAX of the
-        window, each as {ts, key, value} with `ts` in seconds, the shape
-        of a live event.
+        page saw live. The newest UNIT_EVENT_MAX of the window, oldest
+        first as the recorder replies, each as {ts, key, value} with `ts`
+        in seconds, the shape of a live event. A row that is not a JSON
+        object is skipped, as the live path drops it.
         """
         unit = request.query.get("unit", "")
         if unit not in model.units:
@@ -1266,9 +1267,10 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         except QueryError as error:
             return json_error(f"recorder: {error}", status=502)
         events = [
-            {"ts": row["ts"] / 1_000_000, "key": row["key"], "value": row["payload"]}
+            {"ts": row.get("ts", 0) / 1_000_000, "key": row.get("key"), "value": row["payload"]}
             for _key, payload in replies
             for row in payload or []
+            if isinstance(row.get("payload"), dict)
         ]
         return web.json_response({"events": events})
 
