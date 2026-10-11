@@ -191,10 +191,10 @@ class UnitSession:
     def parse_command(self, sample: zenoh.Sample):
         """Run the command prologue every adapter shares (docs/adapters.md, §4).
 
-        The result is the aspect, the envelope's value and its correlation
-        id. It is None after a drop event: "malformed-payload" for a payload
-        that is not JSON, and "invalid-command" for one that is not an
-        envelope.
+        The result is the aspect, the envelope's value, its correlation id
+        and its options (docs/design.md#command-options). It is None after
+        a drop event: "malformed-payload" for a payload that is not JSON,
+        and "invalid-command" for one that is not an envelope.
 
         The id is returned because the adapter's own later validation (out
         of range, no such command) can end the same command. The publisher
@@ -208,8 +208,9 @@ class UnitSession:
 
         Returns
         -------
-        tuple of (str, Any, str or None), or None
-            ``(aspect, value, cmd_id)``, or None if the sample was dropped.
+        tuple of (str, Any, str or None, dict), or None
+            ``(aspect, value, cmd_id, options)``, or None if the sample was
+            dropped.
         """
         key = str(sample.key_expr)
         aspect = key.split("/", 4)[4]
@@ -224,7 +225,7 @@ class UnitSession:
         except ValueError:
             self.health_event("drop", reason="invalid-command", key=key, cmd_id=cmd_id)
             return None
-        return aspect, value, cmd_id
+        return aspect, value, cmd_id, keys.cmd_envelope_options(payload)
 
     def has_subscriber(self, key: str, *, wait_s: float = 0.5) -> bool:
         """Return whether anything on the bus subscribes to `key`.

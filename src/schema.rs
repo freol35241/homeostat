@@ -128,6 +128,30 @@ fn render_vocabulary(out: &mut String) {
     for (aspect, desc) in crate::manifest::COMMON_ASPECTS {
         out.push_str(&format!("- `{aspect}` — {desc}\n"));
     }
+    out.push_str("\n### Command options\n\n");
+    out.push_str(
+        "What a command may carry beside its value, in the envelope's \
+         `options` (docs/design.md#command-options). An option changes how \
+         the device reaches the value, never the value, so an adapter that \
+         cannot honour one ignores it.\n\n",
+    );
+    out.push_str("| Capability | Option | Aspects | Notes |\n|---|---|---|---|\n");
+    for c in crate::manifest::VOCABULARY {
+        for o in c.options {
+            let aspects = o
+                .aspects
+                .iter()
+                .map(|a| format!("`{a}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            out.push_str(&format!(
+                "| `{}` | `{}` | {aspects} | {} |\n",
+                c.name,
+                o.name,
+                o.note.replace('|', "\\|")
+            ));
+        }
+    }
 }
 
 fn render_file(schema: &Value, out: &mut String) {
@@ -303,6 +327,22 @@ mod tests {
             names, CAPABILITIES,
             "VOCABULARY rows must match CAPABILITIES, in order"
         );
+    }
+
+    #[test]
+    fn command_options_name_aspects_their_capability_has() {
+        for c in crate::manifest::VOCABULARY {
+            for o in c.options {
+                for aspect in o.aspects {
+                    assert!(
+                        c.base == Some(*aspect) || c.aspects.contains(aspect),
+                        "{}: option {} names aspect {aspect}, which the capability does not",
+                        c.name,
+                        o.name
+                    );
+                }
+            }
+        }
     }
 
     /// docs/widgets.md is the dashboard's vocabulary with pictures

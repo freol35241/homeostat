@@ -448,6 +448,7 @@ class Context:
         room: str | None = None,
         entity: str | None = None,
         aspect: str | None = None,
+        options: dict | None = None,
     ) -> None:
         """Publish through a `[bus.publishes]` expression to one concrete key.
 
@@ -456,6 +457,10 @@ class Context:
         envelope automatically. The priority comes from the manifest's
         publish declaration, and the actor is this unit. While the
         automation is paused, a cmd-class publish is dropped.
+
+        `options` rides in the envelope beside the value, for the owning
+        adapter (docs/design.md#command-options). An adapter ignores an
+        option it does not support, so the device still reaches the value.
 
         Parameters
         ----------
@@ -469,6 +474,9 @@ class Context:
             The entity slot; required where the expression's is a wildcard.
         aspect : str or None, optional
             The aspect slot; required where the expression's is a wildcard.
+        options : dict or None, optional
+            Command options, such as ``{"transition": 1.0}``. Only a cmd
+            publish takes them.
 
         Raises
         ------
@@ -476,7 +484,9 @@ class Context:
             If `binding` is not declared in `[bus.publishes]`.
         ValueError
             If the slots do not make one concrete key inside the declared
-            expression, or a cmd publish declares no priority.
+            expression, a cmd publish declares no priority, `options` is not
+            an object with string keys, or `options` is given for a publish
+            that is not a command.
         """
         spec = self._publishes[binding]
         segments = spec["key"].split("/")
@@ -490,7 +500,9 @@ class Context:
                 )
             if self.paused:
                 return
-            value = keys.cmd_envelope(value, priority, self.unit)
+            value = keys.cmd_envelope(value, priority, self.unit, options=options)
+        elif options:
+            raise ValueError(f"publish {binding!r} is not a cmd publish and takes no options")
         self._session.put_json(key, value)
 
     def publish_forecast(

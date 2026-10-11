@@ -429,7 +429,7 @@ def cmd_handler(entity, entity_runtime, entity_lock, loop, session):
         parsed = session.parse_command(sample)
         if parsed is None:
             return
-        aspect, value, cmd_id = parsed
+        aspect, value, cmd_id, _options = parsed
         key = str(sample.key_expr)
 
         with entity_lock:

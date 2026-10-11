@@ -216,9 +216,9 @@ use, each in one sense. Where a word has two senses, both are listed.
 - **Write mode.** How commands to an entity are governed: `shared`,
   `exclusive` or `arbitrated`. See
   [Capabilities, grants and write policy](#capabilities-grants-and-write-policy).
-- **Envelope.** A command's payload: `{value, priority, actor, id}`.
-  The SDK stamps the priority from the manifest and the actor with the
-  unit.
+- **Envelope.** A command's payload: `{value, priority, actor, id}`,
+  and optionally `options`. The SDK stamps the priority from the
+  manifest and the actor with the unit.
 - **Arbiter.** The service that orders commands to arbitrated entities.
   It grants a **hold** (a lease per entity and aspect) to the winning
   band. See [Arbitrated mode](#arbitrated-mode).
@@ -353,13 +353,14 @@ Times carry an offset. Clock payloads are local RFC3339
 timestamp. Recorder events and log lines use integer µs UTC.
 
 Every `home/cmd` and `home/arbiter` payload is an envelope,
-`{value, priority, actor, id}`. `priority` is one of `automation`,
-`agent`, `family` or `manual` ([Cmd envelopes](#cmd-envelopes)).
+`{value, priority, actor, id}` with optional `options`. `priority` is
+one of `automation`, `agent`, `family` or `manual`
+([Cmd envelopes](#cmd-envelopes)).
 Priority and actor are self-declared and are checked only for shape
 ([Local-only access](#local-only-access)). An adapter's
 `parse_command` drops a non-JSON payload with `malformed-payload`. It
-drops one that lacks `value` or a known `priority` with
-`invalid-command`.
+drops one that lacks `value` or a known `priority`, or whose `options`
+is not an object, with `invalid-command`.
 
 `put_json` sends `home/cmd` and `home/arbiter` puts with congestion
 control `BLOCK` at priority `INTERACTIVE_HIGH`. Zenoh's default, `DROP`
@@ -648,6 +649,8 @@ a test keeps in step and which is rendered into
   (`indoor_temperature` on `climate`).
 - The **notable** reading, which is a deviation on the dashboard's
   `Now` (a light on, a lock unlocked, a router's `wan = false`).
+- The [command options](#command-options) its commands may carry
+  (`transition` on a light).
 
 Every capability also has `available` ([Availability](#availability)),
 and `{aspect}_valid`, a boolean beside a reading that the device itself
@@ -786,10 +789,46 @@ Every payload on `home/cmd/**` and `home/arbiter/**` is an envelope:
   `invalid-command`) echo the id as `cmd_id`, so a publisher can tell
   which of two overlapping commands ended. The id is optional. Events
   for a hand-rolled publisher's command report `null`.
+- `options` is optional. It holds the [command options](#command-options)
+  for the owning adapter. The arbiter forwards it with the rest of the
+  envelope and reads none of it.
 
 Adapters drop a payload that is not an envelope with `invalid-command`.
 Both classes travel with blocking congestion control at high priority
 ([Bus payload conventions](#bus-payload-conventions)).
+
+#### Command options
+
+A command option changes how the device reaches the value. It never
+changes what the value is. A light told to go to brightness 127 with
+`{"transition": 1.0}` fades there over a second. Without the option it
+jumps, and it still ends at 127.
+
+That rule makes an option safe to ignore. An adapter ignores an option
+it does not support, or one the command's aspect does not take, and
+sends the value. An automation can ask for a fade without knowing
+whether the light can do one. Something whose loss would change the
+outcome is not an option. "Only if the door is closed" is a condition
+in an automation, "off again in ten minutes" is a timer, and a setting
+the device keeps is an aspect.
+
+The options are named in the capability vocabulary (`options` on a row
+of `VOCABULARY`, rendered into [`docs/manifest.md`](manifest.md)), with
+their type, unit and the aspects that take them. Each adapter translates
+them into its protocol. The names are shared because an automation
+written against `light` must mean the same on every adapter that binds
+a light. Adapters do not accept options under their native names. A new
+option is a new row in the vocabulary.
+
+An option the adapter honours but whose value is the wrong type drops
+the command with `invalid-command`, as a bad value does. Options are
+for the device, so the envelope's governance stays at its top level:
+`priority` is read by the arbiter and `options` only by the owning
+adapter.
+
+The SDK's `publish` takes `options=` on a command publish, and
+`parse_command` hands an adapter the options with the value. The
+dashboard's commands carry none.
 
 ### Arbitrated mode
 

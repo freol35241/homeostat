@@ -15,6 +15,7 @@ from zigbee2mqtt import (
     describe,
     inventory,
     state_aspect,
+    value_body,
 )
 
 BASE = "zigbee2mqtt"
@@ -51,22 +52,22 @@ class DialectTest(unittest.TestCase):
         self.assertEqual(state_aspect("light", "brightness", 80), ("brightness", 80))
 
 
-class CommandBodyTest(unittest.TestCase):
+class ValueBodyTest(unittest.TestCase):
     def test_the_base_aspect_takes_a_bool(self):
         lamp = entity("lamp", "light")
-        self.assertEqual(command_body(lamp, "on", True, {}), {"state": "ON"})
-        self.assertIsNone(command_body(lamp, "on", 1, {}))
+        self.assertEqual(value_body(lamp, "on", True, {}), {"state": "ON"})
+        self.assertIsNone(value_body(lamp, "on", 1, {}))
 
     def test_a_lock_is_set_with_lock_and_unlock(self):
         door = entity("door", "lock")
-        self.assertEqual(command_body(door, "locked", True, {}), {"state": "LOCK"})
-        self.assertEqual(command_body(door, "locked", False, {}), {"state": "UNLOCK"})
+        self.assertEqual(value_body(door, "locked", True, {}), {"state": "LOCK"})
+        self.assertEqual(value_body(door, "locked", False, {}), {"state": "UNLOCK"})
 
     def test_a_vocabulary_feature_needs_declaring_and_a_number(self):
         lamp = entity("lamp", "light", features=["brightness"])
-        self.assertEqual(command_body(lamp, "brightness", 120, {}), {"brightness": 120})
-        self.assertIsNone(command_body(lamp, "brightness", True, {}))
-        self.assertIsNone(command_body(entity("bare", "light"), "brightness", 120, {}))
+        self.assertEqual(value_body(lamp, "brightness", 120, {}), {"brightness": 120})
+        self.assertIsNone(value_body(lamp, "brightness", True, {}))
+        self.assertIsNone(value_body(entity("bare", "light"), "brightness", 120, {}))
 
     def test_a_descriptor_command_is_checked_against_its_type(self):
         trv = entity("trv", "sensor")
@@ -75,12 +76,49 @@ class CommandBodyTest(unittest.TestCase):
             "offset": {"command": {"type": "float"}},
             "battery": {"kind": "percent"},
         }
-        self.assertEqual(command_body(trv, "mode", "heat", fields), {"mode": "heat"})
-        self.assertIsNone(command_body(trv, "mode", "cool", fields))
-        self.assertEqual(command_body(trv, "offset", -1.5, fields), {"offset": -1.5})
-        self.assertIsNone(command_body(trv, "offset", "x", fields))
-        self.assertIsNone(command_body(trv, "battery", 50, fields), "a reading takes no command")
-        self.assertIsNone(command_body(trv, "unknown", 1, fields))
+        self.assertEqual(value_body(trv, "mode", "heat", fields), {"mode": "heat"})
+        self.assertIsNone(value_body(trv, "mode", "cool", fields))
+        self.assertEqual(value_body(trv, "offset", -1.5, fields), {"offset": -1.5})
+        self.assertIsNone(value_body(trv, "offset", "x", fields))
+        self.assertIsNone(value_body(trv, "battery", 50, fields), "a reading takes no command")
+        self.assertIsNone(value_body(trv, "unknown", 1, fields))
+
+
+class CommandBodyTest(unittest.TestCase):
+    def test_a_light_command_carries_its_transition(self):
+        lamp = entity("lamp", "light", features=["brightness"])
+        self.assertEqual(
+            command_body(lamp, "brightness", 127, {}, {"transition": 1.5}),
+            {"brightness": 127, "transition": 1.5},
+        )
+        self.assertEqual(
+            command_body(lamp, "on", False, {}, {"transition": 2}),
+            {"state": "OFF", "transition": 2},
+        )
+
+    def test_without_options_the_value_is_the_body(self):
+        lamp = entity("lamp", "light", features=["brightness"])
+        self.assertEqual(command_body(lamp, "brightness", 127, {}, {}), {"brightness": 127})
+
+    def test_a_transition_that_is_not_a_number_at_least_zero_is_invalid(self):
+        lamp = entity("lamp", "light")
+        for transition in (-1, "1", True, None):
+            with self.subTest(transition=transition):
+                self.assertIsNone(command_body(lamp, "on", True, {}, {"transition": transition}))
+
+    def test_an_option_the_command_does_not_take_is_ignored(self):
+        lamp = entity("lamp", "light")
+        self.assertEqual(command_body(lamp, "on", True, {}, {"effect": "blink"}), {"state": "ON"})
+        plug = entity("plug", "switch")
+        self.assertEqual(command_body(plug, "on", True, {}, {"transition": 1}), {"state": "ON"})
+        fields = {"level": {"command": {"type": "float"}}}
+        self.assertEqual(
+            command_body(lamp, "level", 3, fields, {"transition": 1}), {"level": 3}
+        )
+
+    def test_an_invalid_value_stays_invalid_with_options(self):
+        lamp = entity("lamp", "light")
+        self.assertIsNone(command_body(lamp, "on", 1, {}, {"transition": 1}))
 
 
 class DescribeTest(unittest.TestCase):
@@ -214,7 +252,7 @@ class BridgeTest(unittest.TestCase):
             ],
         )
         fields = self.bridge.descriptor_fields["lamp"]
-        self.assertEqual(command_body(self.lamp, "level", 3, fields), {"level": 3})
+        self.assertEqual(value_body(self.lamp, "level", 3, fields), {"level": 3})
 
 
 if __name__ == "__main__":
