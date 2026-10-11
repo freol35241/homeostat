@@ -85,7 +85,7 @@ export function familyEditable(p) { return p.editable_by === 'family'; }
 export function renderPauseSwitch(unit) {
   var spec = logic.pauseParam(unit);
   if (!spec) return '';
-  var on = currentParamValue(unit.name, 'enabled', spec) !== false;
+  var on = !logic.isPaused(unit, store.config);
   var title = on ? 'Running. Switch off to pause it.' : 'Paused: its commands are not sent.';
   var pill = on ? '' : html`<span class="paused-pill">paused</span>`;
   if (!familyEditable(spec)) {

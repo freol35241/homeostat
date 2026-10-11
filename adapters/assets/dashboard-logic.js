@@ -1438,9 +1438,14 @@
     return (unit.params || {})[PAUSE_PARAM] || null;
   }
 
-  /* Whether an automation is paused: its `enabled` reads false. */
+  /* Whether an automation is paused: its `enabled` reads false, or its
+   * default is false while no value is served yet. */
   function isPaused(unit, config) {
-    return !!pauseParam(unit) && (config || {})['home/config/' + unit.name + '/' + PAUSE_PARAM] === false;
+    var spec = pauseParam(unit);
+    if (!spec) return false;
+    var key = 'home/config/' + unit.name + '/' + PAUSE_PARAM;
+    var live = config && key in config ? config[key] : spec.default;
+    return live === false;
   }
 
   /* A view's widgets with every group expanded. A group is only a card

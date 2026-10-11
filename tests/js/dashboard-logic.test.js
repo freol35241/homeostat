@@ -148,7 +148,9 @@ test('a paused automation reads as paused, and only on false', () => {
   const unit = pausable();
   assert.equal(logic.isPaused(unit, { 'home/config/porch/enabled': false }), true);
   assert.equal(logic.isPaused(unit, { 'home/config/porch/enabled': true }), false);
-  assert.equal(logic.isPaused(unit, {}), false, 'no served value is not a pause');
+  assert.equal(logic.isPaused(unit, {}), false, 'no served value reads as the default');
+  const offByDefault = pausable({ enabled: { type: 'bool', default: false, editable_by: 'owner' } });
+  assert.equal(logic.isPaused(offByDefault, {}), true, 'a declared default of false is a pause');
 });
 
 test('the pause switch is in the card head, not among its setpoints', () => {

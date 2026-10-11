@@ -2011,8 +2011,8 @@ by key and window ([Read path](#read-path)).
   success with nothing to say stays silent.
 - Kinds are defined per producer; there is no closed vocabulary. Each
   unit documents its own. The SDK's kinds (`restore-failed`,
-  `source-dropped`, `source-restored`) and the recorder's are shared by
-  every house.
+  `source-dropped`, `source-restored`, `paused`, `resumed`,
+  `redeliver-failed`) and the recorder's are shared by every house.
 - Health events are not mirrored. They are a stream of what happened,
   so one published before the recorder subscribes is gone. Anything a
   late joiner must see as current belongs in state.
