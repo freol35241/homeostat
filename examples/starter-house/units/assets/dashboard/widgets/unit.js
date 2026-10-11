@@ -4,7 +4,7 @@ import { html } from '../html.js';
 import logic from '../logic.js';
 import { descriptorField, localState, stateValue, store } from '../store.js';
 import { widgetForEntity } from './entity.js';
-import { renderParamRow } from './params.js';
+import { renderParamRow, renderPauseSwitch } from './params.js';
 
 // A unit's card (dashboard-logic.js, unitCardPlan): the head, then the
 // relations the manifest and the grant table state. Each section is drawn
@@ -19,7 +19,7 @@ export function widgetUnit(unitName) {
   var parts = [html`<div class="unit-head row-clickable" data-action="unit-detail" data-unit="${u.name}">
     <div><div class="unit-name" title="${u.label}">${u.label}</div>
     ${u.description ? html`<div class="unit-desc">${u.description}</div>` : ''}</div>
-    <span class="status-badge" title="${healthTooltip(h)}"><span class="status-glyph status-${status}">${statusGlyph(status)}</span>${status}</span></div>`];
+    <div class="unit-head-side"><span class="status-badge" title="${healthTooltip(h)}"><span class="status-glyph status-${status}">${statusGlyph(status)}</span>${status}</span>${renderPauseSwitch(u)}</div></div>`];
   var section = function (label, rows) {
     return rows.length ? html`<div class="section-label">${label}</div>${rows}` : '';
   };

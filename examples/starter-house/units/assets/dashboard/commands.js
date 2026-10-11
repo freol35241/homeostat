@@ -30,12 +30,6 @@ var STEP_SETTLE_MS = 600;
 
 var cmdSeq = 0;
 
-// How far a readback may be from the request and still match it. The
-// brightness scale (0–254) is finer than the percent its control shows.
-function cmdTolerance(aspect) {
-  return aspect === 'brightness' ? 254 / 200 : 0;
-}
-
 export function sendCmd(room, entity, aspect, value) {
   var key = logic.pendingKey(room, entity, aspect);
   clearTimeout(drafts[key]);
@@ -44,7 +38,7 @@ export function sendCmd(room, entity, aspect, value) {
   var spec = entitySpec(room, entity);
   var seq = ++cmdSeq;
   logic.trackCommand(pending, {
-    room: room, entity: entity, aspect: aspect, value: value, seq: seq, tolerance: cmdTolerance(aspect),
+    room: room, entity: entity, aspect: aspect, value: value, seq: seq, tolerance: logic.cmdTolerance(aspect),
     capability: spec ? spec.capability : null, descriptor: store.aspects[entity],
     before: stateValue(room, entity, aspect)
   }, Date.now(), 'sending');
@@ -78,7 +72,7 @@ export function stepCmd(room, entity, aspect, value) {
   delete recent[key];
   var spec = entitySpec(room, entity);
   logic.trackCommand(pending, {
-    room: room, entity: entity, aspect: aspect, value: value, tolerance: cmdTolerance(aspect),
+    room: room, entity: entity, aspect: aspect, value: value, tolerance: logic.cmdTolerance(aspect),
     capability: spec ? spec.capability : null, descriptor: store.aspects[entity],
     before: stateValue(room, entity, aspect)
   }, Date.now(), 'draft');
