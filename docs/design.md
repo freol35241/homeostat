@@ -1362,7 +1362,8 @@ may edit it, which suits an owner-only frost guard. A declared
 - Only commands stop. The automation keeps deciding, its virtual
   sensors keep publishing state and its parameters stay live. Other
   automations often read those sensors. `ctx.paused` tells the
-  automation it is paused, so it can say what it would have done.
+  automation it is paused, and `ctx.decision` marks what it would
+  have done ([unit timeline](#unit-timeline)).
 - The SDK emits a `paused` or `resumed` health event on each change.
 - On resume the SDK delivers every subscribed value again, as at
   startup. An automation that acts only on a change then catches up
@@ -2447,10 +2448,10 @@ asks nothing of the automation.
 - Why: why a rule acted or did not, from `ctx.decision(rule, outcome)`.
   The automation calls it every time the rule is evaluated, and the SDK
   emits a `decision` event only when the outcome changes, so a rule
-  evaluated every minute does not write a row a minute. It covers what
-  the command trail cannot: why nothing happened. While the automation
-  is paused the outcome is marked "(paused)", which shows what it would
-  have done.
+  evaluated every minute does not write a row a minute. The command
+  trail cannot say why nothing happened, and this can. While the
+  automation is paused the outcome is marked "(paused)", which shows
+  what it would have done.
 - Event: its other health events, `paused` and `resumed` among them.
 
 `/api/unit-timeline` gathers the rows from the recorder and

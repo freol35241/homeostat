@@ -188,6 +188,19 @@ class DecisionTest(unittest.TestCase):
             ctx.emitted[-1][1]["outcome"], "turning lights off (paused)"
         )
 
+    def test_a_resumed_rule_reports_its_outcome_again(self):
+        ctx = self.context()
+        ctx.decision("night_off", "turning lights off")
+        with mock.patch("homeostat.automation.threading.Thread", InlineThread):
+            ctx._on_config(config_sample(b"false"))
+            ctx.decision("night_off", "turning lights off")
+            ctx._on_config(config_sample(b"true"))
+            ctx.decision("night_off", "turning lights off")
+        self.assertEqual(
+            [f["outcome"] for kind, f in ctx.emitted if kind == "decision"],
+            ["turning lights off", "turning lights off (paused)", "turning lights off"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

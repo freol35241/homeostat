@@ -1780,4 +1780,5 @@ test('a decision event is listed as why its rule acted', () => {
   }), timelineModel, {}, 'evening_lights');
   const d = t.find((e) => e.type === 'decision');
   assert.deepEqual([d.rule, d.outcome], ['night_off', 'waiting: someone is home']);
+  assert.equal(t.filter((e) => e.type === 'event').length, 0, 'not listed again as a plain event');
 });

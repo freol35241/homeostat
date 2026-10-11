@@ -50,7 +50,7 @@ def main():
                 ctx.decision("night_off", "outside the night window")
                 return
             targets = [key for key, on in lights_on.items() if on]
-        ctx.decision("night_off", "turning lights off" if targets else "lights already off")
+            ctx.decision("night_off", "turning lights off" if targets else "lights already off")
         for room, entity in targets:
             ctx.publish("lights", False, room=room, entity=entity)
 

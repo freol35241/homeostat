@@ -266,6 +266,7 @@ async fn a_paused_automation_sends_nothing_and_catches_up_on_resume() {
         .await
         .expect("resume");
     expect_event(&events, "resumed").await;
+    expect_decision(&events, "turning lights off").await;
     expect_lamp_off(&cmd_sub, Duration::from_secs(10)).await;
 
     sup.shutdown();
