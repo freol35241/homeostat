@@ -177,7 +177,11 @@ pub struct UnitManifest {
     /// a publish outside it.
     pub bus: Option<BusSection>,
     /// Live parameters, keyed by name (`home/config/{unit}/{param}`).
-    /// Names become key segments (`invalid-name`).
+    /// Names become key segments (`invalid-name`). Every automation also
+    /// has `enabled`, a `bool` that defaults to `true` and the family may
+    /// edit. While it is `false` the SDK drops the automation's commands.
+    /// Declaring `[params.enabled]` changes its default or who may edit it,
+    /// and it must stay a `bool` (`invalid-manifest`).
     pub params: Option<BTreeMap<String, ParamSpec>>,
     /// The entities this unit binds. Required for adapters, allowed for
     /// automations (virtual sensors), refused for services.
@@ -185,6 +189,32 @@ pub struct UnitManifest {
     /// Human names for voice and the dashboard. The dashboard reads well
     /// only when these are set.
     pub naming: Option<UnitNaming>,
+}
+
+/// The parameter that pauses an automation (docs/design.md#pausing-an-automation).
+pub const ENABLED_PARAM: &str = "enabled";
+
+/// `enabled` as an automation has it when its manifest does not declare it.
+pub fn implicit_enabled() -> ParamSpec {
+    ParamSpec {
+        param_type: ParamType::Bool,
+        default: toml::Value::Boolean(true),
+        constraint: None,
+        editable_by: Some(EditableBy::Family),
+    }
+}
+
+impl UnitManifest {
+    /// Adds the parameters a unit has without declaring them: `enabled` for
+    /// an automation.
+    pub fn add_implicit_params(&mut self) {
+        if self.unit.kind == UnitKind::Automation {
+            self.params
+                .get_or_insert_with(BTreeMap::new)
+                .entry(ENABLED_PARAM.to_string())
+                .or_insert_with(implicit_enabled);
+        }
+    }
 }
 
 /// `[unit]`: identity.
@@ -779,7 +809,7 @@ pub enum WidgetKind {
     /// A unit's card: its family setpoints, the entities it publishes,
     /// the entities it drives (from the grant table) and the entities it
     /// reads (from its subscriptions). All of it derives from its
-    /// manifest.
+    /// manifest. An automation's card also carries its pause switch.
     Unit,
     /// A unit's family-editable parameters as one card.
     Params,

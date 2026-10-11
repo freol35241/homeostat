@@ -1344,6 +1344,40 @@ subscribe, then get, then merge
 - Writers (the dashboard) call `UnitSession.write_config`. It raises
   `ConfigWriteError` with the core's message when the core refuses.
 
+### Pausing an automation
+
+Every automation has an `enabled` parameter without declaring it: a
+`bool` that defaults to `true` and the family may edit. The core adds
+it when it loads the manifest, and the SDK's `params_of` adds the same,
+so plan, the store, the dashboard and the automation agree on it. An
+automation that declares `[params.enabled]` changes its default or who
+may edit it, which suits an owner-only frost guard. A declared
+`enabled` that is not a `bool` is `invalid-manifest`.
+
+- While `enabled` is false, `ctx.publish` drops the automation's
+  `home/cmd` publishes. The SDK enforces it rather than the author's
+  code, because a dashboard switch promises that off does nothing.
+- Only commands stop. The automation keeps deciding, its virtual
+  sensors keep publishing state and its parameters stay live. Other
+  automations often read those sensors. `ctx.paused` tells the
+  automation it is paused, so it can say what it would have done.
+- The SDK emits a `paused` or `resumed` health event on each change.
+- On resume the SDK delivers every subscribed value again, as at
+  startup. An automation that acts only on a change then catches up
+  with the state the house is in. A value older than one already
+  delivered is not delivered again.
+- A pause is a live edit, so it survives applies and supervisor
+  restarts ([Repo and live values](#repo-and-live-values)).
+- The dashboard shows the switch in the head of the automation's card,
+  on its Health card and in its overlay, with a `paused` pill while it
+  is off. Now lists a paused automation as paused.
+
+Stopping and starting the unit's process was rejected. Process
+lifecycle changes through apply. A stopped unit looks broken in Health,
+stopping it takes down its virtual sensors and latches, plan would need
+a new kind of drift, and a unit that hosts several rules could only be
+stopped whole.
+
 ## State, history and forecasts
 
 Three stores answer three questions. The core's last-value mirror says
@@ -1977,8 +2011,8 @@ by key and window ([Read path](#read-path)).
   success with nothing to say stays silent.
 - Kinds are defined per producer; there is no closed vocabulary. Each
   unit documents its own. The SDK's kinds (`restore-failed`,
-  `source-dropped`, `source-restored`) and the recorder's are shared by
-  every house.
+  `source-dropped`, `source-restored`, `paused`, `resumed`,
+  `redeliver-failed`) and the recorder's are shared by every house.
 - Health events are not mirrored. They are a stream of what happened,
   so one published before the recorder subscribes is gone. Anything a
   late joiner must see as current belongs in state.
@@ -2363,7 +2397,9 @@ empty page. The `deviations` feed draws from:
   ([Availability](#availability)), and any described aspect marked
   `notable` that reads true. These come from vocabulary, never from
   house configuration;
-- parameters whose live value differs from the manifest default;
+- parameters whose live value differs from the manifest default, and
+  a paused automation, which reads as paused
+  ([Pausing an automation](#pausing-an-automation));
 - arbiter holds that displaced somebody.
 
 The arbiter leases every forwarded command, so most holds are just the
@@ -2379,6 +2415,7 @@ the control as **held**.
 The unit card is a pure function of the manifest and the grant table.
 It shows family setpoints, published entities, what the unit drives
 (its cmd grants) and what it reads (its expanded state subscriptions).
+An automation's card carries its pause switch in its head.
 The last two are `{entity, aspect}` rows, because a relation is per
 aspect. If the card is wrong, the manifest is wrong.
 

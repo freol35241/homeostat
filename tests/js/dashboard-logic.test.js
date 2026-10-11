@@ -123,6 +123,54 @@ test('an owner param off its default deviates too, tapping to the unit rather th
   assert.deepEqual(off[0].target, { type: 'unit', unit: 'evening_lights' });
 });
 
+// An automation's pause switch (docs/design.md#pausing-an-automation):
+// the `enabled` parameter the core gives every automation.
+function pausable(params) {
+  return {
+    name: 'porch',
+    label: 'Porch light',
+    kind: 'automation',
+    params: Object.assign(
+      { enabled: { type: 'bool', default: true, editable_by: 'family' } },
+      params || {}
+    ),
+  };
+}
+
+test('only an automation has a pause switch', () => {
+  assert.deepEqual(logic.pauseParam(pausable()), { type: 'bool', default: true, editable_by: 'family' });
+  const adapter = Object.assign(pausable(), { kind: 'adapter' });
+  assert.equal(logic.pauseParam(adapter), null, 'an adapter enabled param is an ordinary param');
+  assert.equal(logic.pauseParam({ name: 'x', kind: 'automation', params: {} }), null);
+});
+
+test('a paused automation reads as paused, and only on false', () => {
+  const unit = pausable();
+  assert.equal(logic.isPaused(unit, { 'home/config/porch/enabled': false }), true);
+  assert.equal(logic.isPaused(unit, { 'home/config/porch/enabled': true }), false);
+  assert.equal(logic.isPaused(unit, {}), false, 'no served value reads as the default');
+  const offByDefault = pausable({ enabled: { type: 'bool', default: false, editable_by: 'owner' } });
+  assert.equal(logic.isPaused(offByDefault, {}), true, 'a declared default of false is a pause');
+});
+
+test('the pause switch is in the card head, not among its setpoints', () => {
+  const m = model({ units: [pausable({ level: { type: 'int', default: 1, editable_by: 'family' } })] });
+  const plan = logic.unitCardPlan(m, 'porch');
+  assert.deepEqual(plan.params, ['level']);
+  assert.equal(plan.pause.type, 'bool');
+  assert.deepEqual(logic.placement(Object.assign(m, { views: [{ name: 'v', widgets: [] }] })).params.map((p) => p.param),
+    ['level'], 'Health carries the switch, so Not shown does not list it');
+});
+
+test('a paused automation deviates as paused and taps to its unit', () => {
+  const m = model({ units: [pausable()] });
+  const devs = deviations(null, null, { 'home/config/porch/enabled': false }, m);
+  assert.equal(devs.length, 1);
+  assert.equal(devs[0].title, 'Porch light is paused');
+  assert.deepEqual(devs[0].target, { type: 'unit', unit: 'porch' });
+  assert.deepEqual(deviations(null, null, { 'home/config/porch/enabled': true }, m), []);
+});
+
 // Arbiter holds (docs/design.md#views-are-text). A lease is taken by
 // every forwarded command, so what makes one worth a row is displacement:
 // it stands above a band something is granted to drive that aspect at.

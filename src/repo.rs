@@ -98,10 +98,12 @@ pub fn load(root: &Path) -> (House, Vec<ValidationError>) {
     }
     for file in toml_files(&units_dir) {
         let rel = format!("units/{file}");
-        let Some(manifest) = read_toml::<UnitManifest>(&units_dir.join(&file), &rel, &mut errors)
+        let Some(mut manifest) =
+            read_toml::<UnitManifest>(&units_dir.join(&file), &rel, &mut errors)
         else {
             continue;
         };
+        manifest.add_implicit_params();
         check_schema_version(manifest.schema, &manifest.unit.name, &rel, &mut errors);
         let stem = file.strip_suffix(".toml").unwrap_or(&file);
         if stem != manifest.unit.name {

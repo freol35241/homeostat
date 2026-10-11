@@ -14,7 +14,7 @@ section, and the validator refuses a mismatch with `invalid-manifest`.
 | `discovery` | [DiscoverySection](#discoverysection) | no | How an adapter reaches its backend. Required for adapters, allowed for services, refused for automations. |
 | `entities` | [EntitiesSection](#entitiessection) | no | The entities this unit binds. Required for adapters, allowed for automations (virtual sensors), refused for services. |
 | `naming` | [UnitNaming](#unitnaming) | no | Human names for voice and the dashboard. The dashboard reads well only when these are set. |
-| `params` | table of name → [ParamSpec](#paramspec) | no | Live parameters, keyed by name (`home/config/{unit}/{param}`). Names become key segments (`invalid-name`). |
+| `params` | table of name → [ParamSpec](#paramspec) | no | Live parameters, keyed by name (`home/config/{unit}/{param}`). Names become key segments (`invalid-name`). Every automation also has `enabled`, a `bool` that defaults to `true` and the family may edit. While it is `false` the SDK drops the automation's commands. Declaring `[params.enabled]` changes its default or who may edit it, and it must stay a `bool` (`invalid-manifest`). |
 | `runtime` | [RuntimeSection](#runtimesection) | yes |  |
 | `schema` | integer | yes | Contract version. Must be 1 (`unsupported-schema` otherwise). |
 | `unit` | [UnitSection](#unitsection) | yes |  |
@@ -346,7 +346,7 @@ house's text, the grant table and the bus; no widget carries markup.
 - `entity` — An entity's own row (its control or its readings) as a card.
 - `dial` — A thermostat dial: a temperature setpoint on an arc, the current reading beneath it.
 - `room` — A room's card: every entity in the room.
-- `unit` — A unit's card: its family setpoints, the entities it publishes, the entities it drives (from the grant table) and the entities it reads (from its subscriptions). All of it derives from its manifest.
+- `unit` — A unit's card: its family setpoints, the entities it publishes, the entities it drives (from the grant table) and the entities it reads (from its subscriptions). All of it derives from its manifest. An automation's card also carries its pause switch.
 - `params` — A unit's family-editable parameters as one card.
 - `people` — The person entities, home or away.
 - `deviations` — The deviations feed: what is out of the ordinary.

@@ -429,6 +429,19 @@
         if (!(configKey in config)) return;
         var live = config[configKey];
         var def = params[pname].default;
+        if (pname === PAUSE_PARAM && pauseParam(u)) {
+          // A pause reads as what it is, and taps to the unit, whose card
+          // carries the switch.
+          if (live === false) {
+            deviations.push({
+              tag: 'setpoint',
+              title: (labels[u.name] || u.name) + ' is paused',
+              detail: 'its commands are not sent',
+              target: { type: 'unit', unit: u.name }
+            });
+          }
+          return;
+        }
         if (JSON.stringify(live) !== JSON.stringify(def)) {
           // A family param taps through to its editor on Setpoints; an
           // owner param is read-only here, so it taps to the unit overlay
@@ -1407,9 +1420,32 @@
     });
   }
 
+  /* The family's parameters of a unit, without an automation's pause
+   * switch, which its card shows in its head instead. */
   function familyParams(unit) {
     var params = (unit && unit.params) || {};
-    return Object.keys(params).filter(function (p) { return params[p].editable_by === 'family'; });
+    return Object.keys(params).filter(function (p) {
+      return params[p].editable_by === 'family' && !(p === PAUSE_PARAM && pauseParam(unit));
+    });
+  }
+
+  /* An automation's pause switch: the `enabled` parameter the core gives
+   * every automation (docs/design.md#pausing-an-automation). Its spec, or
+   * null for a unit that has none. */
+  var PAUSE_PARAM = 'enabled';
+  function pauseParam(unit) {
+    if (!unit || unit.kind !== 'automation') return null;
+    return (unit.params || {})[PAUSE_PARAM] || null;
+  }
+
+  /* Whether an automation is paused: its `enabled` reads false, or its
+   * default is false while no value is served yet. */
+  function isPaused(unit, config) {
+    var spec = pauseParam(unit);
+    if (!spec) return false;
+    var key = 'home/config/' + unit.name + '/' + PAUSE_PARAM;
+    var live = config && key in config ? config[key] : spec.default;
+    return live === false;
   }
 
   /* A view's widgets with every group expanded. A group is only a card
@@ -1496,6 +1532,7 @@
     return {
       unit: unit,
       params: familyParams(unit),
+      pause: pauseParam(unit),
       publishes: (model.entities || []).filter(function (e) { return e.owner === unitName; }),
       drives: fields(unit.drives),
       sources: fields(unit.sources)
@@ -1528,6 +1565,9 @@
     viewsOf: viewsOf,
     placement: placement,
     unitCardPlan: unitCardPlan,
+    familyParams: familyParams,
+    pauseParam: pauseParam,
+    isPaused: isPaused,
     viewFor: viewFor,
     historyShape: historyShape,
     bucketSeconds: bucketSeconds,

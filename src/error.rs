@@ -154,7 +154,7 @@ codes! {
         require `[entities]` and `[discovery]`; `[entities]` is valid only for \
         adapters and automations; `[discovery]` only for adapters and \
         services; discovery mode `static` needs `endpoint`, mode `mdns` needs \
-        `service`.",
+        `service`; an automation's `enabled` parameter must be a `bool`.",
     UnknownCapability => "unknown-capability":
         "An entity file's `capability`, or a cmd publish's `capability`, is not \
         one the core knows (`homeostat schema entity` lists them). The \
