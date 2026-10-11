@@ -198,6 +198,9 @@ TIMELINE_ROW_MAX = 1000
 # The most series of each kind (aspects read, aspects commanded) one
 # timeline reads changes for. Each is a recorder query.
 TIMELINE_SERIES_MAX = 24
+# The most changes one aspect it reads adds to a timeline. A sensor that
+# reports every few seconds would otherwise bury the commands.
+TIMELINE_INPUT_MAX = 200
 
 # Issues one /api/forecasts reply may carry. A week of hourly issues is
 # 168 full horizons: megabytes on the wire and an unreadable chart. The
@@ -1288,7 +1291,10 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
 
         Events and commands come from home/history/events, state changes
         from the samples path with changes=1. Times are seconds, as the
-        page's are.
+        page's are. When a query fills its cap, the reply carries the
+        oldest time it kept (`answers_from`, a series' `from`): an answer
+        to an older command may have been cut, so the page does not judge
+        those commands.
         """
         start = datetime.datetime.fromtimestamp(from_us / 1e6, datetime.timezone.utc)
         end = datetime.datetime.fromtimestamp(to_us / 1e6, datetime.timezone.utc)
@@ -1308,46 +1314,56 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
             truncated = truncated or len(rows) >= TIMELINE_ROW_MAX
             return rows
 
-        def changes(entity: str, aspect: str) -> list[dict]:
+        def changes(entity: str, aspect: str, limit: int) -> dict:
+            nonlocal truncated
             selector = (
                 f"{keys.history_key('state', entity, aspect)}"
                 f"?from={start.isoformat(timespec='seconds')}"
-                f";to={end.isoformat(timespec='seconds')};limit={TIMELINE_ROW_MAX};changes=1"
+                f";to={end.isoformat(timespec='seconds')};limit={limit};changes=1"
             )
-            return [
+            points = [
                 {"ts": datetime.datetime.fromisoformat(p["ts"]).timestamp(), "value": p["value"]}
                 for _key, points in hub.session.get_json(selector)
                 for p in points or []
             ]
+            capped = len(points) >= limit
+            truncated = truncated or capped
+            return {
+                "entity": entity,
+                "aspect": aspect,
+                "points": points,
+                "from": points[0]["ts"] if capped else None,
+            }
 
-        commands = [
-            c for c in events("home/cmd/**")
-            if isinstance(c["value"], dict) and c["value"].get("actor") == unit
-        ]
-        ids = {c["value"].get("id") for c in commands} - {None}
+        # Command envelopes and health events are objects. Any bus client
+        # can put on these keys, so a row that is not one, or an id that
+        # is not a string, is skipped.
+        def objects(rows: list[dict]) -> list[dict]:
+            return [r for r in rows if isinstance(r["value"], dict)]
+
+        commands = [c for c in objects(events("home/cmd/**")) if c["value"].get("actor") == unit]
+        ids = {i for c in commands if isinstance(i := c["value"].get("id"), str)}
+        health = events("home/health/*/event")
         answers = [
-            e for e in events("home/health/*/event")
-            if isinstance(e["value"], dict)
-            and (e["value"].get("cmd_id") in ids or e["value"].get("from_actor") == unit)
+            e for e in objects(health)
+            if (isinstance(i := e["value"].get("cmd_id"), str) and i in ids)
+            or e["value"].get("from_actor") == unit
         ]
         commanded = sorted({tuple(c["key"].split("/", 4)[3:5]) for c in commands})
-
-        def series(fields: list) -> list[dict]:
-            return [
-                {"entity": e, "aspect": a, "points": changes(e, a)}
-                for e, a in fields[:TIMELINE_SERIES_MAX]
-            ]
+        commanded = [f for f in commanded if len(f) == 2]
+        fields = [(f["entity"], f["aspect"]) for f in sources]
 
         return {
-            "events": events(f"home/health/{unit}/event"),
+            "events": objects(events(f"home/health/{unit}/event")),
             "params": events(f"home/config/{unit}/*"),
             "commands": commands,
             "answers": answers,
-            "readbacks": series([f for f in commanded if len(f) == 2]),
-            "inputs": series([(f["entity"], f["aspect"]) for f in sources]),
+            "answers_from": health[0]["ts"] if len(health) >= TIMELINE_ROW_MAX else None,
+            "readbacks": [changes(e, a, TIMELINE_ROW_MAX) for e, a in commanded[:TIMELINE_SERIES_MAX]],
+            "inputs": [changes(e, a, TIMELINE_INPUT_MAX) for e, a in fields[:TIMELINE_SERIES_MAX]],
             "truncated": truncated
             or len(commanded) > TIMELINE_SERIES_MAX
-            or len(sources) > TIMELINE_SERIES_MAX,
+            or len(fields) > TIMELINE_SERIES_MAX,
         }
 
     async def api_unit_timeline(request: web.Request) -> web.Response:

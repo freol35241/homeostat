@@ -1234,14 +1234,31 @@ async fn dashboard_gathers_an_automations_timeline() {
                      "payload": {"value": true, "priority": "manual", "actor": "dashboard", "id": "c2"}},
                 ])
             } else if params.contains("key=home/health/*/event") {
-                json!([
-                    {"ts": T + 2, "key": "home/health/arbiter/event",
-                     "payload": {"kind": "refuse", "cmd_id": "c1", "holder_actor": "dashboard"}},
-                    {"ts": T + 3, "key": "home/health/arbiter/event",
-                     "payload": {"kind": "refuse", "cmd_id": "c9"}},
-                ])
+                // A busy house: the reply fills the dashboard's cap of
+                // 1000, so commands older than its oldest row are not
+                // judged. A row that is not an object and a cmd_id that
+                // is not a string are skipped.
+                let mut rows: Vec<Value> = (0..996)
+                    .map(|i| {
+                        json!({"ts": T - 1000 + i, "key": "home/health/zigbee/event",
+                                    "payload": {"kind": "drop", "cmd_id": "other"}})
+                    })
+                    .collect();
+                rows.extend([
+                    json!({"ts": T + 1, "key": "home/health/arbiter/event", "payload": "not an object"}),
+                    json!({"ts": T + 1, "key": "home/health/arbiter/event",
+                           "payload": {"kind": "refuse", "cmd_id": ["c1"]}}),
+                    json!({"ts": T + 2, "key": "home/health/arbiter/event",
+                           "payload": {"kind": "refuse", "cmd_id": "c1", "holder_actor": "dashboard"}}),
+                    json!({"ts": T + 3, "key": "home/health/arbiter/event",
+                           "payload": {"kind": "refuse", "cmd_id": "c9"}}),
+                ]);
+                Value::Array(rows)
             } else if params.contains("key=home/health/evening_lights/event") {
-                json!([{"ts": T + 4, "key": "home/health/evening_lights/event", "payload": {"kind": "paused"}}])
+                json!([
+                    {"ts": T + 4, "key": "home/health/evening_lights/event", "payload": {"kind": "paused"}},
+                    {"ts": T + 4, "key": "home/health/evening_lights/event", "payload": "raw text"},
+                ])
             } else if params.contains("key=home/config/evening_lights/*") {
                 json!([{"ts": T + 5, "key": "home/config/evening_lights/off_time", "payload": "22:30"}])
             } else {
@@ -1292,7 +1309,12 @@ async fn dashboard_gathers_an_automations_timeline() {
     let answers = reply["answers"].as_array().expect("answers");
     assert_eq!(answers.len(), 1, "only events naming its commands: {reply}");
     assert_eq!(answers[0]["value"]["cmd_id"], "c1");
-    assert_eq!(reply["events"][0]["value"]["kind"], "paused", "{reply}");
+    assert_eq!(
+        reply["events"],
+        json!([{"ts": 1_700_000_000.000_004, "key": "home/health/evening_lights/event",
+                "value": {"kind": "paused"}}]),
+        "only object rows: {reply}"
+    );
     assert_eq!(reply["params"][0]["value"], "22:30", "{reply}");
     let readback = &reply["readbacks"][0];
     assert_eq!(
@@ -1304,7 +1326,13 @@ async fn dashboard_gathers_an_automations_timeline() {
         json!(1_700_000_001.0),
         "ts in seconds: {reply}"
     );
-    assert_eq!(reply["truncated"], false);
+    assert_eq!(readback["from"], Value::Null, "a series under its cap");
+    assert_eq!(
+        reply["answers_from"],
+        json!((T - 1000) as f64 / 1e6),
+        "the oldest answer row kept: {reply}"
+    );
+    assert_eq!(reply["truncated"], true, "{reply}");
 
     let (status, reply) = http_request(&addr, "GET", "/api/unit-timeline?unit=nobody", &[], None);
     assert_eq!(status, 404, "{reply}");

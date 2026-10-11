@@ -2430,23 +2430,27 @@ An automation's overlay shows a timeline of the last day, newest first.
 It answers "does it do what I think" from what is already recorded, and
 asks nothing of the automation.
 
-- **Read**: each change to an aspect it reads, its From fields. The
-  first row of a series is the value when the window opened.
-- **Set**: each write to one of its parameters.
-- **Sent**: each command it sent, with what came of it. An event naming
-  the command's `cmd_id` says refused (the arbiter, with the holder) or
-  dropped (the adapter, with the reason). Otherwise the aspect's
-  recorded state once the readback wait has passed says applied. The
-  wait is the one the page uses for its own commands. Otherwise nothing
-  answered.
-- **Taken**: another actor's command displaced a hold it had.
-- **Event**: its own health events, `paused` and `resumed` among them.
+- Read: each change to an aspect it reads, its From fields.
+- Set: each write to one of its parameters.
+- Sent: each command it sent, with what came of it. An event naming the
+  command's `cmd_id` says refused (the arbiter, with the holder) or
+  dropped (the adapter, with the reason). Otherwise the aspect's recorded
+  state says applied when it reached the commanded value within the
+  readback wait. The wait and the tolerance are the ones the page uses
+  for its own commands. A state that already had the value before the
+  command reads "already so", since nothing shows a device acted.
+  Otherwise nothing answered.
+- Taken: another actor's command displaced a hold it had.
+- Event: its own health events, `paused` and `resumed` among them.
 
 `/api/unit-timeline` gathers the rows from the recorder and
 `unitTimeline` in `dashboard-logic.js` puts them in order. The commands
-and events of the whole house are read newest first up to a cap, so a
-busy day can push the oldest rows out, and the overlay says when it
-did. Other units keep the Events list.
+and events of the whole house are read newest first up to a cap, and so
+are the changes of each aspect. A busy day can push the oldest rows out,
+and the overlay says when it did. An answer to an older command may be
+among the rows cut, so a command older than what a capped query kept
+reads "outcome unknown". The overlay shows the newest few hundred rows.
+Other units keep the Events list.
 
 ### Map and people
 

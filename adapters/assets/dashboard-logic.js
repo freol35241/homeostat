@@ -947,6 +947,12 @@
     return entry ? entry.value : current;
   }
 
+  /* How far a readback may be from a command and still match it. The
+   * brightness scale (0–254) is finer than the percent its control shows. */
+  function cmdTolerance(aspect) {
+    return aspect === 'brightness' ? 254 / 200 : 0;
+  }
+
   function sameValue(a, b, tolerance) {
     if (typeof a === 'number' && typeof b === 'number') {
       return Math.abs(a - b) <= Math.max(tolerance || 0, 1e-6 * Math.max(1, Math.abs(a)));
@@ -1440,13 +1446,14 @@
 
   /* An automation's timeline (docs/design.md#unit-timeline), newest first,
    * built from what /api/unit-timeline gathers from the recorder:
-   * - `input`: a change to an aspect it reads. The first of a series is the
-   *   value when the window opened.
+   * - `input`: a change to an aspect it reads.
    * - `param`: a write to one of its parameters.
    * - `command`: a command it sent, with what came of it. An event naming
    *   its cmd_id says refused (the arbiter) or dropped (the adapter). Else
-   *   the aspect's recorded state after the readback wait says applied.
-   *   Else nothing answered.
+   *   a recorded state matching it within the readback wait says applied,
+   *   and a matching state from before it says the aspect already had the
+   *   value. Else nothing answered. A command older than what a capped
+   *   query kept is not judged: its answer may have been cut.
    * - `taken-over`: another actor's command displaced its hold.
    * - `event`: one of its own health events. */
   function unitTimeline(raw, model, aspects, unitName) {
@@ -1455,16 +1462,17 @@
     ((model && model.entities) || []).forEach(function (e) { byName[e.name] = e; });
     var out = [];
     (raw.inputs || []).forEach(function (series) {
-      (series.points || []).forEach(function (p, i) {
-        out.push({ ts: p.ts, type: 'input', entity: series.entity, aspect: series.aspect, value: p.value, first: i === 0 });
+      (series.points || []).forEach(function (p) {
+        out.push({ ts: p.ts, type: 'input', entity: series.entity, aspect: series.aspect, value: p.value });
       });
     });
     (raw.params || []).forEach(function (p) {
       out.push({ ts: p.ts, type: 'param', param: String(p.key).split('/').pop(), value: p.value });
     });
     var readbacks = {};
-    (raw.readbacks || []).forEach(function (s) { readbacks[s.entity + '/' + s.aspect] = s.points || []; });
+    (raw.readbacks || []).forEach(function (s) { readbacks[s.entity + '/' + s.aspect] = s; });
     var answers = raw.answers || [];
+    var cut = function (ts, from) { return from !== null && from !== undefined && ts < from; };
     (raw.commands || []).forEach(function (c) {
       var parts = String(c.key).split('/');
       var entity = parts[3];
@@ -1472,24 +1480,30 @@
       var envelope = c.value || {};
       var entry = { ts: c.ts, type: 'command', entity: entity, aspect: aspect, value: envelope.value, outcome: 'no answer' };
       var answer = envelope.id ? answers.filter(function (a) { return a.value && a.value.cmd_id === envelope.id; })[0] : null;
+      var series = readbacks[entity + '/' + aspect] || { points: [] };
       if (answer) {
         if (answer.value.kind === 'refuse') {
           entry.outcome = 'refused';
-          entry.by = answer.value.holder_actor || answer.value.holder_priority || null;
+          entry.by = answer.value.holder_actor || null;
+          entry.priority = answer.value.holder_priority || null;
         } else {
           entry.outcome = 'dropped';
           entry.by = unitNameFromHealthKey(answer.key);
           entry.reason = answer.value.reason || null;
         }
+      } else if (cut(c.ts, raw.answers_from) || cut(c.ts, series.from)) {
+        entry.outcome = 'unknown';
       } else {
         var e = byName[entity] || {};
         var waitS = commandTimeoutMs(e.capability, aspects && aspects[entity], aspect) / 1000;
-        var at = null;
-        (readbacks[entity + '/' + aspect] || []).forEach(function (p) {
-          if (p.ts <= c.ts + waitS) at = p;
+        var tol = cmdTolerance(aspect);
+        var before = null;
+        var reached = (series.points || []).some(function (p) {
+          if (p.ts <= c.ts) before = p;
+          return p.ts > c.ts && p.ts <= c.ts + waitS && sameValue(p.value, envelope.value, tol);
         });
-        // A device may report a setpoint back rounded to a hundredth.
-        if (at && sameValue(at.value, envelope.value, 0.01)) entry.outcome = 'applied';
+        if (reached) entry.outcome = 'applied';
+        else if (before && sameValue(before.value, envelope.value, tol)) entry.outcome = 'already';
       }
       out.push(entry);
     });
@@ -1653,6 +1667,7 @@
     pauseParam: pauseParam,
     mergeUnitEvents: mergeUnitEvents,
     unitTimeline: unitTimeline,
+    cmdTolerance: cmdTolerance,
     isPaused: isPaused,
     viewFor: viewFor,
     historyShape: historyShape,

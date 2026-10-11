@@ -1683,7 +1683,6 @@ test('the timeline lists reads, writes, commands and events newest first', () =>
   const t = logic.unitTimeline(timelineRaw(), timelineModel, {}, 'evening_lights');
   assert.deepEqual(t.map((e) => [e.type, e.ts]),
     [['event', 400], ['command', 300], ['input', 200], ['param', 150], ['input', 100]]);
-  assert.equal(t.find((e) => e.type === 'input' && e.ts === 100).first, true, 'the value when the window opened');
   assert.equal(t.find((e) => e.type === 'param').param, 'off_time');
 });
 
@@ -1696,11 +1695,52 @@ test('a command the state reached within its wait is applied, one it did not is 
   assert.equal(late.find((e) => e.type === 'command').outcome, 'no answer', 'after the light wait of 8 s');
 });
 
-test('a command to a value the aspect already had is applied', () => {
+test('a command to a value the aspect already had says so, and is not called applied', () => {
   const t = logic.unitTimeline(timelineRaw({
     readbacks: [{ entity: 'lamp', aspect: 'on', points: [{ ts: 50, value: false }] }],
   }), timelineModel, {}, 'evening_lights');
+  assert.equal(t.find((e) => e.type === 'command').outcome, 'already');
+});
+
+test('a change after the command lands does not undo its outcome', () => {
+  const cmd = (ts, value, id) => ({
+    ts, key: 'home/cmd/livingroom/lamp/on',
+    value: { value, priority: 'automation', actor: 'evening_lights', id },
+  });
+  const quick = logic.unitTimeline(timelineRaw({
+    commands: [cmd(300, false, 'c1'), cmd(302, true, 'c2')],
+    readbacks: [{ entity: 'lamp', aspect: 'on', points: [{ ts: 50, value: true }, { ts: 301, value: false }, { ts: 303, value: true }] }],
+  }), timelineModel, {}, 'evening_lights');
+  assert.deepEqual(quick.filter((e) => e.type === 'command').map((e) => e.outcome), ['applied', 'applied']);
+  const taken = logic.unitTimeline(timelineRaw({
+    answers: [{ ts: 305, key: 'home/health/arbiter/event', value: { kind: 'preempt', entity: 'lamp', aspect: 'on',
+      from_actor: 'evening_lights', to_actor: 'dashboard', to_priority: 'manual' } }],
+    readbacks: [{ entity: 'lamp', aspect: 'on', points: [{ ts: 50, value: true }, { ts: 301, value: false }, { ts: 306, value: true }] }],
+  }), timelineModel, {}, 'evening_lights');
+  assert.equal(taken.find((e) => e.type === 'command').outcome, 'applied', 'it held until taken over');
+});
+
+test('a brightness one step off matches, as it does for the page', () => {
+  const t = logic.unitTimeline(timelineRaw({
+    commands: [{ ts: 300, key: 'home/cmd/livingroom/lamp/brightness',
+      value: { value: 128, priority: 'automation', actor: 'evening_lights', id: 'c1' } }],
+    readbacks: [{ entity: 'lamp', aspect: 'brightness', points: [{ ts: 50, value: 10 }, { ts: 301, value: 127 }] }],
+  }), timelineModel, {}, 'evening_lights');
   assert.equal(t.find((e) => e.type === 'command').outcome, 'applied');
+});
+
+test('a command older than what a capped query kept is not judged', () => {
+  const answersCut = logic.unitTimeline(timelineRaw({ answers_from: 310 }), timelineModel, {}, 'evening_lights');
+  assert.equal(answersCut.find((e) => e.type === 'command').outcome, 'unknown');
+  const stateCut = logic.unitTimeline(timelineRaw({
+    readbacks: [{ entity: 'lamp', aspect: 'on', from: 310, points: [{ ts: 310, value: false }] }],
+  }), timelineModel, {}, 'evening_lights');
+  assert.equal(stateCut.find((e) => e.type === 'command').outcome, 'unknown');
+  const answered = logic.unitTimeline(timelineRaw({
+    answers_from: 310,
+    answers: [{ ts: 301, key: 'home/health/arbiter/event', value: { kind: 'refuse', cmd_id: 'c1' } }],
+  }), timelineModel, {}, 'evening_lights');
+  assert.equal(answered.find((e) => e.type === 'command').outcome, 'refused', 'a kept answer still counts');
 });
 
 test('events naming the command say refused or dropped, and by whom', () => {
@@ -1710,7 +1750,7 @@ test('events naming the command say refused or dropped, and by whom', () => {
   }), timelineModel, {}, 'evening_lights');
   const r = refused.find((e) => e.type === 'command');
   assert.equal(r.outcome, 'refused');
-  assert.equal(r.by, 'dashboard');
+  assert.deepEqual([r.by, r.priority], ['dashboard', 'manual']);
   const dropped = logic.unitTimeline(timelineRaw({
     answers: [{ ts: 301, key: 'home/health/zigbee/event',
       value: { kind: 'drop', cmd_id: 'c1', reason: 'invalid-command' } }],

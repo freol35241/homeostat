@@ -180,7 +180,7 @@
     if (route === '/api/source-events') return Promise.resolve(respond({ events: [] }));
     if (route === '/api/unit-events') return Promise.resolve(respond({ events: [] }));
     if (route === '/api/unit-timeline') {
-      return Promise.resolve(respond({ events: [], params: [], commands: [], answers: [], readbacks: [], inputs: [], truncated: false }));
+      return Promise.resolve(respond({ events: [], params: [], commands: [], answers: [], answers_from: null, readbacks: [], inputs: [], truncated: false }));
     }
     if (route === '/api/logs') {
       return Promise.resolve(respond({ lines: [

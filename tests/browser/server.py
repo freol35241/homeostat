@@ -257,10 +257,12 @@ class FakeHouse:
                     {"ts": now - 600, "key": "home/cmd/livingroom/livingroom_lamp/on", "value": envelope}
                 ],
                 "answers": [],
+                "answers_from": None,
                 "readbacks": [
                     {
                         "entity": "livingroom_lamp",
                         "aspect": "on",
+                        "from": None,
                         "points": [{"ts": now - 7200, "value": True}, {"ts": now - 599, "value": False}],
                     }
                 ],
@@ -268,6 +270,7 @@ class FakeHouse:
                     {
                         "entity": "livingroom_presence",
                         "aspect": "presence",
+                        "from": None,
                         "points": [{"ts": now - 7200, "value": True}, {"ts": now - 900, "value": False}],
                     }
                 ],
