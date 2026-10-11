@@ -381,6 +381,55 @@ async fn a_live_edit_survives_an_apply_that_keeps_its_default() {
     let _ = std::fs::remove_dir_all(&house);
 }
 
+/// Live edits survive a supervisor restart. One whose default changed while
+/// the supervisor was down is dropped, and the owner's default holds.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_live_edit_survives_a_supervisor_restart() {
+    let house = temp_house(FIXTURE, "restart-keeps-edit");
+    let saved = house.join("data/live-edits.json");
+    let house_arg = house.to_str().expect("utf-8 path");
+
+    let mut sup = Supervisor::spawn_at(&house, &[]);
+    let observer = sup.observer().await;
+    await_base_units(&observer).await;
+    config_write(&observer, "home/config/probe/level", json!(7))
+        .await
+        .expect("write inside the constraint");
+    assert!(saved.exists(), "the edit is saved");
+    drop(observer);
+    sup.shutdown();
+
+    let mut sup = Supervisor::spawn_at(&house, &[]);
+    let observer = sup.observer().await;
+    await_base_units(&observer).await;
+    assert_eq!(
+        cache_read(&observer, "home/config/probe/level").await,
+        Some(json!(7)),
+        "the edit is restored"
+    );
+    let plan = cli(&["plan", house_arg, "--bus", &sup.endpoint]);
+    assert_cli_ok(&plan);
+    let text = stdout(&plan);
+    assert!(text.contains("= probe/level  live=7  repo=1"), "{text}");
+    drop(observer);
+    sup.shutdown();
+
+    // The owner changes the default while the supervisor is down.
+    edit(&house, "units/probe.toml", "default = 1", "default = 3");
+    let mut sup = Supervisor::spawn_at(&house, &[]);
+    let observer = sup.observer().await;
+    await_base_units(&observer).await;
+    assert_eq!(
+        cache_read(&observer, "home/config/probe/level").await,
+        Some(json!(3)),
+        "the changed default wins"
+    );
+    assert!(!saved.exists(), "the dropped edit is gone from the file");
+
+    sup.shutdown();
+    let _ = std::fs::remove_dir_all(&house);
+}
+
 /// Waits up to 10 s for the probe to echo `want`.
 async fn await_echo(
     echo_sub: &zenoh::pubsub::Subscriber<

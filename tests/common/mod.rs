@@ -35,10 +35,23 @@ impl Supervisor {
     /// (and therefore its units) inherit. Ephemeral ports are handed out
     /// racily (the probe listener closes before the supervisor binds), so
     /// a supervisor that dies before listening is retried on a new port.
+    ///
+    /// Tests share fixture houses, so each spawn saves its live edits to a
+    /// file of its own instead of the house's `data/live-edits.json`.
     pub fn spawn_with_env(fixture: &str, envs: &[(&str, &str)]) -> Self {
+        static SPAWNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let live_edits = std::env::temp_dir().join(format!(
+            "homeostat-live-edits-{}-{}.json",
+            std::process::id(),
+            SPAWNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_file(&live_edits);
+        let live_edits = live_edits.to_str().expect("utf-8 path").to_string();
+        let mut envs = envs.to_vec();
+        envs.push(("HOMEOSTAT_LIVE_EDITS", &live_edits));
         Self::spawn_at(
             &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(fixture),
-            envs,
+            &envs,
         )
     }
 

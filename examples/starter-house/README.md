@@ -20,7 +20,7 @@ echo "Z2M_FRONTEND_TOKEN=$(openssl rand -hex 16)" > .env   # Zigbee2MQTT fronten
 
 Both are gitignored. The homeostat container runs as uid 1000. If your
 checkout is owned by another user, add `HOMEOSTAT_UID=$(id -u)` and
-`HOMEOSTAT_GID=$(id -g)` to `.env` so units can write `data/` and
+`HOMEOSTAT_GID=$(id -g)` to `.env` so the core and units can write `data/` and
 `plans/`. If you are upgrading a house that ran an older image as root,
 its `uv-cache` volume is owned by root. Remove it once with
 `docker volume rm <project>_uv-cache`; it is only a cache.

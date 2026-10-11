@@ -126,7 +126,8 @@ system may run in one container ([Distribution](#distribution)).
 Nothing running edits the repo's manifests, entity files,
 `zones.toml` or `dashboard.toml`. The only things written into the
 checkout are a unit's own data (the recorder's store under the
-gitignored `data/`) and pending plans under `plans/`. The running world
+gitignored `data/`), the core's live parameter edits at
+`data/live-edits.json`, and pending plans under `plans/`. The running world
 is diffed against the repo, not the other way round. A change is
 a commit followed by [plan and apply](#plan-and-apply). A live
 parameter edit is drift from the repo. An apply keeps it until the
@@ -1288,9 +1289,16 @@ default is read. The two never differ by representation alone.
 The repo is the system of record, and the bus value is a live view of
 it.
 
-- A live edit survives a unit restart, because the core holds it. It
-  does not survive a supervisor restart, because the store re-seeds
-  from defaults.
+- A live edit survives a unit restart, because the core holds it.
+- A live edit survives a supervisor restart. The core saves every value
+  that differs from its default, with the default it was set under, to
+  `data/live-edits.json` after each change. On startup it restores a
+  saved edit by the same rule as apply: the default must be unchanged
+  and the value must meet the constraint. A default the owner changed
+  while the supervisor was down wins, and the log says which edits were
+  restored or dropped. The file is not part of the repo, so the repo
+  stays the system of record. `HOMEOSTAT_LIVE_EDITS` moves it, which
+  tests that share a fixture house use.
 - Apply keeps a live edit while its default stays the same. The owner
   decides through the default and the family through the live value,
   so an unrelated commit does not undo a family member's setpoint. An
@@ -1304,8 +1312,8 @@ it.
 - `plan --reset-params` and `apply --reset-params` set every value back
   to its default. A rollback by checkout that should also undo live
   edits needs it.
-- To make a live edit durable, commit it as the default. That is a
-  parameter-only plan, with no restart and no apply lock.
+- To make a live edit part of the repo, commit it as the default. That
+  is a parameter-only plan, with no restart and no apply lock.
 - Changing a constraint or `editable_by` refreshes the unit in place.
   Adding, removing or retyping a parameter restarts it.
 
@@ -2765,8 +2773,8 @@ gaps it has not closed.
   config queryable checks type and constraint, so any bus client may
   write an owner-tier parameter. See [Live parameters](#live-parameters).
 - **Turning a live edit into a commit.** A family member's live edit
-  lasts until the owner changes that parameter in the repo or the
-  supervisor restarts. Capturing it as a commit is not built. See
+  lasts until the owner changes that parameter in the repo. Capturing
+  it as a commit is not built. See
   [Repo and live values](#repo-and-live-values).
 - **Handing an arbiter hold back early.** Only expiry ends a hold.
   Whether release belongs on the envelope or on an arbiter surface is
