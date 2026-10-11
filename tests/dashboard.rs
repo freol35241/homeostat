@@ -1107,6 +1107,95 @@ async fn dashboard_serves_unit_logs() {
     sup.shutdown();
 }
 
+/// `/api/unit-events` reads a unit's health events from the recorder, so
+/// the unit overlay keeps them across a reload. The test session answers
+/// `home/history/events` in the recorder's place, which pins the selector
+/// the dashboard sends and the shape it returns.
+#[tokio::test(flavor = "multi_thread")]
+async fn dashboard_serves_a_units_recorded_events() {
+    let port = common::free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let permit = startup_permit().await;
+    let mut sup =
+        Supervisor::spawn_with_env(FIXTURE, &[("HOMEOSTAT_DASHBOARD_PORT", &port.to_string())]);
+    let observer = sup.observer().await;
+    let mut dash = health_watch(&observer, "dashboard").await;
+    await_health(&mut dash, Duration::from_mins(3), |h| {
+        h.status == HealthStatus::Running
+    })
+    .await;
+    drop(permit);
+
+    let queryable = observer
+        .declare_queryable("home/history/events")
+        .await
+        .expect("stand-in recorder");
+    let (selectors, mut asked) = tokio::sync::mpsc::unbounded_channel::<String>();
+    tokio::spawn(async move {
+        while let Ok(query) = queryable.recv_async().await {
+            let _ = selectors.send(query.parameters().to_string());
+            let rows = json!([
+                {"ts": 1_700_000_000_000_000_u64, "key": "home/health/evening_lights/event",
+                 "payload": {"kind": "paused"}},
+                {"ts": 1_700_000_060_500_000_u64, "key": "home/health/evening_lights/event",
+                 "payload": {"kind": "resumed"}},
+            ]);
+            let _ = query.reply("home/history/events", rows.to_string()).await;
+        }
+    });
+
+    // The stand-in's queryable reaches the dashboard's session after a
+    // moment, until then the get finds no recorder and answers no events.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let reply = loop {
+        let (status, reply) = http_request(
+            &addr,
+            "GET",
+            "/api/unit-events?unit=evening_lights",
+            &[],
+            None,
+        );
+        assert_eq!(status, 200, "{reply}");
+        if reply["events"].as_array().is_some_and(|e| !e.is_empty()) {
+            break reply;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the stand-in recorder was never asked"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    assert_eq!(
+        reply["events"],
+        json!([
+            {"ts": 1_700_000_000.0, "key": "home/health/evening_lights/event", "value": {"kind": "paused"}},
+            {"ts": 1_700_000_060.5, "key": "home/health/evening_lights/event", "value": {"kind": "resumed"}},
+        ]),
+        "ts in seconds, the shape of a live event"
+    );
+    let selector = asked.recv().await.expect("a selector");
+    assert!(
+        selector.contains("key=home/health/evening_lights/event"),
+        "only the unit's own events: {selector}"
+    );
+    assert!(selector.contains("limit=200"), "{selector}");
+
+    let (status, reply) = http_request(&addr, "GET", "/api/unit-events?unit=nobody", &[], None);
+    assert_eq!(status, 404, "{reply}");
+    for query in ["hours=soon", "hours=0", "hours=-1"] {
+        let (status, reply) = http_request(
+            &addr,
+            "GET",
+            &format!("/api/unit-events?unit=evening_lights&{query}"),
+            &[],
+            None,
+        );
+        assert_eq!(status, 400, "{query}: {reply}");
+    }
+
+    sup.shutdown();
+}
+
 /// A fake go2rtc (`tests/fake_go2rtc.py`) spawned directly on a free port.
 /// The dashboard proxies reach it through `HOMEOSTAT_GO2RTC`, as they
 /// would reach the shim-supervised real one on localhost.

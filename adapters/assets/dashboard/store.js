@@ -53,6 +53,7 @@ export var overlay = {
   sourcePinned: null,      // the contributor a reader pinned out of the legend
   lastPoints: null,
   log: null,               // for unit: {lines, loaded, loading}
+  unitEvents: null,        // for unit: {rows, loaded, loading, failed} from /api/unit-events
   expanded: {}              // for entity: group -> true when a collapsed section is opened
 };
 

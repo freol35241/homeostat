@@ -462,6 +462,15 @@ class UnitOverlay(PageTest):
         self.assertEqual(await lines.count(), 1)
         self.assertIn("staged", await lines.first.inner_text())
 
+    async def test_its_recorded_events_are_listed(self):
+        # The page opened after the event, so only the recorder has it.
+        await self.view("health")
+        await self.page.locator('[data-action="unit-detail"]:visible').first.click()
+        await self.page.wait_for_timeout(400)
+        rows = self.page.locator("#overlay-panel .event-feed .event-row")
+        self.assertGreaterEqual(await rows.count(), 1)
+        self.assertIn("recorded-before-load", await rows.first.inner_text())
+
 
 class PauseSwitch(PageTest):
     """An automation's card carries its pause switch, and a tap asks for the

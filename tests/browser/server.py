@@ -86,6 +86,7 @@ class FakeHouse:
         app.router.add_get("/api/forecasts", self.api_forecasts)
         app.router.add_get("/api/source-events", self.api_source_events)
         app.router.add_get("/api/logs", self.api_logs)
+        app.router.add_get("/api/unit-events", self.api_unit_events)
         app.router.add_post("/api/cmd", self.api_cmd)
         app.router.add_post("/api/param", self.api_param)
         app.router.add_post("/api/lights/off", self.api_lights_off)
@@ -220,6 +221,22 @@ class FakeHouse:
 
     async def api_source_events(self, request: web.Request) -> web.Response:
         return web.json_response({"events": []})
+
+    async def api_unit_events(self, request: web.Request) -> web.Response:
+        # The unit's shape: recorded health events, oldest first, ts in
+        # seconds. One for every unit, so the overlay has a row to show.
+        unit = request.query.get("unit", "")
+        return web.json_response(
+            {
+                "events": [
+                    {
+                        "ts": time.time() - 3600,
+                        "key": f"home/health/{unit}/event",
+                        "value": {"kind": "recorded-before-load"},
+                    }
+                ]
+            }
+        )
 
     async def api_logs(self, request: web.Request) -> web.Response:
         # The unit's shape: a list of the core's log entries.

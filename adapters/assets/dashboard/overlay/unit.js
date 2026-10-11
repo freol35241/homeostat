@@ -29,10 +29,28 @@ function renderLogLine(entry) {
   return html`<div class="${cls}"><span class="ts" title="${tFull}">${tStr}</span>${entry.line}</div>`;
 }
 
+// The unit's recorded events, so a reload does not empty the list. Without
+// an answer from the recorder the overlay shows what this page saw live.
+function fetchUnitEvents(unitName) {
+  overlay.unitEvents = { rows: [], loaded: false, loading: true, failed: false };
+  var done = function (rows, failed) {
+    overlay.unitEvents = { rows: rows, loaded: true, loading: false, failed: failed };
+    if (overlay.open && overlay.type === 'unit') renderOverlayContent();
+  };
+  fetch('/api/unit-events?unit=' + encodeURIComponent(unitName))
+    .then(function (r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    })
+    .then(function (data) { done((data && data.events) || [], false); })
+    .catch(function () { done([], true); });
+}
+
 export function openUnitDetail(unitName) {
   overlay.type = 'unit';
   overlay.unit = unitName;
   fetchUnitLog(unitName);
+  fetchUnitEvents(unitName);
   showOverlay();
 }
 
@@ -58,9 +76,16 @@ export function renderUnitDetailBody() {
   });
   var paramsHtml = paramRows.length ? paramRows : html`<div class="empty-hint">No parameters.</div>`;
 
-  var events = store.events.filter(function (ev) { return unitNameFromHealthKey(ev.key) === unit.name; });
-  var eventRows = events.map(renderEventRow);
-  var eventsHtml = eventRows.length ? eventRows : html`<div class="empty-hint">No events yet this session.</div>`;
+  var recorded = overlay.unitEvents || { rows: [], loaded: false, loading: false, failed: false };
+  var live = store.events.filter(function (ev) { return unitNameFromHealthKey(ev.key) === unit.name; });
+  var eventRows = logic.mergeUnitEvents(recorded.rows, live).map(renderEventRow);
+  var eventsHint = recorded.failed
+    ? html`<div class="empty-hint">The recorder did not answer, so this lists the events since the page opened.</div>`
+    : '';
+  var eventsHtml = eventRows.length ? html`${eventsHint}${eventRows}`
+    : recorded.loading ? html`<div class="empty-hint">Loading&hellip;</div>`
+    : recorded.failed ? eventsHint
+    : html`<div class="empty-hint">No events in the last 24 hours.</div>`;
 
   var log = overlay.log || { lines: [], loaded: false, loading: false };
   var logRows = log.lines.map(renderLogLine);

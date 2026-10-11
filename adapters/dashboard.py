@@ -25,6 +25,7 @@ Routes, each documented on its handler in make_app:
   GET  /api/history               recorder proxy for charts
   GET  /api/forecasts             recorder proxy for stored forecast issues
   GET  /api/source-events         when each source of a computed value was used
+  GET  /api/unit-events           a unit's recorded health events
   GET  /api/logs                  a unit's captured stdout/stderr tail
   GET  /api/camera/{entity}/live  MSE relay to go2rtc
   GET  /assets/*                  stylesheet, logic, modules, vendored libraries
@@ -185,6 +186,9 @@ HISTORY_LIMIT_MAX = 5000
 # has been ignored for a while without reading all of history.
 SOURCE_EVENT_LOOKBACK_H = 24 * 7
 SOURCE_EVENT_MAX = 500
+
+# How many of a unit's recorded events its overlay reads, newest first.
+UNIT_EVENT_MAX = 200
 
 # Issues one /api/forecasts reply may carry. A week of hourly issues is
 # 168 full horizons: megabytes on the wire and an unreadable chart. The
@@ -1231,6 +1235,43 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         out.sort(key=lambda e: e["ts"] or 0)
         return web.json_response({"events": out})
 
+    async def api_unit_events(request: web.Request) -> web.Response:
+        """GET /api/unit-events?unit=..&hours=24: a unit's recorded health events.
+
+        The unit overlay lists them, so a reload does not lose what the
+        page saw live. Oldest first, the newest UNIT_EVENT_MAX of the
+        window, each as {ts, key, value} with `ts` in seconds, the shape
+        of a live event.
+        """
+        unit = request.query.get("unit", "")
+        if unit not in model.units:
+            return json_error(f"unknown unit {unit}", status=404)
+        try:
+            hours = min(float(request.query.get("hours", "24")), 24 * 31)
+        except (ValueError, OverflowError):
+            return json_error("hours must be a number")
+        if not hours > 0:
+            return json_error("hours must be positive")
+        now = datetime.datetime.now(datetime.timezone.utc)
+        to_us = int(now.timestamp() * 1_000_000)
+        from_us = to_us - int(hours * 3600 * 1_000_000)
+        selector = (
+            f"home/history/events?key=home/health/{unit}/event"
+            f";from={from_us};to={to_us};limit={UNIT_EVENT_MAX}"
+        )
+        try:
+            replies = await asyncio.get_running_loop().run_in_executor(
+                None, hub.session.get_json, selector
+            )
+        except QueryError as error:
+            return json_error(f"recorder: {error}", status=502)
+        events = [
+            {"ts": row["ts"] / 1_000_000, "key": row["key"], "value": row["payload"]}
+            for _key, payload in replies
+            for row in payload or []
+        ]
+        return web.json_response({"events": events})
+
     async def api_logs(request: web.Request) -> web.Response:
         """GET /api/logs?unit=..&lines=N: a unit's captured stdout/stderr tail.
 
@@ -1338,6 +1379,7 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
     app.router.add_get("/api/history", api_history)
     app.router.add_get("/api/forecasts", api_forecasts)
     app.router.add_get("/api/source-events", api_source_events)
+    app.router.add_get("/api/unit-events", api_unit_events)
     app.router.add_get("/api/logs", api_logs)
     app.router.add_get("/api/camera/{entity}/live", api_camera_live)
     app.router.add_get("/assets/{name:.+}", api_asset)
