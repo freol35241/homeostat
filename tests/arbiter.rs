@@ -247,9 +247,10 @@ async fn forward_preempt_refuse_and_expiry() {
         .await
         .expect("event subscriber");
 
-    // (a) No holder yet: an automation wish forwards unchanged and takes
-    // the lease at the automation band.
-    let auto_wish = envelope(json!(true), "automation", "scheduler");
+    // (a) No holder yet: an automation wish forwards unchanged, options
+    // included, and takes the lease at the automation band.
+    let mut auto_wish = envelope(json!(true), "automation", "scheduler");
+    auto_wish["options"] = json!({"transition": 1.0});
     put_cmd(&observer, &auto_wish).await;
     let forwarded = next_json(&arbiter_sub, Duration::from_secs(10))
         .await

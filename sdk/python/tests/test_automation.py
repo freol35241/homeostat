@@ -8,10 +8,12 @@ and no duplicate expression.
 Run: uv run --no-project --with-editable sdk/python python -m unittest discover sdk/python/tests
 """
 
+import threading
 import types
 import unittest
 from pathlib import Path
 
+from homeostat import house
 from homeostat.automation import Context, _expand, _house_has_recorder
 from homeostat.house import Entity
 from homeostat.session import QueryTimeout
@@ -172,6 +174,62 @@ class ConcreteKeyTest(unittest.TestCase):
         ctx = bare_context({"f": {"key": "home/forecast/{room}/{entity}/price"}})
         with self.assertRaises(ValueError):
             ctx._concrete_key("f", room=None, entity=None, aspect=None)
+
+
+class PublishOptionsTest(unittest.TestCase):
+    """Command options ride in the envelope beside the value
+    (docs/design.md#command-options). Only a command carries them."""
+
+    def context(self):
+        ctx = bare_context(
+            {
+                "lamp": {"key": "home/cmd/hall/lamp/brightness", "priority": "automation"},
+                "level": {"key": "home/state/hall/dimmer/level"},
+            }
+        )
+        ctx.unit = "pir_dim"
+        ctx._lock = threading.Lock()
+        ctx._param_specs = {}
+        ctx.puts = []
+        ctx._session = types.SimpleNamespace(put_json=lambda key, value: ctx.puts.append((key, value)))
+        return ctx
+
+    def test_a_command_carries_its_options(self):
+        ctx = self.context()
+        ctx.publish("lamp", 127, options={"transition": 1.0})
+        [(key, envelope)] = ctx.puts
+        self.assertEqual(key, "home/cmd/hall/lamp/brightness")
+        self.assertEqual(envelope["value"], 127)
+        self.assertEqual(envelope["options"], {"transition": 1.0})
+
+    def test_a_command_without_options_has_no_options_field(self):
+        ctx = self.context()
+        ctx.publish("lamp", 127)
+        self.assertNotIn("options", ctx.puts[0][1])
+
+    def test_options_on_a_state_publish_are_refused(self):
+        ctx = self.context()
+        with self.assertRaises(ValueError):
+            ctx.publish("level", 3, options={"transition": 1.0})
+        self.assertEqual(ctx.puts, [])
+
+    def test_options_must_be_an_object_with_string_keys(self):
+        ctx = self.context()
+        for options in ([("transition", 1)], {1: 1.0}, [], ""):
+            with self.assertRaises(ValueError, msg=repr(options)):
+                ctx.publish("lamp", 127, options=options)
+        self.assertEqual(ctx.puts, [])
+
+    def test_bad_options_raise_while_paused(self):
+        # The mistake is in the automation's code, so it shows at once,
+        # not on the first publish after the automation is resumed.
+        ctx = self.context()
+        ctx._param_specs = {house.ENABLED_PARAM: {}}
+        ctx._param_values = {house.ENABLED_PARAM: False}
+        with self.assertRaises(ValueError):
+            ctx.publish("lamp", 127, options=[1])
+        ctx.publish("lamp", 127, options={"transition": 1.0})
+        self.assertEqual(ctx.puts, [])
 
 
 class RecorderPresenceTest(unittest.TestCase):

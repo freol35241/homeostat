@@ -63,9 +63,32 @@ class EnvelopeTest(unittest.TestCase):
             {"priority": "manual"},
             {"value": 1, "priority": "urgent"},
             {"value": 1, "priority": None},
+            {"value": 1, "priority": "manual", "options": [1]},
+            {"value": 1, "priority": "manual", "options": "transition"},
         ):
             with self.assertRaises(ValueError, msg=repr(payload)):
                 keys.parse_cmd_envelope(payload)
+
+
+class OptionsTest(unittest.TestCase):
+    def test_a_built_envelope_carries_options_only_when_given(self):
+        self.assertNotIn("options", keys.cmd_envelope(1, "automation", "u"))
+        self.assertNotIn("options", keys.cmd_envelope(1, "automation", "u", options={}))
+        envelope = keys.cmd_envelope(1, "automation", "u", options={"transition": 1})
+        self.assertEqual(envelope["options"], {"transition": 1})
+
+    def test_options_must_be_an_object_with_string_keys(self):
+        for options in ([1], {1: 1}):
+            with self.assertRaises(ValueError, msg=repr(options)):
+                keys.cmd_envelope(1, "automation", "u", options=options)
+
+    def test_parsed_options_default_to_empty(self):
+        payload = {"value": 1, "priority": "manual"}
+        keys.parse_cmd_envelope(payload)
+        self.assertEqual(keys.cmd_envelope_options(payload), {})
+        payload["options"] = {"transition": 2}
+        keys.parse_cmd_envelope(payload)
+        self.assertEqual(keys.cmd_envelope_options(payload), {"transition": 2})
 
 
 class CorrelationIdTest(unittest.TestCase):

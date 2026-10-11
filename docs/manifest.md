@@ -378,3 +378,11 @@ Every capability may also publish:
 
 - `available` — bool, published on transition by the owning adapter when the protocol has a real loss signal; `false` is notable (docs/design.md#availability).
 - `{aspect}_valid` — bool beside a reading the device itself may stop trusting; the value stands, the flag says stale.
+
+### Command options
+
+What a command may carry beside its value, in the envelope's `options` (docs/design.md#command-options). An option changes how the device reaches the value, never the value, so an adapter that cannot honour one ignores it.
+
+| Capability | Option | Aspects | Notes |
+|---|---|---|---|
+| `light` | `transition` | `on`, `brightness`, `color_temp` | Seconds the light takes to reach the value, a number ≥ 0. |

@@ -108,6 +108,34 @@ class ParseCommandTest(unittest.TestCase):
             json.dumps({"value": 200, "priority": "manual", "actor": "test"}).encode(),
         )
         self.assertEqual(session.parse_command(sample), ("brightness", 200, None))
+        self.assertEqual(
+            session.parse_command_with_options(sample), ("brightness", 200, None, {})
+        )
+
+    def test_an_envelope_hands_back_its_options(self):
+        session = stub_session()
+        sample = FakeSample(
+            "home/cmd/kitchen/lamp/brightness",
+            json.dumps(
+                {"value": 200, "priority": "automation", "options": {"transition": 1.5}}
+            ).encode(),
+        )
+        self.assertEqual(
+            session.parse_command_with_options(sample),
+            ("brightness", 200, None, {"transition": 1.5}),
+        )
+        # parse_command leaves the options out, so a three-value unpack works.
+        self.assertEqual(session.parse_command(sample), ("brightness", 200, None))
+
+    def test_options_that_are_not_an_object_are_invalid_command(self):
+        session = stub_session()
+        sample = FakeSample(
+            "home/cmd/kitchen/lamp/on",
+            json.dumps({"value": True, "priority": "manual", "options": [1], "id": "badbeef1"}).encode(),
+        )
+        self.assertIsNone(session.parse_command(sample))
+        self.assertEqual(session._session.puts[0][1]["reason"], "invalid-command")
+        self.assertEqual(session._session.puts[0][1]["cmd_id"], "badbeef1")
 
     def test_non_json_is_malformed_payload(self):
         session = stub_session()

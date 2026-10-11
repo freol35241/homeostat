@@ -116,6 +116,27 @@ async fn bus_commands_translate_to_z2m_set() {
     let payload: Value = serde_json::from_slice(&payload).expect("set payload is JSON");
     assert_eq!(payload, json!({"brightness": 200}));
 
+    // A light's `transition` option rides in the same /set as the value.
+    observer
+        .put(
+            "home/cmd/kitchen/kitchen_lamp/brightness",
+            json!({
+                "value": 100,
+                "priority": "manual",
+                "actor": "test",
+                "options": {"transition": 1.5}
+            })
+            .to_string(),
+        )
+        .await
+        .expect("cmd put");
+    let (_, payload) = mqtt
+        .next_message(Duration::from_secs(10))
+        .await
+        .expect("set publish for brightness command with a transition");
+    let payload: Value = serde_json::from_slice(&payload).expect("set payload is JSON");
+    assert_eq!(payload, json!({"brightness": 100, "transition": 1.5}));
+
     sup.shutdown();
 }
 
