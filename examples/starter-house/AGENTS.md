@@ -64,6 +64,34 @@ before changing what it should do: which devices are unconfigured
 (`home/discovery/{adapter}`), what a sensor has read this week, why a
 unit is restarting.
 
+### Why an automation did what it did
+
+The recorder keeps everything needed to answer this. For an automation
+such as `evening_lights`:
+
+- Its commands: `read_events` on `home/cmd/**`, keeping the rows whose
+  payload has `actor` set to the unit. Each envelope carries an `id`.
+- What came of each command: `read_events` on `home/health/*/event`. A
+  `refuse` event from the arbiter names the command's `id` as `cmd_id`,
+  with the holder. A `drop` event from an adapter names it too, with a
+  reason. With neither, compare the command with the aspect's state
+  (`read_history` on `state/{entity}/{aspect}` with `changes`). A
+  `preempt` event whose `from_actor` is the unit means another actor
+  took over an aspect it held.
+- Why it acted, or did not: `read_events` on `home/health/{unit}/event`.
+  A `decision` event carries a `rule` and an `outcome`, and is written
+  when the outcome changes. `paused` and `resumed` are there too.
+- Parameter changes: `read_events` on `home/config/{unit}/*`.
+- What it read: the subscriptions in `units/{unit}.toml`. Read each with
+  `read_history`, using `changes` for an on/off or a mode and `bucket`
+  for a number.
+
+Narrow the window to the question before reading. When the question is
+about a pattern, such as a light that flaps every evening or a rule that
+never fires on weekends, put the few series that matter on one time axis
+and plot them. A picture of three series over two hours shows a pattern
+that a list of rows hides.
+
 ## Rules of thumb
 
 - No protocol reports which room a device is in. Ask rather than
