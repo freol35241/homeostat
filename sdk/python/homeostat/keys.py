@@ -340,8 +340,9 @@ def cmd_envelope(
         "actor": actor,
         "id": cmd_id or secrets.token_hex(4),
     }
-    if options:
+    if options is not None:
         _check_options(options)
+    if options:
         envelope["options"] = options
     return envelope
 

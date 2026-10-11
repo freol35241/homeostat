@@ -13,6 +13,7 @@ import types
 import unittest
 from pathlib import Path
 
+from homeostat import house
 from homeostat.automation import Context, _expand, _house_has_recorder
 from homeostat.house import Entity
 from homeostat.session import QueryTimeout
@@ -214,9 +215,20 @@ class PublishOptionsTest(unittest.TestCase):
 
     def test_options_must_be_an_object_with_string_keys(self):
         ctx = self.context()
-        for options in ([("transition", 1)], {1: 1.0}):
+        for options in ([("transition", 1)], {1: 1.0}, [], ""):
             with self.assertRaises(ValueError, msg=repr(options)):
                 ctx.publish("lamp", 127, options=options)
+        self.assertEqual(ctx.puts, [])
+
+    def test_bad_options_raise_while_paused(self):
+        # The mistake is in the automation's code, so it shows at once,
+        # not on the first publish after the automation is resumed.
+        ctx = self.context()
+        ctx._param_specs = {house.ENABLED_PARAM: {}}
+        ctx._param_values = {house.ENABLED_PARAM: False}
+        with self.assertRaises(ValueError):
+            ctx.publish("lamp", 127, options=[1])
+        ctx.publish("lamp", 127, options={"transition": 1.0})
         self.assertEqual(ctx.puts, [])
 
 

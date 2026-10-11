@@ -86,7 +86,7 @@ class ValueBodyTest(unittest.TestCase):
 
 class CommandBodyTest(unittest.TestCase):
     def test_a_light_command_carries_its_transition(self):
-        lamp = entity("lamp", "light", features=["brightness"])
+        lamp = entity("lamp", "light", features=["brightness", "color_temp"])
         self.assertEqual(
             command_body(lamp, "brightness", 127, {}, {"transition": 1.5}),
             {"brightness": 127, "transition": 1.5},
@@ -95,6 +95,10 @@ class CommandBodyTest(unittest.TestCase):
             command_body(lamp, "on", False, {}, {"transition": 2}),
             {"state": "OFF", "transition": 2},
         )
+        self.assertEqual(
+            command_body(lamp, "color_temp", 300, {}, {"transition": 0}),
+            {"color_temp": 300, "transition": 0},
+        )
 
     def test_without_options_the_value_is_the_body(self):
         lamp = entity("lamp", "light", features=["brightness"])
@@ -102,7 +106,7 @@ class CommandBodyTest(unittest.TestCase):
 
     def test_a_transition_that_is_not_a_number_at_least_zero_is_invalid(self):
         lamp = entity("lamp", "light")
-        for transition in (-1, "1", True, None):
+        for transition in (-1, "1", True, None, float("nan"), float("inf")):
             with self.subTest(transition=transition):
                 self.assertIsNone(command_body(lamp, "on", True, {}, {"transition": transition}))
 

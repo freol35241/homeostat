@@ -498,10 +498,10 @@ class Context:
                     f"publish {binding!r} is a cmd publish with no priority "
                     "declared in the manifest"
                 )
+            value = keys.cmd_envelope(value, priority, self.unit, options=options)
             if self.paused:
                 return
-            value = keys.cmd_envelope(value, priority, self.unit, options=options)
-        elif options:
+        elif options is not None:
             raise ValueError(f"publish {binding!r} is not a cmd publish and takes no options")
         self._session.put_json(key, value)
 

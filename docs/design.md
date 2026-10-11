@@ -790,8 +790,8 @@ Every payload on `home/cmd/**` and `home/arbiter/**` is an envelope:
   which of two overlapping commands ended. The id is optional. Events
   for a hand-rolled publisher's command report `null`.
 - `options` is optional. It holds the [command options](#command-options)
-  for the owning adapter. The arbiter forwards it with the rest of the
-  envelope and reads none of it.
+  for the owning adapter. The arbiter checks only that it is an object
+  and forwards it with the rest of the envelope.
 
 Adapters drop a payload that is not an envelope with `invalid-command`.
 Both classes travel with blocking congestion control at high priority
@@ -822,14 +822,13 @@ option is a new row in the vocabulary.
 
 An option the adapter honours but whose value is the wrong type drops
 the command with `invalid-command`, as a bad value does. Options are
-for the device, so the envelope's governance stays at its top level:
-`priority` is read by the arbiter and `options` only by the owning
-adapter.
+for the device, so the envelope's governance stays at its top level.
+The arbiter reads `priority`, and only the owning adapter reads what
+`options` holds.
 
 The SDK's `publish` takes `options=` on a command publish, and
 `parse_command_with_options` hands an adapter the options with the
-value. The
-dashboard's commands carry none.
+value. The dashboard's commands carry none.
 
 ### Arbitrated mode
 

@@ -44,6 +44,7 @@ time or the bridge reports itself offline.
 """
 
 import json
+import math
 import os
 import threading
 import time
@@ -297,7 +298,7 @@ def command_body(entity, aspect: str, value, fields: dict, options: dict) -> dic
     it: a light's `transition` in seconds on `on`, `brightness` and
     `color_temp`. Any other option is ignored, so the device still reaches
     the value (docs/design.md#command-options). A transition that is not a
-    number ≥ 0 makes the command invalid, like a bad value.
+    finite number ≥ 0 makes the command invalid, like a bad value.
     """
     body = value_body(entity, aspect, value, fields)
     if (
@@ -308,7 +309,12 @@ def command_body(entity, aspect: str, value, fields: dict, options: dict) -> dic
     ):
         return body
     transition = options["transition"]
-    if isinstance(transition, bool) or not isinstance(transition, (int, float)) or transition < 0:
+    if (
+        isinstance(transition, bool)
+        or not isinstance(transition, (int, float))
+        or not math.isfinite(transition)
+        or transition < 0
+    ):
         return None
     return {**body, "transition": transition}
 

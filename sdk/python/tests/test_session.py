@@ -108,6 +108,9 @@ class ParseCommandTest(unittest.TestCase):
             json.dumps({"value": 200, "priority": "manual", "actor": "test"}).encode(),
         )
         self.assertEqual(session.parse_command(sample), ("brightness", 200, None))
+        self.assertEqual(
+            session.parse_command_with_options(sample), ("brightness", 200, None, {})
+        )
 
     def test_an_envelope_hands_back_its_options(self):
         session = stub_session()
