@@ -603,6 +603,8 @@ offers the surface the manifest declares and nothing more:
   ([Restoring a unit's own last value](#restoring-a-units-own-last-value));
 - `ctx.source_used`
   ([Which sources a computation actually used](#which-sources-a-computation-actually-used));
+- `ctx.decision` ([Unit timeline](#unit-timeline));
+- `ctx.paused` ([Pausing an automation](#pausing-an-automation));
 - `ctx.health_event`;
 - `ctx.ready()`, which declares the liveliness token once the unit can
   do its job;
@@ -1360,7 +1362,8 @@ may edit it, which suits an owner-only frost guard. A declared
 - Only commands stop. The automation keeps deciding, its virtual
   sensors keep publishing state and its parameters stay live. Other
   automations often read those sensors. `ctx.paused` tells the
-  automation it is paused, so it can say what it would have done.
+  automation it is paused, and `ctx.decision` marks what it would
+  have done ([unit timeline](#unit-timeline)).
 - The SDK emits a `paused` or `resumed` health event on each change.
 - On resume the SDK delivers every subscribed value again, as at
   startup. An automation that acts only on a change then catches up
@@ -2012,7 +2015,8 @@ by key and window ([Read path](#read-path)).
 - Kinds are defined per producer; there is no closed vocabulary. Each
   unit documents its own. The SDK's kinds (`restore-failed`,
   `source-dropped`, `source-restored`, `paused`, `resumed`,
-  `redeliver-failed`) and the recorder's are shared by every house.
+  `redeliver-failed`, `decision`) and the recorder's are shared by every
+  house.
 - Health events are not mirrored. They are a stream of what happened,
   so one published before the recorder subscribes is gone. Anything a
   late joiner must see as current belongs in state.
@@ -2441,7 +2445,14 @@ asks nothing of the automation.
   command reads "already so", since nothing shows a device acted.
   Otherwise nothing answered.
 - Taken: another actor's command displaced a hold it had.
-- Event: its own health events, `paused` and `resumed` among them.
+- Why: why a rule acted or did not, from `ctx.decision(rule, outcome)`.
+  The automation calls it every time the rule is evaluated, and the SDK
+  emits a `decision` event only when the outcome changes, so a rule
+  evaluated every minute does not write a row a minute. The command
+  trail cannot say why nothing happened, and this can. While the
+  automation is paused the outcome is marked "(paused)", which shows
+  what it would have done.
+- Event: its other health events, `paused` and `resumed` among them.
 
 `/api/unit-timeline` gathers the rows from the recorder and
 `unitTimeline` in `dashboard-logic.js` puts them in order. The commands

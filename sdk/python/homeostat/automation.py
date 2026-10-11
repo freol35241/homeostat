@@ -7,7 +7,9 @@ A Context gives an automation the bus access its manifest declares:
   current by a config subscription;
 - publishing through [bus.publishes] expressions;
 - pausing: while the automation's `enabled` parameter is false its
-  commands are dropped (docs/design.md#pausing-an-automation).
+  commands are dropped (docs/design.md#pausing-an-automation);
+- decisions: why a rule acted or did not, for the dashboard's timeline
+  (docs/design.md#unit-timeline).
 
 Publishes go to concrete keys only. A put on a `**` expression would give
 adapters a wildcard key they cannot parse. Literal segments of the publish
@@ -226,6 +228,8 @@ class Context:
         # (entity, aspect, source) -> last reported participation, so
         # `source_used` can emit on transition rather than on every call.
         self._sources_used: dict[tuple[str, str, str], bool] = {}
+        # rule -> last reported outcome, so `decision` emits on change.
+        self._decisions: dict[str, str] = {}
 
         if self._param_specs:
             # Subscribe, then get, then merge. The get covers everything
@@ -271,8 +275,8 @@ class Context:
     def paused(self) -> bool:
         """Whether the automation is paused: its `enabled` parameter is false.
 
-        While it is, `publish` drops commands. The automation keeps
-        deciding and may read this to say what it would have done.
+        While it is, `publish` drops commands and the automation keeps
+        deciding. `decision` marks a paused outcome itself.
         """
         with self._lock:
             return self._is_paused()
@@ -730,6 +734,33 @@ class Context:
             aspect=aspect,
             source=source,
         )
+
+    def decision(self, rule: str, outcome: str) -> None:
+        """Report why a rule acted or did not, when that changes.
+
+        See docs/design.md#unit-timeline. The command trail says what an
+        automation did. This says why, including why it did nothing,
+        which nothing else records. Call it every time the rule is
+        evaluated, with an outcome in plain words ("waiting: someone is
+        home", "turning lights off"). It emits a `decision` health event
+        only when the rule's outcome changes.
+
+        While the automation is paused the outcome is marked "(paused)",
+        so the timeline shows what it would have done.
+
+        Parameters
+        ----------
+        rule : str
+            The rule's name, stable across calls.
+        outcome : str
+            What the rule decided, and why.
+        """
+        if self.paused:
+            outcome = f"{outcome} (paused)"
+        if self._decisions.get(rule) == outcome:
+            return
+        self._decisions[rule] = outcome
+        self._session.health_event("decision", rule=rule, outcome=outcome)
 
     def ready(self) -> None:
         """Declare the liveliness token: the unit is able to do its job."""

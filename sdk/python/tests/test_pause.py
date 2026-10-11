@@ -151,5 +151,56 @@ class RedeliverTest(unittest.TestCase):
         self.assertEqual(delivered, [True])
 
 
+class DecisionTest(unittest.TestCase):
+    """`decision` reports why a rule acted, on change only, and marks a
+    paused automation's outcome."""
+
+    def context(self, enabled=True):
+        ctx = context(enabled=enabled)
+        ctx._decisions = {}
+        ctx.emitted = []
+        ctx._session.health_event = lambda kind, **fields: ctx.emitted.append((kind, fields))
+        return ctx
+
+    def test_only_a_change_of_outcome_is_reported(self):
+        ctx = self.context()
+        for _ in range(3):
+            ctx.decision("night_off", "waiting: someone is home")
+        ctx.decision("night_off", "turning lights off")
+        self.assertEqual(
+            ctx.emitted,
+            [
+                ("decision", {"rule": "night_off", "outcome": "waiting: someone is home"}),
+                ("decision", {"rule": "night_off", "outcome": "turning lights off"}),
+            ],
+        )
+
+    def test_rules_are_tracked_apart(self):
+        ctx = self.context()
+        ctx.decision("night_off", "outside the window")
+        ctx.decision("morning_on", "outside the window")
+        self.assertEqual(len(ctx.emitted), 2)
+
+    def test_a_paused_outcome_says_so(self):
+        ctx = self.context(enabled=False)
+        ctx.decision("night_off", "turning lights off")
+        self.assertEqual(
+            ctx.emitted[-1][1]["outcome"], "turning lights off (paused)"
+        )
+
+    def test_a_resumed_rule_reports_its_outcome_again(self):
+        ctx = self.context()
+        ctx.decision("night_off", "turning lights off")
+        with mock.patch("homeostat.automation.threading.Thread", InlineThread):
+            ctx._on_config(config_sample(b"false"))
+            ctx.decision("night_off", "turning lights off")
+            ctx._on_config(config_sample(b"true"))
+            ctx.decision("night_off", "turning lights off")
+        self.assertEqual(
+            [f["outcome"] for kind, f in ctx.emitted if kind == "decision"],
+            ["turning lights off", "turning lights off (paused)", "turning lights off"],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

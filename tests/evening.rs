@@ -255,8 +255,9 @@ async fn a_paused_automation_sends_nothing_and_catches_up_on_resume() {
     expect_event(&events, "paused").await;
 
     // Crossing off_time while paused: the decision is made, the command is
-    // not sent.
+    // not sent, and the decision says so (ctx.decision).
     tick(&observer, "22:00").await;
+    expect_decision(&events, "turning lights off (paused)").await;
     expect_no_command(&cmd_sub, Duration::from_secs(2)).await;
 
     // Resuming delivers the current clock minute again, which is past
@@ -265,9 +266,27 @@ async fn a_paused_automation_sends_nothing_and_catches_up_on_resume() {
         .await
         .expect("resume");
     expect_event(&events, "resumed").await;
+    expect_decision(&events, "turning lights off").await;
     expect_lamp_off(&cmd_sub, Duration::from_secs(10)).await;
 
     sup.shutdown();
+}
+
+/// Waits up to 10 s for a `decision` event with this outcome.
+async fn expect_decision(events: &Sub, outcome: &str) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let sample = tokio::time::timeout_at(deadline, events.recv_async())
+            .await
+            .unwrap_or_else(|_| panic!("a decision \"{outcome}\" within 10s"))
+            .expect("event stream open");
+        let event: Value =
+            serde_json::from_slice(&sample.payload().to_bytes()).expect("event payload is JSON");
+        if event["kind"] == "decision" && event["outcome"] == outcome {
+            assert_eq!(event["rule"], "night_off");
+            return;
+        }
+    }
 }
 
 /// Waits up to 10 s for a health event of `kind`.
