@@ -227,6 +227,13 @@ async fn constraint_only_change_refreshes_without_restart() {
         "{text}"
     );
 
+    assert!(
+        text.contains(
+            "~ probe/level  live=7  repo=1  (replaces a live edit: outside the new constraint)"
+        ),
+        "{text}"
+    );
+
     let apply = cli(&["apply", house_arg, "--bus", &sup.endpoint]);
     assert_cli_ok(&apply);
     let text = stdout(&apply);
@@ -266,6 +273,129 @@ async fn constraint_only_change_refreshes_without_restart() {
 
     sup.shutdown();
     let _ = std::fs::remove_dir_all(&house);
+}
+
+/// A live edit survives an apply that leaves its default alone, including
+/// one that restarts the unit. `--reset-params` replaces it, and so does a
+/// changed default. Plan says which happens before apply runs.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_live_edit_survives_an_apply_that_keeps_its_default() {
+    let house = temp_house(FIXTURE, "apply-keep-edit");
+    let mut sup = Supervisor::spawn_at(&house, &[]);
+    let observer = sup.observer().await;
+    let echo_sub = observer
+        .declare_subscriber("home/state/den/probe_echo/level")
+        .await
+        .expect("echo subscriber");
+    let (probe_pid, _) = await_base_units(&observer).await;
+    let house_arg = house.to_str().expect("utf-8 path");
+
+    config_write(&observer, "home/config/probe/level", json!(7))
+        .await
+        .expect("write inside the constraint");
+
+    // An unrelated manifest edit restarts the probe and keeps the edit.
+    edit(
+        &house,
+        "units/probe.toml",
+        "Echoes its live level parameter",
+        "Echoes the live level parameter",
+    );
+    let plan = cli(&["plan", house_arg, "--bus", &sup.endpoint]);
+    assert_cli_ok(&plan);
+    let text = stdout(&plan);
+    assert!(text.contains("Live edits kept (1):"), "{text}");
+    assert!(text.contains("= probe/level  live=7  repo=1"), "{text}");
+    assert!(!text.contains("Parameter changes"), "{text}");
+
+    let apply = cli(&["apply", house_arg, "--bus", &sup.endpoint]);
+    assert_cli_ok(&apply);
+    let text = stdout(&apply);
+    assert!(text.contains("restart probe: ok"), "{text}");
+    assert!(!text.contains("parameter probe/level"), "{text}");
+    assert_ne!(
+        running_pid(&observer, "probe").await,
+        probe_pid,
+        "restarted"
+    );
+    assert_eq!(
+        cache_read(&observer, "home/config/probe/level").await,
+        Some(json!(7)),
+        "the core keeps the live edit"
+    );
+    await_echo(&echo_sub, json!(7)).await;
+
+    let replan = cli(&["plan", house_arg, "--bus", &sup.endpoint]);
+    assert_cli_ok(&replan);
+    let text = stdout(&replan);
+    assert!(
+        text.contains("No changes. The live edits above stay."),
+        "{text}"
+    );
+
+    // --reset-params puts the default back.
+    let plan = cli(&["plan", house_arg, "--bus", &sup.endpoint, "--reset-params"]);
+    assert_cli_ok(&plan);
+    let text = stdout(&plan);
+    assert!(
+        text.contains("~ probe/level  live=7  repo=1  (replaces a live edit: reset)"),
+        "{text}"
+    );
+    let apply = cli(&["apply", house_arg, "--bus", &sup.endpoint, "--reset-params"]);
+    assert_cli_ok(&apply);
+    assert!(
+        stdout(&apply).contains("parameter probe/level = 1"),
+        "{}",
+        stdout(&apply)
+    );
+    assert_eq!(
+        cache_read(&observer, "home/config/probe/level").await,
+        Some(json!(1))
+    );
+
+    // A changed default replaces a live edit.
+    config_write(&observer, "home/config/probe/level", json!(7))
+        .await
+        .expect("write inside the constraint");
+    edit(&house, "units/probe.toml", "default = 1", "default = 3");
+    let plan = cli(&["plan", house_arg, "--bus", &sup.endpoint]);
+    assert_cli_ok(&plan);
+    let text = stdout(&plan);
+    assert!(
+        text.contains("~ probe/level  live=7  repo=3  (replaces a live edit: default changed)"),
+        "{text}"
+    );
+    let apply = cli(&["apply", house_arg, "--bus", &sup.endpoint]);
+    assert_cli_ok(&apply);
+    assert_eq!(
+        cache_read(&observer, "home/config/probe/level").await,
+        Some(json!(3))
+    );
+    await_echo(&echo_sub, json!(3)).await;
+
+    sup.shutdown();
+    let _ = std::fs::remove_dir_all(&house);
+}
+
+/// Waits up to 10 s for the probe to echo `want`.
+async fn await_echo(
+    echo_sub: &zenoh::pubsub::Subscriber<
+        zenoh::handlers::FifoChannelHandler<zenoh::sample::Sample>,
+    >,
+    want: Value,
+) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let sample = tokio::time::timeout_at(deadline, echo_sub.recv_async())
+            .await
+            .unwrap_or_else(|_| panic!("echo of {want} within 10s"))
+            .expect("echo stream open");
+        let value: Value =
+            serde_json::from_slice(&sample.payload().to_bytes()).expect("echo payload is JSON");
+        if value == want {
+            return;
+        }
+    }
 }
 
 fn add_watcher_pair(house: &Path, adapter: &str, room: &str, entity: &str, automation: &str) {

@@ -20,6 +20,8 @@ use crate::validate::parse_time;
 struct StoredParam {
     param_type: ParamType,
     constraint: Constraint,
+    /// The manifest default as of the last apply.
+    default: Value,
     value: Value,
 }
 
@@ -94,20 +96,28 @@ impl ConfigStore {
         self.write_order.lock().await
     }
 
-    /// Rebuilds the store from a new house. On apply every parameter is set to
-    /// its repo default: the repo is the system of record, so live drift
-    /// resets, and the plan showed that. Returns the params whose effective
-    /// value changed, so the caller can put them on the bus for live
-    /// subscribers. Params of new units need no put, because they read their
-    /// values with a get at startup.
-    pub fn replace_from_house(&self, house: &House) -> Vec<(String, String, Value)> {
+    /// Rebuilds the store from a new house. A live value that differs from
+    /// its old default is kept when [`keeps_live`] allows it, and every other
+    /// value is set to its repo default. `reset` sets every value to its
+    /// default. Returns the params whose effective value changed, so the
+    /// caller can put them on the bus for live subscribers. Params of new
+    /// units need no put, because they read their values with a get at
+    /// startup.
+    pub fn replace_from_house(&self, house: &House, reset: bool) -> Vec<(String, String, Value)> {
         let mut params = self.params.lock().expect("config store lock");
-        let fresh = build(house);
-        let changed = fresh
-            .iter()
-            .filter(|(key, new)| params.get(*key).is_some_and(|old| old.value != new.value))
-            .map(|((unit, param), p)| (unit.clone(), param.clone(), p.value.clone()))
-            .collect();
+        let mut fresh = build(house);
+        let mut changed = Vec::new();
+        for ((unit, param), new) in &mut fresh {
+            let Some(old) = params.get(&(unit.clone(), param.clone())) else {
+                continue;
+            };
+            if !reset && keeps(&old.default, new, &old.value) {
+                new.value = old.value.clone();
+            }
+            if old.value != new.value {
+                changed.push((unit.clone(), param.clone(), new.value.clone()));
+            }
+        }
         *params = fresh;
         changed
     }
@@ -159,12 +169,35 @@ fn build(house: &House) -> BTreeMap<(String, String), StoredParam> {
                 StoredParam {
                     param_type: spec.param_type,
                     constraint: Constraint::from_spec(spec),
+                    default: default_value(spec),
                     value: default_value(spec),
                 },
             );
         }
     }
     params
+}
+
+/// Whether an apply keeps a live value. The owner decides through the
+/// default and the family through the live value. An apply that leaves the
+/// default alone keeps the family's value. An apply that changes the default,
+/// or a constraint the live value no longer meets, sets the new default.
+/// `old_default` is the default as of the last apply.
+pub fn keeps_live(old_default: &Value, spec: &ParamSpec, live: &Value) -> bool {
+    keeps(
+        old_default,
+        &StoredParam {
+            param_type: spec.param_type,
+            constraint: Constraint::from_spec(spec),
+            default: default_value(spec),
+            value: default_value(spec),
+        },
+        live,
+    )
+}
+
+fn keeps(old_default: &Value, new: &StoredParam, live: &Value) -> bool {
+    *old_default == new.default && check(new.param_type, &new.constraint, live).is_ok()
 }
 
 /// Whether the spec's default satisfies its own constraint. This is the
@@ -305,6 +338,7 @@ mod tests {
                 before: parse_time(before),
                 ..Constraint::default()
             },
+            default: json!("22:00"),
             value: json!("22:00"),
         }
     }
@@ -372,6 +406,7 @@ mod tests {
                 StoredParam {
                     param_type: ParamType::Float,
                     constraint: Constraint::default(),
+                    default: json!(20.0),
                     value: json!(20.0),
                 },
             )])),
@@ -385,6 +420,39 @@ mod tests {
             "stored as a float, not an integer: {stored}"
         );
         assert_eq!(store.read(|_, _| true)[0].2, json!(21.0));
+    }
+
+    fn level_spec(default: i64, max: i64) -> ParamSpec {
+        ParamSpec {
+            param_type: ParamType::Int,
+            default: toml::Value::Integer(default),
+            constraint: Some(BTreeMap::from([
+                ("min".to_string(), toml::Value::Integer(0)),
+                ("max".to_string(), toml::Value::Integer(max)),
+            ])),
+            editable_by: None,
+        }
+    }
+
+    #[test]
+    fn a_live_edit_under_an_unchanged_default_is_kept() {
+        assert!(keeps_live(&json!(1), &level_spec(1, 10), &json!(7)));
+    }
+
+    #[test]
+    fn a_changed_default_replaces_a_live_edit() {
+        assert!(!keeps_live(&json!(1), &level_spec(3, 10), &json!(7)));
+    }
+
+    #[test]
+    fn a_live_edit_outside_the_new_constraint_is_replaced() {
+        assert!(!keeps_live(&json!(1), &level_spec(1, 5), &json!(7)));
+        assert!(keeps_live(&json!(1), &level_spec(1, 5), &json!(4)));
+    }
+
+    #[test]
+    fn a_live_edit_of_another_type_is_replaced() {
+        assert!(!keeps_live(&json!(1), &level_spec(1, 10), &json!("7")));
     }
 
     #[test]

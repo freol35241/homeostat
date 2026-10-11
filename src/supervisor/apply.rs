@@ -83,7 +83,7 @@ async fn execute(core: &Arc<Core>, request: ApplyRequest) -> ApplyResult {
     }
 
     let world = core.snapshot();
-    let diff = plan::diff(&check, &core.root, &world);
+    let diff = plan::diff(&check, &core.root, &world, request.reset_params);
     if diff.is_empty() {
         return ApplyResult {
             ok: true,
@@ -107,17 +107,20 @@ async fn execute(core: &Arc<Core>, request: ApplyRequest) -> ApplyResult {
         }
     };
 
-    // Parameters first. The repo is the system of record, so live values reset
-    // to repo defaults. Every subscribed unit sees the put, and nothing
-    // restarts. A unit restarted later in the walk reads its values with a get
-    // anyway.
+    // Parameters first. A changed default replaces the live value, and a live
+    // edit under an unchanged default stays (config::keeps_live). Every
+    // subscribed unit sees the put, and nothing restarts. A unit restarted
+    // later in the walk reads its values with a get anyway.
     let mut params = Vec::new();
     {
         // Swap and puts happen together, in order. Otherwise a config write
         // racing this block could validate against the new store and then have
         // its bus put overwritten by the older repo value below.
         let _write_guard = core.store.write_lock().await;
-        for (unit, param, value) in core.store.replace_from_house(&check.house) {
+        for (unit, param, value) in core
+            .store
+            .replace_from_house(&check.house, request.reset_params)
+        {
             let _ = core
                 .session
                 .put(bus::config_key(&unit, &param), value.to_string())

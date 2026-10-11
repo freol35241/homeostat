@@ -129,8 +129,9 @@ checkout are a unit's own data (the recorder's store under the
 gitignored `data/`) and pending plans under `plans/`. The running world
 is diffed against the repo, not the other way round. A change is
 a commit followed by [plan and apply](#plan-and-apply). A live
-parameter edit is drift that the next apply resets
-([Live parameters](#live-parameters)).
+parameter edit is drift from the repo. An apply keeps it until the
+owner changes that parameter's default
+([Repo and live values](#repo-and-live-values)).
 `home/meta/system/applied_commit` names the commit that is running.
 
 ### Unit granularity: the atom is the unit
@@ -997,7 +998,8 @@ Every plan has a tier. It is derived from the diff, not declared
   changes and write-mode flips ([The grant table](#the-grant-table)).
 - **Behavioral**: otherwise, a unit restarts because its code, manifest
   or files changed.
-- **Parameter-only**: otherwise. Live values reset to the repo and
+- **Parameter-only**: otherwise. Changed defaults reach the live
+  values ([Repo and live values](#repo-and-live-values)) and
   parameter-level manifest changes refresh in place. Nothing restarts.
 
 Because the tier is a function of the diff, a structural change cannot
@@ -1045,10 +1047,12 @@ meta manifest updates. Any other difference is behavioral, including
 adding, removing or retyping a parameter, because a running unit read
 its manifest at startup.
 
-Parameter diffs compare each live value with its repo default. The same
-rule covers a changed default and live drift. An integer default on a
-`float` parameter is canonicalized. Otherwise `5` against `5.0` would
-plan as permanent drift.
+Parameter diffs compare each live value with its repo default, and
+with the default in the manifest the world is running. That old
+default tells a live edit apart from a value that only lags a changed
+default ([Repo and live values](#repo-and-live-values)). An integer
+default on a `float` parameter is canonicalized. Otherwise `5` against
+`5.0` would plan as permanent drift.
 
 ### The apply walk
 
@@ -1069,7 +1073,8 @@ follows grant order. Ties and unconnected units are ordered by kind
 (adapter, automation, service) and then by name, so the walk is
 deterministic:
 
-1. Parameters. The store is rebuilt and every changed value is put,
+1. Parameters. The store is rebuilt, keeping the live edits plan
+   showed as kept, and every changed value is put,
    under the config write lock. A racing parameter write therefore
    cannot be lost on the bus while the store keeps it.
 2. Refreshes of parameter-level manifest changes are recorded.
@@ -1286,9 +1291,19 @@ it.
 - A live edit survives a unit restart, because the core holds it. It
   does not survive a supervisor restart, because the store re-seeds
   from defaults.
-- Plan shows drift and apply resets it. Every live value that differs
-  from its default is listed, and every apply sets live values to the
-  repo's ([Change detection](#change-detection)).
+- Apply keeps a live edit while its default stays the same. The owner
+  decides through the default and the family through the live value,
+  so an unrelated commit does not undo a family member's setpoint. An
+  apply sets the new default when the owner changed that default, or
+  when the live value is outside a new constraint
+  (`config::keeps_live`). The old default is the one in the manifest
+  the world is running.
+- Plan lists every live value that differs from its default. A kept
+  edit is listed under "Live edits kept" and is not a change. A
+  replaced one is a parameter change marked with the reason.
+- `plan --reset-params` and `apply --reset-params` set every value back
+  to its default. A rollback by checkout that should also undo live
+  edits needs it.
 - To make a live edit durable, commit it as the default. That is a
   parameter-only plan, with no restart and no apply lock.
 - Changing a constraint or `editable_by` refreshes the unit in place.
@@ -2750,8 +2765,9 @@ gaps it has not closed.
   config queryable checks type and constraint, so any bus client may
   write an owner-tier parameter. See [Live parameters](#live-parameters).
 - **Turning a live edit into a commit.** A family member's live edit
-  is reverted by the next apply unless someone commits it. Capturing it
-  automatically is not built. See [Live parameters](#live-parameters).
+  lasts until the owner changes that default or the supervisor
+  restarts. Capturing it as a commit is not built. See
+  [Repo and live values](#repo-and-live-values).
 - **Handing an arbiter hold back early.** Only expiry ends a hold.
   Whether release belongs on the envelope or on an arbiter surface is
   open. See [Arbitrated mode](#arbitrated-mode).

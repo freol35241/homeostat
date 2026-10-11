@@ -27,7 +27,7 @@ fn valid_house_produces_no_errors_and_golden_plan() {
     );
 
     let world = homeostat::plan::World::empty();
-    let diff = homeostat::plan::diff(&result, &root, &world);
+    let diff = homeostat::plan::diff(&result, &root, &world, false);
     let plan = homeostat::plan::render(&result, &diff, REFERENCE, &world);
     let expected = include_str!("corpus/expected_plan.txt");
     assert_eq!(

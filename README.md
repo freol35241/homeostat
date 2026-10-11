@@ -299,8 +299,10 @@ ctx.ready(); ctx.run()                  # liveliness token, block until SIGTERM
 Parameters live at `home/config/{unit}/{param}`. They start at the
 manifest default, every write is checked against the constraint (min/max,
 an after/before time window that may span midnight, or an enum), and
-running units see new values without a restart. A live edit lasts until
-the next apply; to keep it, commit it as the new default. A `clock`
+running units see new values without a restart. An apply keeps a live
+edit until the parameter's default changes in the repo, and
+`apply --reset-params` puts every default back. To keep an edit across a
+supervisor restart, commit it as the new default. A `clock`
 service publishes local time on `home/clock/minute` and
 `home/clock/date`.
 

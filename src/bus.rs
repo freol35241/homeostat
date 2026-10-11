@@ -203,6 +203,10 @@ pub struct ApplyRequest {
     /// The repo's HEAD when the house root is a git worktree root;
     /// published at `home/meta/system/applied_commit` on success.
     pub base_commit: Option<String>,
+    /// Set every live parameter to its repo default, including the live
+    /// edits an apply would otherwise keep.
+    #[serde(default)]
+    pub reset_params: bool,
 }
 
 /// A parameter an apply set to its repo default.
