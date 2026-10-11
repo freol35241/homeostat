@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "homeostat==0.18.0",
+#     "homeostat==0.19.0",
 # ]
 # ///
 """Recorder service: writes the bus to a SQLite store and answers history reads.
