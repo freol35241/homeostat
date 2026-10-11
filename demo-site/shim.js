@@ -179,6 +179,9 @@
     if (route === '/api/forecasts') return Promise.resolve(respond(forecasts(url.searchParams)));
     if (route === '/api/source-events') return Promise.resolve(respond({ events: [] }));
     if (route === '/api/unit-events') return Promise.resolve(respond({ events: [] }));
+    if (route === '/api/unit-timeline') {
+      return Promise.resolve(respond({ events: [], params: [], commands: [], answers: [], readbacks: [], inputs: [], truncated: false }));
+    }
     if (route === '/api/logs') {
       return Promise.resolve(respond({ lines: [
         { stream: 'stdout', line: 'running (a demo house: these lines are made up)' }

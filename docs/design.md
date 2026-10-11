@@ -2424,6 +2424,30 @@ An automation's card carries its pause switch in its head.
 The last two are `{entity, aspect}` rows, because a relation is per
 aspect. If the card is wrong, the manifest is wrong.
 
+### Unit timeline
+
+An automation's overlay shows a timeline of the last day, newest first.
+It answers "does it do what I think" from what is already recorded, and
+asks nothing of the automation.
+
+- **Read**: each change to an aspect it reads, its From fields. The
+  first row of a series is the value when the window opened.
+- **Set**: each write to one of its parameters.
+- **Sent**: each command it sent, with what came of it. An event naming
+  the command's `cmd_id` says refused (the arbiter, with the holder) or
+  dropped (the adapter, with the reason). Otherwise the aspect's
+  recorded state once the readback wait has passed says applied. The
+  wait is the one the page uses for its own commands. Otherwise nothing
+  answered.
+- **Taken**: another actor's command displaced a hold it had.
+- **Event**: its own health events, `paused` and `resumed` among them.
+
+`/api/unit-timeline` gathers the rows from the recorder and
+`unitTimeline` in `dashboard-logic.js` puts them in order. The commands
+and events of the whole house are read newest first up to a cap, so a
+busy day can push the oldest rows out, and the overlay says when it
+did. Other units keep the Events list.
+
 ### Map and people
 
 A person is an entity with `capability = "person"` in the pseudo-room

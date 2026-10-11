@@ -54,6 +54,7 @@ export var overlay = {
   lastPoints: null,
   log: null,               // for unit: {lines, loaded, loading}
   unitEvents: null,        // for unit: {rows, loaded, loading, failed} from /api/unit-events
+  timeline: null,          // for an automation: {raw, loaded, loading, failed} from /api/unit-timeline
   expanded: {}              // for entity: group -> true when a collapsed section is opened
 };
 

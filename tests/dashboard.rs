@@ -1199,6 +1199,127 @@ async fn dashboard_serves_a_units_recorded_events() {
     sup.shutdown();
 }
 
+/// `/api/unit-timeline` gathers an automation's rows from the recorder:
+/// its own commands among the house's, the events that answered them, its
+/// parameter writes, its health events and how the commanded aspects
+/// changed. The test session answers in the recorder's place.
+#[tokio::test(flavor = "multi_thread")]
+async fn dashboard_gathers_an_automations_timeline() {
+    const T: u64 = 1_700_000_000_000_000;
+    let port = common::free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let permit = startup_permit().await;
+    let mut sup =
+        Supervisor::spawn_with_env(FIXTURE, &[("HOMEOSTAT_DASHBOARD_PORT", &port.to_string())]);
+    let observer = sup.observer().await;
+    let mut dash = health_watch(&observer, "dashboard").await;
+    await_health(&mut dash, Duration::from_mins(3), |h| {
+        h.status == HealthStatus::Running
+    })
+    .await;
+    drop(permit);
+
+    let events = observer
+        .declare_queryable("home/history/events")
+        .await
+        .expect("stand-in recorder events");
+    tokio::spawn(async move {
+        while let Ok(query) = events.recv_async().await {
+            let params = query.parameters().to_string();
+            let rows = if params.contains("key=home/cmd/**") {
+                json!([
+                    {"ts": T, "key": "home/cmd/livingroom/lamp/on",
+                     "payload": {"value": false, "priority": "automation", "actor": "evening_lights", "id": "c1"}},
+                    {"ts": T + 1, "key": "home/cmd/livingroom/lamp/on",
+                     "payload": {"value": true, "priority": "manual", "actor": "dashboard", "id": "c2"}},
+                ])
+            } else if params.contains("key=home/health/*/event") {
+                json!([
+                    {"ts": T + 2, "key": "home/health/arbiter/event",
+                     "payload": {"kind": "refuse", "cmd_id": "c1", "holder_actor": "dashboard"}},
+                    {"ts": T + 3, "key": "home/health/arbiter/event",
+                     "payload": {"kind": "refuse", "cmd_id": "c9"}},
+                ])
+            } else if params.contains("key=home/health/evening_lights/event") {
+                json!([{"ts": T + 4, "key": "home/health/evening_lights/event", "payload": {"kind": "paused"}}])
+            } else if params.contains("key=home/config/evening_lights/*") {
+                json!([{"ts": T + 5, "key": "home/config/evening_lights/off_time", "payload": "22:30"}])
+            } else {
+                json!([])
+            };
+            let _ = query.reply("home/history/events", rows.to_string()).await;
+        }
+    });
+    let samples = observer
+        .declare_queryable("home/history/state/**")
+        .await
+        .expect("stand-in recorder samples");
+    tokio::spawn(async move {
+        while let Ok(query) = samples.recv_async().await {
+            let key = query.key_expr().as_str().to_string();
+            let points =
+                json!([{"ts": "2023-11-14T22:13:21+00:00", "room": "livingroom", "value": false}]);
+            let _ = query.reply(key, points.to_string()).await;
+        }
+    });
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let reply = loop {
+        let (status, reply) = http_request(
+            &addr,
+            "GET",
+            "/api/unit-timeline?unit=evening_lights",
+            &[],
+            None,
+        );
+        assert_eq!(status, 200, "{reply}");
+        if reply["commands"].as_array().is_some_and(|c| !c.is_empty()) {
+            break reply;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the stand-in recorder was never asked"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    let ids: Vec<&Value> = reply["commands"]
+        .as_array()
+        .expect("commands")
+        .iter()
+        .map(|c| &c["value"]["id"])
+        .collect();
+    assert_eq!(ids, vec![&json!("c1")], "only its own commands: {reply}");
+    let answers = reply["answers"].as_array().expect("answers");
+    assert_eq!(answers.len(), 1, "only events naming its commands: {reply}");
+    assert_eq!(answers[0]["value"]["cmd_id"], "c1");
+    assert_eq!(reply["events"][0]["value"]["kind"], "paused", "{reply}");
+    assert_eq!(reply["params"][0]["value"], "22:30", "{reply}");
+    let readback = &reply["readbacks"][0];
+    assert_eq!(
+        (&readback["entity"], &readback["aspect"]),
+        (&json!("lamp"), &json!("on"))
+    );
+    assert_eq!(
+        readback["points"][0]["ts"],
+        json!(1_700_000_001.0),
+        "ts in seconds: {reply}"
+    );
+    assert_eq!(reply["truncated"], false);
+
+    let (status, reply) = http_request(&addr, "GET", "/api/unit-timeline?unit=nobody", &[], None);
+    assert_eq!(status, 404, "{reply}");
+    let (status, reply) = http_request(
+        &addr,
+        "GET",
+        "/api/unit-timeline?unit=evening_lights&hours=0",
+        &[],
+        None,
+    );
+    assert_eq!(status, 400, "{reply}");
+
+    sup.shutdown();
+}
+
 /// A fake go2rtc (`tests/fake_go2rtc.py`) spawned directly on a free port.
 /// The dashboard proxies reach it through `HOMEOSTAT_GO2RTC`, as they
 /// would reach the shim-supervised real one on localhost.

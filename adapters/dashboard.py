@@ -26,6 +26,7 @@ Routes, each documented on its handler in make_app:
   GET  /api/forecasts             recorder proxy for stored forecast issues
   GET  /api/source-events         when each source of a computed value was used
   GET  /api/unit-events           a unit's recorded health events
+  GET  /api/unit-timeline         what an automation saw, did and was told
   GET  /api/logs                  a unit's captured stdout/stderr tail
   GET  /api/camera/{entity}/live  MSE relay to go2rtc
   GET  /assets/*                  stylesheet, logic, modules, vendored libraries
@@ -189,6 +190,14 @@ SOURCE_EVENT_MAX = 500
 
 # How many of a unit's recorded events its overlay reads, newest first.
 UNIT_EVENT_MAX = 200
+
+# A unit timeline reads the house's newest commands and events and keeps
+# the unit's own. A busy house can push the oldest of a day out of this
+# many, and the reply says when that happened.
+TIMELINE_ROW_MAX = 1000
+# The most series of each kind (aspects read, aspects commanded) one
+# timeline reads changes for. Each is a recorder query.
+TIMELINE_SERIES_MAX = 24
 
 # Issues one /api/forecasts reply may carry. A week of hourly issues is
 # 168 full horizons: megabytes on the wire and an unreadable chart. The
@@ -1274,6 +1283,101 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         ]
         return web.json_response({"events": events})
 
+    def timeline_rows(unit: str, sources: list, from_us: int, to_us: int) -> dict:
+        """Gather an automation's timeline rows from the recorder. Blocking.
+
+        Events and commands come from home/history/events, state changes
+        from the samples path with changes=1. Times are seconds, as the
+        page's are.
+        """
+        start = datetime.datetime.fromtimestamp(from_us / 1e6, datetime.timezone.utc)
+        end = datetime.datetime.fromtimestamp(to_us / 1e6, datetime.timezone.utc)
+        truncated = False
+
+        def events(key: str) -> list[dict]:
+            nonlocal truncated
+            selector = (
+                f"home/history/events?key={key}"
+                f";from={from_us};to={to_us};limit={TIMELINE_ROW_MAX}"
+            )
+            rows = [
+                {"ts": row["ts"] / 1_000_000, "key": row["key"], "value": row["payload"]}
+                for _key, payload in hub.session.get_json(selector)
+                for row in payload or []
+            ]
+            truncated = truncated or len(rows) >= TIMELINE_ROW_MAX
+            return rows
+
+        def changes(entity: str, aspect: str) -> list[dict]:
+            selector = (
+                f"{keys.history_key('state', entity, aspect)}"
+                f"?from={start.isoformat(timespec='seconds')}"
+                f";to={end.isoformat(timespec='seconds')};limit={TIMELINE_ROW_MAX};changes=1"
+            )
+            return [
+                {"ts": datetime.datetime.fromisoformat(p["ts"]).timestamp(), "value": p["value"]}
+                for _key, points in hub.session.get_json(selector)
+                for p in points or []
+            ]
+
+        commands = [
+            c for c in events("home/cmd/**")
+            if isinstance(c["value"], dict) and c["value"].get("actor") == unit
+        ]
+        ids = {c["value"].get("id") for c in commands} - {None}
+        answers = [
+            e for e in events("home/health/*/event")
+            if isinstance(e["value"], dict)
+            and (e["value"].get("cmd_id") in ids or e["value"].get("from_actor") == unit)
+        ]
+        commanded = sorted({tuple(c["key"].split("/", 4)[3:5]) for c in commands})
+
+        def series(fields: list) -> list[dict]:
+            return [
+                {"entity": e, "aspect": a, "points": changes(e, a)}
+                for e, a in fields[:TIMELINE_SERIES_MAX]
+            ]
+
+        return {
+            "events": events(f"home/health/{unit}/event"),
+            "params": events(f"home/config/{unit}/*"),
+            "commands": commands,
+            "answers": answers,
+            "readbacks": series([f for f in commanded if len(f) == 2]),
+            "inputs": series([(f["entity"], f["aspect"]) for f in sources]),
+            "truncated": truncated
+            or len(commanded) > TIMELINE_SERIES_MAX
+            or len(sources) > TIMELINE_SERIES_MAX,
+        }
+
+    async def api_unit_timeline(request: web.Request) -> web.Response:
+        """GET /api/unit-timeline?unit=..&hours=24: an automation's rows for its timeline.
+
+        What it read changing, its parameter writes, the commands it sent,
+        the events that answered them, how the commanded aspects changed
+        after, and its own health events (docs/design.md#unit-timeline).
+        The page puts them in order (dashboard-logic.js, unitTimeline).
+        """
+        unit = request.query.get("unit", "")
+        if unit not in model.units:
+            return json_error(f"unknown unit {unit}", status=404)
+        try:
+            hours = min(float(request.query.get("hours", "24")), 24 * 7)
+        except (ValueError, OverflowError):
+            return json_error("hours must be a number")
+        if not hours > 0:
+            return json_error("hours must be positive")
+        sources = hub.relations(model.model)[unit]["sources"]
+        to_us = int(datetime.datetime.now(datetime.timezone.utc).timestamp() * 1_000_000)
+        from_us = to_us - int(hours * 3600 * 1_000_000)
+        try:
+            rows = await asyncio.get_running_loop().run_in_executor(
+                None, timeline_rows, unit, sources, from_us, to_us
+            )
+        except QueryError as error:
+            return json_error(f"recorder: {error}", status=502)
+        return web.json_response(rows)
+
     async def api_logs(request: web.Request) -> web.Response:
         """GET /api/logs?unit=..&lines=N: a unit's captured stdout/stderr tail.
 
@@ -1382,6 +1486,7 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
     app.router.add_get("/api/forecasts", api_forecasts)
     app.router.add_get("/api/source-events", api_source_events)
     app.router.add_get("/api/unit-events", api_unit_events)
+    app.router.add_get("/api/unit-timeline", api_unit_timeline)
     app.router.add_get("/api/logs", api_logs)
     app.router.add_get("/api/camera/{entity}/live", api_camera_live)
     app.router.add_get("/assets/{name:.+}", api_asset)
