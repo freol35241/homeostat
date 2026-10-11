@@ -1772,3 +1772,12 @@ test('a later command that displaced its hold is listed as taken over', () => {
   assert.equal(over.length, 1, 'only holds this unit had');
   assert.deepEqual([over[0].by, over[0].priority], ['dashboard', 'manual']);
 });
+
+test('a decision event is listed as why its rule acted', () => {
+  const t = logic.unitTimeline(timelineRaw({
+    events: [{ ts: 450, key: 'home/health/evening_lights/event',
+      value: { kind: 'decision', rule: 'night_off', outcome: 'waiting: someone is home' } }],
+  }), timelineModel, {}, 'evening_lights');
+  const d = t.find((e) => e.type === 'decision');
+  assert.deepEqual([d.rule, d.outcome], ['night_off', 'waiting: someone is home']);
+});

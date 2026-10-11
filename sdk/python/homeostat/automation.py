@@ -226,6 +226,8 @@ class Context:
         # (entity, aspect, source) -> last reported participation, so
         # `source_used` can emit on transition rather than on every call.
         self._sources_used: dict[tuple[str, str, str], bool] = {}
+        # rule -> last reported outcome, so `decision` emits on change.
+        self._decisions: dict[str, str] = {}
 
         if self._param_specs:
             # Subscribe, then get, then merge. The get covers everything
@@ -730,6 +732,34 @@ class Context:
             aspect=aspect,
             source=source,
         )
+
+    def decision(self, rule: str, outcome: str) -> None:
+        """Report why a rule acted or did not, when that changes.
+
+        See docs/design.md#unit-timeline. The command trail says what an
+        automation did. This says why, including why it did nothing,
+        which nothing else records. Call it every time the rule is
+        evaluated, with an outcome in plain words ("waiting: someone is
+        home", "turning lights off"). It emits a `decision` health event
+        only when the rule's outcome changes, so a rule evaluated every
+        minute does not write a row a minute.
+
+        While the automation is paused the outcome is marked "(paused)",
+        so the timeline shows what it would have done.
+
+        Parameters
+        ----------
+        rule : str
+            The rule's name, stable across calls.
+        outcome : str
+            What the rule decided, and why.
+        """
+        if self.paused:
+            outcome = f"{outcome} (paused)"
+        if self._decisions.get(rule) == outcome:
+            return
+        self._decisions[rule] = outcome
+        self._session.health_event("decision", rule=rule, outcome=outcome)
 
     def ready(self) -> None:
         """Declare the liveliness token: the unit is able to do its job."""

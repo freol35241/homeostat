@@ -1455,7 +1455,8 @@
    *   value. Else nothing answered. A command older than what a capped
    *   query kept is not judged: its answer may have been cut.
    * - `taken-over`: another actor's command displaced its hold.
-   * - `event`: one of its own health events. */
+   * - `decision`: why one of its rules acted or did not (ctx.decision).
+   * - `event`: one of its other health events. */
   function unitTimeline(raw, model, aspects, unitName) {
     raw = raw || {};
     var byName = {};
@@ -1513,7 +1514,12 @@
       out.push({ ts: a.ts, type: 'taken-over', entity: v.entity, aspect: v.aspect, by: v.to_actor, priority: v.to_priority });
     });
     (raw.events || []).forEach(function (ev) {
-      out.push({ ts: ev.ts, type: 'event', kind: (ev.value && ev.value.kind) || 'event', fields: ev.value });
+      var v = ev.value || {};
+      if (v.kind === 'decision') {
+        out.push({ ts: ev.ts, type: 'decision', rule: v.rule, outcome: v.outcome });
+        return;
+      }
+      out.push({ ts: ev.ts, type: 'event', kind: v.kind || 'event', fields: ev.value });
     });
     return out.sort(function (a, b) { return (b.ts || 0) - (a.ts || 0); });
   }

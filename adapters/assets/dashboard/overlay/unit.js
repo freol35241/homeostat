@@ -113,6 +113,9 @@ function renderTimelineRow(entry) {
     }
     if (entry.outcome === 'dropped') outcome = 'dropped by ' + (entry.by || 'its adapter') + (entry.reason ? ': ' + entry.reason : '');
     text = fieldLabel(entry.entity, entry.aspect) + ' = ' + show(entry.value) + ' (' + outcome + ')';
+  } else if (entry.type === 'decision') {
+    tag = 'why';
+    text = entry.rule + ': ' + entry.outcome;
   } else if (entry.type === 'taken-over') {
     tag = 'taken';
     text = fieldLabel(entry.entity, entry.aspect) + ' taken over by ' + (entry.by || 'another actor') +
