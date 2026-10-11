@@ -1420,6 +1420,24 @@
     });
   }
 
+  /* A unit's events for its overlay, newest first: the recorded ones and
+   * those this page saw live. A live event the recorder also holds is
+   * listed once. The two clocks differ by the bus's latency, so a pair
+   * counts as one when key and value match within a few seconds. */
+  var SAME_EVENT_S = 5;
+  function mergeUnitEvents(recorded, live) {
+    var out = (recorded || []).slice();
+    (live || []).forEach(function (ev) {
+      var value = JSON.stringify(ev.value);
+      var seen = out.some(function (r) {
+        return r.key === ev.key && JSON.stringify(r.value) === value &&
+          Math.abs((r.ts || 0) - (ev.ts || 0)) <= SAME_EVENT_S;
+      });
+      if (!seen) out.push(ev);
+    });
+    return out.sort(function (a, b) { return (b.ts || 0) - (a.ts || 0); });
+  }
+
   /* The family's parameters of a unit, without an automation's pause
    * switch, which its card shows in its head instead. */
   function familyParams(unit) {
@@ -1567,6 +1585,7 @@
     unitCardPlan: unitCardPlan,
     familyParams: familyParams,
     pauseParam: pauseParam,
+    mergeUnitEvents: mergeUnitEvents,
     isPaused: isPaused,
     viewFor: viewFor,
     historyShape: historyShape,

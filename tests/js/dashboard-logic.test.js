@@ -1634,3 +1634,30 @@ test('without the file, a generated view says how to keep it', () => {
   assert.match(text, /\[\[view\]\]\nname = "now"\nkind = "now"\n$/);
   assert.equal(logic.viewText({}, 'heating'), null);
 });
+
+// A unit's overlay lists its recorded events with those the page saw live
+// (docs/design.md#logs-and-the-audit-trail).
+test('recorded and live events merge newest first, each listed once', () => {
+  const key = 'home/health/porch/event';
+  const recorded = [
+    { key, value: { kind: 'paused' }, ts: 1000.2 },
+    { key, value: { kind: 'resumed' }, ts: 1100.5 },
+  ];
+  const live = [
+    { key, value: { kind: 'resumed' }, ts: 1101 }, // the same event, seen live
+    { key, value: { kind: 'paused' }, ts: 1200 },
+  ];
+  const merged = logic.mergeUnitEvents(recorded, live);
+  assert.deepEqual(merged.map((e) => [e.value.kind, Math.round(e.ts)]),
+    [['paused', 1200], ['resumed', 1101], ['paused', 1000]]);
+});
+
+test('an event that repeats later is not mistaken for the recorded one', () => {
+  const key = 'home/health/porch/event';
+  const merged = logic.mergeUnitEvents(
+    [{ key, value: { kind: 'paused' }, ts: 1000 }],
+    [{ key, value: { kind: 'paused' }, ts: 1060 }]
+  );
+  assert.equal(merged.length, 2);
+  assert.deepEqual(logic.mergeUnitEvents(null, null), []);
+});
