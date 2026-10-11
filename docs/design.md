@@ -130,7 +130,7 @@ gitignored `data/`) and pending plans under `plans/`. The running world
 is diffed against the repo, not the other way round. A change is
 a commit followed by [plan and apply](#plan-and-apply). A live
 parameter edit is drift from the repo. An apply keeps it until the
-owner changes that parameter's default
+owner changes that parameter's default or constraint
 ([Repo and live values](#repo-and-live-values)).
 `home/meta/system/applied_commit` names the commit that is running.
 
@@ -2765,8 +2765,8 @@ gaps it has not closed.
   config queryable checks type and constraint, so any bus client may
   write an owner-tier parameter. See [Live parameters](#live-parameters).
 - **Turning a live edit into a commit.** A family member's live edit
-  lasts until the owner changes that default or the supervisor
-  restarts. Capturing it as a commit is not built. See
+  lasts until the owner changes that parameter in the repo or the
+  supervisor restarts. Capturing it as a commit is not built. See
   [Repo and live values](#repo-and-live-values).
 - **Handing an arbiter hold back early.** Only expiry ends a hold.
   Whether release belongs on the envelope or on an arbiter surface is

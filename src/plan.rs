@@ -230,7 +230,7 @@ pub fn diff(check: &CheckResult, root: &Path, world: &World, reset_params: bool)
                     && old_default
                         .as_ref()
                         .is_some_and(|old| keeps_live(old, spec, live));
-                let replaces_edit = if !edited {
+                let replaces_edit = if keep || !edited {
                     None
                 } else if reset_params {
                     Some("reset")

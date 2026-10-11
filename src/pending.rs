@@ -18,6 +18,9 @@ pub struct PendingPlan {
     pub created: String,
     pub base_commit: String,
     pub tier: String,
+    /// The plan was made with `--reset-params`, and apply repeats it.
+    #[serde(default)]
+    pub reset_params: bool,
     pub plan: String,
 }
 
@@ -28,6 +31,7 @@ pub fn save(
     tier: &str,
     actor: &str,
     base_commit: &str,
+    reset_params: bool,
 ) -> Result<PathBuf, String> {
     let (created, compact) = utc_now();
     let id = format!("{compact}-{tier}");
@@ -53,6 +57,7 @@ pub fn save(
          created = \"{created}\"\n\
          base_commit = \"{base_commit}\"\n\
          tier = \"{tier}\"\n\
+         reset_params = {reset_params}\n\
          plan = {plan_field}\n",
         actor = toml::Value::String(actor.to_string()),
     );
@@ -120,6 +125,7 @@ mod tests {
             "behavioral",
             "owner",
             "abc123",
+            true,
         )
         .unwrap();
         let plan = load(&path).unwrap();
@@ -127,6 +133,7 @@ mod tests {
         assert_eq!(plan.actor, "owner");
         assert_eq!(plan.base_commit, "abc123");
         assert_eq!(plan.tier, "behavioral");
+        assert!(plan.reset_params);
         assert!(plan.plan.contains("Homeostat plan"));
         let _ = fs::remove_dir_all(&dir);
     }

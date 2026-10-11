@@ -49,8 +49,8 @@ enum Command {
         #[arg(long)]
         plan: Option<PathBuf>,
         /// Set every live parameter to its repo default, including live
-        /// edits an apply would keep.
-        #[arg(long)]
+        /// edits an apply would keep. A pending plan carries its own setting.
+        #[arg(long, conflicts_with = "plan")]
         reset_params: bool,
     },
     /// Serve the agent surface: a read-only MCP server bound to a live
@@ -244,7 +244,7 @@ fn plan_command(
             return ExitCode::FAILURE;
         };
         let tier = homeostat::plan::derive_tier(&diff).to_string();
-        match homeostat::pending::save(&path, &text, &tier, &actor, &base_commit) {
+        match homeostat::pending::save(&path, &text, &tier, &actor, &base_commit, reset_params) {
             Ok(saved) => println!("\nPending plan saved: {}", saved.display()),
             Err(err) => {
                 eprintln!("plan --save failed: {err}");
@@ -284,7 +284,7 @@ fn apply_command(
     path: PathBuf,
     bus: Option<String>,
     plan_file: Option<PathBuf>,
-    reset_params: bool,
+    mut reset_params: bool,
 ) -> ExitCode {
     let Some(endpoint) = endpoint(bus) else {
         eprintln!("apply needs a running supervisor: pass --bus or set HOMEOSTAT_BUS");
@@ -293,7 +293,8 @@ fn apply_command(
 
     // A pending plan is invalid once the repo moves past its base commit. On a
     // match the plan is recomputed below, because the file is for review and
-    // is not executed as written.
+    // is not executed as written. It keeps the --reset-params it was made
+    // with.
     if let Some(plan_file) = &plan_file {
         let pending = match homeostat::pending::load(plan_file) {
             Ok(pending) => pending,
@@ -318,6 +319,7 @@ fn apply_command(
             );
             return ExitCode::FAILURE;
         }
+        reset_params = pending.reset_params;
     }
 
     let Some(result) = checked(&path, "apply") else {

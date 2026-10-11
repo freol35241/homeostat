@@ -8,7 +8,7 @@
 //! stored, put on the key so subscribers see it, and echoed in an ok reply. An
 //! invalid one gets an error reply and the old value stands.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
 
 use serde_json::Value;
@@ -20,8 +20,6 @@ use crate::validate::parse_time;
 struct StoredParam {
     param_type: ParamType,
     constraint: Constraint,
-    /// The manifest default as of the last apply.
-    default: Value,
     value: Value,
 }
 
@@ -96,26 +94,32 @@ impl ConfigStore {
         self.write_order.lock().await
     }
 
-    /// Rebuilds the store from a new house. A live value that differs from
-    /// its old default is kept when [`keeps_live`] allows it, and every other
-    /// value is set to its repo default. `reset` sets every value to its
-    /// default. Returns the params whose effective value changed, so the
-    /// caller can put them on the bus for live subscribers. Params of new
-    /// units need no put, because they read their values with a get at
-    /// startup.
-    pub fn replace_from_house(&self, house: &House, reset: bool) -> Vec<(String, String, Value)> {
+    /// Rebuilds the store from a new house. The params in `replaced` are set
+    /// to their repo default, as are new params. Every other param keeps its
+    /// live value while it meets the new type and constraint. The plan's diff
+    /// names `replaced` ([`keeps_live`]), so plan and apply decide alike. A
+    /// write that lands after the diff was taken is kept the same way.
+    /// Returns the params whose effective value changed, so the caller can
+    /// put them on the bus for live subscribers. Params of new units need no
+    /// put, because they read their values with a get at startup.
+    pub fn replace_from_house(
+        &self,
+        house: &House,
+        replaced: &BTreeSet<(String, String)>,
+    ) -> Vec<(String, String, Value)> {
         let mut params = self.params.lock().expect("config store lock");
         let mut fresh = build(house);
         let mut changed = Vec::new();
-        for ((unit, param), new) in &mut fresh {
-            let Some(old) = params.get(&(unit.clone(), param.clone())) else {
+        for (key, new) in &mut fresh {
+            let Some(old) = params.get(key) else {
                 continue;
             };
-            if !reset && keeps(&old.default, new, &old.value) {
+            if !replaced.contains(key) && check(new.param_type, &new.constraint, &old.value).is_ok()
+            {
                 new.value = old.value.clone();
             }
             if old.value != new.value {
-                changed.push((unit.clone(), param.clone(), new.value.clone()));
+                changed.push((key.0.clone(), key.1.clone(), new.value.clone()));
             }
         }
         *params = fresh;
@@ -169,7 +173,6 @@ fn build(house: &House) -> BTreeMap<(String, String), StoredParam> {
                 StoredParam {
                     param_type: spec.param_type,
                     constraint: Constraint::from_spec(spec),
-                    default: default_value(spec),
                     value: default_value(spec),
                 },
             );
@@ -184,20 +187,8 @@ fn build(house: &House) -> BTreeMap<(String, String), StoredParam> {
 /// or a constraint the live value no longer meets, sets the new default.
 /// `old_default` is the default as of the last apply.
 pub fn keeps_live(old_default: &Value, spec: &ParamSpec, live: &Value) -> bool {
-    keeps(
-        old_default,
-        &StoredParam {
-            param_type: spec.param_type,
-            constraint: Constraint::from_spec(spec),
-            default: default_value(spec),
-            value: default_value(spec),
-        },
-        live,
-    )
-}
-
-fn keeps(old_default: &Value, new: &StoredParam, live: &Value) -> bool {
-    *old_default == new.default && check(new.param_type, &new.constraint, live).is_ok()
+    *old_default == default_value(spec)
+        && check(spec.param_type, &Constraint::from_spec(spec), live).is_ok()
 }
 
 /// Whether the spec's default satisfies its own constraint. This is the
@@ -338,7 +329,6 @@ mod tests {
                 before: parse_time(before),
                 ..Constraint::default()
             },
-            default: json!("22:00"),
             value: json!("22:00"),
         }
     }
@@ -406,7 +396,6 @@ mod tests {
                 StoredParam {
                     param_type: ParamType::Float,
                     constraint: Constraint::default(),
-                    default: json!(20.0),
                     value: json!(20.0),
                 },
             )])),

@@ -293,6 +293,10 @@ async fn a_live_edit_survives_an_apply_that_keeps_its_default() {
     config_write(&observer, "home/config/probe/level", json!(7))
         .await
         .expect("write inside the constraint");
+    // The running probe echoes 7. Drain it, so the echo awaited after the
+    // apply comes from the restarted probe.
+    await_echo(&echo_sub, json!(7)).await;
+    while let Ok(Some(_)) = echo_sub.try_recv() {}
 
     // An unrelated manifest edit restarts the probe and keeps the edit.
     edit(
@@ -672,6 +676,75 @@ async fn stale_pending_plan_refuses_to_apply() {
     assert!(err.contains("stale"), "{err}");
 
     // Nothing was applied: the live value is still the old default.
+    assert_eq!(
+        cache_read(&observer, "home/config/probe/level").await,
+        Some(json!(1))
+    );
+
+    sup.shutdown();
+    let _ = std::fs::remove_dir_all(&house);
+}
+
+/// A pending plan saved with `--reset-params` applies the reset it showed.
+/// The plan file carries the setting, and `apply --plan` refuses the flag.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pending_reset_plan_applies_its_reset() {
+    let house = temp_house(FIXTURE, "apply-pending-reset");
+    git_init_commit(&house);
+    let mut sup = Supervisor::spawn_at(&house, &[]);
+    let observer = sup.observer().await;
+    await_base_units(&observer).await;
+
+    config_write(&observer, "home/config/probe/level", json!(7))
+        .await
+        .expect("write inside the constraint");
+
+    let house_arg = house.to_str().expect("utf-8 path");
+    let saved = cli(&[
+        "plan",
+        house_arg,
+        "--bus",
+        &sup.endpoint,
+        "--save",
+        "--reset-params",
+    ]);
+    assert_cli_ok(&saved);
+    let text = stdout(&saved);
+    assert!(
+        text.contains("~ probe/level  live=7  repo=1  (replaces a live edit: reset)"),
+        "{text}"
+    );
+    let plan_path = text
+        .lines()
+        .find_map(|l| l.strip_prefix("Pending plan saved: "))
+        .expect("saved path printed")
+        .to_string();
+
+    let both = cli(&[
+        "apply",
+        house_arg,
+        "--bus",
+        &sup.endpoint,
+        "--plan",
+        &plan_path,
+        "--reset-params",
+    ]);
+    assert!(!both.status.success(), "--plan and --reset-params conflict");
+
+    let apply = cli(&[
+        "apply",
+        house_arg,
+        "--bus",
+        &sup.endpoint,
+        "--plan",
+        &plan_path,
+    ]);
+    assert_cli_ok(&apply);
+    assert!(
+        stdout(&apply).contains("parameter probe/level = 1"),
+        "{}",
+        stdout(&apply)
+    );
     assert_eq!(
         cache_read(&observer, "home/config/probe/level").await,
         Some(json!(1))

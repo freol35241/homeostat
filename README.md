@@ -300,7 +300,8 @@ Parameters live at `home/config/{unit}/{param}`. They start at the
 manifest default, every write is checked against the constraint (min/max,
 an after/before time window that may span midnight, or an enum), and
 running units see new values without a restart. An apply keeps a live
-edit until the parameter's default changes in the repo, and
+edit until the parameter's default changes in the repo or a new
+constraint rules the value out, and
 `apply --reset-params` puts every default back. To keep an edit across a
 supervisor restart, commit it as the new default. A `clock`
 service publishes local time on `home/clock/minute` and
