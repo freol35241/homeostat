@@ -14,6 +14,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -116,8 +117,12 @@ impl ConfigStore {
     pub fn from_house(house: &House, saved: Option<PathBuf>) -> (ConfigStore, Vec<String>) {
         let mut params = build(house);
         let mut notes = Vec::new();
+        let mut saved = saved;
         if let Some(path) = &saved {
-            restore(&mut params, path, &mut notes);
+            if !restore(&mut params, path, &mut notes) {
+                notes.push("live edits are kept in memory only".to_string());
+                saved = None;
+            }
         }
         let store = ConfigStore {
             params: Mutex::new(params),
@@ -190,22 +195,17 @@ impl ConfigStore {
             return Err(format!("unknown parameter {unit}/{param}"));
         };
         check(stored.param_type, &stored.constraint, &value)?;
-        // An integer written to a float param is stored as the float it means,
-        // as `default_value` does for the repo default. Otherwise serde_json's
-        // 5 != 5.0 would plan as permanent drift.
-        let value = match stored.param_type {
-            ParamType::Float => Value::from(value.as_f64().expect("checked as float")),
-            _ => value,
-        };
+        let value = canonical(stored.param_type, value);
         stored.value = value.clone();
         self.save(&params);
         Ok(value)
     }
 
     /// Writes every live edit to the saved file, or removes the file when
-    /// there are none. The file is replaced by a rename, so a crash leaves
-    /// the old file or the new one. A failure is logged and the store keeps
-    /// working in memory.
+    /// there are none. The new file is written and synced under a temporary
+    /// name, then renamed over the old one, so a crash or a power cut leaves
+    /// one of the two whole. A failure is logged and the store keeps working
+    /// in memory.
     fn save(&self, params: &BTreeMap<(String, String), StoredParam>) {
         let Some(path) = &self.saved else {
             return;
@@ -228,10 +228,16 @@ impl ConfigStore {
         } else {
             let text = serde_json::to_string_pretty(&SavedEdits { schema: 1, edits })
                 .expect("saved edits serialize");
-            let tmp = path.with_extension("tmp");
+            // The process id keeps two supervisors on one house from sharing
+            // a temporary file.
+            let tmp = path.with_extension(format!("tmp.{}", std::process::id()));
             path.parent()
                 .map_or(Ok(()), fs::create_dir_all)
-                .and_then(|()| fs::write(&tmp, text + "\n"))
+                .and_then(|()| {
+                    let mut file = fs::File::create(&tmp)?;
+                    file.write_all((text + "\n").as_bytes())?;
+                    file.sync_all()
+                })
                 .and_then(|()| fs::rename(&tmp, path))
                 .map_err(|e| e.to_string())
         };
@@ -245,25 +251,46 @@ impl ConfigStore {
 }
 
 /// Restores the edits saved at `path` over the defaults in `params`. A missing
-/// file means there are none.
+/// file means there are none. Returns false when the file exists but cannot
+/// be read, so the caller stops saving rather than overwrite it. A file that
+/// reads but is not a schema 1 live edits file is moved aside to
+/// `<path>.bad`, where the owner can still recover it.
 fn restore(
     params: &mut BTreeMap<(String, String), StoredParam>,
     path: &Path,
     notes: &mut Vec<String>,
-) {
+) -> bool {
     let text = match fs::read_to_string(path) {
         Ok(text) => text,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return true,
         Err(e) => {
             notes.push(format!("cannot read {}: {e}", path.display()));
-            return;
+            return false;
         }
     };
-    let saved: SavedEdits = match serde_json::from_str(&text) {
-        Ok(saved) => saved,
-        Err(e) => {
-            notes.push(format!("{} is not a live edits file: {e}", path.display()));
-            return;
+    let saved = match serde_json::from_str::<SavedEdits>(&text) {
+        Ok(saved) if saved.schema == 1 => saved,
+        unusable => {
+            let reason = match unusable {
+                Ok(saved) => format!("schema {} is not 1", saved.schema),
+                Err(e) => e.to_string(),
+            };
+            let mut bad = path.as_os_str().to_owned();
+            bad.push(".bad");
+            let bad = PathBuf::from(bad);
+            if let Err(e) = fs::rename(path, &bad) {
+                notes.push(format!(
+                    "{} is not a live edits file ({reason}) and cannot be moved aside: {e}",
+                    path.display()
+                ));
+                return false;
+            }
+            notes.push(format!(
+                "{} is not a live edits file ({reason}); moved it to {}",
+                path.display(),
+                bad.display()
+            ));
+            return true;
         }
     };
     for edit in saved.edits {
@@ -277,9 +304,21 @@ fn restore(
         } else if let Err(reason) = check(stored.param_type, &stored.constraint, &edit.value) {
             notes.push(format!("dropped saved {name}: {reason}"));
         } else {
-            notes.push(format!("restored {name} = {}", edit.value));
-            stored.value = edit.value;
+            let value = canonical(stored.param_type, edit.value);
+            notes.push(format!("restored {name} = {value}"));
+            stored.value = value;
         }
+    }
+    true
+}
+
+/// A checked value as the store keeps it. An integer for a float param
+/// becomes the float it means, as `default_value` does for the repo default.
+/// Otherwise `serde_json`'s 5 != 5.0 would plan as permanent drift.
+fn canonical(param_type: ParamType, value: Value) -> Value {
+    match param_type {
+        ParamType::Float => Value::from(value.as_f64().expect("checked as float")),
+        _ => value,
     }
 }
 
@@ -644,7 +683,7 @@ mod tests {
     }
 
     #[test]
-    fn an_unreadable_file_restores_nothing_and_says_so() {
+    fn a_file_that_is_not_live_edits_is_moved_aside() {
         let path = saved_path("garbage");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, "not json").unwrap();
@@ -652,6 +691,49 @@ mod tests {
         assert_eq!(restored.read(|_, _| true)[0].2, json!(1));
         assert_eq!(notes.len(), 1);
         assert!(notes[0].contains("is not a live edits file"), "{notes:?}");
+        assert!(!path.exists(), "moved aside");
+        assert_eq!(
+            fs::read_to_string(path.with_extension("json.bad")).unwrap(),
+            "not json",
+            "the owner can still recover it"
+        );
+        let _ = fs::remove_dir_all(path.parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn a_file_of_another_schema_is_moved_aside() {
+        let path = saved_path("schema");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, r#"{"schema": 2, "edits": []}"#).unwrap();
+        let (_, notes) = level_store(path.clone(), 1, 10);
+        assert!(notes[0].contains("schema 2 is not 1"), "{notes:?}");
+        assert!(path.with_extension("json.bad").exists());
+        let _ = fs::remove_dir_all(path.parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn an_integer_restored_to_a_float_param_is_stored_as_a_float() {
+        let mut params = BTreeMap::from([(
+            ("heating".to_string(), "setpoint".to_string()),
+            StoredParam {
+                param_type: ParamType::Float,
+                constraint: Constraint::default(),
+                default: json!(20.0),
+                value: json!(20.0),
+            },
+        )]);
+        let path = saved_path("float");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            r#"{"schema": 1, "edits": [{"unit": "heating", "param": "setpoint", "value": 21, "default": 20.0}]}"#,
+        )
+        .unwrap();
+        let mut notes = Vec::new();
+        assert!(restore(&mut params, &path, &mut notes));
+        let value = &params.values().next().unwrap().value;
+        assert!(value.is_f64(), "{value}");
+        assert_eq!(*value, json!(21.0));
         let _ = fs::remove_dir_all(path.parent().unwrap().parent().unwrap());
     }
 

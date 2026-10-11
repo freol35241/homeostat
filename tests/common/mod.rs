@@ -20,6 +20,8 @@ pub struct Supervisor {
     child: Child,
     pub endpoint: String,
     stderr_path: PathBuf,
+    /// The spawn's own live edits file, removed on drop.
+    live_edits: Option<PathBuf>,
 }
 
 impl Supervisor {
@@ -46,13 +48,15 @@ impl Supervisor {
             SPAWNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
         let _ = std::fs::remove_file(&live_edits);
-        let live_edits = live_edits.to_str().expect("utf-8 path").to_string();
+        let path = live_edits.to_str().expect("utf-8 path").to_string();
         let mut envs = envs.to_vec();
-        envs.push(("HOMEOSTAT_LIVE_EDITS", &live_edits));
-        Self::spawn_at(
+        envs.push(("HOMEOSTAT_LIVE_EDITS", &path));
+        let mut sup = Self::spawn_at(
             &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(fixture),
             &envs,
-        )
+        );
+        sup.live_edits = Some(live_edits);
+        sup
     }
 
     /// Like `spawn_with_env`, on an absolute house path (temp-dir copies
@@ -100,6 +104,7 @@ impl Supervisor {
             child,
             endpoint,
             stderr_path,
+            live_edits: None,
         };
         if sup.await_listening() {
             Some(sup)
@@ -191,6 +196,9 @@ impl Drop for Supervisor {
         let _ = self.child.kill();
         let _ = self.child.wait();
         let _ = std::fs::remove_file(&self.stderr_path);
+        if let Some(live_edits) = &self.live_edits {
+            let _ = std::fs::remove_file(live_edits);
+        }
     }
 }
 

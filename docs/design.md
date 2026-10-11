@@ -1297,8 +1297,9 @@ it.
   and the value must meet the constraint. A default the owner changed
   while the supervisor was down wins, and the log says which edits were
   restored or dropped. The file is not part of the repo, so the repo
-  stays the system of record. `HOMEOSTAT_LIVE_EDITS` moves it, which
-  tests that share a fixture house use.
+  stays the system of record. `HOMEOSTAT_LIVE_EDITS` overrides its
+  path. A file that is not a live edits file is moved aside to
+  `live-edits.json.bad` and nothing is restored from it.
 - Apply keeps a live edit while its default stays the same. The owner
   decides through the default and the family through the live value,
   so an unrelated commit does not undo a family member's setpoint. An
