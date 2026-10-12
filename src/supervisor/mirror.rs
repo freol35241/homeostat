@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
+use zenoh::sample::{Sample, SampleKind};
 use zenoh::time::Timestamp;
 use zenoh::Session;
 
@@ -69,46 +70,23 @@ pub fn age_at(stamp: Option<&Timestamp>, now: SystemTime) -> Duration {
 /// does not change it. The SDK's `subscribe` feeds the age to `Freshness`.
 pub async fn mirror(session: &Session, keyexpr: &'static str) -> Result<MirrorCache, String> {
     let cache: MirrorCache = Arc::default();
-    let sub = session
-        .declare_subscriber(keyexpr)
-        .await
-        .map_err(|e| format!("failed to subscribe to {keyexpr}: {e}"))?;
+    // A callback, so the cache is updated on the thread that delivers the
+    // sample. A bounded channel would make that thread wait for a drain
+    // task: a zenoh receive thread would stop routing, and the core's own
+    // put, as in replay, could block the runtime worker the drain needs.
+    {
+        let cache = cache.clone();
+        session
+            .declare_subscriber(keyexpr)
+            .callback(move |sample| store(&cache, &sample))
+            .background()
+            .await
+            .map_err(|e| format!("failed to subscribe to {keyexpr}: {e}"))?;
+    }
     let queryable = session
         .declare_queryable(keyexpr)
         .await
         .map_err(|e| format!("failed to declare {keyexpr} queryable: {e}"))?;
-    {
-        let cache = cache.clone();
-        tokio::spawn(async move {
-            while let Ok(sample) = sub.recv_async().await {
-                let key = sample.key_expr().as_str();
-                let mut cache = cache.lock().expect("mirror cache lock");
-                match sample.kind() {
-                    zenoh::sample::SampleKind::Put => {
-                        let stamp = sample.timestamp().copied();
-                        if !replaces(
-                            cache.get(key).and_then(|m| m.stamp.as_ref()),
-                            stamp.as_ref(),
-                        ) {
-                            continue;
-                        }
-                        cache.insert(
-                            key.to_string(),
-                            Mirrored {
-                                payload: sample.payload().to_bytes().to_vec(),
-                                age_on_arrival: age_at(stamp.as_ref(), SystemTime::now()),
-                                stamp,
-                                received: Instant::now(),
-                            },
-                        );
-                    }
-                    zenoh::sample::SampleKind::Delete => {
-                        cache.remove(key);
-                    }
-                }
-            }
-        });
-    }
     {
         let cache = cache.clone();
         tokio::spawn(async move {
@@ -140,6 +118,36 @@ pub async fn mirror(session: &Session, keyexpr: &'static str) -> Result<MirrorCa
     Ok(cache)
 }
 
+/// Applies one sample to the cache: a put keeps the value with the newest
+/// stamp, a delete removes the key.
+fn store(cache: &MirrorCache, sample: &Sample) {
+    let key = sample.key_expr().as_str();
+    let mut cache = cache.lock().expect("mirror cache lock");
+    match sample.kind() {
+        SampleKind::Put => {
+            let stamp = sample.timestamp().copied();
+            if !replaces(
+                cache.get(key).and_then(|m| m.stamp.as_ref()),
+                stamp.as_ref(),
+            ) {
+                return;
+            }
+            cache.insert(
+                key.to_string(),
+                Mirrored {
+                    payload: sample.payload().to_bytes().to_vec(),
+                    age_on_arrival: age_at(stamp.as_ref(), SystemTime::now()),
+                    stamp,
+                    received: Instant::now(),
+                },
+            );
+        }
+        SampleKind::Delete => {
+            cache.remove(key);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -167,6 +175,45 @@ mod tests {
         assert!(replaces(None, Some(&stamp)));
         assert!(replaces(Some(&stamp), None));
         assert!(replaces(None, None));
+    }
+
+    /// The core publishes into its own mirror, as replay does. With more
+    /// values than a bounded handler holds, a put that waits for the mirror
+    /// to drain would block the thread the drain needs.
+    #[test]
+    fn the_core_can_publish_more_into_its_own_mirror_than_a_channel_holds() {
+        const VALUES: usize = 2_000;
+        let (done, finished) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(1)
+                .enable_all()
+                .build()
+                .expect("runtime");
+            let held = runtime.block_on(async {
+                let session = zenoh::open(crate::bus::listen_config("tcp/127.0.0.1:0"))
+                    .await
+                    .expect("session");
+                let cache = mirror(&session, "test/mirror/**").await.expect("mirror");
+                // On a runtime worker, as replay runs.
+                tokio::spawn(async move {
+                    for i in 0..VALUES {
+                        session
+                            .put(format!("test/mirror/{i}"), "1")
+                            .await
+                            .expect("put");
+                    }
+                    cache.lock().expect("mirror cache lock").len()
+                })
+                .await
+                .expect("publishing task")
+            });
+            let _ = done.send(held);
+        });
+        let held = finished
+            .recv_timeout(Duration::from_secs(30))
+            .expect("the puts finish");
+        assert_eq!(held, VALUES);
     }
 
     #[test]
