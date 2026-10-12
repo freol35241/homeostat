@@ -266,14 +266,6 @@ class FakeHouse:
                         "points": [{"ts": now - 7200, "value": True}, {"ts": now - 599, "value": False}],
                     }
                 ],
-                "inputs": [
-                    {
-                        "entity": "livingroom_presence",
-                        "aspect": "presence",
-                        "from": None,
-                        "points": [{"ts": now - 7200, "value": True}, {"ts": now - 900, "value": False}],
-                    }
-                ],
                 "truncated": False,
             }
         )
