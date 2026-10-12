@@ -10,7 +10,9 @@ starts.
 
 import json
 import os
+import sys
 import time
+import weakref
 from collections.abc import Callable
 from typing import Any
 
@@ -22,6 +24,30 @@ from .stamps import stamp_us
 # The classes that carry commands: a request (home/cmd) and the arbiter's
 # forward of it (home/arbiter). put_json sends both as commands.
 COMMAND_PREFIXES = ("home/cmd/", "home/arbiter/")
+
+# The sessions not yet closed.
+_open_sessions: "weakref.WeakSet[UnitSession]" = weakref.WeakSet()
+
+
+def _closing_open_sessions(previous):
+    """Wrap an excepthook so it also closes every open session.
+
+    zenoh runs each subscriber's callback on a non-daemon Python thread,
+    which lasts until the session closes. Without this, a unit whose
+    `main()` raises prints its traceback and then waits forever for those
+    threads at interpreter exit, and the supervisor never sees it fail.
+    The sessions close after `previous` has printed the traceback.
+    """
+
+    def hook(exc_type, exc, tb):
+        previous(exc_type, exc, tb)
+        for session in list(_open_sessions):
+            session.close()
+
+    return hook
+
+
+sys.excepthook = _closing_open_sessions(sys.excepthook)
 
 
 def connect() -> "UnitSession":
@@ -84,6 +110,7 @@ class UnitSession:
         config.insert_json5("scouting/multicast/enabled", "false")
         config.insert_json5("scouting/gossip/enabled", "false")
         self._session = zenoh.open(config)
+        _open_sessions.add(self)
         self._token = None
         # key -> publisher, for has_subscriber. Matching status belongs to a
         # publisher, and a new publisher knows nothing until the router has
@@ -572,4 +599,5 @@ class UnitSession:
         if self._token is not None:
             self._token.undeclare()
             self._token = None
+        _open_sessions.discard(self)
         self._session.close()
