@@ -6,7 +6,7 @@ kind = "service"
 description = "Subscribes, then raises from main(): the process must exit"
 
 [runtime]
-command = "uv run units/dies.py"
+command = "uv run units/dies.py raise"
 restart = "never"
 
 [bus.subscribes]

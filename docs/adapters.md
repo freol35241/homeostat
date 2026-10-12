@@ -160,7 +160,9 @@ What the supervisor does, and what it expects back:
 - **Restart** follows `runtime.restart` with backoff and a circuit
   breaker. A misconfiguration that cannot be recovered (an unset `${VAR}`
   in the endpoint, an unknown input name in an entity file) should exit
-  with a clear message; the backoff makes it visible on `Health`. Bad
+  with a clear message; the backoff makes it visible on `Health`. The
+  SDK closes any session still open when the main thread finishes, so
+  an exception out of `main()` or a `sys.exit()` ends the process. Bad
   *input* at runtime must not make the adapter exit: see §6.
 
 Configuration comes from the same files the core validated:

@@ -10,7 +10,7 @@ starts.
 
 import json
 import os
-import sys
+import threading
 import time
 import weakref
 from collections.abc import Callable
@@ -29,25 +29,24 @@ COMMAND_PREFIXES = ("home/cmd/", "home/arbiter/")
 _open_sessions: "weakref.WeakSet[UnitSession]" = weakref.WeakSet()
 
 
-def _closing_open_sessions(previous):
-    """Wrap an excepthook so it also closes every open session.
+def _close_open_sessions() -> None:
+    """Close every session still open when the main thread finishes.
 
     zenoh runs each subscriber's callback on a non-daemon Python thread,
-    which lasts until the session closes. Without this, a unit whose
-    `main()` raises prints its traceback and then waits forever for those
-    threads at interpreter exit, and the supervisor never sees it fail.
-    The sessions close after `previous` has printed the traceback.
+    which lasts until the session closes, and the interpreter waits for
+    those threads before it exits. Without this, a unit whose `main()`
+    raises, calls `sys.exit()` or returns with a session open never exits,
+    and the supervisor never sees it stop.
     """
-
-    def hook(exc_type, exc, tb):
-        previous(exc_type, exc, tb)
-        for session in list(_open_sessions):
-            session.close()
-
-    return hook
+    for session in list(_open_sessions):
+        session.close()
 
 
-sys.excepthook = _closing_open_sessions(sys.excepthook)
+# threading runs these hooks when the main thread finishes, before it waits
+# for non-daemon threads; atexit runs after that wait. concurrent.futures
+# registers its shutdown the same way. The function is private, so typeshed
+# does not declare it.
+threading._register_atexit(_close_open_sessions)  # pyright: ignore[reportAttributeAccessIssue]
 
 
 def connect() -> "UnitSession":

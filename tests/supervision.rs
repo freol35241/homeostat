@@ -358,19 +358,21 @@ async fn restart_policy_terminal_states_read_stopped() {
     sup.shutdown();
 }
 
-/// A Python unit whose `main()` raises after it has subscribed exits with
-/// code 1, so the supervisor sees the failure.
+/// A Python unit that raises from `main()` or calls `sys.exit()` after it
+/// has subscribed exits with code 1, so the supervisor sees the failure.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_python_unit_that_raises_after_subscribing_exits() {
+async fn a_python_unit_that_fails_after_subscribing_exits() {
     let mut sup = Supervisor::spawn("tests/fixtures/house_dies");
     let observer = sup.observer().await;
 
-    let mut dies = health_watch(&observer, "dies").await;
-    let health = await_health(&mut dies, Duration::from_secs(30), |h| {
-        h.status == HealthStatus::Stopped
-    })
-    .await;
-    assert_eq!(health.last_exit_code, Some(1));
+    for unit in ["dies", "exits"] {
+        let mut watch = health_watch(&observer, unit).await;
+        let health = await_health(&mut watch, Duration::from_secs(30), |h| {
+            h.status == HealthStatus::Stopped
+        })
+        .await;
+        assert_eq!(health.last_exit_code, Some(1), "{unit}");
+    }
 
     sup.shutdown();
 }
