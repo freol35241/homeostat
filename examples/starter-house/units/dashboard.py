@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "homeostat==0.19.0",
+#     "homeostat==0.20.0",
 #     "aiohttp>=3.12.14,<4",
 # ]
 # ///
@@ -23,7 +23,7 @@ Routes, each documented on its handler in make_app:
   GET  /api/forecasts             recorder proxy for stored forecast issues
   GET  /api/source-events         when each source of a computed value was used
   GET  /api/unit-events           a unit's recorded health events
-  GET  /api/unit-timeline         what an automation saw, did and was told
+  GET  /api/unit-timeline         what an automation did and was told
   GET  /api/logs                  a unit's captured stdout/stderr tail
   GET  /api/camera/{entity}/live  MSE relay to go2rtc
   GET  /assets/*                  stylesheet, logic, modules, vendored libraries
@@ -192,12 +192,9 @@ UNIT_EVENT_MAX = 200
 # the unit's own. A busy house can push the oldest of a day out of this
 # many, and the reply says when that happened.
 TIMELINE_ROW_MAX = 1000
-# The most series of each kind (aspects read, aspects commanded) one
-# timeline reads changes for. Each is a recorder query.
+# The most commanded aspects one timeline reads changes for. Each is a
+# recorder query.
 TIMELINE_SERIES_MAX = 24
-# The most changes one aspect it reads adds to a timeline. A sensor that
-# reports every few seconds would otherwise bury the commands.
-TIMELINE_INPUT_MAX = 200
 
 # Issues one /api/forecasts reply may carry. A week of hourly issues is
 # 168 full horizons: megabytes on the wire and an unreadable chart. The
@@ -1283,7 +1280,7 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         ]
         return web.json_response({"events": events})
 
-    def timeline_rows(unit: str, sources: list, from_us: int, to_us: int) -> dict:
+    def timeline_rows(unit: str, from_us: int, to_us: int) -> dict:
         """Gather an automation's timeline rows from the recorder. Blocking.
 
         Events and commands come from home/history/events, state changes
@@ -1348,7 +1345,6 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         ]
         commanded = sorted({tuple(c["key"].split("/", 4)[3:5]) for c in commands})
         commanded = [f for f in commanded if len(f) == 2]
-        fields = [(f["entity"], f["aspect"]) for f in sources]
 
         return {
             "events": objects(events(f"home/health/{unit}/event")),
@@ -1357,18 +1353,15 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
             "answers": answers,
             "answers_from": health[0]["ts"] if len(health) >= TIMELINE_ROW_MAX else None,
             "readbacks": [changes(e, a, TIMELINE_ROW_MAX) for e, a in commanded[:TIMELINE_SERIES_MAX]],
-            "inputs": [changes(e, a, TIMELINE_INPUT_MAX) for e, a in fields[:TIMELINE_SERIES_MAX]],
-            "truncated": truncated
-            or len(commanded) > TIMELINE_SERIES_MAX
-            or len(fields) > TIMELINE_SERIES_MAX,
+            "truncated": truncated or len(commanded) > TIMELINE_SERIES_MAX,
         }
 
     async def api_unit_timeline(request: web.Request) -> web.Response:
         """GET /api/unit-timeline?unit=..&hours=24: an automation's rows for its timeline.
 
-        What it read changing, its parameter writes, the commands it sent,
-        the events that answered them, how the commanded aspects changed
-        after, and its own health events (docs/design.md#unit-timeline).
+        Its parameter writes, the commands it sent, the events that
+        answered them, how the commanded aspects changed after, and its own
+        health events (docs/design.md#unit-timeline).
         The page puts them in order (dashboard-logic.js, unitTimeline).
         """
         unit = request.query.get("unit", "")
@@ -1380,12 +1373,11 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
             return json_error("hours must be a number")
         if not hours > 0:
             return json_error("hours must be positive")
-        sources = hub.relations(model.model)[unit]["sources"]
         to_us = int(datetime.datetime.now(datetime.timezone.utc).timestamp() * 1_000_000)
         from_us = to_us - int(hours * 3600 * 1_000_000)
         try:
             rows = await asyncio.get_running_loop().run_in_executor(
-                None, timeline_rows, unit, sources, from_us, to_us
+                None, timeline_rows, unit, from_us, to_us
             )
         except QueryError as error:
             return json_error(f"recorder: {error}", status=502)

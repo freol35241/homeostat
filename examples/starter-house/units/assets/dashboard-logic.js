@@ -1446,7 +1446,6 @@
 
   /* An automation's timeline (docs/design.md#unit-timeline), newest first,
    * built from what /api/unit-timeline gathers from the recorder:
-   * - `input`: a change to an aspect it reads.
    * - `param`: a write to one of its parameters.
    * - `command`: a command it sent, with what came of it. An event naming
    *   its cmd_id says refused (the arbiter) or dropped (the adapter). Else
@@ -1462,11 +1461,6 @@
     var byName = {};
     ((model && model.entities) || []).forEach(function (e) { byName[e.name] = e; });
     var out = [];
-    (raw.inputs || []).forEach(function (series) {
-      (series.points || []).forEach(function (p) {
-        out.push({ ts: p.ts, type: 'input', entity: series.entity, aspect: series.aspect, value: p.value });
-      });
-    });
     (raw.params || []).forEach(function (p) {
       out.push({ ts: p.ts, type: 'param', param: String(p.key).split('/').pop(), value: p.value });
     });
