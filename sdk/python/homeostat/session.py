@@ -10,7 +10,9 @@ starts.
 
 import json
 import os
+import threading
 import time
+import weakref
 from collections.abc import Callable
 from typing import Any
 
@@ -22,6 +24,29 @@ from .stamps import stamp_us
 # The classes that carry commands: a request (home/cmd) and the arbiter's
 # forward of it (home/arbiter). put_json sends both as commands.
 COMMAND_PREFIXES = ("home/cmd/", "home/arbiter/")
+
+# The sessions not yet closed.
+_open_sessions: "weakref.WeakSet[UnitSession]" = weakref.WeakSet()
+
+
+def _close_open_sessions() -> None:
+    """Close every session still open when the main thread finishes.
+
+    zenoh runs each subscriber's callback on a non-daemon Python thread,
+    which lasts until the session closes, and the interpreter waits for
+    those threads before it exits. Without this, a unit whose `main()`
+    raises, calls `sys.exit()` or returns with a session open never exits,
+    and the supervisor never sees it stop.
+    """
+    for session in list(_open_sessions):
+        session.close()
+
+
+# threading runs these hooks when the main thread finishes, before it waits
+# for non-daemon threads; atexit runs after that wait. concurrent.futures
+# registers its shutdown the same way. The function is private, so typeshed
+# does not declare it.
+threading._register_atexit(_close_open_sessions)  # pyright: ignore[reportAttributeAccessIssue]
 
 
 def connect() -> "UnitSession":
@@ -84,6 +109,7 @@ class UnitSession:
         config.insert_json5("scouting/multicast/enabled", "false")
         config.insert_json5("scouting/gossip/enabled", "false")
         self._session = zenoh.open(config)
+        _open_sessions.add(self)
         self._token = None
         # key -> publisher, for has_subscriber. Matching status belongs to a
         # publisher, and a new publisher knows nothing until the router has
@@ -572,4 +598,5 @@ class UnitSession:
         if self._token is not None:
             self._token.undeclare()
             self._token = None
+        _open_sessions.discard(self)
         self._session.close()
