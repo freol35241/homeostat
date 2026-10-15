@@ -24,7 +24,11 @@ const ALICE_ALERT: &str = "home/cmd/person/alice_phone/alert";
 /// Spawns broker + supervisor on the fixture and waits for the adapter's
 /// liveliness token (generous timeout: first run resolves the uv env).
 async fn setup() -> (Mosquitto, Supervisor, zenoh::Session) {
-    let mosquitto = Mosquitto::spawn();
+    start(Mosquitto::spawn()).await
+}
+
+/// Like `setup`, on a broker the test has already published to.
+async fn start(mosquitto: Mosquitto) -> (Mosquitto, Supervisor, zenoh::Session) {
     let port = mosquitto.port.to_string();
     let sup = Supervisor::spawn_with_env(FIXTURE, &[(PORT_ENV, &port)]);
     let observer = sup.observer().await;
@@ -178,9 +182,10 @@ async fn notifications_reach_the_phone_and_publish_delivered() {
     assert_unit_contract(&mut sup, &observer, "companion").await;
 }
 
-/// (c) The far-end receipt and the phone's own liveness: an ack becomes
-/// `acknowledged` on the notifier, and the app's birth/last-will topic
-/// flips `available` on BOTH of that phone's entities, on transition.
+/// (c) The far-end receipt and the phone's own liveness: an ack echoes the
+/// alert's `sent_at` and becomes `acknowledged` on the notifier, which only
+/// moves forward. The app's birth/last-will topic flips `available` on BOTH
+/// of that phone's entities, on transition.
 #[tokio::test(flavor = "multi_thread")]
 async fn ack_and_availability_reach_both_faces() {
     let (mosquitto, mut sup, observer) = setup().await;
@@ -190,16 +195,33 @@ async fn ack_and_availability_reach_both_faces() {
         .expect("state subscriber");
     let mut mqtt = Mqtt::connect(mosquitto.port, "test-ack").await;
 
-    mqtt.publish("companion/alice/notifier/ack", "1752600123")
+    mqtt.publish("companion/alice/notifier/ack", "1752600123.25")
         .await;
     expect_states(
         &state_sub,
         &[(
             "home/state/person/alice_phone/acknowledged",
-            json!(1752600123),
+            json!(1752600123.25),
         )],
     )
     .await;
+
+    // An older alert opened after a newer one leaves `acknowledged` on the
+    // newer. The presence that follows is the sentinel: the adapter handles
+    // the phone's messages in order, so once it lands the ack was handled.
+    mqtt.publish("companion/alice/notifier/ack", "1752600100.5")
+        .await;
+    mqtt.publish("companion/alice/person/presence", "true")
+        .await;
+    expect_states(
+        &state_sub,
+        &[("home/state/person/alice/presence", json!(true))],
+    )
+    .await;
+    assert_eq!(
+        cache_read(&observer, "home/state/person/alice_phone/acknowledged").await,
+        Some(json!(1752600123.25))
+    );
 
     mqtt.publish("companion/alice/available", "true").await;
     await_states(
@@ -387,4 +409,28 @@ async fn discovery_describes_both_faces() {
     assert_eq!(fields["acknowledged"]["kind"], "number");
 
     sup.shutdown();
+}
+
+/// (h) `presence` is retained, so a transition the phone published while
+/// the adapter was down reaches the house when the adapter subscribes.
+#[tokio::test(flavor = "multi_thread")]
+async fn retained_presence_reaches_a_late_adapter() {
+    let mosquitto = Mosquitto::spawn();
+    let mut mqtt = Mqtt::connect(mosquitto.port, "test-retained").await;
+    mqtt.publish_retained("companion/alice/person/presence", "false")
+        .await;
+
+    let (_mosquitto, mut sup, observer) = start(mosquitto).await;
+    let state_sub = observer
+        .declare_subscriber("home/state/**")
+        .await
+        .expect("state subscriber");
+    await_states(
+        &observer,
+        &state_sub,
+        &[("home/state/person/alice/presence", json!(false))],
+    )
+    .await;
+
+    assert_unit_contract(&mut sup, &observer, "companion").await;
 }

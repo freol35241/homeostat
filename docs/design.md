@@ -2579,8 +2579,8 @@ beyond the vocabulary row.
   `alert`), and recorded separately. `delivered` is the epoch time at
   which the delivery service acknowledged the last message. It does not
   mean a person has read it. `acknowledged`, from a channel with an app
-  at the far end, is the time the person dismissed it. Chat ids, topics and priorities are the
-  adapter's dialect.
+  at the far end, is the send time of the newest alert the person has
+  seen. Chat ids, topics and priorities are the adapter's dialect.
 - The entity is the address. One person's phone is in the pseudo-room
   `person`, and a group channel is in `global`. A person with two
   channels is two entities, and switching providers changes no
@@ -2640,17 +2640,24 @@ makes people stop running these apps.
   The core refuses two entities with one `id` under one owner
   (`duplicate-entity-id`), so the face is part of it.
 - `delivered` is the broker's QoS 1 acknowledgement. `acknowledged` is
-  the time the person dismissed the notification in the app. Whether an
-  unacknowledged `alert` escalates is the automation's policy.
+  the `sent_at` of the newest alert the person dismissed or opened, which
+  the app echoes back. It is the adapter's clock, so it names the alert
+  without comparing the phone's clock with the house's. Messages are not
+  acknowledged, so a swiped message never makes an alert look seen.
+  Whether an unacknowledged `alert` escalates is the automation's policy.
 - `available` comes from the app's retained birth message and its last
-  will. MQTT allows one will per connection, so the topic names the
+  will. The broker skips the will on a clean disconnect, so the app
+  publishes the retained `false` itself first. MQTT allows one will per
+  connection, so the topic names the
   phone and the adapter fans it out to both entities. An automation can
   then tell an unreachable phone from a silent person.
 - Notifications are QoS 1 and never retained, because a retained alert
   would fire again on every reconnect. The phone's persistent session
-  holds what it missed. The adapter's own session is clean. Presence and
-  position are live signals the mirror already holds, and an `ack`
-  published while the adapter is down is lost rather than invented.
+  holds what it missed, at least once, and the app drops repeats by
+  `sent_at`. The adapter's own session is clean. `presence` is retained
+  because it is state, so the adapter reads it again on every subscribe.
+  A `position` fix or an `ack` published while the adapter is down is
+  lost rather than invented.
 - The adapter has no rate floor. There is no third-party server to
   protect, and the cooldown already lives in the automation.
 - Identity is the device. The app is provisioned from a text blob that

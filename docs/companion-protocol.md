@@ -52,10 +52,10 @@ that phone's entity ids.
 
 | Topic | Direction | QoS | Retain | Payload |
 |---|---|---|---|---|
-| `{base}/{phone}/available` | app → house | 1 | **yes** | `true` on connect; `false` as the last will |
-| `{base}/{phone}/person/presence` | app → house | 1 | no | `true` / `false` |
+| `{base}/{phone}/available` | app → house | 1 | **yes** | `true` on connect; `false` before a clean disconnect and as the last will |
+| `{base}/{phone}/person/presence` | app → house | 1 | **yes** | `true` / `false` |
 | `{base}/{phone}/person/position` | app → house | 1 | no | a fix object, below |
-| `{base}/{phone}/notifier/ack` | app → house | 1 | no | epoch seconds, a bare number |
+| `{base}/{phone}/notifier/ack` | app → house | 1 | no | the acknowledged alert's `sent_at`, a bare number |
 | `{base}/{phone}/notifier/message` | house → app | 1 | no | a notification object, below |
 | `{base}/{phone}/notifier/alert` | house → app | 1 | no | the same, the urgent channel |
 
@@ -70,8 +70,11 @@ topics; anything else a phone publishes is invisible to the house.
 
 Retained `true` published on connect, and a retained `false` registered
 as the connection's last will, so the broker publishes it when the
-session drops. The adapter forwards it to `available` on BOTH of that
-phone's entities, on transition only.
+session drops. The broker publishes the will only when the connection is
+lost without an MQTT DISCONNECT, so before a clean disconnect (stopping
+the service, re-provisioning) the app publishes the retained `false`
+itself. The adapter forwards it to `available` on BOTH of that phone's
+entities, on transition only.
 
 MQTT allows exactly one last will per connection, which is why this topic
 addresses the phone rather than one of its faces. `delivered` only says
@@ -86,6 +89,12 @@ registers ONE geofence and uses the platform's Geofencing API, which the
 OS runs at near-zero battery cost; it does not run a location loop. Where
 that geofence sits is the `home` key of the provisioning blob below; a
 phone provisioned without it publishes no `presence` at all.
+
+Retained, because presence is state rather than an event. A transition
+published while the adapter is restarting would otherwise be lost, and
+the house would hold the previous value until the next transition, which
+may be days later. The adapter gets the current value on every
+subscribe, and publishing the same value again is harmless.
 
 The house fuses this with the router's WiFi sightings elsewhere; the
 phone's job is `away` and `approaching`, not `at home`.
@@ -109,8 +118,21 @@ A fix without `lat` or `lon`, or with a non-numeric one, drops with
 
 ### `ack` — the far-end receipt
 
-A bare epoch-seconds number, published when the person dismissed or
-opened the notification, becoming `acknowledged` on the notifier entity.
+Published when the person dismisses or opens an `alert`, one ack per
+alert. The payload is that alert's `sent_at`, echoed as received, a bare
+number. It names the alert it acknowledges, and it is the adapter's own
+clock, so the house never compares the phone's clock with its own.
+
+The adapter publishes it as `acknowledged` on the notifier entity, and
+only when it is newer than every ack it has handled since it started.
+`acknowledged` is
+therefore the send time of the newest alert the person has seen, and an
+automation that sent an alert at time `t` reads `acknowledged >= t` as
+seen. Acks arriving out of order, or twice, leave it where it is.
+
+Messages are not acknowledged. Nothing in the house escalates a
+`message`, and an ack for one would make an earlier alert look seen.
+
 This is the receipt no delivery service can give: `delivered` means the
 broker accepted the message, `acknowledged` means a human saw it.
 
@@ -125,7 +147,8 @@ The app decides nothing about escalation. Whether an unacknowledged
 
 `text` is the notification body, `actor` the unit that sent it (show it
 as the title, so the phone says who spoke), `sent_at` the adapter's
-publish time in epoch seconds.
+publish time in epoch seconds. `sent_at` also identifies the
+notification: an `ack` echoes it, and the app deduplicates on it.
 
 Two topics, not one payload field with a severity in it: the severity
 split is structural everywhere else in the house — separately granted,
@@ -136,8 +159,11 @@ once.
 
 **Never retained.** A retained alert would fire again on every reconnect.
 Nothing here is a state to be caught up on; the persistent session is
-what makes an offline phone get the message, exactly once, when it
-returns.
+what makes an offline phone get the message when it returns.
+
+QoS 1 delivers at least once. If the phone drops before its PUBACK
+reaches the broker, the broker sends the message again on reconnect. The
+app shows a notification once per `sent_at` and ignores a repeat.
 
 ## Provisioning a phone
 
@@ -210,10 +236,10 @@ Three things, all text:
 ## Known limits, deliberately
 
 - **The adapter's own MQTT session is clean, not persistent.** An `ack`
-  published while the adapter was down is lost rather than invented, and
-  the app cannot tell. Presence and position are live signals and the
-  house's state mirror holds the last value, so a restart loses nothing
-  else.
+  or a `position` fix published while the adapter was down is lost
+  rather than invented, and the app cannot tell. `presence` is retained,
+  so the adapter reads the current value when it comes back. A lost fix
+  is corrected by the next one.
 - **`delivered` is the broker's QoS 1 ack**, not the phone's. The pair
   `delivered` / `acknowledged` is the whole point: one says the delivery
   path took it, the other that a person saw it.

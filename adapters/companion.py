@@ -28,9 +28,9 @@ Each phone owns a topic subtree under the endpoint's base topic
 (`companion` unless the endpoint path names another) and two entities:
 
     {base}/{phone}/available          <- retained birth `true`, LWT `false`
-    {base}/{phone}/person/presence    <- bare JSON bool
+    {base}/{phone}/person/presence    <- retained bare JSON bool
     {base}/{phone}/person/position    <- {"lat","lon","accuracy","battery","fixed_at"}
-    {base}/{phone}/notifier/ack       <- bare JSON epoch seconds
+    {base}/{phone}/notifier/ack       <- the acknowledged alert's `sent_at`
     {base}/{phone}/notifier/message   -> {"text","actor","sent_at"}, QoS 1
     {base}/{phone}/notifier/alert     -> the same, the urgent channel
 
@@ -53,10 +53,12 @@ Published state:
 - `delivered` (epoch seconds) on the notifier when the BROKER acks the
   publish (QoS 1 PUBACK), which is what ntfy's `delivered` also means: the
   delivery path took it, not that anyone saw it.
-- `acknowledged` (epoch seconds) when the person dismissed the
-  notification in the app. This is the far-end receipt only an app can
-  give; whether an unacknowledged `alert` escalates is the automation's
-  policy over this aspect, never this adapter's.
+- `acknowledged` (epoch seconds): the `sent_at` of the newest alert the
+  person has dismissed or opened in the app, echoed back by the app. It
+  is this adapter's clock, so an automation that sent an alert at `t`
+  reads `acknowledged >= t` as seen. This is the far-end receipt only an
+  app can give; whether an unacknowledged `alert` escalates is the
+  automation's policy over this aspect, never this adapter's.
 - `available` (bool) on both of a phone's entities, from the app's
   retained birth message and its last will. A phone out of coverage is
   unreachable, and an automation that escalates should be able to see it.
@@ -137,6 +139,7 @@ def main():
 
     seen_unknown: set[str] = set()
     available: dict[str, bool] = {}
+    acknowledged: dict[str, float] = {}
     # PUBACK arrives on the network thread; the mid is the only handle
     # paho gives back, so the notifier waits for it there.
     pending: dict[int, object] = {}
@@ -207,11 +210,15 @@ def main():
                 if value is not None:
                     put(entity, field, value)
         elif leaf == "ack":
-            at = _number(payload)
-            if at is None:
+            sent_at = _number(payload)
+            if sent_at is None:
                 drop("malformed-payload", topic=msg.topic)
                 return
-            put(entity, "acknowledged", at)
+            # The person may open an older alert after a newer one, and
+            # QoS 1 may repeat an ack, so `acknowledged` only moves forward.
+            if sent_at > acknowledged.get(entity.name, 0):
+                acknowledged[entity.name] = sent_at
+                put(entity, "acknowledged", sent_at)
 
     def on_publish(client, userdata, mid, reason_code=None, properties=None):
         with lock:
