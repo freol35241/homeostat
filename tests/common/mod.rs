@@ -464,8 +464,16 @@ impl Mqtt {
     }
 
     pub async fn publish(&mut self, topic: &str, payload: &str) {
+        self.publish_with(topic, payload, false).await;
+    }
+
+    pub async fn publish_retained(&mut self, topic: &str, payload: &str) {
+        self.publish_with(topic, payload, true).await;
+    }
+
+    async fn publish_with(&mut self, topic: &str, payload: &str, retain: bool) {
         self.client
-            .publish(topic, QoS::AtLeastOnce, false, payload)
+            .publish(topic, QoS::AtLeastOnce, retain, payload)
             .await
             .expect("mqtt publish");
         self.await_event(|i| matches!(i, Incoming::PubAck(_))).await;
