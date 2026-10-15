@@ -31,6 +31,10 @@ enum Command {
         /// Actor recorded in a saved pending plan.
         #[arg(long, default_value = "owner")]
         actor: String,
+        /// Plan every live parameter back to its repo default, including
+        /// live edits an apply would keep.
+        #[arg(long)]
+        reset_params: bool,
     },
     /// Plan against the live world, then command the supervisor to apply.
     Apply {
@@ -44,6 +48,10 @@ enum Command {
         /// longer the repo's HEAD.
         #[arg(long)]
         plan: Option<PathBuf>,
+        /// Set every live parameter to its repo default, including live
+        /// edits an apply would keep. A pending plan carries its own setting.
+        #[arg(long, conflicts_with = "plan")]
+        reset_params: bool,
     },
     /// Serve the agent surface: a read-only MCP server bound to a live
     /// house bus. Stdio by default (an MCP client launches it); --http for
@@ -90,8 +98,14 @@ fn main() -> ExitCode {
             bus,
             save,
             actor,
-        } => plan_command(path, bus, save, actor),
-        Command::Apply { path, bus, plan } => apply_command(path, bus, plan),
+            reset_params,
+        } => plan_command(path, bus, save, actor, reset_params),
+        Command::Apply {
+            path,
+            bus,
+            plan,
+            reset_params,
+        } => apply_command(path, bus, plan, reset_params),
         Command::Mcp { bus, http } => mcp_command(bus, http),
         Command::Explain { code } => explain_command(code),
         Command::Schema { file, markdown } => schema_command(file, markdown),
@@ -179,7 +193,13 @@ fn endpoint(flag: Option<String>) -> Option<String> {
         .filter(|e| !e.is_empty())
 }
 
-fn plan_command(path: PathBuf, bus: Option<String>, save: bool, actor: String) -> ExitCode {
+fn plan_command(
+    path: PathBuf,
+    bus: Option<String>,
+    save: bool,
+    actor: String,
+    reset_params: bool,
+) -> ExitCode {
     let Some(result) = checked(&path, "plan") else {
         return ExitCode::FAILURE;
     };
@@ -207,7 +227,7 @@ fn plan_command(path: PathBuf, bus: Option<String>, save: bool, actor: String) -
         None => World::empty(),
     };
 
-    let diff = homeostat::plan::diff(&result, &path, &world);
+    let diff = homeostat::plan::diff(&result, &path, &world, reset_params);
     let text = homeostat::plan::render(&result, &diff, &path.display().to_string(), &world);
     print!("{text}");
 
@@ -224,7 +244,7 @@ fn plan_command(path: PathBuf, bus: Option<String>, save: bool, actor: String) -
             return ExitCode::FAILURE;
         };
         let tier = homeostat::plan::derive_tier(&diff).to_string();
-        match homeostat::pending::save(&path, &text, &tier, &actor, &base_commit) {
+        match homeostat::pending::save(&path, &text, &tier, &actor, &base_commit, reset_params) {
             Ok(saved) => println!("\nPending plan saved: {}", saved.display()),
             Err(err) => {
                 eprintln!("plan --save failed: {err}");
@@ -260,7 +280,12 @@ fn mcp_command(bus: Option<String>, http: Option<String>) -> ExitCode {
     }
 }
 
-fn apply_command(path: PathBuf, bus: Option<String>, plan_file: Option<PathBuf>) -> ExitCode {
+fn apply_command(
+    path: PathBuf,
+    bus: Option<String>,
+    plan_file: Option<PathBuf>,
+    mut reset_params: bool,
+) -> ExitCode {
     let Some(endpoint) = endpoint(bus) else {
         eprintln!("apply needs a running supervisor: pass --bus or set HOMEOSTAT_BUS");
         return ExitCode::FAILURE;
@@ -268,7 +293,8 @@ fn apply_command(path: PathBuf, bus: Option<String>, plan_file: Option<PathBuf>)
 
     // A pending plan is invalid once the repo moves past its base commit. On a
     // match the plan is recomputed below, because the file is for review and
-    // is not executed as written.
+    // is not executed as written. It keeps the --reset-params it was made
+    // with.
     if let Some(plan_file) = &plan_file {
         let pending = match homeostat::pending::load(plan_file) {
             Ok(pending) => pending,
@@ -293,6 +319,7 @@ fn apply_command(path: PathBuf, bus: Option<String>, plan_file: Option<PathBuf>)
             );
             return ExitCode::FAILURE;
         }
+        reset_params = pending.reset_params;
     }
 
     let Some(result) = checked(&path, "apply") else {
@@ -314,7 +341,7 @@ fn apply_command(path: PathBuf, bus: Option<String>, plan_file: Option<PathBuf>)
                 return ExitCode::FAILURE;
             }
         };
-        let diff = homeostat::plan::diff(&result, &path, &world);
+        let diff = homeostat::plan::diff(&result, &path, &world, reset_params);
         print!(
             "{}",
             homeostat::plan::render(&result, &diff, &path.display().to_string(), &world)
@@ -325,6 +352,7 @@ fn apply_command(path: PathBuf, bus: Option<String>, plan_file: Option<PathBuf>)
 
         let request = ApplyRequest {
             base_commit: homeostat::gitinfo::head_commit(&path),
+            reset_params,
         };
         println!("\nApplying...");
         let planned_steps = diff.destroys.len() + diff.creates.len() + diff.restarts.len();

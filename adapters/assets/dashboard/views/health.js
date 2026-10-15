@@ -3,6 +3,7 @@ import { healthTooltip, statusGlyph } from '../chrome.js';
 import { byId, html } from '../html.js';
 import { unitNameFromHealthKey } from '../logic.js';
 import { store, unitLabel } from '../store.js';
+import { renderPauseSwitch } from '../widgets/params.js';
 
 export function renderEventRow(ev) {
   var unit = unitNameFromHealthKey(ev.key);
@@ -26,7 +27,7 @@ export function renderHealth() {
     if (h.last_exit_code !== undefined && h.last_exit_code !== null) meta.push('last exit: ' + h.last_exit_code);
     return html`<div class="card health-card clickable" data-action="unit-detail" data-unit="${u.name}"><div class="health-head">
       <span class="name" title="${u.label}">${u.label}</span>
-      <span class="status-badge" title="${healthTooltip(h)}"><span class="status-glyph status-${status}">${statusGlyph(status)}</span>${status}</span></div>
+      <span class="health-side"><span class="status-badge" title="${healthTooltip(h)}"><span class="status-glyph status-${status}">${statusGlyph(status)}</span>${status}</span>${renderPauseSwitch(u)}</span></div>
       ${meta.length ? html`<div class="health-meta">${meta.join(' · ')}</div>` : ''}
       </div>`;
   });

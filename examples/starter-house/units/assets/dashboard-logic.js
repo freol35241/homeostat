@@ -429,6 +429,19 @@
         if (!(configKey in config)) return;
         var live = config[configKey];
         var def = params[pname].default;
+        if (pname === PAUSE_PARAM && pauseParam(u)) {
+          // A pause reads as what it is, and taps to the unit, whose card
+          // carries the switch.
+          if (live === false) {
+            deviations.push({
+              tag: 'setpoint',
+              title: (labels[u.name] || u.name) + ' is paused',
+              detail: 'its commands are not sent',
+              target: { type: 'unit', unit: u.name }
+            });
+          }
+          return;
+        }
         if (JSON.stringify(live) !== JSON.stringify(def)) {
           // A family param taps through to its editor on Setpoints; an
           // owner param is read-only here, so it taps to the unit overlay
@@ -934,6 +947,12 @@
     return entry ? entry.value : current;
   }
 
+  /* How far a readback may be from a command and still match it. The
+   * brightness scale (0–254) is finer than the percent its control shows. */
+  function cmdTolerance(aspect) {
+    return aspect === 'brightness' ? 254 / 200 : 0;
+  }
+
   function sameValue(a, b, tolerance) {
     if (typeof a === 'number' && typeof b === 'number') {
       return Math.abs(a - b) <= Math.max(tolerance || 0, 1e-6 * Math.max(1, Math.abs(a)));
@@ -1407,9 +1426,124 @@
     });
   }
 
+  /* A unit's events for its overlay, newest first: the recorded ones and
+   * those this page saw live. A live event the recorder also holds is
+   * listed once. The two clocks differ by the bus's latency, so a pair
+   * counts as one when key and value match within a few seconds. */
+  var SAME_EVENT_S = 5;
+  function mergeUnitEvents(recorded, live) {
+    var out = (recorded || []).slice();
+    (live || []).forEach(function (ev) {
+      var value = JSON.stringify(ev.value);
+      var seen = out.some(function (r) {
+        return r.key === ev.key && JSON.stringify(r.value) === value &&
+          Math.abs((r.ts || 0) - (ev.ts || 0)) <= SAME_EVENT_S;
+      });
+      if (!seen) out.push(ev);
+    });
+    return out.sort(function (a, b) { return (b.ts || 0) - (a.ts || 0); });
+  }
+
+  /* An automation's timeline (docs/design.md#unit-timeline), newest first,
+   * built from what /api/unit-timeline gathers from the recorder:
+   * - `param`: a write to one of its parameters.
+   * - `command`: a command it sent, with what came of it. An event naming
+   *   its cmd_id says refused (the arbiter) or dropped (the adapter). Else
+   *   a recorded state matching it within the readback wait says applied,
+   *   and a matching state from before it says the aspect already had the
+   *   value. Else nothing answered. A command older than what a capped
+   *   query kept is not judged: its answer may have been cut.
+   * - `taken-over`: another actor's command displaced its hold.
+   * - `decision`: why one of its rules acted or did not (ctx.decision).
+   * - `event`: one of its other health events. */
+  function unitTimeline(raw, model, aspects, unitName) {
+    raw = raw || {};
+    var byName = {};
+    ((model && model.entities) || []).forEach(function (e) { byName[e.name] = e; });
+    var out = [];
+    (raw.params || []).forEach(function (p) {
+      out.push({ ts: p.ts, type: 'param', param: String(p.key).split('/').pop(), value: p.value });
+    });
+    var readbacks = {};
+    (raw.readbacks || []).forEach(function (s) { readbacks[s.entity + '/' + s.aspect] = s; });
+    var answers = raw.answers || [];
+    var cut = function (ts, from) { return from !== null && from !== undefined && ts < from; };
+    (raw.commands || []).forEach(function (c) {
+      var parts = String(c.key).split('/');
+      var entity = parts[3];
+      var aspect = parts.slice(4).join('/');
+      var envelope = c.value || {};
+      var entry = { ts: c.ts, type: 'command', entity: entity, aspect: aspect, value: envelope.value, outcome: 'no answer' };
+      var answer = envelope.id ? answers.filter(function (a) { return a.value && a.value.cmd_id === envelope.id; })[0] : null;
+      var series = readbacks[entity + '/' + aspect] || { points: [] };
+      if (answer) {
+        if (answer.value.kind === 'refuse') {
+          entry.outcome = 'refused';
+          entry.by = answer.value.holder_actor || null;
+          entry.priority = answer.value.holder_priority || null;
+        } else {
+          entry.outcome = 'dropped';
+          entry.by = unitNameFromHealthKey(answer.key);
+          entry.reason = answer.value.reason || null;
+        }
+      } else if (cut(c.ts, raw.answers_from) || cut(c.ts, series.from)) {
+        entry.outcome = 'unknown';
+      } else {
+        var e = byName[entity] || {};
+        var waitS = commandTimeoutMs(e.capability, aspects && aspects[entity], aspect) / 1000;
+        var tol = cmdTolerance(aspect);
+        var before = null;
+        var reached = (series.points || []).some(function (p) {
+          if (p.ts <= c.ts) before = p;
+          return p.ts > c.ts && p.ts <= c.ts + waitS && sameValue(p.value, envelope.value, tol);
+        });
+        if (reached) entry.outcome = 'applied';
+        else if (before && sameValue(before.value, envelope.value, tol)) entry.outcome = 'already';
+      }
+      out.push(entry);
+    });
+    answers.forEach(function (a) {
+      var v = a.value || {};
+      if (v.kind !== 'preempt' || v.from_actor !== unitName) return;
+      out.push({ ts: a.ts, type: 'taken-over', entity: v.entity, aspect: v.aspect, by: v.to_actor, priority: v.to_priority });
+    });
+    (raw.events || []).forEach(function (ev) {
+      var v = ev.value || {};
+      if (v.kind === 'decision') {
+        out.push({ ts: ev.ts, type: 'decision', rule: v.rule, outcome: v.outcome });
+        return;
+      }
+      out.push({ ts: ev.ts, type: 'event', kind: v.kind || 'event', fields: ev.value });
+    });
+    return out.sort(function (a, b) { return (b.ts || 0) - (a.ts || 0); });
+  }
+
+  /* The family's parameters of a unit, without an automation's pause
+   * switch, which its card shows in its head instead. */
   function familyParams(unit) {
     var params = (unit && unit.params) || {};
-    return Object.keys(params).filter(function (p) { return params[p].editable_by === 'family'; });
+    return Object.keys(params).filter(function (p) {
+      return params[p].editable_by === 'family' && !(p === PAUSE_PARAM && pauseParam(unit));
+    });
+  }
+
+  /* An automation's pause switch: the `enabled` parameter the core gives
+   * every automation (docs/design.md#pausing-an-automation). Its spec, or
+   * null for a unit that has none. */
+  var PAUSE_PARAM = 'enabled';
+  function pauseParam(unit) {
+    if (!unit || unit.kind !== 'automation') return null;
+    return (unit.params || {})[PAUSE_PARAM] || null;
+  }
+
+  /* Whether an automation is paused: its `enabled` reads false, or its
+   * default is false while no value is served yet. */
+  function isPaused(unit, config) {
+    var spec = pauseParam(unit);
+    if (!spec) return false;
+    var key = 'home/config/' + unit.name + '/' + PAUSE_PARAM;
+    var live = config && key in config ? config[key] : spec.default;
+    return live === false;
   }
 
   /* A view's widgets with every group expanded. A group is only a card
@@ -1496,6 +1630,7 @@
     return {
       unit: unit,
       params: familyParams(unit),
+      pause: pauseParam(unit),
       publishes: (model.entities || []).filter(function (e) { return e.owner === unitName; }),
       drives: fields(unit.drives),
       sources: fields(unit.sources)
@@ -1528,6 +1663,12 @@
     viewsOf: viewsOf,
     placement: placement,
     unitCardPlan: unitCardPlan,
+    familyParams: familyParams,
+    pauseParam: pauseParam,
+    mergeUnitEvents: mergeUnitEvents,
+    unitTimeline: unitTimeline,
+    cmdTolerance: cmdTolerance,
+    isPaused: isPaused,
     viewFor: viewFor,
     historyShape: historyShape,
     bucketSeconds: bucketSeconds,

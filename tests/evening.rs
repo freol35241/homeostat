@@ -32,6 +32,7 @@ use common::{
 
 const SIM_FIXTURE: &str = "tests/fixtures/house_evening_sim";
 const OFF_TIME_KEY: &str = "home/config/evening_lights/off_time";
+const ENABLED_KEY: &str = "home/config/evening_lights/enabled";
 const LAMP_CMD: &str = "home/cmd/livingroom/lamp/on";
 const LAMP_STATE: &str = "home/state/livingroom/lamp/on";
 const PRESENCE_STATE: &str = "home/state/livingroom/presence_sensor/presence";
@@ -225,6 +226,83 @@ async fn off_time_crossing_with_presence_drives_lights() {
     expect_lamp_off(&cmd_sub, Duration::from_secs(10)).await;
 
     sup.shutdown();
+}
+
+/// (b2) A paused automation decides but sends nothing, and says so. On
+/// resume the SDK delivers its inputs again, so it acts on the state the
+/// house is in without waiting for the next change
+/// (docs/design.md#pausing-an-automation).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_paused_automation_sends_nothing_and_catches_up_on_resume() {
+    let (mut sup, observer, lamp, presence) = setup_sim().await;
+    let cmd_sub = observer
+        .declare_subscriber(LAMP_CMD)
+        .await
+        .expect("cmd subscriber");
+    let events = observer
+        .declare_subscriber("home/health/evening_lights/event")
+        .await
+        .expect("event subscriber");
+
+    put_state(&lamp, json!(true)).await;
+    put_state(&presence, json!(false)).await;
+    tick(&observer, "21:59").await;
+    expect_no_command(&cmd_sub, Duration::from_millis(1500)).await;
+
+    config_write(&observer, ENABLED_KEY, json!(false))
+        .await
+        .expect("the switch is a bool parameter every automation has");
+    expect_event(&events, "paused").await;
+
+    // Crossing off_time while paused: the decision is made, the command is
+    // not sent, and the decision says so (ctx.decision).
+    tick(&observer, "22:00").await;
+    expect_decision(&events, "turning lights off (paused)").await;
+    expect_no_command(&cmd_sub, Duration::from_secs(2)).await;
+
+    // Resuming delivers the current clock minute again, which is past
+    // off_time, so the lamp goes off with no new tick.
+    config_write(&observer, ENABLED_KEY, json!(true))
+        .await
+        .expect("resume");
+    expect_event(&events, "resumed").await;
+    expect_decision(&events, "turning lights off").await;
+    expect_lamp_off(&cmd_sub, Duration::from_secs(10)).await;
+
+    sup.shutdown();
+}
+
+/// Waits up to 10 s for a `decision` event with this outcome.
+async fn expect_decision(events: &Sub, outcome: &str) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let sample = tokio::time::timeout_at(deadline, events.recv_async())
+            .await
+            .unwrap_or_else(|_| panic!("a decision \"{outcome}\" within 10s"))
+            .expect("event stream open");
+        let event: Value =
+            serde_json::from_slice(&sample.payload().to_bytes()).expect("event payload is JSON");
+        if event["kind"] == "decision" && event["outcome"] == outcome {
+            assert_eq!(event["rule"], "night_off");
+            return;
+        }
+    }
+}
+
+/// Waits up to 10 s for a health event of `kind`.
+async fn expect_event(events: &Sub, kind: &str) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let sample = tokio::time::timeout_at(deadline, events.recv_async())
+            .await
+            .unwrap_or_else(|_| panic!("a {kind} event within 10s"))
+            .expect("event stream open");
+        let event: Value =
+            serde_json::from_slice(&sample.payload().to_bytes()).expect("event payload is JSON");
+        if event["kind"] == kind {
+            return;
+        }
+    }
 }
 
 /// (c) A parameter edit reaches the running automation live (same pid, no

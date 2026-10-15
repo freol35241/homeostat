@@ -20,6 +20,8 @@ pub struct Supervisor {
     child: Child,
     pub endpoint: String,
     stderr_path: PathBuf,
+    /// The spawn's own live edits file, removed on drop.
+    live_edits: Option<PathBuf>,
 }
 
 impl Supervisor {
@@ -35,11 +37,26 @@ impl Supervisor {
     /// (and therefore its units) inherit. Ephemeral ports are handed out
     /// racily (the probe listener closes before the supervisor binds), so
     /// a supervisor that dies before listening is retried on a new port.
+    ///
+    /// Tests share fixture houses, so each spawn saves its live edits to a
+    /// file of its own instead of the house's `data/live-edits.json`.
     pub fn spawn_with_env(fixture: &str, envs: &[(&str, &str)]) -> Self {
-        Self::spawn_at(
+        static SPAWNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let live_edits = std::env::temp_dir().join(format!(
+            "homeostat-live-edits-{}-{}.json",
+            std::process::id(),
+            SPAWNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_file(&live_edits);
+        let path = live_edits.to_str().expect("utf-8 path").to_string();
+        let mut envs = envs.to_vec();
+        envs.push(("HOMEOSTAT_LIVE_EDITS", &path));
+        let mut sup = Self::spawn_at(
             &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(fixture),
-            envs,
-        )
+            &envs,
+        );
+        sup.live_edits = Some(live_edits);
+        sup
     }
 
     /// Like `spawn_with_env`, on an absolute house path (temp-dir copies
@@ -87,6 +104,7 @@ impl Supervisor {
             child,
             endpoint,
             stderr_path,
+            live_edits: None,
         };
         if sup.await_listening() {
             Some(sup)
@@ -178,6 +196,9 @@ impl Drop for Supervisor {
         let _ = self.child.kill();
         let _ = self.child.wait();
         let _ = std::fs::remove_file(&self.stderr_path);
+        if let Some(live_edits) = &self.live_edits {
+            let _ = std::fs::remove_file(live_edits);
+        }
     }
 }
 

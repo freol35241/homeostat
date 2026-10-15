@@ -41,6 +41,14 @@ pub type LogMap = Arc<Mutex<BTreeMap<String, VecDeque<LogEntry>>>>;
 /// before halting the walk. Breaker-open and stopped halt sooner.
 const READY_DEADLINE: Duration = Duration::from_mins(1);
 
+/// The live edits file, relative to the house root. `data/` is gitignored,
+/// so the repo stays the system of record (docs/design.md#repo-and-live-values).
+const LIVE_EDITS: &str = "data/live-edits.json";
+
+/// Overrides the live edits file's path. Tests that share a fixture house
+/// set it, so one test's edits are not restored into another's.
+const ENV_LIVE_EDITS: &str = "HOMEOSTAT_LIVE_EDITS";
+
 /// What the supervisor knows to be applied: the world it serves at
 /// `home/meta/**`. Unit entries update only when a unit reaches `running`
 /// during an apply or at startup. A halted walk therefore re-plans the
@@ -90,7 +98,13 @@ pub async fn run(check: &CheckResult, root: &Path, listen: &str) -> Result<(), S
 
     // The last-value queryables are up before any unit spawns, so a unit's
     // first get finds them.
-    let store = Arc::new(ConfigStore::from_house(&check.house));
+    let live_edits = std::env::var_os(ENV_LIVE_EDITS)
+        .map_or_else(|| root.join(LIVE_EDITS), std::path::PathBuf::from);
+    let (store, notes) = ConfigStore::from_house(&check.house, Some(live_edits));
+    for note in notes {
+        println!("[homeostat] live edits: {note}");
+    }
+    let store = Arc::new(store);
     serve_config(&session, store.clone()).await?;
     let health: HealthMap = Arc::default();
     serve_health(&session, health.clone()).await?;

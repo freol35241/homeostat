@@ -5,7 +5,11 @@ A Context gives an automation the bus access its manifest declares:
 - subscriptions by binding name from [bus.subscribes];
 - typed live parameters from [params.*], seeded by a bus get and kept
   current by a config subscription;
-- publishing through [bus.publishes] expressions.
+- publishing through [bus.publishes] expressions;
+- pausing: while the automation's `enabled` parameter is false its
+  commands are dropped (docs/design.md#pausing-an-automation);
+- decisions: why a rule acted or did not, for the dashboard's timeline
+  (docs/design.md#unit-timeline).
 
 Publishes go to concrete keys only. A put on a `**` expression would give
 adapters a wildcard key they cannot parse. Literal segments of the publish
@@ -193,7 +197,7 @@ class Context:
             name: {"key": spec["key"], "priority": spec.get("priority")}
             for name, spec in bus.get("publishes", {}).items()
         }
-        self._param_specs: dict[str, dict] = manifest.get("params", {})
+        self._param_specs: dict[str, dict] = house.params_of(manifest)
         self._zones: dict[str, list[str]] = {}
         zones_path = root / "zones.toml"
         if zones_path.exists():
@@ -217,11 +221,15 @@ class Context:
         self._lock = threading.Lock()
         self._param_values: dict[str, Any] = {}
         self._subs: list = []
+        # One per subscribe: delivers the binding's current values again.
+        self._redeliveries: list[Callable[[], None]] = []
         self._recorder: bool | None = None
         self._session = UnitSession(unit, os.environ[keys.ENV_BUS])
         # (entity, aspect, source) -> last reported participation, so
         # `source_used` can emit on transition rather than on every call.
         self._sources_used: dict[tuple[str, str, str], bool] = {}
+        # rule -> last reported outcome, so `decision` emits on change.
+        self._decisions: dict[str, str] = {}
 
         if self._param_specs:
             # Subscribe, then get, then merge. The get covers everything
@@ -247,7 +255,44 @@ class Context:
         except ValueError:
             return
         with self._lock:
+            was_paused = self._is_paused()
             self._param_values[param] = value
+            paused = self._is_paused()
+        if paused == was_paused:
+            return
+        self._session.health_event("paused" if paused else "resumed")
+        if not paused:
+            # Outside the zenoh callback, which must not block on a get.
+            threading.Thread(target=self._redeliver, daemon=True).start()
+
+    def _is_paused(self) -> bool:
+        """Whether `enabled` is false. Called with `self._lock` held."""
+        if house.ENABLED_PARAM not in self._param_specs:
+            return False
+        return self._param_values.get(house.ENABLED_PARAM) is False
+
+    @property
+    def paused(self) -> bool:
+        """Whether the automation is paused: its `enabled` parameter is false.
+
+        While it is, `publish` drops commands and the automation keeps
+        deciding. `decision` marks a paused outcome itself.
+        """
+        with self._lock:
+            return self._is_paused()
+
+    def _redeliver(self) -> None:
+        """Deliver every subscribed binding's current values again.
+
+        On resume an automation that acts only on a change has missed the
+        changes made while it was paused. Delivering the current values, as
+        at startup, lets it act on the state the house is in now.
+        """
+        for redeliver in list(self._redeliveries):
+            try:
+                redeliver()
+            except QueryError as err:
+                self._session.health_event("redeliver-failed", error=str(err))
 
     def _variants(self, expr: str) -> list[str]:
         return _expand(expr, self._zones, self._entities)
@@ -274,6 +319,10 @@ class Context:
         Values are ordered by their stamps. One older than the value
         already delivered for its key is dropped, so a catch-up or a replay
         never replaces a newer live value.
+
+        When a paused automation resumes, the current values are delivered
+        again in the same way, so a handler sees each one at least once
+        after the pause.
 
         Parameters
         ----------
@@ -326,6 +375,16 @@ class Context:
                     if not newest.admit(key, stamp, catch_up=True):
                         continue
                     deliver(key, value, age_s)
+
+        def redeliver() -> None:
+            for expr in exprs:
+                for key, value, age_s, stamp in self._session.get_json_stamped(expr):
+                    with order:
+                        if newest.older(key, stamp):
+                            continue
+                        deliver(key, value, age_s)
+
+        self._redeliveries.append(redeliver)
 
     def _concrete_key(
         self,
@@ -389,13 +448,19 @@ class Context:
         room: str | None = None,
         entity: str | None = None,
         aspect: str | None = None,
+        options: dict | None = None,
     ) -> None:
         """Publish through a `[bus.publishes]` expression to one concrete key.
 
         Literal expression segments are defaults. Wildcard segments must be
         named with room/entity/aspect. cmd-class publishes are wrapped in the
         envelope automatically. The priority comes from the manifest's
-        publish declaration, and the actor is this unit.
+        publish declaration, and the actor is this unit. While the
+        automation is paused, a cmd-class publish is dropped.
+
+        `options` rides in the envelope beside the value, for the owning
+        adapter (docs/design.md#command-options). An adapter ignores an
+        option it does not support, so the device still reaches the value.
 
         Parameters
         ----------
@@ -409,6 +474,9 @@ class Context:
             The entity slot; required where the expression's is a wildcard.
         aspect : str or None, optional
             The aspect slot; required where the expression's is a wildcard.
+        options : dict or None, optional
+            Command options, such as ``{"transition": 1.0}``. Only a cmd
+            publish takes them.
 
         Raises
         ------
@@ -416,7 +484,9 @@ class Context:
             If `binding` is not declared in `[bus.publishes]`.
         ValueError
             If the slots do not make one concrete key inside the declared
-            expression, or a cmd publish declares no priority.
+            expression, a cmd publish declares no priority, `options` is not
+            an object with string keys, or `options` is given for a publish
+            that is not a command.
         """
         spec = self._publishes[binding]
         segments = spec["key"].split("/")
@@ -428,7 +498,11 @@ class Context:
                     f"publish {binding!r} is a cmd publish with no priority "
                     "declared in the manifest"
                 )
-            value = keys.cmd_envelope(value, priority, self.unit)
+            value = keys.cmd_envelope(value, priority, self.unit, options=options)
+            if self.paused:
+                return
+        elif options is not None:
+            raise ValueError(f"publish {binding!r} is not a cmd publish and takes no options")
         self._session.put_json(key, value)
 
     def publish_forecast(
@@ -672,6 +746,33 @@ class Context:
             aspect=aspect,
             source=source,
         )
+
+    def decision(self, rule: str, outcome: str) -> None:
+        """Report why a rule acted or did not, when that changes.
+
+        See docs/design.md#unit-timeline. The command trail says what an
+        automation did. This says why, including why it did nothing,
+        which nothing else records. Call it every time the rule is
+        evaluated, with an outcome in plain words ("waiting: someone is
+        home", "turning lights off"). It emits a `decision` health event
+        only when the rule's outcome changes.
+
+        While the automation is paused the outcome is marked "(paused)",
+        so the timeline shows what it would have done.
+
+        Parameters
+        ----------
+        rule : str
+            The rule's name, stable across calls.
+        outcome : str
+            What the rule decided, and why.
+        """
+        if self.paused:
+            outcome = f"{outcome} (paused)"
+        if self._decisions.get(rule) == outcome:
+            return
+        self._decisions[rule] = outcome
+        self._session.health_event("decision", rule=rule, outcome=outcome)
 
     def ready(self) -> None:
         """Declare the liveliness token: the unit is able to do its job."""

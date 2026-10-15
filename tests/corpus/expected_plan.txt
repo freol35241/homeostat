@@ -27,19 +27,27 @@ Units to create (11):
 + automation evening_lights (units/evening_lights.toml)
     command: uv run units/evening_lights.py
     params:
+      enabled  type=bool  default=true  editable_by=family
       off_time  type=time  default=23:00  constraint={after=20:00, before=02:00}  editable_by=family
 + automation fused_temperature (units/fused_temperature.toml)
     command: uv run units/fused_temperature.py
     entities (1):
       downstairs_temperature  sensor  room=global  write=exclusive
+    params:
+      enabled  type=bool  default=true  editable_by=family
 + automation intrusion (units/intrusion.toml)
     command: uv run units/intrusion.py
     params:
       cooldown_minutes  type=float  default=10  constraint={min=0}  editable_by=family
+      enabled  type=bool  default=true  editable_by=family
 + automation weather (units/weather.toml)
     command: uv run units/weather.py
+    params:
+      enabled  type=bool  default=true  editable_by=family
 + automation weather_alt (units/weather_alt.toml)
     command: uv run units/weather_alt.py
+    params:
+      enabled  type=bool  default=true  editable_by=family
 + service arbiter (units/arbiter.toml)
     command: uv run units/arbiter.py
     params:
@@ -107,6 +115,7 @@ Expanded keys:
   arbiter publishes arbiter: home/arbiter/**
   arbiter publishes holds: home/hold/arbiter
   arbiter subscribes cmd: home/cmd/**
+  arbiter subscribes grants: home/meta/system/grants
   dashboard publishes lights: home/cmd/**
   dashboard publishes locks: home/cmd/**
   dashboard subscribes config: home/config/*/*

@@ -1,0 +1,13 @@
+schema = 1
+
+[unit]
+name = "exits"
+kind = "service"
+description = "Subscribes, then calls sys.exit(): the process must exit"
+
+[runtime]
+command = "uv run units/dies.py exit"
+restart = "never"
+
+[bus.subscribes]
+clock = "home/clock/*"

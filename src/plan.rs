@@ -10,11 +10,11 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use crate::config::default_value;
+use crate::config::{default_value, keeps_live};
 use crate::content;
 use crate::expand::ExpandedKey;
 use crate::grants::{free_nodes, grant_edges, Grant};
-use crate::manifest::UnitKind;
+use crate::manifest::{implicit_enabled, ParamSpec, UnitKind, ENABLED_PARAM};
 use crate::repo::LoadedUnit;
 use crate::validate::display_value;
 use crate::CheckResult;
@@ -106,6 +106,9 @@ pub struct ParamChange {
     pub param: String,
     pub live: Value,
     pub repo: Value,
+    /// Why the apply replaces a live edit, when the live value is one.
+    /// `None` when the live value is the old default.
+    pub replaces_edit: Option<&'static str>,
 }
 
 /// A unit whose manifest changed at parameter level only (the fields
@@ -126,6 +129,8 @@ pub struct Diff {
     pub destroys: Vec<String>,
     pub restarts: Vec<Restart>,
     pub params: Vec<ParamChange>,
+    /// Live edits the apply keeps ([`keeps_live`]). They are not changes.
+    pub kept: Vec<ParamChange>,
     pub refreshes: Vec<Refresh>,
     pub grant_adds: Vec<Grant>,
     pub grant_removes: Vec<Grant>,
@@ -161,8 +166,8 @@ pub fn derive_tier(diff: &Diff) -> Tier {
 }
 
 /// Diffs the validated repo against the world. Only call on an error-free
-/// check result.
-pub fn diff(check: &CheckResult, root: &Path, world: &World) -> Diff {
+/// check result. `reset_params` plans every live value back to its default.
+pub fn diff(check: &CheckResult, root: &Path, world: &World, reset_params: bool) -> Diff {
     let mut diff = Diff::default();
     let repo_names: BTreeSet<&str> = check
         .house
@@ -207,22 +212,44 @@ pub fn diff(check: &CheckResult, root: &Path, world: &World) -> Diff {
             });
         }
 
-        // Parameter diffs: live value against repo default. One rule covers
-        // both a changed default and live drift, because the repo is the
-        // system of record either way.
+        // Parameter diffs: live value against repo default, with the
+        // world's manifest giving the default the live value was set under.
         if let Some(params) = &unit.manifest.params {
             for (param, spec) in params {
                 let repo = default_value(spec);
                 let Some(live) = world.params.get(&(name.clone(), param.clone())) else {
                     continue; // unknown to the running world: covered by restart
                 };
-                if live != &repo {
-                    diff.params.push(ParamChange {
-                        unit: name.clone(),
-                        param: param.clone(),
-                        live: live.clone(),
-                        repo,
-                    });
+                if live == &repo {
+                    continue;
+                }
+                let old_default = world_default(world_unit, param);
+                let edited = old_default.as_ref() != Some(live);
+                let keep = edited
+                    && !reset_params
+                    && old_default
+                        .as_ref()
+                        .is_some_and(|old| keeps_live(old, spec, live));
+                let replaces_edit = if keep || !edited {
+                    None
+                } else if reset_params {
+                    Some("reset")
+                } else if old_default.as_ref() != Some(&repo) {
+                    Some("default changed")
+                } else {
+                    Some("outside the new constraint")
+                };
+                let change = ParamChange {
+                    unit: name.clone(),
+                    param: param.clone(),
+                    live: live.clone(),
+                    repo,
+                    replaces_edit,
+                };
+                if keep {
+                    diff.kept.push(change);
+                } else {
+                    diff.params.push(change);
                 }
             }
         }
@@ -249,6 +276,24 @@ pub fn diff(check: &CheckResult, root: &Path, world: &World) -> Diff {
     diff.destroys.sort();
     diff.restarts.sort_by(|a, b| a.name.cmp(&b.name));
     diff
+}
+
+/// A parameter's default in the manifest the world is running, the implicit
+/// `enabled` of an automation included. `None` when the manifest does not
+/// parse or does not have the parameter.
+fn world_default(unit: &WorldUnit, param: &str) -> Option<Value> {
+    let manifest: toml::Value = toml::from_str(std::str::from_utf8(&unit.manifest).ok()?).ok()?;
+    let declared = manifest.get("params").and_then(|p| p.get(param));
+    let spec: ParamSpec = match declared {
+        Some(spec) => spec.clone().try_into().ok()?,
+        None if param == ENABLED_PARAM
+            && manifest.get("unit")?.get("kind")?.as_str()? == "automation" =>
+        {
+            implicit_enabled()
+        }
+        None => return None,
+    };
+    Some(default_value(&spec))
 }
 
 /// True when the two manifests differ only in parameter values: with every
@@ -527,7 +572,21 @@ pub fn render(check: &CheckResult, diff: &Diff, repo_label: &str, world: &World)
         out.push_str(&format!("\nParameter changes ({}):\n\n", diff.params.len()));
         for change in &diff.params {
             out.push_str(&format!(
-                "  ~ {}/{}  live={}  repo={}\n",
+                "  ~ {}/{}  live={}  repo={}",
+                change.unit, change.param, change.live, change.repo
+            ));
+            if let Some(reason) = change.replaces_edit {
+                out.push_str(&format!("  (replaces a live edit: {reason})"));
+            }
+            out.push('\n');
+        }
+    }
+
+    if !diff.kept.is_empty() {
+        out.push_str(&format!("\nLive edits kept ({}):\n\n", diff.kept.len()));
+        for change in &diff.kept {
+            out.push_str(&format!(
+                "  = {}/{}  live={}  repo={}\n",
                 change.unit, change.param, change.live, change.repo
             ));
         }
@@ -633,8 +692,10 @@ pub fn render(check: &CheckResult, diff: &Diff, repo_label: &str, world: &World)
         }
     }
 
-    if diff.is_empty() {
+    if diff.is_empty() && diff.kept.is_empty() {
         out.push_str("\nNo changes. The world matches the repo.\n");
+    } else if diff.is_empty() {
+        out.push_str("\nNo changes. The live edits above stay.\n");
     } else {
         out.push_str(&format!(
             "\nPlan tier: {} ({})\n",
@@ -815,6 +876,37 @@ mod tests {
 
     fn edge(a: &str, d: &str) -> (String, String) {
         (a.to_string(), d.to_string())
+    }
+
+    fn world_unit(kind: &str, params: &str) -> WorldUnit {
+        let manifest = format!(
+            "schema = 1\n[unit]\nname = \"porch\"\nkind = \"{kind}\"\n\
+             [runtime]\ncommand = \"true\"\n{params}"
+        );
+        WorldUnit {
+            manifest: manifest.into_bytes(),
+            manifest_hash: String::new(),
+            files_hash: String::new(),
+        }
+    }
+
+    #[test]
+    fn the_world_default_of_an_undeclared_enabled_is_true_for_an_automation() {
+        // A pause must read as a live edit under an unchanged default, or
+        // the next apply would undo it.
+        assert_eq!(
+            world_default(&world_unit("automation", ""), ENABLED_PARAM),
+            Some(Value::Bool(true))
+        );
+        assert_eq!(
+            world_default(&world_unit("adapter", ""), ENABLED_PARAM),
+            None
+        );
+        let declared = "[params.enabled]\ntype = \"bool\"\ndefault = false\n";
+        assert_eq!(
+            world_default(&world_unit("automation", declared), ENABLED_PARAM),
+            Some(Value::Bool(false))
+        );
     }
 
     #[test]

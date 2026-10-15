@@ -1,0 +1,1 @@
+error[invalid-manifest] porch: an automation's "enabled" parameter pauses it, so it must be a bool (units/porch.toml)

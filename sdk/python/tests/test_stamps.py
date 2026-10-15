@@ -168,6 +168,7 @@ class SubscribeMergeTest(unittest.TestCase):
         ctx._subscribes = {"lamp": self.KEY}
         ctx._variants = lambda expr: [expr]
         ctx._subs = []
+        ctx._redeliveries = []
         callbacks = []
         router = session_with_router()
 

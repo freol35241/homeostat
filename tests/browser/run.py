@@ -452,7 +452,7 @@ class SmokePhone(Smoke):
 
 class UnitOverlay(PageTest):
     """A unit's overlay lists its captured log, read in the shape the unit
-    serves: a list of the core's log entries."""
+    serves (a list of the core's log entries), and its recorded events."""
 
     async def test_a_units_log_is_listed(self):
         await self.view("health")
@@ -461,6 +461,54 @@ class UnitOverlay(PageTest):
         lines = self.page.locator("#overlay-panel .log-feed .log-line")
         self.assertEqual(await lines.count(), 1)
         self.assertIn("staged", await lines.first.inner_text())
+
+    async def test_an_automation_shows_its_timeline(self):
+        await self.view("health")
+        await self.page.locator('[data-action="unit-detail"][data-unit="evening_lights"]').first.click()
+        await self.page.wait_for_timeout(400)
+        rows = self.page.locator("#overlay-panel .timeline-row")
+        text = "\n".join(await rows.all_inner_texts())
+        self.assertEqual(await rows.count(), 3, text)
+        self.assertIn("(applied)", text, "the lamp's state answered the command")
+        self.assertIn("off_time set to 22:30", text)
+        self.assertIn("paused", text)
+
+    async def test_its_recorded_events_are_listed(self):
+        # The page opened after the event, so only the recorder has it.
+        await self.view("health")
+        await self.page.locator('[data-action="unit-detail"]:visible').first.click()
+        await self.page.wait_for_timeout(400)
+        rows = self.page.locator("#overlay-panel .event-feed .event-row")
+        self.assertGreaterEqual(await rows.count(), 1)
+        self.assertIn("recorded-before-load", await rows.first.inner_text())
+
+
+class PauseSwitch(PageTest):
+    """An automation's card carries its pause switch, and a tap asks for the
+    `enabled` parameter to change (docs/design.md#pausing-an-automation)."""
+
+    async def test_automations_and_only_they_have_a_switch(self):
+        await self.view("health")
+        switches = self.page.locator("#view .health-card .pause-switch .toggle")
+        self.assertEqual(await switches.count(), 2, "evening_lights and fused")
+        self.assertEqual(await self.page.locator("#view .pause-switch .toggle.on").count(), 2)
+
+    async def test_a_tap_pauses_the_automation(self):
+        await self.view("health")
+        switch = self.page.locator(
+            '#view .pause-switch [data-unit="evening_lights"][data-param="enabled"]'
+        )
+        await switch.click()
+        await self.page.wait_for_timeout(300)
+        self.assertEqual(
+            self.house.posted("/api/param"),
+            [{"unit": "evening_lights", "param": "enabled", "value": False}],
+        )
+        self.assertEqual(
+            await self.page.locator("#overlay-panel.show").count(),
+            0,
+            "the tap is the switch's, not the card's",
+        )
 
 
 class PagesDemo(unittest.IsolatedAsyncioTestCase):

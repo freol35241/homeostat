@@ -39,9 +39,9 @@ services:
 
   homeostat:
     # HOMEOSTAT_IMAGE lets CI point this at a locally built image.
-    image: ${HOMEOSTAT_IMAGE:-ghcr.io/freol35241/homeostat:0.18.0}
+    image: ${HOMEOSTAT_IMAGE:-ghcr.io/freol35241/homeostat:0.20.0}
     restart: unless-stopped
-    # The image runs as uid 1000. Units write to the house checkout
+    # The image runs as uid 1000. The core and units write to the checkout
     # (data/, plans/), so this must be the checkout's owner: set
     # HOMEOSTAT_UID/HOMEOSTAT_GID in .env when that is not 1000.
     user: "${HOMEOSTAT_UID:-1000}:${HOMEOSTAT_GID:-1000}"

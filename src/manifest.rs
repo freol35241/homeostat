@@ -45,6 +45,20 @@ pub struct Capability {
     pub aspects: &'static [&'static str],
     /// The reading and value that is out of the ordinary, if any.
     pub notable: Option<&'static str>,
+    /// The command options the vocabulary names for this capability.
+    pub options: &'static [CommandOption],
+    pub note: &'static str,
+}
+
+/// A command option: a modifier a command may carry beside its value, in
+/// the envelope's `options` (docs/design.md#command-options). It changes
+/// how the device reaches the value, never the value, so an adapter that
+/// cannot honour it ignores it. Rendered into docs/manifest.md.
+#[derive(Debug, Clone, Copy)]
+pub struct CommandOption {
+    pub name: &'static str,
+    /// The aspects whose commands take it: the base aspect or named ones.
+    pub aspects: &'static [&'static str],
     pub note: &'static str,
 }
 
@@ -55,6 +69,7 @@ pub const VOCABULARY: &[Capability] = &[
         base: None,
         aspects: &[],
         notable: None,
+        options: &[],
         note: "A boolean under its native name.",
     },
     Capability {
@@ -62,6 +77,7 @@ pub const VOCABULARY: &[Capability] = &[
         base: Some("on"),
         aspects: &["power_level", "flue_temperature", "boiler_temperature"],
         notable: None,
+        options: &[],
         note: "`on` is the family lever, read back from the device's run state, never echoed from the command. `power_level` is the output setting as the device enumerates it (a constraint the adapter describes); the two temperatures in °C are what an interlock reads. Run-phase codes pass through raw until a second burner adapter exists to generalise against.",
     },
     Capability {
@@ -69,6 +85,7 @@ pub const VOCABULARY: &[Capability] = &[
         base: None,
         aspects: &["motion"],
         notable: None,
+        options: &[],
         note: "`motion` (bool). Media rides the go2rtc plane, never the bus.",
     },
     Capability {
@@ -76,6 +93,7 @@ pub const VOCABULARY: &[Capability] = &[
         base: Some("setpoint"),
         aspects: &["indoor_temperature", "feed_temperature"],
         notable: None,
+        options: &[],
         note: "`setpoint` in °C is the family lever; the two readings are normalized when the device has them.",
     },
     Capability {
@@ -83,6 +101,7 @@ pub const VOCABULARY: &[Capability] = &[
         base: None,
         aspects: &[],
         notable: None,
+        options: &[],
         note: "Reserved; no adapter binds it yet.",
     },
     Capability {
@@ -90,6 +109,11 @@ pub const VOCABULARY: &[Capability] = &[
         base: Some("on"),
         aspects: &["brightness", "color_temp"],
         notable: Some("on = true"),
+        options: &[CommandOption {
+            name: "transition",
+            aspects: &["on", "brightness", "color_temp"],
+            note: "Seconds the light takes to reach the value, a number ≥ 0.",
+        }],
         note: "`brightness` 0–254 (the Zigbee2MQTT scale the dashboard assumes), `color_temp` in mired.",
     },
     Capability {
@@ -97,6 +121,7 @@ pub const VOCABULARY: &[Capability] = &[
         base: Some("locked"),
         aspects: &[],
         notable: Some("locked = false"),
+        options: &[],
         note: "",
     },
     Capability {
@@ -104,6 +129,7 @@ pub const VOCABULARY: &[Capability] = &[
         base: Some("message"),
         aspects: &["alert", "delivered", "acknowledged"],
         notable: None,
+        options: &[],
         note: "A channel that reaches a person: a phone, a group chat. `message` and `alert` are commandable strings — the text itself — and two structurally separate delivery paths, granted and policed apart (an alert overrides quiet hours; a message never will). `delivered` is the epoch time the delivery service acknowledged the last message, never a human's receipt; `acknowledged` is the epoch time the person themselves dismissed it, which only a channel with an app at the far end can report. Room `person` for one person's channel, `global` for a group (docs/design.md#notifications).",
     },
     Capability {
@@ -111,6 +137,7 @@ pub const VOCABULARY: &[Capability] = &[
         base: None,
         aspects: &["presence", "lat", "lon", "accuracy", "battery", "fixed_at"],
         notable: None,
+        options: &[],
         note: "`presence` is whether the person is home (bool), published by whichever adapter knows — a geofence transition, a fused sighting; the dashboard's People tile reads it. Scalar position aspects; `fixed_at` is the fix's epoch timestamp. Room is always `person`.",
     },
     Capability {
@@ -118,6 +145,7 @@ pub const VOCABULARY: &[Capability] = &[
         base: None,
         aspects: &["occupancy", "presence"],
         notable: None,
+        options: &[],
         note: "Either spelling is accepted; adapters pass their native one through.",
     },
     Capability {
@@ -125,6 +153,7 @@ pub const VOCABULARY: &[Capability] = &[
         base: None,
         aspects: &["wan"],
         notable: Some("wan = false"),
+        options: &[],
         note: "",
     },
     Capability {
@@ -132,6 +161,7 @@ pub const VOCABULARY: &[Capability] = &[
         base: None,
         aspects: &[],
         notable: None,
+        options: &[],
         note: "Numeric aspects under descriptive names (`temperature`, `humidity`); widgets come from what is published.",
     },
     Capability {
@@ -139,6 +169,7 @@ pub const VOCABULARY: &[Capability] = &[
         base: Some("on"),
         aspects: &[],
         notable: None,
+        options: &[],
         note: "",
     },
 ];
@@ -177,7 +208,11 @@ pub struct UnitManifest {
     /// a publish outside it.
     pub bus: Option<BusSection>,
     /// Live parameters, keyed by name (`home/config/{unit}/{param}`).
-    /// Names become key segments (`invalid-name`).
+    /// Names become key segments (`invalid-name`). Every automation also
+    /// has `enabled`, a `bool` that defaults to `true` and the family may
+    /// edit. While it is `false` the SDK drops the automation's commands.
+    /// Declaring `[params.enabled]` changes its default or who may edit it,
+    /// and it must stay a `bool` (`invalid-manifest`).
     pub params: Option<BTreeMap<String, ParamSpec>>,
     /// The entities this unit binds. Required for adapters, allowed for
     /// automations (virtual sensors), refused for services.
@@ -185,6 +220,32 @@ pub struct UnitManifest {
     /// Human names for voice and the dashboard. The dashboard reads well
     /// only when these are set.
     pub naming: Option<UnitNaming>,
+}
+
+/// The parameter that pauses an automation (docs/design.md#pausing-an-automation).
+pub const ENABLED_PARAM: &str = "enabled";
+
+/// `enabled` as an automation has it when its manifest does not declare it.
+pub fn implicit_enabled() -> ParamSpec {
+    ParamSpec {
+        param_type: ParamType::Bool,
+        default: toml::Value::Boolean(true),
+        constraint: None,
+        editable_by: Some(EditableBy::Family),
+    }
+}
+
+impl UnitManifest {
+    /// Adds the parameters a unit has without declaring them: `enabled` for
+    /// an automation.
+    pub fn add_implicit_params(&mut self) {
+        if self.unit.kind == UnitKind::Automation {
+            self.params
+                .get_or_insert_with(BTreeMap::new)
+                .entry(ENABLED_PARAM.to_string())
+                .or_insert_with(implicit_enabled);
+        }
+    }
 }
 
 /// `[unit]`: identity.
@@ -779,7 +840,7 @@ pub enum WidgetKind {
     /// A unit's card: its family setpoints, the entities it publishes,
     /// the entities it drives (from the grant table) and the entities it
     /// reads (from its subscriptions). All of it derives from its
-    /// manifest.
+    /// manifest. An automation's card also carries its pause switch.
     Unit,
     /// A unit's family-editable parameters as one card.
     Params,

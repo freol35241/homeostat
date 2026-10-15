@@ -24,7 +24,8 @@ details.
 
 Commands: the capability's base aspect (`on` or `locked`), a declared
 `brightness` or `color_temp`, or a command the device's exposes describe.
-Each is sent to {base}/{id}/set; `command_body` has the translation.
+Each is sent to {base}/{id}/set; `command_body` has the translation. A
+light command's `transition` option rides in the same /set.
 
 Discovery: the retained {base}/bridge/devices inventory is republished at
 home/discovery/{unit}, and each bound device's record carries an aspect
@@ -43,6 +44,7 @@ time or the bridge reports itself offline.
 """
 
 import json
+import math
 import os
 import threading
 import time
@@ -138,6 +140,9 @@ VOCABULARY_ASPECTS = frozenset({"on", "locked", "brightness", "color_temp"})
 # The capability's base aspect (docs/manifest.md, Capability vocabulary):
 # the one command every entity of that capability takes.
 BASE_ASPECT = {"light": "on", "switch": "on", "lock": "locked"}
+# The light aspects the vocabulary's `transition` option applies to
+# (docs/manifest.md, Command options).
+TRANSITION_ASPECTS = frozenset({"on", "brightness", "color_temp"})
 ACCESS_SET = 2  # z2m access bitmask: 1 published, 2 settable, 4 gettable
 SPECIFIC_TYPES = ("light", "switch", "lock", "cover", "climate", "fan")
 
@@ -286,8 +291,36 @@ def inventory(devices, by_id):
     return records
 
 
-def command_body(entity, aspect: str, value, fields: dict) -> dict | None:
+def command_body(entity, aspect: str, value, fields: dict, options: dict) -> dict | None:
     """Return the {base}/{id}/set payload for a command this entity takes, or None.
+
+    `value_body` translates the value. `options` adds what z2m takes beside
+    it: a light's `transition` in seconds on `on`, `brightness` and
+    `color_temp`. Any other option is ignored, so the device still reaches
+    the value (docs/design.md#command-options). A transition that is not a
+    finite number ≥ 0 makes the command invalid, like a bad value.
+    """
+    body = value_body(entity, aspect, value, fields)
+    if (
+        body is None
+        or entity.capability != "light"
+        or aspect not in TRANSITION_ASPECTS
+        or "transition" not in options
+    ):
+        return body
+    transition = options["transition"]
+    if (
+        isinstance(transition, bool)
+        or not isinstance(transition, (int, float))
+        or not math.isfinite(transition)
+        or transition < 0
+    ):
+        return None
+    return {**body, "transition": transition}
+
+
+def value_body(entity, aspect: str, value, fields: dict) -> dict | None:
+    """Return the /set payload for a command's value, or None.
 
     A command this entity takes is its capability's base aspect (a bool), a
     declared vocabulary feature (a number) or a command its exposes-derived
@@ -464,11 +497,13 @@ def main():
 
     def cmd_handler(entity):
         def handler(sample):
-            parsed = session.parse_command(sample)
+            parsed = session.parse_command_with_options(sample)
             if parsed is None:
                 return
-            aspect, value, cmd_id = parsed
-            body = command_body(entity, aspect, value, bridge.descriptor_fields.get(entity.name, {}))
+            aspect, value, cmd_id, options = parsed
+            body = command_body(
+                entity, aspect, value, bridge.descriptor_fields.get(entity.name, {}), options
+            )
             if body is None:
                 session.health_event(
                     "drop", reason="invalid-command", key=str(sample.key_expr), cmd_id=cmd_id

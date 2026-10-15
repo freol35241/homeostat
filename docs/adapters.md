@@ -160,7 +160,9 @@ What the supervisor does, and what it expects back:
 - **Restart** follows `runtime.restart` with backoff and a circuit
   breaker. A misconfiguration that cannot be recovered (an unset `${VAR}`
   in the endpoint, an unknown input name in an entity file) should exit
-  with a clear message; the backoff makes it visible on `Health`. Bad
+  with a clear message; the backoff makes it visible on `Health`. The
+  SDK closes any session still open when the main thread finishes, so
+  an exception out of `main()` or a `sys.exit()` ends the process. Bad
   *input* at runtime must not make the adapter exit: see §6.
 
 Configuration comes from the same files the core validated:
@@ -234,6 +236,9 @@ Every command payload is an envelope:
 {"value": 21.5, "priority": "manual", "actor": "dashboard"}
 ```
 
+It may carry `options` beside the value, such as a light's
+`{"transition": 1.0}` (docs/design.md#command-options).
+
 Subscribe on the expressions `keys.command_keyexprs(entity)`
 returns: `home/cmd/{room}/{entity}/**` for a plain entity,
 `home/arbiter/{room}/{entity}/**` for an arbitrated one. An arbitrated
@@ -248,12 +253,19 @@ Per command:
    `invalid-command`. `session.parse_command(sample)` does steps 1-2 and
    hands back `(aspect, value, cmd_id)`; carry that `cmd_id` into every
    drop below, because each one ends a command someone is waiting on.
+   An adapter that honours command options calls
+   `session.parse_command_with_options(sample)`, which also hands back
+   the envelope's `options`.
 3. Check the aspect is one the entity takes: the capability's base
    aspect, its declared `features`, or a dialect knob this adapter
    documents. Anything else drops with `invalid-command`.
 4. Check the value's type and bounds. **Bounds are adapter constants**,
    because device physics is dialect knowledge, not house config. An
    out-of-range value drops with `invalid-command`; do not clamp it.
+   Check each option the adapter honours the same way. Ignore any other
+   option, because an option never changes the value the device ends at.
+   The options and the aspects that take them are in
+   [`manifest.md`](manifest.md), Command options.
 5. Translate and send. Do not publish the new state yourself; wait for
    the device to report it.
 

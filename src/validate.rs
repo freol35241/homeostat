@@ -9,7 +9,7 @@ use crate::error::{Code, ValidationError};
 use crate::keyspace::{is_reserved_word, PSEUDO_ROOMS};
 use crate::manifest::{
     ControlSpec, DiscoveryMode, ParamSpec, ParamType, UnitKind, WidgetKind, WidgetSpec, WriteMode,
-    CAPABILITIES, VOCABULARY,
+    CAPABILITIES, ENABLED_PARAM, VOCABULARY,
 };
 use crate::repo::House;
 
@@ -212,6 +212,21 @@ fn check_manifest_shape(house: &House, errors: &mut Vec<ValidationError>) {
                     Code::InvalidManifest,
                     name,
                     message,
+                    file.clone(),
+                ));
+            }
+        }
+        if unit.manifest.unit.kind == UnitKind::Automation {
+            let enabled = unit
+                .manifest
+                .params
+                .as_ref()
+                .and_then(|p| p.get(ENABLED_PARAM));
+            if enabled.is_some_and(|spec| spec.param_type != ParamType::Bool) {
+                errors.push(ValidationError::new(
+                    Code::InvalidManifest,
+                    name,
+                    "an automation's \"enabled\" parameter pauses it, so it must be a bool",
                     file.clone(),
                 ));
             }

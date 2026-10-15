@@ -126,11 +126,13 @@ system may run in one container ([Distribution](#distribution)).
 Nothing running edits the repo's manifests, entity files,
 `zones.toml` or `dashboard.toml`. The only things written into the
 checkout are a unit's own data (the recorder's store under the
-gitignored `data/`) and pending plans under `plans/`. The running world
+gitignored `data/`), the core's live parameter edits at
+`data/live-edits.json`, and pending plans under `plans/`. The running world
 is diffed against the repo, not the other way round. A change is
 a commit followed by [plan and apply](#plan-and-apply). A live
-parameter edit is drift that the next apply resets
-([Live parameters](#live-parameters)).
+parameter edit is drift from the repo. An apply keeps it until the
+owner changes that parameter's default or constraint
+([Repo and live values](#repo-and-live-values)).
 `home/meta/system/applied_commit` names the commit that is running.
 
 ### Unit granularity: the atom is the unit
@@ -214,9 +216,9 @@ use, each in one sense. Where a word has two senses, both are listed.
 - **Write mode.** How commands to an entity are governed: `shared`,
   `exclusive` or `arbitrated`. See
   [Capabilities, grants and write policy](#capabilities-grants-and-write-policy).
-- **Envelope.** A command's payload: `{value, priority, actor, id}`.
-  The SDK stamps the priority from the manifest and the actor with the
-  unit.
+- **Envelope.** A command's payload: `{value, priority, actor, id}`,
+  and optionally `options`. The SDK stamps the priority from the
+  manifest and the actor with the unit.
 - **Arbiter.** The service that orders commands to arbitrated entities.
   It grants a **hold** (a lease per entity and aspect) to the winning
   band. See [Arbitrated mode](#arbitrated-mode).
@@ -351,13 +353,14 @@ Times carry an offset. Clock payloads are local RFC3339
 timestamp. Recorder events and log lines use integer µs UTC.
 
 Every `home/cmd` and `home/arbiter` payload is an envelope,
-`{value, priority, actor, id}`. `priority` is one of `automation`,
-`agent`, `family` or `manual` ([Cmd envelopes](#cmd-envelopes)).
+`{value, priority, actor, id}` with optional `options`. `priority` is
+one of `automation`, `agent`, `family` or `manual`
+([Cmd envelopes](#cmd-envelopes)).
 Priority and actor are self-declared and are checked only for shape
 ([Local-only access](#local-only-access)). An adapter's
 `parse_command` drops a non-JSON payload with `malformed-payload`. It
-drops one that lacks `value` or a known `priority` with
-`invalid-command`.
+drops one that lacks `value` or a known `priority`, or whose `options`
+is not an object, with `invalid-command`.
 
 `put_json` sends `home/cmd` and `home/arbiter` puts with congestion
 control `BLOCK` at priority `INTERACTIVE_HIGH`. Zenoh's default, `DROP`
@@ -601,6 +604,8 @@ offers the surface the manifest declares and nothing more:
   ([Restoring a unit's own last value](#restoring-a-units-own-last-value));
 - `ctx.source_used`
   ([Which sources a computation actually used](#which-sources-a-computation-actually-used));
+- `ctx.decision` ([Unit timeline](#unit-timeline));
+- `ctx.paused` ([Pausing an automation](#pausing-an-automation));
 - `ctx.health_event`;
 - `ctx.ready()`, which declares the liveliness token once the unit can
   do its job;
@@ -644,6 +649,8 @@ a test keeps in step and which is rendered into
   (`indoor_temperature` on `climate`).
 - The **notable** reading, which is a deviation on the dashboard's
   `Now` (a light on, a lock unlocked, a router's `wan = false`).
+- The [command options](#command-options) its commands may carry
+  (`transition` on a light).
 
 Every capability also has `available` ([Availability](#availability)),
 and `{aspect}_valid`, a boolean beside a reading that the device itself
@@ -733,7 +740,8 @@ its capability, rebinding it, or widening a publish from `.../on` to
 The table is the permission record. `plan` prints it: the whole table
 offline, or the delta against a live world. The supervisor serves the
 applied table at `home/meta/system/grants`. The dashboard reads it
-there to show which units drive which entities at which band.
+there to show which units drive which entities at which band. The
+arbiter reads it to know which entities it arbitrates.
 
 The table is also the dependency graph. An entity's owner runs before
 the units granted onto it ([apply walk](#the-apply-walk)). Owners can
@@ -781,10 +789,46 @@ Every payload on `home/cmd/**` and `home/arbiter/**` is an envelope:
   `invalid-command`) echo the id as `cmd_id`, so a publisher can tell
   which of two overlapping commands ended. The id is optional. Events
   for a hand-rolled publisher's command report `null`.
+- `options` is optional. It holds the [command options](#command-options)
+  for the owning adapter. The arbiter checks only that it is an object
+  and forwards it with the rest of the envelope.
 
 Adapters drop a payload that is not an envelope with `invalid-command`.
 Both classes travel with blocking congestion control at high priority
 ([Bus payload conventions](#bus-payload-conventions)).
+
+#### Command options
+
+A command option changes how the device reaches the value. It never
+changes what the value is. A light told to go to brightness 127 with
+`{"transition": 1.0}` fades there over a second. Without the option it
+jumps, and it still ends at 127.
+
+That rule makes an option safe to ignore. An adapter ignores an option
+it does not support, or one the command's aspect does not take, and
+sends the value. An automation can ask for a fade without knowing
+whether the light can do one. Something whose loss would change the
+outcome is not an option. "Only if the door is closed" is a condition
+in an automation, "off again in ten minutes" is a timer, and a setting
+the device keeps is an aspect.
+
+The options are named in the capability vocabulary (`options` on a row
+of `VOCABULARY`, rendered into [`docs/manifest.md`](manifest.md)), with
+their type, unit and the aspects that take them. Each adapter translates
+them into its protocol. The names are shared because an automation
+written against `light` must mean the same on every adapter that binds
+a light. Adapters do not accept options under their native names. A new
+option is a new row in the vocabulary.
+
+An option the adapter honours but whose value is the wrong type drops
+the command with `invalid-command`, as a bad value does. Options are
+for the device, so the envelope's governance stays at its top level.
+The arbiter reads `priority`, and only the owning adapter reads what
+`options` holds.
+
+The SDK's `publish` takes `options=` on a command publish, and
+`parse_command_with_options` hands an adapter the options with the
+value. The dashboard's commands carry none.
 
 ### Arbitrated mode
 
@@ -795,9 +839,16 @@ skipping it:
 
 - Writers do not need to know about it. Every writer publishes to
   `home/cmd/{room}/{entity}/{aspect}`. The arbiter subscribes to
-  `home/cmd/**` and ignores non-arbitrated entities. It forwards a
+  `home/cmd/**` and ignores bound, non-arbitrated entities. It forwards a
   granted wish, with the envelope unchanged, to the same path under
   `home/arbiter/`.
+- The arbiter learns which entities are arbitrated from the grant table
+  at `home/meta/system/grants`, and follows it live. Flipping an
+  entity's write mode restarts the entity's adapter but not the
+  arbiter, whose own files are unchanged. A hold on an entity that stops
+  being arbitrated is released. A wish for an entity that no unit binds
+  reaches no adapter either, so the arbiter drops it with an `unbound`
+  event.
 - Adapters cannot hear a wish. Their templated `home/cmd/`
   subscriptions expand only over non-arbitrated entities
   ([Key expansion](#key-expansion)). An arbitrated entity that no
@@ -989,7 +1040,8 @@ Every plan has a tier. It is derived from the diff, not declared
   changes and write-mode flips ([The grant table](#the-grant-table)).
 - **Behavioral**: otherwise, a unit restarts because its code, manifest
   or files changed.
-- **Parameter-only**: otherwise. Live values reset to the repo and
+- **Parameter-only**: otherwise. Changed defaults reach the live
+  values ([Repo and live values](#repo-and-live-values)) and
   parameter-level manifest changes refresh in place. Nothing restarts.
 
 Because the tier is a function of the diff, a structural change cannot
@@ -1037,10 +1089,12 @@ meta manifest updates. Any other difference is behavioral, including
 adding, removing or retyping a parameter, because a running unit read
 its manifest at startup.
 
-Parameter diffs compare each live value with its repo default. The same
-rule covers a changed default and live drift. An integer default on a
-`float` parameter is canonicalized. Otherwise `5` against `5.0` would
-plan as permanent drift.
+Parameter diffs compare each live value with its repo default, and
+with the default in the manifest the world is running. That old
+default tells a live edit apart from a value that only lags a changed
+default ([Repo and live values](#repo-and-live-values)). An integer
+default on a `float` parameter is canonicalized. Otherwise `5` against
+`5.0` would plan as permanent drift.
 
 ### The apply walk
 
@@ -1061,7 +1115,8 @@ follows grant order. Ties and unconnected units are ordered by kind
 (adapter, automation, service) and then by name, so the walk is
 deterministic:
 
-1. Parameters. The store is rebuilt and every changed value is put,
+1. Parameters. The store is rebuilt, keeping the live edits plan
+   showed as kept, and every changed value is put,
    under the config write lock. A racing parameter write therefore
    cannot be lost on the bus while the store keeps it.
 2. Refreshes of parameter-level manifest changes are recorded.
@@ -1275,14 +1330,32 @@ default is read. The two never differ by representation alone.
 The repo is the system of record, and the bus value is a live view of
 it.
 
-- A live edit survives a unit restart, because the core holds it. It
-  does not survive a supervisor restart, because the store re-seeds
-  from defaults.
-- Plan shows drift and apply resets it. Every live value that differs
-  from its default is listed, and every apply sets live values to the
-  repo's ([Change detection](#change-detection)).
-- To make a live edit durable, commit it as the default. That is a
-  parameter-only plan, with no restart and no apply lock.
+- A live edit survives a unit restart, because the core holds it.
+- A live edit survives a supervisor restart. The core saves every value
+  that differs from its default, with the default it was set under, to
+  `data/live-edits.json` after each change. On startup it restores a
+  saved edit by the same rule as apply: the default must be unchanged
+  and the value must meet the constraint. A default the owner changed
+  while the supervisor was down wins, and the log says which edits were
+  restored or dropped. The file is not part of the repo, so the repo
+  stays the system of record. `HOMEOSTAT_LIVE_EDITS` overrides its
+  path. A file that is not a live edits file is moved aside to
+  `live-edits.json.bad` and nothing is restored from it.
+- Apply keeps a live edit while its default stays the same. The owner
+  decides through the default and the family through the live value,
+  so an unrelated commit does not undo a family member's setpoint. An
+  apply sets the new default when the owner changed that default, or
+  when the live value is outside a new constraint
+  (`config::keeps_live`). The old default is the one in the manifest
+  the world is running.
+- Plan lists every live value that differs from its default. A kept
+  edit is listed under "Live edits kept" and is not a change. A
+  replaced one is a parameter change marked with the reason.
+- `plan --reset-params` and `apply --reset-params` set every value back
+  to its default. A rollback by checkout that should also undo live
+  edits needs it.
+- To make a live edit part of the repo, commit it as the default. That
+  is a parameter-only plan, with no restart and no apply lock.
 - Changing a constraint or `editable_by` refreshes the unit in place.
   Adding, removing or retyping a parameter restarts it.
 
@@ -1311,6 +1384,41 @@ subscribe, then get, then merge
   finite numeric values only.
 - Writers (the dashboard) call `UnitSession.write_config`. It raises
   `ConfigWriteError` with the core's message when the core refuses.
+
+### Pausing an automation
+
+Every automation has an `enabled` parameter without declaring it: a
+`bool` that defaults to `true` and the family may edit. The core adds
+it when it loads the manifest, and the SDK's `params_of` adds the same,
+so plan, the store, the dashboard and the automation agree on it. An
+automation that declares `[params.enabled]` changes its default or who
+may edit it, which suits an owner-only frost guard. A declared
+`enabled` that is not a `bool` is `invalid-manifest`.
+
+- While `enabled` is false, `ctx.publish` drops the automation's
+  `home/cmd` publishes. The SDK enforces it rather than the author's
+  code, because a dashboard switch promises that off does nothing.
+- Only commands stop. The automation keeps deciding, its virtual
+  sensors keep publishing state and its parameters stay live. Other
+  automations often read those sensors. `ctx.paused` tells the
+  automation it is paused, and `ctx.decision` marks what it would
+  have done ([unit timeline](#unit-timeline)).
+- The SDK emits a `paused` or `resumed` health event on each change.
+- On resume the SDK delivers every subscribed value again, as at
+  startup. An automation that acts only on a change then catches up
+  with the state the house is in. A value older than one already
+  delivered is not delivered again.
+- A pause is a live edit, so it survives applies and supervisor
+  restarts ([Repo and live values](#repo-and-live-values)).
+- The dashboard shows the switch in the head of the automation's card,
+  on its Health card and in its overlay, with a `paused` pill while it
+  is off. Now lists a paused automation as paused.
+
+Stopping and starting the unit's process was rejected. Process
+lifecycle changes through apply. A stopped unit looks broken in Health,
+stopping it takes down its virtual sensors and latches, plan would need
+a new kind of drift, and a unit that hosts several rules could only be
+stopped whole.
 
 ## State, history and forecasts
 
@@ -1945,8 +2053,9 @@ by key and window ([Read path](#read-path)).
   success with nothing to say stays silent.
 - Kinds are defined per producer; there is no closed vocabulary. Each
   unit documents its own. The SDK's kinds (`restore-failed`,
-  `source-dropped`, `source-restored`) and the recorder's are shared by
-  every house.
+  `source-dropped`, `source-restored`, `paused`, `resumed`,
+  `redeliver-failed`, `decision`) and the recorder's are shared by every
+  house.
 - Health events are not mirrored. They are a stream of what happened,
   so one published before the recorder subscribes is gone. Anything a
   late joiner must see as current belongs in state.
@@ -2067,7 +2176,12 @@ Logs are a by-product. Events are the audit trail.
   health event, every accepted parameter write, and every command
   envelope with its actor and band. It is read through
   `home/history/events`, MCP's `read_events`
-  ([Agent surface (MCP)](#agent-surface-mcp)) and the dashboard.
+  ([Agent surface (MCP)](#agent-surface-mcp)) and the dashboard. A
+  unit's overlay lists its recorded events of the last day with those
+  the page saw live, so a reload does not empty it. When the recorder
+  answers with an error it lists the live ones and says so. A house
+  without a recorder has no recorded events, and the list holds the
+  live ones.
 
 Homeostat has no log sink. Tagged stdout is the standard export
 surface. Durability, retention and indexing are deployment
@@ -2331,7 +2445,9 @@ empty page. The `deviations` feed draws from:
   ([Availability](#availability)), and any described aspect marked
   `notable` that reads true. These come from vocabulary, never from
   house configuration;
-- parameters whose live value differs from the manifest default;
+- parameters whose live value differs from the manifest default, and
+  a paused automation, which reads as paused
+  ([Pausing an automation](#pausing-an-automation));
 - arbiter holds that displaced somebody.
 
 The arbiter leases every forwarded command, so most holds are just the
@@ -2347,8 +2463,52 @@ the control as **held**.
 The unit card is a pure function of the manifest and the grant table.
 It shows family setpoints, published entities, what the unit drives
 (its cmd grants) and what it reads (its expanded state subscriptions).
+An automation's card carries its pause switch in its head.
 The last two are `{entity, aspect}` rows, because a relation is per
 aspect. If the card is wrong, the manifest is wrong.
+
+### Unit timeline
+
+An automation's overlay shows a timeline of the last day, newest first.
+It answers "does it do what I think" from what is already recorded, and
+asks nothing of the automation.
+
+- Set: each write to one of its parameters.
+- Sent: each command it sent, with what came of it. An event naming the
+  command's `cmd_id` says refused (the arbiter, with the holder) or
+  dropped (the adapter, with the reason). Otherwise the aspect's recorded
+  state says applied when it reached the commanded value within the
+  readback wait. The wait and the tolerance are the ones the page uses
+  for its own commands. A state that already had the value before the
+  command reads "already so", since nothing shows a device acted.
+  Otherwise nothing answered.
+- Taken: another actor's command displaced a hold it had.
+- Why: why a rule acted or did not, from `ctx.decision(rule, outcome)`.
+  The automation calls it every time the rule is evaluated, and the SDK
+  emits a `decision` event only when the outcome changes, so a rule
+  evaluated every minute does not write a row a minute. The command
+  trail cannot say why nothing happened, and this can. While the
+  automation is paused the outcome is marked "(paused)", which shows
+  what it would have done.
+- Event: its other health events, `paused` and `resumed` among them.
+
+The aspects it reads are not listed. A sensor that reports every few
+seconds would bury the rest. The card's From rows open each one's
+entity overlay, where a tap on the aspect charts it. A question about a pattern, such
+as why a light flaps every evening, goes to an agent. It reads the same
+records through the [agent surface](#agent-surface-mcp) and plots the
+few series the question needs. The overlay does not chart every input,
+command and decision together, because a fixed chart cannot know which
+of them the question is about.
+
+`/api/unit-timeline` gathers the rows from the recorder and
+`unitTimeline` in `dashboard-logic.js` puts them in order. The commands
+and events of the whole house are read newest first up to a cap, and so
+are the changes of each aspect it commanded. A busy day can push the
+oldest rows out, and the overlay says when it did. An answer to an older
+command may be among the rows cut, so a command older than what a capped
+query kept reads "outcome unknown". The overlay shows the newest few
+hundred rows. Other units keep the Events list.
 
 ### Map and people
 
@@ -2830,8 +2990,9 @@ gaps it has not closed.
   config queryable checks type and constraint, so any bus client may
   write an owner-tier parameter. See [Live parameters](#live-parameters).
 - **Turning a live edit into a commit.** A family member's live edit
-  is reverted by the next apply unless someone commits it. Capturing it
-  automatically is not built. See [Live parameters](#live-parameters).
+  lasts until the owner changes that parameter in the repo. Capturing
+  it as a commit is not built. See
+  [Repo and live values](#repo-and-live-values).
 - **Handing an arbiter hold back early.** Only expiry ends a hold.
   Whether release belongs on the envelope or on an arbiter surface is
   open. See [Arbitrated mode](#arbitrated-mode).

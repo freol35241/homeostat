@@ -15,6 +15,12 @@ service subscribes home/cmd/** and decides which wishes go through. A
 wish for a non-arbitrated entity is ignored, since its own adapter
 consumes it.
 
+Which entities are arbitrated comes from the grant table the core serves
+at home/meta/system/grants (`Bindings`), read live. An apply that flips an
+entity's write mode restarts the entity's adapter but not this service,
+whose own files are unchanged, so a set read from the repo at startup
+would go stale.
+
 A wish for an arbitrated entity is checked against the lease on its
 (entity, aspect) (`Leases.wish`). If it wins, the envelope is forwarded
 unchanged to home/arbiter/{room}/{entity}/{aspect} and the lease is taken
@@ -29,8 +35,8 @@ Configuration: the live parameter hold_minutes (family-editable), seeded
 from the manifest default.
 
 Health events at home/health/{unit}/event: `drop` (off-schema-key,
-invalid-command), `preempt` when a wish takes over from a lower band, and
-`refuse` when a wish below the holder's band is turned away.
+invalid-command, unbound), `preempt` when a wish takes over from a lower
+band, and `refuse` when a wish below the holder's band is turned away.
 """
 
 import datetime
@@ -45,6 +51,7 @@ from homeostat import house, keys
 from homeostat.params import LiveParams
 
 PARAM = "hold_minutes"
+GRANTS_KEY = "home/meta/system/grants"
 
 
 class Params(LiveParams):
@@ -59,6 +66,58 @@ class Params(LiveParams):
     @property
     def hold_minutes(self) -> float:
         return self.get(PARAM)
+
+
+def bindings(grants: list) -> tuple[frozenset, frozenset]:
+    """Return the (room, entity) pairs that are arbitrated, and all bound.
+
+    Every bound entity sits in its owner's binding row of the grant table,
+    and each row entity carries its write mode.
+    """
+    arbitrated, bound = set(), set()
+    for grant in grants:
+        for e in grant["entities"]:
+            pair = (e["room"], e["name"])
+            bound.add(pair)
+            if e["write"] == "arbitrated":
+                arbitrated.add(pair)
+    return frozenset(arbitrated), frozenset(bound)
+
+
+class Bindings:
+    """The arbitrated and bound entities, live from the grant table.
+
+    The core puts the table again when an apply completes. This follows the
+    LiveParams read pattern: subscribe, then seed with a get, and a table
+    the subscription has already delivered wins over the seed.
+
+    `on_change` is called with the new arbitrated set on each live table.
+    The seed does not call it, because nothing is held before the first
+    wish.
+    """
+
+    def __init__(self, session, on_change):
+        # Both sets in one attribute, replaced in one assignment, so a
+        # reader never pairs sets from different tables.
+        self._sets: tuple[frozenset, frozenset] = (frozenset(), frozenset())
+        self._live = False
+        self._on_change = on_change
+        self._sub = session.subscribe(GRANTS_KEY, self._on_grants)
+        for _key, value in session.get_json(GRANTS_KEY):
+            if not self._live:
+                self._sets = bindings(value)
+
+    def _on_grants(self, sample) -> None:
+        self._live = True
+        self._sets = bindings(json.loads(sample.payload.to_bytes()))
+        self._on_change(self._sets[0])
+
+    def route(self, target: tuple[str, str]) -> str:
+        """Return "arbitrated", "bound" or "unbound" for a (room, entity)."""
+        arbitrated, bound = self._sets
+        if target in arbitrated:
+            return "arbitrated"
+        return "bound" if target in bound else "unbound"
 
 
 def iso(epoch: float) -> str:
@@ -143,6 +202,17 @@ class Leases:
             del self._held[k]
         return bool(expired)
 
+    def retain(self, arbitrated: frozenset) -> bool:
+        """Drop leases on entities outside `arbitrated`; True when something went.
+
+        An entity that stops being arbitrated is commanded by its adapter
+        directly, so a hold on it no longer holds anything.
+        """
+        gone = [k for k in self._held if k[:2] not in arbitrated]
+        for k in gone:
+            del self._held[k]
+        return bool(gone)
+
     def next_deadline(self) -> float | None:
         """Return the earliest deadline in force, or None with no leases."""
         return min((lease["deadline"] for lease in self._held.values()), default=None)
@@ -185,9 +255,7 @@ class Leases:
 
 def main():
     unit = os.environ[keys.ENV_UNIT]
-    model = house.load_house(".")
-    arbitrated = {(e.room, e.name) for e in model.entities if e.write_mode == "arbitrated"}
-    own = next(u for u in model.units if u.name == unit)
+    own = next(u for u in house.load_house(".").units if u.name == unit)
 
     session = homeostat.connect()
     params = Params(session, {PARAM: float(own.params[PARAM]["default"])})
@@ -202,6 +270,14 @@ def main():
         # Each document replaces the previous one, so a consumer does not
         # merge two.
         session.put_json(hold_key, leases.document(time.time()))
+
+    def on_arbitrated(arbitrated: frozenset) -> None:
+        with changed:
+            if leases.retain(arbitrated):
+                publish_holds_locked()
+                changed.notify_all()
+
+    routes = Bindings(session, on_arbitrated)
 
     def expiry_loop(stop: threading.Event) -> None:
         """One thread for every lease, waiting on the earliest deadline.
@@ -225,8 +301,18 @@ def main():
             session.health_event("drop", reason="off-schema-key", key=key)
             return
         room, entity, aspect = parts[2:5]
-        if (room, entity) not in arbitrated:
+        route = routes.route((room, entity))
+        if route == "bound":
             return  # not arbitrated: its own adapter consumes this wish
+        if route == "unbound":
+            # No unit binds the entity, so no adapter consumes the wish
+            # either. Without this event it would vanish without a trace.
+            try:
+                cmd_id = keys.cmd_envelope_id(json.loads(sample.payload.to_bytes()))
+            except ValueError:
+                cmd_id = None
+            session.health_event("drop", reason="unbound", key=key, cmd_id=cmd_id)
+            return
 
         envelope = None
         try:

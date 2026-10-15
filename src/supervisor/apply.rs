@@ -13,6 +13,7 @@
 //! fresh failure budget, and a unit stuck in backoff or with its breaker open
 //! can be replaced mid-cycle.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use crate::bus::{self, ApplyParam, ApplyRequest, ApplyResult, ApplyStep};
@@ -83,7 +84,7 @@ async fn execute(core: &Arc<Core>, request: ApplyRequest) -> ApplyResult {
     }
 
     let world = core.snapshot();
-    let diff = plan::diff(&check, &core.root, &world);
+    let diff = plan::diff(&check, &core.root, &world, request.reset_params);
     if diff.is_empty() {
         return ApplyResult {
             ok: true,
@@ -107,17 +108,22 @@ async fn execute(core: &Arc<Core>, request: ApplyRequest) -> ApplyResult {
         }
     };
 
-    // Parameters first. The repo is the system of record, so live values reset
-    // to repo defaults. Every subscribed unit sees the put, and nothing
-    // restarts. A unit restarted later in the walk reads its values with a get
-    // anyway.
+    // Parameters first. The diff's parameter changes get their repo default,
+    // and the live edits it keeps stay (config::keeps_live). Every subscribed
+    // unit sees the put, and nothing restarts. A unit restarted later in the
+    // walk reads its values with a get anyway.
+    let replaced: BTreeSet<(String, String)> = diff
+        .params
+        .iter()
+        .map(|p| (p.unit.clone(), p.param.clone()))
+        .collect();
     let mut params = Vec::new();
     {
         // Swap and puts happen together, in order. Otherwise a config write
         // racing this block could validate against the new store and then have
         // its bus put overwritten by the older repo value below.
         let _write_guard = core.store.write_lock().await;
-        for (unit, param, value) in core.store.replace_from_house(&check.house) {
+        for (unit, param, value) in core.store.replace_from_house(&check.house, &replaced) {
             let _ = core
                 .session
                 .put(bus::config_key(&unit, &param), value.to_string())

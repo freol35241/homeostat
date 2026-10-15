@@ -288,7 +288,14 @@ def command_keyexprs(entity) -> list[str]:
 CMD_PRIORITIES = ("automation", "agent", "family", "manual")
 
 
-def cmd_envelope(value: Any, priority: str, actor: str, *, cmd_id: str | None = None) -> dict:
+def cmd_envelope(
+    value: Any,
+    priority: str,
+    actor: str,
+    *,
+    cmd_id: str | None = None,
+    options: dict | None = None,
+) -> dict:
     """Build a home/cmd/** payload (docs/design.md#cmd-envelopes).
 
     Every cmd payload is an envelope. Its priority comes from the
@@ -312,18 +319,32 @@ def cmd_envelope(value: Any, priority: str, actor: str, *, cmd_id: str | None = 
         The publishing unit's name.
     cmd_id : str or None, optional
         The correlation id. A random one is generated when not given.
+    options : dict or None, optional
+        Command options (docs/design.md#command-options), such as
+        ``{"transition": 1.0}``. Left out of the envelope when empty.
 
     Returns
     -------
     dict
-        The envelope, with `value`, `priority`, `actor` and `id`.
+        The envelope, with `value`, `priority`, `actor`, `id` and, when
+        given, `options`.
+
+    Raises
+    ------
+    ValueError
+        If `options` is not an object with string keys.
     """
-    return {
+    envelope = {
         "value": value,
         "priority": priority,
         "actor": actor,
         "id": cmd_id or secrets.token_hex(4),
     }
+    if options is not None:
+        _check_options(options)
+    if options:
+        envelope["options"] = options
+    return envelope
 
 
 def cmd_envelope_id(payload: Any) -> str | None:
@@ -365,8 +386,8 @@ def parse_cmd_envelope(payload: Any) -> Any:
     Raises
     ------
     ValueError
-        On anything malformed: not an object, missing value or priority, or
-        an unknown priority.
+        On anything malformed: not an object, missing value or priority, an
+        unknown priority, or options that are not an object.
     """
     if not isinstance(payload, dict):
         raise ValueError("cmd payload is not a JSON object")
@@ -374,7 +395,33 @@ def parse_cmd_envelope(payload: Any) -> Any:
         raise ValueError("cmd envelope missing value or priority")
     if payload["priority"] not in CMD_PRIORITIES:
         raise ValueError(f"unknown priority {payload['priority']!r}")
+    if "options" in payload:
+        _check_options(payload["options"])
     return payload["value"]
+
+
+def cmd_envelope_options(payload: Any) -> dict:
+    """Return the options of a cmd envelope (docs/design.md#command-options).
+
+    Call it on an envelope `parse_cmd_envelope` accepted, which has checked
+    their shape.
+
+    Parameters
+    ----------
+    payload : Any
+        A decoded cmd payload that passed `parse_cmd_envelope`.
+
+    Returns
+    -------
+    dict
+        The envelope's `options`, or an empty dict.
+    """
+    return payload.get("options", {})
+
+
+def _check_options(options: Any) -> None:
+    if not isinstance(options, dict) or not all(isinstance(k, str) for k in options):
+        raise ValueError("cmd envelope options is not an object with string keys")
 
 
 def config_key(unit: str, param: str) -> str:
