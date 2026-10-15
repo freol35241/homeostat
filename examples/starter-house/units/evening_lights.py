@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "homeostat==0.20.0",
+#     "homeostat==0.21.0rc1",
 # ]
 # ///
 """Evening lights: the first automation (see docs/design.md).
