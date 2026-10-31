@@ -14,13 +14,15 @@ ignore = [
     # zenoh release so far (1.10.1 included) still requires ^0.10. Drop
     # when zenoh-transport requires lz4_flex >= 0.11.6.
     "RUSTSEC-2026-0041",
-    # rustls-webpki 0.102 CRL / name-constraint bugs, via rumqttc — a
-    # dev-dependency (the MQTT test client), not in the shipped binary.
+    # rustls-webpki 0.102 CRL, name-constraint and distrusted-intermediate
+    # bugs, via rumqttc — a dev-dependency (the MQTT test client), not in
+    # the shipped binary.
     # Drop when rumqttc depends on rustls-webpki 0.103.
     "RUSTSEC-2026-0049",
     "RUSTSEC-2026-0098",
     "RUSTSEC-2026-0099",
     "RUSTSEC-2026-0104",
+    "RUSTSEC-2026-0382",
     # paste is unmaintained (warning, not a vulnerability), via
     # zenoh-keyexpr's token-cell. Drop when token-cell replaces it.
     "RUSTSEC-2024-0436",
