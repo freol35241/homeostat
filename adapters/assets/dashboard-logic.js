@@ -43,22 +43,30 @@
     return { aspect: undefined, value: undefined };
   }
 
-  /* A person or a tracker on People: { home, notSeen, seenAt }. home is a
-   * person's `presence`, or a tracker's `home` geofence: true, false, or
-   * undefined when nothing publishes it. A tracker's `sighted = true` also
-   * reads as home. Its `false` only says the network has not seen the
-   * device, so it is notSeen and not away. seenAt is the last location
-   * fix in epoch ms, when one is reported. The page writes the text; this
-   * only reads the values. */
+  /* A person or a tracker on People: { home, stale, notSeen, seenAt }.
+   * home is a person's `presence`, or for a tracker what the persons rule
+   * would read: home when `home` or `sighted` is true, away when `home`
+   * is false. It is undefined when nothing says. A tracker's
+   * `sighted = false` only says the network has not seen the device, so
+   * it is notSeen and not away. stale is a person's `presence_valid =
+   * false`: presence is held because no tracker can say. seenAt is the
+   * last location fix in epoch ms, when one is reported. The page writes
+   * the text; this only reads the values. */
   function personStatus(state, entity) {
     function read(aspect) { return stateValue(state, entity.room, entity.name, aspect); }
-    var home = entity.capability === 'tracker' ? read('home') : read('presence');
-    var sighted = entity.capability === 'tracker' ? read('sighted') : undefined;
+    var home, sighted;
+    if (entity.capability === 'tracker') {
+      var geofence = read('home');
+      sighted = read('sighted');
+      home = geofence === true || sighted === true ? true : geofence === false ? false : undefined;
+    } else {
+      home = read('presence');
+      home = typeof home === 'boolean' ? home : undefined;
+    }
     var fixedAt = read('fixed_at');
-    home = typeof home === 'boolean' ? home : undefined;
-    if (home === undefined && sighted === true) home = true;
     return {
       home: home,
+      stale: entity.capability === 'person' && read('presence_valid') === false,
       notSeen: home === undefined && sighted === false,
       seenAt: typeof fixedAt === 'number' ? fixedAt * 1000 : undefined
     };
@@ -1263,16 +1271,22 @@
    * aspect, so each contributor is shown under the aspect it contributes
    * to. A fused temperature derived from `temperature` readings shows them
    * under `temperature`, and an unrelated `humidity` chart is unchanged.
-   * A person's `presence` is the exception: it is derived from its
-   * trackers' `home` and `sighted` (docs/design.md#map-and-people).
+   * A person is the exception (docs/design.md#map-and-people). Its
+   * `presence` is derived from its trackers' `home` and `sighted`. Its
+   * position aspects come from the trackers its `lat` sources name, each
+   * drawn as that tracker's own aspect of the same name.
    */
   var PERSON_PRESENCE_SOURCES = ['home', 'sighted'];
+  var PERSON_POSITION = ['lat', 'lon', 'accuracy', 'fixed_at'];
 
-  function contributesTo(owner, src, aspect) {
-    if (owner.capability === 'person' && aspect === 'presence') {
-      return PERSON_PRESENCE_SOURCES.indexOf(src.aspect) !== -1;
+  // The contributor's aspect to draw under `aspect`, or null when this
+  // source does not contribute to it.
+  function contributedAspect(owner, src, aspect) {
+    if (owner.capability === 'person') {
+      if (aspect === 'presence') return PERSON_PRESENCE_SOURCES.indexOf(src.aspect) !== -1 ? src.aspect : null;
+      if (PERSON_POSITION.indexOf(aspect) !== -1) return src.aspect === 'lat' ? aspect : null;
     }
-    return src.aspect === aspect;
+    return src.aspect === aspect ? aspect : null;
   }
 
   function contributorsFor(entities, entityName, aspect) {
@@ -1283,7 +1297,8 @@
     var out = [];
     Object.keys(owner.sources).sort().forEach(function (name) {
       var src = owner.sources[name];
-      if (!src || !contributesTo(owner, src, aspect)) return;
+      var drawn = src ? contributedAspect(owner, src, aspect) : null;
+      if (!drawn) return;
       var e = byName[src.entity];
       // A contributor missing from the model cannot be drawn. The plan
       // refuses an unknown one (`source-unknown-entity`), so this means the
@@ -1292,7 +1307,7 @@
       out.push({
         name: name,
         entity: src.entity,
-        aspect: src.aspect,
+        aspect: drawn,
         label: e.label || titleCase(src.entity),
         // The contributor's own caveat. The aspect descriptor cannot say
         // it because it does not apply to every source. Examples are one
@@ -1620,8 +1635,9 @@
   /* What no view places: entities and family params the family cannot
    * reach from the nav.
    * An entity is placed by any of: a widget naming it, its room, a unit
-   * that publishes or drives it, a `people` widget when it is a person, or
-   * a generated `rooms` view (every entity) or `now` view (people).
+   * that publishes or drives it, a `people` widget when it is a person or
+   * a tracker no person lists, or a generated `rooms` view (every entity)
+   * or `now` view (people).
    * A param is placed by a `params` or `unit` widget for its unit, or by a
    * generated `setpoints` view.
    * Deviations and the map place nothing, because they show signals, not

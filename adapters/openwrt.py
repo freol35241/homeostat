@@ -267,7 +267,8 @@ class Adapter:
         An unreachable router reports one `router-unreachable` per down
         transition (`router-poll-failed` when it answers with something
         that does not parse), and its aspects keep their last values. With
-        every router silent nothing publishes. A router whose dump has no
+        every router silent only the trackers' `available = false`
+        publishes. A router whose dump has no
         interface named `wan` reports `unknown-interface` once, until one
         reappears.
 

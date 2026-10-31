@@ -50,7 +50,8 @@ async fn expect_decision(sub: &common::StateSub, prefix: &str) {
 }
 
 /// A geofence and a router sighting make one person: home on either, away
-/// only when the geofence says he left, and positioned from the phone's fix.
+/// only when the geofence says he left, stale when nothing can say, and
+/// positioned from the phone's fix.
 #[tokio::test(flavor = "multi_thread")]
 async fn trackers_make_one_person() {
     let mut sup = Supervisor::spawn(FIXTURE);
@@ -90,6 +91,20 @@ async fn trackers_make_one_person() {
     put(&geofence, json!(false)).await;
     expect_state(&presence, json!(false)).await;
     expect_decision(&events, "away: geofence").await;
+
+    // The phone drops off the broker. Its last geofence no longer counts,
+    // the router cannot say he left, so presence is held and marked stale.
+    let phone_available = matched_publisher(&observer, &format!("{PHONE}/available")).await;
+    put(&phone_available, json!(false)).await;
+    expect_decision(&events, "unchanged").await;
+    common::expect_states(
+        &position,
+        &[
+            ("home/state/person/fredrik/presence", json!(false)),
+            ("home/state/person/fredrik/presence_valid", json!(false)),
+        ],
+    )
+    .await;
 
     // A fix from the phone becomes the person's position.
     for (aspect, value) in [

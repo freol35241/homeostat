@@ -353,18 +353,23 @@ test('personStatus reads presence and the last fix, and nothing else', () => {
   const alice = { room: 'person', name: 'alice', capability: 'person' };
   assert.deepEqual(
     logic.personStatus({ 'home/state/person/alice/presence': true, 'home/state/person/alice/fixed_at': 1700000000 }, alice),
-    { home: true, notSeen: false, seenAt: 1700000000000 }
+    { home: true, stale: false, notSeen: false, seenAt: 1700000000000 }
   );
   assert.deepEqual(
     logic.personStatus({ 'home/state/person/alice/presence': false }, alice),
-    { home: false, notSeen: false, seenAt: undefined }
+    { home: false, stale: false, notSeen: false, seenAt: undefined }
+  );
+  // Held by the persons rule because no tracker can say.
+  assert.equal(
+    logic.personStatus({ 'home/state/person/alice/presence': true, 'home/state/person/alice/presence_valid': false }, alice).stale,
+    true
   );
   // A fix without a presence aspect is not "away": home stays unknown.
   assert.deepEqual(
     logic.personStatus({ 'home/state/person/alice/fixed_at': 1700000000, 'home/state/person/alice/lat': 59.3 }, alice),
-    { home: undefined, notSeen: false, seenAt: 1700000000000 }
+    { home: undefined, stale: false, notSeen: false, seenAt: 1700000000000 }
   );
-  assert.deepEqual(logic.personStatus({}, alice), { home: undefined, notSeen: false, seenAt: undefined });
+  assert.deepEqual(logic.personStatus({}, alice), { home: undefined, stale: false, notSeen: false, seenAt: undefined });
 });
 
 test('a tracker is home on its geofence or a sighting, and an unseen device is not away', () => {
@@ -372,11 +377,14 @@ test('a tracker is home on its geofence or a sighting, and an unseen device is n
   assert.equal(logic.personStatus({ 'home/state/person/phone/home': false }, phone).home, false);
   assert.equal(logic.personStatus({ 'home/state/person/phone/sighted': true }, phone).home, true);
   assert.deepEqual(logic.personStatus({ 'home/state/person/phone/sighted': false }, phone),
-    { home: undefined, notSeen: true, seenAt: undefined });
-  // The geofence outranks a lost sighting.
-  assert.deepEqual(
-    logic.personStatus({ 'home/state/person/phone/home': true, 'home/state/person/phone/sighted': false }, phone),
-    { home: true, notSeen: false, seenAt: undefined });
+    { home: undefined, stale: false, notSeen: true, seenAt: undefined });
+  // Either one saying home is home, as the persons rule reads them.
+  assert.equal(
+    logic.personStatus({ 'home/state/person/phone/home': true, 'home/state/person/phone/sighted': false }, phone).home,
+    true);
+  assert.equal(
+    logic.personStatus({ 'home/state/person/phone/home': false, 'home/state/person/phone/sighted': true }, phone).home,
+    true);
 });
 
 test('People draws each person and each tracker no person lists', () => {
@@ -399,7 +407,10 @@ test("a person's presence is drawn from its trackers' home and sighted", () => {
     { name: 'anna_wifi', capability: 'tracker', room: 'person', label: 'WiFi' },
   ];
   assert.deepEqual(logic.contributorsFor(entities, 'anna', 'presence').map((c) => c.name), ['geofence', 'wifi']);
-  assert.deepEqual(logic.contributorsFor(entities, 'anna', 'lat').map((c) => c.name), ['gps']);
+  assert.deepEqual(logic.contributorsFor(entities, 'anna', 'presence').map((c) => c.aspect), ['home', 'sighted']);
+  // Each position aspect draws the tracker's own aspect of that name.
+  assert.deepEqual(logic.contributorsFor(entities, 'anna', 'lat').map((c) => [c.name, c.aspect]), [['gps', 'lat']]);
+  assert.deepEqual(logic.contributorsFor(entities, 'anna', 'fixed_at').map((c) => [c.name, c.aspect]), [['gps', 'fixed_at']]);
   const state = {
     'home/state/person/anna_phone/battery': 81,
     'home/state/person/anna_phone/accuracy': 12,

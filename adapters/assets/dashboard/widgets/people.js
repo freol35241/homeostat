@@ -14,6 +14,8 @@ export function widgetPeople(persons) {
     var detail = st.home === true ? 'Home' : st.home === false ? 'Away'
       : st.notSeen ? 'not seen'
       : st.seenAt !== undefined ? 'last fix ' + relTime(st.seenAt) : 'no signal';
+    // Held because no tracker can say: the last answer, marked as such.
+    if (st.stale && st.home !== undefined) detail += ' (stale)';
     return html`<div class="row-clickable" data-action="entity-detail" data-room="${e.room}" data-entity="${e.name}" style="display:flex;align-items:center;gap:6px;padding:3px 0;">
       <span class="status-dot ${st.home === true ? 'dot-on' : 'dot-off'}"></span>
       <span>${e.label} &middot; ${detail}</span></div>`;

@@ -2557,18 +2557,34 @@ which trackers are whose:
   as true. It is away if none does and a usable tracker reports `home`
   as false. A person with no `home` source is also away when every
   usable `sighted` tracker reports false, because otherwise a person
-  tracked only by WiFi could never be away. Otherwise it is unchanged.
+  tracked only by WiFi could never be away. Otherwise it is unchanged,
+  and `presence_valid` is false so the dashboard shows it as stale.
   A tracker is usable unless it reports `available = false`.
 - The position is the newest fix whose accuracy is within the unit's
-  `max_accuracy_m`. A tracker once produced a day of 2000 m network
-  locates, and the bound keeps them off the map. When no fix qualifies,
-  the last values stand.
-- `available` is false only when every tracker is unavailable.
+  `max_accuracy_m`, which keeps coarse network locates off the map.
+  When no fix qualifies, the last values stand. A tracker publishes
+  `fixed_at` after the other aspects of a fix, and the fix counts from
+  then. A `lat` read before its fix is complete would otherwise be
+  paired with the previous fix's accuracy.
+- `available` is true when any tracker reports it true, and false when
+  every tracker reports it false. A tracker that reports no
+  availability, such as an OwnTracks phone, gives no answer, so a
+  person built only from such trackers carries no `available`
+  ([Availability](#availability)).
 - `battery` is not merged, since it belongs to one device.
 
-The unit reports which sources took part with `ctx.source_used`, and
-why presence is what it is with a decision per person, so the overlay
-and the unit timeline show which tracker decided.
+Which trackers decided each value is reported with `ctx.source_used`,
+as a fusion reports its sources
+([Which sources a computation actually used](#which-sources-a-computation-actually-used)).
+A geofence that said away while the WiFi said home took no part in a
+home. The history overlay draws each tracker beside the person's value
+and marks the ones that did not decide it. Why presence is what it is
+goes to the unit timeline as a decision per person.
+
+At startup the unit reads every tracker's mirrored value before it
+evaluates anyone. The mirror delivers keys in no set order, and a
+`home` read before the same tracker's `available = false` would
+otherwise publish a presence the running unit never held.
 
 Each kind of evidence expires where its cadence is known, so the rule
 has no age bound per tracker. A geofence is published on transition,
@@ -2596,7 +2612,8 @@ called zones, which are groups of rooms.
 The `people` widget draws each person, and each tracker no person
 lists, so a phone bound before its person file still shows. It reads
 `presence`, or a tracker's `home` and `sighted`, and falls back to the
-age of the last fix. A person's overlay lists its trackers with their
+age of the last fix. A presence held with `presence_valid = false` is
+marked stale. A person's overlay lists its trackers with their
 battery, the accuracy and age of their last fix, and their
 availability. Trackers stay reachable under Rooms and Not shown like
 any entity.

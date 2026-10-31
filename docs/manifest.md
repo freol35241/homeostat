@@ -373,7 +373,7 @@ What an entity of each capability publishes under which names (docs/adapters.md,
 | `router` | — | `wan` | `wan = false` |  |
 | `sensor` | — | — | — | Numeric aspects under descriptive names (`temperature`, `humidity`); widgets come from what is published. |
 | `switch` | `on` | — | — |  |
-| `tracker` | — | `home`, `sighted`, `lat`, `lon`, `accuracy`, `battery`, `fixed_at` | — | A device someone carries: a phone, a tag, a watch. `home` (bool) is inside the home geofence, and its `false` says the device left. `sighted` (bool) is seen on the home network, and its `false` says only that it was not seen within the adapter's delay. Scalar position aspects as on `person`, plus the device's `battery`. Room `person` for one person's device. A `person` lists its trackers as sources (docs/design.md#map-and-people). |
+| `tracker` | — | `home`, `sighted`, `lat`, `lon`, `accuracy`, `battery`, `fixed_at` | — | A device someone carries: a phone, a tag, a watch. `home` (bool) is inside the home geofence, and its `false` says the device left. `sighted` (bool) is seen on the home network, and its `false` says only that it was not seen within the adapter's delay. Scalar position aspects as on `person`, plus the device's `battery`; `fixed_at` is published after the fix's other aspects and completes it. Room `person` for one person's device. A `person` lists its trackers as sources (docs/design.md#map-and-people). |
 
 Every capability may also publish:
 

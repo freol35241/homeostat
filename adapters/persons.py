@@ -26,18 +26,22 @@ which trackers are whose; the rule is fixed (`Persons.evaluate`).
 
 A tracker is usable unless it reports `available = false`. The second
 case under rule 2 lets a person tracked only by WiFi be away; the
-adapter's own delay already stands behind that `false`.
+adapter's own delay already stands behind that `false`. `presence_valid`
+is false while presence is held by rule 3, so the dashboard shows it as
+stale.
 
 Position: `lat`, `lon`, `accuracy` and `fixed_at` come from the newest
-fix whose accuracy is within max_accuracy_m. A fix without `fixed_at` is
-dated when it arrived. When no fix qualifies, the last values stand.
-`battery` belongs to the device and stays on the tracker.
+fix whose accuracy is within max_accuracy_m. A fix counts once its
+`fixed_at` arrives, which a tracker publishes after the fix's other
+aspects (`Persons.seen`). When no fix qualifies, the last values stand. `battery` belongs to the device and stays on the
+tracker.
 
-`available` is false only when every tracker reports `available = false`.
+`available` is true when any tracker reports it true and false when
+every tracker reports it false. Without a report it is not published.
 
-Each value publishes on change. Which sources took part is reported with
-`ctx.source_used`, and why presence is what it is with `ctx.decision`,
-one rule per person.
+Each value publishes on change. The sources that decided each value are
+reported with `ctx.source_used`, and why presence is what it is with
+`ctx.decision`, one rule per person.
 
 Manifest: subscribe `home/state/person/*/*`, where trackers live, and
 publish `home/state/{room}/{entity}/*`. Configuration: the live
@@ -45,16 +49,15 @@ parameter max_accuracy_m (owner-editable).
 """
 
 import threading
-import time
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
 from homeostat import automation, house
 
 PRESENCE_ASPECTS = ("home", "sighted")
+POSITION_ASPECTS = ("lat", "lon", "accuracy", "fixed_at")
 # Tracker aspects this unit reads: presence evidence, a fix and liveness.
-READ_ASPECTS = frozenset({"home", "sighted", "lat", "lon", "accuracy", "fixed_at", "available"})
+READ_ASPECTS = frozenset({*PRESENCE_ASPECTS, *POSITION_ASPECTS, "available"})
 
 
 def number(value: Any) -> float | None:
@@ -74,7 +77,7 @@ class Outcome:
         The aspects the person carries now. An aspect left out keeps its
         last value.
     used : dict of (str, str) to bool
-        (computed aspect, source name) to whether the source took part.
+        (computed aspect, source name) to whether the source decided it.
     decision : str
         Why presence is what it is, in words.
     """
@@ -91,27 +94,39 @@ class Persons:
     ----------
     persons : list of house.Entity
         The person entities this unit binds, with their `[sources]`.
-    clock : Callable[[], float], optional
-        Wall-clock seconds, which date a fix that carries no `fixed_at`.
     """
 
-    def __init__(self, persons: list[house.Entity], clock: Callable[[], float] = time.time):
+    def __init__(self, persons: list[house.Entity]):
         self.persons = persons
-        self.clock = clock
         self.trackers = {src.entity for p in persons for src in p.sources.values()}
         # tracker -> aspect -> last value
         self.readings: dict[str, dict[str, Any]] = {}
-        # tracker -> when its last `lat` was taken, by this unit's clock
-        self.received: dict[str, float] = {}
+        # tracker -> its last complete fix, as it stood when `fixed_at` arrived
+        self.fixes: dict[str, dict[str, Any]] = {}
 
-    def seen(self, tracker: str, aspect: str, value: Any, age_s: float = 0.0) -> list[house.Entity]:
-        """Record one tracker reading and return the persons it concerns."""
+    def seen(self, tracker: str, aspect: str, value: Any) -> list[house.Entity]:
+        """Record one tracker reading and return the persons to evaluate again.
+
+        A tracker publishes `fixed_at` after the other aspects of a fix, so
+        its arrival completes the fix (`commit`). A `lat`, `lon` or
+        `accuracy` alone concerns nobody yet: evaluated then, it would
+        pair with the rest of the previous fix.
+        """
         if tracker not in self.trackers or aspect not in READ_ASPECTS:
             return []
         self.readings.setdefault(tracker, {})[aspect] = value
-        if aspect == "lat":
-            self.received[tracker] = self.clock() - age_s
+        if aspect in ("lat", "lon", "accuracy"):
+            return []
+        if aspect == "fixed_at":
+            self.commit(tracker)
         return [p for p in self.persons if any(s.entity == tracker for s in p.sources.values())]
+
+    def commit(self, tracker: str) -> None:
+        """Take a tracker's current position aspects as its latest fix."""
+        reading = self.readings.get(tracker, {})
+        if any(number(reading.get(a)) is None for a in ("lat", "lon", "fixed_at")):
+            return
+        self.fixes[tracker] = {a: reading[a] for a in POSITION_ASPECTS if a in reading}
 
     def usable(self, tracker: str) -> bool:
         """Whether a tracker's presence evidence counts: it is not reported unavailable."""
@@ -123,10 +138,14 @@ class Persons:
         self._presence(person, out)
         self._position(person, max_accuracy_m, out)
         trackers = {src.entity for src in person.sources.values()}
-        if trackers:
-            out.values["available"] = not all(
-                self.readings.get(t, {}).get("available") is False for t in trackers
-            )
+        reported = [
+            self.readings[t]["available"] for t in trackers
+            if isinstance(self.readings.get(t, {}).get("available"), bool)
+        ]
+        if any(reported):
+            out.values["available"] = True
+        elif reported and len(reported) == len(trackers):
+            out.values["available"] = False
         return out
 
     def _presence(self, person: house.Entity, out: Outcome) -> None:
@@ -137,9 +156,7 @@ class Persons:
                 continue
             geofenced = geofenced or src.aspect == "home"
             value = self.readings.get(src.entity, {}).get(src.aspect)
-            took_part = self.usable(src.entity) and isinstance(value, bool)
-            out.used[("presence", name)] = took_part
-            if took_part:
+            if self.usable(src.entity) and isinstance(value, bool):
                 says[name] = value
         sources = person.sources
         home = sorted(n for n, v in says.items() if v)
@@ -150,46 +167,108 @@ class Persons:
             n for n, src in sources.items()
             if src.aspect == "sighted" and self.usable(src.entity)
         ]
+        decided: list[str] = []
         if home:
-            out.values["presence"] = True
+            decided = home
             out.decision = f"home: {', '.join(home)} says so"
         elif left:
-            out.values["presence"] = False
+            decided = left
             out.decision = f"away: {', '.join(left)} left the geofence"
         elif not geofenced and sighted and sorted(sighted) == unseen:
-            out.values["presence"] = False
+            decided = unseen
             out.decision = f"away: no geofence, and {', '.join(unseen)} has not seen the device"
         else:
             out.decision = "unchanged: no usable tracker says home or left"
+        if decided:
+            out.values["presence"] = bool(home)
+        out.values["presence_valid"] = bool(decided)
+        for name, src in sources.items():
+            if src.aspect in PRESENCE_ASPECTS:
+                out.used[("presence", name)] = name in decided
 
     def _position(self, person: house.Entity, max_accuracy_m: float, out: Outcome) -> None:
-        best: tuple[float, str, dict] | None = None
+        best: tuple[float, str] | None = None
         for name, src in person.sources.items():
             if src.aspect != "lat":
                 continue
-            reading = self.readings.get(src.entity, {})
-            lat, lon = number(reading.get("lat")), number(reading.get("lon"))
-            accuracy = number(reading.get("accuracy"))
-            out.used[("lat", name)] = False
-            if lat is None or lon is None:
+            fix = self.fixes.get(src.entity)
+            if fix is None:
                 continue
+            accuracy = number(fix.get("accuracy"))
             if accuracy is not None and accuracy > max_accuracy_m:
                 continue
-            # The tracker's own values, so the person carries what it published.
-            fix = {"lat": reading["lat"], "lon": reading["lon"]}
-            if accuracy is not None:
-                fix["accuracy"] = reading["accuracy"]
-            fixed_at = number(reading.get("fixed_at"))
-            if fixed_at is None:
-                fixed_at = self.received.get(src.entity, self.clock())
-                fix["fixed_at"] = fixed_at
-            else:
-                fix["fixed_at"] = reading["fixed_at"]
+            fixed_at = float(fix["fixed_at"])
             if best is None or fixed_at > best[0]:
-                best = (fixed_at, name, fix)
+                best = (fixed_at, name)
+        for name, src in person.sources.items():
+            if src.aspect == "lat":
+                for aspect in POSITION_ASPECTS:
+                    out.used[(aspect, name)] = best is not None and best[1] == name
         if best is not None:
-            out.used[("lat", best[1])] = True
-            out.values.update(best[2])
+            out.values.update(self.fixes[person.sources[best[1]].entity])
+
+
+class Unit:
+    """The persons rule on the bus: catch-up, then one evaluation per change.
+
+    Parameters
+    ----------
+    ctx : automation.Context
+        The unit's context, or anything with `publish`, `source_used`,
+        `decision` and `params.max_accuracy_m`.
+    persons : list of house.Entity
+        The person entities this unit binds.
+    """
+
+    def __init__(self, ctx, persons: list[house.Entity]):
+        self.ctx = ctx
+        self.persons = persons
+        self.names = {p.name for p in persons}
+        self.rule = Persons(persons)
+        self.lock = threading.Lock()
+        # (person, aspect) -> the value on the bus. Seeded from the mirror
+        # during catch-up, so a restart republishes only what changed.
+        self.published: dict[tuple[str, str], Any] = {}
+        self.started = False
+
+    def on_state(self, key: str, value: Any) -> None:
+        """Take one state sample from the `trackers` subscription."""
+        _, _, _room, entity, aspect = key.split("/")
+        with self.lock:
+            if entity in self.names:
+                # The persons' own keys come back on this subscription.
+                if not self.started:
+                    self.published[(entity, aspect)] = value
+                return
+            concerned = self.rule.seen(entity, aspect, value)
+            # During catch-up the mirror delivers one key at a time, in no
+            # set order. Evaluating then could act on a `home` before the
+            # same tracker's `available = false`, so the first evaluation
+            # waits until every value is in (`start`).
+            if self.started:
+                for person in concerned:
+                    self.apply(person)
+
+    def start(self) -> None:
+        """Evaluate every person once, after the catch-up."""
+        with self.lock:
+            self.started = True
+            for tracker in self.rule.trackers:
+                self.rule.commit(tracker)
+            for person in self.persons:
+                self.apply(person)
+
+    def apply(self, person: house.Entity) -> None:
+        """Evaluate one person and publish what changed."""
+        ctx = self.ctx
+        out = self.rule.evaluate(person, ctx.params.max_accuracy_m)
+        for aspect, value in out.values.items():
+            if self.published.get((person.name, aspect)) != value:
+                ctx.publish("person", value, room=person.room, entity=person.name, aspect=aspect)
+                self.published[(person.name, aspect)] = value
+        for (computed, source), used in out.used.items():
+            ctx.source_used(person.name, computed, source, used)
+        ctx.decision(person.name, out.decision)
 
 
 def main():
@@ -198,24 +277,9 @@ def main():
         e for e in house.load_house().entities
         if e.owner == ctx.unit and e.capability == "person"
     ]
-    rule = Persons(persons)
-    lock = threading.Lock()
-    published: dict[tuple[str, str], Any] = {}
-
-    def on_tracker(key, value, age_s):
-        _, _, _room, tracker, aspect = key.split("/")
-        with lock:
-            for person in rule.seen(tracker, aspect, value, age_s):
-                out = rule.evaluate(person, ctx.params.max_accuracy_m)
-                for aspect_name, v in out.values.items():
-                    if published.get((person.name, aspect_name)) != v:
-                        ctx.publish("person", v, room=person.room, entity=person.name, aspect=aspect_name)
-                        published[(person.name, aspect_name)] = v
-                for (computed, source), used in out.used.items():
-                    ctx.source_used(person.name, computed, source, used)
-                ctx.decision(person.name, out.decision)
-
-    ctx.subscribe("trackers", on_tracker)
+    unit = Unit(ctx, persons)
+    ctx.subscribe("trackers", unit.on_state)
+    unit.start()
     ctx.ready()
     ctx.run()
 
