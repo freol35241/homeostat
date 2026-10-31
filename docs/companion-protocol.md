@@ -20,8 +20,11 @@ never reads house state. It says two things — where the person is, and
 that they saw the notification — and hears one: the notification.
 
 Each phone owns one topic subtree and, in the house repo, two entity
-files: a `person` and a `notifier`. The adapter binds them by `id`, which
-is the two topic segments naming the subtree and the face.
+files: a `tracker` and a `notifier`. The adapter binds them by `id`, which
+is the two topic segments naming the subtree and the face. The tracker's
+face is called `person` on the wire. The human is a `person` entity the
+persons automation computes from the tracker
+([design.md](design.md#map-and-people)).
 
 ## Connection
 
@@ -90,14 +93,16 @@ OS runs at near-zero battery cost; it does not run a location loop. Where
 that geofence sits is the `home` key of the provisioning blob below; a
 phone provisioned without it publishes no `presence` at all.
 
+The adapter publishes it as `home` on the tracker.
+
 Retained, because presence is state rather than an event. A transition
 published while the adapter is restarting would otherwise be lost, and
 the house would hold the previous value until the next transition, which
 may be days later. The adapter gets the current value on every
 subscribe, and publishing the same value again is harmless.
 
-The house fuses this with the router's WiFi sightings elsewhere; the
-phone's job is `away` and `approaching`, not `at home`.
+The persons automation combines this with the router's WiFi sightings;
+the phone's job is `away` and `approaching`, not `at home`.
 
 ### `position` — the opt-in fix
 
@@ -110,8 +115,12 @@ Off by default, per phone. When on:
 `lat` and `lon` are required numbers; `accuracy` (metres), `battery`
 (percent) and `fixed_at` (epoch seconds) are optional and omitted rather
 than nulled when the fix does not carry them. The adapter fans the object
-out to scalar aspects, so the recorder gives trails for free; it publishes
-nothing for an absent field, and never invents one.
+out to scalar aspects, so the recorder gives trails for free. It
+publishes nothing for an absent `accuracy` or `battery`. It publishes
+`fixed_at` last, because that completes a fix for the persons
+automation, and stamps it with the arrival time when the fix has none.
+Send the platform's own fix time when there is one: it is when the
+phone was there, and the arrival time is later.
 
 A fix without `lat` or `lon`, or with a non-numeric one, drops with
 `malformed-payload`.
@@ -170,10 +179,12 @@ app shows a notification once per `sent_at` and ignores a repeat.
 Three things, all text:
 
 1. **Two entity files** in the house repo, under the companion adapter's
-   entities directory — `alice.toml` (capability `person`, id
+   entities directory — `alice_tracker.toml` (capability `tracker`, id
    `alice/person`) and `alice_phone.toml` (capability `notifier`, id
    `alice/notifier`), both room `person`. `plan` renders the result; the
-   tests' fixture house is the worked example.
+   tests' fixture house is the worked example. The person file that
+   lists `alice_tracker` as a source (aspect `home`, and `lat` when the
+   phone sends positions) goes under the persons automation.
 2. **A broker user and ACL**, one block per phone:
 
    ```

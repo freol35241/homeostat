@@ -35,21 +35,25 @@ Each phone owns a topic subtree under the endpoint's base topic
     {base}/{phone}/notifier/alert     -> the same, the urgent channel
 
 The entity file's `id` is the two topic segments that name the subtree and
-the face: "alice/person" binds the `person` entity (room `person`, the
-reserved pseudo-room), "alice/notifier" the `notifier` entity for the same
-phone. One phone is therefore two files, which is what the two
-capabilities are; they share the first segment and that is how `available`
-reaches both.
+the face: "alice/person" binds the phone's `tracker` entity (room
+`person`, the reserved pseudo-room), "alice/notifier" the `notifier`
+entity for the same phone. One phone is therefore two files, which is
+what the two capabilities are; they share the first segment and that is
+how `available` reaches both. The wire keeps the face name `person`; the
+human is a `person` entity the persons automation computes from this
+tracker (docs/design.md#map-and-people).
 
 Published state:
 
-- `presence` (bool) on the person, from the platform's geofence
-  transitions. The app registers ONE geofence, `home`; continuous position
-  is opt-in per phone and off by default, so a phone that never
-  publishes `position` is the normal case, not a degraded one.
-- `lat`, `lon` and — when the fix carries them — `accuracy`, `battery`,
-  `fixed_at`: scalar aspects, never one composite fix, so the recorder
-  gives trails for free.
+- `home` (bool) on the tracker, from the platform's geofence transitions,
+  which the wire calls `presence`. The app registers ONE geofence, `home`;
+  continuous position is opt-in per phone and off by default, so a phone
+  that never publishes `position` is the normal case, not a degraded one.
+- `lat`, `lon`, `fixed_at` and, when the fix carries them, `accuracy` and
+  `battery`: scalar aspects, never one composite fix, so the recorder
+  gives trails for free. `fixed_at` is published last, because it
+  completes a fix for the persons automation. A fix without one is
+  stamped with its arrival time.
 - `delivered` (epoch seconds) on the notifier when the BROKER acks the
   publish (QoS 1 PUBACK), which is what ntfy's `delivered` also means: the
   delivery path took it, not that anyone saw it.
@@ -94,14 +98,15 @@ DEFAULT_BASE_TOPIC = "companion"
 # is ntfy's priority.
 CHANNELS = {"message": "message", "alert": "alert"}
 
-# Optional position fields, homeostat names already.
-POSITION_OPTIONAL = ("accuracy", "battery", "fixed_at")
+# Optional position fields, homeostat names already. `fixed_at` follows
+# them, last.
+POSITION_OPTIONAL = ("accuracy", "battery")
 
-PERSON_DESCRIPTOR = {
+TRACKER_DESCRIPTOR = {
     "schema": 1,
     "groups": ["presence"],
     "fields": {
-        "presence": {"label": "home", "kind": "boolean", "group": "presence"},
+        "home": {"label": "inside the home geofence (home)", "kind": "boolean", "group": "presence"},
     },
 }
 
@@ -196,7 +201,7 @@ def main():
             if not isinstance(payload, bool):
                 drop("malformed-payload", topic=msg.topic)
                 return
-            put(entity, "presence", payload)
+            put(entity, "home", payload)
         elif leaf == "position":
             lat = _number(payload.get("lat")) if isinstance(payload, dict) else None
             lon = _number(payload.get("lon")) if isinstance(payload, dict) else None
@@ -209,6 +214,8 @@ def main():
                 value = _number(payload.get(field))
                 if value is not None:
                     put(entity, field, value)
+            fixed_at = _number(payload.get("fixed_at"))
+            put(entity, "fixed_at", fixed_at if fixed_at is not None else time.time())
         elif leaf == "ack":
             sent_at = _number(payload)
             if sent_at is None:
@@ -285,7 +292,7 @@ def main():
                     "capability": e.capability,
                     "features": ["alert", "acknowledged"] if e.capability == "notifier" else [],
                 },
-                "aspects": NOTIFIER_DESCRIPTOR if e.capability == "notifier" else PERSON_DESCRIPTOR,
+                "aspects": NOTIFIER_DESCRIPTOR if e.capability == "notifier" else TRACKER_DESCRIPTOR,
             }
             for e in config.entities
         ],

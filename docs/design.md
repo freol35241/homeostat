@@ -2712,8 +2712,8 @@ Rejected alternatives:
 ### The companion app
 
 The house's own Android app (`homeostat-app`) gives each family phone
-two faces: a `person` that reports presence and a `notifier` that
-receives messages. It reaches the house through the MQTT broker and
+two faces: a `tracker` that reports where the phone is and a `notifier`
+that receives messages. It reaches the house through the MQTT broker and
 `adapters/companion.py`. The wire contract is
 [docs/companion-protocol.md](companion-protocol.md). It is normative
 and lives in this repo, because the adapter is the house side of the
@@ -2722,8 +2722,9 @@ contract.
 Presence is the reason the app exists. The router's WiFi sightings
 already say who is home at no battery cost. The phone answers what the
 router cannot: away, and approaching. The app registers one platform
-geofence, `home`, and publishes its enter and leave transitions as
-`presence`. Android's geofencing API costs almost no battery, where
+geofence, `home`, and publishes its enter and leave transitions, which
+the adapter publishes as the tracker's `home`. The persons automation
+turns that into the person's presence ([Map and people](#map-and-people)). Android's geofencing API costs almost no battery, where
 OwnTracks runs its own location loop. Continuous position is opt-in per
 phone and off by default, because tracking within a family is what
 makes people stop running these apps.
@@ -2731,11 +2732,12 @@ makes people stop running these apps.
 - The phone is a device and does not touch the bus. The bus trusts
   everything on it, since priority and actor are self-declared
   ([Local-only access](#local-only-access)). A phone publishing its own
-  `presence` would be an entity no plan shows. The bus has no queue for
+  `home` would be an entity no plan shows. The bus has no queue for
   an absent client, and the broker's persistent sessions are one. A
   pure-JVM MQTT client is also smaller than zenoh-kotlin's JNI library.
 - One phone is two entities under one topic subtree. The entity `id`
-  names the subtree and the face (`alice/person`, `alice/notifier`).
+  names the subtree and the face (`alice/person` for the tracker,
+  `alice/notifier`).
   The core refuses two entities with one `id` under one owner
   (`duplicate-entity-id`), so the face is part of it.
 - `delivered` is the broker's QoS 1 acknowledgement. `acknowledged` is
@@ -2753,10 +2755,12 @@ makes people stop running these apps.
 - Notifications are QoS 1 and never retained, because a retained alert
   would fire again on every reconnect. The phone's persistent session
   holds what it missed, at least once, and the app drops repeats by
-  `sent_at`. The adapter's own session is clean. `presence` is retained
-  because it is state, so the adapter reads it again on every subscribe.
-  A `position` fix or an `ack` published while the adapter is down is
-  lost rather than invented.
+  `sent_at`. The adapter's own session is clean. The geofence state is
+  retained because it is state, so the adapter reads it again on every
+  subscribe. A `position` fix or an `ack` published while the adapter is
+  down is lost rather than invented. A fix that arrives without a
+  `fixed_at` is stamped on arrival, because a fix counts for the person
+  once its `fixed_at` arrives.
 - The adapter has no rate floor. There is no third-party server to
   protect, and the cooldown already lives in the automation.
 - Identity is the device. The app is provisioned from a text blob that

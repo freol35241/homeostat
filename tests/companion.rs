@@ -80,8 +80,9 @@ async fn await_number(observer: &zenoh::Session, key: &str) -> f64 {
 }
 
 /// (a) The phone's two upward channels: a geofence transition becomes
-/// `presence` on the person, and an opt-in position fix fans out to the
-/// scalar aspects — the optional fields only when the fix carries them.
+/// `home` on the tracker, and an opt-in position fix fans out to the
+/// scalar aspects — the optional fields only when the fix carries them,
+/// and `fixed_at` always, stamped on arrival when the fix has none.
 #[tokio::test(flavor = "multi_thread")]
 async fn presence_and_position_translate_to_bus_state() {
     let (mosquitto, mut sup, observer) = setup().await;
@@ -95,7 +96,7 @@ async fn presence_and_position_translate_to_bus_state() {
         .await;
     expect_states(
         &state_sub,
-        &[("home/state/person/alice/presence", json!(true))],
+        &[("home/state/person/alice_tracker/home", json!(true))],
     )
     .await;
 
@@ -107,18 +108,21 @@ async fn presence_and_position_translate_to_bus_state() {
     expect_states(
         &state_sub,
         &[
-            ("home/state/person/alice/lat", json!(59.33)),
-            ("home/state/person/alice/lon", json!(18.06)),
-            ("home/state/person/alice/accuracy", json!(12)),
-            ("home/state/person/alice/battery", json!(87)),
-            ("home/state/person/alice/fixed_at", json!(1752600000)),
+            ("home/state/person/alice_tracker/lat", json!(59.33)),
+            ("home/state/person/alice_tracker/lon", json!(18.06)),
+            ("home/state/person/alice_tracker/accuracy", json!(12)),
+            ("home/state/person/alice_tracker/battery", json!(87)),
+            (
+                "home/state/person/alice_tracker/fixed_at",
+                json!(1752600000),
+            ),
         ],
     )
     .await;
 
-    // A fix without the optional fields publishes lat/lon and invents
-    // nothing: the next presence sentinel arrives with no accuracy
-    // between it and the fix.
+    // A fix without the optional fields publishes lat/lon and a stamped
+    // fixed_at, and no accuracy: the next presence sentinel arrives with
+    // none between it and the fix.
     mqtt.publish(
         "companion/alice/person/position",
         r#"{"lat":1.0,"lon":2.0}"#,
@@ -129,11 +133,20 @@ async fn presence_and_position_translate_to_bus_state() {
     expect_states(
         &state_sub,
         &[
-            ("home/state/person/alice/lat", json!(1.0)),
-            ("home/state/person/alice/presence", json!(false)),
+            ("home/state/person/alice_tracker/lat", json!(1.0)),
+            ("home/state/person/alice_tracker/home", json!(false)),
         ],
     )
     .await;
+    // The stamped fixed_at is this fix's, later than the first fix's.
+    let fixed_at = cache_read(&observer, "home/state/person/alice_tracker/fixed_at")
+        .await
+        .and_then(|v| v.as_f64())
+        .expect("a stamped fixed_at");
+    assert!(
+        fixed_at > 1_752_600_000.0,
+        "fixed_at {fixed_at} is not the arrival time"
+    );
 
     assert_unit_contract(&mut sup, &observer, "companion").await;
 }
@@ -215,7 +228,7 @@ async fn ack_and_availability_reach_both_faces() {
         .await;
     expect_states(
         &state_sub,
-        &[("home/state/person/alice/presence", json!(true))],
+        &[("home/state/person/alice_tracker/home", json!(true))],
     )
     .await;
     assert_eq!(
@@ -228,7 +241,7 @@ async fn ack_and_availability_reach_both_faces() {
         &observer,
         &state_sub,
         &[
-            ("home/state/person/alice/available", json!(true)),
+            ("home/state/person/alice_tracker/available", json!(true)),
             ("home/state/person/alice_phone/available", json!(true)),
         ],
     )
@@ -240,7 +253,7 @@ async fn ack_and_availability_reach_both_faces() {
         &observer,
         &state_sub,
         &[
-            ("home/state/person/alice/available", json!(false)),
+            ("home/state/person/alice_tracker/available", json!(false)),
             ("home/state/person/alice_phone/available", json!(false)),
         ],
     )
@@ -284,7 +297,7 @@ async fn bad_phone_input_drops_with_health_event() {
         .await;
     expect_states(
         &state_sub,
-        &[("home/state/person/alice/presence", json!(true))],
+        &[("home/state/person/alice_tracker/home", json!(true))],
     )
     .await;
 
@@ -388,12 +401,12 @@ async fn discovery_describes_both_faces() {
         .find(|r| r["id"] == json!("alice/person"))
         .expect("person record");
     assert_eq!(person["configured"], json!(true));
-    assert_eq!(person["entity"], json!("alice"));
+    assert_eq!(person["entity"], json!("alice_tracker"));
     assert_eq!(
         person["suggested"],
-        json!({"capability": "person", "features": []})
+        json!({"capability": "tracker", "features": []})
     );
-    assert_eq!(person["aspects"]["fields"]["presence"]["kind"], "boolean");
+    assert_eq!(person["aspects"]["fields"]["home"]["kind"], "boolean");
 
     let notifier = records
         .iter()
@@ -428,7 +441,7 @@ async fn retained_presence_reaches_a_late_adapter() {
     await_states(
         &observer,
         &state_sub,
-        &[("home/state/person/alice/presence", json!(false))],
+        &[("home/state/person/alice_tracker/home", json!(false))],
     )
     .await;
 
