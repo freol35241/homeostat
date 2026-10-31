@@ -3,7 +3,7 @@ schema = 1
 [entity]
 # The two OwnTracks topic segments: user/device, as configured in the app.
 id = "alice/phone"
-capability = "person"
+capability = "tracker"
 features = []
 room = "person"
 

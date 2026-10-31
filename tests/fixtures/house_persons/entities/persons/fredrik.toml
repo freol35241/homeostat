@@ -1,0 +1,24 @@
+schema = 1
+
+[entity]
+capability = "person"
+room = "person"
+
+[naming]
+en = "Fredrik"
+
+[write_policy]
+mode = "exclusive"
+owner = "persons"
+
+[sources.geofence]
+entity = "fredrik_phone"
+aspect = "home"
+
+[sources.gps]
+entity = "fredrik_phone"
+aspect = "lat"
+
+[sources.wifi]
+entity = "fredriks_phone"
+aspect = "sighted"

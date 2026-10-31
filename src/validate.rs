@@ -22,6 +22,7 @@ pub fn validate(house: &House) -> Vec<ValidationError> {
     check_duplicates(house, &mut errors);
     check_manifest_shape(house, &mut errors);
     check_entities(house, &mut errors);
+    check_persons(house, &mut errors);
     check_zones(house, &mut errors);
     check_params(house, &mut errors);
     check_dashboard(house, &mut errors);
@@ -374,6 +375,64 @@ fn check_entities(house: &House, errors: &mut Vec<ValidationError>) {
                 ));
             }
             Some(_) => {}
+        }
+    }
+}
+
+/// The aspects a person's source may name: presence evidence (`home`,
+/// `sighted`) or a position fix (`lat`, read with its `lon`, `accuracy` and
+/// `fixed_at`).
+const PERSON_SOURCE_ASPECTS: &[&str] = &["home", "sighted", "lat"];
+
+/// A person is a human computed from the trackers it lists, so an adapter
+/// cannot bind one (docs/design.md#map-and-people). An unknown source entity is
+/// `source-unknown-entity`, which `grants::resolve_sources` reports.
+fn check_persons(house: &House, errors: &mut Vec<ValidationError>) {
+    for entity in &house.entities {
+        if entity.file.entity.capability != "person" {
+            continue;
+        }
+        let file = Some(entity.path.clone());
+        let owner_is_adapter = house
+            .unit(&entity.file.write_policy.owner)
+            .is_some_and(|u| u.manifest.unit.kind == UnitKind::Adapter);
+        if owner_is_adapter {
+            errors.push(ValidationError::new(
+                Code::PersonBoundByAdapter,
+                &entity.name,
+                format!(
+                    "adapter \"{}\" binds a person; bind the device as `tracker` and list it in a person file owned by an automation",
+                    entity.file.write_policy.owner
+                ),
+                file.clone(),
+            ));
+        }
+        for (name, source) in entity.file.sources.iter().flatten() {
+            let subject = format!("{}.{name}", entity.name);
+            let Some(src) = house.entities.iter().find(|e| e.name == source.entity) else {
+                continue;
+            };
+            if src.file.entity.capability != "tracker" {
+                errors.push(ValidationError::new(
+                    Code::PersonSourceNotTracker,
+                    subject,
+                    format!(
+                        "source \"{}\" has capability `{}`; a person's sources are trackers",
+                        src.name, src.file.entity.capability
+                    ),
+                    file.clone(),
+                ));
+            } else if !PERSON_SOURCE_ASPECTS.contains(&source.aspect.as_str()) {
+                errors.push(ValidationError::new(
+                    Code::PersonSourceAspect,
+                    subject,
+                    format!(
+                        "aspect \"{}\" is not one of `home`, `sighted` or `lat`",
+                        source.aspect
+                    ),
+                    file.clone(),
+                ));
+            }
         }
     }
 }

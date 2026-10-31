@@ -1,0 +1,2 @@
+error[person-source-aspect] alice.battery: aspect "battery" is not one of `home`, `sighted` or `lat` (entities/persons/alice.toml)
+error[person-source-not-tracker] alice.hallway: source "hallway_motion" has capability `occupancy`; a person's sources are trackers (entities/persons/alice.toml)

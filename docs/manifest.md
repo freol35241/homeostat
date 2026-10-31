@@ -191,7 +191,7 @@ a key segment (`invalid-name`).
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `capability` | string | yes | One of: `binary_sensor`, `burner`, `camera`, `climate`, `cover`, `light`, `lock`, `notifier`, `person`, `presence`, `router`, `sensor`, `switch` (`unknown-capability`). Decides the base aspect, the dashboard widget and which cmd grants apply. |
+| `capability` | string | yes | One of: `binary_sensor`, `burner`, `camera`, `climate`, `cover`, `light`, `lock`, `notifier`, `occupancy`, `person`, `router`, `sensor`, `switch`, `tracker` (`unknown-capability`). Decides the base aspect, the dashboard widget and which cmd grants apply. |
 | `features` | list of string | no | Optional aspects beyond the capability's base, as the adapter names them (`brightness`, `color_temp` on a light). For a sensor it is descriptive only; its widgets come from the numeric aspects it publishes. |
 | `id` | string | no | The adapter-native address (a zigbee2mqtt friendly name, an ESPHome node, a camera's go2rtc stream). Unique per adapter (`duplicate-entity-id`). Required on an adapter-owned entity, where it addresses something (`entity-id-required`); optional on an automation-owned one, which has no periphery to address and would otherwise have to invent a name for a device that does not exist. |
 | `room` | string | yes | Where the entity is. No other file places it. A key segment; not `home` or a key class (`reserved-room-name`). The pseudo-rooms `global` and `person` are for entities with no place. |
@@ -226,8 +226,8 @@ identity layer between a unit and a bus key is the same one
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `aspect` | string | yes | The aspect that contributes. When the contributor is automation-owned, that automation's `[bus.publishes]` must cover the key (`source-unpublished-aspect`). |
-| `entity` | string | yes | Name of the contributing entity; must exist (`source-unknown-entity`). Any owner will do. |
+| `aspect` | string | yes | The aspect that contributes. When the contributor is automation-owned, that automation's `[bus.publishes]` must cover the key (`source-unpublished-aspect`). A `person`'s source names `home` or `sighted` for presence, or `lat` for a position fix (`person-source-aspect`). |
+| `entity` | string | yes | Name of the contributing entity; must exist (`source-unknown-entity`). Any owner will do. A `person`'s sources must be trackers (`person-source-not-tracker`). |
 | `note` | string | no | Free text about this contributor, shown beside it in the history overlay. Use it for what the subject's own descriptor cannot say because it is not true of every source. For example, one sensor sits in the sun, or a reading carries an offset the house itself writes and so must not be fused back in. Kind and unit stay on the aspect descriptor, which every source is held to. |
 | `precision` | number | no | The contributor's resolution in the aspect's own unit, where it differs enough to matter. A half-degree sensor read against a hundredth-degree one looks like it disagrees when it is only coarse. |
 
@@ -348,9 +348,9 @@ house's text, the grant table and the bus; no widget carries markup.
 - `room` — A room's card: every entity in the room.
 - `unit` — A unit's card: its family setpoints, the entities it publishes, the entities it drives (from the grant table) and the entities it reads (from its subscriptions). All of it derives from its manifest. An automation's card also carries its pause switch.
 - `params` — A unit's family-editable parameters as one card.
-- `people` — The person entities, home or away.
+- `people` — The persons, home or away, and each tracker no person lists.
 - `deviations` — The deviations feed: what is out of the ordinary.
-- `map` — The map over every entity with a location.
+- `map` — The map: each person's position, and each tracker no person lists.
 - `group` — Several widgets as one card, such as a dial with the traces that explain it, or a setpoint beside what it drives. Groups do not nest.
 - `burner` — A burner's card: its two commands and the two temperatures an interlock reads. It uses only the `burner` vocabulary, with nothing adapter-specific.
 
@@ -368,11 +368,12 @@ What an entity of each capability publishes under which names (docs/adapters.md,
 | `light` | `on` | `brightness`, `color_temp` | `on = true` | `brightness` 0–254 (the Zigbee2MQTT scale the dashboard assumes), `color_temp` in mired. |
 | `lock` | `locked` | — | `locked = false` |  |
 | `notifier` | `message` | `alert`, `delivered` | — | A channel that reaches a person: a phone, a group chat. `message` and `alert` are commandable strings — the text itself — and two structurally separate delivery paths, granted and policed apart (an alert overrides quiet hours; a message never will). `delivered` is the epoch time the delivery service acknowledged the last message, never a human's receipt. Room `person` for one person's channel, `global` for a group (docs/design.md#notifications). |
-| `person` | — | `presence`, `lat`, `lon`, `accuracy`, `battery`, `fixed_at` | — | `presence` is whether the person is home (bool), published by whichever adapter knows — a geofence transition, a fused sighting; the dashboard's People tile reads it. Scalar position aspects; `fixed_at` is the fix's epoch timestamp. Room is always `person`. |
-| `presence` | — | `occupancy`, `presence` | — | Either spelling is accepted; adapters pass their native one through. |
+| `occupancy` | — | `motion`, `occupied` | — | A room sensor, in the room it watches. `motion` (bool) is movement seen within the adapter's hold, as a PIR reports it; `false` means nothing moved, not that the room is empty. `occupied` (bool) is a body detected, moving or still, as an mmWave radar reports it. The adapter publishes whichever its device observes (docs/design.md#the-capability-vocabulary). |
+| `person` | — | `presence`, `lat`, `lon`, `accuracy`, `fixed_at` | — | A human, computed from the trackers its `[sources]` list. Only an automation binds one (`person-bound-by-adapter`), and the shipped `persons` unit is the one that does. `presence` (bool) is whether the person is home; the dashboard's People tile reads it. Scalar position aspects; `fixed_at` is the fix's epoch timestamp. Room `person` (docs/design.md#map-and-people). |
 | `router` | — | `wan` | `wan = false` |  |
 | `sensor` | — | — | — | Numeric aspects under descriptive names (`temperature`, `humidity`); widgets come from what is published. |
 | `switch` | `on` | — | — |  |
+| `tracker` | — | `home`, `sighted`, `lat`, `lon`, `accuracy`, `battery`, `fixed_at` | — | A device someone carries: a phone, a tag, a watch. `home` (bool) is inside the home geofence, and its `false` says the device left. `sighted` (bool) is seen on the home network, and its `false` says only that it was not seen within the adapter's delay. Scalar position aspects as on `person`, plus the device's `battery`. Room `person` for one person's device. A `person` lists its trackers as sources (docs/design.md#map-and-people). |
 
 Every capability may also publish:
 

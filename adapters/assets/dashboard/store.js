@@ -94,8 +94,8 @@ export function unitLabel(unitName) {
   return u ? u.label : unitName;
 }
 
-export function presenceValue(entity) {
-  return logic.presenceValue(store.state, entity);
+export function occupancyReading(entity) {
+  return logic.occupancyReading(store.state, entity);
 }
 
 export function entitySpec(room, entity) {
@@ -156,7 +156,7 @@ export function liveForecastsOf(entity, aspect) {
 export function controlDisabled(entity) { return !entity.commandable; }
 
 export function personEntities() {
-  return (store.model.entities || []).filter(function (e) { return e.capability === 'person'; });
+  return logic.peopleEntities(store.model.entities || []);
 }
 
 export function entitiesInRoom(room) {

@@ -1,0 +1,1 @@
+error[person-bound-by-adapter] alice: adapter "owntracks" binds a person; bind the device as `tracker` and list it in a person file owned by an automation (entities/owntracks/alice.toml)

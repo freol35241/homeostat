@@ -4,8 +4,7 @@ schema = 1
 # id is the decimal code the sender transmits. It differs from the entity
 # name, so the tests prove binding goes through the code.
 id = "11970086"
-capability = "presence"
-features = ["occupancy"]
+capability = "occupancy"
 room = "hallway"
 
 [write_policy]

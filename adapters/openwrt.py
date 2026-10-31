@@ -8,23 +8,23 @@
 # [tool.uv.sources]
 # homeostat = { path = "../sdk/python", editable = true }
 # ///
-"""OpenWrt adapter: router WAN state and WiFi presence over ubus JSON-RPC.
+"""OpenWrt adapter: router WAN state and WiFi sightings over ubus JSON-RPC.
 
 See docs/design.md#the-capability-vocabulary. The adapter speaks ubus
 JSON-RPC over HTTP (uhttpd-mod-ubus, rpcd session auth) and polls each
 configured router (`poll_router`). It is read-only and takes no commands.
 
-Scope is WAN state and presence. Network metrics and tunnel reachability
+Scope is WAN state and sightings. Network metrics and tunnel reachability
 belong to the monitoring stack. There is no tunnel state: a wireguard
 interface's up flag is true whether or not a peer can be reached, and
 per-peer state would publish each peer's endpoint, a movement trace of
-whoever carries the device. Combining WiFi sightings with location into
-"someone is home" is an ordinary automation, because which MAC is whose
-is house knowledge, and this adapter cannot write onto person entities.
+whoever carries the device. Which MAC is whose is house knowledge: a
+person file lists the tracker, and the persons automation combines it
+with that person's other trackers (docs/design.md#map-and-people).
 
 Binding: a `router` entity's `id` is its name in the credentials file,
-with aspect `wan`. A `presence` entity's `id` is the device MAC in
-lowercase, with aspect `presence` (`Adapter.cycle`). `classify` drops
+with aspect `wan`. A `tracker` entity's `id` is the device MAC in
+lowercase, with aspect `sighted` (`Adapter.cycle`). `classify` drops
 other bindings with a health event.
 
 Configuration: [discovery].endpoint is the path of the credentials file,
@@ -35,7 +35,9 @@ root; the ACL needs only `network.interface` and `hostapd.*`. Live
 parameters: poll_interval_s (default 30) and away_delay_s (default 180).
 
 Aspects publish on change, plus each entity's value after its first
-successful poll, so the recorder stores only transitions.
+successful poll, so the recorder stores only transitions. A tracker's
+`available` is false while a silent router could be the one that sees
+it, so a held `sighted = true` is not read as current.
 
 Discovery: every configured router with whether it answered, and every
 station seen this cycle (`Adapter.publish_discovery`).
@@ -170,7 +172,7 @@ def classify(entities, routers, session):
     """Split bound entities by capability, dropping unusable bindings.
 
     Each dropped binding gets a health event, and the unit keeps running.
-    A presence id that is not lowercase drops with `malformed-id`, a router
+    A tracker id that is not lowercase drops with `malformed-id`, a router
     id missing from the credentials file with `router-unconfigured`, and
     any other capability with `unsupported-capability`.
     """
@@ -181,7 +183,7 @@ def classify(entities, routers, session):
                 session.health_event("drop", reason="router-unconfigured", entity=entity.name)
                 continue
             router_entities.append(entity)
-        elif entity.capability == "presence":
+        elif entity.capability == "tracker":
             if entity.id != entity.id.lower():
                 # Sightings are lowercased, so an uppercase MAC would read
                 # absent forever with no trace.
@@ -226,7 +228,7 @@ async def poll_router(http, name: str, conf: dict):
 
 
 class Adapter:
-    """Router WAN and device presence state, carried across poll cycles and published on change."""
+    """Router WAN and device sighting state, carried across poll cycles and published on change."""
 
     def __init__(self, session, routers, router_entities, trackers):
         self.session = session
@@ -269,8 +271,8 @@ class Adapter:
         interface named `wan` reports `unknown-interface` once, until one
         reappears.
 
-        A presence entity is present when any BSS of any router sighted it
-        within away_delay_s. The delay also covers access point reboots.
+        A tracker is sighted when any BSS of any router sighted it within
+        away_delay_s. The delay also covers access point reboots.
         """
         interfaces: dict[str, dict] = {}
         sightings: dict[str, list[str]] = {}  # mac -> routers that saw it
@@ -304,7 +306,11 @@ class Adapter:
                 sightings.setdefault(mac, []).append(name)
 
         if not polled_ok:
-            return  # no router answered: everything keeps its last value
+            # No router answered: everything keeps its last value, and no
+            # tracker's sighting can be trusted.
+            for entity in self.trackers:
+                self.publish(keys.state_key(entity.room, entity.name, "available"), False)
+            return
 
         now_mono = time.monotonic()
         for mac in sightings:
@@ -322,10 +328,11 @@ class Adapter:
 
         # Some routers silent. A sighting still counts, but absence needs
         # every router to see nothing: with one silent, a device on it
-        # would read away. Unsighted devices keep their last value, as
-        # when no router answers. Report the blind spot each time the set
-        # of silent routers changes; router-unreachable is reported once
-        # and says nothing about how long the outage lasts.
+        # would read not seen. Unsighted devices keep their last value and
+        # turn unavailable, as when no router answers. Report the blind
+        # spot each time the set of silent routers changes;
+        # router-unreachable is reported once and says nothing about how
+        # long the outage lasts.
         blind = frozenset(self.routers) - polled_ok
         if self.trackers and blind != self.blind and blind:
             self.session.health_event("presence-partial", routers=sorted(blind))
@@ -337,9 +344,12 @@ class Adapter:
             present = entity.id in sightings or (
                 seen_at is not None and now_mono - seen_at < away_delay
             )
+            available = keys.state_key(entity.room, entity.name, "available")
             if not present and blind:
+                self.publish(available, False)
                 continue
-            self.publish(keys.state_key(entity.room, entity.name, "presence"), present)
+            self.publish(keys.state_key(entity.room, entity.name, "sighted"), present)
+            self.publish(available, True)
 
         self.publish_discovery(sightings)
 
@@ -357,13 +367,13 @@ class Adapter:
                 }
             },
         },
-        "presence": {
+        "tracker": {
             "schema": 1,
             "groups": ["readings"],
             "fields": {
-                "presence": {
-                    "label": "on the WiFi (presence)", "kind": "boolean", "group": "readings",
-                    "values": [{"value": True, "label": "present"}, {"value": False, "label": "away"}],
+                "sighted": {
+                    "label": "on the WiFi (sighted)", "kind": "boolean", "group": "readings",
+                    "values": [{"value": True, "label": "seen"}, {"value": False, "label": "not seen"}],
                 }
             },
         },
@@ -374,7 +384,7 @@ class Adapter:
 
         Built from data the cycle already fetched, and republished only when
         it changes: every configured router with whether it answered, and
-        every station seen this cycle as a bare MAC, suggested `presence`,
+        every station seen this cycle as a bare MAC, suggested `tracker`,
         with the routers that saw it.
         """
         bound = {e.id: e.name for e in self.router_entities + self.trackers}
@@ -396,7 +406,7 @@ class Adapter:
             for name in self.routers
         ]
         for mac in sorted(sightings):
-            records.append(record(mac, "presence", {"seen_by": sorted(sightings[mac])}))
+            records.append(record(mac, "tracker", {"seen_by": sorted(sightings[mac])}))
 
         records.sort(key=lambda r: r["id"])
         serialized = json.dumps(records)

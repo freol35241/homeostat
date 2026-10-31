@@ -1,0 +1,24 @@
+schema = 1
+
+[unit]
+name = "reflector"
+kind = "adapter"
+description = "Reflects commands back as state"
+
+[runtime]
+command = "reflector"
+restart = "always"
+shutdown_grace_s = 5
+
+[discovery]
+mode = "static"
+endpoint = "reflect://local"
+
+[bus.publishes]
+state = { key = "home/state/{room}/{entity}/**" }
+
+[bus.subscribes]
+commands = "home/cmd/{room}/{entity}/**"
+
+[entities]
+dir = "entities/reflector/"
