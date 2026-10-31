@@ -11,6 +11,11 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # Each integration test links into its own binary, and with full debug
+    # info the test build outgrows the runner's free disk. Line tables keep
+    # file and line in panic backtraces at under half the size.
+    env:
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
