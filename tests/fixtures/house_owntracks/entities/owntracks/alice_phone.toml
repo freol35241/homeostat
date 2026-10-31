@@ -4,7 +4,7 @@ schema = 1
 # id is the two OwnTracks topic segments (user/device). It differs from
 # the entity name, so the tests prove binding goes through the id.
 id = "alice/phone"
-capability = "person"
+capability = "tracker"
 features = []
 room = "person"
 

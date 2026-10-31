@@ -1,0 +1,10 @@
+schema = 1
+
+# The companion app: a geofence and, when it has one, a fix.
+[entity]
+id = "phone-1"
+capability = "tracker"
+room = "person"
+
+[write_policy]
+owner = "reflector"

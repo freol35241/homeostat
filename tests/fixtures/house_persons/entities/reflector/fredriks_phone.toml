@@ -1,0 +1,10 @@
+schema = 1
+
+# The same phone as the router sees it.
+[entity]
+id = "aa:bb:cc:dd:ee:ff"
+capability = "tracker"
+room = "person"
+
+[write_policy]
+owner = "reflector"

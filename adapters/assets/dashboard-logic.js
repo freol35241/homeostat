@@ -29,37 +29,68 @@
     return state[entityKey(room, entity, aspect)];
   }
 
-  // Adapters differ on the presence aspect name. z2m passes through
-  // "occupancy", and others use "presence". The vocabulary allows either
-  // (docs/design.md#the-capability-vocabulary), so accept both.
-  var PRESENCE_ASPECTS = ['occupancy', 'presence'];
+  // A room sensor publishes `motion` (a PIR) or `occupied` (a radar),
+  // whichever its device observes (docs/design.md#the-capability-vocabulary).
+  var OCCUPANCY_ASPECTS = ['motion', 'occupied'];
 
-  function presenceValue(state, entity) {
-    for (var i = 0; i < PRESENCE_ASPECTS.length; i++) {
-      var v = stateValue(state, entity.room, entity.name, PRESENCE_ASPECTS[i]);
-      if (v !== undefined) return v;
+  /* A room sensor's reading: { aspect, value }, from whichever occupancy
+   * aspect it publishes. Both are undefined when it has published neither. */
+  function occupancyReading(state, entity) {
+    for (var i = 0; i < OCCUPANCY_ASPECTS.length; i++) {
+      var v = stateValue(state, entity.room, entity.name, OCCUPANCY_ASPECTS[i]);
+      if (v !== undefined) return { aspect: OCCUPANCY_ASPECTS[i], value: v };
     }
-    return undefined;
+    return { aspect: undefined, value: undefined };
   }
 
-  /* A person on Now: { home, seenAt }. home is the person's `presence`
-   * aspect: true, false, or undefined when nothing publishes it. seenAt is
-   * the last location fix in epoch ms, when a location adapter reports
-   * one. The page writes the text; this only reads the values. */
+  /* A person or a tracker on People: { home, stale, notSeen, seenAt }.
+   * home is a person's `presence`, or for a tracker what the persons rule
+   * would read: home when `home` or `sighted` is true, away when `home`
+   * is false. It is undefined when nothing says. A tracker's
+   * `sighted = false` only says the network has not seen the device, so
+   * it is notSeen and not away. stale is a person's `presence_valid =
+   * false`: presence is held because no tracker can say. seenAt is the
+   * last location fix in epoch ms, when one is reported. The page writes
+   * the text; this only reads the values. */
   function personStatus(state, entity) {
-    var presence = stateValue(state, entity.room, entity.name, 'presence');
-    var fixedAt = stateValue(state, entity.room, entity.name, 'fixed_at');
+    function read(aspect) { return stateValue(state, entity.room, entity.name, aspect); }
+    var home, sighted;
+    if (entity.capability === 'tracker') {
+      var geofence = read('home');
+      sighted = read('sighted');
+      home = geofence === true || sighted === true ? true : geofence === false ? false : undefined;
+    } else {
+      home = read('presence');
+      home = typeof home === 'boolean' ? home : undefined;
+    }
+    var fixedAt = read('fixed_at');
     return {
-      home: typeof presence === 'boolean' ? presence : undefined,
+      home: home,
+      stale: entity.capability === 'person' && read('presence_valid') === false,
+      notSeen: home === undefined && sighted === false,
       seenAt: typeof fixedAt === 'number' ? fixedAt * 1000 : undefined
     };
   }
 
-  // "room/entity" when the key is a presence-aspect state key, else null.
-  function presenceEntityFromKey(key) {
+  /* Who the People and map widgets draw: every person, and every tracker
+   * no person lists as a source. A phone bound before its person file is
+   * written still shows up, and one a person lists is not drawn twice. */
+  function peopleEntities(entities) {
+    var listed = {};
+    entities.forEach(function (e) {
+      if (e.capability !== 'person') return;
+      Object.keys(e.sources || {}).forEach(function (name) { listed[e.sources[name].entity] = true; });
+    });
+    return entities.filter(function (e) {
+      return e.capability === 'person' || (e.capability === 'tracker' && !listed[e.name]);
+    });
+  }
+
+  // "room/entity" when the key is an occupancy-aspect state key, else null.
+  function occupancyEntityFromKey(key) {
     var parts = key.split('/');
     if (parts[0] === 'home' && parts[1] === 'state' && parts.length >= 5 &&
-        PRESENCE_ASPECTS.indexOf(parts[4]) !== -1) {
+        OCCUPANCY_ASPECTS.indexOf(parts[4]) !== -1) {
       return parts[2] + '/' + parts[3];
     }
     return null;
@@ -1240,7 +1271,24 @@
    * aspect, so each contributor is shown under the aspect it contributes
    * to. A fused temperature derived from `temperature` readings shows them
    * under `temperature`, and an unrelated `humidity` chart is unchanged.
+   * A person is the exception (docs/design.md#map-and-people). Its
+   * `presence` is derived from its trackers' `home` and `sighted`. Its
+   * position aspects come from the trackers its `lat` sources name, each
+   * drawn as that tracker's own aspect of the same name.
    */
+  var PERSON_PRESENCE_SOURCES = ['home', 'sighted'];
+  var PERSON_POSITION = ['lat', 'lon', 'accuracy', 'fixed_at'];
+
+  // The contributor's aspect to draw under `aspect`, or null when this
+  // source does not contribute to it.
+  function contributedAspect(owner, src, aspect) {
+    if (owner.capability === 'person') {
+      if (aspect === 'presence') return PERSON_PRESENCE_SOURCES.indexOf(src.aspect) !== -1 ? src.aspect : null;
+      if (PERSON_POSITION.indexOf(aspect) !== -1) return src.aspect === 'lat' ? aspect : null;
+    }
+    return src.aspect === aspect ? aspect : null;
+  }
+
   function contributorsFor(entities, entityName, aspect) {
     var owner = (entities || []).filter(function (e) { return e.name === entityName; })[0];
     if (!owner || !owner.sources) return [];
@@ -1249,7 +1297,8 @@
     var out = [];
     Object.keys(owner.sources).sort().forEach(function (name) {
       var src = owner.sources[name];
-      if (!src || src.aspect !== aspect) return;
+      var drawn = src ? contributedAspect(owner, src, aspect) : null;
+      if (!drawn) return;
       var e = byName[src.entity];
       // A contributor missing from the model cannot be drawn. The plan
       // refuses an unknown one (`source-unknown-entity`), so this means the
@@ -1258,13 +1307,39 @@
       out.push({
         name: name,
         entity: src.entity,
-        aspect: src.aspect,
+        aspect: drawn,
         label: e.label || titleCase(src.entity),
         // The contributor's own caveat. The aspect descriptor cannot say
         // it because it does not apply to every source. Examples are one
         // sensor in the sun, or a reading with an offset the house itself
         // writes, which must not be fused back in.
         note: typeof src.note === 'string' ? src.note : null
+      });
+    });
+    return out;
+  }
+
+  /* A person's trackers, for its overlay: one row per tracker its sources
+   * name, with the device's own battery, the accuracy and time of its last
+   * fix, and whether it is reported unavailable. */
+  function trackersOf(entities, state, person) {
+    var byName = {};
+    (entities || []).forEach(function (e) { byName[e.name] = e; });
+    var seen = {}, out = [];
+    Object.keys(person.sources || {}).sort().forEach(function (name) {
+      var e = byName[person.sources[name].entity];
+      if (!e || seen[e.name]) return;
+      seen[e.name] = true;
+      function read(aspect) { return stateValue(state, e.room, e.name, aspect); }
+      var fixedAt = read('fixed_at');
+      out.push({
+        entity: e.name,
+        room: e.room,
+        label: e.label || titleCase(e.name),
+        battery: typeof read('battery') === 'number' ? read('battery') : undefined,
+        accuracy: typeof read('accuracy') === 'number' ? read('accuracy') : undefined,
+        fixedAt: typeof fixedAt === 'number' ? fixedAt * 1000 : undefined,
+        unavailable: read('available') === false
       });
     });
     return out;
@@ -1560,8 +1635,9 @@
   /* What no view places: entities and family params the family cannot
    * reach from the nav.
    * An entity is placed by any of: a widget naming it, its room, a unit
-   * that publishes or drives it, a `people` widget when it is a person, or
-   * a generated `rooms` view (every entity) or `now` view (people).
+   * that publishes or drives it, a `people` widget when it is a person or
+   * a tracker no person lists, or a generated `rooms` view (every entity)
+   * or `now` view (people).
    * A param is placed by a `params` or `unit` widget for its unit, or by a
    * generated `setpoints` view.
    * Deviations and the map place nothing, because they show signals, not
@@ -1593,8 +1669,10 @@
         if (w.kind === 'people') persons = true;
       });
     });
+    var people = {};
+    if (persons) peopleEntities(entities).forEach(function (e) { people[e.name] = true; });
     var unplacedEntities = allEntities ? [] : entities.filter(function (e) {
-      return !placedEntity[e.name] && !(persons && e.capability === 'person');
+      return !placedEntity[e.name] && !people[e.name];
     });
     var unplacedParams = [];
     if (!allParams) {
@@ -1659,7 +1737,7 @@
   }
 
   return {
-    PRESENCE_ASPECTS: PRESENCE_ASPECTS,
+    OCCUPANCY_ASPECTS: OCCUPANCY_ASPECTS,
     viewsOf: viewsOf,
     placement: placement,
     unitCardPlan: unitCardPlan,
@@ -1677,9 +1755,11 @@
     titleCase: titleCase,
     entityKey: entityKey,
     stateValue: stateValue,
-    presenceValue: presenceValue,
+    occupancyReading: occupancyReading,
     personStatus: personStatus,
-    presenceEntityFromKey: presenceEntityFromKey,
+    peopleEntities: peopleEntities,
+    trackersOf: trackersOf,
+    occupancyEntityFromKey: occupancyEntityFromKey,
     unitNameFromHealthKey: unitNameFromHealthKey,
     applyMessage: applyMessage,
     computeDeviations: computeDeviations,

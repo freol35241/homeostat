@@ -44,6 +44,24 @@
    "write_mode": "shared",
    "owner": "stage",
    "commandable": false,
+   "sources": {
+    "phone": {
+     "entity": "alex_phone",
+     "aspect": "lat",
+     "note": null,
+     "precision": null
+    }
+   }
+  },
+  {
+   "name": "alex_phone",
+   "label": "Alex's phone",
+   "capability": "tracker",
+   "features": [],
+   "room": "person",
+   "write_mode": "shared",
+   "owner": "stage",
+   "commandable": false,
    "sources": {}
   },
   {
@@ -280,7 +298,7 @@
     }
    },
    "subscribes": {
-    "presence": "home/state/downstairs/*/presence",
+    "presence": "home/state/downstairs/*/motion",
     "light_state": "home/state/downstairs/*/on",
     "clock": "home/clock/minute"
    },
