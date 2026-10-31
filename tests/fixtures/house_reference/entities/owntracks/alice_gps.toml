@@ -1,0 +1,12 @@
+schema = 1
+
+[entity]
+id = "alice/phone"           # OwnTracks user/device
+capability = "tracker"
+room = "person"
+
+[naming]
+en = "Alice's phone (OwnTracks)"
+
+[write_policy]
+owner = "owntracks"

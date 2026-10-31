@@ -375,7 +375,7 @@ def unit_relations(
     expanded through the zones as the core expands it, intersected with
     the concrete state keys on the bus. Matching against
     `{room}/{entity}/**` instead would make every entity in a room a source
-    of a `*/presence` subscription.
+    of a `*/motion` subscription.
     """
     zones = model["zones"]
     entities = {e["name"]: e for e in model["entities"]}

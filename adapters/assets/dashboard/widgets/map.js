@@ -1,5 +1,6 @@
-/* The map widget. The map shows every person entity, rather than being a
- * per-entity row (see docs/design.md#map-and-people). Leaflet's map object
+/* The map widget. The map shows every person, and every tracker no person
+ * lists, rather than being a per-entity row (see
+ * docs/design.md#map-and-people). Leaflet's map object
  * has state (pan/zoom, tile cache) and must not be recreated on every
  * state-delta render. Its container is therefore a detached DOM node kept
  * in mapState and moved into a new slot on each render, instead of being

@@ -19,15 +19,15 @@ with a hold, following docs/adapters.md#one-way-senders and
 docs/design.md#one-way-senders (`Radio`).
 
 Binding: an entity file's `id` is the code, written as a plain decimal
-without padding or leading zeros (`code_from`). A PIR binds `presence` and
-publishes `occupancy`. A contact or detector binds `binary_sensor` and
+without padding or leading zeros (`code_from`). A PIR binds `occupancy` and
+publishes `motion`. A contact or detector binds `binary_sensor` and
 publishes the aspect its single feature names (`contact`, `smoke`, ...),
 because the radio cannot say what it is (`aspect_for`).
 
 Configuration: the base topic is the endpoint's path, default
 `home/OpenMQTTGateway`. Broker credentials are inline in the endpoint or
 in HOMEOSTAT_MQTT_CREDENTIALS. Live parameters (owner-editable):
-occupancy_hold_s (default 15 s), contact_hold_s (60 s), smoke_hold_s
+motion_hold_s (default 15 s), contact_hold_s (60 s), smoke_hold_s
 (600 s), and hold_s (60 s) for any other aspect.
 
 Availability: the bridge's LWT sets `available` for every bound entity.
@@ -57,7 +57,7 @@ LWT_SUFFIX = "LWT"
 ONLINE = "online"
 
 PARAM_DEFAULTS = {
-    "occupancy_hold_s": 15.0,
+    "motion_hold_s": 15.0,
     "contact_hold_s": 60.0,
     "smoke_hold_s": 600.0,
     "hold_s": 60.0,
@@ -82,8 +82,7 @@ DISCOVERY_COALESCE_S = 5.0
 # instead of one per device. Anything else falls back to `hold_s`, so an
 # unexpected sensor class still decays.
 HOLD_PARAM = {
-    "occupancy": "occupancy_hold_s",
-    "presence": "occupancy_hold_s",
+    "motion": "motion_hold_s",
     "contact": "contact_hold_s",
     "smoke": "smoke_hold_s",
 }
@@ -104,14 +103,14 @@ class Params(LiveParams):
 def aspect_for(entity) -> str | None:
     """Return the aspect a bound entity publishes, or None when the file cannot say.
 
-    `presence` has one in the vocabulary. `binary_sensor` is "a boolean
-    under its native name", and the radio cannot say which name, so the
-    entity file's single feature names it. Two features would be two
-    aspects for a sender that transmits one thing, so that is
-    misconfigured too.
+    `occupancy` has `motion`, since a 433 MHz PIR reports movement.
+    `binary_sensor` is "a boolean under its native name", and the radio
+    cannot say which name, so the entity file's single feature names it.
+    Two features would be two aspects for a sender that transmits one
+    thing, so that is misconfigured too.
     """
-    if entity.capability == "presence":
-        return entity.features[0] if entity.features else "occupancy"
+    if entity.capability == "occupancy":
+        return "motion"
     return entity.features[0] if len(entity.features) == 1 else None
 
 

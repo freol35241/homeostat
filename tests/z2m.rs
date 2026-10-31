@@ -481,7 +481,7 @@ async fn bridge_inventory_published_as_discovery() {
         .expect("motion record");
     assert_eq!(motion["configured"], json!(false));
     assert_eq!(motion["entity"], json!(null));
-    assert_eq!(motion["suggested"]["capability"], json!("presence"));
+    assert_eq!(motion["suggested"]["capability"], json!("occupancy"));
     assert_eq!(motion["description"]["model"], json!("RTCGQ11LM"));
     assert!(
         motion.get("aspects").is_none(),

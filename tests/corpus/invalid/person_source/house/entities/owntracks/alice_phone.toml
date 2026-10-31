@@ -1,0 +1,9 @@
+schema = 1
+
+[entity]
+id = "alice/phone"
+capability = "tracker"
+room = "person"
+
+[write_policy]
+owner = "owntracks"
