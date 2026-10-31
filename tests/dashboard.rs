@@ -356,7 +356,7 @@ async fn dashboard_serves_the_family_surface() {
     assert_eq!(evening["params"]["grace_minutes"]["default"], json!(5));
     assert_eq!(evening["params"]["grace_minutes"]["editable_by"], "owner");
 
-    // A person entity is an ordinary entity in the model, on the reserved
+    // A tracker is an ordinary entity in the model, on the reserved
     // "person" pseudo-room. It is not commandable (checked below).
     let person = model["entities"]
         .as_array()
@@ -364,7 +364,7 @@ async fn dashboard_serves_the_family_surface() {
         .iter()
         .find(|e| e["name"] == "family_member")
         .expect("family_member in model");
-    assert_eq!(person["capability"], "person");
+    assert_eq!(person["capability"], "tracker");
     assert_eq!(person["room"], "person");
     assert_eq!(person["label"], "family member");
 
@@ -386,11 +386,11 @@ async fn dashboard_serves_the_family_surface() {
     );
     assert_eq!(
         evening["subscribes"]["presence"],
-        "home/state/downstairs/*/presence"
+        "home/state/downstairs/*/occupied"
     );
     observer
         .put(
-            "home/state/livingroom/presence_sensor/presence",
+            "home/state/livingroom/presence_sensor/occupied",
             json!(true).to_string(),
         )
         .await
@@ -409,7 +409,7 @@ async fn dashboard_serves_the_family_surface() {
         // its key is on the bus. The lamp's `on` is subscribed too but not
         // published yet at this point, and a source is a live key rather than
         // a subscription.
-        if evening["sources"] == json!([{"entity": "presence_sensor", "aspect": "presence"}]) {
+        if evening["sources"] == json!([{"entity": "presence_sensor", "aspect": "occupied"}]) {
             break;
         }
         assert!(
@@ -583,7 +583,7 @@ async fn dashboard_serves_the_family_surface() {
     );
     assert_eq!(status, 400, "{reply}");
 
-    // A person entity is not commandable: it is not in COMMANDABLE.
+    // A tracker is not commandable: it is not in COMMANDABLE.
     let (status, reply) = http_request(
         &addr,
         "POST",
@@ -591,7 +591,7 @@ async fn dashboard_serves_the_family_surface() {
         &[("X-Homeostat", "family")],
         Some(&json!({"room": "person", "entity": "family_member", "aspect": "lat", "value": 1.0})),
     );
-    assert_eq!(status, 400, "person entity must refuse commands: {reply}");
+    assert_eq!(status, 400, "a tracker must refuse commands: {reply}");
 
     // A vocabulary aspect is type-checked before the bus: a lock takes a
     // bool, and a string, an object or NaN is refused. A body past the
@@ -696,7 +696,7 @@ async fn dashboard_serves_the_family_surface() {
     assert_eq!(
         commandable("family_member"),
         json!(false),
-        "person is never commandable"
+        "a tracker takes no commands"
     );
     let (status, reply) = http_request(
         &addr,

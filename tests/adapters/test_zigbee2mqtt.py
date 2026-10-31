@@ -51,6 +51,12 @@ class DialectTest(unittest.TestCase):
         self.assertEqual(state_aspect("lock", "state", "UNLOCKED"), ("locked", False))
         self.assertEqual(state_aspect("light", "brightness", 80), ("brightness", 80))
 
+    def test_a_room_sensor_says_what_it_observed(self):
+        self.assertEqual(state_aspect("occupancy", "occupancy", True), ("motion", True))
+        self.assertEqual(state_aspect("occupancy", "presence", False), ("occupied", False))
+        # Only on a room sensor: elsewhere the field keeps its z2m name.
+        self.assertEqual(state_aspect("binary_sensor", "occupancy", True), ("occupancy", True))
+
 
 class ValueBodyTest(unittest.TestCase):
     def test_the_base_aspect_takes_a_bool(self):

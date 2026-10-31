@@ -20,7 +20,10 @@
   "home/state/utility/stove/on": true,
   "home/state/utility/stove/flue_temperature": 184.0,
   "home/state/utility/stove/power": 50,
-  "home/state/porch/porch_cam/available": true
+  "home/state/porch/porch_cam/available": true,
+  "home/state/person/alex_phone/battery": 64,
+  "home/state/person/alex_phone/accuracy": 14,
+  "home/state/person/alex_phone/fixed_at": 1790000000
  },
  "forecasts": {
   "home/forecast/global/spot/price/nordpool": {

@@ -1,0 +1,11 @@
+schema = 1
+
+# A phone bound as the human who carries it. The phone is a `tracker`, and
+# Alice is a person file that lists it.
+[entity]
+id = "alice/phone"
+capability = "person"
+room = "person"
+
+[write_policy]
+owner = "owntracks"

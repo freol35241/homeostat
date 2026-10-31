@@ -329,45 +329,98 @@ test('unrecognized messages apply nothing', () => {
   assert.deepEqual(store, freshStore());
 });
 
-// ---- presence helpers ----
+// ---- occupancy and people helpers ----
 
-test('presence keys parse for both aspect spellings, off-schema keys do not', () => {
-  assert.equal(logic.presenceEntityFromKey('home/state/hall/sensor1/occupancy'), 'hall/sensor1');
-  assert.equal(logic.presenceEntityFromKey('home/state/global/phone/presence'), 'global/phone');
-  assert.equal(logic.presenceEntityFromKey('home/state/hall/sensor1/temperature'), null);
-  assert.equal(logic.presenceEntityFromKey('home/cmd/hall/sensor1/occupancy'), null);
-  assert.equal(logic.presenceEntityFromKey('home/state/short'), null);
+test('occupancy keys parse for both aspects, off-schema keys do not', () => {
+  assert.equal(logic.occupancyEntityFromKey('home/state/hall/sensor1/motion'), 'hall/sensor1');
+  assert.equal(logic.occupancyEntityFromKey('home/state/hall/radar/occupied'), 'hall/radar');
+  assert.equal(logic.occupancyEntityFromKey('home/state/person/phone/sighted'), null);
+  assert.equal(logic.occupancyEntityFromKey('home/state/hall/sensor1/temperature'), null);
+  assert.equal(logic.occupancyEntityFromKey('home/cmd/hall/sensor1/motion'), null);
+  assert.equal(logic.occupancyEntityFromKey('home/state/short'), null);
+});
+
+test('occupancyReading says which aspect the sensor publishes', () => {
+  const entity = { room: 'hall', name: 'sensor1' };
+  assert.deepEqual(logic.occupancyReading({ 'home/state/hall/sensor1/motion': true }, entity),
+    { aspect: 'motion', value: true });
+  assert.deepEqual(logic.occupancyReading({ 'home/state/hall/sensor1/occupied': false }, entity),
+    { aspect: 'occupied', value: false });
+  assert.deepEqual(logic.occupancyReading({}, entity), { aspect: undefined, value: undefined });
 });
 
 test('personStatus reads presence and the last fix, and nothing else', () => {
   const alice = { room: 'person', name: 'alice', capability: 'person' };
   assert.deepEqual(
     logic.personStatus({ 'home/state/person/alice/presence': true, 'home/state/person/alice/fixed_at': 1700000000 }, alice),
-    { home: true, seenAt: 1700000000000 }
+    { home: true, stale: false, notSeen: false, seenAt: 1700000000000 }
   );
   assert.deepEqual(
     logic.personStatus({ 'home/state/person/alice/presence': false }, alice),
-    { home: false, seenAt: undefined }
+    { home: false, stale: false, notSeen: false, seenAt: undefined }
+  );
+  // Held by the persons rule because no tracker can say.
+  assert.equal(
+    logic.personStatus({ 'home/state/person/alice/presence': true, 'home/state/person/alice/presence_valid': false }, alice).stale,
+    true
   );
   // A fix without a presence aspect is not "away": home stays unknown.
   assert.deepEqual(
     logic.personStatus({ 'home/state/person/alice/fixed_at': 1700000000, 'home/state/person/alice/lat': 59.3 }, alice),
-    { home: undefined, seenAt: 1700000000000 }
+    { home: undefined, stale: false, notSeen: false, seenAt: 1700000000000 }
   );
-  assert.deepEqual(logic.personStatus({}, alice), { home: undefined, seenAt: undefined });
+  assert.deepEqual(logic.personStatus({}, alice), { home: undefined, stale: false, notSeen: false, seenAt: undefined });
 });
 
-test('presenceValue prefers occupancy, falls back to presence', () => {
-  const entity = { room: 'hall', name: 'sensor1' };
+test('a tracker is home on its geofence or a sighting, and an unseen device is not away', () => {
+  const phone = { room: 'person', name: 'phone', capability: 'tracker' };
+  assert.equal(logic.personStatus({ 'home/state/person/phone/home': false }, phone).home, false);
+  assert.equal(logic.personStatus({ 'home/state/person/phone/sighted': true }, phone).home, true);
+  assert.deepEqual(logic.personStatus({ 'home/state/person/phone/sighted': false }, phone),
+    { home: undefined, stale: false, notSeen: true, seenAt: undefined });
+  // Either one saying home is home, as the persons rule reads them.
   assert.equal(
-    logic.presenceValue({ 'home/state/hall/sensor1/occupancy': true }, entity),
-    true
-  );
+    logic.personStatus({ 'home/state/person/phone/home': true, 'home/state/person/phone/sighted': false }, phone).home,
+    true);
   assert.equal(
-    logic.presenceValue({ 'home/state/hall/sensor1/presence': false }, entity),
-    false
-  );
-  assert.equal(logic.presenceValue({}, entity), undefined);
+    logic.personStatus({ 'home/state/person/phone/home': false, 'home/state/person/phone/sighted': true }, phone).home,
+    true);
+});
+
+test('People draws each person and each tracker no person lists', () => {
+  const entities = [
+    { name: 'alice', capability: 'person', sources: { gps: { entity: 'alice_phone', aspect: 'lat' } } },
+    { name: 'alice_phone', capability: 'tracker', sources: {} },
+    { name: 'guest_phone', capability: 'tracker', sources: {} },
+    { name: 'hall', capability: 'occupancy', sources: {} },
+  ];
+  assert.deepEqual(logic.peopleEntities(entities).map((e) => e.name), ['alice', 'guest_phone']);
+});
+
+test("a person's presence is drawn from its trackers' home and sighted", () => {
+  const entities = [
+    { name: 'anna', capability: 'person', room: 'person', sources: {
+      geofence: { entity: 'anna_phone', aspect: 'home' },
+      gps: { entity: 'anna_phone', aspect: 'lat' },
+      wifi: { entity: 'anna_wifi', aspect: 'sighted' } } },
+    { name: 'anna_phone', capability: 'tracker', room: 'person', label: 'Phone' },
+    { name: 'anna_wifi', capability: 'tracker', room: 'person', label: 'WiFi' },
+  ];
+  assert.deepEqual(logic.contributorsFor(entities, 'anna', 'presence').map((c) => c.name), ['geofence', 'wifi']);
+  assert.deepEqual(logic.contributorsFor(entities, 'anna', 'presence').map((c) => c.aspect), ['home', 'sighted']);
+  // Each position aspect draws the tracker's own aspect of that name.
+  assert.deepEqual(logic.contributorsFor(entities, 'anna', 'lat').map((c) => [c.name, c.aspect]), [['gps', 'lat']]);
+  assert.deepEqual(logic.contributorsFor(entities, 'anna', 'fixed_at').map((c) => [c.name, c.aspect]), [['gps', 'fixed_at']]);
+  const state = {
+    'home/state/person/anna_phone/battery': 81,
+    'home/state/person/anna_phone/accuracy': 12,
+    'home/state/person/anna_phone/fixed_at': 1700000000,
+    'home/state/person/anna_wifi/available': false,
+  };
+  assert.deepEqual(logic.trackersOf(entities, state, entities[0]), [
+    { entity: 'anna_phone', room: 'person', label: 'Phone', battery: 81, accuracy: 12, fixedAt: 1700000000000, unavailable: false },
+    { entity: 'anna_wifi', room: 'person', label: 'WiFi', battery: undefined, accuracy: undefined, fixedAt: undefined, unavailable: true },
+  ]);
 });
 
 // ---- aspect descriptors ----
@@ -968,7 +1021,7 @@ function viewsModel(views) {
       { name: 'lamp', label: 'Lamp', capability: 'light', room: 'livingroom', owner: 'zigbee' },
       { name: 'thermo', label: 'Thermo', capability: 'sensor', room: 'kitchen', owner: 'zigbee' },
       { name: 'fused', label: 'Fused', capability: 'sensor', room: 'global', owner: 'fusion' },
-      { name: 'anna', label: 'Anna', capability: 'person', room: 'person', owner: 'owntracks' },
+      { name: 'anna', label: 'Anna', capability: 'person', room: 'person', owner: 'persons' },
     ],
     units: [
       { name: 'evening_lights', params: { off_time: { type: 'time', editable_by: 'family' } },
@@ -999,6 +1052,19 @@ test('a views file is the whole nav, labels falling back to the title-cased name
 
 test('the generated views place everything, so nothing is unshown by default', () => {
   assert.deepEqual(logic.placement(viewsModel(null)), { entities: [], params: [] });
+});
+
+test('People places the trackers it draws, and a listed tracker stays under Not shown', () => {
+  const model = {
+    entities: [
+      { name: 'anna', capability: 'person', room: 'person', owner: 'persons', sources: { gps: { entity: 'anna_phone', aspect: 'lat' } } },
+      { name: 'anna_phone', capability: 'tracker', room: 'person', owner: 'owntracks', sources: {} },
+      { name: 'guest_phone', capability: 'tracker', room: 'person', owner: 'openwrt', sources: {} },
+    ],
+    units: [],
+    views: [{ name: 'v', widgets: [{ kind: 'people' }] }],
+  };
+  assert.deepEqual(logic.placement(model).entities.map((e) => e.name), ['anna_phone']);
 });
 
 test('placement: each widget kind places exactly what it shows', () => {

@@ -370,7 +370,7 @@ command = "uv run units/intrusion.py"
 restart = "on-failure"
 
 [bus.subscribes]
-motion = "home/state/*/*/occupancy"
+motion = "home/state/*/*/motion"
 
 [bus.publishes]
 alert = { key = "home/cmd/person/*/alert", capability = "notifier", priority = "automation" }

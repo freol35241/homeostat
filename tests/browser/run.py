@@ -367,6 +367,21 @@ class ViewsAreText(PageTest):
         self.assertEqual(await self.page.locator('[data-action="view-text"]').count(), 0)
 
 
+class People(PageTest):
+    """`docs/design.md#map-and-people`: a person is drawn once, and the
+    trackers that person carries are listed in the person's overlay."""
+
+    async def test_a_listed_tracker_is_drawn_under_its_person(self):
+        await self.view("now")
+        people = await self.page.locator(".card", has_text="People").first.inner_text()
+        self.assertIn("Alex", people)
+        self.assertNotIn("Alex's phone", people)
+        await self.page.click('[data-action="entity-detail"][data-entity="alex"]')
+        await self.page.wait_for_timeout(400)
+        overlay = await self.page.locator("#overlay-panel").inner_text()
+        self.assertRegex(overlay, r"Alex's phone\s+fix .* · ±14 m · battery 64%")
+
+
 class HoldsOnNow(PageTest):
     """`docs/design.md#views-are-text`: a hold is a deviation when it
     displaced somebody, and possession shows on the control either way."""

@@ -11,8 +11,8 @@ restart = "on-failure"
 shutdown_grace_s = 5
 
 [bus.subscribes]
-motion = "home/state/hallway/*/occupancy"
-presence = "home/state/global/*/presence"
+motion = "home/state/hallway/*/motion"
+presence = "home/state/person/*/presence"
 
 # The notifier grant: who this unit may reach, and with which severity.
 # Adding or widening it is a grant delta, which makes the plan structural

@@ -1,0 +1,18 @@
+schema = 1
+
+[entity]
+capability = "person"
+room = "person"
+
+[naming]
+sv = "Alice"
+en = "Alice"
+aliases = []
+
+[write_policy]
+mode = "exclusive"
+owner = "persons"
+
+[sources.gps]
+entity = "alice_gps"
+aspect = "lat"
