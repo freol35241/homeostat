@@ -123,7 +123,7 @@ Homeostat plan
   repo:  examples/starter-house
   world: empty
 
-Units to create (10):
+Units to create (11):
 
 + adapter zigbee (units/zigbee.toml)
     command: uv run units/zigbee.py

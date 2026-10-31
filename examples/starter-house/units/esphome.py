@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "homeostat==0.20.0",
+#     "homeostat==0.21.0rc2",
 #     "aioesphomeapi>=45,<46",
 #     "zeroconf>=0.130,<1",
 # ]
@@ -24,8 +24,8 @@ a bound entity (`state_values`):
 - sensor: capability `sensor`, aspect = the device_class, else the
   object_id. Sensors take no commands.
 - binary_sensor: capability `binary_sensor`, aspect named the same way,
-  or capability `presence` with aspect `occupancy` for device classes
-  motion, occupancy and presence.
+  or capability `occupancy` for device classes motion, occupancy and
+  presence (`occupancy_aspect`).
 
 Configuration: a device is reached at `{device}.local:6053` (mDNS) unless
 the TOML file that HOMEOSTAT_ESPHOME_DEVICES names gives it a `host`
@@ -78,7 +78,7 @@ from zeroconf.asyncio import AsyncServiceBrowser, AsyncServiceInfo, AsyncZerocon
 ENV_DEVICES = "HOMEOSTAT_ESPHOME_DEVICES"
 MDNS_SERVICE = "_esphomelib._tcp.local."
 DEFAULT_PORT = 6053
-PRESENCE_DEVICE_CLASSES = {"motion", "occupancy", "presence"}
+OCCUPANCY_DEVICE_CLASSES = {"motion", "occupancy", "presence"}
 # ESPHome's native brightness is a 0.0-1.0 float. z2m's `brightness` is
 # the raw Zigbee 0-254 integer (see zigbee2mqtt.py, and the dashboard's
 # `b / 254`), so brightness is rescaled both ways to match it. color_temp
@@ -135,9 +135,7 @@ def suggest(info) -> dict | None:
 
     The adapter suggests and plan/apply review decides
     (docs/design.md#discovery). motion, occupancy and presence binary
-    sensors suggest `presence`, whose `occupancy` aspect is z2m's name for
-    its occupancy exposes, so the dashboard treats both adapters' presence
-    entities alike.
+    sensors suggest `occupancy`, the room-sensor capability.
     """
     if isinstance(info, SwitchInfo):
         return {"capability": "switch", "features": []}
@@ -146,8 +144,8 @@ def suggest(info) -> dict | None:
     if isinstance(info, SensorInfo):
         return {"capability": "sensor", "features": []}
     if isinstance(info, BinarySensorInfo):
-        if info.device_class in PRESENCE_DEVICE_CLASSES:
-            return {"capability": "presence", "features": []}
+        if info.device_class in OCCUPANCY_DEVICE_CLASSES:
+            return {"capability": "occupancy", "features": []}
         return {"capability": "binary_sensor", "features": []}
     return None
 
@@ -200,10 +198,11 @@ def aspect_descriptor(entity, info) -> dict | None:
         if field["kind"] == "number" and unit:
             field["unit"] = unit
         fields[aspect] = field
-    elif entity.capability == "presence" and isinstance(info, BinarySensorInfo):
-        fields["occupancy"] = {
-            "label": aspect_label(info, "occupancy"), "kind": "boolean", "group": "readings",
-            "values": [{"value": True, "label": "occupied"}, {"value": False, "label": "clear"}],
+    elif entity.capability == "occupancy" and isinstance(info, BinarySensorInfo):
+        aspect = occupancy_aspect(info)
+        fields[aspect] = {
+            "label": aspect_label(info, aspect), "kind": "boolean", "group": "readings",
+            "values": [{"value": True, "label": aspect}, {"value": False, "label": "clear"}],
         }
     elif entity.capability == "binary_sensor" and isinstance(info, BinarySensorInfo):
         aspect = native_aspect(info)
@@ -214,6 +213,19 @@ def aspect_descriptor(entity, info) -> dict | None:
     if not fields:
         return None
     return {"schema": 1, "groups": ["readings"], "fields": fields}
+
+
+def occupancy_aspect(info) -> str:
+    """Return the vocabulary aspect a room sensor publishes.
+
+    Device classes occupancy and presence detect a body, moving or still,
+    and publish `occupied`. Anything else publishes `motion`, the weaker
+    claim, because a PIR is the common case and its `false` does not mean
+    the room is empty.
+    """
+    if info.device_class in ("occupancy", "presence"):
+        return "occupied"
+    return "motion"
 
 
 def describe(info) -> dict:
@@ -251,8 +263,8 @@ def state_values(entity, info, state):
             yield "color_temp", round(state.color_temperature)
     elif entity.capability == "sensor" and isinstance(state, SensorState):
         yield native_aspect(info), state.state
-    elif entity.capability == "presence" and isinstance(state, BinarySensorState):
-        yield "occupancy", bool(state.state)
+    elif entity.capability == "occupancy" and isinstance(state, BinarySensorState):
+        yield occupancy_aspect(info), bool(state.state)
     elif entity.capability == "binary_sensor" and isinstance(state, BinarySensorState):
         yield native_aspect(info), bool(state.state)
 

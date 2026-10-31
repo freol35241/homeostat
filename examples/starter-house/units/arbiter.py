@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "homeostat==0.20.0",
+#     "homeostat==0.21.0rc2",
 # ]
 # ///
 """Arbiter service: holds the write lease for arbitrated entities.

@@ -60,7 +60,7 @@ compose up -d mosquitto homeostat >/dev/null 2>&1
 # generous.
 echo "waiting for all starter units to reach running..."
 deadline=$((SECONDS + 300))
-for unit in clock recorder zigbee evening_lights mcp; do
+for unit in clock recorder zigbee evening_lights persons mcp; do
   until compose logs homeostat 2>&1 | grep -q "\[homeostat\] $unit: running"; do
     if [ -z "$(compose ps -q homeostat)" ]; then
       fail "homeostat container exited before $unit ran"

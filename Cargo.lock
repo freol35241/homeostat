@@ -1077,7 +1077,7 @@ dependencies = [
 
 [[package]]
 name = "homeostat"
-version = "0.20.0"
+version = "0.21.0-rc2"
 dependencies = [
  "clap",
  "libc",

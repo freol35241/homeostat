@@ -1,0 +1,21 @@
+schema = 1
+
+# Alice, computed from the trackers she carries. Add a source per device:
+# a geofence (`home`) or a WiFi sighting (`sighted`) for presence, a
+# phone that reports fixes (`lat`) for the map.
+[entity]
+capability = "person"
+room = "person"
+
+[naming]
+sv = "Alice"
+en = "Alice"
+aliases = []
+
+[write_policy]
+mode = "exclusive"
+owner = "persons"
+
+[sources.phone]
+entity = "alice_phone"
+aspect = "lat"

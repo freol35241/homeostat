@@ -26,7 +26,7 @@
 set -euo pipefail
 
 # Bumped with the starter's compose image at each release.
-SDK_TAG="v0.20.0"
+SDK_TAG="v0.21.0-rc2"
 
 # The tag's version, and the same version as Python spells it. They differ
 # only for a prerelease. Semver puts a hyphen before the label
@@ -53,6 +53,7 @@ zigbee2mqtt.py:zigbee.py
 esphome.py:esphome.py
 ivt490.py:ivt490.py
 owntracks.py:owntracks.py
+persons.py:persons.py
 clock.py:clock.py
 recorder.py:recorder.py
 arbiter.py:arbiter.py

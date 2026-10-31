@@ -9,7 +9,7 @@ it works and what you may do. People are welcome to read it too.
 | Path | What it is |
 |---|---|
 | `units/*.toml` | One manifest per unit (an adapter, an automation, a service): what it publishes and subscribes to, its parameters, how it runs. |
-| `units/*.py` | Unit code. The adapters (`zigbee.py`, `esphome.py`, `ivt490.py`, `owntracks.py`, `clock.py`, `recorder.py`, `arbiter.py`, `dashboard.py`, `dashboard.html`, `assets/`) are copies of a homeostat release: do not edit them. `evening_lights.py` is the house's own automation, yours to change. |
+| `units/*.py` | Unit code. The adapters (`zigbee.py`, `esphome.py`, `ivt490.py`, `owntracks.py`, `persons.py`, `clock.py`, `recorder.py`, `arbiter.py`, `dashboard.py`, `dashboard.html`, `assets/`) are copies of a homeostat release: do not edit them. `evening_lights.py` is the house's own automation, yours to change. |
 | `entities/<adapter>/*.toml` | One file per device: its capability, room and binding. |
 | `zones.toml` | The rooms, grouped into zones. |
 | `dashboard.toml` | The family dashboard's views, as widgets. |

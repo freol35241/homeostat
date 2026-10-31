@@ -8,8 +8,8 @@ features = []
 room = "person"
 
 [naming]
-sv = "Alice"
-en = "Alice"
+sv = "Alices telefon"
+en = "Alice's phone"
 aliases = []
 
 [write_policy]

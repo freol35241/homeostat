@@ -70,10 +70,10 @@ function handleWsMessage(msg) {
   scheduleRender();
 }
 
-// For a key like home/state/{room}/{entity}/occupancy, track lastSeen per
-// entity (both presence aspect names; see dashboard-logic.js).
+// For a key like home/state/{room}/{entity}/motion, track lastSeen per
+// entity (both occupancy aspect names; see dashboard-logic.js).
 function trackLastSeen(key) {
-  var pe = logic.presenceEntityFromKey(key);
+  var pe = logic.occupancyEntityFromKey(key);
   if (pe) store.lastSeen[pe] = Date.now();
 }
 

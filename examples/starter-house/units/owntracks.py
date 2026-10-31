@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "homeostat==0.20.0",
+#     "homeostat==0.21.0rc2",
 #     "paho-mqtt>=2,<3",
 # ]
 # ///
@@ -13,16 +13,17 @@ position across restarts, and the house gains no second way in. The
 topic prefix is fixed at `owntracks`.
 
 Binding: an entity file's `id` is the two OwnTracks topic segments,
-`{user}/{device}`, and the file stem is the entity name. Person entities
-bind capability `person` in the reserved pseudo-room `person`, since
-people move between rooms.
+`{user}/{device}`, and the file stem is the entity name. A phone binds
+capability `tracker` in the reserved pseudo-room `person`, since it moves
+between rooms with its owner. A person file lists the tracker as a
+source (docs/design.md#map-and-people).
 
 State: a location on owntracks/{user}/{device} fans out to
 home/state/person/{entity}/{aspect} as lat, lon, accuracy (from `acc`),
 battery (from `batt`) and fixed_at (from `tst`) (`Tracker.on_message`).
 These are separate scalar aspects so the recorder keeps position trails
 (docs/design.md#map-and-people). accuracy, battery and fixed_at are
-omitted when the fix lacks them. Persons are read-only: there is no
+omitted when the fix lacks them. Trackers are read-only: there is no
 command subscription.
 
 There is no `available` aspect. A retained position says nothing about
@@ -30,7 +31,7 @@ whether the phone is alive, so there is no real loss signal; an old fix
 shows its age through fixed_at.
 
 Discovery: every user/device pair seen on the broker, bound or not, with
-a suggested `person` stanza. There is no retained inventory to mirror,
+a suggested `tracker` stanza. There is no retained inventory to mirror,
 so pairs are added as traffic arrives. The document is republished at
 most once per DISCOVERY_COALESCE_S, and only the MAX_UNBOUND most
 recently first-seen unbound pairs are kept, since the pairs are whatever
@@ -51,7 +52,7 @@ from homeostat import house, keys, mqtt
 BASE_TOPIC = "owntracks"
 MAX_UNBOUND = 200
 DISCOVERY_COALESCE_S = 5.0
-# OwnTracks location fields -> the person's aspects, in publish order.
+# OwnTracks location fields -> the tracker's aspects, in publish order.
 FIELDS = (("lat", "lat"), ("lon", "lon"), ("acc", "accuracy"), ("batt", "battery"), ("tst", "fixed_at"))
 
 
@@ -90,7 +91,7 @@ class Tracker:
                     "id": dev_id,
                     "configured": entity is not None,
                     "entity": entity.name if entity else None,
-                    "suggested": {"capability": "person", "features": []},
+                    "suggested": {"capability": "tracker", "features": []},
                 }
                 unbound = [k for k, r in self.inventory.items() if not r["configured"]]
                 if len(unbound) > MAX_UNBOUND:
