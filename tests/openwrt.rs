@@ -2,7 +2,7 @@
 //! endpoint (`tests/fake_openwrt.py`, with real JSON-RPC shapes and
 //! session-id enforcement) on a free port plus the real supervisor on the
 //! openwrt fixture house, and asserts on the bus. The fixture polls every
-//! second with a 2s presence away-delay, so transitions land within the
+//! second with a 2s away-delay, so sighting transitions land within the
 //! timeouts.
 
 mod common;
@@ -21,7 +21,8 @@ const FIXTURE: &str = "tests/fixtures/house_openwrt";
 const ROUTERS_ENV: &str = "HOMEOSTAT_OPENWRT";
 const EVENT_KEY: &str = "home/health/openwrt/event";
 const WAN_KEY: &str = "home/state/hallway/gateway/wan";
-const PRESENCE_KEY: &str = "home/state/global/dads_phone/presence";
+const SIGHTED_KEY: &str = "home/state/person/dads_phone/sighted";
+const AVAILABLE_KEY: &str = "home/state/person/dads_phone/available";
 const DISCOVERY_KEY: &str = "home/discovery/openwrt";
 const PHONE_MAC: &str = "aa:bb:cc:dd:ee:ff";
 const USERNAME: &str = "homeostat";
@@ -144,23 +145,23 @@ async fn start(routers_path: &std::path::Path) -> (Supervisor, zenoh::Session) {
     (sup, observer)
 }
 
-/// (a) A phone associating to an AP becomes `presence = true` on the bus;
+/// (a) A phone associating to an AP becomes `sighted = true` on the bus;
 /// dropping off flips it back after the away delay. The discovery feed
 /// shows the sighted station bound to its entity.
 #[tokio::test(flavor = "multi_thread")]
-async fn wifi_association_drives_presence() {
+async fn wifi_association_drives_sighted() {
     let (router, _routers_path, mut sup, observer) = setup().await;
-    let presence_sub = observer
-        .declare_subscriber(PRESENCE_KEY)
+    let sighted_sub = observer
+        .declare_subscriber(SIGHTED_KEY)
         .await
-        .expect("presence subscriber");
+        .expect("sighted subscriber");
     let discovery_sub = observer
         .declare_subscriber(DISCOVERY_KEY)
         .await
         .expect("discovery subscriber");
 
     router.control(&format!("/control/station?mac={PHONE_MAC}&present=true"));
-    expect_state(&presence_sub, json!(true)).await;
+    expect_state(&sighted_sub, json!(true)).await;
 
     // The station's appearance changes the periphery: one JSON array,
     // the phone's record bound to its entity.
@@ -186,27 +187,27 @@ async fn wifi_association_drives_presence() {
             );
             // and its aspect descriptor: the one boolean this capability speaks
             assert_eq!(
-                record["aspects"]["fields"]["presence"]["kind"],
+                record["aspects"]["fields"]["sighted"]["kind"],
                 json!("boolean"),
                 "{record}"
             );
             assert_eq!(
-                record["aspects"]["fields"]["presence"]["values"][1]["label"],
-                json!("away")
+                record["aspects"]["fields"]["sighted"]["values"][1]["label"],
+                json!("not seen")
             );
             break;
         }
     }
 
     router.control(&format!("/control/station?mac={PHONE_MAC}&present=false"));
-    expect_state(&presence_sub, json!(false)).await;
+    expect_state(&sighted_sub, json!(false)).await;
 
     sup.shutdown();
 }
 
 /// (b) Connectivity state: WAN down is a `wan = false` transition, and
 /// back up again. Tunnels are not this adapter's
-/// (docs/design.md#the-capability-vocabulary): it reports presence and WAN.
+/// (docs/design.md#the-capability-vocabulary): it reports sightings and WAN.
 #[tokio::test(flavor = "multi_thread")]
 async fn connectivity_state_translates_to_bus() {
     let (router, _routers_path, mut sup, observer) = setup().await;
@@ -257,72 +258,79 @@ async fn unreachable_router_drops_once_and_recovers() {
 /// firmware that does stream. The whole-body read belongs to both call
 /// sites, so the test does too.
 ///
-/// Chunking is switched on mid-run, after presence has already been proved
+/// Chunking is switched on mid-run, after sightings have already been proved
 /// to work, so the assertion is about the framing and nothing else.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_chunked_ubus_reply_is_read_whole() {
     let (router, _routers_path, mut sup, observer) = setup().await;
-    let presence_sub = observer
-        .declare_subscriber(PRESENCE_KEY)
+    let sighted_sub = observer
+        .declare_subscriber(SIGHTED_KEY)
         .await
-        .expect("presence subscriber");
+        .expect("sighted subscriber");
 
-    // The control: unchunked, presence follows the station.
+    // The control: unchunked, the sighting follows the station.
     router.control(&format!("/control/station?mac={PHONE_MAC}&present=true"));
-    expect_state(&presence_sub, json!(true)).await;
+    expect_state(&sighted_sub, json!(true)).await;
 
     router.control("/control/chunked");
     router.control(&format!("/control/station?mac={PHONE_MAC}&present=false"));
-    expect_state(&presence_sub, json!(false)).await;
+    expect_state(&sighted_sub, json!(false)).await;
 
     sup.shutdown();
 }
 
-/// (f) A silent router does not make its stations absent. Two routers are
+/// (f) A silent router does not make its stations unseen. Two routers are
 /// configured and the phone is associated only to the AP. When the AP
 /// goes silent the phone must hold stale, because the routers that did
 /// answer say nothing about a device on the one that did not. Reading it
-/// as absence would publish `presence = false` with the family at home for
-/// as long as the AP stays silent. The blind spot is announced, and
-/// absence becomes assertable again once every router answers.
+/// as unseen would publish `sighted = false` with the family at home for
+/// as long as the AP stays silent. The blind spot is announced, the
+/// tracker turns unavailable so its held value is not read as current,
+/// and both recover once every router answers.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_silent_router_cannot_assert_absence() {
     let gw = FakeOpenwrt::spawn().await;
     let ap = FakeOpenwrt::spawn().await;
     let routers_path = routers_file(&[("gw", gw.port), ("ap", ap.port)]);
     let (mut sup, observer) = start(&routers_path).await;
-    let presence_sub = observer
-        .declare_subscriber(PRESENCE_KEY)
+    let sighted_sub = observer
+        .declare_subscriber(SIGHTED_KEY)
         .await
-        .expect("presence subscriber");
+        .expect("sighted subscriber");
+    let available_sub = observer
+        .declare_subscriber(AVAILABLE_KEY)
+        .await
+        .expect("available subscriber");
     let event_sub = observer
         .declare_subscriber(EVENT_KEY)
         .await
         .expect("event subscriber");
 
     ap.control(&format!("/control/station?mac={PHONE_MAC}&present=true"));
-    expect_state(&presence_sub, json!(true)).await;
+    expect_state(&sighted_sub, json!(true)).await;
 
     ap.control("/control/break");
     expect_event_kind(&event_sub, "presence-partial").await;
+    expect_state(&available_sub, json!(false)).await;
 
     // Several poll cycles past the 2s away delay: nothing may say away.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
-    while let Ok(sample) = tokio::time::timeout_at(deadline, presence_sub.recv_async()).await {
+    while let Ok(sample) = tokio::time::timeout_at(deadline, sighted_sub.recv_async()).await {
         let value: Value =
             serde_json::from_slice(&sample.expect("state stream open").payload().to_bytes())
                 .expect("state payload is JSON");
         assert_ne!(
             value,
             json!(false),
-            "presence asserted away while the AP that sees the phone was silent"
+            "sighted asserted false while the AP that sees the phone was silent"
         );
     }
 
-    // The AP answering again, the phone really gone: away, as before.
+    // The AP answering again, the phone really gone: not seen, as before.
     ap.control("/control/restore");
     ap.control(&format!("/control/station?mac={PHONE_MAC}&present=false"));
-    expect_state(&presence_sub, json!(false)).await;
+    expect_state(&sighted_sub, json!(false)).await;
+    expect_state(&available_sub, json!(true)).await;
 
     sup.shutdown();
 }

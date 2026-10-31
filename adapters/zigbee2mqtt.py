@@ -16,8 +16,11 @@ friendly name containing "/" is not supported, because the device
 subscription is {base}/+.
 
 State: JSON on {base}/{id} fans out to home/state/{room}/{entity}/{aspect}.
-z2m's `state` field becomes `on` (lights, switches) or `locked` (locks);
-other scalar fields keep their z2m names. When availability is enabled in
+z2m's `state` field becomes `on` (lights, switches) or `locked` (locks).
+On a room sensor (`occupancy`), z2m's `occupancy` becomes `motion`, since
+on most devices it is a PIR, and `presence` becomes `occupied`, which is
+what z2m calls an mmWave radar's reading. Other scalar fields keep their
+z2m names. When availability is enabled in
 the z2m config, {base}/{id}/availability becomes the reserved `available`
 aspect. Without it the aspect does not appear. `Bridge.on_message` has the
 details.
@@ -83,16 +86,25 @@ def availability_state(payload: bytes):
     return state if state in ("online", "offline") else None
 
 
+# z2m property -> the `occupancy` capability's aspect. z2m reports a PIR as
+# `occupancy` and an mmWave radar as `presence`.
+OCCUPANCY_ASPECTS = {"occupancy": "motion", "presence": "occupied"}
+
+
 def state_aspect(capability: str, z2m_field: str, value):
     """Map one z2m JSON field to a (bus aspect, JSON value) pair.
 
-    `state` becomes `locked` for a lock and `on` otherwise, as a bool.
-    Every other field keeps its z2m name and value.
+    `state` becomes `locked` for a lock and `on` otherwise, as a bool. A
+    room sensor's `occupancy` and `presence` become the vocabulary's
+    `motion` and `occupied` (OCCUPANCY_ASPECTS). Every other field keeps
+    its z2m name and value.
     """
     if z2m_field == "state":
         if capability == "lock":
             return "locked", value == "LOCKED"
         return "on", value == "ON"
+    if capability == "occupancy" and z2m_field in OCCUPANCY_ASPECTS:
+        return OCCUPANCY_ASPECTS[z2m_field], value
     return z2m_field, value
 
 
@@ -118,8 +130,8 @@ def suggest(exposes):
             }
         if exp.get("type") == "lock":
             return {"capability": "lock", "features": []}
-        if exp.get("type") == "binary" and exp.get("property") == "occupancy":
-            return {"capability": "presence", "features": []}
+        if exp.get("type") == "binary" and exp.get("property") in OCCUPANCY_ASPECTS:
+            return {"capability": "occupancy", "features": []}
     return None
 
 

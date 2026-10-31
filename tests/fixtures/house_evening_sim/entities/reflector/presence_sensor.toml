@@ -2,7 +2,7 @@ schema = 1
 
 [entity]
 id = "presence-1"
-capability = "presence"
+capability = "occupancy"
 features = []
 room = "livingroom"
 

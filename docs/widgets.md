@@ -85,7 +85,7 @@ A unit's family-editable parameters as one card.
 
 ## `people`
 
-The person entities, home or away.
+The persons, home or away, and each tracker no person lists.
 
 ```toml
 { kind = "people" }
@@ -105,7 +105,7 @@ The deviations feed: what is out of the ordinary.
 
 ## `map`
 
-The map over every entity with a location.
+The map: each person's position, and each tracker no person lists.
 
 ```toml
 { kind = "map" }
