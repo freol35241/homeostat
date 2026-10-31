@@ -23,7 +23,7 @@ discovery = { key = "home/discovery/rf433" }
 
 # Short holds so expiry happens inside a test run; the adapter's own
 # defaults (15/60/600 s) cover a manifest without them.
-[params.occupancy_hold_s]
+[params.motion_hold_s]
 type = "float"
 default = 1.0
 editable_by = "owner"

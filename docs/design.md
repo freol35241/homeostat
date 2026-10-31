@@ -636,9 +636,9 @@ reviews and the dependency graph the apply walk follows.
 A capability says what kind of thing an entity is. The list is fixed in
 the core (`CAPABILITIES` in `src/manifest.rs`): `binary_sensor`,
 `burner`, `camera`, `climate`, `cover`, `light`, `lock`, `notifier`,
-`person`, `presence`, `router`, `sensor`, `switch`. An unknown one is
-`unknown-capability`. Each capability has a row in `VOCABULARY`, which
-a test keeps in step and which is rendered into
+`occupancy`, `person`, `router`, `sensor`, `switch`, `tracker`. An
+unknown one is `unknown-capability`. Each capability has a row in
+`VOCABULARY`, which a test keeps in step and which is rendered into
 [`docs/manifest.md`](manifest.md). A row gives:
 
 - The **base aspect**, which commands target and the widget acts on
@@ -655,11 +655,17 @@ a test keeps in step and which is rendered into
 Every capability also has `available` ([Availability](#availability)),
 and `{aspect}_valid`, a boolean beside a reading that the device itself
 may stop trusting. Some rows are less obvious. `camera` has `motion`,
-and its media never goes on the bus ([Cameras](#cameras)). `person` has
-`presence`, `lat`, `lon`, `accuracy`, `battery` and `fixed_at`
-([Map and people](#map-and-people)). `presence` takes `occupancy` or
-`presence`, whichever the protocol uses. `notifier` is described in
-[Notifications](#notifications). `cover` is reserved.
+and its media never goes on the bus ([Cameras](#cameras)). `tracker`
+and `person` are described in [Map and people](#map-and-people).
+`notifier` is described in [Notifications](#notifications). `cover` is
+reserved.
+
+An aspect names what the device observed, so a consumer can tell what a
+`false` means. `occupancy` is a room sensor. A PIR publishes `motion`:
+something moved within the adapter's hold, and its `false` says only
+that nothing moved. An mmWave radar publishes `occupied`: a body is
+there, moving or still. A camera's `motion` makes the same claim as a
+PIR's and shares the name.
 
 The vocabulary is fixed because adapters speak homeostat vocabulary
 instead of their dialect's. An automation, a widget, a deviation rule
@@ -675,11 +681,12 @@ spanning a burner and a heat pump) waits for a second case.
 
 Presence and connectivity are house state. Network metrics are
 observability and belong to the monitoring tooling beside homeostat,
-so there is no `vpn` capability. Fusing sightings into "someone is
-home" is an automation ([Virtual sensors](#virtual-sensors)). Losing
-sight of something does not mean nobody is home. An adapter that loses
-part of its view holds those aspects stale and reports it in a health
-event.
+so there is no `vpn` capability. Who is home comes from the shipped
+`persons` automation ([Map and people](#map-and-people)). Whether
+anyone is home, from the persons and the room sensors together, is a
+house automation ([Virtual sensors](#virtual-sensors)). Losing sight of
+something does not mean nobody is home. An adapter that loses part of
+its view holds those aspects stale and reports it in a health event.
 
 ### Priority bands
 
@@ -1830,8 +1837,8 @@ in the entity file's owner and in the plan.
 
 A virtual sensor is an entity whose binding unit is an automation. One
 unit binds each entity, whether it is an adapter or an automation.
-Presence fusion (router sightings, phones and motion combined into
-"someone is home") is the typical example.
+"Someone is home", from the persons and the room sensors, is the
+typical example.
 
 - An automation may carry `[entities]` ([Unit kinds](#unit-kinds)),
   which are expanded as an adapter's are. Their files may omit `id`,
@@ -1864,7 +1871,11 @@ Rejected alternatives:
   keys on.
 - A generic fusion adapter with rules would not fit, because the choice
   of sensors and weights is house behaviour, and a rule language for it
-  is a DSL.
+  is a DSL. The shipped `persons` automation is not one. Its rule is
+  fixed and has no weights. The one judgement it makes, which evidence
+  can show that someone left, is a fact about each protocol, and the
+  aspect names carry it ([Map and people](#map-and-people)). The house
+  supplies only which trackers are whose.
 - Fusion across adapters inside one adapter is not allowed. An adapter
   may derive values on its own bound entities and no further.
 
@@ -2103,7 +2114,7 @@ transition is supposed to be old.
 `available` has a real limitation. It reports device liveness, not
 data freshness. A bridge's passive check on a battery device can take
 hours, so a motion sensor that dies while reporting
-`occupancy = true` stays trusted until the check runs. Input with a
+`motion = true` stays trusted until the check runs. Input with a
 bounded age still needs the consumer's own policy.
 
 ### Staleness
@@ -2512,17 +2523,105 @@ hundred rows. Other units keep the Events list.
 
 ### Map and people
 
-A person is an entity with `capability = "person"` in the pseudo-room
-`person`. People move and the key space is keyed by room, so the room a
-person is in is state, not structure. Location is a set of scalar
-aspects ([the capability vocabulary](#the-capability-vocabulary)), so
-position history comes for free. The `people` widget reads `presence`
-and falls back to the age of the last fix.
+A device and a human are two things. A phone, a tag or a watch is a
+`tracker`, which an adapter binds. A `person` is a human, computed from
+the trackers that person carries. One human with a phone app, an
+OwnTracks client and a WiFi sighting is then one person on the bus,
+and every consumer asks one question: is `person/fredrik` home?
 
-The `map` widget is a view over every entity with a location. Tiles
-come from a self-hosted PMTiles extract named by
-`HOMEOSTAT_DASHBOARD_TILES` and served by the dashboard unit. A public
-tile CDN would learn family positions from tile coordinates.
+Both live in the pseudo-room `person`. People move and the key space is
+keyed by room, so the room a person is in is state, not structure.
+Location is a set of scalar aspects
+([the capability vocabulary](#the-capability-vocabulary)), so position
+history comes for free.
+
+A tracker's aspects say how strong its evidence is:
+
+- `home` is the home geofence. It is two-way: its `false` says the
+  device left.
+- `sighted` is the home network seeing the device. It can only say
+  yes. A phone sleeps and randomises its MAC, so `false` says only that
+  the adapter has not seen it within its delay.
+- `lat`, `lon`, `accuracy` and `fixed_at` are a fix. `battery` belongs
+  to the device.
+
+A person is an entity file under the shipped `persons` automation. Its
+`[sources]` list the person's trackers, naming `home` or `sighted` for
+presence and `lat` for position. The plan refuses a person bound by an
+adapter (`person-bound-by-adapter`), a source that is not a tracker
+(`person-source-not-tracker`) and any other aspect
+(`person-source-aspect`). The rule is fixed, and the house writes only
+which trackers are whose:
+
+- `presence` is home if any usable tracker reports `home` or `sighted`
+  as true. It is away if none does and a usable tracker reports `home`
+  as false. A person with no `home` source is also away when every
+  usable `sighted` tracker reports false, because otherwise a person
+  tracked only by WiFi could never be away. Otherwise it is unchanged,
+  and `presence_valid` is false so the dashboard shows it as stale.
+  A tracker is usable unless it reports `available = false`.
+- The position is the newest fix whose accuracy is within the unit's
+  `max_accuracy_m`, which keeps coarse network locates off the map.
+  When no fix qualifies, the last values stand. A tracker publishes
+  `fixed_at` after the other aspects of a fix, and the fix counts from
+  then. A `lat` read before its fix is complete would otherwise be
+  paired with the previous fix's accuracy.
+- `available` is true when any tracker reports it true, and false when
+  every tracker reports it false. A tracker that reports no
+  availability, such as an OwnTracks phone, gives no answer, so a
+  person built only from such trackers carries no `available`
+  ([Availability](#availability)).
+- `battery` is not merged, since it belongs to one device.
+
+Which trackers decided each value is reported with `ctx.source_used`,
+as a fusion reports its sources
+([Which sources a computation actually used](#which-sources-a-computation-actually-used)).
+A geofence that said away while the WiFi said home took no part in a
+home. The history overlay draws each tracker beside the person's value
+and marks the ones that did not decide it. Why presence is what it is
+goes to the unit timeline as a decision per person.
+
+At startup the unit reads every tracker's mirrored value before it
+evaluates anyone. The mirror delivers keys in no set order, and a
+`home` read before the same tracker's `available = false` would
+otherwise publish a presence the running unit never held.
+
+Each kind of evidence expires where its cadence is known, so the rule
+has no age bound per tracker. A geofence is published on transition,
+and a three-day-old `home` can be true; its liveness is `available`,
+from the app's birth message and last will. A sighting is kept current
+by its adapter's delay, and the adapter turns a tracker unavailable
+while a silent router could be the one that sees it. A fix carries
+`fixed_at`, so the newest one wins without a bound. The same rule
+governs a PIR, whose hold lives in its adapter
+([One-way senders](#one-way-senders)).
+
+A room sensor cannot be a person's source, because it cannot say who it
+saw. "Is anyone home", mixing persons with motion, stays a house
+automation. Only the house knows that the cat sets off the hallway PIR,
+or that guests carry no tracker. That is also why the persons rule can
+ship: its inputs are identified, and what their `false` means is a fact
+about each protocol.
+
+`home` is the only place in the vocabulary, because it is the only
+place the house senses for itself. Another place would be a separate
+`place` aspect on the person, computed from position against places the
+house defines, beside the boolean `presence`. Such places would not be
+called zones, which are groups of rooms.
+
+The `people` widget draws each person, and each tracker no person
+lists, so a phone bound before its person file still shows. It reads
+`presence`, or a tracker's `home` and `sighted`, and falls back to the
+age of the last fix. A presence held with `presence_valid = false` is
+marked stale. A person's overlay lists its trackers with their
+battery, the accuracy and age of their last fix, and their
+availability. Trackers stay reachable under Rooms and Not shown like
+any entity.
+
+The `map` widget draws the same entities, at their last fix. Tiles come
+from a self-hosted PMTiles extract named by `HOMEOSTAT_DASHBOARD_TILES`
+and served by the dashboard unit. A public tile CDN would learn family
+positions from tile coordinates.
 
 ### Cameras
 
@@ -2534,7 +2633,7 @@ longer be small.
 - The event plane is on the bus. A camera is an entity
   (`capability = "camera"`) that publishes scalar aspects, currently
   `motion`. It is recorded and automatable in the same way as a PIR's
-  `occupancy`. A better detector later changes one adapter and no
+  `motion`. A better detector later changes one adapter and no
   automation.
 - The media plane is off the bus and never recorded. Live viewing goes
   over RTSP into go2rtc, with one upstream session per camera however

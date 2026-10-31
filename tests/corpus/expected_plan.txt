@@ -2,7 +2,7 @@ Homeostat plan
   repo:  tests/fixtures/house_reference
   world: empty
 
-Units to create (11):
+Units to create (13):
 
 + adapter esphome (units/esphome.toml)
     command: uv run units/esphome.py
@@ -15,15 +15,19 @@ Units to create (11):
       alice_phone  notifier  room=person  write=shared
     params:
       min_interval_s  type=float  default=5  constraint={min=0}  editable_by=owner
++ adapter owntracks (units/owntracks.toml)
+    command: uv run units/owntracks.py
+    entities (1):
+      alice_gps  tracker  room=person  write=shared
 + adapter zigbee (units/zigbee.toml)
     command: uv run units/zigbee.py
     entities (6):
-      front_door_lock  lock      room=hallway     write=arbitrated
-      hallway_motion   presence  room=hallway     write=shared
-      kitchen_ceiling  light     room=kitchen     write=shared
-      kitchen_temp     sensor    room=kitchen     write=shared
-      livingroom_lamp  light     room=livingroom  write=exclusive
-      livingroom_temp  sensor    room=livingroom  write=shared
+      front_door_lock  lock       room=hallway     write=arbitrated
+      hallway_motion   occupancy  room=hallway     write=shared
+      kitchen_ceiling  light      room=kitchen     write=shared
+      kitchen_temp     sensor     room=kitchen     write=shared
+      livingroom_lamp  light      room=livingroom  write=exclusive
+      livingroom_temp  sensor     room=livingroom  write=shared
 + automation evening_lights (units/evening_lights.toml)
     command: uv run units/evening_lights.py
     params:
@@ -40,6 +44,13 @@ Units to create (11):
     params:
       cooldown_minutes  type=float  default=10  constraint={min=0}  editable_by=family
       enabled  type=bool  default=true  editable_by=family
++ automation persons (units/persons.toml)
+    command: uv run units/persons.py
+    entities (1):
+      alice  person  room=person  write=exclusive
+    params:
+      enabled  type=bool  default=true  editable_by=family
+      max_accuracy_m  type=float  default=500  constraint={min=1}  editable_by=owner
 + automation weather (units/weather.toml)
     command: uv run units/weather.py
     params:
@@ -77,6 +88,9 @@ Expanded keys:
   ntfy subscribes commands: home/cmd/{room}/{entity}/**
     -> home/cmd/global/adults/**
     -> home/cmd/person/alice_phone/**
+  owntracks publishes discovery: home/discovery/owntracks
+  owntracks publishes state: home/state/{room}/{entity}/**
+    -> home/state/person/alice_gps/**
   zigbee publishes discovery: home/discovery/zigbee
   zigbee publishes state: home/state/{room}/{entity}/**
     -> home/state/hallway/front_door_lock/**
@@ -98,18 +112,21 @@ Expanded keys:
     -> home/cmd/livingroom/**/light
     -> home/cmd/hallway/**/light
   evening_lights subscribes clock: home/clock/minute
-  evening_lights subscribes presence: home/state/downstairs/**/presence (zone downstairs)
-    -> home/state/kitchen/**/presence
-    -> home/state/livingroom/**/presence
-    -> home/state/hallway/**/presence
+  evening_lights subscribes presence: home/state/downstairs/**/motion (zone downstairs)
+    -> home/state/kitchen/**/motion
+    -> home/state/livingroom/**/motion
+    -> home/state/hallway/**/motion
   fused_temperature publishes fused: home/state/global/downstairs_temperature/temperature
   fused_temperature subscribes temperatures: home/state/downstairs/*/temperature (zone downstairs)
     -> home/state/kitchen/*/temperature
     -> home/state/livingroom/*/temperature
     -> home/state/hallway/*/temperature
   intrusion publishes alert: home/cmd/person/alice_phone/alert
-  intrusion subscribes motion: home/state/hallway/*/occupancy
-  intrusion subscribes presence: home/state/global/*/presence
+  intrusion subscribes motion: home/state/hallway/*/motion
+  intrusion subscribes presence: home/state/person/*/presence
+  persons publishes person: home/state/{room}/{entity}/*
+    -> home/state/person/alice/*
+  persons subscribes trackers: home/state/person/*/*
   weather publishes curve: home/forecast/global/outdoor_temp/temperature/smhi
   weather_alt publishes curve: home/forecast/global/outdoor_temp/temperature/yr
   arbiter publishes arbiter: home/arbiter/**
@@ -160,6 +177,12 @@ Grant table:
     key: home/state/person/alice_phone/**
     -> adults       (room=global, capability=notifier, write=shared, owner=ntfy)
     -> alice_phone  (room=person, capability=notifier, write=shared, owner=ntfy)
+  owntracks.state  binds
+    key: home/state/person/alice_gps/**
+    -> alice_gps  (room=person, capability=tracker, write=shared, owner=owntracks)
+  persons.person  binds
+    key: home/state/person/alice/*
+    -> alice  (room=person, capability=person, write=exclusive, owner=persons)
   weather.curve  binds
     key: home/forecast/global/outdoor_temp/temperature/smhi
   weather_alt.curve  binds
@@ -172,7 +195,7 @@ Grant table:
     key: home/state/livingroom/livingroom_lamp/**
     key: home/state/livingroom/livingroom_temp/**
     -> front_door_lock  (room=hallway, capability=lock, write=arbitrated, owner=zigbee)
-    -> hallway_motion   (room=hallway, capability=presence, write=shared, owner=zigbee)
+    -> hallway_motion   (room=hallway, capability=occupancy, write=shared, owner=zigbee)
     -> kitchen_ceiling  (room=kitchen, capability=light, write=shared, owner=zigbee)
     -> kitchen_temp     (room=kitchen, capability=sensor, write=shared, owner=zigbee)
     -> livingroom_lamp  (room=livingroom, capability=light, write=exclusive, owner=zigbee)
@@ -183,5 +206,6 @@ Sources:
   downstairs_temperature.kitchen  <-  kitchen_temp.temperature  (home/state/kitchen/kitchen_temp/temperature, owner=zigbee)
       south-facing; reads high on a sunny afternoon
   downstairs_temperature.livingroom  <-  livingroom_temp.temperature  (home/state/livingroom/livingroom_temp/temperature, owner=zigbee)
+  alice.gps  <-  alice_gps.lat  (home/state/person/alice_gps/lat, owner=owntracks)
 
-Plan tier: structural (11 units created, 10 grants added)
+Plan tier: structural (13 units created, 12 grants added)

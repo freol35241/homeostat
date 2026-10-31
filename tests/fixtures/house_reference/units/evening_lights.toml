@@ -11,7 +11,7 @@ restart = "on-failure"
 shutdown_grace_s = 5
 
 [bus.subscribes]
-presence = "home/state/downstairs/**/presence"
+presence = "home/state/downstairs/**/motion"
 clock = "home/clock/minute"
 
 [bus.publishes]

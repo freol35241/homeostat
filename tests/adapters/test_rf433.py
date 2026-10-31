@@ -42,7 +42,7 @@ class DialectTest(unittest.TestCase):
 
     def test_the_aspect_comes_from_the_entity_file(self):
         self.assertEqual(aspect_for(entity("d", "1")), "contact")
-        self.assertEqual(aspect_for(entity("p", "1", "presence", ())), "occupancy")
+        self.assertEqual(aspect_for(entity("p", "1", "occupancy", ())), "motion")
         self.assertIsNone(aspect_for(entity("x", "1", features=())))
         self.assertIsNone(aspect_for(entity("x", "1", features=("a", "b"))))
 

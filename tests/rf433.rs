@@ -26,7 +26,7 @@ const PIR: &str = "11970086";
 const DOOR: &str = "13951014";
 const SMOKE: &str = "10600462";
 
-const PIR_KEY: &str = "home/state/hallway/hallway_motion/occupancy";
+const PIR_KEY: &str = "home/state/hallway/hallway_motion/motion";
 const DOOR_KEY: &str = "home/state/hallway/front_door/contact";
 const SMOKE_KEY: &str = "home/state/landing/smoke_upstairs/smoke";
 
@@ -71,7 +71,7 @@ async fn every_bound_entity_starts_false() {
 }
 
 /// (b) A burst asserts the bound entity, and the hold releases it. The
-/// fixture's occupancy hold is 1 s, so both transitions land inside a test.
+/// fixture's motion hold is 1 s, so both transitions land inside a test.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_burst_asserts_and_the_hold_releases() {
     let (mosquitto, mut sup, observer) = setup().await;

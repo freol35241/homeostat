@@ -1,0 +1,26 @@
+schema = 1
+
+[unit]
+name = "persons"
+kind = "automation"
+description = "Persons under test"
+
+[runtime]
+command = "uv run ../../../adapters/persons.py"
+restart = "on-failure"
+shutdown_grace_s = 5
+
+[bus.subscribes]
+trackers = "home/state/person/*/*"
+
+[bus.publishes]
+person = { key = "home/state/{room}/{entity}/*" }
+
+[params.max_accuracy_m]
+type = "float"
+default = 500
+constraint = { min = 1 }
+editable_by = "owner"
+
+[entities]
+dir = "entities/persons/"

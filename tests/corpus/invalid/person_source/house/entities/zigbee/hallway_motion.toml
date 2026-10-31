@@ -1,0 +1,9 @@
+schema = 1
+
+[entity]
+id = "hallway_motion"
+capability = "occupancy"
+room = "hallway"
+
+[write_policy]
+owner = "zigbee"

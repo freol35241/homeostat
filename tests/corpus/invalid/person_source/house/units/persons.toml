@@ -1,0 +1,19 @@
+schema = 1
+
+[unit]
+name = "persons"
+kind = "automation"
+
+[runtime]
+command = "uv run units/persons.py"
+restart = "on-failure"
+
+[bus.subscribes]
+trackers = "home/state/person/*/*"
+hall = "home/state/hallway/*/motion"
+
+[bus.publishes]
+person = { key = "home/state/{room}/{entity}/*" }
+
+[entities]
+dir = "entities/persons"

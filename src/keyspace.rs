@@ -234,7 +234,7 @@ mod tests {
     #[test]
     fn schema_accepts_design_examples() {
         for s in [
-            "home/state/downstairs/**/presence",
+            "home/state/downstairs/**/motion",
             "home/clock/minute",
             "home/cmd/downstairs/**/light",
             "home/state/**",

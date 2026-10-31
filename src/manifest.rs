@@ -21,11 +21,12 @@ pub const CAPABILITIES: &[&str] = &[
     "light",
     "lock",
     "notifier",
+    "occupancy",
     "person",
-    "presence",
     "router",
     "sensor",
     "switch",
+    "tracker",
 ];
 
 /// One capability's aspect vocabulary: the names an adapter binding it
@@ -133,20 +134,20 @@ pub const VOCABULARY: &[Capability] = &[
         note: "A channel that reaches a person: a phone, a group chat. `message` and `alert` are commandable strings — the text itself — and two structurally separate delivery paths, granted and policed apart (an alert overrides quiet hours; a message never will). `delivered` is the epoch time the delivery service acknowledged the last message, never a human's receipt. Room `person` for one person's channel, `global` for a group (docs/design.md#notifications).",
     },
     Capability {
-        name: "person",
+        name: "occupancy",
         base: None,
-        aspects: &["presence", "lat", "lon", "accuracy", "battery", "fixed_at"],
+        aspects: &["motion", "occupied"],
         notable: None,
         options: &[],
-        note: "`presence` is whether the person is home (bool), published by whichever adapter knows — a geofence transition, a fused sighting; the dashboard's People tile reads it. Scalar position aspects; `fixed_at` is the fix's epoch timestamp. Room is always `person`.",
+        note: "A room sensor, in the room it watches. `motion` (bool) is movement seen within the adapter's hold, as a PIR reports it; `false` means nothing moved, not that the room is empty. `occupied` (bool) is a body detected, moving or still, as an mmWave radar reports it. The adapter publishes whichever its device observes (docs/design.md#the-capability-vocabulary).",
     },
     Capability {
-        name: "presence",
+        name: "person",
         base: None,
-        aspects: &["occupancy", "presence"],
+        aspects: &["presence", "lat", "lon", "accuracy", "fixed_at"],
         notable: None,
         options: &[],
-        note: "Either spelling is accepted; adapters pass their native one through.",
+        note: "A human, computed from the trackers its `[sources]` list. Only an automation binds one (`person-bound-by-adapter`), and the shipped `persons` unit is the one that does. `presence` (bool) is whether the person is home; the dashboard's People tile reads it. Scalar position aspects; `fixed_at` is the fix's epoch timestamp. Room `person` (docs/design.md#map-and-people).",
     },
     Capability {
         name: "router",
@@ -171,6 +172,14 @@ pub const VOCABULARY: &[Capability] = &[
         notable: None,
         options: &[],
         note: "",
+    },
+    Capability {
+        name: "tracker",
+        base: None,
+        aspects: &["home", "sighted", "lat", "lon", "accuracy", "battery", "fixed_at"],
+        notable: None,
+        options: &[],
+        note: "A device someone carries: a phone, a tag, a watch. `home` (bool) is inside the home geofence, and its `false` says the device left. `sighted` (bool) is seen on the home network, and its `false` says only that it was not seen within the adapter's delay. Scalar position aspects as on `person`, plus the device's `battery`; `fixed_at` is published after the fix's other aspects and completes it. Room `person` for one person's device. A `person` lists its trackers as sources (docs/design.md#map-and-people).",
     },
 ];
 
@@ -580,11 +589,14 @@ pub struct InputSource {
 #[serde(deny_unknown_fields)]
 pub struct SourceRef {
     /// Name of the contributing entity; must exist
-    /// (`source-unknown-entity`). Any owner will do.
+    /// (`source-unknown-entity`). Any owner will do. A `person`'s sources
+    /// must be trackers (`person-source-not-tracker`).
     pub entity: String,
     /// The aspect that contributes. When the contributor is
     /// automation-owned, that automation's `[bus.publishes]` must cover the
-    /// key (`source-unpublished-aspect`).
+    /// key (`source-unpublished-aspect`). A `person`'s source names `home`
+    /// or `sighted` for presence, or `lat` for a position fix
+    /// (`person-source-aspect`).
     pub aspect: String,
     /// Free text about this contributor, shown beside it in the history
     /// overlay. Use it for what the subject's own descriptor cannot say
@@ -612,8 +624,8 @@ pub struct EntitySection {
     #[serde(default)]
     pub id: Option<String>,
     /// One of: `binary_sensor`, `burner`, `camera`, `climate`, `cover`,
-    /// `light`, `lock`, `notifier`, `person`, `presence`, `router`,
-    /// `sensor`, `switch` (`unknown-capability`). Decides the base aspect,
+    /// `light`, `lock`, `notifier`, `occupancy`, `person`, `router`,
+    /// `sensor`, `switch`, `tracker` (`unknown-capability`). Decides the base aspect,
     /// the dashboard widget and which cmd grants apply.
     pub capability: String,
     /// Optional aspects beyond the capability's base, as the adapter
@@ -844,11 +856,11 @@ pub enum WidgetKind {
     Unit,
     /// A unit's family-editable parameters as one card.
     Params,
-    /// The person entities, home or away.
+    /// The persons, home or away, and each tracker no person lists.
     People,
     /// The deviations feed: what is out of the ordinary.
     Deviations,
-    /// The map over every entity with a location.
+    /// The map: each person's position, and each tracker no person lists.
     Map,
     /// Several widgets as one card, such as a dial with the traces that
     /// explain it, or a setpoint beside what it drives. Groups do not nest.
