@@ -128,9 +128,9 @@ Units to create (10):
 + adapter zigbee (units/zigbee.toml)
     command: uv run units/zigbee.py
     entities (3):
-      front_door       lock      room=hallway     write=arbitrated
-      hallway_motion   presence  room=hallway     write=shared
-      livingroom_lamp  light     room=livingroom  write=shared
+      front_door       lock       room=hallway     write=arbitrated
+      hallway_motion   occupancy  room=hallway     write=shared
+      livingroom_lamp  light      room=livingroom  write=shared
     ...
 + automation evening_lights (units/evening_lights.toml)
     command: uv run units/evening_lights.py
@@ -409,7 +409,8 @@ reached only on the LAN or over WireGuard (see
 
 Pre-1.0. What works today: the validator, `homeostat plan` and `apply`,
 the supervisor, the Python SDK, the recorder (history, forecasts and
-archives), the arbiter, the dashboard and the read-only MCP server.
+archives), the arbiter, the persons automation (one person from the
+trackers each carries), the dashboard and the read-only MCP server.
 There are adapters for Zigbee2MQTT, ESPHome, OwnTracks, an IVT490 heat
 pump, Aduro pellet burners, ONVIF cameras through go2rtc, OpenWrt routers,
 433 MHz transmitters and ntfy notifications. Voice control is planned

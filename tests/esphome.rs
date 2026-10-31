@@ -131,7 +131,7 @@ async fn setup_with(device_args: &[&str]) -> (FakeEsphome, PathBuf, Supervisor, 
 
 /// (a) The fake device's initial states translate to the correct home/state
 /// keys: switch -> "on" (bool), sensor -> its `device_class` aspect, motion
-/// `binary_sensor` -> presence capability's "occupancy" aspect.
+/// `binary_sensor` -> the occupancy capability's "motion" aspect.
 #[tokio::test(flavor = "multi_thread")]
 async fn device_state_translates_to_bus_state() {
     let (_device, _devices_path, mut sup, observer) = setup().await;
@@ -148,7 +148,7 @@ async fn device_state_translates_to_bus_state() {
         &[
             (RELAY_STATE_KEY, json!(false)),
             ("home/state/shed/shed_temp/temperature", json!(21.5)),
-            ("home/state/shed/shed_motion/occupancy", json!(true)),
+            ("home/state/shed/shed_motion/motion", json!(true)),
         ],
     )
     .await;
@@ -347,15 +347,15 @@ async fn bound_device_entities_published_as_discovery() {
         .expect("motion record");
     assert_eq!(motion["configured"], json!(true));
     assert_eq!(motion["entity"], json!("shed_motion"));
-    assert_eq!(motion["suggested"]["capability"], json!("presence"));
+    assert_eq!(motion["suggested"]["capability"], json!("occupancy"));
     assert_eq!(motion["description"]["device_class"], json!("motion"));
     assert_eq!(
-        motion["aspects"]["fields"]["occupancy"]["label"],
-        json!("motion (occupancy)")
+        motion["aspects"]["fields"]["motion"]["label"],
+        json!("motion")
     );
     assert_eq!(
-        motion["aspects"]["fields"]["occupancy"]["values"][0],
-        json!({"value": true, "label": "occupied"})
+        motion["aspects"]["fields"]["motion"]["values"][0],
+        json!({"value": true, "label": "motion"})
     );
 
     sup.shutdown();

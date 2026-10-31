@@ -2,7 +2,7 @@ schema = 1
 
 [entity]
 id = "shed/motion"
-capability = "presence"
+capability = "occupancy"
 room = "shed"
 
 [write_policy]

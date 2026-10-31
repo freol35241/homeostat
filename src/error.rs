@@ -192,6 +192,22 @@ codes! {
         Either the owner is a read-only virtual sensor — narrow the publish \
         key or its capability — or it is meant to be a latch and needs the \
         subscription in its `[bus.subscribes]`.",
+    PersonBoundByAdapter => "person-bound-by-adapter":
+        "A `person` entity is owned by an adapter. A person is a human, not a \
+        device, so it is computed from the trackers it lists as `[sources]`, \
+        by an automation (the shipped `persons` unit). Bind the device as \
+        `tracker` and add a person file under that automation's entities \
+        dir (docs/design.md#map-and-people).",
+    PersonSourceNotTracker => "person-source-not-tracker":
+        "A `person`'s `[sources]` names an entity that is not a `tracker`. A \
+        person is computed from the devices that person carries. A room \
+        sensor cannot say who it saw, so it cannot be a person's source.",
+    PersonSourceAspect => "person-source-aspect":
+        "A `person`'s source names an aspect other than `home`, `sighted` or \
+        `lat`. The persons rule reads `home` and `sighted` as presence \
+        evidence and `lat` as a position fix (with the tracker's `lon`, \
+        `accuracy` and `fixed_at`). It knows nothing else to do with a \
+        tracker's reading.",
     GrantCycle => "grant-cycle":
         "Automations that bind commandable virtual entities are walk-order \
         edge sources like adapters: an owner starts before the units \

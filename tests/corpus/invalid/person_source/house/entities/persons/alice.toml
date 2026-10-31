@@ -1,0 +1,23 @@
+schema = 1
+
+[entity]
+capability = "person"
+room = "person"
+
+[write_policy]
+mode = "exclusive"
+owner = "persons"
+
+[sources.gps]
+entity = "alice_phone"
+aspect = "lat"
+
+# A PIR cannot say who moved, so it is no evidence about Alice.
+[sources.hallway]
+entity = "hallway_motion"
+aspect = "motion"
+
+# The persons rule reads `lat` for a fix, with the tracker's `lon` beside it.
+[sources.battery]
+entity = "alice_phone"
+aspect = "battery"

@@ -11,8 +11,8 @@ restart = "on-failure"
 shutdown_grace_s = 5
 
 [bus.subscribes]
-# Zigbee2MQTT motion sensors publish their `occupancy` field as the aspect.
-presence = "home/state/downstairs/*/occupancy"
+# Motion sensors publish `motion`: movement seen within the sensor's hold.
+presence = "home/state/downstairs/*/motion"
 light_state = "home/state/downstairs/*/on"
 clock = "home/clock/minute"
 

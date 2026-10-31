@@ -35,7 +35,7 @@ const OFF_TIME_KEY: &str = "home/config/evening_lights/off_time";
 const ENABLED_KEY: &str = "home/config/evening_lights/enabled";
 const LAMP_CMD: &str = "home/cmd/livingroom/lamp/on";
 const LAMP_STATE: &str = "home/state/livingroom/lamp/on";
-const PRESENCE_STATE: &str = "home/state/livingroom/presence_sensor/presence";
+const PRESENCE_STATE: &str = "home/state/livingroom/presence_sensor/occupied";
 
 type Sub = Subscriber<FifoChannelHandler<Sample>>;
 

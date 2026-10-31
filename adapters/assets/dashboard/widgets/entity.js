@@ -5,7 +5,7 @@ import { ensureHistory } from '../api.js';
 import { buildChart } from '../charts.js';
 import { html } from '../html.js';
 import logic, { titleCase } from '../logic.js';
-import { controlDisabled, houseControls, localState, presenceValue, stateValue, store } from '../store.js';
+import { controlDisabled, houseControls, localState, occupancyReading, stateValue, store } from '../store.js';
 import { renderAspectControl, renderDial } from './controls.js';
 
 function widgetForLight(entity) {
@@ -44,11 +44,12 @@ function widgetForLight(entity) {
   return html`${rows}`;
 }
 
-function widgetForPresence(entity) {
-  var occ = presenceValue(entity);
+function widgetForOccupancy(entity) {
+  var reading = occupancyReading(entity);
+  var occ = reading.value;
   var seenKey = entity.room + '/' + entity.name;
   var lastSeen = store.lastSeen[seenKey];
-  var label = occ ? 'Motion' : 'Clear';
+  var label = !occ ? 'Clear' : reading.aspect === 'occupied' ? 'Occupied' : 'Motion';
   var extra = lastSeen ? html`<span class="faint" title="${new Date(lastSeen).toLocaleString()}"> &middot; ${relTime(lastSeen)}</span>` : '';
   return html`<div class="entity-row row-clickable" data-action="entity-detail" data-room="${entity.room}" data-entity="${entity.name}">
     <span class="entity-name" title="${entity.label}">${entity.label}</span>
@@ -188,7 +189,7 @@ export function widgetForEntity(entity) {
   var described = !!store.aspects[entity.name];
   if (described && (entity.capability === 'climate' || !BESPOKE_WIDGET[entity.capability])) return widgetForDescribed(entity);
   if (entity.capability === 'light' || entity.capability === 'switch') return widgetForLight(entity);
-  if (entity.capability === 'presence') return widgetForPresence(entity);
+  if (entity.capability === 'occupancy') return widgetForOccupancy(entity);
   if (entity.capability === 'lock') return widgetForLock(entity);
   if (entity.capability === 'climate') return widgetForClimate(entity);
   if (entity.capability === 'sensor') return widgetForSensor(entity);
@@ -196,11 +197,11 @@ export function widgetForEntity(entity) {
   return widgetGeneric(entity);
 }
 
-var CAP_ORDER = { light: 0, lock: 1, presence: 2, climate: 3, sensor: 4, camera: 5 };
+var CAP_ORDER = { light: 0, lock: 1, occupancy: 2, climate: 3, sensor: 4, camera: 5 };
 
 // Capabilities whose card widget is the capability's own (a toggle, a
 // sparkline, a poster) rather than the descriptor-driven row.
-export var BESPOKE_WIDGET = { light: true, switch: true, presence: true, lock: true, sensor: true, camera: true };
+export var BESPOKE_WIDGET = { light: true, switch: true, occupancy: true, lock: true, sensor: true, camera: true };
 
 function capRank(entity) {
   var r = CAP_ORDER[entity.capability];
