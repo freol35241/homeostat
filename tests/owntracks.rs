@@ -232,7 +232,7 @@ async fn seen_devices_published_as_discovery() {
     assert_eq!(alice["entity"], json!("alice_phone"));
     assert_eq!(
         alice["suggested"],
-        json!({"capability": "person", "features": []})
+        json!({"capability": "tracker", "features": []})
     );
 
     let bob = records
@@ -243,7 +243,7 @@ async fn seen_devices_published_as_discovery() {
     assert_eq!(bob["entity"], json!(null));
     assert_eq!(
         bob["suggested"],
-        json!({"capability": "person", "features": []})
+        json!({"capability": "tracker", "features": []})
     );
 
     // The mirror serves it to late joiners.

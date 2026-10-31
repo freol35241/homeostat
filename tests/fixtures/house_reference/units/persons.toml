@@ -1,0 +1,31 @@
+schema = 1
+
+[unit]
+name = "persons"
+kind = "automation"
+description = "Computes each person from the trackers that person carries"
+
+[runtime]
+command = "uv run units/persons.py"
+restart = "on-failure"
+shutdown_grace_s = 5
+
+[bus.subscribes]
+trackers = "home/state/person/*/*"
+
+[bus.publishes]
+person = { key = "home/state/{room}/{entity}/*" }
+
+[params.max_accuracy_m]
+type = "float"
+default = 500
+constraint = { min = 1 }
+editable_by = "owner"
+
+[naming]
+sv = "personer"
+en = "persons"
+aliases = []
+
+[entities]
+dir = "entities/persons/"

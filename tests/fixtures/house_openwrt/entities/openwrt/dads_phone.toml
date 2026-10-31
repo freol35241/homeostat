@@ -2,8 +2,8 @@ schema = 1
 
 [entity]
 id = "aa:bb:cc:dd:ee:ff"
-capability = "presence"
-room = "global"
+capability = "tracker"
+room = "person"
 
 [write_policy]
 mode = "shared"

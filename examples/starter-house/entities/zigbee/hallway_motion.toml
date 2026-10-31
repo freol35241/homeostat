@@ -4,7 +4,7 @@ schema = 1
 # The Zigbee2MQTT topic segment: your device's friendly name (or its
 # IEEE address if you never renamed it).
 id = "hallway_motion"
-capability = "presence"
+capability = "occupancy"
 features = []
 room = "hallway"
 
