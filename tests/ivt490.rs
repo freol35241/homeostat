@@ -176,7 +176,7 @@ async fn ivt490_state_translates_to_bus_state() {
     let fields = &record["aspects"]["fields"];
     assert_eq!(
         record["aspects"]["groups"],
-        json!(["control", "readings", "status", "limits"])
+        json!(["control", "readings", "status", "limits", "diagnostics"])
     );
     // How long a command takes to come back: the firmware's state cadence,
     // which the adapter knows and the dashboard's per-capability guess
@@ -199,10 +199,16 @@ async fn ivt490_state_translates_to_bus_state() {
         json!("owner")
     );
     assert_eq!(
-        fields["GT2"]["label"],
-        json!("outdoor (GT2)"),
+        fields["GT2_filtered"]["label"],
+        json!("outdoor sensor (GT2)"),
         "labels keep the firmware code"
     );
+    assert_eq!(
+        fields["GT2"]["label"],
+        json!("outdoor as fed to the pump (GT2)"),
+        "GT2 is what the bridge feeds the pump, not the outdoor reading"
+    );
+    assert_eq!(fields["GT2_raw"]["group"], json!("diagnostics"));
     assert_eq!(
         fields["indoor_temperature"]["valid"],
         json!("indoor_temperature_valid")
@@ -219,7 +225,7 @@ async fn ivt490_state_translates_to_bus_state() {
         "IVT490.h: procent utnyttjande"
     );
     assert!(
-        fields.get("GT2_raw").is_none(),
+        fields.get("indoor_temperature_valid").is_none(),
         "undescribed aspects are simply absent"
     );
 
