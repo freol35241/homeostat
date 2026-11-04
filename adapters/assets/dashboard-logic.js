@@ -139,23 +139,56 @@
     return kept;
   }
 
-  /* The track as polylines that fade with age. Leaflet cannot draw a
-   * gradient along a line, so the window is cut into `bands` spans of
-   * time, each one line with its own opacity. Each band starts at the
-   * previous band's last fix, so the line has no gaps. */
-  function trackBands(fixes, from, to, bands) {
-    var span = (to - from) / bands;
-    var out = [];
-    var prev = null;
-    for (var i = 0; i < bands; i++) {
-      var latlngs = prev ? [[prev.lat, prev.lon]] : [];
-      fixes.forEach(function (f) {
-        var band = Math.min(bands - 1, Math.max(0, Math.floor((f.t - from) / span)));
-        if (band === i) { latlngs.push([f.lat, f.lon]); prev = f; }
-      });
-      if (latlngs.length > 1) out.push({ opacity: 0.15 + 0.75 * (i + 1) / bands, latlngs: latlngs });
+  /* The track as one line whose opacity follows the age of each fix,
+   * from faint at the window's start to solid at the newest fix. A line
+   * gradient in MapLibre runs over the distance along the line, not over
+   * time, so the age at each step of distance is worked out here. Fixes
+   * are not evenly spaced in time, and a stop where someone stood still
+   * would otherwise fade the whole stretch around it. Returns the line's
+   * [lon, lat] coordinates and `steps` + 1 [progress, opacity] stops, or
+   * null when there is no line to draw. */
+  function trackGradient(fixes, from, to, steps) {
+    if (fixes.length < 2) return null;
+    var along = [0];
+    for (var i = 1; i < fixes.length; i++) along.push(along[i - 1] + metresBetween(fixes[i - 1], fixes[i]));
+    var total = along[along.length - 1];
+    if (!(total > 0)) return null;
+    var opacity = function (t) {
+      var f = to > from ? (t - from) / (to - from) : 1;
+      return 0.15 + 0.85 * Math.min(1, Math.max(0, f));
+    };
+    var stops = [];
+    var j = 0;
+    for (var k = 0; k <= steps; k++) {
+      var d = total * k / steps;
+      while (j < fixes.length - 2 && along[j + 1] < d) j++;
+      var seg = along[j + 1] - along[j];
+      var t = seg > 0 ? fixes[j].t + (fixes[j + 1].t - fixes[j].t) * (d - along[j]) / seg : fixes[j + 1].t;
+      stops.push([k / steps, opacity(t)]);
     }
-    return out;
+    return { coordinates: fixes.map(function (f) { return [f.lon, f.lat]; }), stops: stops };
+  }
+
+  /* An accuracy circle as a polygon of `sides` corners, [lon, lat]
+   * closed. MapLibre has no circle in metres, and a circle layer is sized
+   * in pixels. */
+  function circlePolygon(lat, lon, radiusM, sides) {
+    var dLat = radiusM / 111320;
+    var dLon = dLat / Math.max(1e-6, Math.cos(lat * Math.PI / 180));
+    var ring = [];
+    for (var i = 0; i <= sides; i++) {
+      var a = 2 * Math.PI * (i % sides) / sides;
+      ring.push([lon + dLon * Math.cos(a), lat + dLat * Math.sin(a)]);
+    }
+    return ring;
+  }
+
+  // "rgba(r,g,b,a)" for a hex colour, which a line gradient needs to fade.
+  function hexRgba(hex, alpha) {
+    var h = hex.slice(1);
+    if (h.length === 3) h = h.replace(/./g, function (c) { return c + c; });
+    var n = parseInt(h, 16);
+    return 'rgba(' + (n >> 16 & 255) + ',' + (n >> 8 & 255) + ',' + (n & 255) + ',' + alpha + ')';
   }
 
   // A `colors` value as the house wrote it, or null unless it is a hex
@@ -1869,7 +1902,9 @@
     peopleEntities: peopleEntities,
     trackFixes: trackFixes,
     thinTrack: thinTrack,
-    trackBands: trackBands,
+    trackGradient: trackGradient,
+    circlePolygon: circlePolygon,
+    hexRgba: hexRgba,
     hexColor: hexColor,
     trackersOf: trackersOf,
     occupancyEntityFromKey: occupancyEntityFromKey,

@@ -133,6 +133,9 @@ class FakeHouse:
             ".mjs": "text/javascript",
             ".css": "text/css",
             ".svg": "image/svg+xml",
+            ".pbf": "application/x-protobuf",
+            ".json": "application/json",
+            ".png": "image/png",
         }
         return web.FileResponse(
             path, headers={"Content-Type": types.get(path.suffix, "text/plain")}

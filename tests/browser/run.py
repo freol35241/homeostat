@@ -390,30 +390,42 @@ class RelatedReadings(PageTest):
 
 
 class MapTracks(PageTest):
-    """`docs/design.md#map-and-people`: a map with `hours` draws each
-    person's track as fading bands, in the colour `colors` gives them."""
+    """`docs/design.md#map-and-people`: a map with `hours` reads each
+    person's track from the recorder and draws its marker in the colour
+    `colors` gives it. The track itself is drawn in WebGL, where the DOM
+    cannot see it; tests/js checks how it is built."""
 
-    async def test_a_track_fades_and_takes_its_colour(self):
+    async def test_a_track_is_read_and_its_marker_takes_its_colour(self):
+        reads: list[str] = []
+        self.page.on(
+            "request", lambda r: reads.append(r.url) if "/api/history" in r.url else None
+        )
         await self.view("now")
         now = time.time()
         for aspect, value in (("lat", 59.3326), ("lon", 18.0649), ("accuracy", 15), ("fixed_at", now)):
             await self.house.push(
                 {"type": "state", "key": f"home/state/person/robin/{aspect}", "value": value}
             )
-        # The history reads land after the render that asked for them.
-        await self.page.wait_for_function(
-            "document.querySelectorAll('#person-map path.person-track').length > 1"
-        )
-        tracks = self.page.locator("#person-map path.person-track")
-        self.assertGreater(await tracks.count(), 1, "a track is several bands")
-        strokes = await tracks.evaluate_all("els => els.map(e => e.getAttribute('stroke'))")
-        opacities = await tracks.evaluate_all(
-            "els => els.map(e => Number(e.getAttribute('stroke-opacity')))"
-        )
-        self.assertIn("#d9534f", strokes, "robin's colour from `colors`")
-        self.assertLess(min(opacities), max(opacities), "older bands are fainter")
-        dot = self.page.locator("#person-map .person-marker-dot").first
-        self.assertIn("217, 83, 79", await dot.evaluate("e => getComputedStyle(e).backgroundColor"))
+        dot = self.page.locator("#person-map .person-marker-dot")
+        await dot.first.wait_for()
+        self.assertIn("217, 83, 79", await dot.first.evaluate("e => getComputedStyle(e).backgroundColor"))
+        self.assertEqual(await self.page.locator("#person-map canvas.maplibregl-canvas").count(), 1)
+        # The fixes over the window, then lat and lon over the history
+        # API's longest window, so a fix before the first move still pairs.
+        # lat is read once fixed_at has answered.
+        def wanted(aspect: str, hours: int) -> bool:
+            return any(
+                "entity=robin" in u and f"aspect={aspect}&" in u and f"hours={hours}&" in u
+                and "changes=1" in u
+                for u in reads
+            )
+
+        for _ in range(50):
+            if wanted("fixed_at", 24) and wanted("lat", 744):
+                break
+            await self.page.wait_for_timeout(100)
+        self.assertTrue(wanted("fixed_at", 24), reads)
+        self.assertTrue(wanted("lat", 744), reads)
 
 
 class MapLibreRenders(PageTest):
@@ -425,7 +437,7 @@ class MapLibreRenders(PageTest):
     async def test_a_line_is_painted(self):
         result = await self.page.evaluate(
             """async () => {
-              const maplibre = await import('/assets/maplibre-gl.mjs');
+              const maplibre = await import('/assets/map/maplibre-gl.mjs');
               const box = document.createElement('div');
               box.style.cssText = 'position:fixed;left:0;top:0;width:400px;height:300px';
               document.body.appendChild(box);

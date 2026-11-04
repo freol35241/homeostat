@@ -48,7 +48,11 @@ fn sources() -> Vec<PathBuf> {
                 // (scripts/sync_starter.sh) and cite the design as that
                 // release did; they follow at the next one.
                 let generated = path.ends_with("examples/starter-house/units");
-                if !generated && !matches!(name.as_str(), "target" | "__pycache__" | "node_modules")
+                // Vendored map files (adapters/assets/README.md).
+                let vendored = path.ends_with("adapters/assets/map");
+                if !generated
+                    && !vendored
+                    && !matches!(name.as_str(), "target" | "__pycache__" | "node_modules")
                 {
                     walk(&path, out);
                 }
@@ -56,10 +60,7 @@ fn sources() -> Vec<PathBuf> {
                 .iter()
                 .any(|ext| name.ends_with(ext))
                 && !name.ends_with(".lock")
-                && !matches!(
-                    name.as_str(),
-                    "leaflet.js" | "protomaps-leaflet.js" | "video-rtc.js" | "design.md"
-                )
+                && !matches!(name.as_str(), "video-rtc.js" | "design.md")
             {
                 out.push(path);
             }

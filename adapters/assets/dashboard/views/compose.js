@@ -15,7 +15,7 @@ import { widgetChart, widgetTiles } from '../widgets/readings.js';
 import { widgetUnit } from '../widgets/unit.js';
 
 // Lays out a view's widgets, in order, in one grid. The map is mounted
-// after the markup is inserted, because Leaflet owns its container.
+// after the markup is inserted, because MapLibre owns its container.
 export function renderWidgets(title, widgets) {
   var persons = personEntities();
   var wantMap = null;

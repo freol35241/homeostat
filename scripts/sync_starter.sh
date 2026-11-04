@@ -58,9 +58,6 @@ recorder.py:recorder.py
 arbiter.py:arbiter.py
 dashboard.py:dashboard.py
 dashboard.html:dashboard.html
-assets/leaflet.css:assets/leaflet.css
-assets/leaflet.js:assets/leaflet.js
-assets/protomaps-leaflet.js:assets/protomaps-leaflet.js
 assets/dashboard-logic.js:assets/dashboard-logic.js
 assets/dashboard.css:assets/dashboard.css
 assets/video-rtc.js:assets/video-rtc.js
@@ -185,22 +182,37 @@ for pair in $FILES; do
   fi
 done
 
-# The dashboard page's modules. This copies every file under
-# assets/dashboard/ in the release instead of listing each one above, so a
-# new module cannot be left out of the starter. Older releases have no
-# modules.
-modules_at_tag() {
+# The dashboard page's modules and the vendored map files. This copies
+# every file under assets/dashboard/ and assets/map/ in the release instead
+# of listing each one above, so a new file cannot be left out of the
+# starter. Older releases have neither directory. The font directories
+# have spaces in their names, so the paths are read a line at a time.
+files_at_tag() {
   if [ "$at_tag" = 1 ]; then
-    git -C "$REPO" ls-tree -r --name-only "$SDK_TAG" -- adapters/assets/dashboard
-  elif [ -d "$REPO/adapters/assets/dashboard" ]; then
-    (cd "$REPO" && find adapters/assets/dashboard -type f | sort)
+    git -C "$REPO" ls-tree -r --name-only "$SDK_TAG" -- "adapters/$1"
+  elif [ -d "$REPO/adapters/$1" ]; then
+    (cd "$REPO" && find "adapters/$1" -type f | sort)
   fi
 }
-for src in $(modules_at_tag); do
+while IFS= read -r src; do
   src="${src#adapters/}"
   source_at_tag "$src" > "$tmp"
   place "$tmp" "$UNITS/$src" "$src"
-done
+done < <(files_at_tag assets/dashboard; files_at_tag assets/map)
+
+# A file the release no longer has leaves the starter's assets too, so a
+# library the dashboard dropped does not linger in every new house.
+if [ -d "$UNITS/assets" ]; then
+  while IFS= read -r copy; do
+    rel="${copy#"$UNITS/"}"
+    have_at_tag "$rel" && continue
+    if [ "$check" = 1 ]; then
+      stale="$stale $rel"
+    else
+      rm -f "$copy"
+    fi
+  done < <(find "$UNITS/assets" -type f | sort)
+fi
 
 # Starter-only units (evening_lights.py) get the pin and nothing else.
 for unit in "$UNITS"/*.py; do
