@@ -10,8 +10,8 @@ import { descriptorField, liveForecastsOf, localState, scheduleRender, stateValu
 // the same rows as the entity's sensor card (dashboard-logic.js,
 // sensorCardPlan).
 export function widgetTiles(entity, aspect) {
-  var rows = logic.sensorCardPlan(entity, store.state, store.aspects[entity.name]);
-  if (aspect) rows = rows.filter(function (r) { return r.aspect === aspect; });
+  var all = logic.sensorCardPlan(entity, store.state, store.aspects[entity.name]);
+  var rows = aspect ? all.filter(function (r) { return r.aspect === aspect; }) : all;
   return html`${rows.map(function (r) {
     var sk = entity.name + '|' + r.aspect;
     ensureHistory(entity.name, r.aspect);
@@ -39,7 +39,9 @@ export function widgetTiles(entity, aspect) {
     if (!caption && s && s.loaded) caption = minMaxCaption(s.points);
     // The separator is the character, not the HTML entity. The label is
     // text and is escaped as a whole, so "&middot;" would print as-is.
-    var tileLabel = entity.label + (rows.length > 1 ? ' \u00b7 ' + r.label : '');
+    // The reading is named whenever the entity has more than one, so a
+    // tile placed with `aspect` still says which reading it shows.
+    var tileLabel = entity.label + (all.length > 1 ? ' \u00b7 ' + r.label : '');
     return html`<div class="card tile clickable" data-action="history-detail" data-room="${entity.room}" data-entity="${entity.name}" data-aspect="${r.aspect}">
       <div class="card-label" title="${entity.label}">${tileLabel.toUpperCase()}</div>
       <div class="big${r.stale ? ' stale' : ''}">${r.display}</div>${spark}
