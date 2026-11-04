@@ -1319,6 +1319,28 @@
     return out;
   }
 
+  /* The entity's other readings that belong on one chart with `aspect`,
+   * from the descriptor's `related` sets: stages of one sensor, or a
+   * target and its actual value. A reading in several sets gets the
+   * members of each, once. A member the entity has not reported is left
+   * out, and so is one of another kind, because the chart has one y
+   * scale. */
+  function relatedFor(descriptor, aspect, present) {
+    var fields = (descriptor && descriptor.fields) || {};
+    var kindOf = function (a) { return fields[a] ? fields[a].kind : undefined; };
+    var out = [], seen = {};
+    seen[aspect] = true;
+    ((descriptor && descriptor.related) || []).forEach(function (set) {
+      if (!Array.isArray(set) || set.indexOf(aspect) === -1) return;
+      set.forEach(function (a) {
+        if (seen[a] || present.indexOf(a) === -1 || kindOf(a) !== kindOf(aspect)) return;
+        seen[a] = true;
+        out.push({ name: a, aspect: a, label: (fields[a] && fields[a].label) || a });
+      });
+    });
+    return out;
+  }
+
   /* A person's trackers, for its overlay: one row per tracker its sources
    * name, with the device's own battery, the accuracy and time of its last
    * fix, and whether it is reported unavailable. */
@@ -1771,6 +1793,7 @@
     forecastsFor: forecastsFor,
     decodeForecast: decodeForecast,
     contributorsFor: contributorsFor,
+    relatedFor: relatedFor,
     sourceUsage: sourceUsage,
     decodeIssues: decodeIssues,
     sourceLabel: sourceLabel,

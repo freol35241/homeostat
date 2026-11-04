@@ -79,6 +79,16 @@ class CommandTest(unittest.TestCase):
         self.assertNotIn("command", fields["outdoor_temperature_offset"])
         self.assertEqual(fields["setpoint"]["command"]["editable_by"], "family")
 
+    def test_related_sets_name_described_aspects_of_one_kind(self):
+        # The page skips a member it has no reading for, so a misspelt name
+        # would leave a line out without any error.
+        descriptor = aspect_descriptor(PUMP)
+        fields = descriptor["fields"]
+        for members in descriptor["related"]:
+            with self.subTest(members=members):
+                self.assertTrue(all(m in fields for m in members))
+                self.assertEqual(len({fields[m]["kind"] for m in members}), 1)
+
 
 class PumpsTest(unittest.TestCase):
     def setUp(self):

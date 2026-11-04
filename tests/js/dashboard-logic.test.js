@@ -397,6 +397,33 @@ test('People draws each person and each tracker no person lists', () => {
   assert.deepEqual(logic.peopleEntities(entities).map((e) => e.name), ['alice', 'guest_phone']);
 });
 
+test('related readings come from the descriptor sets that hold the aspect', () => {
+  const T = 'temperature';
+  const descriptor = {
+    fields: {
+      GT2: { label: 'outdoor as fed to the pump (GT2)', kind: T },
+      GT2_filtered: { label: 'outdoor sensor (GT2)', kind: T },
+      GT2_raw: { label: 'outdoor sensor, unfiltered (GT2)', kind: T },
+      setpoint: { label: 'indoor target', kind: T },
+      compressor: { label: 'compressor', kind: 'boolean' },
+    },
+    related: [['GT2_filtered', 'GT2_raw', 'GT2'], ['GT2', 'setpoint', 'compressor'], ['GT2', 'GT2_filtered']],
+  };
+  const present = ['GT2', 'GT2_filtered', 'GT2_raw', 'setpoint', 'compressor'];
+  // Every set holding the aspect contributes, each member once, in order.
+  assert.deepEqual(logic.relatedFor(descriptor, 'GT2', present), [
+    { name: 'GT2_filtered', aspect: 'GT2_filtered', label: 'outdoor sensor (GT2)' },
+    { name: 'GT2_raw', aspect: 'GT2_raw', label: 'outdoor sensor, unfiltered (GT2)' },
+    { name: 'setpoint', aspect: 'setpoint', label: 'indoor target' },
+  ], 'a member of another kind is left out');
+  assert.deepEqual(logic.relatedFor(descriptor, 'GT2_raw', ['GT2_raw', 'GT2']).map((r) => r.aspect), ['GT2'],
+    'a member the entity has not reported is left out');
+  assert.deepEqual(logic.relatedFor(descriptor, 'setpoint', present).map((r) => r.aspect), ['GT2']);
+  assert.deepEqual(logic.relatedFor(descriptor, 'compressor', present), []);
+  assert.deepEqual(logic.relatedFor({ fields: {} }, 'GT2', present), [], 'no sets');
+  assert.deepEqual(logic.relatedFor(null, 'GT2', present), [], 'no descriptor');
+});
+
 test("a person's presence is drawn from its trackers' home and sighted", () => {
   const entities = [
     { name: 'anna', capability: 'person', room: 'person', sources: {
