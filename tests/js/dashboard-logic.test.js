@@ -421,6 +421,20 @@ test('related readings come from the descriptor sets that hold the aspect', () =
   assert.deepEqual(logic.relatedFor(descriptor, 'setpoint', present).map((r) => r.aspect), ['GT2']);
   assert.deepEqual(logic.relatedFor(descriptor, 'compressor', present), []);
   assert.deepEqual(logic.relatedFor({ fields: {} }, 'GT2', present), [], 'no sets');
+  // Undescribed readings have no kind to compare, so neither side of a
+  // pair of them is drawn.
+  const loose = { fields: {}, related: [['a', 'b']] };
+  assert.deepEqual(logic.relatedFor(loose, 'a', ['a', 'b']), [], 'an undescribed aspect');
+  const power = {
+    fields: {
+      power: { label: 'power', kind: 'number', unit: 'W' },
+      energy: { label: 'energy', kind: 'number', unit: 'kWh' },
+      peak: { label: 'peak', kind: 'number', unit: 'W' },
+    },
+    related: [['power', 'energy', 'peak']],
+  };
+  assert.deepEqual(logic.relatedFor(power, 'power', ['power', 'energy', 'peak']).map((r) => r.aspect), ['peak'],
+    'a number of another unit is left out');
   assert.deepEqual(logic.relatedFor(null, 'GT2', present), [], 'no descriptor');
 });
 

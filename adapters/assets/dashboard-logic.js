@@ -1323,19 +1323,22 @@
    * from the descriptor's `related` sets: stages of one sensor, or a
    * target and its actual value. A reading in several sets gets the
    * members of each, once. A member the entity has not reported is left
-   * out, and so is one of another kind, because the chart has one y
-   * scale. */
+   * out. So is one that is undescribed or of another kind or unit,
+   * because the chart has one y scale and its readout formats every line
+   * as `aspect`. */
   function relatedFor(descriptor, aspect, present) {
     var fields = (descriptor && descriptor.fields) || {};
-    var kindOf = function (a) { return fields[a] ? fields[a].kind : undefined; };
+    var own = fields[aspect];
     var out = [], seen = {};
+    if (!own) return out;
     seen[aspect] = true;
     ((descriptor && descriptor.related) || []).forEach(function (set) {
       if (!Array.isArray(set) || set.indexOf(aspect) === -1) return;
       set.forEach(function (a) {
-        if (seen[a] || present.indexOf(a) === -1 || kindOf(a) !== kindOf(aspect)) return;
+        var f = fields[a];
+        if (seen[a] || present.indexOf(a) === -1 || !f || f.kind !== own.kind || f.unit !== own.unit) return;
         seen[a] = true;
-        out.push({ name: a, aspect: a, label: (fields[a] && fields[a].label) || a });
+        out.push({ name: a, aspect: a, label: f.label || a });
       });
     });
     return out;

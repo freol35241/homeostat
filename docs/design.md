@@ -2369,8 +2369,8 @@ In the detail overlay, the `forecasts` view draws the stored issues
 declared contributor ([Sources](#sources)) with its exclusions from
 `/api/source-events`. The `related` view draws the readings the
 descriptor relates to this one ([Aspect
-descriptors](#aspect-descriptors)), leaving out any of another kind,
-since the chart has one y scale. Each issue, contributor or related
+descriptors](#aspect-descriptors)), leaving out any of another kind
+or unit, since the chart has one y scale. Each issue, contributor or related
 reading is its own neutral line, and the outcome keeps the accent
 colour. No view draws an envelope, because its edge would trace a path
 nobody predicted. All three views are owner work, so they live in the

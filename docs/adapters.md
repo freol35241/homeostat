@@ -344,8 +344,9 @@ declares that key in `[bus.publishes]`. One record per device:
   aspect names that belong on one chart, such as a sensor's raw,
   filtered and fed values (`["GT2_filtered", "GT2_raw", "GT2"]`) or a
   target and its actual value. The detail overlay of any member offers
-  a `related` layer that draws the other members. A member the entity
-  has not reported, or one of another `kind`, is left out.
+  a `related` layer that draws the other members. Name described
+  aspects only. A member the entity has not reported, or one of another
+  `kind` or `unit`, is left out.
 
 Generate the descriptor when the protocol already describes its devices.
 The Zigbee2MQTT adapter derives one from each device's `exposes` (unit →
