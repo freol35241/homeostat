@@ -337,7 +337,15 @@
       "editable_by": "family"
      }
     }
-   }
+   },
+   "related": [
+    [
+     "indoor_temperature",
+     "setpoint",
+     "outdoor_temperature",
+     "mode"
+    ]
+   ]
   },
   "livingroom_temp": {
    "schema": 1,

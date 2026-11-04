@@ -21,7 +21,7 @@ name = "heating"
 widgets = [
   { kind = "dial", entity = "heatpump" },                                   # the indoor target, on a dial
   { kind = "chart", entity = "heatpump", aspect = "indoor_temperature", hours = 24 },
-  { kind = "chart", entity = "heatpump", aspect = "GT2", hours = 168 },                # outdoor, a week
+  { kind = "chart", entity = "heatpump", aspect = "GT2_filtered", hours = 168 },       # outdoor, a week
 ]
 
 [[view]]

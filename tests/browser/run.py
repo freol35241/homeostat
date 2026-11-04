@@ -367,6 +367,39 @@ class ViewsAreText(PageTest):
         self.assertEqual(await self.page.locator('[data-action="view-text"]').count(), 0)
 
 
+class RelatedReadings(PageTest):
+    """`docs/design.md#charts-forecasts-and-sources`: the `related` layer
+    draws the readings the descriptor relates to this one, on its scale."""
+
+    async def test_the_related_layer_draws_the_set_of_one_kind(self):
+        await self.view("heating")
+        await self.page.click('[data-action="entity-detail"][data-entity="heat_pump"]')
+        await self.page.wait_for_timeout(700)
+        await self.page.click(
+            '#overlay-panel [data-action="history-detail"][data-aspect="indoor_temperature"]'
+        )
+        await self.page.wait_for_timeout(700)
+        await self.page.click('[data-action="chart-layer"][data-layer="related"]')
+        await self.page.wait_for_timeout(700)
+        legend = self.page.locator(".source-legend span[data-source]")
+        names = [await legend.nth(i).get_attribute("data-source") for i in range(await legend.count())]
+        # The set also holds `mode`, an enum, which has no place on the scale.
+        self.assertEqual(names, ["setpoint", "outdoor_temperature"])
+        self.assertEqual(await self.page.locator("#overlay-panel .chart-contributor").count(), 2)
+
+
+class TileTitles(PageTest):
+    """A tile names its reading whenever the entity has more than one, so
+    two tiles of one entity have different titles."""
+
+    async def test_a_tile_narrowed_to_one_reading_names_it(self):
+        await self.view("now")
+        tile = self.page.locator(
+            '.tile[data-entity="livingroom_temp"][data-aspect="humidity"] .card-label'
+        )
+        self.assertRegex(await tile.inner_text(), r"· HUMIDITY$")
+
+
 class People(PageTest):
     """`docs/design.md#map-and-people`: a person is drawn once, and the
     trackers that person carries are listed in the person's overlay."""

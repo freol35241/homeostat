@@ -11,7 +11,7 @@ import { currentView, renderShell } from './chrome.js';
 import { announceOutcome, markPendingControls, pending, recent, sendCmd, sendLightsOff, sendParam, stepBase, stepCmd } from './commands.js';
 import logic from './logic.js';
 import { openEntityDetail } from './overlay/entity.js';
-import { fetchHistoryRange, fetchIssues, fetchSourceEvents, fetchSources, openHistoryDetail } from './overlay/history.js';
+import { fetchHistoryRange, fetchIssues, fetchLayerLines, fetchSourceEvents, openHistoryDetail } from './overlay/history.js';
 import { closeOverlay, overlayWide, renderOverlayContent, setOverlayWide } from './overlay/panel.js';
 import { openViewText } from './overlay/text.js';
 import { openUnitDetail } from './overlay/unit.js';
@@ -163,7 +163,7 @@ document.addEventListener('click', function (e) {
     return;
   }
   if (action === 'chart-layer') {
-    // Choosing one layer hides the other, because two sets of thin grey
+    // Choosing one layer hides the others, because two sets of thin grey
     // lines on one chart look like one set.
     overlay.layer = el.getAttribute('data-layer') || '';
     // A pin belongs to a braid or a legend that may no longer be drawn.
@@ -172,8 +172,8 @@ document.addEventListener('click', function (e) {
     if (overlay.layer === 'forecasts' && !overlay.issues.length && !overlay.issuesLoading) {
       fetchIssues(overlay.entity.name, overlay.aspect, overlay.range);
     }
+    fetchLayerLines(overlay.entity, overlay.aspect, overlay.range);
     if (overlay.layer === 'sources') {
-      fetchSources(overlay.entity, overlay.aspect, overlay.range);
       fetchSourceEvents(overlay.entity, overlay.aspect, overlay.range);
     }
     renderOverlayContent();
@@ -183,8 +183,8 @@ document.addEventListener('click', function (e) {
     var hrs = parseInt(el.getAttribute('data-hours'), 10);
     overlay.range = hrs;
     fetchHistoryRange(overlay.entity.name, overlay.aspect, hrs, overlay.shape);
+    fetchLayerLines(overlay.entity, overlay.aspect, hrs);
     if (overlay.layer === 'sources') {
-      fetchSources(overlay.entity, overlay.aspect, hrs);
       fetchSourceEvents(overlay.entity, overlay.aspect, hrs);
     }
     // A different window has a different set of issues, and a pin on a
