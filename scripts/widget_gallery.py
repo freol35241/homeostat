@@ -52,7 +52,7 @@ EXAMPLES = {
     "params": {"kind": "params", "unit": "evening_lights"},
     "people": {"kind": "people"},
     "deviations": {"kind": "deviations"},
-    "map": {"kind": "map"},
+    "map": {"kind": "map", "hours": 24, "colors": {"robin": "#d9534f"}},
     "group": {
         "kind": "group",
         "label": "Heating",
@@ -64,7 +64,14 @@ EXAMPLES = {
     "burner": {"kind": "burner", "entity": "stove"},
 }
 
-KEY_ORDER = ["kind", "entity", "aspect", "room", "unit", "label", "hours"]
+KEY_ORDER = ["kind", "entity", "aspect", "room", "unit", "label", "hours", "colors"]
+
+
+def toml_value(value) -> str:
+    """Return a value as TOML writes it; a table, such as `colors`, inline."""
+    if isinstance(value, dict):
+        return "{ " + ", ".join(f"{k} = {toml_value(v)}" for k, v in value.items()) + " }"
+    return json.dumps(value)
 
 
 def toml_widget(widget: dict, indent: str = "") -> str:
@@ -74,7 +81,7 @@ def toml_widget(widget: dict, indent: str = "") -> str:
     viewText).
     """
     fields = [
-        f"{k} = {json.dumps(widget[k])}"
+        f"{k} = {toml_value(widget[k])}"
         for k in sorted(
             (k for k in widget if k != "widgets"),
             key=lambda k: KEY_ORDER.index(k) if k in KEY_ORDER else len(KEY_ORDER),

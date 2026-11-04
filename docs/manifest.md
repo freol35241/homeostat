@@ -328,8 +328,9 @@ says what to place, not how it looks.
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `aspect` | string | no | `chart`: the aspect charted; `tile`: narrows the tiles to one reading (every reading otherwise); `dial`: the temperature command to turn (the first one, or the climate setpoint, otherwise). A key segment (`dashboard-invalid-aspect`). |
+| `colors` | table of name → string | no | `map`: a colour for an entity's marker and track, by entity name, as `#rgb` or `#rrggbb`. The entity is a `person` or a `tracker` (`dashboard-widget-capability`). Entities not named here take the accent colour. |
 | `entity` | string | no | `tile`, `chart`, `entity`, `dial`, `burner`: the entity, by name. `burner` takes one of `capability = "burner"` (`dashboard-widget-capability`). |
-| `hours` | number | no | `chart`: the window in hours (24 when absent). |
+| `hours` | number | no | `chart`: the window in hours (24 when absent). `map`: how many hours of track to draw behind each marker. Without it the map shows positions only. |
 | `kind` | [WidgetKind](#widgetkind) | yes |  |
 | `label` | string | no | `group`: the label over its members; unlabelled when absent. |
 | `room` | string | no | `room`: the room whose card to place. |
@@ -350,7 +351,7 @@ house's text, the grant table and the bus; no widget carries markup.
 - `params` — A unit's family-editable parameters as one card.
 - `people` — The persons, home or away, and each tracker no person lists.
 - `deviations` — The deviations feed: what is out of the ordinary.
-- `map` — The map: each person's position, and each tracker no person lists.
+- `map` — The map: each person's position, and each tracker no person lists, optionally with a fading track of the last `hours`.
 - `group` — Several widgets as one card, such as a dial with the traces that explain it, or a setpoint beside what it drives. Groups do not nest.
 - `burner` — A burner's card: its two commands and the two temperatures an interlock reads. It uses only the `burner` vocabulary, with nothing adapter-specific.
 

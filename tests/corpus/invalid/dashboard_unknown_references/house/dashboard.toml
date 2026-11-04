@@ -8,4 +8,5 @@ widgets = [
   { kind = "room", room = "attic" },
   { kind = "unit", unit = "zigbe" },
   { kind = "chart", entity = "kitchen_lamp", aspect = "bright/ness" },
+  { kind = "map", colors = { nobody = "#fff" } },
 ]

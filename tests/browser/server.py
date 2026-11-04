@@ -34,6 +34,10 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 PAGE = pathlib.Path(os.environ.get("HOMEOSTAT_TEST_PAGE") or ROOT / "adapters" / "dashboard.html")
 ASSETS = ROOT / "adapters" / "assets"
 FIXTURES = pathlib.Path(__file__).resolve().parent / "fixtures"
+# The aspects of a fix, which history answers as a route.
+POSITION_ASPECTS = ("lat", "lon", "accuracy", "fixed_at")
+# Where a route goes round when its entity has no position.
+HOME = (59.3326, 18.0649)
 
 
 def load(name: str):
@@ -185,21 +189,51 @@ class FakeHouse:
         aspect = request.query.get("aspect", "")
         hours = float(request.query.get("hours", "24"))
         now = time.time()
-        step = max(60.0, hours * 3600 / 120)
-        points = []
-        t = now - hours * 3600
-        while t <= now:
-            points.append(
-                {
-                    "ts": iso(t),
-                    "room": "livingroom",
-                    "value": round(20 + 1.5 * math.sin((t - now) / 9000), 2),
-                }
-            )
-            t += step
+        if aspect in POSITION_ASPECTS:
+            points = self.route(entity, aspect, hours, now)
+        else:
+            step = max(60.0, hours * 3600 / 120)
+            points = []
+            t = now - hours * 3600
+            while t <= now:
+                points.append(
+                    {
+                        "ts": iso(t),
+                        "room": "livingroom",
+                        "value": round(20 + 1.5 * math.sin((t - now) / 9000), 2),
+                    }
+                )
+                t += step
         return web.json_response(
             {"series": [{"key": f"home/history/state/{entity}/{aspect}", "points": points}]}
         )
+
+    def route(self, entity: str, aspect: str, hours: float, now: float) -> list[dict]:
+        """A loop of fixes that ends where the entity is now.
+
+        A fix every ten minutes, its `fixed_at` a second after its other
+        aspects, as a tracker publishes it. The loop is about a kilometre
+        across, around the entity's position, or the demo house when it
+        has none.
+        """
+        state = self.snapshot["state"]
+        room = "person"
+        lat0 = state.get(f"home/state/{room}/{entity}/lat", HOME[0])
+        lon0 = state.get(f"home/state/{room}/{entity}/lon", HOME[1])
+        points = []
+        t = now - hours * 3600
+        while t <= now:
+            phase = 2 * math.pi * (now - t) / (hours * 3600)
+            fix = {
+                "lat": round(lat0 + 0.006 * math.sin(phase), 6),
+                "lon": round(lon0 + 0.012 * (1 - math.cos(phase)), 6),
+                "accuracy": 15,
+                "fixed_at": round(t),
+            }
+            at = t + 1 if aspect == "fixed_at" else t
+            points.append({"ts": iso(at), "room": room, "value": fix[aspect]})
+            t += 600
+        return points
 
     async def api_forecasts(self, request: web.Request) -> web.Response:
         """Three kept issues about the next twelve hours, newest last."""

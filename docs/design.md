@@ -2633,6 +2633,31 @@ from a self-hosted PMTiles extract named by `HOMEOSTAT_DASHBOARD_TILES`
 and served by the dashboard unit. A public tile CDN would learn family
 positions from tile coordinates.
 
+With `hours`, the map also draws each entity's track over that window.
+A day of where everyone went is more than a dot saying where they are,
+so a house asks for it; without `hours` the map shows positions only.
+The track is read from the recorder:
+
+- A fix is a `fixed_at` point, with `lat`, `lon` and `accuracy` as
+  they stood then. `fixed_at` is published after the other three, so a
+  point taken where `lat` changed could pair a new `lat` with an old
+  `lon`. The page reads changes, since averaging `lat` and `lon` apart
+  in buckets would cut the corners off a route.
+- Fixes are ordered by their `fixed_at` value, the time each was
+  taken, so a phone that sends queued fixes late still draws them in
+  place.
+- A fix within its own accuracy of the last one kept is dropped. A
+  phone lying still reports a new fix inside its circle every few
+  minutes, which would otherwise draw a scribble around the spot.
+- The track fades with age. Leaflet cannot draw a gradient along a
+  line, so the window is cut into eight spans of time, each one line.
+- Live fixes extend the track, and the history is read again every few
+  minutes, which moves the window and the fade with the clock.
+
+`colors` gives a person or tracker its own marker and track colour.
+Everyone else takes the accent colour. The plan accepts only a hex
+colour, since the value is written into the map's markup.
+
 ### Cameras
 
 Pixels are the media plane, and detections are data. The payload

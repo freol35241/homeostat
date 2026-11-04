@@ -397,6 +397,52 @@ test('People draws each person and each tracker no person lists', () => {
   assert.deepEqual(logic.peopleEntities(entities).map((e) => e.name), ['alice', 'guest_phone']);
 });
 
+test('a track is one point per fixed_at, with lat and lon as they stood then', () => {
+  const at = (s) => new Date(Date.UTC(2026, 10, 4, 12, 0, s)).toISOString();
+  const t0 = Date.UTC(2026, 10, 4, 12, 0, 0) / 1000;
+  const series = {
+    // The second fix moves lat first; a point at that instant would pair
+    // the new lat with the old lon.
+    lat: [{ ts: at(0), value: 59.0 }, { ts: at(10), value: 59.1 }],
+    lon: [{ ts: at(0), value: 18.0 }, { ts: at(11), value: 18.1 }],
+    accuracy: [{ ts: at(0), value: 12 }],
+    // The newest fix was taken before the second but sent after it.
+    fixed_at: [{ ts: at(1), value: t0 }, { ts: at(12), value: t0 + 10 }, { ts: at(20), value: t0 + 5 }],
+  };
+  assert.deepEqual(logic.trackFixes(series, 0), [
+    { lat: 59.0, lon: 18.0, accuracy: 12, t: t0 * 1000 },
+    { lat: 59.1, lon: 18.1, accuracy: 12, t: (t0 + 5) * 1000 },
+    { lat: 59.1, lon: 18.1, accuracy: 12, t: (t0 + 10) * 1000 },
+  ], 'ordered by when each fix was taken');
+  assert.deepEqual(logic.trackFixes(series, (t0 + 1) * 1000).map((f) => f.t), [(t0 + 5) * 1000, (t0 + 10) * 1000],
+    'a fix taken before the window is left out');
+  assert.deepEqual(logic.trackFixes({ fixed_at: series.fixed_at }, 0), [], 'no position, no track');
+});
+
+test('a fix inside its own accuracy of the last one kept is dropped, except the newest', () => {
+  // 0.0001 degrees of latitude is about 11 m.
+  const fix = (dLat, accuracy, t) => ({ lat: 59 + dLat, lon: 18, accuracy, t });
+  const fixes = [fix(0, 20, 1), fix(0.0001, 20, 2), fix(0.001, 20, 3), fix(0.00105, 20, 4), fix(0.0011, 20, 5)];
+  assert.deepEqual(logic.thinTrack(fixes).map((f) => f.t), [1, 3, 5]);
+  assert.deepEqual(logic.thinTrack([]), []);
+});
+
+test('track bands fade with age and join end to start', () => {
+  const fix = (lat, t) => ({ lat, lon: 18, accuracy: 0, t });
+  const bands = logic.trackBands([fix(1, 0), fix(2, 10), fix(3, 55), fix(4, 60), fix(5, 99)], 0, 100, 4);
+  assert.deepEqual(bands.map((b) => b.latlngs.map((p) => p[0])), [[1, 2], [2, 3, 4], [4, 5]]);
+  const opacities = bands.map((b) => b.opacity);
+  assert.ok(opacities[0] < opacities[1] && opacities[1] < opacities[2], 'older is fainter');
+  assert.equal(opacities[2], 0.9, 'the newest band is nearly solid');
+  assert.deepEqual(logic.trackBands([fix(1, 50)], 0, 100, 4), [], 'one fix is no line');
+});
+
+test('a map colour is a hex colour or nothing', () => {
+  assert.equal(logic.hexColor('#d9534f'), '#d9534f');
+  assert.equal(logic.hexColor('#abc'), '#abc');
+  for (const bad of ['red', '#abcd', 'd9534f', '#d9534f;x', null, undefined]) assert.equal(logic.hexColor(bad), null, String(bad));
+});
+
 test('related readings come from the descriptor sets that hold the aspect', () => {
   const T = 'temperature';
   const descriptor = {
@@ -1715,7 +1761,8 @@ test('a view reads back as the dashboard.toml block that made it', () => {
           { kind: 'dial', entity: 'heat_pump' },
           { hours: 24, aspect: 'temperature', entity: 'livingroom_temp', kind: 'chart' }
         ] },
-        { kind: 'room', room: 'kitchen' }
+        { kind: 'room', room: 'kitchen' },
+        { colors: { robin: '#d9534f', alex: '#abc' }, hours: 24, kind: 'map' }
       ]
     }, { name: 'rooms', label: 'All rooms', kind: 'rooms' }]
   };
@@ -1728,6 +1775,7 @@ test('a view reads back as the dashboard.toml block that made it', () => {
     '    { kind = "chart", entity = "livingroom_temp", aspect = "temperature", hours = 24 },',
     '  ] },',
     '  { kind = "room", room = "kitchen" },',
+    '  { kind = "map", hours = 24, colors = { robin = "#d9534f", alex = "#abc" } },',
     ']',
     ''
   ].join('\n'));

@@ -66,10 +66,38 @@
 
   /* ---- history: a plausible past that ends at the present value ---- */
 
+  // The aspects of a fix. History answers them as one route, so a map's
+  // track is a path and not four unrelated waves.
+  var POSITION = ['lat', 'lon', 'accuracy', 'fixed_at'];
+
+  /* A loop of fixes about a kilometre across that ends where the entity
+   * is now: a fix every ten minutes, its `fixed_at` a second after its
+   * other aspects, as a tracker publishes it (tests/browser/server.py
+   * draws the same route). */
+  function route(entity, aspect, hours, now) {
+    var lat = currentValue(entity, 'lat'), lon = currentValue(entity, 'lon');
+    if (!lat || !lon) return [];
+    var span = hours * 3600e3, points = [];
+    for (var t = now - span; t <= now; t += 600e3) {
+      var phase = 2 * Math.PI * (now - t) / span;
+      var fix = {
+        lat: Math.round((lat.value + 0.006 * Math.sin(phase)) * 1e6) / 1e6,
+        lon: Math.round((lon.value + 0.012 * (1 - Math.cos(phase))) * 1e6) / 1e6,
+        accuracy: 15,
+        fixed_at: Math.round(t / 1000)
+      };
+      points.push({ ts: iso(aspect === 'fixed_at' ? t + 1000 : t), room: lat.room, value: fix[aspect] });
+    }
+    return points;
+  }
+
   function history(params) {
     var entity = params.get('entity'), aspect = params.get('aspect');
     var hours = parseFloat(params.get('hours') || '24');
     var now = Date.now();
+    if (POSITION.indexOf(aspect) !== -1) {
+      return { series: [{ key: 'home/history/state/' + entity + '/' + aspect, points: route(entity, aspect, hours, now) }] };
+    }
     var current = currentValue(entity, aspect);
     var points = [];
     if (current) {

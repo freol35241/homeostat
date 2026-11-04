@@ -36,6 +36,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 
 # server.py sits beside this file; `uv run --script` does not add that
@@ -386,6 +387,30 @@ class RelatedReadings(PageTest):
         # The set also holds `mode`, an enum, which has no place on the scale.
         self.assertEqual(names, ["setpoint", "outdoor_temperature"])
         self.assertEqual(await self.page.locator("#overlay-panel .chart-contributor").count(), 2)
+
+
+class MapTracks(PageTest):
+    """`docs/design.md#map-and-people`: a map with `hours` draws each
+    person's track as fading bands, in the colour `colors` gives them."""
+
+    async def test_a_track_fades_and_takes_its_colour(self):
+        await self.view("now")
+        now = time.time()
+        for aspect, value in (("lat", 59.3326), ("lon", 18.0649), ("accuracy", 15), ("fixed_at", now)):
+            await self.house.push(
+                {"type": "state", "key": f"home/state/person/robin/{aspect}", "value": value}
+            )
+        await self.page.wait_for_timeout(1200)
+        tracks = self.page.locator("#person-map path.person-track")
+        self.assertGreater(await tracks.count(), 1, "a track is several bands")
+        strokes = await tracks.evaluate_all("els => els.map(e => e.getAttribute('stroke'))")
+        opacities = await tracks.evaluate_all(
+            "els => els.map(e => Number(e.getAttribute('stroke-opacity')))"
+        )
+        self.assertIn("#d9534f", strokes, "robin's colour from `colors`")
+        self.assertLess(min(opacities), max(opacities), "older bands are fainter")
+        dot = self.page.locator("#person-map .person-marker-dot").first
+        self.assertIn("217, 83, 79", await dot.evaluate("e => getComputedStyle(e).backgroundColor"))
 
 
 class TileTitles(PageTest):
