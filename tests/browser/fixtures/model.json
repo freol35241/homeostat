@@ -428,6 +428,11 @@
      "aspect": "price"
     },
     {
+     "kind": "tile",
+     "entity": "livingroom_temp",
+     "aspect": "humidity"
+    },
+    {
      "kind": "people"
     },
     {
