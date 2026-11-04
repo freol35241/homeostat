@@ -439,7 +439,11 @@
      "kind": "deviations"
     },
     {
-     "kind": "map"
+     "kind": "map",
+     "hours": 24,
+     "colors": {
+      "robin": "#d9534f"
+     }
     }
    ]
   },

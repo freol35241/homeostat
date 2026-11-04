@@ -7,4 +7,5 @@ name = "now"
 widgets = [
   { kind = "burner", entity = "kitchen_lamp" },
   { kind = "burner", entity = "kitchen_lamp", aspect = "on" },
+  { kind = "map", hours = 24, colors = { kitchen_lamp = "#d9534f" } },
 ]

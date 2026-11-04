@@ -310,15 +310,16 @@ codes! {
         capability: a `burner` widget draws the `burner` vocabulary — the \
         two commands and the two temperatures an interlock reads — which \
         an entity that does not speak it has nothing to fill. Place that \
-        entity with `entity`, `tile` or `chart` instead.",
+        entity with `entity`, `tile` or `chart` instead. A `map`'s `colors` \
+        name people and trackers, the entities the map draws.",
     DashboardWidgetFields => "dashboard-widget-fields":
         "A widget in `dashboard.toml` is missing a field its kind needs, or \
         carries one it does not take: `tile`, `chart`, `entity` and `dial` \
         name an `entity` (`chart` also an `aspect`, optionally `hours`; \
         `tile` and `dial` optionally an `aspect`), `room` a `room`, `unit` and `params` a \
         `unit`; `group` a list of `widgets` and optionally a `label`; \
-        `burner` an `entity`; `people`, `deviations` and `map` take \
-        nothing. The set is \
+        `burner` an `entity`; `map` optionally `hours` and `colors` (each a \
+        hex colour); `people` and `deviations` take nothing. The set is \
         closed so a typo is refused, not ignored.",
     DashboardUnknownEntity => "dashboard-unknown-entity":
         "A widget in `dashboard.toml` names an entity no unit binds. Widgets \

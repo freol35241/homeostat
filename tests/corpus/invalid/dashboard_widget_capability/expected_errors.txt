@@ -1,2 +1,3 @@
 error[dashboard-widget-capability] now[0]: a `burner` widget needs a burner; "kitchen_lamp" is a light (dashboard.toml)
+error[dashboard-widget-capability] now[2]: a `map` colours a person or a tracker; "kitchen_lamp" is a light (dashboard.toml)
 error[dashboard-widget-fields] now[1]: a `burner` widget takes no `aspect` (dashboard.toml)

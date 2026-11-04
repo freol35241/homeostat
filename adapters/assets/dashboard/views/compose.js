@@ -18,7 +18,7 @@ import { widgetUnit } from '../widgets/unit.js';
 // after the markup is inserted, because Leaflet owns its container.
 export function renderWidgets(title, widgets) {
   var persons = personEntities();
-  var wantMap = false;
+  var wantMap = null;
   // One widget's card. A group calls this for each of its members, so a
   // member renders the same as it would directly on the view.
   function card(w) {
@@ -51,7 +51,7 @@ export function renderWidgets(title, widgets) {
     if (w.kind === 'people') return widgetPeople(persons);
     if (w.kind === 'deviations') return widgetDeviations();
     if (w.kind === 'map' && persons.length > 0) {
-      wantMap = true;
+      wantMap = { hours: w.hours, colors: w.colors };
       return renderMapCard(persons);
     }
     if (w.kind === 'group') return widgetGroup(w, card);
@@ -60,7 +60,7 @@ export function renderWidgets(title, widgets) {
   var cards = html`${widgets.map(card)}`;
   byId('view').innerHTML = html`<h1 class="view-title">${title}</h1>
     ${String(cards) ? html`<div class="grid">${cards}</div>` : html`<div class="card"><div class="empty-hint">Nothing to show yet.</div></div>`}`;
-  if (wantMap) mountMap(persons);
+  if (wantMap) mountMap(persons, wantMap);
 }
 
 // A group is one card around its members: its label, then each member's

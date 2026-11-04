@@ -86,6 +86,85 @@
     });
   }
 
+  /* ---- map tracks (docs/design.md#map-and-people) ---- */
+
+  // The value a series held at `ts`: its last point at or before it.
+  function valueAsOf(points, ts) {
+    var value;
+    for (var i = 0; i < points.length && Date.parse(points[i].ts) <= ts; i++) value = points[i].value;
+    return value;
+  }
+
+  /* An entity's fixes over a window, oldest first, from the recorder's
+   * `lat`, `lon`, `accuracy` and `fixed_at` series. Every fix ends with
+   * its `fixed_at`, which is published after the other three, so each
+   * `fixed_at` point marks one complete fix. A point taken where `lat`
+   * changed could pair the new `lat` with the old `lon`. A fix is placed
+   * at its `fixed_at` time, which is when it was taken, even if the phone
+   * sent it later. */
+  function trackFixes(series, from) {
+    var out = [];
+    (series.fixed_at || []).forEach(function (p) {
+      var at = Date.parse(p.ts);
+      var lat = valueAsOf(series.lat || [], at);
+      var lon = valueAsOf(series.lon || [], at);
+      if (typeof lat !== 'number' || typeof lon !== 'number' || typeof p.value !== 'number') return;
+      var t = p.value * 1000;
+      if (t < from) return;
+      var accuracy = valueAsOf(series.accuracy || [], at);
+      out.push({ lat: lat, lon: lon, accuracy: typeof accuracy === 'number' ? accuracy : 0, t: t });
+    });
+    return out.sort(function (a, b) { return a.t - b.t; });
+  }
+
+  function metresBetween(a, b) {
+    var rad = Math.PI / 180;
+    var dLat = (b.lat - a.lat) * rad, dLon = (b.lon - a.lon) * rad;
+    var h = Math.pow(Math.sin(dLat / 2), 2) +
+      Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.pow(Math.sin(dLon / 2), 2);
+    return 2 * 6371000 * Math.asin(Math.min(1, Math.sqrt(h)));
+  }
+
+  /* The fixes worth drawing. A phone lying still reports a fix inside its
+   * accuracy circle every few minutes, and drawing them scribbles around
+   * the spot. A fix within its own accuracy of the last one kept is
+   * dropped. The newest fix is always kept, so the line reaches the
+   * marker. */
+  function thinTrack(fixes) {
+    var kept = [];
+    fixes.forEach(function (f, i) {
+      var last = kept[kept.length - 1];
+      if (!last || i === fixes.length - 1 || metresBetween(last, f) > f.accuracy) kept.push(f);
+    });
+    return kept;
+  }
+
+  /* The track as polylines that fade with age. Leaflet cannot draw a
+   * gradient along a line, so the window is cut into `bands` spans of
+   * time, each one line with its own opacity. Each band starts at the
+   * previous band's last fix, so the line has no gaps. */
+  function trackBands(fixes, from, to, bands) {
+    var span = (to - from) / bands;
+    var out = [];
+    var prev = null;
+    for (var i = 0; i < bands; i++) {
+      var latlngs = prev ? [[prev.lat, prev.lon]] : [];
+      fixes.forEach(function (f) {
+        var band = Math.min(bands - 1, Math.max(0, Math.floor((f.t - from) / span)));
+        if (band === i) { latlngs.push([f.lat, f.lon]); prev = f; }
+      });
+      if (latlngs.length > 1) out.push({ opacity: 0.15 + 0.75 * (i + 1) / bands, latlngs: latlngs });
+    }
+    return out;
+  }
+
+  // A `colors` value as the house wrote it, or null unless it is a hex
+  // colour. The plan refuses anything else; this keeps the page safe from
+  // a value that reached it some other way.
+  function hexColor(value) {
+    return typeof value === 'string' && /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(value) ? value : null;
+  }
+
   // "room/entity" when the key is an occupancy-aspect state key, else null.
   function occupancyEntityFromKey(key) {
     var parts = key.split('/');
@@ -767,11 +846,16 @@
    * indented under it. Comments and spacing are not reproduced, but the
    * content is. It is read-only, and the dashboard does not write to the
    * house. */
-  var WIDGET_KEY_ORDER = ['kind', 'entity', 'aspect', 'room', 'unit', 'label', 'hours'];
+  var WIDGET_KEY_ORDER = ['kind', 'entity', 'aspect', 'room', 'unit', 'label', 'hours', 'colors'];
 
   function tomlValue(v) {
     // A JSON string literal is a valid TOML basic string.
     if (typeof v === 'string') return JSON.stringify(v);
+    // A table, such as a map's `colors`, is written inline. Its keys are
+    // entity names, which are bare TOML keys.
+    if (v && typeof v === 'object') {
+      return '{ ' + Object.keys(v).map(function (k) { return k + ' = ' + tomlValue(v[k]); }).join(', ') + ' }';
+    }
     return String(v);
   }
 
@@ -1783,6 +1867,10 @@
     occupancyReading: occupancyReading,
     personStatus: personStatus,
     peopleEntities: peopleEntities,
+    trackFixes: trackFixes,
+    thinTrack: thinTrack,
+    trackBands: trackBands,
+    hexColor: hexColor,
     trackersOf: trackersOf,
     occupancyEntityFromKey: occupancyEntityFromKey,
     unitNameFromHealthKey: unitNameFromHealthKey,
