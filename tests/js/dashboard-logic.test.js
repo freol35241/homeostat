@@ -417,6 +417,11 @@ test('a track is one point per fixed_at, with lat and lon as they stood then', (
   assert.deepEqual(logic.trackFixes(series, (t0 + 1) * 1000).map((f) => f.t), [(t0 + 5) * 1000, (t0 + 10) * 1000],
     'a fix taken before the window is left out');
   assert.deepEqual(logic.trackFixes({ fixed_at: series.fixed_at }, 0), [], 'no position, no track');
+  // A person who has not moved since long before the window: the only
+  // lat and lon are older than the window, and still place each fix.
+  const still = { lat: [{ ts: at(-86400), value: 59.0 }], lon: [{ ts: at(-86400), value: 18.0 }], fixed_at: series.fixed_at };
+  assert.deepEqual(logic.trackFixes(still, t0 * 1000).map((f) => [f.lat, f.lon]), [[59.0, 18.0], [59.0, 18.0], [59.0, 18.0]],
+    'a value from before the window still pairs');
 });
 
 test('a fix inside its own accuracy of the last one kept is dropped, except the newest', () => {

@@ -400,7 +400,10 @@ class MapTracks(PageTest):
             await self.house.push(
                 {"type": "state", "key": f"home/state/person/robin/{aspect}", "value": value}
             )
-        await self.page.wait_for_timeout(1200)
+        # The history reads land after the render that asked for them.
+        await self.page.wait_for_function(
+            "document.querySelectorAll('#person-map path.person-track').length > 1"
+        )
         tracks = self.page.locator("#person-map path.person-track")
         self.assertGreater(await tracks.count(), 1, "a track is several bands")
         strokes = await tracks.evaluate_all("els => els.map(e => e.getAttribute('stroke'))")

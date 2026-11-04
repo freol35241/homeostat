@@ -2634,15 +2634,21 @@ and served by the dashboard unit. A public tile CDN would learn family
 positions from tile coordinates.
 
 With `hours`, the map also draws each entity's track over that window.
-A day of where everyone went is more than a dot saying where they are,
-so a house asks for it; without `hours` the map shows positions only.
-The track is read from the recorder:
+Without `hours` the map shows positions only. A track shows where each
+person has been all day, which the house should choose to put on a
+shared screen. The track is read from the recorder:
 
 - A fix is a `fixed_at` point, with `lat`, `lon` and `accuracy` as
   they stood then. `fixed_at` is published after the other three, so a
   point taken where `lat` changed could pair a new `lat` with an old
   `lon`. The page reads changes, since averaging `lat` and `lon` apart
-  in buckets would cut the corners off a route.
+  in buckets would cut the corners off a route. `lat`, `lon` and
+  `accuracy` publish only on change, so they are read over the history
+  API's longest window. A person who has not moved since before the
+  track's window still needs a value for each fix.
+- A read keeps the newest 5,000 fixes. A phone reporting every 30
+  seconds fills that in about 40 hours, so a longer `hours` shows only
+  its newest part.
 - Fixes are ordered by their `fixed_at` value, the time each was
   taken, so a phone that sends queued fixes late still draws them in
   place.

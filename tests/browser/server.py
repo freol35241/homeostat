@@ -214,7 +214,8 @@ class FakeHouse:
         A fix every ten minutes, its `fixed_at` a second after its other
         aspects, as a tracker publishes it. The loop is about a kilometre
         across, around the entity's position, or the demo house when it
-        has none.
+        has none. It takes a day whatever window is asked for, since the
+        page reads `lat` and `lon` over a longer window than `fixed_at`.
         """
         state = self.snapshot["state"]
         room = "person"
@@ -223,7 +224,7 @@ class FakeHouse:
         points = []
         t = now - hours * 3600
         while t <= now:
-            phase = 2 * math.pi * (now - t) / (hours * 3600)
+            phase = 2 * math.pi * (now - t) / 86400
             fix = {
                 "lat": round(lat0 + 0.006 * math.sin(phase), 6),
                 "lon": round(lon0 + 0.012 * (1 - math.cos(phase)), 6),

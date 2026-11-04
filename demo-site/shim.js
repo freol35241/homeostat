@@ -73,13 +73,14 @@
   /* A loop of fixes about a kilometre across that ends where the entity
    * is now: a fix every ten minutes, its `fixed_at` a second after its
    * other aspects, as a tracker publishes it (tests/browser/server.py
-   * draws the same route). */
+   * draws the same route). The loop takes a day whatever the window, since
+   * the page reads `lat` and `lon` over a longer window than `fixed_at`. */
   function route(entity, aspect, hours, now) {
     var lat = currentValue(entity, 'lat'), lon = currentValue(entity, 'lon');
     if (!lat || !lon) return [];
     var span = hours * 3600e3, points = [];
     for (var t = now - span; t <= now; t += 600e3) {
-      var phase = 2 * Math.PI * (now - t) / span;
+      var phase = 2 * Math.PI * (now - t) / 86400e3;
       var fix = {
         lat: Math.round((lat.value + 0.006 * Math.sin(phase)) * 1e6) / 1e6,
         lon: Math.round((lon.value + 0.012 * (1 - Math.cos(phase))) * 1e6) / 1e6,

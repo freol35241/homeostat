@@ -1,11 +1,11 @@
 /* The map widget. The map shows every person, and every tracker no person
  * lists, rather than being a per-entity row (see
  * docs/design.md#map-and-people). With `hours` it also draws each one's
- * track over that window. Leaflet's map object
- * has state (pan/zoom, tile cache) and must not be recreated on every
- * state-delta render. Its container is therefore a detached DOM node kept
- * in mapState and moved into a new slot on each render, instead of being
- * rebuilt from an HTML string like the rest of the view. */
+ * track over that window. Leaflet's map object has state (pan/zoom, tile
+ * cache) and must not be recreated on every state-delta render. Its
+ * container is therefore a detached DOM node kept in mapState and moved
+ * into a new slot on each render, instead of being rebuilt from an HTML
+ * string like the rest of the view. */
 import { byId, html } from '../html.js';
 import logic from '../logic.js';
 import { stateValue, store } from '../store.js';
@@ -20,7 +20,14 @@ var TRACK_REFRESH_MS = 5 * 60e3;
 var TRACK_BANDS = 8;
 // The most fixes a track reads per series: the history endpoint's cap.
 var TRACK_LIMIT = 5000;
-var POSITION_ASPECTS = ['lat', 'lon', 'accuracy', 'fixed_at'];
+// The window `lat`, `lon` and `accuracy` are read over: the history
+// endpoint's longest. A changes read starts at the first change inside
+// its window, and these publish only on change, so a person who has not
+// moved since before the track's window has no row in it. Each fix needs
+// the value as it stood when the fix was taken.
+var TRACK_LOOKBACK_HOURS = 24 * 31;
+// The aspects a fix is paired from, beside `fixed_at`.
+var FIX_ASPECTS = ['lat', 'lon', 'accuracy'];
 
 function personLatLon(entity) {
   var lat = stateValue(entity.room, entity.name, 'lat');
@@ -84,8 +91,9 @@ function updateMapMarkers(persons, opts) {
     seen[key] = true;
     var color = logic.hexColor((opts.colors || {})[e.name]);
     var latlon = personLatLon(e);
-    if (opts.hours) updateTrack(key, e, opts.hours, color || accentColor());
-    else dropTrack(key);
+    if (!opts.hours) dropTrack(key);
+    // An entity that has never had a position has no track to read.
+    else if (latlon) updateTrack(key, e, opts.hours, color || accentColor());
     if (!latlon) {
       if (mapState.markers[key]) { map.removeLayer(mapState.markers[key]); delete mapState.markers[key]; }
       if (mapState.circles[key]) { map.removeLayer(mapState.circles[key]); delete mapState.circles[key]; }
@@ -167,24 +175,34 @@ function updateTrack(key, entity, hours, color) {
   track.drawn = signature;
 }
 
+// One series over the last `hours`, as changes. Changes, not buckets:
+// averaging lat and lon apart would cut the corners off a route.
+function readChanges(entity, aspect, hours) {
+  return fetch('/api/history?entity=' + encodeURIComponent(entity.name) + '&aspect=' + aspect +
+               '&hours=' + hours + '&changes=1&limit=' + TRACK_LIMIT)
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      var points = [];
+      (data.series || []).forEach(function (s) { points = points.concat(s.points || []); });
+      return points;
+    })
+    .catch(function () { return []; });
+}
+
 function readTrack(track, entity, hours) {
   track.reading = true;
-  var reads = POSITION_ASPECTS.map(function (aspect) {
-    // Changes, not buckets: averaging lat and lon apart would cut the
-    // corners off a route.
-    return fetch('/api/history?entity=' + encodeURIComponent(entity.name) + '&aspect=' + aspect +
-                 '&hours=' + hours + '&changes=1&limit=' + TRACK_LIMIT)
-      .then(function (r) { return r.json(); })
-      .then(function (data) {
-        var points = [];
-        (data.series || []).forEach(function (s) { points = points.concat(s.points || []); });
-        return points;
-      })
-      .catch(function () { return []; });
-  });
-  Promise.all(reads).then(function (results) {
-    var series = {};
-    POSITION_ASPECTS.forEach(function (aspect, i) { series[aspect] = results[i]; });
+  // `fixed_at` first. Each read ends at the server's own now, and a fix's
+  // `fixed_at` lands after its `lat` and `lon`. Read after it, they hold
+  // every fix the `fixed_at` reply has.
+  readChanges(entity, 'fixed_at', hours).then(function (fixedAt) {
+    return Promise.all(FIX_ASPECTS.map(function (aspect) {
+      return readChanges(entity, aspect, TRACK_LOOKBACK_HOURS);
+    })).then(function (results) {
+      var series = { fixed_at: fixedAt };
+      FIX_ASPECTS.forEach(function (aspect, i) { series[aspect] = results[i]; });
+      return series;
+    });
+  }).then(function (series) {
     var now = Date.now();
     var fixes = logic.trackFixes(series, now - hours * 3600e3);
     // Live fixes newer than the read stay.
