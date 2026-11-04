@@ -204,7 +204,7 @@ COMMANDS = {
 # keep the firmware's sensor code in parentheses so the page and the
 # manual agree on what a reading is. Aspects not named here still publish
 # and render, in the page's diagnostics group under their firmware names.
-ASPECT_GROUPS = ["control", "readings", "status", "limits"]
+ASPECT_GROUPS = ["control", "readings", "status", "limits", "diagnostics"]
 # Labels follow lib/IVT490/IVT490.h's field comments (Swedish, the pump's
 # own manual vocabulary) with the firmware code kept in parentheses.
 T = "temperature"
@@ -235,9 +235,16 @@ ASPECT_FIELDS = {
     },
     "feed_temperature": {"label": "feed line (GT1)", "kind": T, "group": "readings"},
     "GT1_target": {"label": "feed line target (GT1_target)", "kind": T, "group": "readings"},
-    "GT2": {"label": "outdoor (GT2)", "kind": T, "group": "readings"},
+    # GT2 and GT3_2 are what the pump reads, which is what the bridge feeds
+    # it. GT2 carries the curve offset and indoor correction, and the
+    # GT3_2 emulation fakes the tank in block and boost. The bridge's own
+    # thermistor reading is the _filtered aspect (a 10-minute mean), so
+    # that one carries the plain name.
+    "GT2_filtered": {"label": "outdoor sensor (GT2)", "kind": T, "group": "readings"},
+    "GT2": {"label": "outdoor as fed to the pump (GT2)", "kind": T, "group": "readings"},
     "GT3_1": {"label": "tap hot water (GT3_1)", "kind": T, "group": "readings"},
-    "GT3_2": {"label": "hot water tank (GT3_2)", "kind": T, "group": "readings"},
+    "GT3_2_filtered": {"label": "hot water tank (GT3_2)", "kind": T, "group": "readings"},
+    "GT3_2": {"label": "hot water tank as fed to the pump (GT3_2)", "kind": T, "group": "readings"},
     "GT3_3": {"label": "heating water (GT3_3)", "kind": T, "group": "readings"},
     "GT3_3_target": {"label": "heating water target (GT3_3_target)", "kind": T, "group": "readings"},
     "GT3_4": {"label": "extra accumulator tank (GT3_4)", "kind": T, "group": "readings"},
@@ -267,6 +274,9 @@ ASPECT_FIELDS = {
     "GT3_2_UL": {"label": "tank upper limit (GT3_2_UL)", "kind": T, "group": "limits"},
     "GT3_2_ULT": {"label": "tank upper limit for backup (GT3_2_ULT)", "kind": T, "group": "limits"},
     "GT3_3_LL": {"label": "heating water lower limit (GT3_3_LL)", "kind": T, "group": "limits"},
+    # diagnostics: the thermistors as the bridge's ADC reads them
+    "GT2_raw": {"label": "outdoor sensor, unfiltered (GT2)", "kind": T, "group": "diagnostics"},
+    "GT3_2_raw": {"label": "hot water tank, unfiltered (GT3_2)", "kind": T, "group": "diagnostics"},
 }
 COMMAND_TIER = {
     "setpoint": "family",

@@ -367,6 +367,18 @@ class ViewsAreText(PageTest):
         self.assertEqual(await self.page.locator('[data-action="view-text"]').count(), 0)
 
 
+class TileTitles(PageTest):
+    """A tile names its reading whenever the entity has more than one, so
+    two tiles of one entity have different titles."""
+
+    async def test_a_tile_narrowed_to_one_reading_names_it(self):
+        await self.view("now")
+        tile = self.page.locator(
+            '.tile[data-entity="livingroom_temp"][data-aspect="humidity"] .card-label'
+        )
+        self.assertRegex(await tile.inner_text(), r"· HUMIDITY$")
+
+
 class People(PageTest):
     """`docs/design.md#map-and-people`: a person is drawn once, and the
     trackers that person carries are listed in the person's overlay."""
