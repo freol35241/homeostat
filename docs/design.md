@@ -2640,7 +2640,7 @@ library, the style's fonts and its icons are vendored
 (`adapters/assets/map/`), and the page makes no request outside the
 house. The map credits OpenStreetMap and Protomaps, as the data's licence
 asks. MapLibre is loaded the first time a map is shown, so a view without
-one does not pay for it. A browser without WebGL shows a line saying so
+one does not pay for it. A browser without WebGL2 shows a line saying so
 in place of the map.
 
 With `hours`, the map also draws each entity's track over that window.
@@ -2667,9 +2667,9 @@ shared screen. The track is read from the recorder:
   minutes, which would otherwise draw a scribble around the spot.
 - The track fades with age, from faint at the window's start to solid
   at the marker. MapLibre's line gradient runs over distance along the
-  line, so the page works out each fix's age at points along it. A stop
-  where someone stood still for hours fades as it should, not with the
-  stretch of road around it.
+  line, so the page works out each fix's age at points along it. Fixes
+  are not evenly spaced along a route, and a stop of several hours fades
+  by its own age.
 - Live fixes extend the track, and the history is read again every few
   minutes, which moves the window and the fade with the clock.
 

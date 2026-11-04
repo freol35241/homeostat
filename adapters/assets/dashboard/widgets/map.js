@@ -20,7 +20,7 @@ import { relTime } from './entity.js';
 var MAP_ASSETS = new URL('../../map/', import.meta.url).href;
 
 var mapState = {
-  container: null, map: null, maplibre: null, basemaps: null, loading: null,
+  container: null, map: null, maplibre: null, basemaps: null, loading: null, unavailable: null,
   markers: {}, tracks: {}, accuracy: { type: 'FeatureCollection', features: [] }, fitted: false
 };
 
@@ -71,10 +71,10 @@ function accentColor() {
   return logic.hexColor(cssVar('--accent')) || '#808080';
 }
 
-function webglAvailable() {
+// MapLibre 6 needs WebGL2.
+function webgl2Available() {
   try {
-    var canvas = document.createElement('canvas');
-    return !!(canvas.getContext('webgl2') || canvas.getContext('webgl'));
+    return !!document.createElement('canvas').getContext('webgl2');
   } catch (e) {
     return false;
   }
@@ -130,9 +130,11 @@ function mapStyle() {
   };
 }
 
+// The map, once loaded, or null with `mapState.unavailable` saying why.
 function ensureMap() {
   if (mapState.loading) return mapState.loading;
-  if (!webglAvailable()) {
+  if (!webgl2Available()) {
+    mapState.unavailable = 'This browser cannot draw the map: WebGL2 is unavailable.';
     mapState.loading = Promise.resolve(null);
     return mapState.loading;
   }
@@ -145,8 +147,11 @@ function ensureMap() {
     var maplibre = mapState.maplibre = loaded[0];
     mapState.basemaps = loaded[1];
     if (tiles) maplibre.addProtocol('pmtiles', new window.pmtiles.Protocol().tile);
-    // No meaningful centre yet. It is set once real fixes exist
-    // (updateMapMarkers), so no coordinate is hardcoded.
+    // The note a failed earlier load left in the container.
+    mapState.container.classList.remove('map-unavailable');
+    mapState.container.textContent = '';
+    // The centre is a placeholder until the first fixes set it
+    // (updateMapMarkers).
     var map = new maplibre.Map({
       container: mapState.container, style: mapStyle(), center: [0, 0], zoom: 1,
       maxZoom: MAX_ZOOM, attributionControl: { compact: true }
@@ -156,7 +161,7 @@ function ensureMap() {
     // extract does not cover, fails one request and the map draws on
     // without it. MapLibre logs every error unless the page listens, and
     // the page's own console errors are kept for its own faults.
-    map.on('error', function (e) { console.warn('map: ' + ((e.error && e.error.message) || e)); });
+    map.on('error', function (e) { console.warn('map: ' + ((e.error && e.error.message) || e.type)); });
     // A style change drops every source and layer the page added, so they
     // are added again from what mapState holds.
     // `diff: false` reloads the style whole, which fires `style.load`. A
@@ -166,12 +171,13 @@ function ensureMap() {
       darkScheme.addEventListener('change', function () { map.setStyle(mapStyle(), { diff: false }); });
     }
     mapState.map = map;
-    // An inline style can finish loading before the listener above.
-    // Adding the overlays twice is harmless.
-    if (map.isStyleLoaded()) addOverlays();
     return map;
   }).catch(function (err) {
+    // A file that did not load, such as over a dropped connection. The
+    // next render tries again.
     console.warn('map: ' + err);
+    mapState.unavailable = 'The map could not be loaded.';
+    mapState.loading = null;
     return null;
   });
   return mapState.loading;
@@ -189,6 +195,9 @@ function addOverlays() {
       paint: { 'line-color': ['get', 'color'], 'line-width': 1 } });
   }
   Object.keys(mapState.tracks).forEach(function (key) { applyTrack(key, mapState.tracks[key]); });
+  // A theme switch also changes the accent, so the lines and circles are
+  // drawn again in the new one.
+  mountMapAgain();
 }
 
 function setAccuracy(features) {
@@ -431,7 +440,7 @@ export function mountMap(persons, opts) {
   ensureMap().then(function (map) {
     if (!map) {
       mapState.container.classList.add('map-unavailable');
-      mapState.container.textContent = 'This browser cannot draw the map: WebGL is unavailable.';
+      mapState.container.textContent = mapState.unavailable;
       return;
     }
     map.resize();

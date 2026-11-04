@@ -161,7 +161,9 @@
     var j = 0;
     for (var k = 0; k <= steps; k++) {
       var d = total * k / steps;
-      while (j < fixes.length - 2 && along[j + 1] < d) j++;
+      // `<=` steps onto a last segment of no length, a phone lying where
+      // it stopped, so the line's end takes the newest fix's time.
+      while (j < fixes.length - 2 && along[j + 1] <= d) j++;
       var seg = along[j + 1] - along[j];
       var t = seg > 0 ? fixes[j].t + (fixes[j + 1].t - fixes[j].t) * (d - along[j]) / seg : fixes[j + 1].t;
       stops.push([k / steps, opacity(t)]);

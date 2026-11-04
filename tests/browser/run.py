@@ -57,9 +57,12 @@ class PageTest(unittest.IsolatedAsyncioTestCase):
     """
 
     viewport = DESKTOP
+    # Whether the house has a tile extract (server.py, FakeHouse.tiles).
+    tiles = False
 
     async def asyncSetUp(self) -> None:
         self.house = FakeHouse()
+        self.house.tiles = self.tiles
         url = await self.house.start()
         self.pw = await async_playwright().start()
         self.browser = await self.pw.chromium.launch()
@@ -426,6 +429,35 @@ class MapTracks(PageTest):
             await self.page.wait_for_timeout(100)
         self.assertTrue(wanted("fixed_at", 24), reads)
         self.assertTrue(wanted("lat", 744), reads)
+
+
+class MapBasemap(PageTest):
+    """`docs/design.md#map-and-people`: with an extract, the map loads the
+    Protomaps style for the page's colour scheme, credits OpenStreetMap,
+    and switches style with the scheme while keeping its markers."""
+
+    tiles = True
+
+    async def test_the_style_follows_the_colour_scheme(self):
+        await self.view("now")
+        for aspect, value in (("lat", 59.3326), ("lon", 18.0649), ("fixed_at", time.time())):
+            await self.house.push(
+                {"type": "state", "key": f"home/state/person/robin/{aspect}", "value": value}
+            )
+        await self.page.wait_for_function(
+            "(document.querySelector('#person-map .maplibregl-ctrl-attrib') || {}).textContent?.includes('OpenStreetMap')"
+        )
+        served = self.house.map_assets
+        self.assertIn("map/sprites/light.json", served)
+
+        await self.page.emulate_media(color_scheme="dark")
+        for _ in range(50):
+            if "map/sprites/dark.json" in served:
+                break
+            await self.page.wait_for_timeout(100)
+        self.assertIn("map/sprites/dark.json", served)
+        await self.page.wait_for_timeout(500)
+        self.assertEqual(await self.page.locator("#person-map .person-marker").count(), 1)
 
 
 class MapLibreRenders(PageTest):

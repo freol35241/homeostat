@@ -445,6 +445,10 @@ test('a track fades by the age of each fix, along its length', () => {
   // Halfway along the line is the middle fix, taken at t = 10, not t = 50.
   assert.ok(Math.abs(opacity[2] - (0.15 + 0.85 * 0.1)) < 1e-6, String(opacity[2]));
   for (let i = 1; i < opacity.length; i++) assert.ok(opacity[i] >= opacity[i - 1], 'newer is never fainter');
+  // Someone who arrived at t = 10 and has not moved since: the newest fix
+  // repeats the one before it, and the end of the line is still solid.
+  const arrived = logic.trackGradient([fix(59, 0), fix(59.01, 10), fix(59.01, 100)], 0, 100, 4);
+  assert.equal(arrived.stops[4][1], 1, 'solid where they are now');
   assert.equal(logic.trackGradient([fix(59, 0)], 0, 100, 4), null, 'one fix is no line');
   assert.equal(logic.trackGradient([fix(59, 0), fix(59, 50)], 0, 100, 4), null, 'a line of no length');
 });
