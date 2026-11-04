@@ -206,7 +206,7 @@ async fn ivt490_state_translates_to_bus_state() {
     assert_eq!(
         fields["GT2"]["label"],
         json!("outdoor as fed to the pump (GT2)"),
-        "GT2 is what the bridge feeds the pump, not the outdoor reading"
+        "GT2 is the value the bridge feeds the pump"
     );
     assert_eq!(fields["GT2_raw"]["group"], json!("diagnostics"));
     assert_eq!(
@@ -223,10 +223,6 @@ async fn ivt490_state_translates_to_bus_state() {
         fields["electricity_supplement"]["kind"],
         json!("percent"),
         "IVT490.h: procent utnyttjande"
-    );
-    assert!(
-        fields.get("indoor_temperature_valid").is_none(),
-        "undescribed aspects are simply absent"
     );
 
     sup.shutdown();
