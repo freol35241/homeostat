@@ -128,7 +128,12 @@ class FakeHouse:
         path = (ASSETS / name).resolve()
         if ASSETS not in path.parents or not path.exists():
             raise web.HTTPNotFound()
-        types = {".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml"}
+        types = {
+            ".js": "text/javascript",
+            ".mjs": "text/javascript",
+            ".css": "text/css",
+            ".svg": "image/svg+xml",
+        }
         return web.FileResponse(
             path, headers={"Content-Type": types.get(path.suffix, "text/plain")}
         )

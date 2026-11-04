@@ -10,7 +10,14 @@ update a file, download it again and update its row in this table.
 | leaflet.js | https://unpkg.com/leaflet@1.9.4/dist/leaflet.js | db49d009c841f5ca34a888c96511ae936fd9f5533e90d8b2c4d57596f4e5641a |
 | leaflet.css | https://unpkg.com/leaflet@1.9.4/dist/leaflet.css | a7837102824184820dfa198d1ebcd109ff6d0ff9a2672a074b9a1b4d147d04c6 |
 | protomaps-leaflet.js | https://unpkg.com/protomaps-leaflet@4.0.1/dist/protomaps-leaflet.js | 8e3d2aa0f5a2fd46871ff9c6ed47fdcdb969bc6ed10bf6719dee507b46a2ec9e |
+| maplibre-gl.mjs | https://unpkg.com/maplibre-gl@6.16.0/dist/maplibre-gl.mjs | fbbdf8ddd9a48e49059a4be6795a4f214a711314bb5809f72d3730b48e7897e3 |
+| maplibre-gl-worker.mjs | https://unpkg.com/maplibre-gl@6.16.0/dist/maplibre-gl-worker.mjs | 0bf06492bdb7ba3d4132b78e435621bfba60d5250967991c02b1a73affea8cd5 |
+| maplibre-gl.css | https://unpkg.com/maplibre-gl@6.16.0/dist/maplibre-gl.css | a90798a1953017790e590f7e1bd35ff103a8a4263972cb47290b78adf86f8c20 |
 | video-rtc.js | https://raw.githubusercontent.com/AlexxIT/go2rtc/master/www/video-rtc.js (VideoRTC v1.6.0, MIT) | d48ce627baf7c341a92c0f5844a3c546431f9db873ff21489671aba2ecfe64fb |
+
+MapLibre loads `maplibre-gl-worker.mjs` from beside `maplibre-gl.mjs`, so
+the two are served from the same directory. Their source maps are left
+out; a browser asks for one only while its developer tools are open.
 
 Leaflet's `images/` directory is left out. The map uses `divIcon` markers
 and no layers control, so nothing references it.

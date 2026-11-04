@@ -416,6 +416,67 @@ class MapTracks(PageTest):
         self.assertIn("217, 83, 79", await dot.evaluate("e => getComputedStyle(e).backgroundColor"))
 
 
+class MapLibreRenders(PageTest):
+    """MapLibre draws with WebGL. Headless Chromium has no GPU and falls
+    back to SwiftShader, a software renderer. This checks that the
+    vendored MapLibre gets a context there and paints a line, apart from
+    the map widget, so a missing WebGL fails here by name."""
+
+    async def test_a_line_is_painted(self):
+        result = await self.page.evaluate(
+            """async () => {
+              const maplibre = await import('/assets/maplibre-gl.mjs');
+              const box = document.createElement('div');
+              box.style.cssText = 'position:fixed;left:0;top:0;width:400px;height:300px';
+              document.body.appendChild(box);
+              const coords = [];
+              for (let i = 0; i <= 72; i++) {
+                const a = 2 * Math.PI * i / 72;
+                coords.push([18.0649 + 0.012 * (1 - Math.cos(a)), 59.3326 + 0.006 * Math.sin(a)]);
+              }
+              const map = new maplibre.Map({
+                container: box, center: [18.0769, 59.3326], zoom: 13,
+                // So the test can read the pixels back after the frame.
+                canvasContextAttributes: { preserveDrawingBuffer: true },
+                style: {
+                  version: 8,
+                  sources: { line: { type: 'geojson', lineMetrics: true,
+                    data: { type: 'Feature', geometry: { type: 'LineString', coordinates: coords } } } },
+                  layers: [
+                    { id: 'bg', type: 'background', paint: { 'background-color': '#ffffff' } },
+                    { id: 'line', type: 'line', source: 'line', paint: { 'line-width': 6,
+                      'line-gradient': ['interpolate', ['linear'], ['line-progress'],
+                        0, 'rgba(217,83,79,0.2)', 1, 'rgba(217,83,79,1)'] } }
+                  ]
+                }
+              });
+              const errors = [];
+              map.on('error', (e) => errors.push(String((e.error && e.error.message) || e)));
+              await new Promise((resolve) => map.once('idle', resolve));
+              const gl = map.painter.context.gl;
+              const info = gl.getExtension('WEBGL_debug_renderer_info');
+              const w = gl.drawingBufferWidth, h = gl.drawingBufferHeight;
+              const px = new Uint8Array(4 * w * h);
+              gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+              let red = 0;
+              for (let i = 0; i < px.length; i += 4) {
+                if (px[i] > 200 && px[i + 1] < 160 && px[i + 2] < 160) red++;
+              }
+              return {
+                webgl2: gl instanceof WebGL2RenderingContext,
+                renderer: info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER),
+                errors: errors,
+                red: red
+              };
+            }"""
+        )
+        # The renderer goes to the log, so a CI run shows what drew.
+        print(f"\nMapLibre renderer: {result['renderer']}", file=sys.stderr)
+        self.assertEqual(result["errors"], [])
+        self.assertTrue(result["webgl2"], "a WebGL2 context")
+        self.assertGreater(result["red"], 200, "the line's pixels")
+
+
 class TileTitles(PageTest):
     """A tile names its reading whenever the entity has more than one, so
     two tiles of one entity have different titles."""
