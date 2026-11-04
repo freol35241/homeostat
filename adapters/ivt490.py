@@ -278,6 +278,17 @@ ASPECT_FIELDS = {
     "GT2_raw": {"label": "outdoor sensor, unfiltered (GT2)", "kind": T, "group": "diagnostics"},
     "GT3_2_raw": {"label": "hot water tank, unfiltered (GT3_2)", "kind": T, "group": "diagnostics"},
 }
+# Readings the overlay draws on one chart
+# (docs/design.md#aspect-descriptors: related).
+# The emulated sensors' three stages show what the bridge does to the
+# reading. A target beside its actual value shows how far off it runs.
+RELATED = [
+    ["GT2_filtered", "GT2_raw", "GT2"],
+    ["GT3_2_filtered", "GT3_2_raw", "GT3_2"],
+    ["indoor_temperature", "setpoint"],
+    ["feed_temperature", "GT1_target"],
+    ["GT3_3", "GT3_3_target"],
+]
 COMMAND_TIER = {
     "setpoint": "family",
     "operating_mode": "owner",
@@ -308,7 +319,13 @@ def aspect_descriptor(entity) -> dict:
         if aspect in COMMAND_STEP:
             command["step"] = COMMAND_STEP[aspect]
         fields[aspect]["command"] = command
-    return {"schema": 1, "groups": list(ASPECT_GROUPS), "fields": fields, "readback_s": READBACK_S}
+    return {
+        "schema": 1,
+        "groups": list(ASPECT_GROUPS),
+        "fields": fields,
+        "related": [list(s) for s in RELATED],
+        "readback_s": READBACK_S,
+    }
 
 
 def state_field(segments: list[str]) -> str:

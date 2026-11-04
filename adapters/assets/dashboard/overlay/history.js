@@ -1,7 +1,7 @@
 /* The history overlay: one aspect's record over a chosen window. It also
- * shows the current forecast, either the sources the value is derived
- * from or every forecast the recorder kept, and the commands sent to the
- * aspect. */
+ * shows the current forecast, one layer beside the record (the sources
+ * the value is derived from, the entity's related readings, or every
+ * forecast the recorder kept), and the commands sent to the aspect. */
 import { fetchHistory } from '../api.js';
 import { buildChart, buildTimeline, fmtDuration, formatChartClock, formatChartTime, formatChartValue, horizonCaption, issuedCaption } from '../charts.js';
 import { html } from '../html.js';
@@ -49,6 +49,22 @@ function contributorsOf(entity, aspect) {
   return logic.contributorsFor((store.model && store.model.entities) || [], entity.name, aspect);
 }
 
+/* The entity's readings that its adapter relates to this one, such as a
+ * sensor's raw, filtered and fed values, or a target and its actual
+ * value. They are the same entity's series, fetched and drawn like
+ * contributors. */
+function relatedOf(entity, aspect) {
+  return logic.relatedFor(store.aspects[entity.name], aspect, aspectsFor(entity))
+    .map(function (r) { return Object.assign({ entity: entity.name, note: null }, r); });
+}
+
+// The lines a layer draws beside the record.
+function layerLines(entity, aspect, layer) {
+  if (layer === 'sources') return contributorsOf(entity, aspect);
+  if (layer === 'related') return relatedOf(entity, aspect);
+  return [];
+}
+
 // A contributor's room, for reading its own `available` aspect.
 function contributorRoom(c) {
   var entities = (store.model && store.model.entities) || [];
@@ -91,8 +107,8 @@ function sourceUsageNow(entity, aspect, hours, contributors) {
   return logic.sourceUsage(d && d.loaded ? d.events : [], contributors);
 }
 
-export function fetchSources(entity, aspect, hours) {
-  contributorsOf(entity, aspect).forEach(function (c) {
+export function fetchLayerLines(entity, aspect, hours) {
+  layerLines(entity, aspect, overlay.layer).forEach(function (c) {
     var ck = sourceCacheKey(hours, c);
     var cached = overlay.sourceData[ck];
     if (cached && (cached.loaded || cached.loading)) return;
@@ -104,12 +120,11 @@ export function fetchSources(entity, aspect, hours) {
   });
 }
 
-// The contributors the chart should draw now: declared, requested, and
+// The layer's lines the chart should draw now: declared, requested, and
 // loaded. One that is still loading is not drawn yet.
-function drawnSources(entity, aspect, hours) {
-  if (overlay.layer !== 'sources') return null;
+function drawnLines(entity, aspect, hours) {
   var out = [];
-  contributorsOf(entity, aspect).forEach(function (c) {
+  layerLines(entity, aspect, overlay.layer).forEach(function (c) {
     var d = overlay.sourceData[sourceCacheKey(hours, c)];
     if (!d || !d.loaded || !d.points.length) return;
     // Includes the contributor's identity and caveat, not just its line.
@@ -193,8 +208,8 @@ export function openHistoryDetail(room, entityName, aspect) {
   overlay.pinned = null;
   overlay.sourcePinned = null;
   overlay.lastPoints = null;
-  // Sources belong to this entity, so the layer and the fetched
-  // contributor history are reset for the next overlay.
+  // Sources and related readings belong to this entity, so the layer and
+  // the fetched history of its lines are reset for the next overlay.
   overlay.sourceData = {};
   overlay.sourceEvents = {};
   fetchHistoryRange(entityName, aspect, 24, overlay.shape);
@@ -269,16 +284,19 @@ export function renderHistoryDetailBody() {
     return html`<button data-action="range-chip" data-hours="${rp.hours}" class="${overlay.range === rp.hours ? 'active' : ''}">${rp.label}</button>`;
   });
   // One row of chips for what is drawn beside the record: the sources
-  // behind the value's past, or the stored forecasts of its future. Both
-  // are for the owner, so they are here and not on a tile. A family wants
-  // the temperature, not which sensor read low. Only one can be drawn at a
-  // time, so they share one control
-  // (docs/design.md#charts-forecasts-and-sources). A chip appears only
-  // when the house has what it names, so an ordinary sensor's overlay has
-  // no such row.
+  // behind the value's past, the readings its adapter relates to it, or
+  // the stored forecasts of its future. All are for the owner, so they are
+  // here and not on a tile. A family wants the temperature, not which
+  // sensor read low. Only one can be drawn at a time, so they share one
+  // control (docs/design.md#charts-forecasts-and-sources). A chip appears
+  // only when the house has what it names, so an ordinary sensor's
+  // overlay has no such row.
   var layers = [{ id: '', label: 'value' }];
   if (overlay.shape !== 'timeline' && contributorsOf(entity, aspect).length) {
     layers.push({ id: 'sources', label: 'sources' });
+  }
+  if (overlay.shape !== 'timeline' && relatedOf(entity, aspect).length) {
+    layers.push({ id: 'related', label: 'related' });
   }
   if (forecastsOf(entity, aspect).length) {
     layers.push({ id: 'forecasts', label: 'forecasts' });
@@ -318,7 +336,7 @@ export function renderHistoryDetailBody() {
       // Contributors are not drawn with the braid. Two sets of grey lines
       // on one chart, one per issue and one per source, would look like
       // one set.
-      contributors: overlay.layer === 'forecasts' ? null : drawnSources(entity, aspect, overlay.range)
+      contributors: drawnLines(entity, aspect, overlay.range)
     });
     var stats = rangeStats(points);
     statsHtml = html`<div class="stat-row">
@@ -373,20 +391,23 @@ export function renderHistoryDetailBody() {
       }</div>`;
   }
   // The legend is also the scrub readout. With no cursor it names the
-  // sources, and with one it says what each read at that instant. The
-  // lines are all the same grey, so the names are what identify them.
+  // lines, and with one it says what each read at that instant. The lines
+  // are all the same grey, so the names are what identify them.
   var legendHtml = '';
-  var drawn = overlay.layer === 'forecasts' ? null : drawnSources(entity, aspect, overlay.range);
+  var drawn = drawnLines(entity, aspect, overlay.range);
+  var sources = overlay.layer === 'sources';
   if (drawn) {
-    var usage = sourceUsageNow(entity, aspect, overlay.range,
-                               contributorsOf(entity, aspect));
+    var usage = sources
+      ? sourceUsageNow(entity, aspect, overlay.range, contributorsOf(entity, aspect))
+      : {};
     legendHtml = html`<div class="chart-note source-legend" id="sources-legend">${
       drawn.map(function (c) {
         // A contributor that has dropped out is still drawn, because
         // where its line stops is useful, but it must not look live. It
         // can be out in two ways: its own device is gone, or the
-        // computation chooses not to use it.
-        var down = stateValue(contributorRoom(c), c.entity, 'available') === false;
+        // computation chooses not to use it. A related reading is the
+        // overlay's own entity, which is marked elsewhere.
+        var down = sources && stateValue(contributorRoom(c), c.entity, 'available') === false;
         var use = usage[c.name];
         var excluded = use && use.used === false;
         var since = excluded && use.since
@@ -399,8 +420,8 @@ export function renderHistoryDetailBody() {
           ${c.note ? ' \u00b7 ' + c.note : ''}</span>`;
       })}</div>
       <div class="chart-note" id="sources-column"></div>`;
-  } else if (overlay.layer === 'sources' && contributorsOf(entity, aspect).length) {
-    legendHtml = html`<div class="chart-note">reading the sources\u2026</div>`;
+  } else if (layerLines(entity, aspect, overlay.layer).length) {
+    legendHtml = html`<div class="chart-note">reading the ${overlay.layer === 'sources' ? 'sources' : 'related readings'}\u2026</div>`;
   }
   var body = html`<div class="seg">${chips}</div>${layerChips}
     <div class="${loaded ? '' : 'chart-loading'}">${chartHtml}${statsHtml}${horizonHtml}</div>

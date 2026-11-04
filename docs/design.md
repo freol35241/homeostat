@@ -931,6 +931,13 @@ labels; they do not become schema. The contract is in
 - `notable` makes a described boolean reading a deviation when it is
   true. `readback_s` says how long the device takes to report a command
   back, which only the adapter knows.
+- `related` lists sets of the entity's readings that belong on one
+  chart: the stages of one sensor (raw, filtered, the value fed to the
+  device) or a target and its actual value. The overlay draws a set as
+  its `related` layer ([Charts, forecasts and
+  sources](#charts-forecasts-and-sources)). The adapter declares it
+  because only the adapter knows that `GT2` and `GT2_filtered` are one
+  sensor. A house does not restate it.
 - A capability's own aspects (`on`, `locked`) are described as
   readings only. Their controls stay the dashboard's.
 
@@ -2360,11 +2367,14 @@ horizon has run out is no longer drawn as the future.
 In the detail overlay, the `forecasts` view draws the stored issues
 (`/api/forecasts`, the newest 40). The `sources` view draws each
 declared contributor ([Sources](#sources)) with its exclusions from
-`/api/source-events`. Each issue or contributor is its own neutral
-line, and the outcome keeps the accent colour. Neither view draws an
-envelope, because its edge would trace a path nobody predicted. Both
-views are owner work, so they live in the overlay rather than as
-widgets.
+`/api/source-events`. The `related` view draws the readings the
+descriptor relates to this one ([Aspect
+descriptors](#aspect-descriptors)), leaving out any of another kind
+or unit, since the chart has one y scale. Each issue, contributor or related
+reading is its own neutral line, and the outcome keeps the accent
+colour. No view draws an envelope, because its edge would trace a path
+nobody predicted. All three views are owner work, so they live in the
+overlay rather than as widgets.
 
 #### Controls and the overlay
 
