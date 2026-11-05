@@ -188,12 +188,22 @@ ASPECT_DESCRIPTOR = {
 }
 
 
+def is_code(value) -> bool:
+    """Whether a `state` value is a run-state code: a number, not a bool.
+
+    The bridge sends codes as floats, and 14.0 finds the int key 14. A
+    JSON `false` would otherwise find code 0, since Python counts a bool
+    as an int.
+    """
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
 def status_aspects(status: dict) -> tuple[dict, list[str]]:
     """Map one status document to the bus aspects it yields.
 
     Returns the aspects and the raw fields dropped for naming a reserved
-    aspect. The aspects are the normalized names, the derived `on`, and
-    every other field under its firmware name, including `shaft_temp` (the
+    aspect. The aspects are the normalized names, the derived `on` and
+    `fault`, and every other field under its firmware name, including `shaft_temp` (the
     feed shaft, the device's own fire-safety reading) and `power_pct`
     (actual output). Firmware names may contain dots
     (`regulation.fixed_power` is a valid key segment). `power_level` is an
@@ -217,9 +227,7 @@ def status_aspects(status: dict) -> tuple[dict, list[str]]:
             value = int(value)
         aspects[aspect] = value
     state = status.get("state")
-    # A run-state code is a number. The bridge sends it as a float, and
-    # 14.0 finds the int key 14.
-    if isinstance(state, (int, float)) and state in STATE_LABELS:
+    if is_code(state) and state in STATE_LABELS:
         aspects["on"] = state not in OFF_STATES
         aspects["fault"] = state in FAULT_STATES
     return aspects, reserved
@@ -279,7 +287,7 @@ class Stoves:
         self.available: dict[str, bool] = {}
         # (entity, code) for each run-state code reported as unknown, so
         # a stove that stays in one reports it once.
-        self.unknown_states: set[tuple[str, float]] = set()
+        self.unknown_states: set[tuple[str, int | float]] = set()
 
     def set_available(self, entity, value: bool) -> bool:
         """Publish an availability change; True when it was one."""
@@ -353,7 +361,7 @@ class Stoves:
                 session.health_event("drop", reason="reserved-aspect", topic=topic, field=field)
             state = document.get("state")
             if (
-                isinstance(state, (int, float))
+                is_code(state)
                 and state not in STATE_LABELS
                 and (entity.name, state) not in self.unknown_states
             ):

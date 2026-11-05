@@ -67,7 +67,7 @@ class DialectTest(unittest.TestCase):
     def test_an_unknown_state_derives_nothing(self):
         # Neither burning nor stopped is a safe guess for a code the table
         # does not list, so `on` and `fault` keep their last values.
-        for state in (7.0, "?"):
+        for state in (7.0, "?", False, True):
             with self.subTest(state=state):
                 aspects = status_aspects({"state": state})[0]
                 self.assertNotIn("on", aspects)
@@ -131,14 +131,39 @@ class StovesTest(unittest.TestCase):
         self.message("status", b"[]")
         self.assertEqual(self.session.events[-1]["reason"], "malformed-payload")
 
-    def test_an_unknown_state_is_reported_once(self):
+    def test_an_unknown_state_is_reported_once_per_code(self):
         self.message("status", {"state": 5.0})
         self.message("status", {"state": 7.0})
         self.message("status", {"state": 7.0})
+        self.message("status", {"state": 8.0})
+        topic = f"{STOVE.id}/status"
         unknown = [e for e in self.session.events if e["kind"] == "unknown-state"]
-        self.assertEqual(unknown, [{"kind": "unknown-state", "topic": f"{STOVE.id}/status", "state": 7.0}])
-        on = [v for k, v in self.session.puts if k == KEY + "on"]
-        self.assertEqual(on, [True], "on keeps its last value through the unknown code")
+        self.assertEqual(
+            unknown,
+            [
+                {"kind": "unknown-state", "topic": topic, "state": 7.0},
+                {"kind": "unknown-state", "topic": topic, "state": 8.0},
+            ],
+        )
+        for aspect, value in (("on", True), ("fault", False)):
+            with self.subTest(aspect=aspect):
+                published = [v for k, v in self.session.puts if k == KEY + aspect]
+                self.assertEqual(published, [value], "kept through the unknown codes")
+
+    def test_a_first_unknown_state_publishes_no_on_or_fault(self):
+        # Nothing to keep yet, and nothing to guess from: the raw code
+        # and the health event are the trace.
+        self.message("status", {"state": 7.0})
+        keys = [k for k, _ in self.session.puts]
+        self.assertIn(KEY + "state", keys)
+        self.assertNotIn(KEY + "on", keys)
+        self.assertNotIn(KEY + "fault", keys)
+
+    def test_a_fault_publishes_on_change(self):
+        for code in (5.0, 20.0, 20.0, 14.0):
+            self.message("status", {"state": code})
+        faults = [v for k, v in self.session.puts if k == KEY + "fault"]
+        self.assertEqual(faults, [False, True, False])
 
     def test_silence_is_one_unavailable_and_one_event(self):
         self.message("status", {"state": 14})
