@@ -108,6 +108,8 @@ async fn status_translates_on_change_only() {
         &[
             ("home/state/livingroom/burner/available", json!(true)),
             ("home/state/livingroom/burner/on", json!(false)),
+            // Off by the switch is a stop, not a fault.
+            ("home/state/livingroom/burner/fault", json!(false)),
             ("home/state/livingroom/burner/power_level", json!(10)),
             ("home/state/livingroom/burner/flue_temperature", json!(25.5)),
             (
@@ -205,6 +207,14 @@ async fn status_translates_on_change_only() {
         fields["flue_temperature"]["label"],
         json!("flue (smoke_temp)")
     );
+    // The run state is labelled, and a fault is notable, so the dashboard
+    // names the state and lists a fault as out of the ordinary.
+    assert_eq!(fields["state"]["kind"], json!("enum"));
+    assert!(fields["state"]["values"]
+        .as_array()
+        .expect("state values")
+        .contains(&json!({"value": 20, "label": "no fuel"})));
+    assert_eq!(fields["fault"]["notable"], json!(true));
     assert!(
         fields.get("city").is_none(),
         "undescribed aspects are simply absent"

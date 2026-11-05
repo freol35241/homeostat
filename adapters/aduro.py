@@ -26,9 +26,10 @@ home/arbiter/{room}/{entity}/{aspect}.
 State: each status field publishes under its firmware name, each
 operating field as `operating_{field}`, and only when its value changes
 (`Stoves.on_message`). `on`, `power_level`, `flue_temperature` and
-`boiler_temperature` are the burner vocabulary (`status_aspects`).
-`available` goes false after availability_timeout_s without a message
-(`Stoves.sweep`).
+`boiler_temperature` are the burner vocabulary (`status_aspects`). `on`
+and `fault` are derived from the run state (`state`), which the
+descriptor labels from STATE_LABELS. `available` goes false after
+availability_timeout_s without a message (`Stoves.sweep`).
 
 Commands: `on` (a bool) and `power_level` (10, 50 or 100); see
 `command_body`.
@@ -42,7 +43,8 @@ Discovery: one record per entity with the aspect descriptor and a
 `bound` flag that turns true the first time the base topic is seen.
 
 Health events: `drop` (malformed-payload, reserved-aspect,
-invalid-command) and device-silent.
+invalid-command), device-silent, and `unknown-state` the first time a
+stove reports a run-state code STATE_LABELS does not list.
 
 Combustion safety is not this adapter's job. The burner has its own
 alarm layer (shaft and boiler temperature limits). A house-local flue
@@ -85,17 +87,48 @@ ASPECT_OVERRIDES = {
     "regulation.fixed_power": "power_level",
 }
 
-# Run-state codes that mean the burner is not making heat. 14 (idle,
-# unlit) is the only code observed so far. Add codes as the heating
-# season shows them; `state` and `substate` are published raw so they can
-# be read off the bus.
-OFF_STATES = frozenset({14})
+# Run-state codes and what the stove shows for each, from the community
+# Home Assistant integration's table (github.com/NewImproved/Aduro,
+# custom_components/aduro/const.py). A label is the stove's sub-state text
+# where it has one, since that is the part that says what happened.
+STATE_LABELS = {
+    0: "wait",
+    2: "ignition",
+    4: "ignition 2",
+    5: "normal",
+    6: "room temperature reached",
+    9: "wood burning",
+    11: "drop shaft hot",
+    13: "failed ignition",
+    14: "off",
+    15: "bad smoke sensor",
+    17: "bad drop shaft sensor",
+    18: "check burner (yellow)",
+    19: "bad external auger output",
+    20: "no fuel",
+    23: "stopped by timer",
+    24: "air damper closed",
+    28: "door open",
+    32: "heating up",
+    33: "CO sensor defect",
+    34: "check burn cup",
+    35: "no power to the fan",
+}
+# The codes the stove stops in: `on` reads false. The rest of the table
+# reads true. That includes 6, a pause the stove resumes from by itself,
+# and 9, a wood fire with the pellet feed stopped. The family's switch is
+# still on in both, and reading them as off would flip it on every pause.
+OFF_STATES = frozenset({11, 13, 14, 15, 17, 18, 19, 20, 23, 28, 33, 34, 35})
+# The stops a person has to deal with: every stop but the switch (14) and
+# the stove's own timer (23). `fault` is a notable reading, so it shows
+# on the dashboard as something out of the ordinary.
+FAULT_STATES = OFF_STATES - {14, 23}
 
 # Names a raw status field may not publish as: the adapter's own liveness
 # signal and the normalized vocabulary. A wire field named `on` would
 # otherwise overwrite the derived one and corrupt the publish-on-change
 # cache.
-RESERVED_STATUS_FIELDS = frozenset({"available", "on", *ASPECT_OVERRIDES.values()})
+RESERVED_STATUS_FIELDS = frozenset({"available", "on", "fault", *ASPECT_OVERRIDES.values()})
 
 POWER_LEVELS = (10, 50, 100)
 
@@ -132,8 +165,14 @@ ASPECT_FIELDS = {
     "boiler_temperature": {"label": "boiler (boiler_temp)", "kind": T, "group": "readings"},
     "shaft_temp": {"label": "feed shaft (shaft_temp)", "kind": T, "group": "readings"},
     "power_pct": {"label": "output (power_pct)", "kind": "percent", "group": "readings"},
-    "state": {"label": "run state (state)", "kind": "number", "group": "status"},
+    "state": {
+        "label": "run state (state)",
+        "kind": "enum",
+        "group": "status",
+        "values": [{"value": code, "label": label} for code, label in STATE_LABELS.items()],
+    },
     "substate": {"label": "run substate (substate)", "kind": "number", "group": "status"},
+    "fault": {"label": "needs attention", "kind": "boolean", "group": "status", "notable": True},
 }
 # How long a command takes to come back (docs/design.md#aspect-descriptors:
 # readback_s). The bridge polls every ADURO_POLL_INTERVAL (30 s by default)
@@ -160,8 +199,10 @@ def status_aspects(status: dict) -> tuple[dict, list[str]]:
     (`regulation.fixed_power` is a valid key segment). `power_level` is an
     int when the wire float is integral, so it matches the enum.
 
-    `on` is derived from the run state: the burner is on unless `state` is
-    in OFF_STATES, so an unknown code reads as on. Start and stop are
+    `on` and `fault` are derived from the run state: `on` is false in
+    OFF_STATES and `fault` true in FAULT_STATES. A code STATE_LABELS does
+    not list derives neither, so both keep their last values rather than
+    guess; Stoves.on_message reports the code. Start and stop are
     momentary writes in this dialect (misc.start / misc.stop), so `on` is
     always the device's own readback and not an echo of a command.
     """
@@ -176,8 +217,11 @@ def status_aspects(status: dict) -> tuple[dict, list[str]]:
             value = int(value)
         aspects[aspect] = value
     state = status.get("state")
-    if isinstance(state, (int, float)):  # a run-state code is a number
+    # A run-state code is a number. The bridge sends it as a float, and
+    # 14.0 finds the int key 14.
+    if isinstance(state, (int, float)) and state in STATE_LABELS:
         aspects["on"] = state not in OFF_STATES
+        aspects["fault"] = state in FAULT_STATES
     return aspects, reserved
 
 
@@ -233,6 +277,9 @@ class Stoves:
         self.lock = threading.Lock()
         self.last_rx = {e.id: clock() for e in self.entities}
         self.available: dict[str, bool] = {}
+        # (entity, code) for each run-state code reported as unknown, so
+        # a stove that stays in one reports it once.
+        self.unknown_states: set[tuple[str, float]] = set()
 
     def set_available(self, entity, value: bool) -> bool:
         """Publish an availability change; True when it was one."""
@@ -304,6 +351,14 @@ class Stoves:
             aspects, reserved = status_aspects(document)
             for field in reserved:
                 session.health_event("drop", reason="reserved-aspect", topic=topic, field=field)
+            state = document.get("state")
+            if (
+                isinstance(state, (int, float))
+                and state not in STATE_LABELS
+                and (entity.name, state) not in self.unknown_states
+            ):
+                self.unknown_states.add((entity.name, state))
+                session.health_event("unknown-state", topic=topic, state=state)
         else:
             aspects = {f"operating_{field}": value for field, value in document.items()}
         for aspect, value in aspects.items():
