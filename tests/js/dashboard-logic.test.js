@@ -432,14 +432,40 @@ test('a fix inside its own accuracy of the last one kept is dropped, except the 
   assert.deepEqual(logic.thinTrack([]), []);
 });
 
-test('track bands fade with age and join end to start', () => {
+test('a track fades by the age of each fix, along its length', () => {
+  // Three fixes due north, 0.01 degrees (about 1.1 km) apart. The first
+  // leg was walked at the start of the window, the second at its end.
   const fix = (lat, t) => ({ lat, lon: 18, accuracy: 0, t });
-  const bands = logic.trackBands([fix(1, 0), fix(2, 10), fix(3, 55), fix(4, 60), fix(5, 99)], 0, 100, 4);
-  assert.deepEqual(bands.map((b) => b.latlngs.map((p) => p[0])), [[1, 2], [2, 3, 4], [4, 5]]);
-  const opacities = bands.map((b) => b.opacity);
-  assert.ok(opacities[0] < opacities[1] && opacities[1] < opacities[2], 'older is fainter');
-  assert.equal(opacities[2], 0.9, 'the newest band is nearly solid');
-  assert.deepEqual(logic.trackBands([fix(1, 50)], 0, 100, 4), [], 'one fix is no line');
+  const g = logic.trackGradient([fix(59, 0), fix(59.01, 10), fix(59.02, 100)], 0, 100, 4);
+  assert.deepEqual(g.coordinates, [[18, 59], [18, 59.01], [18, 59.02]], 'lon, lat');
+  assert.deepEqual(g.stops.map((s) => s[0]), [0, 0.25, 0.5, 0.75, 1], 'evenly spaced, strictly rising');
+  const opacity = g.stops.map((s) => s[1]);
+  assert.equal(opacity[0], 0.15, 'the window start is faint');
+  assert.equal(opacity[4], 1, 'the newest fix is solid');
+  // Halfway along the line is the middle fix, taken at t = 10, not t = 50.
+  assert.ok(Math.abs(opacity[2] - (0.15 + 0.85 * 0.1)) < 1e-6, String(opacity[2]));
+  for (let i = 1; i < opacity.length; i++) assert.ok(opacity[i] >= opacity[i - 1], 'newer is never fainter');
+  // Someone who arrived at t = 10 and has not moved since: the newest fix
+  // repeats the one before it, and the end of the line is still solid.
+  const arrived = logic.trackGradient([fix(59, 0), fix(59.01, 10), fix(59.01, 100)], 0, 100, 4);
+  assert.equal(arrived.stops[4][1], 1, 'solid where they are now');
+  assert.equal(logic.trackGradient([fix(59, 0)], 0, 100, 4), null, 'one fix is no line');
+  assert.equal(logic.trackGradient([fix(59, 0), fix(59, 50)], 0, 100, 4), null, 'a line of no length');
+});
+
+test('an accuracy circle is a closed polygon its radius out', () => {
+  const ring = logic.circlePolygon(59, 18, 100, 8);
+  assert.equal(ring.length, 9);
+  assert.deepEqual(ring[0], ring[8], 'closed');
+  // North of the centre by the radius: 100 m is about 0.0009 degrees of latitude.
+  assert.ok(Math.abs(ring[2][1] - 59 - 100 / 111320) < 1e-9);
+  // East by the radius, wider in degrees at this latitude.
+  assert.ok(ring[0][0] - 18 > 100 / 111320);
+});
+
+test('a hex colour fades as rgba', () => {
+  assert.equal(logic.hexRgba('#d9534f', 0.5), 'rgba(217,83,79,0.5)');
+  assert.equal(logic.hexRgba('#abc', 1), 'rgba(170,187,204,1)');
 });
 
 test('a map colour is a hex colour or nothing', () => {

@@ -59,6 +59,15 @@ class FakeHouse:
         # What /api/cmd says about the bus: False is a key nobody
         # subscribes to (the owning adapter is down).
         self.heard = True
+        # Whether the house has a tile extract. The one served is
+        # fixtures/empty.pmtiles, a valid archive with a single empty tile:
+        # enough for the page to load the basemap style, its icons and the
+        # protocol, and draw no land.
+        self.tiles = False
+        # Every map file served, by path under assets/: what a test asserts
+        # the map loaded by. MapLibre fetches some from its worker, which a
+        # page's request events do not all show.
+        self.map_assets: list[str] = []
         self.clients: list[web.WebSocketResponse] = []
         self.app = self._build()
         self.runner: web.AppRunner | None = None
@@ -125,16 +134,26 @@ class FakeHouse:
 
     async def api_asset(self, request: web.Request) -> web.StreamResponse:
         name = request.match_info["name"]
+        if name.startswith("map/"):
+            self.map_assets.append(name)
         path = (ASSETS / name).resolve()
         if ASSETS not in path.parents or not path.exists():
             raise web.HTTPNotFound()
-        types = {".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml"}
+        types = {
+            ".js": "text/javascript",
+            ".mjs": "text/javascript",
+            ".css": "text/css",
+            ".svg": "image/svg+xml",
+            ".pbf": "application/x-protobuf",
+            ".json": "application/json",
+            ".png": "image/png",
+        }
         return web.FileResponse(
             path, headers={"Content-Type": types.get(path.suffix, "text/plain")}
         )
 
     async def api_model(self, request: web.Request) -> web.Response:
-        return web.json_response(dict(self.model, tiles=False))
+        return web.json_response(dict(self.model, tiles=self.tiles))
 
     async def ws(self, request: web.Request) -> web.WebSocketResponse:
         ws = web.WebSocketResponse()
@@ -336,5 +355,7 @@ class FakeHouse:
             pass
         return ws
 
-    async def api_tiles(self, request: web.Request) -> web.Response:
-        raise web.HTTPNotFound()
+    async def api_tiles(self, request: web.Request) -> web.StreamResponse:
+        if not self.tiles:
+            raise web.HTTPNotFound()
+        return web.FileResponse(FIXTURES / "empty.pmtiles")

@@ -57,9 +57,12 @@ class PageTest(unittest.IsolatedAsyncioTestCase):
     """
 
     viewport = DESKTOP
+    # Whether the house has a tile extract (server.py, FakeHouse.tiles).
+    tiles = False
 
     async def asyncSetUp(self) -> None:
         self.house = FakeHouse()
+        self.house.tiles = self.tiles
         url = await self.house.start()
         self.pw = await async_playwright().start()
         self.browser = await self.pw.chromium.launch()
@@ -390,30 +393,132 @@ class RelatedReadings(PageTest):
 
 
 class MapTracks(PageTest):
-    """`docs/design.md#map-and-people`: a map with `hours` draws each
-    person's track as fading bands, in the colour `colors` gives them."""
+    """`docs/design.md#map-and-people`: a map with `hours` reads each
+    person's track from the recorder and draws its marker in the colour
+    `colors` gives it. The track itself is drawn in WebGL, where the DOM
+    cannot see it; tests/js checks how it is built."""
 
-    async def test_a_track_fades_and_takes_its_colour(self):
+    async def test_a_track_is_read_and_its_marker_takes_its_colour(self):
+        reads: list[str] = []
+        self.page.on(
+            "request", lambda r: reads.append(r.url) if "/api/history" in r.url else None
+        )
         await self.view("now")
         now = time.time()
         for aspect, value in (("lat", 59.3326), ("lon", 18.0649), ("accuracy", 15), ("fixed_at", now)):
             await self.house.push(
                 {"type": "state", "key": f"home/state/person/robin/{aspect}", "value": value}
             )
-        # The history reads land after the render that asked for them.
+        dot = self.page.locator("#person-map .person-marker-dot")
+        await dot.first.wait_for()
+        self.assertIn("217, 83, 79", await dot.first.evaluate("e => getComputedStyle(e).backgroundColor"))
+        self.assertEqual(await self.page.locator("#person-map canvas.maplibregl-canvas").count(), 1)
+        # The fixes over the window, then lat and lon over the history
+        # API's longest window, so a fix before the first move still pairs.
+        # lat is read once fixed_at has answered.
+        def wanted(aspect: str, hours: int) -> bool:
+            return any(
+                "entity=robin" in u and f"aspect={aspect}&" in u and f"hours={hours}&" in u
+                and "changes=1" in u
+                for u in reads
+            )
+
+        for _ in range(50):
+            if wanted("fixed_at", 24) and wanted("lat", 744):
+                break
+            await self.page.wait_for_timeout(100)
+        self.assertTrue(wanted("fixed_at", 24), reads)
+        self.assertTrue(wanted("lat", 744), reads)
+
+
+class MapBasemap(PageTest):
+    """`docs/design.md#map-and-people`: with an extract, the map loads the
+    Protomaps style for the page's colour scheme, credits OpenStreetMap,
+    and switches style with the scheme while keeping its markers."""
+
+    tiles = True
+
+    async def test_the_style_follows_the_colour_scheme(self):
+        await self.view("now")
+        for aspect, value in (("lat", 59.3326), ("lon", 18.0649), ("fixed_at", time.time())):
+            await self.house.push(
+                {"type": "state", "key": f"home/state/person/robin/{aspect}", "value": value}
+            )
         await self.page.wait_for_function(
-            "document.querySelectorAll('#person-map path.person-track').length > 1"
+            "(document.querySelector('#person-map .maplibregl-ctrl-attrib') || {}).textContent?.includes('OpenStreetMap')"
         )
-        tracks = self.page.locator("#person-map path.person-track")
-        self.assertGreater(await tracks.count(), 1, "a track is several bands")
-        strokes = await tracks.evaluate_all("els => els.map(e => e.getAttribute('stroke'))")
-        opacities = await tracks.evaluate_all(
-            "els => els.map(e => Number(e.getAttribute('stroke-opacity')))"
+        served = self.house.map_assets
+        self.assertIn("map/sprites/light.json", served)
+
+        await self.page.emulate_media(color_scheme="dark")
+        for _ in range(50):
+            if "map/sprites/dark.json" in served:
+                break
+            await self.page.wait_for_timeout(100)
+        self.assertIn("map/sprites/dark.json", served)
+        await self.page.wait_for_timeout(500)
+        self.assertEqual(await self.page.locator("#person-map .person-marker").count(), 1)
+
+
+class MapLibreRenders(PageTest):
+    """MapLibre draws with WebGL. Headless Chromium has no GPU and falls
+    back to SwiftShader, a software renderer. This checks that the
+    vendored MapLibre gets a context there and paints a line, apart from
+    the map widget, so a missing WebGL fails here by name."""
+
+    async def test_a_line_is_painted(self):
+        result = await self.page.evaluate(
+            """async () => {
+              const maplibre = await import('/assets/map/maplibre-gl.mjs');
+              const box = document.createElement('div');
+              box.style.cssText = 'position:fixed;left:0;top:0;width:400px;height:300px';
+              document.body.appendChild(box);
+              const coords = [];
+              for (let i = 0; i <= 72; i++) {
+                const a = 2 * Math.PI * i / 72;
+                coords.push([18.0649 + 0.012 * (1 - Math.cos(a)), 59.3326 + 0.006 * Math.sin(a)]);
+              }
+              const map = new maplibre.Map({
+                container: box, center: [18.0769, 59.3326], zoom: 13,
+                // So the test can read the pixels back after the frame.
+                canvasContextAttributes: { preserveDrawingBuffer: true },
+                style: {
+                  version: 8,
+                  sources: { line: { type: 'geojson', lineMetrics: true,
+                    data: { type: 'Feature', geometry: { type: 'LineString', coordinates: coords } } } },
+                  layers: [
+                    { id: 'bg', type: 'background', paint: { 'background-color': '#ffffff' } },
+                    { id: 'line', type: 'line', source: 'line', paint: { 'line-width': 6,
+                      'line-gradient': ['interpolate', ['linear'], ['line-progress'],
+                        0, 'rgba(217,83,79,0.2)', 1, 'rgba(217,83,79,1)'] } }
+                  ]
+                }
+              });
+              const errors = [];
+              map.on('error', (e) => errors.push(String((e.error && e.error.message) || e)));
+              await new Promise((resolve) => map.once('idle', resolve));
+              const gl = map.painter.context.gl;
+              const info = gl.getExtension('WEBGL_debug_renderer_info');
+              const w = gl.drawingBufferWidth, h = gl.drawingBufferHeight;
+              const px = new Uint8Array(4 * w * h);
+              gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+              let red = 0;
+              for (let i = 0; i < px.length; i += 4) {
+                if (px[i] > 200 && px[i + 1] < 160 && px[i + 2] < 160) red++;
+              }
+              return {
+                webgl2: gl instanceof WebGL2RenderingContext,
+                renderer: info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER),
+                errors: errors,
+                red: red
+              };
+            }"""
         )
-        self.assertIn("#d9534f", strokes, "robin's colour from `colors`")
-        self.assertLess(min(opacities), max(opacities), "older bands are fainter")
-        dot = self.page.locator("#person-map .person-marker-dot").first
-        self.assertIn("217, 83, 79", await dot.evaluate("e => getComputedStyle(e).backgroundColor"))
+        # The renderer goes to the log, so a CI run shows what drew.
+        print(f"\nMapLibre renderer: {result['renderer']}", file=sys.stderr)
+        self.assertEqual(result["errors"], [])
+        self.assertTrue(result["webgl2"], "a WebGL2 context")
+        self.assertGreater(result["red"], 200, "the line's pixels")
 
 
 class TileTitles(PageTest):

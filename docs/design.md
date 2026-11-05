@@ -2633,6 +2633,16 @@ from a self-hosted PMTiles extract named by `HOMEOSTAT_DASHBOARD_TILES`
 and served by the dashboard unit. A public tile CDN would learn family
 positions from tile coordinates.
 
+MapLibre GL draws the map with WebGL, in the Protomaps basemap style,
+light or dark with the page's colour scheme. Vector tiles stay sharp past
+the extract's last zoom level, so the map zooms in to house level. The
+library, the style's fonts and its icons are vendored
+(`adapters/assets/map/`), and the page makes no request outside the
+house. The map credits OpenStreetMap and Protomaps, as the data's licence
+asks. MapLibre is loaded the first time a map is shown, so a view without
+one does not pay for it. A browser without WebGL2 shows a line saying so
+in place of the map.
+
 With `hours`, the map also draws each entity's track over that window.
 Without `hours` the map shows positions only. A track shows where each
 person has been all day, which the house should choose to put on a
@@ -2655,8 +2665,11 @@ shared screen. The track is read from the recorder:
 - A fix within its own accuracy of the last one kept is dropped. A
   phone lying still reports a new fix inside its circle every few
   minutes, which would otherwise draw a scribble around the spot.
-- The track fades with age. Leaflet cannot draw a gradient along a
-  line, so the window is cut into eight spans of time, each one line.
+- The track fades with age, from faint at the window's start to solid
+  at the marker. MapLibre's line gradient runs over distance along the
+  line, so the page works out each fix's age at points along it. Fixes
+  are not evenly spaced along a route, and a stop of several hours fades
+  by its own age.
 - Live fixes extend the track, and the history is read again every few
   minutes, which moves the window and the fade with the clock.
 
