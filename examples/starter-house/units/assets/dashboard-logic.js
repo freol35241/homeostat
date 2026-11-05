@@ -86,6 +86,120 @@
     });
   }
 
+  /* ---- map tracks (docs/design.md#map-and-people) ---- */
+
+  // The value a series held at `ts`: its last point at or before it.
+  function valueAsOf(points, ts) {
+    var value;
+    for (var i = 0; i < points.length && Date.parse(points[i].ts) <= ts; i++) value = points[i].value;
+    return value;
+  }
+
+  /* An entity's fixes over a window, oldest first, from the recorder's
+   * `lat`, `lon`, `accuracy` and `fixed_at` series. Every fix ends with
+   * its `fixed_at`, which is published after the other three, so each
+   * `fixed_at` point marks one complete fix. A point taken where `lat`
+   * changed could pair the new `lat` with the old `lon`. A fix is placed
+   * at its `fixed_at` time, which is when it was taken, even if the phone
+   * sent it later. */
+  function trackFixes(series, from) {
+    var out = [];
+    (series.fixed_at || []).forEach(function (p) {
+      var at = Date.parse(p.ts);
+      var lat = valueAsOf(series.lat || [], at);
+      var lon = valueAsOf(series.lon || [], at);
+      if (typeof lat !== 'number' || typeof lon !== 'number' || typeof p.value !== 'number') return;
+      var t = p.value * 1000;
+      if (t < from) return;
+      var accuracy = valueAsOf(series.accuracy || [], at);
+      out.push({ lat: lat, lon: lon, accuracy: typeof accuracy === 'number' ? accuracy : 0, t: t });
+    });
+    return out.sort(function (a, b) { return a.t - b.t; });
+  }
+
+  function metresBetween(a, b) {
+    var rad = Math.PI / 180;
+    var dLat = (b.lat - a.lat) * rad, dLon = (b.lon - a.lon) * rad;
+    var h = Math.pow(Math.sin(dLat / 2), 2) +
+      Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.pow(Math.sin(dLon / 2), 2);
+    return 2 * 6371000 * Math.asin(Math.min(1, Math.sqrt(h)));
+  }
+
+  /* The fixes worth drawing. A phone lying still reports a fix inside its
+   * accuracy circle every few minutes, and drawing them scribbles around
+   * the spot. A fix within its own accuracy of the last one kept is
+   * dropped. The newest fix is always kept, so the line reaches the
+   * marker. */
+  function thinTrack(fixes) {
+    var kept = [];
+    fixes.forEach(function (f, i) {
+      var last = kept[kept.length - 1];
+      if (!last || i === fixes.length - 1 || metresBetween(last, f) > f.accuracy) kept.push(f);
+    });
+    return kept;
+  }
+
+  /* The track as one line whose opacity follows the age of each fix,
+   * from faint at the window's start to solid at the newest fix. A line
+   * gradient in MapLibre runs over the distance along the line, not over
+   * time, so the age at each step of distance is worked out here. Fixes
+   * are not evenly spaced in time, and a stop where someone stood still
+   * would otherwise fade the whole stretch around it. Returns the line's
+   * [lon, lat] coordinates and `steps` + 1 [progress, opacity] stops, or
+   * null when there is no line to draw. */
+  function trackGradient(fixes, from, to, steps) {
+    if (fixes.length < 2) return null;
+    var along = [0];
+    for (var i = 1; i < fixes.length; i++) along.push(along[i - 1] + metresBetween(fixes[i - 1], fixes[i]));
+    var total = along[along.length - 1];
+    if (!(total > 0)) return null;
+    var opacity = function (t) {
+      var f = to > from ? (t - from) / (to - from) : 1;
+      return 0.15 + 0.85 * Math.min(1, Math.max(0, f));
+    };
+    var stops = [];
+    var j = 0;
+    for (var k = 0; k <= steps; k++) {
+      var d = total * k / steps;
+      // `<=` steps onto a last segment of no length, a phone lying where
+      // it stopped, so the line's end takes the newest fix's time.
+      while (j < fixes.length - 2 && along[j + 1] <= d) j++;
+      var seg = along[j + 1] - along[j];
+      var t = seg > 0 ? fixes[j].t + (fixes[j + 1].t - fixes[j].t) * (d - along[j]) / seg : fixes[j + 1].t;
+      stops.push([k / steps, opacity(t)]);
+    }
+    return { coordinates: fixes.map(function (f) { return [f.lon, f.lat]; }), stops: stops };
+  }
+
+  /* An accuracy circle as a polygon of `sides` corners, [lon, lat]
+   * closed. MapLibre has no circle in metres, and a circle layer is sized
+   * in pixels. */
+  function circlePolygon(lat, lon, radiusM, sides) {
+    var dLat = radiusM / 111320;
+    var dLon = dLat / Math.max(1e-6, Math.cos(lat * Math.PI / 180));
+    var ring = [];
+    for (var i = 0; i <= sides; i++) {
+      var a = 2 * Math.PI * (i % sides) / sides;
+      ring.push([lon + dLon * Math.cos(a), lat + dLat * Math.sin(a)]);
+    }
+    return ring;
+  }
+
+  // "rgba(r,g,b,a)" for a hex colour, which a line gradient needs to fade.
+  function hexRgba(hex, alpha) {
+    var h = hex.slice(1);
+    if (h.length === 3) h = h.replace(/./g, function (c) { return c + c; });
+    var n = parseInt(h, 16);
+    return 'rgba(' + (n >> 16 & 255) + ',' + (n >> 8 & 255) + ',' + (n & 255) + ',' + alpha + ')';
+  }
+
+  // A `colors` value as the house wrote it, or null unless it is a hex
+  // colour. The plan refuses anything else; this keeps the page safe from
+  // a value that reached it some other way.
+  function hexColor(value) {
+    return typeof value === 'string' && /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(value) ? value : null;
+  }
+
   // "room/entity" when the key is an occupancy-aspect state key, else null.
   function occupancyEntityFromKey(key) {
     var parts = key.split('/');
@@ -767,11 +881,16 @@
    * indented under it. Comments and spacing are not reproduced, but the
    * content is. It is read-only, and the dashboard does not write to the
    * house. */
-  var WIDGET_KEY_ORDER = ['kind', 'entity', 'aspect', 'room', 'unit', 'label', 'hours'];
+  var WIDGET_KEY_ORDER = ['kind', 'entity', 'aspect', 'room', 'unit', 'label', 'hours', 'colors'];
 
   function tomlValue(v) {
     // A JSON string literal is a valid TOML basic string.
     if (typeof v === 'string') return JSON.stringify(v);
+    // A table, such as a map's `colors`, is written inline. Its keys are
+    // entity names, which are bare TOML keys.
+    if (v && typeof v === 'object') {
+      return '{ ' + Object.keys(v).map(function (k) { return k + ' = ' + tomlValue(v[k]); }).join(', ') + ' }';
+    }
     return String(v);
   }
 
@@ -1783,6 +1902,12 @@
     occupancyReading: occupancyReading,
     personStatus: personStatus,
     peopleEntities: peopleEntities,
+    trackFixes: trackFixes,
+    thinTrack: thinTrack,
+    trackGradient: trackGradient,
+    circlePolygon: circlePolygon,
+    hexRgba: hexRgba,
+    hexColor: hexColor,
     trackersOf: trackersOf,
     occupancyEntityFromKey: occupancyEntityFromKey,
     unitNameFromHealthKey: unitNameFromHealthKey,

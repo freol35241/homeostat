@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "homeostat==0.21.0rc3",
+#     "homeostat==0.21.0rc4",
 # ]
 # ///
 """Persons: each person computed from the trackers that person carries.
