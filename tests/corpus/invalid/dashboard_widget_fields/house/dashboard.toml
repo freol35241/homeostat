@@ -9,4 +9,6 @@ widgets = [
   { kind = "room", room = "kitchen", hours = 24 },
   { kind = "chart", entity = "kitchen_lamp", aspect = "brightness", hours = 0 },
   { kind = "dial", room = "kitchen" },
+  { kind = "map", colors = { kitchen_lamp = "red" } },
+  { kind = "people", hours = 24 },
 ]

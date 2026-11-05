@@ -132,9 +132,6 @@ except importlib.metadata.PackageNotFoundError:
 REVALIDATE = {"Cache-Control": "no-cache"}
 
 ASSETS = {
-    "leaflet.js": "text/javascript",
-    "leaflet.css": "text/css",
-    "protomaps-leaflet.js": "text/javascript",
     "video-rtc.js": "text/javascript",
     "dashboard-logic.js": "text/javascript",
     "dashboard.css": "text/css",
@@ -144,6 +141,19 @@ ASSETS = {
 # a path that resolves inside it once `..` and symlinks are followed. A
 # browser runs a module only when it is served as JavaScript.
 MODULES = "dashboard"
+# The vendored map renderer and what it loads: MapLibre and its worker,
+# the PMTiles reader, the basemap style, fonts and icon sheets. Any file
+# under this directory of assets/ with one of these suffixes, by the same
+# rule as a module.
+MAP = "map"
+MAP_TYPES = {
+    ".mjs": "text/javascript",
+    ".js": "text/javascript",
+    ".css": "text/css",
+    ".pbf": "application/x-protobuf",
+    ".json": "application/json",
+    ".png": "image/png",
+}
 
 # Commandable aspects per capability: the capability's base aspect plus
 # the features the entity declares. A lock command goes to home/cmd at the
@@ -935,25 +945,31 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         )
 
     async def api_asset(request: web.Request) -> web.StreamResponse:
-        """GET /assets/*: an allowlisted file, or a module under assets/dashboard/.
+        """GET /assets/*: an allowlisted file, a module, or a map file.
 
-        The vendored libraries (Leaflet, protomaps-leaflet, the go2rtc
-        player) and the page's own files are in ASSETS by name. A module is
-        any .js file whose path resolves inside assets/dashboard/.
+        The go2rtc player and the page's own files are in ASSETS by name. A
+        module is any .js file whose path resolves inside assets/dashboard/,
+        and a map file any file of a MAP_TYPES suffix inside assets/map/.
         """
         name = request.match_info["name"]
         content_type = ASSETS.get(name)
         path = assets_dir / name
-        if content_type is None and name.endswith(".js"):
-            modules = (assets_dir / MODULES).resolve()
+
+        def inside(directory: str) -> bool:
             # A path with a NUL raises ValueError; it gets a 404 like any
             # other missing file.
             with contextlib.suppress(ValueError):
-                path = path.resolve()
-                if modules in path.parents and path.is_file():
-                    content_type = "text/javascript"
+                resolved = path.resolve()
+                return (assets_dir / directory).resolve() in resolved.parents and resolved.is_file()
+            return False
+
+        if content_type is None and name.endswith(".js") and inside(MODULES):
+            content_type = "text/javascript"
+        if content_type is None and inside(MAP):
+            content_type = MAP_TYPES.get(path.suffix)
         if content_type is None:
             raise web.HTTPNotFound()
+        path = path.resolve()
         return web.FileResponse(path, headers={"Content-Type": content_type, **REVALIDATE})
 
     async def api_tiles(request: web.Request) -> web.StreamResponse:

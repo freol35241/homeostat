@@ -397,6 +397,83 @@ test('People draws each person and each tracker no person lists', () => {
   assert.deepEqual(logic.peopleEntities(entities).map((e) => e.name), ['alice', 'guest_phone']);
 });
 
+test('a track is one point per fixed_at, with lat and lon as they stood then', () => {
+  const at = (s) => new Date(Date.UTC(2026, 10, 4, 12, 0, s)).toISOString();
+  const t0 = Date.UTC(2026, 10, 4, 12, 0, 0) / 1000;
+  const series = {
+    // The second fix moves lat first; a point at that instant would pair
+    // the new lat with the old lon.
+    lat: [{ ts: at(0), value: 59.0 }, { ts: at(10), value: 59.1 }],
+    lon: [{ ts: at(0), value: 18.0 }, { ts: at(11), value: 18.1 }],
+    accuracy: [{ ts: at(0), value: 12 }],
+    // The newest fix was taken before the second but sent after it.
+    fixed_at: [{ ts: at(1), value: t0 }, { ts: at(12), value: t0 + 10 }, { ts: at(20), value: t0 + 5 }],
+  };
+  assert.deepEqual(logic.trackFixes(series, 0), [
+    { lat: 59.0, lon: 18.0, accuracy: 12, t: t0 * 1000 },
+    { lat: 59.1, lon: 18.1, accuracy: 12, t: (t0 + 5) * 1000 },
+    { lat: 59.1, lon: 18.1, accuracy: 12, t: (t0 + 10) * 1000 },
+  ], 'ordered by when each fix was taken');
+  assert.deepEqual(logic.trackFixes(series, (t0 + 1) * 1000).map((f) => f.t), [(t0 + 5) * 1000, (t0 + 10) * 1000],
+    'a fix taken before the window is left out');
+  assert.deepEqual(logic.trackFixes({ fixed_at: series.fixed_at }, 0), [], 'no position, no track');
+  // A person who has not moved since long before the window: the only
+  // lat and lon are older than the window, and still place each fix.
+  const still = { lat: [{ ts: at(-86400), value: 59.0 }], lon: [{ ts: at(-86400), value: 18.0 }], fixed_at: series.fixed_at };
+  assert.deepEqual(logic.trackFixes(still, t0 * 1000).map((f) => [f.lat, f.lon]), [[59.0, 18.0], [59.0, 18.0], [59.0, 18.0]],
+    'a value from before the window still pairs');
+});
+
+test('a fix inside its own accuracy of the last one kept is dropped, except the newest', () => {
+  // 0.0001 degrees of latitude is about 11 m.
+  const fix = (dLat, accuracy, t) => ({ lat: 59 + dLat, lon: 18, accuracy, t });
+  const fixes = [fix(0, 20, 1), fix(0.0001, 20, 2), fix(0.001, 20, 3), fix(0.00105, 20, 4), fix(0.0011, 20, 5)];
+  assert.deepEqual(logic.thinTrack(fixes).map((f) => f.t), [1, 3, 5]);
+  assert.deepEqual(logic.thinTrack([]), []);
+});
+
+test('a track fades by the age of each fix, along its length', () => {
+  // Three fixes due north, 0.01 degrees (about 1.1 km) apart. The first
+  // leg was walked at the start of the window, the second at its end.
+  const fix = (lat, t) => ({ lat, lon: 18, accuracy: 0, t });
+  const g = logic.trackGradient([fix(59, 0), fix(59.01, 10), fix(59.02, 100)], 0, 100, 4);
+  assert.deepEqual(g.coordinates, [[18, 59], [18, 59.01], [18, 59.02]], 'lon, lat');
+  assert.deepEqual(g.stops.map((s) => s[0]), [0, 0.25, 0.5, 0.75, 1], 'evenly spaced, strictly rising');
+  const opacity = g.stops.map((s) => s[1]);
+  assert.equal(opacity[0], 0.15, 'the window start is faint');
+  assert.equal(opacity[4], 1, 'the newest fix is solid');
+  // Halfway along the line is the middle fix, taken at t = 10, not t = 50.
+  assert.ok(Math.abs(opacity[2] - (0.15 + 0.85 * 0.1)) < 1e-6, String(opacity[2]));
+  for (let i = 1; i < opacity.length; i++) assert.ok(opacity[i] >= opacity[i - 1], 'newer is never fainter');
+  // Someone who arrived at t = 10 and has not moved since: the newest fix
+  // repeats the one before it, and the end of the line is still solid.
+  const arrived = logic.trackGradient([fix(59, 0), fix(59.01, 10), fix(59.01, 100)], 0, 100, 4);
+  assert.equal(arrived.stops[4][1], 1, 'solid where they are now');
+  assert.equal(logic.trackGradient([fix(59, 0)], 0, 100, 4), null, 'one fix is no line');
+  assert.equal(logic.trackGradient([fix(59, 0), fix(59, 50)], 0, 100, 4), null, 'a line of no length');
+});
+
+test('an accuracy circle is a closed polygon its radius out', () => {
+  const ring = logic.circlePolygon(59, 18, 100, 8);
+  assert.equal(ring.length, 9);
+  assert.deepEqual(ring[0], ring[8], 'closed');
+  // North of the centre by the radius: 100 m is about 0.0009 degrees of latitude.
+  assert.ok(Math.abs(ring[2][1] - 59 - 100 / 111320) < 1e-9);
+  // East by the radius, wider in degrees at this latitude.
+  assert.ok(ring[0][0] - 18 > 100 / 111320);
+});
+
+test('a hex colour fades as rgba', () => {
+  assert.equal(logic.hexRgba('#d9534f', 0.5), 'rgba(217,83,79,0.5)');
+  assert.equal(logic.hexRgba('#abc', 1), 'rgba(170,187,204,1)');
+});
+
+test('a map colour is a hex colour or nothing', () => {
+  assert.equal(logic.hexColor('#d9534f'), '#d9534f');
+  assert.equal(logic.hexColor('#abc'), '#abc');
+  for (const bad of ['red', '#abcd', 'd9534f', '#d9534f;x', null, undefined]) assert.equal(logic.hexColor(bad), null, String(bad));
+});
+
 test('related readings come from the descriptor sets that hold the aspect', () => {
   const T = 'temperature';
   const descriptor = {
@@ -1715,7 +1792,8 @@ test('a view reads back as the dashboard.toml block that made it', () => {
           { kind: 'dial', entity: 'heat_pump' },
           { hours: 24, aspect: 'temperature', entity: 'livingroom_temp', kind: 'chart' }
         ] },
-        { kind: 'room', room: 'kitchen' }
+        { kind: 'room', room: 'kitchen' },
+        { colors: { robin: '#d9534f', alex: '#abc' }, hours: 24, kind: 'map' }
       ]
     }, { name: 'rooms', label: 'All rooms', kind: 'rooms' }]
   };
@@ -1728,6 +1806,7 @@ test('a view reads back as the dashboard.toml block that made it', () => {
     '    { kind = "chart", entity = "livingroom_temp", aspect = "temperature", hours = 24 },',
     '  ] },',
     '  { kind = "room", room = "kitchen" },',
+    '  { kind = "map", hours = 24, colors = { robin = "#d9534f", alex = "#abc" } },',
     ']',
     ''
   ].join('\n'));

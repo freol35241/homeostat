@@ -822,7 +822,9 @@ pub struct WidgetSpec {
     pub room: Option<String>,
     /// `unit`, `params`: the unit, by name.
     pub unit: Option<String>,
-    /// `chart`: the window in hours (24 when absent).
+    /// `chart`: the window in hours (24 when absent). `map`: how many
+    /// hours of track to draw behind each marker. Without it the map
+    /// shows positions only.
     pub hours: Option<f64>,
     /// `group`: the label over its members; unlabelled when absent.
     pub label: Option<String>,
@@ -830,6 +832,12 @@ pub struct WidgetSpec {
     /// hold another group (`dashboard-nested-group`).
     #[serde(default)]
     pub widgets: Vec<WidgetSpec>,
+    /// `map`: a colour for an entity's marker and track, by entity name,
+    /// as `#rgb` or `#rrggbb`. The entity is a `person` or a `tracker`
+    /// (`dashboard-widget-capability`). Entities not named here take the
+    /// accent colour.
+    #[serde(default)]
+    pub colors: BTreeMap<String, String>,
 }
 
 /// What a widget places. Everything is rendered by the dashboard from the
@@ -860,7 +868,8 @@ pub enum WidgetKind {
     People,
     /// The deviations feed: what is out of the ordinary.
     Deviations,
-    /// The map: each person's position, and each tracker no person lists.
+    /// The map: each person's position, and each tracker no person lists,
+    /// optionally with a fading track of the last `hours`.
     Map,
     /// Several widgets as one card, such as a dial with the traces that
     /// explain it, or a setpoint beside what it drives. Groups do not nest.

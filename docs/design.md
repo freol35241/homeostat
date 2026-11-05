@@ -2633,6 +2633,50 @@ from a self-hosted PMTiles extract named by `HOMEOSTAT_DASHBOARD_TILES`
 and served by the dashboard unit. A public tile CDN would learn family
 positions from tile coordinates.
 
+MapLibre GL draws the map with WebGL, in the Protomaps basemap style,
+light or dark with the page's colour scheme. Vector tiles stay sharp past
+the extract's last zoom level, so the map zooms in to house level. The
+library, the style's fonts and its icons are vendored
+(`adapters/assets/map/`), and the page makes no request outside the
+house. The map credits OpenStreetMap and Protomaps, as the data's licence
+asks. MapLibre is loaded the first time a map is shown, so a view without
+one does not pay for it. A browser without WebGL2 shows a line saying so
+in place of the map.
+
+With `hours`, the map also draws each entity's track over that window.
+Without `hours` the map shows positions only. A track shows where each
+person has been all day, which the house should choose to put on a
+shared screen. The track is read from the recorder:
+
+- A fix is a `fixed_at` point, with `lat`, `lon` and `accuracy` as
+  they stood then. `fixed_at` is published after the other three, so a
+  point taken where `lat` changed could pair a new `lat` with an old
+  `lon`. The page reads changes, since averaging `lat` and `lon` apart
+  in buckets would cut the corners off a route. `lat`, `lon` and
+  `accuracy` publish only on change, so they are read over the history
+  API's longest window. A person who has not moved since before the
+  track's window still needs a value for each fix.
+- A read keeps the newest 5,000 fixes. A phone reporting every 30
+  seconds fills that in about 40 hours, so a longer `hours` shows only
+  its newest part.
+- Fixes are ordered by their `fixed_at` value, the time each was
+  taken, so a phone that sends queued fixes late still draws them in
+  place.
+- A fix within its own accuracy of the last one kept is dropped. A
+  phone lying still reports a new fix inside its circle every few
+  minutes, which would otherwise draw a scribble around the spot.
+- The track fades with age, from faint at the window's start to solid
+  at the marker. MapLibre's line gradient runs over distance along the
+  line, so the page works out each fix's age at points along it. Fixes
+  are not evenly spaced along a route, and a stop of several hours fades
+  by its own age.
+- Live fixes extend the track, and the history is read again every few
+  minutes, which moves the window and the fade with the clock.
+
+`colors` gives a person or tracker its own marker and track colour.
+Everyone else takes the accent colour. The plan accepts only a hex
+colour, since the value is written into the map's markup.
+
 ### Cameras
 
 Pixels are the media plane, and detections are data. The payload
