@@ -105,10 +105,10 @@ The deviations feed: what is out of the ordinary.
 
 ## `map`
 
-The map: each person's position, and each tracker no person lists.
+The map: each person's position, and each tracker no person lists, optionally with a fading track of the last `hours`.
 
 ```toml
-{ kind = "map" }
+{ kind = "map", hours = 24, colors = { robin = "#d9534f" } }
 ```
 
 ![The map widget](widgets/map.png)

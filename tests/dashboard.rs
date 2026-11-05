@@ -447,16 +447,9 @@ async fn dashboard_serves_the_family_surface() {
     revalidates("/");
     revalidates("/assets/dashboard-logic.js");
 
-    // Vendored map assets and the page's own logic and stylesheet are
-    // served, allowlisted by filename.
-    for name in [
-        "leaflet.js",
-        "leaflet.css",
-        "protomaps-leaflet.js",
-        "dashboard-logic.js",
-        "dashboard.css",
-        "homeostat-mark.svg",
-    ] {
+    // The page's own logic and stylesheet are served, allowlisted by
+    // filename.
+    for name in ["dashboard-logic.js", "dashboard.css", "homeostat-mark.svg"] {
         let (status, _) = http_request(&addr, "GET", &format!("/assets/{name}"), &[], None);
         assert_eq!(status, 200, "asset {name}");
     }
@@ -485,6 +478,43 @@ async fn dashboard_serves_the_family_surface() {
         "/assets/dashboard/%2e%2e/%2e%2e/%2e%2e/demo-site/shim.js",
         "/assets/dashboard/nope.js",
         "/assets/dashboard/%00.js",
+    ] {
+        let (status, _, _) = http_request_bytes(&addr, path, &[]);
+        assert_eq!(status, 404, "{path} must 404");
+    }
+
+    // The vendored map files are served from assets/map/ by suffix, each
+    // as the type the browser needs: a module as JavaScript, a font range
+    // as protobuf, an icon sheet as an image. A font directory has spaces
+    // in its name, which the URL escapes.
+    for (path, expected) in [
+        ("/assets/map/maplibre-gl.mjs", "text/javascript"),
+        ("/assets/map/maplibre-gl-worker.mjs", "text/javascript"),
+        ("/assets/map/maplibre-gl.css", "text/css"),
+        ("/assets/map/pmtiles.js", "text/javascript"),
+        ("/assets/map/basemaps.mjs", "text/javascript"),
+        ("/assets/map/sprites/light.json", "application/json"),
+        ("/assets/map/sprites/dark@2x.png", "image/png"),
+        (
+            "/assets/map/fonts/Noto%20Sans%20Regular/0-255.pbf",
+            "application/x-protobuf",
+        ),
+    ] {
+        let (status, headers, _) = http_request_bytes(&addr, path, &[]);
+        assert_eq!(status, 200, "{path}");
+        let content_type = headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case("content-type"))
+            .map(|(_, value)| value.as_str());
+        assert_eq!(content_type, Some(expected), "{path}");
+    }
+    // ...and nothing outside it: adapters/dashboard.py and
+    // adapters/assets/README.md are real files beside it.
+    for path in [
+        "/assets/map/../../dashboard.py",
+        "/assets/map/%2e%2e/%2e%2e/dashboard.py",
+        "/assets/map/../README.md",
+        "/assets/map/nope.png",
     ] {
         let (status, _, _) = http_request_bytes(&addr, path, &[]);
         assert_eq!(status, 404, "{path} must 404");

@@ -822,6 +822,29 @@ fn check_widget(
             Some(_) => {}
         }
     }
+    // A map colours what it draws: people, and trackers.
+    for entity in widget.colors.keys() {
+        match house.entities.iter().find(|e| &e.name == entity) {
+            None => errors.push(ValidationError::new(
+                Code::DashboardUnknownEntity,
+                subject,
+                format!("`colors` names unknown entity \"{entity}\""),
+                file.map(str::to_string),
+            )),
+            Some(e) if !matches!(e.file.entity.capability.as_str(), "person" | "tracker") => {
+                errors.push(ValidationError::new(
+                    Code::DashboardWidgetCapability,
+                    subject,
+                    format!(
+                        "a `map` colours a person or a tracker; \"{entity}\" is a {}",
+                        e.file.entity.capability
+                    ),
+                    file.map(str::to_string),
+                ));
+            }
+            Some(_) => {}
+        }
+    }
     if let Some(aspect) = &widget.aspect {
         if !valid_segment(aspect) {
             errors.push(ValidationError::new(
@@ -863,7 +886,8 @@ fn widget_fields_message(widget: &WidgetSpec) -> Option<String> {
         WidgetKind::Chart => (&["entity", "aspect"], &["hours"]),
         WidgetKind::Room => (&["room"], &[]),
         WidgetKind::Unit | WidgetKind::Params => (&["unit"], &[]),
-        WidgetKind::People | WidgetKind::Deviations | WidgetKind::Map => (&[], &[]),
+        WidgetKind::Map => (&[], &["hours", "colors"]),
+        WidgetKind::People | WidgetKind::Deviations => (&[], &[]),
         WidgetKind::Group => (&["widgets"], &["label"]),
     };
     let present: Vec<&str> = [
@@ -874,6 +898,7 @@ fn widget_fields_message(widget: &WidgetSpec) -> Option<String> {
         ("hours", widget.hours.is_some()),
         ("label", widget.label.is_some()),
         ("widgets", !widget.widgets.is_empty()),
+        ("colors", !widget.colors.is_empty()),
     ]
     .into_iter()
     .filter(|(_, set)| *set)
@@ -895,5 +920,21 @@ fn widget_fields_message(widget: &WidgetSpec) -> Option<String> {
             return Some(format!("`hours` must be a positive number, not {hours}"));
         }
     }
+    // The colour is written into the map's markup, so only a hex colour
+    // passes.
+    for (entity, color) in &widget.colors {
+        if !hex_color(color) {
+            return Some(format!(
+                "`colors.{entity}` must be a hex colour like \"#d9534f\", not \"{color}\""
+            ));
+        }
+    }
     None
+}
+
+/// `#rgb` or `#rrggbb`.
+fn hex_color(color: &str) -> bool {
+    color
+        .strip_prefix('#')
+        .is_some_and(|hex| matches!(hex.len(), 3 | 6) && hex.chars().all(|c| c.is_ascii_hexdigit()))
 }

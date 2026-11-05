@@ -4,3 +4,5 @@ error[dashboard-widget-fields] now[2]: a `people` widget takes no `entity` (dash
 error[dashboard-widget-fields] now[3]: a `room` widget takes no `hours` (dashboard.toml)
 error[dashboard-widget-fields] now[4]: `hours` must be a positive number, not 0 (dashboard.toml)
 error[dashboard-widget-fields] now[5]: a `dial` widget needs `entity` (dashboard.toml)
+error[dashboard-widget-fields] now[6]: `colors.kitchen_lamp` must be a hex colour like "#d9534f", not "red" (dashboard.toml)
+error[dashboard-widget-fields] now[7]: a `people` widget takes no `hours` (dashboard.toml)
