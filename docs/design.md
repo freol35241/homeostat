@@ -974,7 +974,10 @@ automation dressed as an adapter), a `mode` capability, and a relay
 aspect is `on` (the family lever). Its feature is `power_level`, an
 enum constraint that the existing control renders. Its readings are
 `flue_temperature` and `boiler_temperature`, in °C. Everything else
-passes through raw.
+passes through raw. The Aduro adapter also derives `fault` from the
+stove's run state and marks it notable, so a stop a person has to deal
+with, such as no fuel, lists on the dashboard. `fault` belongs to that
+adapter; the vocabulary does not name it.
 
 - It is not modelled as `switch` plus sensors. "Is it making heat"
   would then be read from dialect fields. Per-aspect leases also need
