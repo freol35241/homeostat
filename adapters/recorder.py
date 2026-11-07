@@ -1800,9 +1800,11 @@ def parse_params(raw: str) -> tuple[int, int, int, int, bool]:
         changes = True
     if bucket_us and changes:
         raise ValueError("bucket and changes are exclusive")
-    if bucket_us and (to_us - from_us) // bucket_us > MAX_QUERY_LIMIT:
+    if bucket_us and to_us // bucket_us - from_us // bucket_us + 1 > MAX_QUERY_LIMIT:
         # The fold walks the whole window, so a bucket that yields more
-        # points than a reply can carry would scan for nothing.
+        # points than a reply can carry would scan for nothing, and the
+        # reply would leave the oldest buckets out. Buckets are aligned to
+        # the epoch, so the count is of the buckets the window touches.
         raise ValueError(
             f"bucket: {bucket_us // 1_000_000} s makes more than {MAX_QUERY_LIMIT}"
             " buckets over the window; widen it or narrow from/to"
@@ -1892,6 +1894,10 @@ def bucketed(rows, bucket_us: int, limit: int) -> list[dict]:
     bucket's start, room the last row's; a number bucket's value is the
     mean and carries min and max, any other kind's is the last value seen
     (a run of bools or enum strings has no mean).
+
+    A number bucket also carries `sum` and the sample count `n`. A series
+    of amounts per interval, such as hourly rainfall, is totalled by its
+    sum, which the mean alone does not give back.
     """
     points: deque[dict] = deque(maxlen=limit)
     point: dict | None = None
@@ -1912,6 +1918,7 @@ def bucketed(rows, bucket_us: int, limit: int) -> list[dict]:
         if KINDS[point["kind"]] == "number" and point["n"]:
             row["value"] = point["sum"] / point["n"]
             row["min"], row["max"] = point["min"], point["max"]
+            row["sum"], row["n"] = point["sum"], point["n"]
         else:
             row["value"] = decode(point["kind"], point["last"])
         out.append(row)

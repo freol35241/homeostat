@@ -95,6 +95,28 @@ class SelectorTest(unittest.TestCase):
             with self.subTest(raw=raw), self.assertRaises(ValueError):
                 parse_params(raw)
 
+    def test_buckets_are_counted_as_the_window_touches_them(self):
+        # Epoch-aligned buckets: a window 9,999.5 widths long that starts
+        # mid-bucket touches 10,001 of them, and the reply would leave the
+        # oldest out.
+        start = datetime.datetime(2026, 1, 1, 0, 0, 30, tzinfo=datetime.timezone.utc)
+        for span_s, refused in ((9_999 * 60, False), (9_999 * 60 + 30, True)):
+            end = start + datetime.timedelta(seconds=span_s)
+            raw = f"from={start.isoformat()};to={end.isoformat()};bucket=60"
+            with self.subTest(span_s=span_s):
+                if refused:
+                    with self.assertRaises(ValueError):
+                        parse_params(raw)
+                else:
+                    parse_params(raw)
+
+    def test_the_sdk_reads_up_to_the_recorders_limit(self):
+        # `Context.history` takes a full read as a cut window, so it must
+        # ask for exactly the most the recorder returns.
+        from homeostat.automation import _HISTORY_LIMIT
+
+        self.assertEqual(_HISTORY_LIMIT, MAX_QUERY_LIMIT)
+
     def test_limit_is_positive_and_clamped(self):
         self.assertEqual(parse_limit("3"), 3)
         self.assertEqual(parse_limit(str(MAX_QUERY_LIMIT * 2)), MAX_QUERY_LIMIT)
@@ -129,6 +151,13 @@ class FoldTest(unittest.TestCase):
             [(p["value"], p["min"], p["max"], p["room"]) for p in points],
             [(2.0, 1.0, 3.0, "a"), (5.0, 5.0, 5.0, "b")],
         )
+
+    def test_a_number_bucket_carries_its_sum_and_count(self):
+        rows = [(0, "a", NUMBER, 0.5), (20 * S, "a", NUMBER, 0.0), (40 * S, "a", NUMBER, 1.5)]
+        (point,) = bucketed(rows, 60 * S, limit=10)
+        self.assertEqual((point["sum"], point["n"]), (2.0, 3))
+        rows = [(0, "a", BOOL, 1)]
+        self.assertNotIn("sum", bucketed(rows, 60 * S, limit=10)[0])
 
     def test_a_bool_bucket_is_its_last_value_and_the_newest_are_kept(self):
         rows = [(0, "a", BOOL, 1), (1, "a", BOOL, 0), (60 * S, "a", BOOL, 1)]

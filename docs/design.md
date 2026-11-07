@@ -1588,8 +1588,10 @@ slot.
   (RFC3339 with offset). There is one reply per matching series, an
   array of `{ts, room, value}`. Two mutually exclusive folds apply to
   the whole window before `limit`. `bucket=<seconds>` gives a number's
-  mean with `min` and `max`, or otherwise the last value; more than
-  10,000 buckets is refused. `changes=1` gives the rows where the value
+  mean with `min`, `max`, `sum` and the sample count `n`, or otherwise
+  the last value; more than 10,000 buckets is refused. Buckets start at
+  multiples of their width since the epoch. A series of amounts per
+  interval, such as hourly rainfall, is totalled by `sum`. `changes=1` gives the rows where the value
   changed. Without folds, a chart's span would depend on the publish
   rate. The page knows its width and the recorder knows the rows, so
   the recorder does the downsampling.
@@ -1825,14 +1827,49 @@ automatically:
   reply. It does not wait if no unit publishes under `home/history/`.
   Call it before `ready()`. The recorder answers serially, so restore
   waits out a get the recorder has taken instead of adding another to
-  its queue. Only a get that was not served is repeated. Reads are not
-  a declared bus surface. What constrains `restore` is the unit's own
-  publish bindings.
+  its queue. Only a get that was not served is repeated. Nothing on the
+  bus checks who sends a query, so the SDK ties each read to a binding:
+  `restore` to the unit's own publish bindings, and
+  [`history`](#reading-the-recorded-past) to its subscribe bindings.
 
 Persisting unit state in the SDK or the supervisor was rejected. It
 would be the same framework guess, made without the value's age. A file
 beside the unit was also rejected. It would be a second store with its
 own retention, backup and corruption problems.
+
+### Reading the recorded past
+
+A rule that decides on a series' recent past, such as the rain over the
+last day, reads it from the recorder. A window the unit kept from its
+own subscription would be empty after every restart of the unit until
+it refilled, while the recorder held the data all along.
+
+- `ctx.history(binding, start, end, bucket_s=, room=, entity=, aspect=,
+  timeout_s=30)` returns the window's rows, oldest first, with `ts` as
+  an aware datetime. With `bucket_s` it returns the recorder's buckets
+  ([Read path](#read-path)).
+- The binding is a `[bus.subscribes]` state binding, with its slots
+  filled as for `publish`. A unit reads the past only of what it
+  subscribes to, and the plan already shows that subscription. A
+  separate `[bus.reads]` table was rejected. Nothing on the bus enforces
+  reads, so it would be one more declaration to validate with nothing
+  behind it.
+- It raises `HistoryUnavailable` where `restore` returns `None`: when
+  the house has no recorder, the recorder does not answer or answers
+  with an error, or the window holds 10,000 raw rows or more. An empty
+  list then means that nothing was recorded. An irrigation rule must be
+  able to tell "it did not rain" from "I do not know". The read answers
+  from the store alone ([Archives](#archives)), so a window older than
+  the retention or archive settings reads as unrecorded.
+- It waits for the recorder as `restore` does, on every call. A get
+  that no queryable serves returns no replies, so without the wait a
+  recorder that is down would read as an empty window. A read that gets
+  no reply asks `stats` once more, for a recorder that stopped since.
+- Buckets are aligned to the epoch, not to `start`. Only rows inside the
+  window are folded, so the buckets' sums add up to the window's total,
+  while the first and last bucket's mean covers only part of its span.
+- It blocks until the recorder answers, so a unit calls it from its main
+  thread or a thread of its own, not from a `subscribe` handler.
 
 ## Derived values
 
