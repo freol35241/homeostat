@@ -3,7 +3,8 @@
 The core's router stamps every sample that arrives without a stamp, so
 every sample on the bus carries one (docs/design.md#timestamps). A
 publisher may set its own stamp instead, saying when the value was true.
-The core does that when it replays recorded state after a restart.
+The core does that when it replays recorded state after a restart, and a
+unit does it for a reading that describes an earlier time.
 """
 
 import datetime

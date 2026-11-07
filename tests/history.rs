@@ -1,10 +1,13 @@
 //! `ctx.history`: a unit reading a subscribed series' recorded past
-//! (docs/design.md#reading-the-recorded-past).
+//! (docs/design.md#reading-the-recorded-past), and stamped publishes
+//! (docs/design.md#timestamps).
 //!
-//! The fixture's unit publishes three amounts, reads them back raw and in
-//! buckets, and publishes what it read. This runs the SDK's selector
-//! against the real recorder, so a window or bucket the recorder parses
-//! differently from how the SDK writes it fails here.
+//! The fixture's unit publishes three hourly amounts, each stamped with the
+//! start of its hour, reads them back raw and in buckets, and publishes
+//! what it read. This runs the SDK's selector against the real recorder,
+//! so a window or bucket the recorder parses differently from how the SDK
+//! writes it fails here, and so does a stamp that does not reach the store
+//! to the microsecond.
 
 mod common;
 
@@ -16,6 +19,10 @@ use serde_json::json;
 
 use common::{await_health, await_mirror, health_watch, Supervisor};
 
+/// The newest amount is stamped at the start of the previous hour, so the
+/// mirror must report it as at least this old.
+const AN_HOUR_S: f64 = 3600.0;
+
 const FIXTURE: &str = "tests/fixtures/house_history";
 const GAUGE: &str = "home/state/garden/rain_gauge";
 
@@ -25,8 +32,9 @@ fn store_path() -> PathBuf {
     path
 }
 
-/// The three amounts come back as three rows, and the buckets' sums and
-/// counts add up to what was published.
+/// The three amounts come back as three rows at their hours' starts, the
+/// buckets' sums and counts add up to what was published, and the mirror
+/// ages the newest amount from its stamp.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_unit_reads_back_what_the_recorder_holds() {
     let db = store_path();
@@ -42,8 +50,27 @@ async fn a_unit_reads_back_what_the_recorder_holds() {
     .await;
 
     await_mirror(&observer, &format!("{GAUGE}/rows"), &json!(3)).await;
+    await_mirror(&observer, &format!("{GAUGE}/exact"), &json!(true)).await;
     await_mirror(&observer, &format!("{GAUGE}/total"), &json!(2.0)).await;
     await_mirror(&observer, &format!("{GAUGE}/count"), &json!(3)).await;
+
+    let replies = observer
+        .get(format!("{GAUGE}/precipitation"))
+        .await
+        .expect("mirror get");
+    let reply = replies.recv_async().await.expect("a mirror reply");
+    let sample = reply.result().expect("an ok reply");
+    let age_s: f64 = String::from_utf8(
+        sample
+            .attachment()
+            .expect("the mirror attaches the age")
+            .to_bytes()
+            .to_vec(),
+    )
+    .expect("utf-8 age")
+    .parse()
+    .expect("a decimal age");
+    assert!(age_s >= AN_HOUR_S, "aged from its stamp, got {age_s} s");
 
     sup.shutdown();
     let _ = std::fs::remove_file(&db);

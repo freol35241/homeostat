@@ -197,7 +197,7 @@ class PublishOptionsTest(unittest.TestCase):
         ctx._lock = threading.Lock()
         ctx._param_specs = {}
         ctx.puts = []
-        ctx._session = types.SimpleNamespace(put_json=lambda key, value: ctx.puts.append((key, value)))
+        ctx._session = types.SimpleNamespace(put_json=lambda key, value, at=None: ctx.puts.append((key, value)))
         return ctx
 
     def test_a_command_carries_its_options(self):
