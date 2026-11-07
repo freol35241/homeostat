@@ -1903,7 +1903,9 @@ interval_s = 3600
 - Each sample is the total over `[ts, ts + interval_s)`, the same
   convention as a forecast point with `d`. A unit that publishes an
   hour's total after the hour ends stamps it with the hour's start
-  ([Timestamps](#timestamps)).
+  ([Timestamps](#timestamps)). Each interval is published once, when it
+  is final: the recorder keeps the first value at a stamp, so a revised
+  total for the same hour is not recorded.
 - The house declares it, not an aspect descriptor. A unit that fetches
   data, such as a weather service, is an automation and publishes no
   descriptor. A meter's hourly energy needs the same declaration

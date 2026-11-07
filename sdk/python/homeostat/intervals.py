@@ -40,6 +40,9 @@ class IntervalsUncovered(Exception):
 def total(points: Iterable["Point"], start: datetime.datetime, end: datetime.datetime) -> float:
     """Return the total over `[start, end)` of values that each cover an interval.
 
+    Only values whose interval reaches into the window matter: a hole,
+    an overlap or an instant outside it says nothing about the window.
+
     Parameters
     ----------
     points : iterable of Point
@@ -57,10 +60,17 @@ def total(points: Iterable["Point"], start: datetime.datetime, end: datetime.dat
     Raises
     ------
     ValueError
-        If `end` is before `start`.
+        If `end` is before `start`, or a bound has no timezone.
     IntervalsUncovered
         If the values do not cover the whole window.
     """
+    # Python subtracts two datetimes in one zone by the wall clock, so an
+    # interval across a DST change would count an hour too many or few.
+    # In UTC every hour is an hour.
+    if start.tzinfo is None or end.tzinfo is None:
+        raise ValueError("the window's bounds need a timezone")
+    start = start.astimezone(datetime.timezone.utc)
+    end = end.astimezone(datetime.timezone.utc)
     if end < start:
         raise ValueError("the window's end is before its start")
     summed = 0.0
@@ -72,13 +82,13 @@ def total(points: Iterable["Point"], start: datetime.datetime, end: datetime.dat
                 raise IntervalsUncovered("not-intervals", f"{point.t.isoformat()} has no interval")
             continue
         point_end = point.t + datetime.timedelta(seconds=point.d)
+        if point_end <= start or point.t >= end:
+            continue
         if previous_end is not None and point.t < previous_end:
             raise IntervalsUncovered(
                 "gap", f"{point.t.isoformat()} starts before the previous interval ends"
             )
         previous_end = point_end
-        if point_end <= start or point.t >= end:
-            continue
         if point.t > covered_to:
             raise IntervalsUncovered("gap", f"nothing covers {covered_to.isoformat()}")
         inside = (min(point_end, end) - max(point.t, start)).total_seconds()

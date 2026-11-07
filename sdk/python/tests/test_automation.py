@@ -12,6 +12,7 @@ import datetime
 import threading
 import types
 import unittest
+import zoneinfo
 from pathlib import Path
 
 from homeostat import house
@@ -481,6 +482,22 @@ class HistoryTotalTest(unittest.TestCase):
         ctx = self.context(self.rows((6, 0.4), (7, 1.0)))
         self.assertAlmostEqual(ctx.history_total("rain", self.at(6, 30), self.at(8)), 1.2)
         self.assertIn("?from=2026-11-06T05:30:00+00:00;", ctx.asked[-1])
+
+    def test_the_hour_before_a_start_after_a_dst_change_is_read(self):
+        # 03:30 in Stockholm on the spring-forward night is 01:30 UTC. An
+        # hour earlier on the wall clock is 02:30, which does not exist and
+        # resolves to the same instant, so the row at 01:00 UTC would be
+        # left out.
+        stockholm = zoneinfo.ZoneInfo("Europe/Stockholm")
+        rows = [
+            {"ts": datetime.datetime(2026, 3, 29, h, tzinfo=self.UTC).isoformat(), "room": "garden", "value": v}
+            for h, v in ((1, 0.4), (2, 1.0))
+        ]
+        ctx = self.context(rows)
+        start = datetime.datetime(2026, 3, 29, 3, 30, tzinfo=stockholm)
+        # 01:30 to 02:30 UTC: half of each hour.
+        self.assertAlmostEqual(ctx.history_total("rain", start, start + datetime.timedelta(hours=1)), 0.7)
+        self.assertIn("?from=2026-03-29T00:30:00+00:00;", ctx.asked[-1])
 
     def test_a_missing_hour_is_not_zero(self):
         ctx = self.context(self.rows((6, 0.4), (8, 1.0)))

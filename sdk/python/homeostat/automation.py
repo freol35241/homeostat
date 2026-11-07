@@ -934,9 +934,14 @@ class Context:
         if segments[1] != "state":
             raise ValueError(f"history {binding!r}: only state keys have a history")
         interval_s = self._interval_of(segments[3], segments[4])
+        if start.tzinfo is None:
+            raise ValueError("history start needs a timezone")
+        # In UTC, so the interval before `start` is an hour long across a
+        # DST change too.
+        utc_start = start.astimezone(datetime.timezone.utc)
         rows = self.history(
             binding,
-            start - datetime.timedelta(seconds=interval_s),
+            utc_start - datetime.timedelta(seconds=interval_s),
             end,
             room=room,
             entity=entity,

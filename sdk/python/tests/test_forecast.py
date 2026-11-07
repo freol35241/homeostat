@@ -6,6 +6,7 @@ Run: uv run --no-project --with-editable sdk/python python -m unittest discover 
 import datetime
 import json
 import unittest
+import zoneinfo
 
 from homeostat.forecast import MAX_POINTS, Forecast, Point, decode, encode
 from homeostat.intervals import IntervalsUncovered
@@ -237,10 +238,6 @@ class ResampleTest(unittest.TestCase):
             f.resample(t(9), 3600, -1, "step", 3600)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TotalTest(unittest.TestCase):
     """A window's total counts each interval by its share inside. A
     stretch nothing covers raises, because a missing hour counted as zero
@@ -281,10 +278,31 @@ class TotalTest(unittest.TestCase):
                 self.assertEqual(caught.exception.reason, reason)
 
     def test_points_outside_the_window_do_not_matter(self):
-        # A hole and an instant after the window say nothing about it.
+        # A hole, an instant and an overlap after the window say nothing
+        # about it.
         fc = forecast([(t(9), 1.0, self.H), (t(10), 2.0), (t(12), 1.0, self.H)])
         self.assertEqual(fc.total(t(9), t(10)), 1.0)
+        overlapping = forecast([(t(9), 1.0, self.H), (t(10), 2.0, 2 * self.H), (t(11), 1.0, self.H)])
+        self.assertEqual(overlapping.total(t(9), t(10)), 1.0)
+
+    def test_a_window_across_a_dst_change_is_counted_in_real_hours(self):
+        # 01:30 to 03:30 in Stockholm on the spring-forward night is one
+        # hour, so one sixth of a 6 h interval, not two.
+        stockholm = zoneinfo.ZoneInfo("Europe/Stockholm")
+        night = datetime.datetime(2026, 3, 29, tzinfo=UTC)
+        fc = forecast([(night, 6.0, 6 * self.H)])
+        start = datetime.datetime(2026, 3, 29, 1, 30, tzinfo=stockholm)
+        end = datetime.datetime(2026, 3, 29, 3, 30, tzinfo=stockholm)
+        self.assertAlmostEqual(fc.total(start, end), 1.0)
+
+    def test_a_bound_without_a_timezone_is_refused(self):
+        with self.assertRaises(ValueError):
+            self.RAIN.total(t(9).replace(tzinfo=None), t(10))
 
     def test_a_window_that_ends_before_it_starts_is_refused(self):
         with self.assertRaises(ValueError):
             self.RAIN.total(t(11), t(10))
+
+
+if __name__ == "__main__":
+    unittest.main()

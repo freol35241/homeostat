@@ -48,7 +48,8 @@ fn valid_segment(name: &str) -> bool {
 
 /// Every name that becomes a key segment: unit and parameter names
 /// (`home/config/{unit}/{param}`, `home/meta/{unit}/...`), entity and room
-/// names (`home/state/{room}/{entity}/{aspect}`), and zone names (expanded in
+/// names, the aspect names an entity file declares
+/// (`home/state/{room}/{entity}/{aspect}`), and zone names (expanded in
 /// key expressions). The unit name `system` is refused because the core serves
 /// `home/meta/system/**` itself.
 fn check_names(house: &House, errors: &mut Vec<ValidationError>) {
@@ -97,6 +98,16 @@ fn check_names(house: &House, errors: &mut Vec<ValidationError>) {
                 segment_message("entity name", &entity.name),
                 file.clone(),
             ));
+        }
+        for aspect in entity.file.aspects.iter().flat_map(|a| a.keys()) {
+            if !valid_segment(aspect) {
+                errors.push(ValidationError::new(
+                    Code::InvalidName,
+                    format!("{}.{aspect}", entity.name),
+                    segment_message("aspect name", aspect),
+                    file.clone(),
+                ));
+            }
         }
         let room = &entity.file.entity.room;
         if !valid_segment(room) {
