@@ -192,7 +192,7 @@ One entry in `[aspects]`.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `interval_s` | integer | yes | Each sample is a total over the `interval_s` seconds that start at its stamp, as hourly rainfall in mm is with `interval_s = 3600`. Totals over a window count each sample by how much of its interval falls inside. A sample is stamped with the start of its interval, which a unit sets with `at=` when it publishes after the interval ends (docs/design.md#totals-over-intervals). At least 1 (`aspect-interval`). |
+| `interval_s` | integer | yes | Each sample is a total over the `interval_s` seconds that start at its stamp, as hourly rainfall in mm is with `interval_s = 3600`. Totals over a window count each sample by how much of its interval falls inside, and the dashboard draws the aspect as bars. A sample is stamped with the start of its interval, which a unit sets with `at=` when it publishes after the interval ends (docs/design.md#totals-over-intervals). At least 1 (`aspect-interval`). |
 
 ### EntitySection
 

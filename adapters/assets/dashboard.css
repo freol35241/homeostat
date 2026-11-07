@@ -282,6 +282,8 @@ pre.view-text { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, mono
    the span it has left to cover, so it does not use the accent
    (docs/design.md#charts-forecasts-and-sources). */
 .chart-forecast.stale { stroke: var(--muted); opacity: .6; }
+.chart-bar { fill: var(--accent); stroke: none; }
+.chart-bar.forecast { opacity: .35; }
 .chart-now { stroke: var(--secondary); stroke-width: 1; stroke-dasharray: 3 3; opacity: .55;
   vector-effect: non-scaling-stroke; }
 .chart-grid { stroke: var(--border); stroke-width: 1; vector-effect: non-scaling-stroke; }

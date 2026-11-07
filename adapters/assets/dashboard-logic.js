@@ -1581,10 +1581,132 @@
    * otherwise be drawn as a line between its codes and averaged. Without
    * a descriptor, the value's type decides. */
 
-  function historyShape(value, field) {
+  function historyShape(value, field, intervalS) {
+    // An amount per interval is drawn as bars over its intervals. A line
+    // through hourly amounts reads as a rate, and makes a 6 h forecast
+    // interval look like one spike.
+    if (intervalS) return 'bars';
     var kind = field && field.kind;
     if (kind === 'enum' || kind === 'boolean') return 'timeline';
     return typeof value === 'number' ? 'chart' : 'timeline';
+  }
+
+  /* The interval in seconds that each sample of an aspect totals over,
+   * from the entity file's `[aspects.<name>] interval_s`
+   * (docs/design.md#totals-over-intervals), or null. */
+  function intervalOf(entity, aspect) {
+    var s = entity && entity.intervals && entity.intervals[aspect];
+    return typeof s === 'number' && s > 0 ? s : null;
+  }
+
+  var DAY_MS = 86400e3;
+
+  // The most bars of one interval each that a window draws. Beyond this a
+  // bar is a local calendar day: a week of hourly bars is too thin to
+  // read, and "how much rain on Tuesday" asks for days.
+  var MAX_INTERVAL_BARS = 48;
+
+  function barsByDay(spanMs, intervalS) {
+    var ms = intervalS * 1000;
+    return ms < DAY_MS && spanMs / ms > MAX_INTERVAL_BARS;
+  }
+
+  // A bar's start and end. Interval bars are aligned to the epoch, as the
+  // recorder's buckets and an hour's stamp are. Day bars start at local
+  // midnight, and a day is not always 24 h long.
+  function barStart(t, byDay, ms) {
+    if (!byDay) return t - (((t % ms) + ms) % ms);
+    var d = new Date(t);
+    d.setHours(0, 0, 0, 0);
+    return d.getTime();
+  }
+
+  function barEnd(start, byDay, ms) {
+    if (!byDay) return start + ms;
+    var d = new Date(start);
+    d.setDate(d.getDate() + 1);
+    return d.getTime();
+  }
+
+  // Adds an amount, spread evenly over [a, b), to every bar it overlaps.
+  function spreadOver(add, a, b, amount, byDay, ms) {
+    for (var start = barStart(a, byDay, ms); start < b; start = barEnd(start, byDay, ms)) {
+      var end = barEnd(start, byDay, ms);
+      var inside = Math.min(end, b) - Math.max(start, a);
+      if (inside > 0) add(start, end, amount * inside / (b - a));
+    }
+  }
+
+  /* Bars for an interval aspect over a window: what was recorded, then
+   * what one forecast expects. `points` are the recorder's buckets, one
+   * per interval and each at its interval's start. Each bar is
+   * { from, to, observed, forecast } in epoch ms and the aspect's unit.
+   * A bar holds its share of every value whose interval overlaps it, with
+   * the amount spread evenly over the interval, as
+   * `homeostat.intervals.total` counts it. The forecast is drawn only
+   * after the last recorded interval ends, so no stretch counts twice. A
+   * forecast point without `d` says nothing about an interval and is left
+   * out. A stretch with nothing recorded has no bar, so a gap shows. */
+  function intervalBars(points, intervalS, win, forecast) {
+    var ms = intervalS * 1000;
+    var to = forecast && forecast.to > win.to ? forecast.to : win.to;
+    var byDay = barsByDay(to - win.from, intervalS);
+    var bars = {};
+    var adder = function (kind) {
+      return function (start, end, amount) {
+        if (end <= win.from || start >= to) return;
+        var bar = bars[start] || (bars[start] = { from: start, to: end, observed: 0, forecast: 0 });
+        bar[kind] += amount;
+      };
+    };
+    var observedEnd = win.from;
+    (points || []).forEach(function (p) {
+      var t = Date.parse(p.ts);
+      var amount = typeof p.sum === 'number' ? p.sum : p.value;
+      if (isNaN(t) || typeof amount !== 'number') return;
+      spreadOver(adder('observed'), t, t + ms, amount, byDay, ms);
+      observedEnd = Math.max(observedEnd, t + ms);
+    });
+    ((forecast && forecast.points) || []).forEach(function (p) {
+      if (!p.d) return;
+      var end = p.t + p.d * 1000;
+      var from = Math.max(p.t, observedEnd);
+      if (end <= from) return;
+      spreadOver(adder('forecast'), from, end, p.v * (end - from) / (end - p.t), byDay, ms);
+    });
+    return Object.keys(bars)
+      .map(function (k) { return bars[k]; })
+      .sort(function (a, b) { return a.from - b.from; });
+  }
+
+  /* The total over the 24 h that end where the newest recorded interval
+   * ends, for a tile. An interval is published after it ends, so the
+   * newest one ends before now and a total up to now would always be
+   * short. `covered` is how many intervals the recorder holds in those
+   * 24 h and `expected` how many there are, so a tile can say when some
+   * are missing. `stale` is when the newest interval ended more than two
+   * intervals ago, as when its publisher has stopped. Null when nothing
+   * is recorded. */
+  function recentTotal(points, intervalS, nowMs) {
+    var ms = intervalS * 1000;
+    var rows = [];
+    (points || []).forEach(function (p) {
+      var t = Date.parse(p.ts);
+      var amount = typeof p.sum === 'number' ? p.sum : p.value;
+      if (!isNaN(t) && typeof amount === 'number') rows.push({ t: t, amount: amount });
+    });
+    if (!rows.length) return null;
+    var newest = rows.reduce(function (a, r) { return r.t > a.t ? r : a; });
+    var end = newest.t + ms;
+    var start = end - Math.max(DAY_MS, ms);
+    var total = 0, covered = 0;
+    rows.forEach(function (r) {
+      if (r.t >= start && r.t < end) { total += r.amount; covered += 1; }
+    });
+    return {
+      total: total, latest: newest.amount, end: end, covered: covered,
+      expected: Math.max(1, Math.round(DAY_MS / ms)), stale: nowMs - end > 2 * ms
+    };
   }
 
   /* One bucket per drawn column. The chart's viewBox width is the most
@@ -1893,6 +2015,9 @@
     isPaused: isPaused,
     viewFor: viewFor,
     historyShape: historyShape,
+    intervalOf: intervalOf,
+    intervalBars: intervalBars,
+    recentTotal: recentTotal,
     bucketSeconds: bucketSeconds,
     timelineRuns: timelineRuns,
     timelineStats: timelineStats,

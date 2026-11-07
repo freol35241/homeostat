@@ -1,4 +1,4 @@
-/* Charts: line and timeline markup over dashboard-logic.js's geometry,
+/* Charts: line, bar and timeline markup over dashboard-logic.js's geometry,
  * and the scrub, with its crosshair, tooltip and the readouts under a
  * chart. */
 import { byId, html } from './html.js';
@@ -175,28 +175,90 @@ export function buildChart(chartId, points, opts) {
       ${opts.yLabels ? html`<div class="chart-ylabel chart-ylabel-top">${formatChartValue(opts.aspect, geo.max)}</div>
         <div class="chart-ylabel chart-ylabel-bottom">${formatChartValue(opts.aspect, geo.min)}</div>` : ''}`;
   }
-  // Without a time axis the reader has to guess how far back the chart
-  // goes. The range chip says "24h" but not where the window starts or
-  // ends, and with a horizon drawn the right edge is not the present. The
-  // middle slot labels the now-rule when one is drawn, since its position
-  // cannot be read off the ends.
-  var axis = '';
-  if (opts.yLabels && geo && geo.from && geo.to > geo.from) {
-    var span = geo.to - geo.from;
-    // The near end shows the date. The far end only needs the time,
-    // unless it falls on another day.
-    var sameDay = new Date(geo.from).toDateString() === new Date(geo.to).toDateString();
-    var nowPct = geo.nowX === undefined ? null : (geo.nowX / CHART_VBW) * 100;
-    // Too close to either end it would overlap the label there, and the
-    // rule itself already shows where now is.
-    var nowLabel = nowPct !== null && nowPct > 14 && nowPct < 86
-      ? html`<span class="chart-xnow" style="left:${nowPct.toFixed(1)}%">now</span>`
-      : '';
-    axis = html`<div class="chart-xaxis">
-      <span>${formatChartTime(geo.from, span)}</span>${nowLabel}
-      <span>${sameDay ? formatChartClock(geo.to, span) : formatChartTime(geo.to, span)}</span>
-      </div>`;
+  var axis = opts.yLabels && geo ? timeAxis(geo.from, geo.to, geo.nowX) : '';
+  return html`<div class="chart-wrap ${sizeClass}" data-chart-id="${chartId}">${inner}</div>${axis}`;
+}
+
+// Without a time axis the reader has to guess how far back the chart
+// goes. The range chip says "24h" but not where the window starts or
+// ends, and with a horizon drawn the right edge is not the present. The
+// middle slot labels the now-rule when one is drawn, since its position
+// cannot be read off the ends.
+function timeAxis(from, to, nowX) {
+  if (!from || !(to > from)) return '';
+  var span = to - from;
+  // The near end shows the date. The far end only needs the time,
+  // unless it falls on another day.
+  var sameDay = new Date(from).toDateString() === new Date(to).toDateString();
+  var nowPct = nowX === undefined ? null : (nowX / CHART_VBW) * 100;
+  // Too close to either end it would overlap the label there, and the
+  // rule itself already shows where now is. A far end on another day
+  // carries its date and reaches further in.
+  var nowLabel = nowPct !== null && nowPct > 14 && nowPct < (sameDay ? 86 : 74)
+    ? html`<span class="chart-xnow" style="left:${nowPct.toFixed(1)}%">now</span>`
+    : '';
+  return html`<div class="chart-xaxis">
+    <span>${formatChartTime(from, span)}</span>${nowLabel}
+    <span>${sameDay ? formatChartClock(to, span) : formatChartTime(to, span)}</span>
+    </div>`;
+}
+
+/* Bars over intervals, for an aspect whose samples are amounts per
+ * interval (dashboard-logic.js, intervalBars). A bar spans its interval,
+ * so an amount reads as an amount: a 6 h forecast interval is six hours
+ * wide and not a spike. Recorded amounts are solid and the forecast's
+ * are faded, stacked on top where one bar holds both, as today's bar
+ * does in a week of days. The scale starts at zero, because the height
+ * of a bar is the amount. */
+export function buildBars(chartId, bars, opts) {
+  opts = opts || {};
+  var height = opts.height || 36;
+  var pad = opts.pad !== undefined ? opts.pad : 3;
+  var sizeClass = opts.sizeClass || 'chart-tile';
+  var win = opts.window;
+  if (!bars.length) {
+    chartRegistry[chartId] = null;
+    return html`<div class="chart-wrap ${sizeClass}" data-chart-id="${chartId}"><div class="chart-empty">no history yet</div></div>`;
   }
+  var from = win.from;
+  var to = Math.max(win.to, bars[bars.length - 1].to);
+  var max = 0;
+  bars.forEach(function (b) { max = Math.max(max, b.observed + b.forecast); });
+  max = max || 1;
+  var x = function (t) { return pad + (Math.min(Math.max(t, from), to) - from) / (to - from) * (CHART_VBW - 2 * pad); };
+  var y = function (v) { return height - pad - (v / max) * (height - 2 * pad); };
+  var marks = [];
+  if (opts.gridlines) {
+    [pad, height / 2, height - pad].forEach(function (gy) {
+      marks.push(html`<line class="chart-grid" x1="0" y1="${gy.toFixed(1)}" x2="${CHART_VBW}" y2="${gy.toFixed(1)}"/>`);
+    });
+  }
+  var coords = [];
+  bars.forEach(function (b) {
+    var x0 = x(b.from), x1 = x(b.to);
+    // A sliver between bars, so neighbours of equal height stay apart.
+    var w = Math.max(x1 - x0 - Math.min(1, (x1 - x0) * 0.15), 0.5);
+    var total = b.observed + b.forecast;
+    if (b.observed > 0) {
+      marks.push(html`<rect class="chart-bar" x="${x0.toFixed(1)}" y="${y(b.observed).toFixed(1)}" width="${w.toFixed(1)}" height="${(y(0) - y(b.observed)).toFixed(1)}"/>`);
+    }
+    if (b.forecast > 0) {
+      marks.push(html`<rect class="chart-bar forecast" x="${x0.toFixed(1)}" y="${y(total).toFixed(1)}" width="${w.toFixed(1)}" height="${(y(b.observed) - y(total)).toFixed(1)}"/>`);
+    }
+    coords.push({ x: x0 + w / 2, y: y(total), value: total, ts: b.from });
+  });
+  var now = Date.now();
+  var nowX = now > from && now < to && to > win.to ? x(now) : undefined;
+  if (nowX !== undefined) {
+    marks.push(html`<line class="chart-now" x1="${nowX.toFixed(1)}" y1="0" x2="${nowX.toFixed(1)}" y2="${height}"/>`);
+  }
+  chartRegistry[chartId] = { coords: coords, width: CHART_VBW, height: height, aspect: opts.aspect, window: { from: from, to: to } };
+  var inner = html`<svg viewBox="0 0 ${CHART_VBW} ${height}" preserveAspectRatio="none">${marks}
+    <line class="chart-crosshair" x1="0" y1="0" x2="0" y2="${height}" style="display:none;"/></svg>
+    <div class="chart-crosshair-dot" style="display:none;"></div>
+    ${opts.yLabels ? html`<div class="chart-ylabel chart-ylabel-top">${formatChartValue(opts.aspect, max)}</div>
+      <div class="chart-ylabel chart-ylabel-bottom">${formatChartValue(opts.aspect, 0)}</div>` : ''}`;
+  var axis = opts.yLabels ? timeAxis(from, to, nowX) : '';
   return html`<div class="chart-wrap ${sizeClass}" data-chart-id="${chartId}">${inner}</div>${axis}`;
 }
 

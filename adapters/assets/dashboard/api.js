@@ -104,12 +104,15 @@ export function errText(e) {
 // place them by time.
 
 // `cls` is the recorder's series class: 'state' (the default) is what the
-// house did, and 'cmd' is what was asked of it.
-export function fetchHistory(entity, aspect, hours, shape, cls) {
+// house did, and 'cmd' is what was asked of it. Bars ask for one bucket
+// per interval, whose sum is that interval's amount, and are binned into
+// days on the page, because the recorder's buckets start at UTC midnight.
+export function fetchHistory(entity, aspect, hours, shape, cls, intervalS) {
   var win = { from: Date.now() - hours * 3600e3, to: Date.now() };
+  var bucket = shape === 'bars' ? intervalS : logic.bucketSeconds(hours, CHART_VBW);
   var url = '/api/history?entity=' + encodeURIComponent(entity) + '&aspect=' + encodeURIComponent(aspect) + '&hours=' + hours +
     (cls ? '&class=' + encodeURIComponent(cls) : '') +
-    (shape === 'timeline' ? '&changes=1' : '&bucket=' + logic.bucketSeconds(hours, CHART_VBW));
+    (shape === 'timeline' ? '&changes=1' : '&bucket=' + bucket);
   return fetch(url)
     .then(function (r) { return r.json(); })
     .then(function (data) {
@@ -124,13 +127,18 @@ export function fetchHistory(entity, aspect, hours, shape, cls) {
     });
 }
 
-// tile/row sparklines: numeric readings, fixed 24h window
-export function ensureHistory(entity, aspect) {
+// tile/row sparklines: numeric readings, fixed 24h window. An interval
+// aspect reads 48 h, because its tile totals the 24 h that end with the
+// newest recorded interval, which ends before now.
+export function ensureHistory(entity, aspect, intervalS) {
   var sk = entity + '|' + aspect;
   var s = localState.sparklines[sk];
   if (s && (s.loaded || s.loading)) return;
   localState.sparklines[sk] = { points: [], loaded: false, loading: true };
-  fetchHistory(entity, aspect, 24, 'chart').then(function (loaded) {
+  var fetched = intervalS
+    ? fetchHistory(entity, aspect, 48, 'bars', null, intervalS)
+    : fetchHistory(entity, aspect, 24, 'chart');
+  fetched.then(function (loaded) {
     localState.sparklines[sk] = loaded;
     scheduleRender();
   });
