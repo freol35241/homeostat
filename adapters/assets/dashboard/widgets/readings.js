@@ -1,6 +1,6 @@
 /* The tile and chart widgets: an entity's readings, now and over time. */
 import { ensureHistory, fetchHistory } from '../api.js';
-import { buildBars, buildChart, buildTimeline, formatChartClock, horizonCaption, issuedCaption, minMaxCaption } from '../charts.js';
+import { buildBars, buildChart, buildTimeline, fmtDuration, formatChartClock, formatChartTime, horizonCaption, issuedCaption, minMaxCaption } from '../charts.js';
 import { html } from '../html.js';
 import logic from '../logic.js';
 import { descriptorField, liveForecastsOf, localState, scheduleRender, stateValue, store } from '../store.js';
@@ -61,9 +61,10 @@ function intervalName(intervalS) {
 
 /* A tile for an amount per interval, such as hourly rain. The big number
  * is the total over the last 24 h, because "has it rained?" is what a
- * glance asks, and the latest hour is 0 most of the time. The 24 h end
- * where the newest recorded interval ends, which is before now, and the
- * caption says when. The latest interval is the small line. */
+ * glance asks, and the latest hour is 0 most of the time. An interval
+ * longer than a day is totalled alone. The span ends where the newest
+ * recorded interval ends, which is before now, and the caption says
+ * when. The latest interval is the small line. */
 function intervalTile(entity, r, named, intervalS) {
   var sk = entity.name + '|' + r.aspect;
   ensureHistory(entity.name, r.aspect, intervalS);
@@ -81,10 +82,15 @@ function intervalTile(entity, r, named, intervalS) {
     : '';
   var recent = loaded ? logic.recentTotal(s.points, intervalS, now) : null;
   var big = recent ? logic.formatAspect(r.aspect, field, recent.total) : r.display;
+  var day = recent && recent.spanMs === 864e5;
   var caption = recent
-    ? ['last 24 h to ' + formatChartClock(recent.end),
-      'latest ' + (intervalName(intervalS) ? intervalName(intervalS) + ' ' : '') + logic.formatAspect(r.aspect, field, recent.latest),
-      recent.covered < recent.expected ? recent.covered + ' of ' + recent.expected + ' recorded' : ''
+    ? ['last ' + (day ? '24 h' : fmtDuration(recent.spanMs)) + ' to ' +
+        (day ? formatChartClock(recent.end) : formatChartTime(recent.end)),
+      day ? 'latest ' + (intervalName(intervalS) ? intervalName(intervalS) + ' ' : '') + logic.formatAspect(r.aspect, field, recent.latest) : '',
+      // Rounded to the hour: a second short of the span is not missing.
+      Math.round(recent.coveredMs / 36e5) < Math.round(recent.spanMs / 36e5)
+        ? Math.round(recent.coveredMs / 36e5) + ' of ' + Math.round(recent.spanMs / 36e5) + ' h recorded'
+        : ''
     ].filter(Boolean).join(' \u00b7 ')
     : '';
   var tileLabel = entity.label + (named ? ' \u00b7 ' + r.label : '');
@@ -125,7 +131,7 @@ export function widgetChart(entity, aspect, hours) {
         : buildChart('chart-' + key, s.points, { height: 120, sizeClass: 'chart-card', aspect: aspect, area: true, gridlines: true, yLabels: true, window: s.window, forecast: beliefs });
   // An amount per interval reads as the window's recorded total, which is
   // what the bars add up to. Its latest value is one interval's.
-  var big = shape === 'bars'
+  var big = shape === 'bars' && s.loaded
     ? logic.formatAspect(aspect, field, bars.reduce(function (a, b) { return a + b.observed; }, 0))
     : logic.formatAspect(aspect, field, value);
   // The same rule as a tile: a drawn forecast says when it was issued. One

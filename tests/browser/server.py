@@ -238,18 +238,19 @@ class FakeHouse:
         return None
 
     def amounts(self, interval: int, hours: float, now: float) -> list[dict]:
-        """One bucket per interval, as the recorder folds stamped amounts.
+        """One row per interval, as the recorder holds stamped amounts.
 
-        Each is at its interval's start, and the newest ended at the start
-        of the current interval, as when an hour's total is published once
-        the hour is over. It rains a little every third interval.
+        Each is at its interval's start, and none before the window's
+        start, as the recorder reads. The newest ended at the start of the
+        current interval, as when an hour's total is published once the
+        hour is over. It rains a little every third interval.
         """
         newest = now - now % interval - interval
         points = []
-        t = newest - (int(hours * 3600 // interval) - 1) * interval
+        t = math.ceil((now - hours * 3600) / interval) * interval
         while t <= newest:
             value = 0.6 if int(t // interval) % 3 == 0 else 0.0
-            points.append({"ts": iso(t), "room": "garden", "value": value, "sum": value, "n": 1})
+            points.append({"ts": iso(t), "room": "garden", "value": value})
             t += interval
         return points
 

@@ -208,8 +208,9 @@ function timeAxis(from, to, nowX) {
  * so an amount reads as an amount: a 6 h forecast interval is six hours
  * wide and not a spike. Recorded amounts are solid and the forecast's
  * are faded, stacked on top where one bar holds both, as today's bar
- * does in a week of days. The scale starts at zero, because the height
- * of a bar is the amount. */
+ * does in a week of days. The scale includes zero, because the height
+ * of a bar is the amount, and a negative amount, such as energy exported
+ * in an hour, is drawn down from it. */
 export function buildBars(chartId, bars, opts) {
   opts = opts || {};
   var height = opts.height || 36;
@@ -220,13 +221,25 @@ export function buildBars(chartId, bars, opts) {
     chartRegistry[chartId] = null;
     return html`<div class="chart-wrap ${sizeClass}" data-chart-id="${chartId}"><div class="chart-empty">no history yet</div></div>`;
   }
-  var from = win.from;
+  // A first bar that starts before the window, a whole day or the
+  // interval straddling its start, is drawn whole.
+  var from = Math.min(win.from, bars[0].from);
   var to = Math.max(win.to, bars[bars.length - 1].to);
-  var max = 0;
-  bars.forEach(function (b) { max = Math.max(max, b.observed + b.forecast); });
-  max = max || 1;
+  var max = 0, min = 0;
+  bars.forEach(function (b) {
+    [b.observed, b.observed + b.forecast].forEach(function (v) {
+      max = Math.max(max, v);
+      min = Math.min(min, v);
+    });
+  });
+  if (max === min) max = min + 1;
   var x = function (t) { return pad + (Math.min(Math.max(t, from), to) - from) / (to - from) * (CHART_VBW - 2 * pad); };
-  var y = function (v) { return height - pad - (v / max) * (height - 2 * pad); };
+  var y = function (v) { return height - pad - ((v - min) / (max - min)) * (height - 2 * pad); };
+  // A rectangle between two amounts, whichever is higher.
+  var rect = function (cls, x0, w, a, b) {
+    var top = Math.min(y(a), y(b));
+    return html`<rect class="${cls}" x="${x0.toFixed(1)}" y="${top.toFixed(1)}" width="${w.toFixed(1)}" height="${Math.abs(y(a) - y(b)).toFixed(1)}"/>`;
+  };
   var marks = [];
   if (opts.gridlines) {
     [pad, height / 2, height - pad].forEach(function (gy) {
@@ -239,12 +252,8 @@ export function buildBars(chartId, bars, opts) {
     // A sliver between bars, so neighbours of equal height stay apart.
     var w = Math.max(x1 - x0 - Math.min(1, (x1 - x0) * 0.15), 0.5);
     var total = b.observed + b.forecast;
-    if (b.observed > 0) {
-      marks.push(html`<rect class="chart-bar" x="${x0.toFixed(1)}" y="${y(b.observed).toFixed(1)}" width="${w.toFixed(1)}" height="${(y(0) - y(b.observed)).toFixed(1)}"/>`);
-    }
-    if (b.forecast > 0) {
-      marks.push(html`<rect class="chart-bar forecast" x="${x0.toFixed(1)}" y="${y(total).toFixed(1)}" width="${w.toFixed(1)}" height="${(y(b.observed) - y(total)).toFixed(1)}"/>`);
-    }
+    if (b.observed !== 0) marks.push(rect('chart-bar', x0, w, 0, b.observed));
+    if (b.forecast !== 0) marks.push(rect('chart-bar forecast', x0, w, b.observed, total));
     coords.push({ x: x0 + w / 2, y: y(total), value: total, ts: b.from });
   });
   var now = Date.now();
@@ -257,7 +266,7 @@ export function buildBars(chartId, bars, opts) {
     <line class="chart-crosshair" x1="0" y1="0" x2="0" y2="${height}" style="display:none;"/></svg>
     <div class="chart-crosshair-dot" style="display:none;"></div>
     ${opts.yLabels ? html`<div class="chart-ylabel chart-ylabel-top">${formatChartValue(opts.aspect, max)}</div>
-      <div class="chart-ylabel chart-ylabel-bottom">${formatChartValue(opts.aspect, 0)}</div>` : ''}`;
+      <div class="chart-ylabel chart-ylabel-bottom">${formatChartValue(opts.aspect, min)}</div>` : ''}`;
   var axis = opts.yLabels ? timeAxis(from, to, nowX) : '';
   return html`<div class="chart-wrap ${sizeClass}" data-chart-id="${chartId}">${inner}</div>${axis}`;
 }

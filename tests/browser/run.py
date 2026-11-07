@@ -406,7 +406,9 @@ class IntervalBars(PageTest):
         # A third of 24 hours rain 0.6 each.
         self.assertRegex(await tile.locator(".big").inner_text(), r"^4\.8")
         self.assertRegex(await tile.locator(".caption").inner_text(), r"^last 24 h to .* · latest hour")
-        self.assertEqual(await tile.locator("rect.chart-bar:not(.forecast)").count(), 8)
+        # The hour straddling the window's start is drawn whole, so 25
+        # hours show, and eight or nine of them rained.
+        self.assertIn(await tile.locator("rect.chart-bar:not(.forecast)").count(), (8, 9))
         self.assertGreater(await tile.locator("rect.chart-bar.forecast").count(), 0)
 
     async def test_the_overlay_draws_bars_and_a_week_in_days(self):
@@ -421,6 +423,10 @@ class IntervalBars(PageTest):
         days = await self.page.locator("#overlay-panel rect.chart-bar:not(.forecast)").count()
         self.assertGreaterEqual(days, 7)
         self.assertLessEqual(days, 8)
+        # An hour's window still holds the hour that straddles its start.
+        await self.page.click('[data-action="range-chip"][data-hours="1"]')
+        await self.page.wait_for_timeout(700)
+        self.assertGreater(await self.page.locator("#overlay-panel rect.chart-bar").count(), 0)
 
 
 class MapTracks(PageTest):
