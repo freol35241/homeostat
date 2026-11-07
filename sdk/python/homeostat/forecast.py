@@ -46,6 +46,8 @@ import math
 from dataclasses import dataclass
 from itertools import pairwise
 
+from . import intervals
+
 SCHEMA = 1
 
 # A guard against a runaway producer. 15-minute resolution over a week is
@@ -252,6 +254,36 @@ class Forecast:
             return left.v
         span = (right.t - left.t).total_seconds()
         return left.v + (right.v - left.v) * ((when - left.t).total_seconds() / span)
+
+    def total(self, start: datetime.datetime, end: datetime.datetime) -> float:
+        """Return the total this forecast predicts over `[start, end)`.
+
+        For a forecast of amounts per interval, such as rain. Each point
+        counts by the share of its interval inside the window
+        (`homeostat.intervals.total`). How old a forecast may be is the
+        consumer's call, so check `age_s` first.
+
+        Parameters
+        ----------
+        start : datetime.datetime
+            The window's start.
+        end : datetime.datetime
+            The window's end.
+
+        Returns
+        -------
+        float
+            The predicted total over the window.
+
+        Raises
+        ------
+        ValueError
+            If `end` is before `start`.
+        homeostat.intervals.IntervalsUncovered
+            If a point in the window has no `d`, the points leave a gap or
+            overlap, or the forecast ends before the window does.
+        """
+        return intervals.total(self.points, start, end)
 
     def resample(
         self,

@@ -23,6 +23,7 @@ pub fn validate(house: &House) -> Vec<ValidationError> {
     check_manifest_shape(house, &mut errors);
     check_entities(house, &mut errors);
     check_persons(house, &mut errors);
+    check_aspect_intervals(house, &mut errors);
     check_zones(house, &mut errors);
     check_params(house, &mut errors);
     check_dashboard(house, &mut errors);
@@ -47,7 +48,8 @@ fn valid_segment(name: &str) -> bool {
 
 /// Every name that becomes a key segment: unit and parameter names
 /// (`home/config/{unit}/{param}`, `home/meta/{unit}/...`), entity and room
-/// names (`home/state/{room}/{entity}/{aspect}`), and zone names (expanded in
+/// names, the aspect names an entity file declares
+/// (`home/state/{room}/{entity}/{aspect}`), and zone names (expanded in
 /// key expressions). The unit name `system` is refused because the core serves
 /// `home/meta/system/**` itself.
 fn check_names(house: &House, errors: &mut Vec<ValidationError>) {
@@ -96,6 +98,16 @@ fn check_names(house: &House, errors: &mut Vec<ValidationError>) {
                 segment_message("entity name", &entity.name),
                 file.clone(),
             ));
+        }
+        for aspect in entity.file.aspects.iter().flat_map(|a| a.keys()) {
+            if !valid_segment(aspect) {
+                errors.push(ValidationError::new(
+                    Code::InvalidName,
+                    format!("{}.{aspect}", entity.name),
+                    segment_message("aspect name", aspect),
+                    file.clone(),
+                ));
+            }
         }
         let room = &entity.file.entity.room;
         if !valid_segment(room) {
@@ -431,6 +443,24 @@ fn check_persons(house: &House, errors: &mut Vec<ValidationError>) {
                         source.aspect
                     ),
                     file.clone(),
+                ));
+            }
+        }
+    }
+}
+
+/// An interval total weighs each sample by the share of its interval
+/// inside a window, so an interval of no length would divide by zero.
+fn check_aspect_intervals(house: &House, errors: &mut Vec<ValidationError>) {
+    for entity in &house.entities {
+        for (aspect, decl) in entity.file.aspects.iter().flatten() {
+            if decl.interval_s == 0 {
+                errors.push(ValidationError::new(
+                    Code::AspectInterval,
+                    format!("{}.{aspect}", entity.name),
+                    "interval_s is 0; it is the length of each sample's interval in seconds"
+                        .to_string(),
+                    Some(entity.path.clone()),
                 ));
             }
         }

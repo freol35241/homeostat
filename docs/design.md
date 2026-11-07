@@ -1889,6 +1889,44 @@ it refilled, while the recorder held the data all along.
 - It blocks until the recorder answers, so a unit calls it from its main
   thread or a thread of its own, not from a `subscribe` handler.
 
+### Totals over intervals
+
+Some readings are amounts over an interval: hourly rainfall, energy per
+hour, pellets burnt per day. A forecast point says so with `d`. A state
+sample has one stamp, so the entity file says it for the aspect:
+
+```toml
+[aspects.precipitation]
+interval_s = 3600
+```
+
+- Each sample is the total over `[ts, ts + interval_s)`, the same
+  convention as a forecast point with `d`. A unit that publishes an
+  hour's total after the hour ends stamps it with the hour's start
+  ([Timestamps](#timestamps)). Each interval is published once, when it
+  is final: the recorder keeps the first value at a stamp, so a revised
+  total for the same hour is not recorded.
+- The house declares it, not an aspect descriptor. A unit that fetches
+  data, such as a weather service, is an automation and publishes no
+  descriptor. A meter's hourly energy needs the same declaration
+  whichever kind of unit binds it.
+- `Forecast.total(start, end)` and `ctx.history_total(binding, start,
+  end)` count each value by the share of its interval inside the window,
+  with the amount taken as spread evenly over the interval. An hour half
+  inside counts half, and a 6 h interval with two hours inside counts a
+  third. `history_total` reads one interval before `start` to take in
+  the one that straddles it.
+- A stretch the values do not cover raises `IntervalsUncovered`, with
+  the reason `gap` (a hole or an overlap, or the window starts before the
+  values), `short` (the values end before the window does) or
+  `not-intervals` (a forecast point in the window has no `d`). It never
+  counts as zero, because zero rain is the reading that turns the
+  watering on.
+- How old a forecast may be is the consumer's call, as for `at`, so
+  `total` does not check `issued`. An observed interval arrives after it
+  ends, so the newest one usually ends before now. A window that runs
+  past it is `short`, and the consumer picks an end it trusts.
+
 ## Derived values
 
 A value the house computes rather than measures (a fused temperature,
