@@ -393,12 +393,16 @@ stamps each sample that arrives without one (`timestamping` in
 A stamp is the core's wall-clock time plus the ID of whoever set it,
 and stamps order totally: by time, then by ID.
 
-A publisher may set its own stamp to say when its value was true. Only
-the core does this, when it
-[replays recorded state after a restart](#replay-after-a-core-restart).
-Its replays carry the ID `1`. The router's stamps carry the router's
-own ID, which is random, so a consumer can tell a live sample from a
-replay.
+A publisher may set its own stamp to say when its value was true. The
+core does this when it
+[replays recorded state after a restart](#replay-after-a-core-restart),
+and its replays carry the ID `1`. A unit does it with `at=` on a state
+publish, for a reading that describes an earlier time, and its stamps
+carry its session's ID. An hourly rain total published twenty minutes
+after its hour ends is stamped with the start of the hour, so it covers
+`[t, t + 1 h)` as a forecast point with `d` does. The router's stamps
+carry the router's own ID, which is random, so a consumer can tell a
+live sample from a stamped one.
 
 - Values are ordered by stamp. A value older than the one already held
   for its key never replaces it. The mirror, the SDK's `subscribe` and
@@ -407,8 +411,21 @@ replay.
 - A live sample's age is zero. Its stamp is not used for age, because
   a unit on another host would then see every live value aged by the
   difference between the two clocks.
-- A replay's age is the time since its stamp
-  (`UnitSession.sample_age`).
+- A stamped value's age is the time since its stamp
+  (`UnitSession.sample_age`), and the recorder stores it at its stamp.
+- Stamps on one key move forward. A stamped value older than the one
+  held is dropped, and the recorder skips a stamped row when the series
+  already has one at or after it, within half a second, so a unit that
+  republishes its last hour after a restart adds no duplicate. A unit does not mix stamped
+  and unstamped publishes on one key: an unstamped value is stamped on
+  arrival, which is later than the stamps that follow it.
+- A stamp may not be in the future, since a value about the future is a
+  [forecast](#forecasts). The router replaces a stamp more than half a
+  second ahead of its own clock with its own, which makes the value
+  live. Units run on the core's host, so their clocks agree. Commands take no stamp, because a command is
+  an instruction now.
+- A consumer that acts only on live values ignores a stamped one as it
+  ignores a replay. `ivt490`'s [device feeds](#device-feeds) do this.
 - The mirror counts age on its monotonic clock from when a value
   arrived, plus how old it was then. A clock step after arrival does
   not change it.
@@ -1525,11 +1542,12 @@ by `PRAGMA user_version` and migrated in place.
   and `ctx.restore`, which polls `stats`, would time out.
 - A live sample's timestamp is the recorder's receive time (µs, UTC),
   assigned before any buffering, so an outage does not distort history.
-  A sample whose publisher set its own stamp, which today is only the
-  core's replay, is recorded at that stamp instead. A state sample is
+  A sample whose publisher set its own stamp, the core's replay or a
+  unit's `at=`, is recorded at that stamp instead. A state sample is
   then skipped when the series already has a row at or after the stamp,
   within half a second, so a replay never duplicates the row it came
-  from. Two samples for one series in the same microsecond collide, and
+  from. One older than the series' newest row by more than that also
+  leaves a `drop` event (`older-than-held`). Two samples for one series in the same microsecond collide, and
   the later one is dropped.
 - Repeats are kept. A republished value is still a sighting. Dropping
   repeats would help with a device that republishes, but not with a

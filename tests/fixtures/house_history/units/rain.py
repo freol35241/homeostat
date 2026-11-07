@@ -9,11 +9,13 @@
 # ///
 """A rain gauge that reads its own readings back from the recorder.
 
-This is the fixture for `ctx.history`. It publishes three hourly amounts,
+This is the fixture for `ctx.history` and for stamped publishes. It
+publishes three hourly amounts, each stamped with the start of its hour,
 waits until the recorder holds them, and then publishes what a raw read
-and a bucketed read returned: `rows`, the raw row count, and `total` and
-`count`, the buckets' sums and sample counts added up. The test compares
-them with what was published.
+and a bucketed read returned: `rows`, the raw row count; `exact`, whether
+each row is stored at its hour's start to the microsecond; and `total`
+and `count`, the buckets' sums and sample counts added up. The test
+compares them with what was published.
 """
 
 import datetime
@@ -26,13 +28,15 @@ AMOUNTS = [0.5, 0.0, 1.5]
 
 def main():
     ctx = automation.context()
-    start = datetime.datetime.now(datetime.timezone.utc)
+    now = datetime.datetime.now(datetime.timezone.utc)
+    hour = now.replace(minute=0, second=0, microsecond=0)
+    hours = [hour - datetime.timedelta(hours=len(AMOUNTS) - i) for i in range(len(AMOUNTS))]
+    start = hours[0]
     # The first read waits for the recorder, which subscribes before it
     # answers. Published any earlier, the amounts could go unrecorded.
     ctx.history("rain", start, start)
-    for amount in AMOUNTS:
-        ctx.publish("gauge", amount, aspect="precipitation")
-        time.sleep(0.05)
+    for at, amount in zip(hours, AMOUNTS, strict=True):
+        ctx.publish("gauge", amount, aspect="precipitation", at=at)
     ctx.ready()
     deadline = time.monotonic() + 60
     while True:
@@ -43,6 +47,7 @@ def main():
         time.sleep(0.2)
     buckets = ctx.history("rain", start, end, bucket_s=86400)
     ctx.publish("gauge", len(rows), aspect="rows")
+    ctx.publish("gauge", [row["ts"] for row in rows] == hours, aspect="exact")
     ctx.publish("gauge", sum(b["sum"] for b in buckets), aspect="total")
     ctx.publish("gauge", sum(b["n"] for b in buckets), aspect="count")
     ctx.run()

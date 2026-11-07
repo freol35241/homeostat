@@ -474,6 +474,7 @@ class Context:
         entity: str | None = None,
         aspect: str | None = None,
         options: dict | None = None,
+        at: datetime.datetime | None = None,
     ) -> None:
         """Publish through a `[bus.publishes]` expression to one concrete key.
 
@@ -486,6 +487,10 @@ class Context:
         `options` rides in the envelope beside the value, for the owning
         adapter (docs/design.md#command-options). An adapter ignores an
         option it does not support, so the device still reaches the value.
+
+        `at` stamps a state value with the time it describes, as for
+        `UnitSession.put_json` (docs/design.md#timestamps). An hourly total
+        published after its hour ends is stamped with the start of the hour.
 
         Parameters
         ----------
@@ -502,6 +507,9 @@ class Context:
         options : dict or None, optional
             Command options, such as ``{"transition": 1.0}``. Only a cmd
             publish takes them.
+        at : datetime.datetime or None, optional
+            The time a state value describes, timezone-aware and not in the
+            future.
 
         Raises
         ------
@@ -510,12 +518,15 @@ class Context:
         ValueError
             If the slots do not make one concrete key inside the declared
             expression, a cmd publish declares no priority, `options` is not
-            an object with string keys, or `options` is given for a publish
-            that is not a command.
+            an object with string keys, `options` is given for a publish
+            that is not a command, or `at` is given for one that is not
+            state, has no timezone or is in the future.
         """
         spec = self._publishes[binding]
         segments = spec["key"].split("/")
         key = self._concrete_key(binding, room=room, entity=entity, aspect=aspect)
+        if at is not None and segments[1] != "state":
+            raise ValueError(f"publish {binding!r} is not a state publish and takes no stamp")
         if segments[1] == "cmd":
             priority = spec["priority"]
             if priority is None:
@@ -528,7 +539,7 @@ class Context:
                 return
         elif options is not None:
             raise ValueError(f"publish {binding!r} is not a cmd publish and takes no options")
-        self._session.put_json(key, value)
+        self._session.put_json(key, value, at=at)
 
     def publish_forecast(
         self,

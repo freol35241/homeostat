@@ -197,7 +197,7 @@ class PublishOptionsTest(unittest.TestCase):
         ctx._lock = threading.Lock()
         ctx._param_specs = {}
         ctx.puts = []
-        ctx._session = types.SimpleNamespace(put_json=lambda key, value: ctx.puts.append((key, value)))
+        ctx._session = types.SimpleNamespace(put_json=lambda key, value, at=None: ctx.puts.append((key, value)))
         return ctx
 
     def test_a_command_carries_its_options(self):
@@ -224,6 +224,15 @@ class PublishOptionsTest(unittest.TestCase):
         for options in ([("transition", 1)], {1: 1.0}, [], ""):
             with self.assertRaises(ValueError, msg=repr(options)):
                 ctx.publish("lamp", 127, options=options)
+        self.assertEqual(ctx.puts, [])
+
+    def test_a_stamp_on_a_command_raises_even_while_paused(self):
+        ctx = self.context()
+        ctx._param_specs = {house.ENABLED_PARAM: {}}
+        ctx._param_values = {house.ENABLED_PARAM: False}
+        hour = datetime.datetime(2026, 11, 7, 12, tzinfo=datetime.timezone.utc)
+        with self.assertRaises(ValueError):
+            ctx.publish("lamp", 127, at=hour)
         self.assertEqual(ctx.puts, [])
 
     def test_bad_options_raise_while_paused(self):

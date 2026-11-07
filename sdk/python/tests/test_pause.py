@@ -61,7 +61,7 @@ def context(enabled=True, current=()):
     ctx.events = []
     ctx.current = list(current)
     ctx._session = types.SimpleNamespace(
-        put_json=lambda key, value: ctx.puts.append((key, value)),
+        put_json=lambda key, value, at=None: ctx.puts.append((key, value)),
         health_event=lambda kind, **fields: ctx.events.append(kind),
         subscribe=lambda expr, callback: object(),
         get_json_stamped=lambda expr: [(k, v, 0.0, s) for k, v, s in ctx.current],

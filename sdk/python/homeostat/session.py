@@ -8,6 +8,7 @@ as up when its liveliness token is declared, not when its process
 starts.
 """
 
+import datetime
 import json
 import os
 import threading
@@ -126,7 +127,7 @@ class UnitSession:
             keys.liveliness_key(self.unit)
         )
 
-    def put_json(self, key: str, value: Any) -> None:
+    def put_json(self, key: str, value: Any, *, at: datetime.datetime | None = None) -> None:
         """Publish a JSON-encoded value.
 
         A value containing a non-finite float (NaN, Infinity) is dropped
@@ -135,6 +136,15 @@ class UnitSession:
         otherwise have to guard against them, and the recorder cannot store
         them (docs/design.md#bus-payload-conventions).
 
+        `at` stamps a state value with the time it describes, such as the
+        start of the hour an hourly total covers, instead of the time it
+        is published (docs/design.md#timestamps). Consumers then see the
+        value's real age, and the recorder stores it at that time. A value
+        about the future is a forecast, so `at` may not be later than now.
+        The core's router replaces a stamp more than half a second ahead of
+        its own clock with one of its own, which makes the value live. A
+        unit runs on the core's host, so the two clocks agree.
+
         Parameters
         ----------
         key : str
@@ -142,7 +152,27 @@ class UnitSession:
             sent as a command.
         value : Any
             A JSON-encodable value.
+        at : datetime.datetime or None, optional
+            The time the value describes, timezone-aware. Only a state key
+            takes one.
+
+        Raises
+        ------
+        ValueError
+            If `at` is given for a key outside home/state/, has no timezone,
+            or is in the future.
         """
+        timestamp = None
+        if at is not None:
+            if not key.startswith("home/state/"):
+                raise ValueError(f"only a state value takes a stamp, not {key!r}")
+            if at.tzinfo is None:
+                raise ValueError("a stamp needs a timezone")
+            if at > datetime.datetime.now(datetime.timezone.utc):
+                raise ValueError(f"a stamp may not be in the future: {at.isoformat()}")
+            # The session's own ID, which differs from the router's, so a
+            # consumer can tell this value from one stamped on arrival.
+            timestamp = zenoh.Timestamp(at, self._session.new_timestamp().get_id())
         try:
             encoded = json.dumps(value, allow_nan=False)
         except ValueError:
@@ -159,6 +189,9 @@ class UnitSession:
                 congestion_control=zenoh.CongestionControl.BLOCK,
                 priority=zenoh.Priority.INTERACTIVE_HIGH,
             )
+            return
+        if timestamp is not None:
+            self._session.put(key, encoded, timestamp=timestamp)
             return
         self._session.put(key, encoded)
 
@@ -350,14 +383,15 @@ class UnitSession:
         return self._session.declare_subscriber(keyexpr, callback)
 
     def is_live(self, sample: zenoh.Sample) -> bool:
-        """Return whether a sample is a live publish rather than a replay.
+        """Return whether a sample is a live publish rather than a stamped one.
 
         The core's router stamps a sample on arrival unless its publisher
         set a stamp. A sample with the router's stamp, or with none, is
         live: its value is true now. A sample whose publisher set the stamp
         says when its value was true, which can be long ago. The core does
         that when it replays recorded state after a restart
-        (docs/design.md#replay-after-a-core-restart).
+        (docs/design.md#replay-after-a-core-restart), and a unit does it
+        with `put_json(..., at=)`.
 
         Parameters
         ----------
@@ -369,7 +403,24 @@ class UnitSession:
         bool
             True for a live sample.
         """
-        stamp = getattr(sample, "timestamp", None)
+        return self.is_live_stamp(getattr(sample, "timestamp", None))
+
+    def is_live_stamp(self, stamp: Any) -> bool:
+        """Return whether a stamp was set by the core's router on arrival.
+
+        As `is_live`, for a stamp read from a mirror reply rather than a
+        received sample.
+
+        Parameters
+        ----------
+        stamp : zenoh.Timestamp or None
+            The stamp.
+
+        Returns
+        -------
+        bool
+            True for a router stamp or no stamp.
+        """
         if stamp is None:
             return True
         if not self._router_ids:
@@ -381,8 +432,8 @@ class UnitSession:
     def sample_age(self, sample: zenoh.Sample) -> float:
         """Return how old a sample's value is, in seconds.
 
-        Zero for a live sample. For a replay, the time since the stamp its
-        publisher set, and never negative.
+        Zero for a live sample. For a stamped one, the time since the stamp
+        its publisher set, and never negative.
 
         Parameters
         ----------
