@@ -22,6 +22,7 @@ from homeostat.automation import (
     _house_has_recorder,
 )
 from homeostat.house import Entity
+from homeostat.intervals import IntervalsUncovered
 from homeostat.session import QueryError, QueryTimeout
 
 FIXTURES = Path(__file__).resolve().parents[3] / "tests" / "fixtures"
@@ -362,6 +363,7 @@ class HistoryTest(unittest.TestCase):
         ctx._zones = ZONES
         ctx._entities = []
         ctx._has_recorder = lambda: recorder
+        ctx._intervals = {("rain_gauge", "precipitation"): 3600}
 
         def get(selector, timeout_s=None):
             ctx.asked.append(selector)
@@ -455,6 +457,46 @@ class HistoryTest(unittest.TestCase):
         bucket = {**ROW, "sum": 0.4, "n": 1}
         ctx = self.context(lambda selector: [(selector, [bucket] * 10_000)])
         self.assertEqual(len(ctx.history("rain", self.START, self.END, bucket_s=60)), 10_000)
+
+
+class HistoryTotalTest(unittest.TestCase):
+    """`history_total` totals an interval aspect over a window. It reads
+    one interval early, so an hour straddling the start counts in
+    proportion, and a missing hour raises rather than counting as zero."""
+
+    UTC = datetime.timezone.utc
+
+    def at(self, hour, minute=0):
+        return datetime.datetime(2026, 11, 6, hour, minute, tzinfo=self.UTC)
+
+    def rows(self, *pairs):
+        return [
+            {"ts": self.at(h).isoformat(), "room": "garden", "value": v} for h, v in pairs
+        ]
+
+    def context(self, rows):
+        return HistoryTest.context(self, lambda selector: [(selector, rows)])
+
+    def test_the_straddling_hour_counts_in_proportion(self):
+        ctx = self.context(self.rows((6, 0.4), (7, 1.0)))
+        self.assertAlmostEqual(ctx.history_total("rain", self.at(6, 30), self.at(8)), 1.2)
+        self.assertIn("?from=2026-11-06T05:30:00+00:00;", ctx.asked[-1])
+
+    def test_a_missing_hour_is_not_zero(self):
+        ctx = self.context(self.rows((6, 0.4), (8, 1.0)))
+        with self.assertRaises(IntervalsUncovered) as caught:
+            ctx.history_total("rain", self.at(6), self.at(9))
+        self.assertEqual(caught.exception.reason, "gap")
+
+    def test_an_aspect_without_an_interval_or_a_number_is_refused(self):
+        ctx = self.context(self.rows((6, 0.4)))
+        ctx._subscribes["wind"] = "home/state/garden/rain_gauge/wind"
+        with self.assertRaisesRegex(ValueError, "declares no interval_s"):
+            ctx.history_total("wind", self.at(6), self.at(7))
+        self.assertEqual(ctx.asked, [])
+        ctx = self.context(self.rows((6, "heavy")))
+        with self.assertRaisesRegex(ValueError, "not a number"):
+            ctx.history_total("rain", self.at(6), self.at(7))
 
 
 class SourceUsedTest(unittest.TestCase):

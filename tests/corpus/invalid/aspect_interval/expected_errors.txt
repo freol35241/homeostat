@@ -1,0 +1,1 @@
+error[aspect-interval] rain.precipitation: interval_s is 0; it is the length of each sample's interval in seconds (entities/weather/rain.toml)

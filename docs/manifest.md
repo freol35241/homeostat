@@ -178,12 +178,21 @@ a key segment (`invalid-name`).
 
 | Field | Type | Required | Description |
 |---|---|---|---|
+| `aspects` | table of name → [AspectDecl](#aspectdecl) | no | `[aspects]`: what the house declares about one of this entity's aspects, keyed by the aspect's name. It is for a fact the reading itself cannot carry and its publisher may have no way to describe, as an automation publishes no aspect descriptor. |
 | `entity` | [EntitySection](#entitysection) | yes |  |
 | `inputs` | table of name → [InputSource](#inputsource) | no | `[inputs]`: device inputs fed from one source each, keyed by the adapter's own input name (e.g. `indoor_temperature_actual`). A fed input is a continuous signal with one source, not a command. It stops being a command aspect for this entity and does not go through the arbiter. The device's own validity window decides when it is stale. Only a device entity can be fed (`virtual-entity-fed`). The adapter decides which input names exist. |
 | `naming` | [EntityNaming](#entitynaming) | no |  |
 | `schema` | integer | yes | Contract version. Must be 1. |
 | `sources` | table of name → [SourceRef](#sourceref) | no | `[sources]`: the readings this entity's value is derived from, keyed by a short name for each contributor. The history overlay draws them beside the computed value (docs/design.md#sources). They must be declared because they cannot be inferred: a unit subscribes to many keys for many reasons, and its subscriptions do not say which feed which published aspect. This is separate from `[inputs]`. A device feed carries a runtime contract that does not apply here. A wired input also stops being a command aspect, which would collide on a commandable virtual entity. |
 | `write_policy` | [WritePolicy](#writepolicy) | yes |  |
+
+### AspectDecl
+
+One entry in `[aspects]`.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `interval_s` | integer | yes | Each sample is a total over the `interval_s` seconds that start at its stamp, as hourly rainfall in mm is with `interval_s = 3600`. Totals over a window count each sample by how much of its interval falls inside. A sample is stamped with the start of its interval, which a unit sets with `at=` when it publishes after the interval ends (docs/design.md#totals-over-intervals). At least 1 (`aspect-interval`). |
 
 ### EntitySection
 

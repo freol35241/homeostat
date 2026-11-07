@@ -119,6 +119,8 @@ class Entity:
         `[inputs]`, resolved; filled in by `load_adapter` only.
     sources : dict of str to SourceRef
         `[sources]`: contributor name to the reading the value derives from.
+    intervals : dict of str to int
+        `[aspects]`: aspect name to the `interval_s` its samples total over.
     """
 
     name: str
@@ -136,6 +138,8 @@ class Entity:
     # [sources]: contributor name -> the reading this entity's value is
     # derived from. Declared on computed entities; empty for most.
     sources: dict[str, SourceRef] = field(default_factory=dict)
+    # [aspects]: aspect -> the interval in seconds each sample totals over.
+    intervals: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass
@@ -216,6 +220,11 @@ def _entity_from(path: Path, data: dict, default_owner: str) -> Entity:
                 precision=src.get("precision"),
             )
             for name, src in data.get("sources", {}).items()
+        },
+        intervals={
+            aspect: decl["interval_s"]
+            for aspect, decl in data.get("aspects", {}).items()
+            if "interval_s" in decl
         },
     )
 

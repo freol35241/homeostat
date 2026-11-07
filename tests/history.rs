@@ -1,6 +1,7 @@
 //! `ctx.history`: a unit reading a subscribed series' recorded past
-//! (docs/design.md#reading-the-recorded-past), and stamped publishes
-//! (docs/design.md#timestamps).
+//! (docs/design.md#reading-the-recorded-past), stamped publishes
+//! (docs/design.md#timestamps) and interval totals
+//! (docs/design.md#totals-over-intervals).
 //!
 //! The fixture's unit publishes three hourly amounts, each stamped with the
 //! start of its hour, reads them back raw and in buckets, and publishes
@@ -33,8 +34,9 @@ fn store_path() -> PathBuf {
 }
 
 /// The three amounts come back as three rows at their hours' starts, the
-/// buckets' sums and counts add up to what was published, and the mirror
-/// ages the newest amount from its stamp.
+/// buckets' sums and counts add up to what was published, a window total
+/// counts a straddling hour in proportion and refuses a window the hours
+/// do not reach, and the mirror ages the newest amount from its stamp.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_unit_reads_back_what_the_recorder_holds() {
     let db = store_path();
@@ -53,6 +55,9 @@ async fn a_unit_reads_back_what_the_recorder_holds() {
     await_mirror(&observer, &format!("{GAUGE}/exact"), &json!(true)).await;
     await_mirror(&observer, &format!("{GAUGE}/total"), &json!(2.0)).await;
     await_mirror(&observer, &format!("{GAUGE}/count"), &json!(3)).await;
+    // Half of the first hour's 0.5, then 0.0 and 1.5.
+    await_mirror(&observer, &format!("{GAUGE}/window"), &json!(1.75)).await;
+    await_mirror(&observer, &format!("{GAUGE}/short"), &json!("short")).await;
 
     let replies = observer
         .get(format!("{GAUGE}/precipitation"))
