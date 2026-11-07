@@ -752,13 +752,19 @@ class Context:
         many seconds. A bucket's `ts` is its start, and buckets are aligned
         to the epoch, not to `start`. A number bucket's `value` is the mean,
         and it carries `min`, `max`, `sum` and the sample count `n`; any
-        other kind's is its last value. A whole window's total is better
-        taken from the raw rows, since the first and last buckets usually
-        reach past the window.
+        other kind's is its last value. Only rows inside the window are
+        folded, so the buckets' sums add up to the window's total, while
+        the first and last bucket's mean covers only part of its span.
 
         Unlike `restore`, this raises when the history cannot be read. An
         empty list means the recorder holds no rows in the window, and a
-        rule must be able to tell that from not knowing.
+        rule must be able to tell that from not knowing. The recorder
+        answers from its store alone, so a window older than its retention
+        or archive settings reads as unrecorded.
+
+        It blocks until the recorder answers. Call it from the unit's main
+        thread or a thread of its own, not from a `subscribe` handler,
+        which runs on the bus's delivery thread.
 
         Parameters
         ----------
@@ -777,7 +783,8 @@ class Context:
         aspect : str or None, optional
             The aspect slot, as for `publish`.
         timeout_s : float, optional
-            Seconds to keep waiting for the recorder to answer.
+            Seconds to keep waiting for the recorder to come up, and then
+            for its answer.
 
         Returns
         -------
@@ -791,11 +798,12 @@ class Context:
         ValueError
             If the binding is not a state key, the slots do not make one
             concrete key inside the declared expression, a bound has no
-            timezone, or `bucket_s` is not a positive integer.
+            timezone, `end` is before `start`, or `bucket_s` is not a
+            positive integer.
         HistoryUnavailable
             If the house runs no recorder, the recorder does not answer, it
-            answers with an error, or the window holds more raw rows than
-            one read returns.
+            answers with an error, or the window holds 10,000 raw rows or
+            more.
         """
         key = self._concrete_key(
             binding, room=room, entity=entity, aspect=aspect, use="history"
@@ -806,6 +814,8 @@ class Context:
         for name, bound in (("start", start), ("end", end)):
             if bound.tzinfo is None:
                 raise ValueError(f"history {name} needs a timezone")
+        if end < start:
+            raise ValueError("history end is before start")
         if bucket_s is not None and (
             isinstance(bucket_s, bool) or not isinstance(bucket_s, int) or bucket_s < 1
         ):
@@ -824,7 +834,13 @@ class Context:
             params.append(f"bucket={bucket_s}")
         selector = keys.history_key("state", segments[3], segments[4]) + "?" + ";".join(params)
         try:
-            replies = self._session.get_json(selector)
+            replies = self._session.get_json(selector, timeout_s=timeout_s)
+            # The recorder sends nothing for a series it has never recorded,
+            # and a get nobody serves returns nothing too. Asking `stats`
+            # again tells the two apart, so a recorder that went down since
+            # the wait does not read as an empty window.
+            if not replies and not self._session.get_json(_HISTORY_STATS, timeout_s=timeout_s):
+                raise HistoryUnavailable("the recorder stopped answering")
         except QueryError as err:
             raise HistoryUnavailable(str(err)) from err
         rows = next((rows for _, rows in replies), [])

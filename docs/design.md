@@ -1856,16 +1856,20 @@ it refilled, while the recorder held the data all along.
   behind it.
 - It raises `HistoryUnavailable` where `restore` returns `None`: when
   the house has no recorder, the recorder does not answer or answers
-  with an error, or the window holds more raw rows than one read
-  returns. An empty list then means that nothing was recorded. An
-  irrigation rule must be able to tell "it did not rain" from "I do not
-  know".
+  with an error, or the window holds 10,000 raw rows or more. An empty
+  list then means that nothing was recorded. An irrigation rule must be
+  able to tell "it did not rain" from "I do not know". The read answers
+  from the store alone ([Archives](#archives)), so a window older than
+  the retention or archive settings reads as unrecorded.
 - It waits for the recorder as `restore` does, on every call. A get
   that no queryable serves returns no replies, so without the wait a
-  recorder that is down would read as an empty window.
-- Buckets are aligned to the epoch, not to `start`, so the first and
-  last usually reach past the window. A total over the window is taken
-  from the raw rows.
+  recorder that is down would read as an empty window. A read that gets
+  no reply asks `stats` once more, for a recorder that stopped since.
+- Buckets are aligned to the epoch, not to `start`. Only rows inside the
+  window are folded, so the buckets' sums add up to the window's total,
+  while the first and last bucket's mean covers only part of its span.
+- It blocks until the recorder answers, so a unit calls it from its main
+  thread or a thread of its own, not from a `subscribe` handler.
 
 ## Derived values
 

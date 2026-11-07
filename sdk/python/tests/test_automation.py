@@ -342,7 +342,7 @@ class HistoryTest(unittest.TestCase):
     START = datetime.datetime(2026, 11, 6, 6, 0, tzinfo=UTC)
     END = datetime.datetime(2026, 11, 7, 6, 0, tzinfo=UTC)
 
-    def context(self, answer, recorder=True):
+    def context(self, answer, recorder=True, stats=lambda: True):
         ctx = Context.__new__(Context)
         ctx.asked = []
         ctx._subscribes = {
@@ -357,11 +357,16 @@ class HistoryTest(unittest.TestCase):
         def get(selector, timeout_s=None):
             ctx.asked.append(selector)
             if selector == "home/history/stats":
-                return [(selector, {})]
+                return [(selector, {})] if stats() else []
             return answer(selector)
 
         ctx._session = types.SimpleNamespace(get_json=get)
         return ctx
+
+    def test_a_bound_keeps_its_microseconds(self):
+        ctx = self.context(lambda selector: [(selector, [])])
+        ctx.history("rain", self.START.replace(microsecond=123456), self.END)
+        self.assertIn("from=2026-11-06T06:00:00.123456+00:00;", ctx.asked[-1])
 
     def test_the_window_is_read_in_utc_and_its_stamps_parsed(self):
         ctx = self.context(lambda selector: [(selector, [ROW])])
@@ -398,7 +403,14 @@ class HistoryTest(unittest.TestCase):
     def test_bad_bounds_and_buckets_are_refused_before_asking(self):
         ctx = self.context(lambda selector: [])
         naive = self.START.replace(tzinfo=None)
-        for start, bucket_s in ((naive, None), (self.START, 0), (self.START, True), (self.START, 1.5)):
+        cases = (
+            (naive, None),
+            (self.END + datetime.timedelta(seconds=1), None),
+            (self.START, 0),
+            (self.START, True),
+            (self.START, 1.5),
+        )
+        for start, bucket_s in cases:
             with self.subTest(start=start, bucket_s=bucket_s), self.assertRaises(ValueError):
                 ctx.history("rain", start, self.END, bucket_s=bucket_s)
         self.assertEqual(ctx.asked, [])
@@ -407,9 +419,17 @@ class HistoryTest(unittest.TestCase):
         def refused(selector):
             raise QueryError("store unavailable: disk I/O error")
 
+        def slow(selector):
+            raise QueryTimeout("Timeout")
+
+        # Up for the wait, gone for the read and the second look.
+        answers = iter([True, False])
+        stopped = self.context(lambda selector: [], stats=lambda: next(answers))
         cases = (
             (self.context(lambda selector: [], recorder=False), "runs no recorder"),
             (self.context(refused), "store unavailable"),
+            (self.context(slow), "Timeout"),
+            (stopped, "stopped answering"),
             (self.context(lambda selector: [(selector, [ROW] * 10_000)]), "pass bucket_s"),
         )
         for ctx, reason in cases:

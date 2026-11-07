@@ -95,6 +95,28 @@ class SelectorTest(unittest.TestCase):
             with self.subTest(raw=raw), self.assertRaises(ValueError):
                 parse_params(raw)
 
+    def test_buckets_are_counted_as_the_window_touches_them(self):
+        # Epoch-aligned buckets: a window 9,999.5 widths long that starts
+        # mid-bucket touches 10,001 of them, and the reply would leave the
+        # oldest out.
+        start = datetime.datetime(2026, 1, 1, 0, 0, 30, tzinfo=datetime.timezone.utc)
+        for span_s, refused in ((9_999 * 60, False), (9_999 * 60 + 30, True)):
+            end = start + datetime.timedelta(seconds=span_s)
+            raw = f"from={start.isoformat()};to={end.isoformat()};bucket=60"
+            with self.subTest(span_s=span_s):
+                if refused:
+                    with self.assertRaises(ValueError):
+                        parse_params(raw)
+                else:
+                    parse_params(raw)
+
+    def test_the_sdk_reads_up_to_the_recorders_limit(self):
+        # `Context.history` takes a full read as a cut window, so it must
+        # ask for exactly the most the recorder returns.
+        from homeostat.automation import _HISTORY_LIMIT
+
+        self.assertEqual(_HISTORY_LIMIT, MAX_QUERY_LIMIT)
+
     def test_limit_is_positive_and_clamped(self):
         self.assertEqual(parse_limit("3"), 3)
         self.assertEqual(parse_limit(str(MAX_QUERY_LIMIT * 2)), MAX_QUERY_LIMIT)
