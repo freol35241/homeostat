@@ -261,14 +261,20 @@ class HoldsStateTest(StoreTest):
 
 
 class StampedRecordTest(StoreTest):
-    """`record` for a sample whose publisher set the stamp: the core's replay."""
+    """`record` for a sample whose publisher set the stamp: the core's
+    replay, or a unit's `at=`."""
 
     KEY = "home/state/livingroom/lamp/on"
 
     def recorder(self, live):
         rec = Recorder.__new__(Recorder)
         rec.db_path = self.db
-        rec.sess = types.SimpleNamespace(is_live=lambda sample: live)
+        rec.events = []
+        rec.sess = types.SimpleNamespace(
+            is_live=lambda sample: live,
+            is_live_stamp=lambda stamp: live,
+            health_event=lambda kind, **f: rec.events.append((kind, f)),
+        )
         rec.queued = []
         rec.writer = types.SimpleNamespace(enqueue=lambda table, row: rec.queued.append((table, row)))
         rec._live = set()
@@ -289,7 +295,28 @@ class StampedRecordTest(StoreTest):
         self.row("state", "livingroom", "lamp", "on", 10 * S, True)
         rec = self.recorder(live=False)
         rec.record(self.sample(b"true", 10 * S))
+        self.assertEqual((rec.queued, rec.events), ([], []))
+
+    def test_a_stamped_value_older_than_the_store_is_dropped_with_an_event(self):
+        # A unit that once published the key unstamped loses every stamped
+        # value older than that row, and the loss shows.
+        self.row("state", "livingroom", "lamp", "on", 20 * S, True)
+        rec = self.recorder(live=False)
+        rec.record(self.sample(b"false", 10 * S))
         self.assertEqual(rec.queued, [])
+        self.assertEqual(rec.events, [("drop", {"reason": "older-than-held", "key": self.KEY})])
+
+    def test_a_stamped_mirror_value_is_seeded_at_its_stamp(self):
+        # Now less the mirror's age lands a few milliseconds off the stamp,
+        # and an hour stamped at 12:00 must stay at 12:00.
+        rec = self.recorder(live=False)
+        stamp = self.sample(b"", 20 * S).timestamp
+        rec.sess.get_json_stamped = lambda expr: [(self.KEY, True, 3.0, stamp)]
+        rec.seed(["home/state/**"])
+        self.assertEqual(
+            rec.queued,
+            [("samples", (20 * S, "state", "livingroom", "lamp", "on", KINDS.index("bool"), 1))],
+        )
 
     def test_a_stamped_value_newer_than_the_store_is_recorded_at_its_stamp(self):
         self.row("state", "livingroom", "lamp", "on", 10 * S, True)

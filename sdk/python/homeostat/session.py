@@ -141,6 +141,9 @@ class UnitSession:
         is published (docs/design.md#timestamps). Consumers then see the
         value's real age, and the recorder stores it at that time. A value
         about the future is a forecast, so `at` may not be later than now.
+        The core's router replaces a stamp more than half a second ahead of
+        its own clock with one of its own, which makes the value live. A
+        unit runs on the core's host, so the two clocks agree.
 
         Parameters
         ----------
@@ -400,7 +403,24 @@ class UnitSession:
         bool
             True for a live sample.
         """
-        stamp = getattr(sample, "timestamp", None)
+        return self.is_live_stamp(getattr(sample, "timestamp", None))
+
+    def is_live_stamp(self, stamp: Any) -> bool:
+        """Return whether a stamp was set by the core's router on arrival.
+
+        As `is_live`, for a stamp read from a mirror reply rather than a
+        received sample.
+
+        Parameters
+        ----------
+        stamp : zenoh.Timestamp or None
+            The stamp.
+
+        Returns
+        -------
+        bool
+            True for a router stamp or no stamp.
+        """
         if stamp is None:
             return True
         if not self._router_ids:

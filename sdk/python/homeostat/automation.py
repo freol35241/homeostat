@@ -525,6 +525,8 @@ class Context:
         spec = self._publishes[binding]
         segments = spec["key"].split("/")
         key = self._concrete_key(binding, room=room, entity=entity, aspect=aspect)
+        if at is not None and segments[1] != "state":
+            raise ValueError(f"publish {binding!r} is not a state publish and takes no stamp")
         if segments[1] == "cmd":
             priority = spec["priority"]
             if priority is None:

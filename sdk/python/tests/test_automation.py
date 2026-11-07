@@ -226,6 +226,15 @@ class PublishOptionsTest(unittest.TestCase):
                 ctx.publish("lamp", 127, options=options)
         self.assertEqual(ctx.puts, [])
 
+    def test_a_stamp_on_a_command_raises_even_while_paused(self):
+        ctx = self.context()
+        ctx._param_specs = {house.ENABLED_PARAM: {}}
+        ctx._param_values = {house.ENABLED_PARAM: False}
+        hour = datetime.datetime(2026, 11, 7, 12, tzinfo=datetime.timezone.utc)
+        with self.assertRaises(ValueError):
+            ctx.publish("lamp", 127, at=hour)
+        self.assertEqual(ctx.puts, [])
+
     def test_bad_options_raise_while_paused(self):
         # The mistake is in the automation's code, so it shows at once,
         # not on the first publish after the automation is resumed.

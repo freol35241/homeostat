@@ -20,7 +20,7 @@ use serde_json::json;
 use common::{await_health, await_mirror, health_watch, Supervisor};
 
 /// The newest amount is stamped at the start of the previous hour, so the
-/// mirror must report it as at least this old.
+/// mirror must report it as between one and two of these old.
 const AN_HOUR_S: f64 = 3600.0;
 
 const FIXTURE: &str = "tests/fixtures/house_history";
@@ -60,6 +60,9 @@ async fn a_unit_reads_back_what_the_recorder_holds() {
         .expect("mirror get");
     let reply = replies.recv_async().await.expect("a mirror reply");
     let sample = reply.result().expect("an ok reply");
+    let value: serde_json::Value =
+        serde_json::from_slice(&sample.payload().to_bytes()).expect("JSON payload");
+    assert_eq!(value, json!(1.5), "the newest stamp's value is held");
     let age_s: f64 = String::from_utf8(
         sample
             .attachment()
@@ -70,7 +73,10 @@ async fn a_unit_reads_back_what_the_recorder_holds() {
     .expect("utf-8 age")
     .parse()
     .expect("a decimal age");
-    assert!(age_s >= AN_HOUR_S, "aged from its stamp, got {age_s} s");
+    assert!(
+        (AN_HOUR_S..2.0 * AN_HOUR_S).contains(&age_s),
+        "aged from the newest stamp, got {age_s} s"
+    );
 
     sup.shutdown();
     let _ = std::fs::remove_file(&db);
