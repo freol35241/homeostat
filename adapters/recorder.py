@@ -1892,6 +1892,11 @@ def bucketed(rows, bucket_us: int, limit: int) -> list[dict]:
     bucket's start, room the last row's; a number bucket's value is the
     mean and carries min and max, any other kind's is the last value seen
     (a run of bools or enum strings has no mean).
+
+    A number bucket also carries `sum` and the sample count `n`. A series
+    of amounts per interval, such as hourly rainfall, is totalled by its
+    sum, and mean times count only gives it back when the bucket happens
+    to match the sample interval.
     """
     points: deque[dict] = deque(maxlen=limit)
     point: dict | None = None
@@ -1912,6 +1917,7 @@ def bucketed(rows, bucket_us: int, limit: int) -> list[dict]:
         if KINDS[point["kind"]] == "number" and point["n"]:
             row["value"] = point["sum"] / point["n"]
             row["min"], row["max"] = point["min"], point["max"]
+            row["sum"], row["n"] = point["sum"], point["n"]
         else:
             row["value"] = decode(point["kind"], point["last"])
         out.append(row)

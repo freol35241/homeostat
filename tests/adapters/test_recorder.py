@@ -130,6 +130,13 @@ class FoldTest(unittest.TestCase):
             [(2.0, 1.0, 3.0, "a"), (5.0, 5.0, 5.0, "b")],
         )
 
+    def test_a_number_bucket_carries_its_sum_and_count(self):
+        rows = [(0, "a", NUMBER, 0.5), (20 * S, "a", NUMBER, 0.0), (40 * S, "a", NUMBER, 1.5)]
+        (point,) = bucketed(rows, 60 * S, limit=10)
+        self.assertEqual((point["sum"], point["n"]), (2.0, 3))
+        rows = [(0, "a", BOOL, 1)]
+        self.assertNotIn("sum", bucketed(rows, 60 * S, limit=10)[0])
+
     def test_a_bool_bucket_is_its_last_value_and_the_newest_are_kept(self):
         rows = [(0, "a", BOOL, 1), (1, "a", BOOL, 0), (60 * S, "a", BOOL, 1)]
         points = bucketed(rows, 60 * S, limit=1)

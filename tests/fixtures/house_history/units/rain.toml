@@ -1,0 +1,20 @@
+schema = 1
+
+[unit]
+name = "rain"
+kind = "automation"
+description = "Reads its own rain readings back from the recorder"
+
+[runtime]
+command = "uv run units/rain.py"
+restart = "on-failure"
+shutdown_grace_s = 5
+
+[bus.subscribes]
+rain = "home/state/garden/rain_gauge/precipitation"
+
+[bus.publishes]
+gauge = { key = "home/state/garden/rain_gauge/*" }
+
+[entities]
+dir = "entities/rain/"

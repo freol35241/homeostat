@@ -1,6 +1,7 @@
 """Python SDK for homeostat units."""
 
 from . import automation, forecast, house, keys, stamps
+from .automation import HistoryUnavailable
 from .cooldown import Cooldown
 from .forecast import Forecast, Point
 from .freshness import Freshness
@@ -12,6 +13,7 @@ __all__ = [
     "Cooldown",
     "Forecast",
     "Freshness",
+    "HistoryUnavailable",
     "Newest",
     "Point",
     "QueryError",

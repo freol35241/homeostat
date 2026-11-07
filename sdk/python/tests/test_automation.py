@@ -8,15 +8,21 @@ and no duplicate expression.
 Run: uv run --no-project --with-editable sdk/python python -m unittest discover sdk/python/tests
 """
 
+import datetime
 import threading
 import types
 import unittest
 from pathlib import Path
 
 from homeostat import house
-from homeostat.automation import Context, _expand, _house_has_recorder
+from homeostat.automation import (
+    Context,
+    HistoryUnavailable,
+    _expand,
+    _house_has_recorder,
+)
 from homeostat.house import Entity
-from homeostat.session import QueryTimeout
+from homeostat.session import QueryError, QueryTimeout
 
 FIXTURES = Path(__file__).resolve().parents[3] / "tests" / "fixtures"
 
@@ -322,6 +328,104 @@ class RestoreWaitTest(unittest.TestCase):
                 )
             ],
         )
+
+
+ROW = {"ts": "2026-11-06T07:00:00.000000+00:00", "room": "garden", "value": 0.4}
+
+
+class HistoryTest(unittest.TestCase):
+    """`history` reads the past of a subscribed state key. It goes through
+    the same recorder wait as `restore`, but it raises where `restore`
+    returns None: an empty window must mean that nothing was recorded."""
+
+    UTC = datetime.timezone.utc
+    START = datetime.datetime(2026, 11, 6, 6, 0, tzinfo=UTC)
+    END = datetime.datetime(2026, 11, 7, 6, 0, tzinfo=UTC)
+
+    def context(self, answer, recorder=True):
+        ctx = Context.__new__(Context)
+        ctx.asked = []
+        ctx._subscribes = {
+            "rain": "home/state/garden/rain_gauge/precipitation",
+            "temperatures": "home/state/downstairs/*/temperature",
+            "commands": "home/cmd/global/night_mode/**",
+        }
+        ctx._zones = ZONES
+        ctx._entities = []
+        ctx._has_recorder = lambda: recorder
+
+        def get(selector, timeout_s=None):
+            ctx.asked.append(selector)
+            if selector == "home/history/stats":
+                return [(selector, {})]
+            return answer(selector)
+
+        ctx._session = types.SimpleNamespace(get_json=get)
+        return ctx
+
+    def test_the_window_is_read_in_utc_and_its_stamps_parsed(self):
+        ctx = self.context(lambda selector: [(selector, [ROW])])
+        local = datetime.timezone(datetime.timedelta(hours=1))
+        rows = ctx.history("rain", self.START.astimezone(local), self.END, bucket_s=3600)
+        self.assertEqual(
+            ctx.asked[-1],
+            "home/history/state/rain_gauge/precipitation"
+            "?from=2026-11-06T06:00:00+00:00;to=2026-11-07T06:00:00+00:00"
+            ";limit=10000;bucket=3600",
+        )
+        self.assertEqual(
+            rows,
+            [{**ROW, "ts": datetime.datetime(2026, 11, 6, 7, 0, tzinfo=self.UTC)}],
+        )
+
+    def test_a_series_with_nothing_recorded_is_empty(self):
+        ctx = self.context(lambda selector: [])
+        self.assertEqual(ctx.history("rain", self.START, self.END), [])
+
+    def test_the_slots_must_land_inside_the_subscription(self):
+        ctx = self.context(lambda selector: [(selector, [])])
+        ctx.history("temperatures", self.START, self.END, room="hallway", entity="hall_temp")
+        self.assertTrue(ctx.asked[-1].startswith("home/history/state/hall_temp/temperature?"))
+        for binding, slots, error in (
+            ("temperatures", {"entity": "hall_temp"}, ValueError),
+            ("temperatures", {"room": "attic", "entity": "attic_temp"}, ValueError),
+            ("commands", {"aspect": "on"}, ValueError),
+            ("lamp", {}, KeyError),
+        ):
+            with self.subTest(binding=binding, slots=slots), self.assertRaises(error):
+                ctx.history(binding, self.START, self.END, **slots)
+
+    def test_bad_bounds_and_buckets_are_refused_before_asking(self):
+        ctx = self.context(lambda selector: [])
+        naive = self.START.replace(tzinfo=None)
+        for start, bucket_s in ((naive, None), (self.START, 0), (self.START, True), (self.START, 1.5)):
+            with self.subTest(start=start, bucket_s=bucket_s), self.assertRaises(ValueError):
+                ctx.history("rain", start, self.END, bucket_s=bucket_s)
+        self.assertEqual(ctx.asked, [])
+
+    def test_what_cannot_be_read_raises(self):
+        def refused(selector):
+            raise QueryError("store unavailable: disk I/O error")
+
+        cases = (
+            (self.context(lambda selector: [], recorder=False), "runs no recorder"),
+            (self.context(refused), "store unavailable"),
+            (self.context(lambda selector: [(selector, [ROW] * 10_000)]), "pass bucket_s"),
+        )
+        for ctx, reason in cases:
+            with self.subTest(reason=reason), self.assertRaisesRegex(HistoryUnavailable, reason):
+                ctx.history("rain", self.START, self.END)
+
+    def test_a_recorder_that_never_answers_raises_with_its_reason(self):
+        ctx = self.context(lambda selector: [])
+        ctx._session.get_json = lambda selector, timeout_s=None: []
+        with self.assertRaisesRegex(HistoryUnavailable, "no recorder answered within 0.3s"):
+            ctx.history("rain", self.START, self.END, timeout_s=0.3)
+
+    def test_a_full_set_of_buckets_is_not_a_cut_window(self):
+        bucket = {**ROW, "sum": 0.4, "n": 1}
+        ctx = self.context(lambda selector: [(selector, [bucket] * 10_000)])
+        self.assertEqual(len(ctx.history("rain", self.START, self.END, bucket_s=60)), 10_000)
 
 
 class SourceUsedTest(unittest.TestCase):
