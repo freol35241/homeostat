@@ -208,6 +208,10 @@ codes! {
         evidence and `lat` as a position fix (with the tracker's `lon`, \
         `accuracy` and `fixed_at`). It knows nothing else to do with a \
         tracker's reading.",
+    AspectInterval => "aspect-interval":
+        "An `[aspects.<name>]` table's `interval_s` is 0. Each sample totals \
+        the `interval_s` seconds from its stamp, so an interval is at least a \
+        second.",
     GrantCycle => "grant-cycle":
         "Automations that bind commandable virtual entities are walk-order \
         edge sources like adapters: an owner starts before the units \

@@ -9,19 +9,26 @@
 # ///
 """A rain gauge that reads its own readings back from the recorder.
 
-This is the fixture for `ctx.history` and for stamped publishes. It
-publishes three hourly amounts, each stamped with the start of its hour,
-waits until the recorder holds them, and then publishes what a raw read
-and a bucketed read returned: `rows`, the raw row count; `exact`, whether
-each row is stored at its hour's start to the microsecond; and `total`
-and `count`, the buckets' sums and sample counts added up. The test
-compares them with what was published.
+This is the fixture for `ctx.history`, stamped publishes and
+`ctx.history_total`. It publishes three hourly amounts, each stamped with
+the start of its hour, waits until the recorder holds them, and then
+publishes what it read:
+
+- `rows`, the raw row count;
+- `exact`, whether each row is stored at its hour's start to the
+  microsecond;
+- `total` and `count`, the buckets' sums and sample counts added up;
+- `window`, the total from half past the first hour to the end of the
+  last, so the first hour counts half;
+- `short`, the reason a window running past the last hour is refused.
+
+The test compares them with what was published.
 """
 
 import datetime
 import time
 
-from homeostat import automation
+from homeostat import IntervalsUncovered, automation
 
 AMOUNTS = [0.5, 0.0, 1.5]
 
@@ -50,6 +57,13 @@ def main():
     ctx.publish("gauge", [row["ts"] for row in rows] == hours, aspect="exact")
     ctx.publish("gauge", sum(b["sum"] for b in buckets), aspect="total")
     ctx.publish("gauge", sum(b["n"] for b in buckets), aspect="count")
+    half_past = hours[0] + datetime.timedelta(minutes=30)
+    last_end = hours[-1] + datetime.timedelta(hours=1)
+    ctx.publish("gauge", ctx.history_total("rain", half_past, last_end), aspect="window")
+    try:
+        ctx.history_total("rain", half_past, last_end + datetime.timedelta(hours=1))
+    except IntervalsUncovered as err:
+        ctx.publish("gauge", err.reason, aspect="short")
     ctx.run()
 
 

@@ -38,7 +38,8 @@ from typing import Any
 import tomllib
 import zenoh
 
-from . import house, keys
+from . import house, intervals, keys
+from .forecast import Point
 from .session import QueryError, QueryTimeout, UnitSession
 from .stamps import Newest
 
@@ -243,6 +244,9 @@ class Context:
         # One per subscribe: delivers the binding's current values again.
         self._redeliveries: list[Callable[[], None]] = []
         self._recorder: bool | None = None
+        # (entity, aspect) -> interval_s from the house's entity files, read
+        # on the first `history_total`.
+        self._intervals: dict[tuple[str, str], int] | None = None
         self._session = UnitSession(unit, os.environ[keys.ENV_BUS])
         # (entity, aspect, source) -> last reported participation, so
         # `source_used` can emit on transition rather than on every call.
@@ -863,6 +867,109 @@ class Context:
                 f"the window holds {_HISTORY_LIMIT} rows or more; pass bucket_s"
             )
         return [{**row, "ts": datetime.datetime.fromisoformat(row["ts"])} for row in rows]
+
+    def history_total(
+        self,
+        binding: str,
+        start: datetime.datetime,
+        end: datetime.datetime,
+        *,
+        room: str | None = None,
+        entity: str | None = None,
+        aspect: str | None = None,
+        timeout_s: float = 30.0,
+    ) -> float:
+        """Return the recorded total of a subscribed interval aspect over `[start, end)`.
+
+        The aspect's entity file declares `interval_s`, and each sample is
+        the total over the interval that starts at its stamp
+        (docs/design.md#totals-over-intervals). Each sample counts by the
+        share of its interval inside the window, so the read starts one
+        interval before `start` to take in the one that straddles it.
+
+        A value about an interval is published after the interval ends, so
+        the newest one usually ends before now. A window that runs past the
+        newest recorded interval is short, and the caller picks an end it
+        trusts.
+
+        Parameters
+        ----------
+        binding : str
+            A `[bus.subscribes]` binding name with a state key.
+        start : datetime.datetime
+            The window's start, timezone-aware.
+        end : datetime.datetime
+            The window's end, timezone-aware.
+        room : str or None, optional
+            The room slot, as for `publish`.
+        entity : str or None, optional
+            The entity slot, as for `publish`.
+        aspect : str or None, optional
+            The aspect slot, as for `publish`.
+        timeout_s : float, optional
+            As for `history`.
+
+        Returns
+        -------
+        float
+            The total over the window.
+
+        Raises
+        ------
+        KeyError
+            If `binding` is not declared in `[bus.subscribes]`.
+        ValueError
+            As for `history`, and if the aspect declares no `interval_s` or a
+            recorded value is not a number.
+        HistoryUnavailable
+            As for `history`.
+        homeostat.intervals.IntervalsUncovered
+            If the recorded intervals leave a gap or overlap, or do not
+            reach the end of the window.
+        """
+        key = self._concrete_key(
+            binding, room=room, entity=entity, aspect=aspect, use="history"
+        )
+        segments = key.split("/")
+        if segments[1] != "state":
+            raise ValueError(f"history {binding!r}: only state keys have a history")
+        interval_s = self._interval_of(segments[3], segments[4])
+        if start.tzinfo is None:
+            raise ValueError("history start needs a timezone")
+        # In UTC, so the interval before `start` is an hour long across a
+        # DST change too.
+        utc_start = start.astimezone(datetime.timezone.utc)
+        rows = self.history(
+            binding,
+            utc_start - datetime.timedelta(seconds=interval_s),
+            end,
+            room=room,
+            entity=entity,
+            aspect=aspect,
+            timeout_s=timeout_s,
+        )
+        points = []
+        for row in rows:
+            value = row["value"]
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(f"{key} recorded {value!r}, which is not a number")
+            points.append(Point(t=row["ts"], v=float(value), d=interval_s))
+        return intervals.total(points, start, end)
+
+    def _interval_of(self, entity: str, aspect: str) -> int:
+        """Return the `interval_s` an entity file declares for an aspect."""
+        if self._intervals is None:
+            self._intervals = {
+                (e.name, name): seconds
+                for e in house.load_house(self._root).entities
+                for name, seconds in e.intervals.items()
+            }
+        try:
+            return self._intervals[(entity, aspect)]
+        except KeyError:
+            raise ValueError(
+                f"{entity}.{aspect} declares no interval_s in its entity file"
+            ) from None
 
     def health_event(self, kind: str, **fields: Any) -> None:
         """Publish a JSON event at home/health/{unit}/event.
