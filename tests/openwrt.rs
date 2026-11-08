@@ -15,7 +15,12 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 use zenoh::sample::SampleKind;
 
-use common::{expect_event_kind, expect_state, fixture_command, free_port, Supervisor};
+use homeostat::bus::HealthStatus;
+
+use common::{
+    await_health, config_write, expect_event_kind, expect_state, fixture_command, free_port,
+    health_watch, Supervisor,
+};
 
 const FIXTURE: &str = "tests/fixtures/house_openwrt";
 const ROUTERS_ENV: &str = "HOMEOSTAT_OPENWRT";
@@ -98,13 +103,22 @@ impl Drop for FakeOpenwrt {
 /// credentials. The fixture binds entities on "gw"; any further router is
 /// configured but unbound, which is all a second AP needs to be polled.
 fn routers_file(routers: &[(&str, u16)]) -> PathBuf {
-    let tag: Vec<String> = routers.iter().map(|(_, port)| port.to_string()).collect();
+    let plain: Vec<(&str, u16, &str)> = routers.iter().map(|&(n, p)| (n, p, "")).collect();
+    routers_file_with(&plain)
+}
+
+/// As `routers_file`, with extra TOML lines for each router's entry.
+fn routers_file_with(routers: &[(&str, u16, &str)]) -> PathBuf {
+    let tag: Vec<String> = routers
+        .iter()
+        .map(|(_, port, _)| port.to_string())
+        .collect();
     let path = std::env::temp_dir().join(format!("homeostat-openwrt-{}.toml", tag.join("-")));
     let body = routers
         .iter()
-        .map(|(name, port)| {
+        .map(|(name, port, extra)| {
             format!(
-                "[{name}]\nhost = \"127.0.0.1:{port}\"\nusername = \"{USERNAME}\"\npassword = \"{PASSWORD}\"\n"
+                "[{name}]\nhost = \"127.0.0.1:{port}\"\nusername = \"{USERNAME}\"\npassword = \"{PASSWORD}\"\n{extra}"
             )
         })
         .collect::<Vec<_>>()
@@ -331,6 +345,209 @@ async fn a_silent_router_cannot_assert_absence() {
     ap.control(&format!("/control/station?mac={PHONE_MAC}&present=false"));
     expect_state(&sighted_sub, json!(false)).await;
     expect_state(&available_sub, json!(true)).await;
+
+    sup.shutdown();
+}
+
+/// The phone's state samples, in arrival order, until its `fixed_at`.
+async fn until_fix(sub: &common::StateSub) -> Vec<(String, Value)> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    let mut seen = Vec::new();
+    loop {
+        let sample = tokio::time::timeout_at(deadline, sub.recv_async())
+            .await
+            .unwrap_or_else(|_| panic!("no fixed_at within 20s; saw {seen:?}"))
+            .expect("state stream open");
+        let key = sample
+            .key_expr()
+            .as_str()
+            .rsplit('/')
+            .next()
+            .unwrap()
+            .to_string();
+        let value: Value =
+            serde_json::from_slice(&sample.payload().to_bytes()).expect("state payload is JSON");
+        let done = key == "fixed_at";
+        seen.push((key, value));
+        if done {
+            return seen;
+        }
+    }
+}
+
+/// Fails if the phone publishes a `fixed_at` within `secs`.
+async fn no_fix_for(sub: &common::StateSub, secs: u64) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(secs);
+    while let Ok(sample) = tokio::time::timeout_at(deadline, sub.recv_async()).await {
+        let sample = sample.expect("state stream open");
+        assert!(
+            !sample.key_expr().as_str().ends_with("/fixed_at"),
+            "unexpected fix: {}",
+            String::from_utf8_lossy(&sample.payload().to_bytes())
+        );
+    }
+}
+
+/// (g) A router with a location turns a sighting into a fix at the router,
+/// with its radius as the accuracy and `fixed_at` last. The fix comes when
+/// the device comes into range and not on every poll, so a held sighting
+/// cannot outdate the phone's own fixes. A router without a location
+/// gives none.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_sighting_at_a_located_router_is_a_fix() {
+    let gw = FakeOpenwrt::spawn().await;
+    let ap = FakeOpenwrt::spawn().await;
+    let routers_path = routers_file_with(&[
+        ("gw", gw.port, "lat = 59.33\nlon = 18.06\nradius_m = 40\n"),
+        ("ap", ap.port, ""),
+    ]);
+    let (mut sup, observer) = start(&routers_path).await;
+    let phone_sub = observer
+        .declare_subscriber("home/state/person/dads_phone/*")
+        .await
+        .expect("phone subscriber");
+    let sighted_sub = observer
+        .declare_subscriber(SIGHTED_KEY)
+        .await
+        .expect("sighted subscriber");
+
+    let before = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs_f64();
+    gw.control(&format!("/control/station?mac={PHONE_MAC}&present=true"));
+    let seen = until_fix(&phone_sub).await;
+    let at = |aspect: &str| seen.iter().position(|(k, _)| k == aspect);
+    for (aspect, value) in [
+        ("lat", json!(59.33)),
+        ("lon", json!(18.06)),
+        ("accuracy", json!(40.0)),
+    ] {
+        let i = at(aspect).unwrap_or_else(|| panic!("no {aspect} before fixed_at: {seen:?}"));
+        assert_eq!(seen[i].1, value, "{seen:?}");
+    }
+    let fixed_at = seen
+        .last()
+        .unwrap()
+        .1
+        .as_f64()
+        .expect("fixed_at is a number");
+    assert!(
+        fixed_at >= before - 1.0,
+        "fixed_at {fixed_at} predates the sighting"
+    );
+
+    // Still associated: later polls publish no new fix.
+    no_fix_for(&phone_sub, 4).await;
+
+    // Gone, then seen again only by the AP without a location: no fix.
+    gw.control(&format!("/control/station?mac={PHONE_MAC}&present=false"));
+    expect_state(&sighted_sub, json!(false)).await;
+    ap.control(&format!("/control/station?mac={PHONE_MAC}&present=true"));
+    expect_state(&sighted_sub, json!(true)).await;
+    no_fix_for(&phone_sub, 3).await;
+
+    // Gone again, then back at the gateway: a new, later fix.
+    ap.control(&format!("/control/station?mac={PHONE_MAC}&present=false"));
+    expect_state(&sighted_sub, json!(false)).await;
+    gw.control(&format!("/control/station?mac={PHONE_MAC}&present=true"));
+    let again = until_fix(&phone_sub).await;
+    let later = again
+        .last()
+        .unwrap()
+        .1
+        .as_f64()
+        .expect("fixed_at is a number");
+    assert!(
+        later > fixed_at,
+        "second fix {later} not after the first {fixed_at}"
+    );
+
+    sup.shutdown();
+}
+
+/// (h) A device back in range before the away delay ran out gets a new fix,
+/// though `sighted` never turned false. A restart gives none to a device
+/// the mirror already holds as sighted: a router lists a station for
+/// minutes after it leaves, so that fix could outdate the phone's own.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_return_within_the_hold_is_a_fix_and_a_restart_is_not() {
+    let gw = FakeOpenwrt::spawn().await;
+    let routers_path = routers_file_with(&[("gw", gw.port, "lat = 59.33\nlon = 18.06\n")]);
+    let (mut sup, observer) = start(&routers_path).await;
+    config_write(&observer, "home/config/openwrt/away_delay_s", json!(30))
+        .await
+        .expect("away delay write");
+    let phone_sub = observer
+        .declare_subscriber("home/state/person/dads_phone/*")
+        .await
+        .expect("phone subscriber");
+
+    gw.control(&format!("/control/station?mac={PHONE_MAC}&present=true"));
+    let first = until_fix(&phone_sub).await;
+    assert!(
+        first.contains(&("accuracy".to_string(), json!(50.0))),
+        "default radius: {first:?}"
+    );
+    let first = first
+        .last()
+        .unwrap()
+        .1
+        .as_f64()
+        .expect("fixed_at is a number");
+
+    // Out of range for a few polls, well inside the 30 s delay.
+    gw.control(&format!("/control/station?mac={PHONE_MAC}&present=false"));
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    gw.control(&format!("/control/station?mac={PHONE_MAC}&present=true"));
+    let back = until_fix(&phone_sub).await;
+    assert!(
+        !back.contains(&("sighted".to_string(), json!(false))),
+        "sighted turned false inside the delay: {back:?}"
+    );
+    let back = back
+        .last()
+        .unwrap()
+        .1
+        .as_f64()
+        .expect("fixed_at is a number");
+    assert!(
+        back > first,
+        "return fix {back} not after the first {first}"
+    );
+
+    // The adapter restarted while the phone stays in range: no fix.
+    let mut watch = health_watch(&observer, "openwrt").await;
+    let running = await_health(&mut watch, Duration::from_secs(10), |h| {
+        h.status == HealthStatus::Running && h.pid.is_some()
+    })
+    .await;
+    let pid = running.pid.expect("pid");
+    unsafe {
+        libc::kill(i32::try_from(pid).expect("a pid fits i32"), libc::SIGKILL);
+    }
+    await_health(&mut watch, Duration::from_mins(1), |h| {
+        h.status == HealthStatus::Running && h.pid.is_some_and(|p| p != pid)
+    })
+    .await;
+    // The new process's first cycle republishes `sighted`, and a fix would
+    // come just before it.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        let sample = tokio::time::timeout_at(deadline, phone_sub.recv_async())
+            .await
+            .expect("sighted republished within 20s")
+            .expect("state stream open");
+        let key = sample.key_expr().as_str();
+        assert!(
+            !key.ends_with("/fixed_at"),
+            "a restart fixed the phone again"
+        );
+        if key.ends_with("/sighted") {
+            break;
+        }
+    }
+    no_fix_for(&phone_sub, 3).await;
 
     sup.shutdown();
 }
