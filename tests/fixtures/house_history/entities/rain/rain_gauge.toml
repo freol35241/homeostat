@@ -1,0 +1,15 @@
+schema = 1
+
+[entity]
+capability = "sensor"
+room = "garden"
+
+[naming]
+en = "rain gauge"
+
+[write_policy]
+mode = "exclusive"
+owner = "rain"
+
+[aspects.precipitation]
+interval_s = 3600

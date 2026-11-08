@@ -58,6 +58,7 @@ pub fn check(root: &Path) -> CheckResult {
     let (sources, source_warnings, source_errors) = grants::resolve_sources(&house, &expanded);
     warnings.extend(source_warnings);
     errors.extend(source_errors);
+    errors.extend(grants::check_aspects(&house, &expanded));
     CheckResult {
         house,
         expanded,

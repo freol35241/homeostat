@@ -6,8 +6,10 @@ Run: uv run --no-project --with-editable sdk/python python -m unittest discover 
 import datetime
 import json
 import unittest
+import zoneinfo
 
 from homeostat.forecast import MAX_POINTS, Forecast, Point, decode, encode
+from homeostat.intervals import IntervalsUncovered
 
 UTC = datetime.timezone.utc
 
@@ -234,6 +236,72 @@ class ResampleTest(unittest.TestCase):
             f.resample(t(9), 0, 3, "step", 3600)
         with self.assertRaises(ValueError):
             f.resample(t(9), 3600, -1, "step", 3600)
+
+
+class TotalTest(unittest.TestCase):
+    """A window's total counts each interval by its share inside. A
+    stretch nothing covers raises, because a missing hour counted as zero
+    rain is the reading that turns the watering on."""
+
+    H = 3600
+
+    # Hourly 9-12, then one 6 h interval 12-18.
+    RAIN = forecast([(t(9), 1.0, H), (t(10), 2.0, H), (t(11), 0.0, H), (t(12), 6.0, 6 * H)])
+
+    def test_whole_intervals_add_up(self):
+        self.assertEqual(self.RAIN.total(t(9), t(12)), 3.0)
+
+    def test_an_interval_counts_by_its_share_inside(self):
+        # Half of 9-10, all of 10-11, and two of the six hours of 12-18.
+        self.assertAlmostEqual(self.RAIN.total(t(9, 30), t(11)), 2.5)
+        self.assertAlmostEqual(self.RAIN.total(t(12), t(14)), 2.0)
+        self.assertAlmostEqual(self.RAIN.total(t(10, 30), t(13)), 1.0 + 0.0 + 1.0)
+
+    def test_an_empty_window_is_zero(self):
+        self.assertEqual(self.RAIN.total(t(10), t(10)), 0.0)
+
+    def test_what_the_points_do_not_cover_is_refused(self):
+        holed = forecast([(t(9), 1.0, self.H), (t(11), 1.0, self.H)])
+        overlapping = forecast([(t(9), 1.0, 2 * self.H), (t(10), 1.0, self.H)])
+        instant = forecast([(t(9), 1.0, self.H), (t(10), 1.0), (t(11), 1.0, self.H)])
+        cases = (
+            (holed, t(9), t(12), "gap"),
+            (overlapping, t(9), t(11), "gap"),
+            (self.RAIN, t(8), t(10), "gap"),
+            (self.RAIN, t(17), t(19), "short"),
+            (instant, t(9), t(12), "not-intervals"),
+        )
+        for fc, start, end, reason in cases:
+            with self.subTest(reason=reason, start=start, end=end):
+                with self.assertRaises(IntervalsUncovered) as caught:
+                    fc.total(start, end)
+                self.assertEqual(caught.exception.reason, reason)
+
+    def test_points_outside_the_window_do_not_matter(self):
+        # A hole, an instant and an overlap after the window say nothing
+        # about it.
+        fc = forecast([(t(9), 1.0, self.H), (t(10), 2.0), (t(12), 1.0, self.H)])
+        self.assertEqual(fc.total(t(9), t(10)), 1.0)
+        overlapping = forecast([(t(9), 1.0, self.H), (t(10), 2.0, 2 * self.H), (t(11), 1.0, self.H)])
+        self.assertEqual(overlapping.total(t(9), t(10)), 1.0)
+
+    def test_a_window_across_a_dst_change_is_counted_in_real_hours(self):
+        # 01:30 to 03:30 in Stockholm on the spring-forward night is one
+        # hour, so one sixth of a 6 h interval, not two.
+        stockholm = zoneinfo.ZoneInfo("Europe/Stockholm")
+        night = datetime.datetime(2026, 3, 29, tzinfo=UTC)
+        fc = forecast([(night, 6.0, 6 * self.H)])
+        start = datetime.datetime(2026, 3, 29, 1, 30, tzinfo=stockholm)
+        end = datetime.datetime(2026, 3, 29, 3, 30, tzinfo=stockholm)
+        self.assertAlmostEqual(fc.total(start, end), 1.0)
+
+    def test_a_bound_without_a_timezone_is_refused(self):
+        with self.assertRaises(ValueError):
+            self.RAIN.total(t(9).replace(tzinfo=None), t(10))
+
+    def test_a_window_that_ends_before_it_starts_is_refused(self):
+        with self.assertRaises(ValueError):
+            self.RAIN.total(t(11), t(10))
 
 
 if __name__ == "__main__":

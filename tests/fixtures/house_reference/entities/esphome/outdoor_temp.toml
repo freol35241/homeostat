@@ -13,3 +13,8 @@ aliases = []
 
 [write_policy]
 owner = "esphome"
+
+# The station's rain gauge reports an amount per hour. esphome publishes
+# every aspect of its entities under a wildcard, so any name is covered.
+[aspects.precipitation]
+interval_s = 3600

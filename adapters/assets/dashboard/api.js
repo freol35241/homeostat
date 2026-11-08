@@ -103,13 +103,33 @@ export function errText(e) {
 // of the state. The window is returned with the points so the chart can
 // place them by time.
 
+// The most rows /api/history returns (HISTORY_LIMIT_MAX in
+// adapters/dashboard.py).
+var HISTORY_LIMIT = 5000;
+
 // `cls` is the recorder's series class: 'state' (the default) is what the
 // house did, and 'cmd' is what was asked of it.
-export function fetchHistory(entity, aspect, hours, shape, cls) {
+//
+// Bars read the raw rows and spread each from its own stamp on the page.
+// The recorder's buckets start at multiples of their width since the
+// epoch, which is not where a unit in another zone stamps its day. The
+// read starts one interval early, for the interval that straddles the
+// window's start, and a day earlier for day bars, which are whole days.
+// When the window holds more rows than one read returns, it starts where
+// the rows do, so the axis does not show a stretch that was not read.
+export function fetchHistory(entity, aspect, hours, shape, cls, intervalS) {
   var win = { from: Date.now() - hours * 3600e3, to: Date.now() };
-  var url = '/api/history?entity=' + encodeURIComponent(entity) + '&aspect=' + encodeURIComponent(aspect) + '&hours=' + hours +
-    (cls ? '&class=' + encodeURIComponent(cls) : '') +
-    (shape === 'timeline' ? '&changes=1' : '&bucket=' + logic.bucketSeconds(hours, CHART_VBW));
+  var query = shape === 'timeline' ? '&hours=' + hours + '&changes=1'
+    : shape !== 'bars' ? '&hours=' + hours + '&bucket=' + logic.bucketSeconds(hours, CHART_VBW)
+      : null;
+  var limit = 0;
+  if (query === null) {
+    var extra = intervalS / 3600 + (logic.barsByDay(hours * 3600e3, intervalS) ? 24 : 0);
+    limit = Math.min(Math.ceil((hours + extra) * 3600 / intervalS) + 1, HISTORY_LIMIT);
+    query = '&hours=' + (hours + extra) + '&limit=' + limit;
+  }
+  var url = '/api/history?entity=' + encodeURIComponent(entity) + '&aspect=' + encodeURIComponent(aspect) + query +
+    (cls ? '&class=' + encodeURIComponent(cls) : '');
   return fetch(url)
     .then(function (r) { return r.json(); })
     .then(function (data) {
@@ -117,6 +137,7 @@ export function fetchHistory(entity, aspect, hours, shape, cls) {
       (data.series || []).forEach(function (series) {
         (series.points || []).forEach(function (p) { pts.push(p); });
       });
+      if (limit && pts.length >= limit) win.from = Math.max(win.from, Date.parse(pts[0].ts));
       return { points: pts, window: win, loaded: true, loading: false };
     })
     .catch(function () {
@@ -124,13 +145,18 @@ export function fetchHistory(entity, aspect, hours, shape, cls) {
     });
 }
 
-// tile/row sparklines: numeric readings, fixed 24h window
-export function ensureHistory(entity, aspect) {
+// tile/row sparklines: numeric readings, fixed 24h window. An interval
+// aspect reads 48 h, because its tile totals the 24 h that end with the
+// newest recorded interval, which ends before now.
+export function ensureHistory(entity, aspect, intervalS) {
   var sk = entity + '|' + aspect;
   var s = localState.sparklines[sk];
   if (s && (s.loaded || s.loading)) return;
   localState.sparklines[sk] = { points: [], loaded: false, loading: true };
-  fetchHistory(entity, aspect, 24, 'chart').then(function (loaded) {
+  var fetched = intervalS
+    ? fetchHistory(entity, aspect, 48, 'bars', null, intervalS)
+    : fetchHistory(entity, aspect, 24, 'chart');
+  fetched.then(function (loaded) {
     localState.sparklines[sk] = loaded;
     scheduleRender();
   });

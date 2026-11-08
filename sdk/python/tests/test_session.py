@@ -4,11 +4,14 @@ refuses to publish, and the shared command prologue.
 Run: uv run --no-project --with-editable sdk/python python -m unittest discover sdk/python/tests
 """
 
+import datetime
 import json
 import threading
 import unittest
 
+import zenoh
 from homeostat.session import UnitSession
+from homeostat.stamps import stamp_us
 
 
 class FakeZenoh:
@@ -22,6 +25,9 @@ class FakeZenoh:
     def put(self, key, payload, **options):
         self.puts.append((key, json.loads(payload)))
         self.options.append(options)
+
+    def new_timestamp(self):
+        return zenoh.Timestamp(datetime.datetime.now(datetime.timezone.utc), zenoh.TimestampId(b"\x07"))
 
     def liveliness(self):
         alive = self.alive
@@ -85,6 +91,35 @@ class PutJsonTest(unittest.TestCase):
                 session._session.puts,
                 [("home/health/u/event", {"kind": "drop", "reason": "non-finite", "key": "home/state/r/e/a"})],
             )
+
+
+class StampedPutTest(unittest.TestCase):
+    """`at` stamps a state value with the time it describes. The stamp
+    carries the session's ID, which is not the router's, so consumers take
+    the value as stamped rather than live."""
+
+    HOUR = datetime.datetime(2026, 11, 7, 12, 0, tzinfo=datetime.timezone.utc)
+
+    def test_a_state_value_carries_the_time_it_describes(self):
+        session = stub_session()
+        local = datetime.timezone(datetime.timedelta(hours=1))
+        session.put_json("home/state/garden/rain/precipitation", 0.4, at=self.HOUR.astimezone(local))
+        (options,) = session._session.options
+        stamp = options["timestamp"]
+        self.assertEqual(stamp_us(stamp), int(self.HOUR.timestamp()) * 1_000_000)
+        self.assertEqual(str(stamp.get_id()), "7")
+
+    def test_a_stamp_is_refused_where_it_cannot_mean_anything(self):
+        session = stub_session()
+        future = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=5)
+        for key, at in (
+            ("home/cmd/garden/valve/on", self.HOUR),
+            ("home/state/garden/rain/precipitation", self.HOUR.replace(tzinfo=None)),
+            ("home/state/garden/rain/precipitation", future),
+        ):
+            with self.subTest(key=key, at=at), self.assertRaises(ValueError):
+                session.put_json(key, 1.0, at=at)
+        self.assertEqual(session._session.puts, [])
 
 
 class ParseCommandTest(unittest.TestCase):

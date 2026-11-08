@@ -2,7 +2,7 @@
  * descriptor, and the cards made of rows: the entity widget and the room
  * card. */
 import { ensureHistory } from '../api.js';
-import { buildChart } from '../charts.js';
+import { buildBars, buildChart } from '../charts.js';
 import { html } from '../html.js';
 import logic, { titleCase } from '../logic.js';
 import { controlDisabled, houseControls, localState, occupancyReading, stateValue, store } from '../store.js';
@@ -118,9 +118,18 @@ export function widgetForSensor(entity, withHead) {
     : '';
   return html`${head}${rows.map(function (r) {
     var sk = entity.name + '|' + r.aspect;
-    ensureHistory(entity.name, r.aspect); // fetched once, on the first render while visible
+    var intervalS = logic.intervalOf(entity, r.aspect);
+    ensureHistory(entity.name, r.aspect, intervalS); // fetched once, on the first render while visible
     var s = localState.sparklines[sk];
-    var spark = s && s.loaded ? buildChart('room-' + sk, s.points, { height: 28, sizeClass: 'chart-row', aspect: r.aspect, area: true, window: s.window }) : null;
+    var spark = null;
+    if (s && s.loaded) {
+      // The row draws the last 24 h, also of an interval aspect, whose
+      // fetch reaches further back for its tile's total.
+      var day = { from: Date.now() - 864e5, to: Date.now() };
+      spark = intervalS
+        ? buildBars('room-' + sk, logic.intervalBars(s.points, intervalS, day, null), { height: 28, sizeClass: 'chart-row', aspect: r.aspect, window: day })
+        : buildChart('room-' + sk, s.points, { height: 28, sizeClass: 'chart-row', aspect: r.aspect, area: true, window: s.window });
+    }
     var name = multi ? r.label : entity.label;
     return html`<div class="entity-row row-clickable${multi ? ' sensor-reading' : ''}" data-action="history-detail"${attrs} data-aspect="${r.aspect}">
       <span class="entity-name" title="${name}">${name}</span>

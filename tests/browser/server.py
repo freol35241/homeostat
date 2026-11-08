@@ -208,8 +208,12 @@ class FakeHouse:
         aspect = request.query.get("aspect", "")
         hours = float(request.query.get("hours", "24"))
         now = time.time()
+        interval = self.interval(entity, aspect)
         if aspect in POSITION_ASPECTS:
             points = self.route(entity, aspect, hours, now)
+        elif interval:
+            # A reading nobody commands has no cmd series.
+            points = [] if request.query.get("class") == "cmd" else self.amounts(interval, hours, now)
         else:
             step = max(60.0, hours * 3600 / 120)
             points = []
@@ -226,6 +230,29 @@ class FakeHouse:
         return web.json_response(
             {"series": [{"key": f"home/history/state/{entity}/{aspect}", "points": points}]}
         )
+
+    def interval(self, entity: str, aspect: str) -> int | None:
+        for e in self.model["entities"]:
+            if e["name"] == entity:
+                return (e.get("intervals") or {}).get(aspect)
+        return None
+
+    def amounts(self, interval: int, hours: float, now: float) -> list[dict]:
+        """One row per interval, as the recorder holds stamped amounts.
+
+        Each is at its interval's start, and none before the window's
+        start, as the recorder reads. The newest ended at the start of the
+        current interval, as when an hour's total is published once the
+        hour is over. It rains a little every third interval.
+        """
+        newest = now - now % interval - interval
+        points = []
+        t = math.ceil((now - hours * 3600) / interval) * interval
+        while t <= newest:
+            value = 0.6 if int(t // interval) % 3 == 0 else 0.0
+            points.append({"ts": iso(t), "room": "garden", "value": value})
+            t += interval
+        return points
 
     def route(self, entity: str, aspect: str, hours: float, now: float) -> list[dict]:
         """A loop of fixes that ends where the entity is now.

@@ -1204,8 +1204,17 @@ class Recorder:
                 with self._live_lock:
                     if self._live is not None:
                         self._live.add(key)
-            elif parts[1] == "state" and len(parts) >= 5 and self._holds(parts, ts):
-                return
+            elif parts[1] == "state" and len(parts) >= 5:
+                newest = self._newest(parts)
+                if newest is not None and newest >= ts - SEED_TOLERANCE_US:
+                    # A row at the stamp is the one a replay or a republish
+                    # came from. A newer row means the stamped value is
+                    # older than what the series already says, which is
+                    # worth knowing, as a unit mixing stamped and unstamped
+                    # publishes on one key loses values this way.
+                    if newest > ts + SEED_TOLERANCE_US:
+                        self.sess.health_event("drop", reason="older-than-held", key=key)
+                    return
             self._record_sample(ts, key, parts, sample)
         elif len(parts) > 1 and parts[1] == "forecast":
             self._record_forecast(ts, key, parts, sample)
@@ -1223,26 +1232,30 @@ class Recorder:
         for automations.
 
         A mirrored value can be old, so the row is stamped at the value's
-        own time (now less the mirror's age) and not at recorder start: a
-        sample records an observation at its stamp. A series the store
+        own time and not at recorder start: a sample records an observation
+        at its stamp. That is the stamp its publisher set, or else now less
+        the mirror's age. A series the store
         already holds at or after that time is left alone; that happens
         after a recorder-only restart, when the live row was written before
         it went down. Only state is seeded. Commands, health and config go
         to the events audit, and a mirrored current value is not an event.
         """
-        replies = [r for expr in exprs for r in self.sess.get_json_aged(expr)]
+        replies = [r for expr in exprs for r in self.sess.get_json_stamped(expr)]
         with self._live_lock:
             live, self._live = self._live, None
         conn = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True, timeout=2.0)
         try:
-            for key, value, age_s in replies:
+            for key, value, age_s, stamp in replies:
                 parts = key.split("/")
                 if len(parts) < 5 or parts[1] != "state" or key in live:
                     continue
                 kind_value = typed(value)
                 if kind_value is None:
                     continue  # the live path reports these; a seed stays quiet
-                ts = now_us() - int(age_s * 1_000_000)
+                if self.sess.is_live_stamp(stamp):
+                    ts = now_us() - int(age_s * 1_000_000)
+                else:
+                    ts = stamp_us(stamp)
                 if holds_state_at(conn, parts[3], "/".join(parts[4:]), ts):
                     continue
                 kind, stored = kind_value
@@ -1253,20 +1266,20 @@ class Recorder:
         finally:
             conn.close()
 
-    def _holds(self, parts: list[str], ts: int) -> bool:
-        """Return whether the store holds this state series at or after `ts`.
+    def _newest(self, parts: list[str]) -> int | None:
+        """Return the newest stored time of this state series, or None.
 
-        False when the store cannot be read: the sample is then recorded,
-        and a backend outage costs at most a duplicate row.
+        None also when the store cannot be read: the sample is then
+        recorded, and a backend outage costs at most a duplicate row.
         """
         try:
             conn = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True, timeout=2.0)
         except sqlite3.Error:
-            return False
+            return None
         try:
-            return holds_state_at(conn, parts[3], "/".join(parts[4:]), ts)
+            return newest_state_ts(conn, parts[3], "/".join(parts[4:]))
         except sqlite3.Error:
-            return False
+            return None
         finally:
             conn.close()
 
@@ -1637,17 +1650,23 @@ class Recorder:
             conn.close()
 
 
+def newest_state_ts(conn: sqlite3.Connection, entity: str, aspect: str) -> int | None:
+    """Return a state series' newest row time, or None if it has none."""
+    newest = conn.execute(
+        "SELECT newest_ts FROM series WHERE class = 'state' AND entity = ? AND aspect = ?",
+        (entity, aspect),
+    ).fetchone()
+    return None if newest is None else newest[0]
+
+
 def holds_state_at(conn: sqlite3.Connection, entity: str, aspect: str, ts: int) -> bool:
     """Return whether the store holds a state series' row at or after `ts`.
 
     Within SEED_TOLERANCE_US, because a value's time read back from the
     mirror or from a stamp can differ from its row by a little.
     """
-    newest = conn.execute(
-        "SELECT newest_ts FROM series WHERE class = 'state' AND entity = ? AND aspect = ?",
-        (entity, aspect),
-    ).fetchone()
-    return newest is not None and newest[0] is not None and newest[0] >= ts - SEED_TOLERANCE_US
+    newest = newest_state_ts(conn, entity, aspect)
+    return newest is not None and newest >= ts - SEED_TOLERANCE_US
 
 
 def latest_state(conn: sqlite3.Connection) -> list[dict]:
@@ -1800,9 +1819,11 @@ def parse_params(raw: str) -> tuple[int, int, int, int, bool]:
         changes = True
     if bucket_us and changes:
         raise ValueError("bucket and changes are exclusive")
-    if bucket_us and (to_us - from_us) // bucket_us > MAX_QUERY_LIMIT:
+    if bucket_us and to_us // bucket_us - from_us // bucket_us + 1 > MAX_QUERY_LIMIT:
         # The fold walks the whole window, so a bucket that yields more
-        # points than a reply can carry would scan for nothing.
+        # points than a reply can carry would scan for nothing, and the
+        # reply would leave the oldest buckets out. Buckets are aligned to
+        # the epoch, so the count is of the buckets the window touches.
         raise ValueError(
             f"bucket: {bucket_us // 1_000_000} s makes more than {MAX_QUERY_LIMIT}"
             " buckets over the window; widen it or narrow from/to"
@@ -1892,6 +1913,10 @@ def bucketed(rows, bucket_us: int, limit: int) -> list[dict]:
     bucket's start, room the last row's; a number bucket's value is the
     mean and carries min and max, any other kind's is the last value seen
     (a run of bools or enum strings has no mean).
+
+    A number bucket also carries `sum` and the sample count `n`. A series
+    of amounts per interval, such as hourly rainfall, is totalled by its
+    sum, which the mean alone does not give back.
     """
     points: deque[dict] = deque(maxlen=limit)
     point: dict | None = None
@@ -1912,6 +1937,7 @@ def bucketed(rows, bucket_us: int, limit: int) -> list[dict]:
         if KINDS[point["kind"]] == "number" and point["n"]:
             row["value"] = point["sum"] / point["n"]
             row["min"], row["max"] = point["min"], point["max"]
+            row["sum"], row["n"] = point["sum"], point["n"]
         else:
             row["value"] = decode(point["kind"], point["last"])
         out.append(row)

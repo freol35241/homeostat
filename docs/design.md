@@ -393,12 +393,16 @@ stamps each sample that arrives without one (`timestamping` in
 A stamp is the core's wall-clock time plus the ID of whoever set it,
 and stamps order totally: by time, then by ID.
 
-A publisher may set its own stamp to say when its value was true. Only
-the core does this, when it
-[replays recorded state after a restart](#replay-after-a-core-restart).
-Its replays carry the ID `1`. The router's stamps carry the router's
-own ID, which is random, so a consumer can tell a live sample from a
-replay.
+A publisher may set its own stamp to say when its value was true. The
+core does this when it
+[replays recorded state after a restart](#replay-after-a-core-restart),
+and its replays carry the ID `1`. A unit does it with `at=` on a state
+publish, for a reading that describes an earlier time, and its stamps
+carry its session's ID. An hourly rain total published twenty minutes
+after its hour ends is stamped with the start of the hour, so it covers
+`[t, t + 1 h)` as a forecast point with `d` does. The router's stamps
+carry the router's own ID, which is random, so a consumer can tell a
+live sample from a stamped one.
 
 - Values are ordered by stamp. A value older than the one already held
   for its key never replaces it. The mirror, the SDK's `subscribe` and
@@ -407,8 +411,21 @@ replay.
 - A live sample's age is zero. Its stamp is not used for age, because
   a unit on another host would then see every live value aged by the
   difference between the two clocks.
-- A replay's age is the time since its stamp
-  (`UnitSession.sample_age`).
+- A stamped value's age is the time since its stamp
+  (`UnitSession.sample_age`), and the recorder stores it at its stamp.
+- Stamps on one key move forward. A stamped value older than the one
+  held is dropped, and the recorder skips a stamped row when the series
+  already has one at or after it, within half a second, so a unit that
+  republishes its last hour after a restart adds no duplicate. A unit does not mix stamped
+  and unstamped publishes on one key: an unstamped value is stamped on
+  arrival, which is later than the stamps that follow it.
+- A stamp may not be in the future, since a value about the future is a
+  [forecast](#forecasts). The router replaces a stamp more than half a
+  second ahead of its own clock with its own, which makes the value
+  live. Units run on the core's host, so their clocks agree. Commands take no stamp, because a command is
+  an instruction now.
+- A consumer that acts only on live values ignores a stamped one as it
+  ignores a replay. `ivt490`'s [device feeds](#device-feeds) do this.
 - The mirror counts age on its monotonic clock from when a value
   arrived, plus how old it was then. A clock step after arrival does
   not change it.
@@ -1525,11 +1542,12 @@ by `PRAGMA user_version` and migrated in place.
   and `ctx.restore`, which polls `stats`, would time out.
 - A live sample's timestamp is the recorder's receive time (µs, UTC),
   assigned before any buffering, so an outage does not distort history.
-  A sample whose publisher set its own stamp, which today is only the
-  core's replay, is recorded at that stamp instead. A state sample is
+  A sample whose publisher set its own stamp, the core's replay or a
+  unit's `at=`, is recorded at that stamp instead. A state sample is
   then skipped when the series already has a row at or after the stamp,
   within half a second, so a replay never duplicates the row it came
-  from. Two samples for one series in the same microsecond collide, and
+  from. One older than the series' newest row by more than that also
+  leaves a `drop` event (`older-than-held`). Two samples for one series in the same microsecond collide, and
   the later one is dropped.
 - Repeats are kept. A republished value is still a sighting. Dropping
   repeats would help with a device that republishes, but not with a
@@ -1588,8 +1606,10 @@ slot.
   (RFC3339 with offset). There is one reply per matching series, an
   array of `{ts, room, value}`. Two mutually exclusive folds apply to
   the whole window before `limit`. `bucket=<seconds>` gives a number's
-  mean with `min` and `max`, or otherwise the last value; more than
-  10,000 buckets is refused. `changes=1` gives the rows where the value
+  mean with `min`, `max`, `sum` and the sample count `n`, or otherwise
+  the last value; more than 10,000 buckets is refused. Buckets start at
+  multiples of their width since the epoch. A series of amounts per
+  interval, such as hourly rainfall, is totalled by `sum`. `changes=1` gives the rows where the value
   changed. Without folds, a chart's span would depend on the publish
   rate. The page knows its width and the recorder knows the rows, so
   the recorder does the downsampling.
@@ -1825,14 +1845,91 @@ automatically:
   reply. It does not wait if no unit publishes under `home/history/`.
   Call it before `ready()`. The recorder answers serially, so restore
   waits out a get the recorder has taken instead of adding another to
-  its queue. Only a get that was not served is repeated. Reads are not
-  a declared bus surface. What constrains `restore` is the unit's own
-  publish bindings.
+  its queue. Only a get that was not served is repeated. Nothing on the
+  bus checks who sends a query, so the SDK ties each read to a binding:
+  `restore` to the unit's own publish bindings, and
+  [`history`](#reading-the-recorded-past) to its subscribe bindings.
 
 Persisting unit state in the SDK or the supervisor was rejected. It
 would be the same framework guess, made without the value's age. A file
 beside the unit was also rejected. It would be a second store with its
 own retention, backup and corruption problems.
+
+### Reading the recorded past
+
+A rule that decides on a series' recent past, such as the rain over the
+last day, reads it from the recorder. A window the unit kept from its
+own subscription would be empty after every restart of the unit until
+it refilled, while the recorder held the data all along.
+
+- `ctx.history(binding, start, end, bucket_s=, room=, entity=, aspect=,
+  timeout_s=30)` returns the window's rows, oldest first, with `ts` as
+  an aware datetime. With `bucket_s` it returns the recorder's buckets
+  ([Read path](#read-path)).
+- The binding is a `[bus.subscribes]` state binding, with its slots
+  filled as for `publish`. A unit reads the past only of what it
+  subscribes to, and the plan already shows that subscription. A
+  separate `[bus.reads]` table was rejected. Nothing on the bus enforces
+  reads, so it would be one more declaration to validate with nothing
+  behind it.
+- It raises `HistoryUnavailable` where `restore` returns `None`: when
+  the house has no recorder, the recorder does not answer or answers
+  with an error, or the window holds 10,000 raw rows or more. An empty
+  list then means that nothing was recorded. An irrigation rule must be
+  able to tell "it did not rain" from "I do not know". The read answers
+  from the store alone ([Archives](#archives)), so a window older than
+  the retention or archive settings reads as unrecorded.
+- It waits for the recorder as `restore` does, on every call. A get
+  that no queryable serves returns no replies, so without the wait a
+  recorder that is down would read as an empty window. A read that gets
+  no reply asks `stats` once more, for a recorder that stopped since.
+- Buckets are aligned to the epoch, not to `start`. Only rows inside the
+  window are folded, so the buckets' sums add up to the window's total,
+  while the first and last bucket's mean covers only part of its span.
+- It blocks until the recorder answers, so a unit calls it from its main
+  thread or a thread of its own, not from a `subscribe` handler.
+
+### Totals over intervals
+
+Some readings are amounts over an interval: hourly rainfall, energy per
+hour, pellets burnt per day. A forecast point says so with `d`. A state
+sample has one stamp, so the entity file says it for the aspect:
+
+```toml
+[aspects.precipitation]
+interval_s = 3600
+```
+
+- Each sample is the total over `[ts, ts + interval_s)`, the same
+  convention as a forecast point with `d`. A unit that publishes an
+  hour's total after the hour ends stamps it with the hour's start
+  ([Timestamps](#timestamps)). Each interval is published once, when it
+  is final: the recorder keeps the first value at a stamp, so a revised
+  total for the same hour is not recorded.
+- The core refuses an `interval_s` of 0, and an aspect the entity's
+  owner does not publish, such as a misspelt one (`aspect-unpublished`).
+- The house declares it, not an aspect descriptor. A unit that fetches
+  data, such as a weather service, is an automation and publishes no
+  descriptor. A meter's hourly energy needs the same declaration
+  whichever kind of unit binds it.
+- `Forecast.total(start, end)` and `ctx.history_total(binding, start,
+  end)` count each value by the share of its interval inside the window,
+  with the amount taken as spread evenly over the interval. An hour half
+  inside counts half, and a 6 h interval with two hours inside counts a
+  third. `history_total` reads one interval before `start` to take in
+  the one that straddles it.
+- A stretch the values do not cover raises `IntervalsUncovered`, with
+  the reason `gap` (a hole or an overlap, or the window starts before the
+  values), `short` (the values end before the window does) or
+  `not-intervals` (a forecast point in the window has no `d`). It never
+  counts as zero, because zero rain is the reading that turns the
+  watering on.
+- The dashboard draws such an aspect as bars
+  ([Charts, forecasts and sources](#charts-forecasts-and-sources)).
+- How old a forecast may be is the consumer's call, as for `at`, so
+  `total` does not check `issued`. An observed interval arrives after it
+  ends, so the newest one usually ends before now. A window that runs
+  past it is `short`, and the consumer picks an end it trusts.
 
 ## Derived values
 
@@ -2357,6 +2454,36 @@ to one point per drawn column. For a boolean or enum they ask for
 `changes`. The descriptor decides which, so an enum coded as integers
 is not averaged. `class=cmd` draws a "Commanded" strip under the chart.
 It is the page's one view of intent against outcome.
+
+An aspect with an `interval_s` ([Totals over intervals](#totals-over-intervals))
+is drawn as bars, because a line through hourly amounts reads as a
+rate and makes a 6 h forecast interval look like one spike.
+
+- The page reads the raw rows and spreads each from its own stamp. The
+  recorder's buckets start at multiples of their width since the epoch,
+  which is not where a unit in another zone stamps its day. The read
+  starts one interval before the window, for the interval that
+  straddles its start.
+- A window of at most 48 intervals draws a bar per interval, lined up
+  with the stamps. A longer window, or an interval of a day, draws a
+  bar per local day, from midnight to midnight, and the first day is
+  drawn whole.
+- A bar holds its share of each value whose interval overlaps it, as
+  the SDK's totals count it. Recorded amounts are solid, and a negative
+  amount is drawn down from zero. One forecast continues after the last
+  recorded interval, faded, so no stretch counts twice, and at most as
+  far ahead as the window looks back. With several forecasts no
+  forecast bars are drawn, since two providers' bars on one axis would
+  add up to an amount neither predicted.
+- An interval with nothing recorded has no bar, so a gap shows.
+- A tile's big number is the total over the 24 h that end with the
+  newest recorded interval, or over that interval alone when it is
+  longer. "Has it rained?" is what a glance asks, and the latest hour is
+  0 most of the time. An interval is published after it ends, so the
+  span ends before now, and the caption says where. It also names the
+  latest interval, and how many hours of the span are recorded when
+  some are missing. A newest interval that ended more than two
+  intervals ago marks the tile `stale`.
 
 Forecasts reach the page live with state rather than from the
 recorder. The family sees what the house believes now, and a house

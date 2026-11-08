@@ -3,7 +3,7 @@
  * the value is derived from, the entity's related readings, or every
  * forecast the recorder kept), and the commands sent to the aspect. */
 import { fetchHistory } from '../api.js';
-import { buildChart, buildTimeline, fmtDuration, formatChartClock, formatChartTime, formatChartValue, horizonCaption, issuedCaption } from '../charts.js';
+import { buildBars, buildChart, buildTimeline, fmtDuration, formatChartClock, formatChartTime, formatChartValue, horizonCaption, issuedCaption } from '../charts.js';
 import { html } from '../html.js';
 import logic, { titleCase } from '../logic.js';
 import { overlayWide, renderOverlayContent, showOverlay } from './panel.js';
@@ -21,7 +21,7 @@ export function fetchHistoryRange(entityName, aspect, hours, shape) {
   var rd = overlay.rangeData[hours];
   if (rd && (rd.loaded || rd.loading)) return;
   overlay.rangeData[hours] = { points: [], loaded: false, loading: true };
-  fetchHistory(entityName, aspect, hours, shape).then(function (loaded) {
+  fetchHistory(entityName, aspect, hours, shape, null, overlay.intervalS).then(function (loaded) {
     if (!overlay.shapeSettled && loaded.points.length) {
       // the shape was guessed without a live value; the recorded values decide
       overlay.shapeSettled = true;
@@ -198,8 +198,10 @@ export function openHistoryDetail(room, entityName, aspect) {
   var live = stateValue(room, entityName, aspect);
   var field = descriptorField(entity, aspect);
   var described = !!(field && (field.kind === 'boolean' || field.kind === 'enum'));
-  overlay.shape = logic.historyShape(live, field);
-  overlay.shapeSettled = described || live !== undefined;
+  // An interval declared in the entity file settles the shape too.
+  overlay.intervalS = logic.intervalOf(entity, aspect);
+  overlay.shape = logic.historyShape(live, field, overlay.intervalS);
+  overlay.shapeSettled = described || live !== undefined || !!overlay.intervalS;
   overlay.range = 24;
   overlay.rangeData = {};
   overlay.cmdData = {};
@@ -292,10 +294,10 @@ export function renderHistoryDetailBody() {
   // only when the house has what it names, so an ordinary sensor's
   // overlay has no such row.
   var layers = [{ id: '', label: 'value' }];
-  if (overlay.shape !== 'timeline' && contributorsOf(entity, aspect).length) {
+  if (overlay.shape === 'chart' && contributorsOf(entity, aspect).length) {
     layers.push({ id: 'sources', label: 'sources' });
   }
-  if (overlay.shape !== 'timeline' && relatedOf(entity, aspect).length) {
+  if (overlay.shape === 'chart' && relatedOf(entity, aspect).length) {
     layers.push({ id: 'related', label: 'related' });
   }
   if (forecastsOf(entity, aspect).length) {
@@ -324,6 +326,25 @@ export function renderHistoryDetailBody() {
       ${statText('Now', tl.latest === null ? '—' : logic.formatAspect(aspect, field, tl.latest))}
       ${tl.onMs === null ? '' : statText('On', fmtDuration(tl.onMs) + ' of ' + fmtDuration(win.to - win.from))}
       ${statText('Changes', String(tl.changes))}</div>`;
+  } else if (overlay.shape === 'bars' && overlay.layer !== 'forecasts') {
+    // One forecast is drawn after the record, as on a tile. Bars from two
+    // providers on one axis would add up to an amount neither predicted,
+    // so with several the captions below name each instead.
+    var beliefsNow = liveForecastsOf(entity, aspect);
+    var bars = logic.intervalBars(points, overlay.intervalS, win, beliefsNow.length === 1 ? beliefsNow[0].forecast : null);
+    chartHtml = buildBars('detail-chart', bars, {
+      height: wide ? 440 : 220, sizeClass: wide ? 'chart-detail-wide' : 'chart-detail',
+      aspect: aspect, gridlines: true, yLabels: true, window: win
+    });
+    var recorded = bars.filter(function (b) { return b.observed > 0; });
+    var total = bars.reduce(function (a, b) { return a + b.observed; }, 0);
+    var ahead = bars.reduce(function (a, b) { return a + b.forecast; }, 0);
+    var last = points.length ? points[points.length - 1] : null;
+    statsHtml = html`<div class="stat-row">
+      ${statItem('Total', points.length ? total : null, aspect)}
+      ${statItem('Latest', last ? (typeof last.sum === 'number' ? last.sum : last.value) : null, aspect)}
+      ${statItem('Largest', recorded.length ? Math.max.apply(null, recorded.map(function (b) { return b.observed; })) : null, aspect)}
+      ${ahead > 0 ? statItem('Ahead', ahead, aspect) : ''}</div>`;
   } else {
     chartHtml = buildChart('detail-chart', points, {
       height: wide ? 440 : 220, sizeClass: wide ? 'chart-detail-wide' : 'chart-detail',

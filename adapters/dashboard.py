@@ -262,6 +262,9 @@ def build_model(model: house.HouseModel, granted: set[str]) -> dict:
                     }
                     for name, src in e.sources.items()
                 },
+                # Aspects whose samples are amounts per interval, drawn as
+                # bars (docs/design.md#totals-over-intervals).
+                "intervals": e.intervals,
             }
             for e in model.entities
         ],

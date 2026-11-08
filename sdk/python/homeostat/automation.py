@@ -6,6 +6,7 @@ A Context gives an automation the bus access its manifest declares:
 - typed live parameters from [params.*], seeded by a bus get and kept
   current by a config subscription;
 - publishing through [bus.publishes] expressions;
+- reading the recorded past of a [bus.subscribes] state key;
 - pausing: while the automation's `enabled` parameter is false its
   commands are dropped (docs/design.md#pausing-an-automation);
 - decisions: why a rule acted or did not, for the dashboard's timeline
@@ -37,7 +38,8 @@ from typing import Any
 import tomllib
 import zenoh
 
-from . import house, keys
+from . import house, intervals, keys
+from .forecast import Point
 from .session import QueryError, QueryTimeout, UnitSession
 from .stamps import Newest
 
@@ -77,6 +79,24 @@ _ENTITY_ADDRESSED = ("state", "cmd", "forecast")
 # The recorder's store description. It is the only history selector that
 # answers whenever the recorder is up, whatever the store holds.
 _HISTORY_STATS = "home/history/stats"
+
+
+# The most rows the recorder returns for one read (MAX_QUERY_LIMIT in
+# adapters/recorder.py).
+_HISTORY_LIMIT = 10_000
+
+
+class HistoryUnavailable(Exception):
+    """`Context.history` could not read the window.
+
+    The house runs no recorder, the recorder did not answer or answered
+    with an error, or the window holds more rows than one read returns.
+    """
+
+
+def _rfc3339(when: datetime.datetime) -> str:
+    """Format an aware datetime for a history selector, in UTC."""
+    return when.astimezone(datetime.timezone.utc).isoformat()
 
 
 def _dedup(exprs: Iterable[str]) -> list[str]:
@@ -129,8 +149,8 @@ def _house_has_recorder(root: str | Path) -> bool:
 
     The recorder is the unit that declares a publish under home/history/.
     src/grants.rs allows only one service to publish there. Without a
-    recorder, `restore` has nothing to wait for, and waiting out its
-    timeout would delay every start in a house without one.
+    recorder, `restore` and `history` have nothing to wait for, and
+    waiting out the timeout would delay every start in a house without one.
     """
     return any(
         spec.get("key", "").startswith("home/history/")
@@ -224,6 +244,9 @@ class Context:
         # One per subscribe: delivers the binding's current values again.
         self._redeliveries: list[Callable[[], None]] = []
         self._recorder: bool | None = None
+        # (entity, aspect) -> interval_s from the house's entity files, read
+        # on the first `history_total`.
+        self._intervals: dict[tuple[str, str], int] | None = None
         self._session = UnitSession(unit, os.environ[keys.ENV_BUS])
         # (entity, aspect, source) -> last reported participation, so
         # `source_used` can emit on transition rather than on every call.
@@ -394,17 +417,23 @@ class Context:
         entity: str | None,
         aspect: str | None,
         source: str | None = None,
+        use: str = "publish",
     ) -> str:
-        """Return the concrete key a `[bus.publishes]` binding addresses.
+        """Return the concrete key a binding addresses.
 
-        Literal expression segments are defaults, and wildcard and template
-        segments must be named. A key the declared expression does not cover
-        is refused, so the manifest decides what the unit may publish.
+        `use` is "publish" for a `[bus.publishes]` binding and "history" for
+        a `[bus.subscribes]` one. Literal expression segments are defaults,
+        and wildcard and template segments must be named. A key the declared
+        expression does not cover is refused, so the manifest decides what
+        the unit may publish and whose past it may read.
 
         A forecast key has one more slot than the others: its source, which
         says who publishes this forecast (docs/design.md#forecasts).
         """
-        expr = self._publishes[binding]["key"]
+        if use == "publish":
+            expr = self._publishes[binding]["key"]
+        else:
+            expr = self._subscribes[binding]
         segments = expr.split("/")
         if segments[1] in _ENTITY_ADDRESSED:
             if segments[1] == "forecast":
@@ -417,7 +446,7 @@ class Context:
                 }
             else:
                 if source is not None:
-                    raise ValueError(f"publish {binding!r} takes no source slot")
+                    raise ValueError(f"{use} {binding!r} takes no source slot")
                 names = ("room", "entity", "aspect")
                 slots = {"room": room, "entity": entity, "aspect": aspect}
             defaults: dict[str, str] = dict(zip(names, segments[2 : 2 + len(names)], strict=False))
@@ -425,12 +454,12 @@ class Context:
             for slot, given in slots.items():
                 part = given if given is not None else defaults.get(slot)
                 if part is None or "*" in part or "{" in part:
-                    raise ValueError(f"publish {binding!r} needs a concrete {slot}")
+                    raise ValueError(f"{use} {binding!r} needs a concrete {slot}")
                 parts.append(part)
             key = "/".join(["home", segments[1], *parts])
         else:
             if room or entity or aspect:
-                raise ValueError(f"publish {binding!r} takes no key slots")
+                raise ValueError(f"{use} {binding!r} takes no key slots")
             key = expr
         covered = any(
             zenoh.KeyExpr(variant).includes(zenoh.KeyExpr(key))
@@ -449,6 +478,7 @@ class Context:
         entity: str | None = None,
         aspect: str | None = None,
         options: dict | None = None,
+        at: datetime.datetime | None = None,
     ) -> None:
         """Publish through a `[bus.publishes]` expression to one concrete key.
 
@@ -461,6 +491,10 @@ class Context:
         `options` rides in the envelope beside the value, for the owning
         adapter (docs/design.md#command-options). An adapter ignores an
         option it does not support, so the device still reaches the value.
+
+        `at` stamps a state value with the time it describes, as for
+        `UnitSession.put_json` (docs/design.md#timestamps). An hourly total
+        published after its hour ends is stamped with the start of the hour.
 
         Parameters
         ----------
@@ -477,6 +511,9 @@ class Context:
         options : dict or None, optional
             Command options, such as ``{"transition": 1.0}``. Only a cmd
             publish takes them.
+        at : datetime.datetime or None, optional
+            The time a state value describes, timezone-aware and not in the
+            future.
 
         Raises
         ------
@@ -485,12 +522,15 @@ class Context:
         ValueError
             If the slots do not make one concrete key inside the declared
             expression, a cmd publish declares no priority, `options` is not
-            an object with string keys, or `options` is given for a publish
-            that is not a command.
+            an object with string keys, `options` is given for a publish
+            that is not a command, or `at` is given for one that is not
+            state, has no timezone or is in the future.
         """
         spec = self._publishes[binding]
         segments = spec["key"].split("/")
         key = self._concrete_key(binding, room=room, entity=entity, aspect=aspect)
+        if at is not None and segments[1] != "state":
+            raise ValueError(f"publish {binding!r} is not a state publish and takes no stamp")
         if segments[1] == "cmd":
             priority = spec["priority"]
             if priority is None:
@@ -503,7 +543,7 @@ class Context:
                 return
         elif options is not None:
             raise ValueError(f"publish {binding!r} is not a cmd publish and takes no options")
-        self._session.put_json(key, value)
+        self._session.put_json(key, value, at=at)
 
     def publish_forecast(
         self,
@@ -567,6 +607,38 @@ class Context:
         if self._recorder is None:
             self._recorder = _house_has_recorder(self._root)
         return self._recorder
+
+    def _await_recorder(self, timeout_s: float) -> str | None:
+        """Wait for the recorder to answer. Returns why it did not, or None.
+
+        Wait for the recorder, not for rows. The recorder replies once per
+        series it holds, so a series it does not hold gets no reply at all.
+        Waiting on the series itself would delay every first start by the
+        whole timeout. `stats` describes the store and always answers while
+        the recorder is up.
+
+        Send one query at a time, and let it wait for the rest of the
+        deadline. The recorder answers queries one at a time (zenoh runs a
+        queryable's callback serially). A get that gives up and asks again
+        leaves its query in the recorder's queue. Once an answer takes
+        longer than the get's timeout, every later answer arrives after its
+        get has given up, and the loop never receives one. A get that no
+        queryable serves returns at once with no replies, which means the
+        recorder is not up yet. Only that case is retried.
+        """
+        deadline = time.monotonic() + timeout_s
+        while True:
+            remaining = max(deadline - time.monotonic(), 0.1)
+            try:
+                if self._session.get_json(_HISTORY_STATS, timeout_s=remaining):
+                    return None
+            except QueryTimeout:
+                return f"recorder took the query but did not answer within {timeout_s}s"
+            except QueryError as err:
+                return str(err)
+            if time.monotonic() >= deadline:
+                return f"no recorder answered within {timeout_s}s"
+            time.sleep(0.2)
 
     def restore(
         self,
@@ -646,39 +718,10 @@ class Context:
         def failed(reason: str) -> None:
             self.health_event("restore-failed", key=key, reason=reason)
 
-        # Wait for the recorder to answer, not for rows. The recorder
-        # replies once per series it holds, so a series with no rows gets no
-        # reply at all. Waiting on the series itself would delay every first
-        # start by the whole timeout. `stats` describes the store and always
-        # answers while the recorder is up.
-        #
-        # Send one query at a time, and let it wait for the rest of the
-        # deadline. The recorder answers queries one at a time (zenoh runs a
-        # queryable's callback serially). A get that gives up and asks again
-        # leaves its query in the recorder's queue. Once an answer takes
-        # longer than the get's timeout, every later answer arrives after
-        # its get has given up, and the loop never receives one. A get that
-        # no queryable serves returns at once with no replies, which means
-        # the recorder is not up yet. Only that case is retried.
-        deadline = time.monotonic() + timeout_s
-        while True:
-            remaining = max(deadline - time.monotonic(), 0.1)
-            try:
-                if self._session.get_json(_HISTORY_STATS, timeout_s=remaining):
-                    break
-            except QueryTimeout:
-                failed(
-                    f"recorder took the query but did not answer within {timeout_s}s"
-                )
-                return None
-            except QueryError as err:
-                failed(str(err))
-                return None
-            if time.monotonic() >= deadline:
-                failed(f"no recorder answered within {timeout_s}s")
-                return None
-            time.sleep(0.2)
-
+        reason = self._await_recorder(timeout_s)
+        if reason is not None:
+            failed(reason)
+            return None
         selector = f"{keys.history_key('state', segments[3], segments[4])}?limit=1"
         try:
             replies = self._session.get_json(selector)
@@ -694,6 +737,239 @@ class Context:
                 ).total_seconds()
                 return row["value"], max(age_s, 0.0)
         return None
+
+    def history(
+        self,
+        binding: str,
+        start: datetime.datetime,
+        end: datetime.datetime,
+        *,
+        bucket_s: int | None = None,
+        room: str | None = None,
+        entity: str | None = None,
+        aspect: str | None = None,
+        timeout_s: float = 30.0,
+    ) -> list[dict[str, Any]]:
+        """Read the recorded samples of a subscribed state key over a window.
+
+        A rule that decides on a series' recent past, such as the rain over
+        the last day, reads it here instead of keeping its own window from
+        its subscription, which is empty after every restart of the unit
+        (docs/design.md#reading-the-recorded-past).
+
+        The read goes through a `[bus.subscribes]` binding, addressed by the
+        same slots as `publish`, so a unit reads the past only of what its
+        manifest says it subscribes to.
+
+        Each row is a dict with `ts` (an aware datetime), `room` and
+        `value`, oldest first, and both ends of the window are included.
+        With `bucket_s` the recorder folds the window into buckets of that
+        many seconds. A bucket's `ts` is its start, and buckets are aligned
+        to the epoch, not to `start`. A number bucket's `value` is the mean,
+        and it carries `min`, `max`, `sum` and the sample count `n`; any
+        other kind's is its last value. Only rows inside the window are
+        folded, so the buckets' sums add up to the window's total, while
+        the first and last bucket's mean covers only part of its span.
+
+        Unlike `restore`, this raises when the history cannot be read. An
+        empty list means the recorder holds no rows in the window, and a
+        rule must be able to tell that from not knowing. The recorder
+        answers from its store alone, so a window older than its retention
+        or archive settings reads as unrecorded.
+
+        It blocks until the recorder answers. Call it from the unit's main
+        thread or a thread of its own, not from a `subscribe` handler,
+        which runs on the bus's delivery thread.
+
+        Parameters
+        ----------
+        binding : str
+            A `[bus.subscribes]` binding name with a state key.
+        start : datetime.datetime
+            The window's start, timezone-aware.
+        end : datetime.datetime
+            The window's end, timezone-aware.
+        bucket_s : int or None, optional
+            The bucket width in seconds, or None for the raw rows.
+        room : str or None, optional
+            The room slot, as for `publish`.
+        entity : str or None, optional
+            The entity slot, as for `publish`.
+        aspect : str or None, optional
+            The aspect slot, as for `publish`.
+        timeout_s : float, optional
+            Seconds to keep waiting for the recorder to come up, and then
+            for its answer.
+
+        Returns
+        -------
+        list of dict
+            The rows or buckets in the window, oldest first.
+
+        Raises
+        ------
+        KeyError
+            If `binding` is not declared in `[bus.subscribes]`.
+        ValueError
+            If the binding is not a state key, the slots do not make one
+            concrete key inside the declared expression, a bound has no
+            timezone, `end` is before `start`, or `bucket_s` is not a
+            positive integer.
+        HistoryUnavailable
+            If the house runs no recorder, the recorder does not answer, it
+            answers with an error, or the window holds 10,000 raw rows or
+            more.
+        """
+        key = self._concrete_key(
+            binding, room=room, entity=entity, aspect=aspect, use="history"
+        )
+        segments = key.split("/")
+        if segments[1] != "state":
+            raise ValueError(f"history {binding!r}: only state keys have a history")
+        for name, bound in (("start", start), ("end", end)):
+            if bound.tzinfo is None:
+                raise ValueError(f"history {name} needs a timezone")
+        if end < start:
+            raise ValueError("history end is before start")
+        if bucket_s is not None and (
+            isinstance(bucket_s, bool) or not isinstance(bucket_s, int) or bucket_s < 1
+        ):
+            raise ValueError(f"history bucket_s {bucket_s!r} is not a positive integer")
+        if not self._has_recorder():
+            raise HistoryUnavailable("the house runs no recorder")
+        reason = self._await_recorder(timeout_s)
+        if reason is not None:
+            raise HistoryUnavailable(reason)
+        params = [
+            f"from={_rfc3339(start)}",
+            f"to={_rfc3339(end)}",
+            f"limit={_HISTORY_LIMIT}",
+        ]
+        if bucket_s is not None:
+            params.append(f"bucket={bucket_s}")
+        selector = keys.history_key("state", segments[3], segments[4]) + "?" + ";".join(params)
+        try:
+            replies = self._session.get_json(selector, timeout_s=timeout_s)
+            # The recorder sends nothing for a series it has never recorded,
+            # and a get nobody serves returns nothing too. Asking `stats`
+            # again tells the two apart, so a recorder that went down since
+            # the wait does not read as an empty window.
+            if not replies and not self._session.get_json(_HISTORY_STATS, timeout_s=timeout_s):
+                raise HistoryUnavailable("the recorder stopped answering")
+        except QueryError as err:
+            raise HistoryUnavailable(str(err)) from err
+        rows = next((rows for _, rows in replies), [])
+        # The recorder keeps the newest rows when a window holds more than
+        # the limit. Returning them would cut the window's start off
+        # without saying so.
+        if bucket_s is None and len(rows) >= _HISTORY_LIMIT:
+            raise HistoryUnavailable(
+                f"the window holds {_HISTORY_LIMIT} rows or more; pass bucket_s"
+            )
+        return [{**row, "ts": datetime.datetime.fromisoformat(row["ts"])} for row in rows]
+
+    def history_total(
+        self,
+        binding: str,
+        start: datetime.datetime,
+        end: datetime.datetime,
+        *,
+        room: str | None = None,
+        entity: str | None = None,
+        aspect: str | None = None,
+        timeout_s: float = 30.0,
+    ) -> float:
+        """Return the recorded total of a subscribed interval aspect over `[start, end)`.
+
+        The aspect's entity file declares `interval_s`, and each sample is
+        the total over the interval that starts at its stamp
+        (docs/design.md#totals-over-intervals). Each sample counts by the
+        share of its interval inside the window, so the read starts one
+        interval before `start` to take in the one that straddles it.
+
+        A value about an interval is published after the interval ends, so
+        the newest one usually ends before now. A window that runs past the
+        newest recorded interval is short, and the caller picks an end it
+        trusts.
+
+        Parameters
+        ----------
+        binding : str
+            A `[bus.subscribes]` binding name with a state key.
+        start : datetime.datetime
+            The window's start, timezone-aware.
+        end : datetime.datetime
+            The window's end, timezone-aware.
+        room : str or None, optional
+            The room slot, as for `publish`.
+        entity : str or None, optional
+            The entity slot, as for `publish`.
+        aspect : str or None, optional
+            The aspect slot, as for `publish`.
+        timeout_s : float, optional
+            As for `history`.
+
+        Returns
+        -------
+        float
+            The total over the window.
+
+        Raises
+        ------
+        KeyError
+            If `binding` is not declared in `[bus.subscribes]`.
+        ValueError
+            As for `history`, and if the aspect declares no `interval_s` or a
+            recorded value is not a number.
+        HistoryUnavailable
+            As for `history`.
+        homeostat.intervals.IntervalsUncovered
+            If the recorded intervals leave a gap or overlap, or do not
+            reach the end of the window.
+        """
+        key = self._concrete_key(
+            binding, room=room, entity=entity, aspect=aspect, use="history"
+        )
+        segments = key.split("/")
+        if segments[1] != "state":
+            raise ValueError(f"history {binding!r}: only state keys have a history")
+        interval_s = self._interval_of(segments[3], segments[4])
+        if start.tzinfo is None:
+            raise ValueError("history start needs a timezone")
+        # In UTC, so the interval before `start` is an hour long across a
+        # DST change too.
+        utc_start = start.astimezone(datetime.timezone.utc)
+        rows = self.history(
+            binding,
+            utc_start - datetime.timedelta(seconds=interval_s),
+            end,
+            room=room,
+            entity=entity,
+            aspect=aspect,
+            timeout_s=timeout_s,
+        )
+        points = []
+        for row in rows:
+            value = row["value"]
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(f"{key} recorded {value!r}, which is not a number")
+            points.append(Point(t=row["ts"], v=float(value), d=interval_s))
+        return intervals.total(points, start, end)
+
+    def _interval_of(self, entity: str, aspect: str) -> int:
+        """Return the `interval_s` an entity file declares for an aspect."""
+        if self._intervals is None:
+            self._intervals = {
+                (e.name, name): seconds
+                for e in house.load_house(self._root).entities
+                for name, seconds in e.intervals.items()
+            }
+        try:
+            return self._intervals[(entity, aspect)]
+        except KeyError:
+            raise ValueError(
+                f"{entity}.{aspect} declares no interval_s in its entity file"
+            ) from None
 
     def health_event(self, kind: str, **fields: Any) -> None:
         """Publish a JSON event at home/health/{unit}/event.

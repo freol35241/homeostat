@@ -95,6 +95,28 @@ class SelectorTest(unittest.TestCase):
             with self.subTest(raw=raw), self.assertRaises(ValueError):
                 parse_params(raw)
 
+    def test_buckets_are_counted_as_the_window_touches_them(self):
+        # Epoch-aligned buckets: a window 9,999.5 widths long that starts
+        # mid-bucket touches 10,001 of them, and the reply would leave the
+        # oldest out.
+        start = datetime.datetime(2026, 1, 1, 0, 0, 30, tzinfo=datetime.timezone.utc)
+        for span_s, refused in ((9_999 * 60, False), (9_999 * 60 + 30, True)):
+            end = start + datetime.timedelta(seconds=span_s)
+            raw = f"from={start.isoformat()};to={end.isoformat()};bucket=60"
+            with self.subTest(span_s=span_s):
+                if refused:
+                    with self.assertRaises(ValueError):
+                        parse_params(raw)
+                else:
+                    parse_params(raw)
+
+    def test_the_sdk_reads_up_to_the_recorders_limit(self):
+        # `Context.history` takes a full read as a cut window, so it must
+        # ask for exactly the most the recorder returns.
+        from homeostat.automation import _HISTORY_LIMIT
+
+        self.assertEqual(_HISTORY_LIMIT, MAX_QUERY_LIMIT)
+
     def test_limit_is_positive_and_clamped(self):
         self.assertEqual(parse_limit("3"), 3)
         self.assertEqual(parse_limit(str(MAX_QUERY_LIMIT * 2)), MAX_QUERY_LIMIT)
@@ -129,6 +151,13 @@ class FoldTest(unittest.TestCase):
             [(p["value"], p["min"], p["max"], p["room"]) for p in points],
             [(2.0, 1.0, 3.0, "a"), (5.0, 5.0, 5.0, "b")],
         )
+
+    def test_a_number_bucket_carries_its_sum_and_count(self):
+        rows = [(0, "a", NUMBER, 0.5), (20 * S, "a", NUMBER, 0.0), (40 * S, "a", NUMBER, 1.5)]
+        (point,) = bucketed(rows, 60 * S, limit=10)
+        self.assertEqual((point["sum"], point["n"]), (2.0, 3))
+        rows = [(0, "a", BOOL, 1)]
+        self.assertNotIn("sum", bucketed(rows, 60 * S, limit=10)[0])
 
     def test_a_bool_bucket_is_its_last_value_and_the_newest_are_kept(self):
         rows = [(0, "a", BOOL, 1), (1, "a", BOOL, 0), (60 * S, "a", BOOL, 1)]
@@ -232,14 +261,20 @@ class HoldsStateTest(StoreTest):
 
 
 class StampedRecordTest(StoreTest):
-    """`record` for a sample whose publisher set the stamp: the core's replay."""
+    """`record` for a sample whose publisher set the stamp: the core's
+    replay, or a unit's `at=`."""
 
     KEY = "home/state/livingroom/lamp/on"
 
     def recorder(self, live):
         rec = Recorder.__new__(Recorder)
         rec.db_path = self.db
-        rec.sess = types.SimpleNamespace(is_live=lambda sample: live)
+        rec.events = []
+        rec.sess = types.SimpleNamespace(
+            is_live=lambda sample: live,
+            is_live_stamp=lambda stamp: live,
+            health_event=lambda kind, **f: rec.events.append((kind, f)),
+        )
         rec.queued = []
         rec.writer = types.SimpleNamespace(enqueue=lambda table, row: rec.queued.append((table, row)))
         rec._live = set()
@@ -260,7 +295,28 @@ class StampedRecordTest(StoreTest):
         self.row("state", "livingroom", "lamp", "on", 10 * S, True)
         rec = self.recorder(live=False)
         rec.record(self.sample(b"true", 10 * S))
+        self.assertEqual((rec.queued, rec.events), ([], []))
+
+    def test_a_stamped_value_older_than_the_store_is_dropped_with_an_event(self):
+        # A unit that once published the key unstamped loses every stamped
+        # value older than that row, and the loss shows.
+        self.row("state", "livingroom", "lamp", "on", 20 * S, True)
+        rec = self.recorder(live=False)
+        rec.record(self.sample(b"false", 10 * S))
         self.assertEqual(rec.queued, [])
+        self.assertEqual(rec.events, [("drop", {"reason": "older-than-held", "key": self.KEY})])
+
+    def test_a_stamped_mirror_value_is_seeded_at_its_stamp(self):
+        # Now less the mirror's age lands a few milliseconds off the stamp,
+        # and an hour stamped at 12:00 must stay at 12:00.
+        rec = self.recorder(live=False)
+        stamp = self.sample(b"", 20 * S).timestamp
+        rec.sess.get_json_stamped = lambda expr: [(self.KEY, True, 3.0, stamp)]
+        rec.seed(["home/state/**"])
+        self.assertEqual(
+            rec.queued,
+            [("samples", (20 * S, "state", "livingroom", "lamp", "on", KINDS.index("bool"), 1))],
+        )
 
     def test_a_stamped_value_newer_than_the_store_is_recorded_at_its_stamp(self):
         self.row("state", "livingroom", "lamp", "on", 10 * S, True)
