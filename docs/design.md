@@ -2748,13 +2748,16 @@ saw the transition knows where it happened:
   entry and exit as a fix
   ([companion-protocol.md](companion-protocol.md#position--the-opt-in-fix)).
 - A router with a configured location publishes a fix at itself, with
-  its WiFi reach as the accuracy, when a device turns sighted.
+  its WiFi reach as the accuracy, when a device comes into its range.
 
 Each is an ordinary fix, so the newest `fixed_at` wins and neither the
-rule nor the map needs a case for it. A sighting fix is published when
-the device turns sighted and not while the adapter holds the sighting
-through its delay. A refreshed one would be newer than the phone's
-first fixes after leaving, and would keep the person at the house.
+rule nor the map needs a case for it. A sighting fix is published only
+when a router lists the device and did not in the previous cycle. A
+fix repeated while the adapter holds the sighting through its delay
+would be newer than the phone's first fixes after leaving, and would
+keep the person at the house. After a restart, devices the mirror
+holds as sighted count as already in range, for the same reason: a
+router keeps listing a station for minutes after it leaves.
 [adapters.md](adapters.md#trackers) says what a tracking adapter
 publishes.
 

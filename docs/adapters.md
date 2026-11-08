@@ -238,7 +238,7 @@ the aspects its protocol supports:
 
 - `home` (bool) is inside the home geofence. Publish it only when the
   protocol reports both entry and exit, because its `false` says the
-  device left. Publish it on transition.
+  device left.
 - `sighted` (bool) is the house seeing the device itself, such as on
   its network. Its `false` says only that the device was not seen
   within the adapter's delay, which is a live parameter.
@@ -258,10 +258,10 @@ Publish a fix whenever the adapter learns where the device is,
 including from presence evidence tied to a place. A geofence
 transition that carries the location that triggered it is a fix. So is
 a sighting by a receiver whose location is configured, with the
-receiver's reach as `accuracy`. Without such a fix the map shows the
-last fix taken before the transition, which may be hours old. Publish
-it when the evidence is fresh, not again while the adapter holds a
-value through its delay.
+receiver's reach as `accuracy`. Publish it once, when the evidence is
+fresh. Do not repeat it while the adapter holds a value through its
+delay ([design.md](design.md#map-and-people) says why). An `accuracy`
+above the persons unit's `max_accuracy_m` keeps the fix off the person.
 
 The house says which trackers are whose. A person file lists a tracker
 under `[sources]`, naming `home` or `sighted` for presence and `lat`

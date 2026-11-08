@@ -24,8 +24,8 @@ with that person's other trackers (docs/design.md#map-and-people).
 
 Binding: a `router` entity's `id` is its name in the credentials file,
 with aspect `wan`. A `tracker` entity's `id` is the device MAC in
-lowercase, with aspect `sighted` (`Adapter.cycle`). `classify` drops
-other bindings with a health event.
+lowercase, with aspect `sighted` and the fix aspects below
+(`Adapter.cycle`). `classify` drops other bindings with a health event.
 
 Configuration: [discovery].endpoint is the path of the credentials file,
 normally `${HOMEOSTAT_OPENWRT}`: a TOML file outside the repo keyed by
@@ -41,18 +41,19 @@ successful poll, so the recorder stores only transitions. A tracker's
 `available` is false while a silent router could be the one that sees
 it, so a held `sighted = true` is not read as current.
 
-A router with a location makes each sighting a fix: when a device turns
-sighted, its tracker also publishes the router's `lat` and `lon`, the
-radius as `accuracy`, and `fixed_at` last (`Adapter.place_fix`). A
-person file lists the tracker as a `lat` source to use it
-(docs/adapters.md#trackers).
+A router with a location makes a sighting a fix: when a device comes
+into a router's range, its tracker also publishes the router's `lat`
+and `lon`, the radius as `accuracy`, and `fixed_at` last
+(`Adapter.place_fix`). A person file lists the tracker as a `lat`
+source to use it (docs/adapters.md#trackers). A radius above the
+persons unit's max_accuracy_m keeps the fix off the person.
 
 Discovery: every configured router with whether it answered, and every
 station seen this cycle (`Adapter.publish_discovery`).
 
 Health events: `drop` (malformed-id, router-unconfigured,
 unsupported-capability), router-unreachable, router-poll-failed,
-presence-partial and unknown-interface.
+presence-partial, unknown-interface and mirror-unread.
 """
 
 import asyncio
@@ -281,6 +282,9 @@ class Adapter:
         self.noted: set = set()  # degraded conditions already announced
         self.blind: frozenset = frozenset()  # routers silent as of last cycle
         self.last_seen: dict[str, float] = {}  # mac -> monotonic sighting time
+        # Macs some answering router listed last cycle. A device not among
+        # them that a router lists now has come into range (`place_fix`).
+        self.in_range: set[str] = set()
         self.places = {
             name: place for name, conf in routers.items()
             if (place := router_place(name, conf)) is not None
@@ -393,27 +397,43 @@ class Adapter:
             if not present and blind:
                 self.publish(available, False)
                 continue
-            sighted = keys.state_key(entity.room, entity.name, "sighted")
-            if entity.id in sightings and self.published.get(sighted) is not True:
+            if entity.id in sightings and entity.id not in self.in_range:
                 self.place_fix(entity, sightings[entity.id], now)
-            self.publish(sighted, present)
+            self.publish(keys.state_key(entity.room, entity.name, "sighted"), present)
             self.publish(available, True)
+        self.in_range = set(sightings)
 
         self.publish_discovery(sightings)
 
-    def place_fix(self, entity, seen_by: list[str], now: float) -> None:
-        """Publish a fix at the first router with a location that saw the device.
+    def seed_in_range(self) -> None:
+        """Count every device the mirror holds as sighted as already in range.
 
-        Only when the device turns sighted, and only from a real sighting.
-        A fix refreshed while `sighted` is held through away_delay_s would
-        be newer than the phone's own first fixes after leaving, and would
-        keep the person at the house. `fixed_at` is published last, since
-        it completes the fix.
+        After a restart the first cycle would otherwise give a fresh fix to
+        everyone a router lists. A router keeps listing a station for
+        minutes after it leaves, so that fix could be newer than the
+        phone's own fix after leaving.
         """
-        place = next((self.places[r] for r in sorted(seen_by) if r in self.places), None)
-        if place is None:
+        by_key = {keys.state_key(e.room, e.name, "sighted"): e.id for e in self.trackers}
+        try:
+            mirrored = self.session.get_json("home/state/person/*/sighted", timeout_s=5)
+        except homeostat.QueryError as err:
+            # The first cycle then fixes everyone in range, as on a first start.
+            self.session.health_event("mirror-unread", error=str(err))
             return
-        lat, lon, radius = place
+        self.in_range = {by_key[key] for key, value in mirrored if key in by_key and value is True}
+
+    def place_fix(self, entity, seen_by: list[str], now: float) -> None:
+        """Publish a fix at the located router with the smallest radius that saw the device.
+
+        Called when the device comes into range, and never while
+        `sighted` is only held through away_delay_s
+        (docs/design.md#map-and-people). `fixed_at` is published last,
+        since it completes the fix.
+        """
+        located = [(self.places[r][2], r) for r in seen_by if r in self.places]
+        if not located:
+            return
+        lat, lon, radius = self.places[min(located)[1]]
         self.publish(keys.state_key(entity.room, entity.name, "lat"), lat)
         self.publish(keys.state_key(entity.room, entity.name, "lon"), lon)
         self.publish(keys.state_key(entity.room, entity.name, "accuracy"), radius)
@@ -488,6 +508,8 @@ async def serve(session, routers, config) -> None:
         loop.add_signal_handler(sig, stop.set)
 
     adapter = Adapter(session, routers, *classify(config.entities, routers, session))
+    if adapter.places:
+        await asyncio.to_thread(adapter.seed_in_range)
 
     async with aiohttp.ClientSession() as http:
         first = True

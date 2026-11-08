@@ -15,7 +15,12 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 use zenoh::sample::SampleKind;
 
-use common::{expect_event_kind, expect_state, fixture_command, free_port, Supervisor};
+use homeostat::bus::HealthStatus;
+
+use common::{
+    await_health, config_write, expect_event_kind, expect_state, fixture_command, free_port,
+    health_watch, Supervisor,
+};
 
 const FIXTURE: &str = "tests/fixtures/house_openwrt";
 const ROUTERS_ENV: &str = "HOMEOSTAT_OPENWRT";
@@ -385,7 +390,7 @@ async fn no_fix_for(sub: &common::StateSub, secs: u64) {
 
 /// (g) A router with a location turns a sighting into a fix at the router,
 /// with its radius as the accuracy and `fixed_at` last. The fix comes when
-/// the device turns sighted and not on every poll, so a held sighting
+/// the device comes into range and not on every poll, so a held sighting
 /// cannot outdate the phone's own fixes. A router without a location
 /// gives none.
 #[tokio::test(flavor = "multi_thread")]
@@ -457,6 +462,92 @@ async fn a_sighting_at_a_located_router_is_a_fix() {
         later > fixed_at,
         "second fix {later} not after the first {fixed_at}"
     );
+
+    sup.shutdown();
+}
+
+/// (h) A device back in range before the away delay ran out gets a new fix,
+/// though `sighted` never turned false. A restart gives none to a device
+/// the mirror already holds as sighted: a router lists a station for
+/// minutes after it leaves, so that fix could outdate the phone's own.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_return_within_the_hold_is_a_fix_and_a_restart_is_not() {
+    let gw = FakeOpenwrt::spawn().await;
+    let routers_path = routers_file_with(&[("gw", gw.port, "lat = 59.33\nlon = 18.06\n")]);
+    let (mut sup, observer) = start(&routers_path).await;
+    config_write(&observer, "home/config/openwrt/away_delay_s", json!(30))
+        .await
+        .expect("away delay write");
+    let phone_sub = observer
+        .declare_subscriber("home/state/person/dads_phone/*")
+        .await
+        .expect("phone subscriber");
+
+    gw.control(&format!("/control/station?mac={PHONE_MAC}&present=true"));
+    let first = until_fix(&phone_sub).await;
+    assert!(
+        first.contains(&("accuracy".to_string(), json!(50.0))),
+        "default radius: {first:?}"
+    );
+    let first = first
+        .last()
+        .unwrap()
+        .1
+        .as_f64()
+        .expect("fixed_at is a number");
+
+    // Out of range for a few polls, well inside the 30 s delay.
+    gw.control(&format!("/control/station?mac={PHONE_MAC}&present=false"));
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    gw.control(&format!("/control/station?mac={PHONE_MAC}&present=true"));
+    let back = until_fix(&phone_sub).await;
+    assert!(
+        !back.contains(&("sighted".to_string(), json!(false))),
+        "sighted turned false inside the delay: {back:?}"
+    );
+    let back = back
+        .last()
+        .unwrap()
+        .1
+        .as_f64()
+        .expect("fixed_at is a number");
+    assert!(
+        back > first,
+        "return fix {back} not after the first {first}"
+    );
+
+    // The adapter restarted while the phone stays in range: no fix.
+    let mut watch = health_watch(&observer, "openwrt").await;
+    let running = await_health(&mut watch, Duration::from_secs(10), |h| {
+        h.status == HealthStatus::Running && h.pid.is_some()
+    })
+    .await;
+    let pid = running.pid.expect("pid");
+    unsafe {
+        libc::kill(i32::try_from(pid).expect("a pid fits i32"), libc::SIGKILL);
+    }
+    await_health(&mut watch, Duration::from_mins(1), |h| {
+        h.status == HealthStatus::Running && h.pid.is_some_and(|p| p != pid)
+    })
+    .await;
+    // The new process's first cycle republishes `sighted`, and a fix would
+    // come just before it.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        let sample = tokio::time::timeout_at(deadline, phone_sub.recv_async())
+            .await
+            .expect("sighted republished within 20s")
+            .expect("state stream open");
+        let key = sample.key_expr().as_str();
+        assert!(
+            !key.ends_with("/fixed_at"),
+            "a restart fixed the phone again"
+        );
+        if key.ends_with("/sighted") {
+            break;
+        }
+    }
+    no_fix_for(&phone_sub, 3).await;
 
     sup.shutdown();
 }
