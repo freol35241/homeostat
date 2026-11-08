@@ -37,7 +37,7 @@ pub fn validate(house: &House) -> Vec<ValidationError> {
 /// supervisor's liveliness subscriber. `.` and `..` are refused as path-like.
 /// The SDK refuses the same names, so a name that passes here is one every
 /// unit can build keys from.
-fn valid_segment(name: &str) -> bool {
+pub(crate) fn valid_segment(name: &str) -> bool {
     !name.is_empty()
         && name != "."
         && name != ".."

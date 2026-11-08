@@ -13,3 +13,6 @@ interval_s = 3600
 
 [aspects.precipitaton]
 interval_s = 3600
+
+[aspects."rain fall"]
+interval_s = 3600

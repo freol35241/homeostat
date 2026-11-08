@@ -169,12 +169,13 @@ pub struct Source {
     pub note: Option<String>,
 }
 
-/// Checks every `[aspects]` entry against what its entity's owner publishes,
-/// as `resolve_sources` checks a contributor. A misspelt aspect would
-/// otherwise sit there unused, and an interval total over the real aspect
-/// would say only that it declares no interval. An owner that publishes its
-/// entities' aspects under a wildcard covers any name. A name that is not a
-/// key segment is `invalid-name` already and is not checked again.
+/// Checks every `[aspects]` entry against what its entity's owner publishes.
+/// A misspelt aspect would otherwise sit there unused, and an interval total
+/// over the real aspect would say only that it declares no interval. A unit
+/// publishes only through its `[bus.publishes]`, whatever its kind, so every
+/// owner is checked. An owner that publishes its entities' aspects under a
+/// wildcard, as most adapters do, covers any name. A name that is not a key
+/// segment is `invalid-name` already and is not checked again.
 pub fn check_aspects(house: &House, expanded: &[ExpandedKey]) -> Vec<ValidationError> {
     let mut errors = Vec::new();
     for entity in &house.entities {
@@ -183,10 +184,10 @@ pub fn check_aspects(house: &House, expanded: &[ExpandedKey]) -> Vec<ValidationE
                 "home/state/{}/{}/{aspect}",
                 entity.file.entity.room, entity.name
             );
-            let segments: Vec<&str> = key.split('/').collect();
-            if segments.len() != 5 {
+            if !crate::validate::valid_segment(aspect) {
                 continue;
             }
+            let segments: Vec<&str> = key.split('/').collect();
             let published = expanded.iter().any(|k| {
                 k.unit == entity.owner
                     && k.direction == Direction::Publishes
