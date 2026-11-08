@@ -1906,6 +1906,8 @@ interval_s = 3600
   ([Timestamps](#timestamps)). Each interval is published once, when it
   is final: the recorder keeps the first value at a stamp, so a revised
   total for the same hour is not recorded.
+- The core refuses an `interval_s` of 0, and an aspect the entity's
+  owner does not publish, such as a misspelt one (`aspect-unpublished`).
 - The house declares it, not an aspect descriptor. A unit that fetches
   data, such as a weather service, is an automation and publishes no
   descriptor. A meter's hourly energy needs the same declaration

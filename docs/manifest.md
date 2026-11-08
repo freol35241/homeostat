@@ -178,7 +178,7 @@ a key segment (`invalid-name`).
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `aspects` | table of name → [AspectDecl](#aspectdecl) | no | `[aspects]`: what the house declares about one of this entity's aspects, keyed by the aspect's name. It is for a fact the reading itself cannot carry and its publisher may have no way to describe, as an automation publishes no aspect descriptor. |
+| `aspects` | table of name → [AspectDecl](#aspectdecl) | no | `[aspects]`: what the house declares about one of this entity's aspects, keyed by the aspect's name. It is for a fact the reading itself cannot carry and its publisher may have no way to describe, as an automation publishes no aspect descriptor. Each aspect must be one the owner publishes (`aspect-unpublished`). |
 | `entity` | [EntitySection](#entitysection) | yes |  |
 | `inputs` | table of name → [InputSource](#inputsource) | no | `[inputs]`: device inputs fed from one source each, keyed by the adapter's own input name (e.g. `indoor_temperature_actual`). A fed input is a continuous signal with one source, not a command. It stops being a command aspect for this entity and does not go through the arbiter. The device's own validity window decides when it is stale. Only a device entity can be fed (`virtual-entity-fed`). The adapter decides which input names exist. |
 | `naming` | [EntityNaming](#entitynaming) | no |  |

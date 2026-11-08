@@ -1,0 +1,15 @@
+schema = 1
+
+[unit]
+name = "weather"
+kind = "automation"
+
+[runtime]
+command = "uv run units/weather.py"
+restart = "on-failure"
+
+[bus.publishes]
+observed = { key = "home/state/garden/rain/precipitation" }
+
+[entities]
+dir = "entities/weather/"

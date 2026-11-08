@@ -169,6 +169,45 @@ pub struct Source {
     pub note: Option<String>,
 }
 
+/// Checks every `[aspects]` entry against what its entity's owner publishes,
+/// as `resolve_sources` checks a contributor. A misspelt aspect would
+/// otherwise sit there unused, and an interval total over the real aspect
+/// would say only that it declares no interval. An owner that publishes its
+/// entities' aspects under a wildcard covers any name. A name that is not a
+/// key segment is `invalid-name` already and is not checked again.
+pub fn check_aspects(house: &House, expanded: &[ExpandedKey]) -> Vec<ValidationError> {
+    let mut errors = Vec::new();
+    for entity in &house.entities {
+        for aspect in entity.file.aspects.iter().flat_map(|a| a.keys()) {
+            let key = format!(
+                "home/state/{}/{}/{aspect}",
+                entity.file.entity.room, entity.name
+            );
+            let segments: Vec<&str> = key.split('/').collect();
+            if segments.len() != 5 {
+                continue;
+            }
+            let published = expanded.iter().any(|k| {
+                k.unit == entity.owner
+                    && k.direction == Direction::Publishes
+                    && k.exprs.iter().any(|e| e.matches_prefix(&segments))
+            });
+            if !published {
+                errors.push(ValidationError::new(
+                    Code::AspectUnpublished,
+                    format!("{}.{aspect}", entity.name),
+                    format!(
+                        "\"{}\" does not publish {key}; [aspects] names an aspect its owner publishes",
+                        entity.owner
+                    ),
+                    Some(entity.path.clone()),
+                ));
+            }
+        }
+    }
+    errors
+}
+
 /// Resolves every `[sources]` block. It makes the same two checks as
 /// `[inputs]`, for the same reason: the contributor exists, and an
 /// automation-owned contributor publishes the aspect. It also warns when the

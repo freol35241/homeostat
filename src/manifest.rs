@@ -566,7 +566,8 @@ pub struct EntityFile {
     /// `[aspects]`: what the house declares about one of this entity's
     /// aspects, keyed by the aspect's name. It is for a fact the reading
     /// itself cannot carry and its publisher may have no way to describe,
-    /// as an automation publishes no aspect descriptor.
+    /// as an automation publishes no aspect descriptor. Each aspect must be
+    /// one the owner publishes (`aspect-unpublished`).
     pub aspects: Option<BTreeMap<String, AspectDecl>>,
 }
 
