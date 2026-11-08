@@ -1,0 +1,17 @@
+schema = 1
+
+[entity]
+# id is the two topic segments naming the phone's subtree and the face it
+# binds; deliberately not the entity name, so the tests prove binding goes
+# through the id.
+id = "alice/person"
+capability = "tracker"
+features = ["home"]
+room = "person"
+
+[naming]
+en = "Alice's phone (location)"
+
+[write_policy]
+mode = "shared"
+owner = "companion"
