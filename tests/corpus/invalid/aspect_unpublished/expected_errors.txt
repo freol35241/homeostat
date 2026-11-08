@@ -1,0 +1,2 @@
+error[aspect-unpublished] rain.precipitaton: "weather" does not publish home/state/garden/rain/precipitaton; [aspects] names an aspect its owner publishes (entities/weather/rain.toml)
+error[invalid-name] rain.rain fall: aspect name "rain fall" must be a single key segment (letters, digits, "_", "-", "."; not "." or "..") (entities/weather/rain.toml)

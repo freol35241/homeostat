@@ -1,0 +1,18 @@
+schema = 1
+
+[entity]
+capability = "sensor"
+room = "garden"
+
+[write_policy]
+mode = "exclusive"
+owner = "weather"
+
+[aspects.precipitation]
+interval_s = 3600
+
+[aspects.precipitaton]
+interval_s = 3600
+
+[aspects."rain fall"]
+interval_s = 3600

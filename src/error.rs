@@ -208,6 +208,10 @@ codes! {
         evidence and `lat` as a position fix (with the tracker's `lon`, \
         `accuracy` and `fixed_at`). It knows nothing else to do with a \
         tracker's reading.",
+    AspectUnpublished => "aspect-unpublished":
+        "An entity's `[aspects]` names an aspect its owner does not publish, \
+        such as a misspelt one. The declaration would apply to nothing, and \
+        a total over the aspect that is published would find no interval.",
     AspectInterval => "aspect-interval":
         "An `[aspects.<name>]` table's `interval_s` is 0. Each sample totals \
         the `interval_s` seconds from its stamp, so an interval is at least a \
