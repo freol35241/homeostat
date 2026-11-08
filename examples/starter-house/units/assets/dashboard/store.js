@@ -39,15 +39,16 @@ export var overlay = {
   rangeData: {},          // hours -> {points, window, loaded, loading}
   cmdData: {},             // hours -> the same, for the cmd series (what was asked)
   // What is drawn beside the record: '' (the value and its current
-  // forecast), 'sources' (the contributors it is derived from) or
-  // 'forecasts' (every issue the recorder kept). Only one is shown at a
+  // forecast), 'sources' (the contributors it is derived from), 'related'
+  // (the readings its descriptor relates to it) or 'forecasts' (every
+  // issue the recorder kept). Only one is shown at a
   // time, because two sets of thin grey lines on one chart look like one
   // set. So this is one field rather than a flag for each
   // (docs/design.md#charts-forecasts-and-sources).
   layer: '',
   issues: [],              // decoded stored issues for the current window
   issuesLoading: false,
-  sourceData: {},          // "<hours>|<entity>|<aspect>" -> fetched contributor history
+  sourceData: {},          // "<hours>|<entity>|<aspect>" -> fetched history of a sources or related line
   sourceEvents: {},        // same key -> when each source went in or out
   pinned: null,            // the issue time a reader pinned out of the braid
   sourcePinned: null,      // the contributor a reader pinned out of the legend
@@ -94,8 +95,8 @@ export function unitLabel(unitName) {
   return u ? u.label : unitName;
 }
 
-export function presenceValue(entity) {
-  return logic.presenceValue(store.state, entity);
+export function occupancyReading(entity) {
+  return logic.occupancyReading(store.state, entity);
 }
 
 export function entitySpec(room, entity) {
@@ -156,7 +157,7 @@ export function liveForecastsOf(entity, aspect) {
 export function controlDisabled(entity) { return !entity.commandable; }
 
 export function personEntities() {
-  return (store.model.entities || []).filter(function (e) { return e.capability === 'person'; });
+  return logic.peopleEntities(store.model.entities || []);
 }
 
 export function entitiesInRoom(room) {

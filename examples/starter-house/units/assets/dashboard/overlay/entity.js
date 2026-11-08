@@ -4,7 +4,7 @@ import logic, { titleCase } from '../logic.js';
 import { showOverlay } from './panel.js';
 import { controlDisabled, findEntity, houseControls, overlay, store, unitLabel } from '../store.js';
 import { aspectValueSpan, renderAspectControl } from '../widgets/controls.js';
-import { BESPOKE_WIDGET, widgetForClimate, widgetForEntity, widgetForSensor } from '../widgets/entity.js';
+import { BESPOKE_WIDGET, relTime, widgetForClimate, widgetForEntity, widgetForSensor } from '../widgets/entity.js';
 
 export function openEntityDetail(room, entityName) {
   var entity = findEntity(room, entityName);
@@ -47,6 +47,21 @@ function renderAspectRow(entity, r) {
     ${renderAspectControl(entity, r, true)}</div>`;
 }
 
+// A person's devices, each opening its own overlay. Which one decided a
+// value is in the history overlay's sources layer.
+function renderTrackers(person) {
+  var rows = logic.trackersOf(store.model.entities, store.state, person).map(function (t) {
+    var parts = [];
+    if (t.unavailable) parts.push('unavailable');
+    if (t.fixedAt !== undefined) parts.push('fix ' + relTime(t.fixedAt));
+    if (t.accuracy !== undefined) parts.push('\u00b1' + Math.round(t.accuracy) + ' m');
+    if (t.battery !== undefined) parts.push('battery ' + Math.round(t.battery) + '%');
+    return html`<div class="aspect-row described row-clickable" data-action="entity-detail" data-room="${t.room}" data-entity="${t.entity}">
+      <span class="aspect-label">${t.label}</span><span class="muted">${parts.join(' \u00b7 ')}</span></div>`;
+  });
+  return rows.length ? html`<div class="card-label" style="margin-top:20px;">Trackers</div>${rows}` : '';
+}
+
 export function renderEntityDetailBody() {
   var entity = overlay.entity;
   var meta = titleCase(entity.room) + ' · ' + titleCase(entity.capability) +
@@ -69,6 +84,7 @@ export function renderEntityDetailBody() {
     return html`${head}${open ? section.rows.map(function (r) { return renderAspectRow(entity, r); }) : ''}`;
   });
   if (sections.length === 0) sections.push(html`<div class="card-label" style="margin-top:20px;">State</div><div class="aspect-row faint">no data</div>`);
+  if (entity.capability === 'person') sections.push(renderTrackers(entity));
 
   // A camera's detail is the live view, not a Controls row, because
   // cameras take no commands. The view is mounted in renderOverlayContent,
