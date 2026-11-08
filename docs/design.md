@@ -2736,6 +2736,28 @@ while a silent router could be the one that sees it. A fix carries
 governs a PIR, whose hold lives in its adapter
 ([One-way senders](#one-way-senders)).
 
+A fix comes from whatever knows where the device is, and presence
+evidence tied to a place is such a source. Presence and position arrive
+at different cadences. A geofence fires on entry, while a phone lying
+still indoors may hand over no fix for hours, so its newest fix is often
+one taken on the way in. The persons rule cannot correct that, because
+it knows no places and the house holds no coordinates. The tracker that
+saw the transition knows where it happened:
+
+- The companion app publishes the location that triggered each geofence
+  entry and exit as a fix
+  ([companion-protocol.md](companion-protocol.md#position--the-opt-in-fix)).
+- A router with a configured location publishes a fix at itself, with
+  its WiFi reach as the accuracy, when a device turns sighted.
+
+Each is an ordinary fix, so the newest `fixed_at` wins and neither the
+rule nor the map needs a case for it. A sighting fix is published when
+the device turns sighted and not while the adapter holds the sighting
+through its delay. A refreshed one would be newer than the phone's
+first fixes after leaving, and would keep the person at the house.
+[adapters.md](adapters.md#trackers) says what a tracking adapter
+publishes.
+
 A room sensor cannot be a person's source, because it cannot say who it
 saw. "Is anyone home", mixing persons with motion, stays a house
 automation. Only the house knows that the cat sets off the hallway PIR,

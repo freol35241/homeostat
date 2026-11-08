@@ -31,13 +31,21 @@ Configuration: [discovery].endpoint is the path of the credentials file,
 normally `${HOMEOSTAT_OPENWRT}`: a TOML file outside the repo keyed by
 router name, with `host` (optionally `host:port`), `username` and
 `password`. Use a dedicated read-only rpcd ACL login per router, not
-root; the ACL needs only `network.interface` and `hostapd.*`. Live
-parameters: poll_interval_s (default 30) and away_delay_s (default 180).
+root; the ACL needs only `network.interface` and `hostapd.*`. A router
+may also give where it stands, `lat` and `lon`, and its WiFi reach
+`radius_m` (default 50). Live parameters: poll_interval_s (default 30)
+and away_delay_s (default 180).
 
 Aspects publish on change, plus each entity's value after its first
 successful poll, so the recorder stores only transitions. A tracker's
 `available` is false while a silent router could be the one that sees
 it, so a held `sighted = true` is not read as current.
+
+A router with a location makes each sighting a fix: when a device turns
+sighted, its tracker also publishes the router's `lat` and `lon`, the
+radius as `accuracy`, and `fixed_at` last (`Adapter.place_fix`). A
+person file lists the tracker as a `lat` source to use it
+(docs/adapters.md#trackers).
 
 Discovery: every configured router with whether it answered, and every
 station seen this cycle (`Adapter.publish_discovery`).
@@ -50,6 +58,7 @@ presence-partial and unknown-interface.
 import asyncio
 import contextlib
 import json
+import math
 import os
 import signal
 import time
@@ -65,6 +74,8 @@ from homeostat.params import LiveParams
 NULL_SID = "0" * 32
 HTTP_TIMEOUT_S = 10
 PARAM_DEFAULTS = {"poll_interval_s": 30, "away_delay_s": 180}
+# A router's WiFi reach when its entry gives a location and no radius_m.
+DEFAULT_RADIUS_M = 50
 
 
 class UbusError(Exception):
@@ -160,12 +171,40 @@ class Params(LiveParams):
 def load_routers(endpoint: str | None) -> dict:
     """Load the HOMEOSTAT_OPENWRT TOML behind [discovery].endpoint.
 
-    Per-router host/username/password keyed by router name. Missing or
-    unreadable is a startup error (visible via the supervisor's backoff).
+    Per-router host/username/password, and an optional location, keyed by
+    router name. Missing, unreadable or a malformed location is a startup
+    error (visible via the supervisor's backoff).
     """
     if not endpoint:
         raise ValueError("openwrt adapter requires [discovery].endpoint")
-    return tomllib.loads(Path(endpoint).read_text())
+    routers = tomllib.loads(Path(endpoint).read_text())
+    for name, conf in routers.items():
+        router_place(name, conf)
+    return routers
+
+
+def _finite(value) -> bool:
+    """Whether a TOML value is a finite number; bools are not numbers."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def router_place(name: str, conf: dict) -> tuple[float, float, float] | None:
+    """Return a router's (lat, lon, radius_m), or None when it gives no location.
+
+    `lat` and `lon` come together. A malformed location is a startup
+    error, as an unreadable credentials file is: a fix at the wrong place
+    would move people on the map.
+    """
+    lat, lon, radius = conf.get("lat"), conf.get("lon"), conf.get("radius_m", DEFAULT_RADIUS_M)
+    if lat is None and lon is None:
+        if "radius_m" in conf:
+            raise ValueError(f"router {name}: radius_m needs lat and lon")
+        return None
+    if not (_finite(lat) and _finite(lon) and -90 <= lat <= 90 and -180 <= lon <= 180):
+        raise ValueError(f"router {name}: lat and lon must be numbers in range")
+    if not _finite(radius) or radius <= 0:
+        raise ValueError(f"router {name}: radius_m must be a positive number")
+    return float(lat), float(lon), float(radius)
 
 
 def classify(entities, routers, session):
@@ -242,6 +281,10 @@ class Adapter:
         self.noted: set = set()  # degraded conditions already announced
         self.blind: frozenset = frozenset()  # routers silent as of last cycle
         self.last_seen: dict[str, float] = {}  # mac -> monotonic sighting time
+        self.places = {
+            name: place for name, conf in routers.items()
+            if (place := router_place(name, conf)) is not None
+        }
 
     def note(self, key: tuple, kind: str, **fields) -> None:
         """One health event per down transition of a degraded condition.
@@ -314,6 +357,7 @@ class Adapter:
             return
 
         now_mono = time.monotonic()
+        now = time.time()
         for mac in sightings:
             self.last_seen[mac] = now_mono
 
@@ -349,14 +393,35 @@ class Adapter:
             if not present and blind:
                 self.publish(available, False)
                 continue
-            self.publish(keys.state_key(entity.room, entity.name, "sighted"), present)
+            sighted = keys.state_key(entity.room, entity.name, "sighted")
+            if entity.id in sightings and self.published.get(sighted) is not True:
+                self.place_fix(entity, sightings[entity.id], now)
+            self.publish(sighted, present)
             self.publish(available, True)
 
         self.publish_discovery(sightings)
 
+    def place_fix(self, entity, seen_by: list[str], now: float) -> None:
+        """Publish a fix at the first router with a location that saw the device.
+
+        Only when the device turns sighted, and only from a real sighting.
+        A fix refreshed while `sighted` is held through away_delay_s would
+        be newer than the phone's own first fixes after leaving, and would
+        keep the person at the house. `fixed_at` is published last, since
+        it completes the fix.
+        """
+        place = next((self.places[r] for r in sorted(seen_by) if r in self.places), None)
+        if place is None:
+            return
+        lat, lon, radius = place
+        self.publish(keys.state_key(entity.room, entity.name, "lat"), lat)
+        self.publish(keys.state_key(entity.room, entity.name, "lon"), lon)
+        self.publish(keys.state_key(entity.room, entity.name, "accuracy"), radius)
+        self.publish(keys.state_key(entity.room, entity.name, "fixed_at"), now)
+
     # A class-level constant, shared read-only across instances. One
-    # boolean per capability: everything this adapter publishes, so a
-    # static table.
+    # boolean per capability, so a static table. A tracker's fix aspects
+    # are the vocabulary's, and no tracking adapter describes them.
     ASPECT_DESCRIPTORS: ClassVar[dict] = {
         "router": {
             "schema": 1,

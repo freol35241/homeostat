@@ -122,6 +122,14 @@ automation, and stamps it with the arrival time when the fix has none.
 Send the platform's own fix time when there is one: it is when the
 phone was there, and the arrival time is later.
 
+With position on, every geofence transition is also a fix. On entry and
+on exit the app publishes the location that triggered it (Android's
+`GeofencingEvent.getTriggeringLocation()`) on this topic, with that
+location's own time as `fixed_at`. A phone lying still hands over fixes
+rarely, so without it the newest fix is often one taken on the way in,
+and the map shows a person who is home a few hundred metres away. The
+order of this fix and the `presence` it accompanies does not matter.
+
 A fix without `lat` or `lon`, or with a non-numeric one, drops with
 `malformed-payload`.
 

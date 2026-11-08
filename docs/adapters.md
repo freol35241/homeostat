@@ -228,6 +228,48 @@ home/state/{room}/{entity}/{aspect}
 - **`available` is reserved** (§7). A passthrough that could mint it from
   a native field drops that field with a `reserved-aspect` event.
 
+### Trackers
+
+A tracker is a device someone carries: a phone, a tag, a watch. Its
+adapter binds it as capability `tracker` in the pseudo-room `person`,
+and the `persons` automation turns trackers into people
+([design.md](design.md#map-and-people)). A tracking adapter publishes
+the aspects its protocol supports:
+
+- `home` (bool) is inside the home geofence. Publish it only when the
+  protocol reports both entry and exit, because its `false` says the
+  device left. Publish it on transition.
+- `sighted` (bool) is the house seeing the device itself, such as on
+  its network. Its `false` says only that the device was not seen
+  within the adapter's delay, which is a live parameter.
+- A fix is `lat` and `lon` (degrees), `accuracy` (metres, the radius
+  the device is within) and `fixed_at` (epoch seconds, when the device
+  was there). Publish `fixed_at` last. Its arrival completes the fix
+  for the persons rule, which would otherwise pair a new `lat` with the
+  previous fix's accuracy. Use the protocol's own fix time, and the
+  arrival time only when there is none. Leave out an `accuracy` the
+  protocol does not give.
+- `battery` (percent) belongs to the device, and persons do not merge
+  it.
+- `available` follows §7. The persons rule ignores presence evidence
+  from a tracker that reports `available = false`.
+
+Publish a fix whenever the adapter learns where the device is,
+including from presence evidence tied to a place. A geofence
+transition that carries the location that triggered it is a fix. So is
+a sighting by a receiver whose location is configured, with the
+receiver's reach as `accuracy`. Without such a fix the map shows the
+last fix taken before the transition, which may be hours old. Publish
+it when the evidence is fresh, not again while the adapter holds a
+value through its delay.
+
+The house says which trackers are whose. A person file lists a tracker
+under `[sources]`, naming `home` or `sighted` for presence and `lat`
+for position, and the tracker contributes only what a source names.
+The worked examples are `adapters/companion.py` (a geofence and fixes),
+`adapters/owntracks.py` (fixes) and `adapters/openwrt.py` (sightings,
+and fixes at routers with a location).
+
 ## 4. Commands
 
 Every command payload is an envelope:
@@ -517,6 +559,8 @@ a manifest beside it is installed, and `plan` shows it.
 - [ ] Commands via `command_keyexprs` + `parse_cmd_envelope`; type and
       bounds checked; drops leave events.
 - [ ] `available` if there is a real loss signal; timeout as a parameter.
+- [ ] A tracker publishes the aspects in §3, Trackers, with `fixed_at`
+      last, and a fix for every place it learns.
 - [ ] Discovery document with `id`, `configured`, `entity`, `suggested`,
       and an `aspects` descriptor for bound entities.
 - [ ] `ready()` after both directions are wired; clean exit on SIGTERM.
