@@ -29,37 +29,182 @@
     return state[entityKey(room, entity, aspect)];
   }
 
-  // Adapters differ on the presence aspect name. z2m passes through
-  // "occupancy", and others use "presence". The vocabulary allows either
-  // (docs/design.md#the-capability-vocabulary), so accept both.
-  var PRESENCE_ASPECTS = ['occupancy', 'presence'];
+  // A room sensor publishes `motion` (a PIR) or `occupied` (a radar),
+  // whichever its device observes (docs/design.md#the-capability-vocabulary).
+  var OCCUPANCY_ASPECTS = ['motion', 'occupied'];
 
-  function presenceValue(state, entity) {
-    for (var i = 0; i < PRESENCE_ASPECTS.length; i++) {
-      var v = stateValue(state, entity.room, entity.name, PRESENCE_ASPECTS[i]);
-      if (v !== undefined) return v;
+  /* A room sensor's reading: { aspect, value }, from whichever occupancy
+   * aspect it publishes. Both are undefined when it has published neither. */
+  function occupancyReading(state, entity) {
+    for (var i = 0; i < OCCUPANCY_ASPECTS.length; i++) {
+      var v = stateValue(state, entity.room, entity.name, OCCUPANCY_ASPECTS[i]);
+      if (v !== undefined) return { aspect: OCCUPANCY_ASPECTS[i], value: v };
     }
-    return undefined;
+    return { aspect: undefined, value: undefined };
   }
 
-  /* A person on Now: { home, seenAt }. home is the person's `presence`
-   * aspect: true, false, or undefined when nothing publishes it. seenAt is
-   * the last location fix in epoch ms, when a location adapter reports
-   * one. The page writes the text; this only reads the values. */
+  /* A person or a tracker on People: { home, stale, notSeen, seenAt }.
+   * home is a person's `presence`, or for a tracker what the persons rule
+   * would read: home when `home` or `sighted` is true, away when `home`
+   * is false. It is undefined when nothing says. A tracker's
+   * `sighted = false` only says the network has not seen the device, so
+   * it is notSeen and not away. stale is a person's `presence_valid =
+   * false`: presence is held because no tracker can say. seenAt is the
+   * last location fix in epoch ms, when one is reported. The page writes
+   * the text; this only reads the values. */
   function personStatus(state, entity) {
-    var presence = stateValue(state, entity.room, entity.name, 'presence');
-    var fixedAt = stateValue(state, entity.room, entity.name, 'fixed_at');
+    function read(aspect) { return stateValue(state, entity.room, entity.name, aspect); }
+    var home, sighted;
+    if (entity.capability === 'tracker') {
+      var geofence = read('home');
+      sighted = read('sighted');
+      home = geofence === true || sighted === true ? true : geofence === false ? false : undefined;
+    } else {
+      home = read('presence');
+      home = typeof home === 'boolean' ? home : undefined;
+    }
+    var fixedAt = read('fixed_at');
     return {
-      home: typeof presence === 'boolean' ? presence : undefined,
+      home: home,
+      stale: entity.capability === 'person' && read('presence_valid') === false,
+      notSeen: home === undefined && sighted === false,
       seenAt: typeof fixedAt === 'number' ? fixedAt * 1000 : undefined
     };
   }
 
-  // "room/entity" when the key is a presence-aspect state key, else null.
-  function presenceEntityFromKey(key) {
+  /* Who the People and map widgets draw: every person, and every tracker
+   * no person lists as a source. A phone bound before its person file is
+   * written still shows up, and one a person lists is not drawn twice. */
+  function peopleEntities(entities) {
+    var listed = {};
+    entities.forEach(function (e) {
+      if (e.capability !== 'person') return;
+      Object.keys(e.sources || {}).forEach(function (name) { listed[e.sources[name].entity] = true; });
+    });
+    return entities.filter(function (e) {
+      return e.capability === 'person' || (e.capability === 'tracker' && !listed[e.name]);
+    });
+  }
+
+  /* ---- map tracks (docs/design.md#map-and-people) ---- */
+
+  // The value a series held at `ts`: its last point at or before it.
+  function valueAsOf(points, ts) {
+    var value;
+    for (var i = 0; i < points.length && Date.parse(points[i].ts) <= ts; i++) value = points[i].value;
+    return value;
+  }
+
+  /* An entity's fixes over a window, oldest first, from the recorder's
+   * `lat`, `lon`, `accuracy` and `fixed_at` series. Every fix ends with
+   * its `fixed_at`, which is published after the other three, so each
+   * `fixed_at` point marks one complete fix. A point taken where `lat`
+   * changed could pair the new `lat` with the old `lon`. A fix is placed
+   * at its `fixed_at` time, which is when it was taken, even if the phone
+   * sent it later. */
+  function trackFixes(series, from) {
+    var out = [];
+    (series.fixed_at || []).forEach(function (p) {
+      var at = Date.parse(p.ts);
+      var lat = valueAsOf(series.lat || [], at);
+      var lon = valueAsOf(series.lon || [], at);
+      if (typeof lat !== 'number' || typeof lon !== 'number' || typeof p.value !== 'number') return;
+      var t = p.value * 1000;
+      if (t < from) return;
+      var accuracy = valueAsOf(series.accuracy || [], at);
+      out.push({ lat: lat, lon: lon, accuracy: typeof accuracy === 'number' ? accuracy : 0, t: t });
+    });
+    return out.sort(function (a, b) { return a.t - b.t; });
+  }
+
+  function metresBetween(a, b) {
+    var rad = Math.PI / 180;
+    var dLat = (b.lat - a.lat) * rad, dLon = (b.lon - a.lon) * rad;
+    var h = Math.pow(Math.sin(dLat / 2), 2) +
+      Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.pow(Math.sin(dLon / 2), 2);
+    return 2 * 6371000 * Math.asin(Math.min(1, Math.sqrt(h)));
+  }
+
+  /* The fixes worth drawing. A phone lying still reports a fix inside its
+   * accuracy circle every few minutes, and drawing them scribbles around
+   * the spot. A fix within its own accuracy of the last one kept is
+   * dropped. The newest fix is always kept, so the line reaches the
+   * marker. */
+  function thinTrack(fixes) {
+    var kept = [];
+    fixes.forEach(function (f, i) {
+      var last = kept[kept.length - 1];
+      if (!last || i === fixes.length - 1 || metresBetween(last, f) > f.accuracy) kept.push(f);
+    });
+    return kept;
+  }
+
+  /* The track as one line whose opacity follows the age of each fix,
+   * from faint at the window's start to solid at the newest fix. A line
+   * gradient in MapLibre runs over the distance along the line, not over
+   * time, so the age at each step of distance is worked out here. Fixes
+   * are not evenly spaced in time, and a stop where someone stood still
+   * would otherwise fade the whole stretch around it. Returns the line's
+   * [lon, lat] coordinates and `steps` + 1 [progress, opacity] stops, or
+   * null when there is no line to draw. */
+  function trackGradient(fixes, from, to, steps) {
+    if (fixes.length < 2) return null;
+    var along = [0];
+    for (var i = 1; i < fixes.length; i++) along.push(along[i - 1] + metresBetween(fixes[i - 1], fixes[i]));
+    var total = along[along.length - 1];
+    if (!(total > 0)) return null;
+    var opacity = function (t) {
+      var f = to > from ? (t - from) / (to - from) : 1;
+      return 0.15 + 0.85 * Math.min(1, Math.max(0, f));
+    };
+    var stops = [];
+    var j = 0;
+    for (var k = 0; k <= steps; k++) {
+      var d = total * k / steps;
+      // `<=` steps onto a last segment of no length, a phone lying where
+      // it stopped, so the line's end takes the newest fix's time.
+      while (j < fixes.length - 2 && along[j + 1] <= d) j++;
+      var seg = along[j + 1] - along[j];
+      var t = seg > 0 ? fixes[j].t + (fixes[j + 1].t - fixes[j].t) * (d - along[j]) / seg : fixes[j + 1].t;
+      stops.push([k / steps, opacity(t)]);
+    }
+    return { coordinates: fixes.map(function (f) { return [f.lon, f.lat]; }), stops: stops };
+  }
+
+  /* An accuracy circle as a polygon of `sides` corners, [lon, lat]
+   * closed. MapLibre has no circle in metres, and a circle layer is sized
+   * in pixels. */
+  function circlePolygon(lat, lon, radiusM, sides) {
+    var dLat = radiusM / 111320;
+    var dLon = dLat / Math.max(1e-6, Math.cos(lat * Math.PI / 180));
+    var ring = [];
+    for (var i = 0; i <= sides; i++) {
+      var a = 2 * Math.PI * (i % sides) / sides;
+      ring.push([lon + dLon * Math.cos(a), lat + dLat * Math.sin(a)]);
+    }
+    return ring;
+  }
+
+  // "rgba(r,g,b,a)" for a hex colour, which a line gradient needs to fade.
+  function hexRgba(hex, alpha) {
+    var h = hex.slice(1);
+    if (h.length === 3) h = h.replace(/./g, function (c) { return c + c; });
+    var n = parseInt(h, 16);
+    return 'rgba(' + (n >> 16 & 255) + ',' + (n >> 8 & 255) + ',' + (n & 255) + ',' + alpha + ')';
+  }
+
+  // A `colors` value as the house wrote it, or null unless it is a hex
+  // colour. The plan refuses anything else; this keeps the page safe from
+  // a value that reached it some other way.
+  function hexColor(value) {
+    return typeof value === 'string' && /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(value) ? value : null;
+  }
+
+  // "room/entity" when the key is an occupancy-aspect state key, else null.
+  function occupancyEntityFromKey(key) {
     var parts = key.split('/');
     if (parts[0] === 'home' && parts[1] === 'state' && parts.length >= 5 &&
-        PRESENCE_ASPECTS.indexOf(parts[4]) !== -1) {
+        OCCUPANCY_ASPECTS.indexOf(parts[4]) !== -1) {
       return parts[2] + '/' + parts[3];
     }
     return null;
@@ -736,11 +881,16 @@
    * indented under it. Comments and spacing are not reproduced, but the
    * content is. It is read-only, and the dashboard does not write to the
    * house. */
-  var WIDGET_KEY_ORDER = ['kind', 'entity', 'aspect', 'room', 'unit', 'label', 'hours'];
+  var WIDGET_KEY_ORDER = ['kind', 'entity', 'aspect', 'room', 'unit', 'label', 'hours', 'colors'];
 
   function tomlValue(v) {
     // A JSON string literal is a valid TOML basic string.
     if (typeof v === 'string') return JSON.stringify(v);
+    // A table, such as a map's `colors`, is written inline. Its keys are
+    // entity names, which are bare TOML keys.
+    if (v && typeof v === 'object') {
+      return '{ ' + Object.keys(v).map(function (k) { return k + ' = ' + tomlValue(v[k]); }).join(', ') + ' }';
+    }
     return String(v);
   }
 
@@ -1240,7 +1390,24 @@
    * aspect, so each contributor is shown under the aspect it contributes
    * to. A fused temperature derived from `temperature` readings shows them
    * under `temperature`, and an unrelated `humidity` chart is unchanged.
+   * A person is the exception (docs/design.md#map-and-people). Its
+   * `presence` is derived from its trackers' `home` and `sighted`. Its
+   * position aspects come from the trackers its `lat` sources name, each
+   * drawn as that tracker's own aspect of the same name.
    */
+  var PERSON_PRESENCE_SOURCES = ['home', 'sighted'];
+  var PERSON_POSITION = ['lat', 'lon', 'accuracy', 'fixed_at'];
+
+  // The contributor's aspect to draw under `aspect`, or null when this
+  // source does not contribute to it.
+  function contributedAspect(owner, src, aspect) {
+    if (owner.capability === 'person') {
+      if (aspect === 'presence') return PERSON_PRESENCE_SOURCES.indexOf(src.aspect) !== -1 ? src.aspect : null;
+      if (PERSON_POSITION.indexOf(aspect) !== -1) return src.aspect === 'lat' ? aspect : null;
+    }
+    return src.aspect === aspect ? aspect : null;
+  }
+
   function contributorsFor(entities, entityName, aspect) {
     var owner = (entities || []).filter(function (e) { return e.name === entityName; })[0];
     if (!owner || !owner.sources) return [];
@@ -1249,7 +1416,8 @@
     var out = [];
     Object.keys(owner.sources).sort().forEach(function (name) {
       var src = owner.sources[name];
-      if (!src || src.aspect !== aspect) return;
+      var drawn = src ? contributedAspect(owner, src, aspect) : null;
+      if (!drawn) return;
       var e = byName[src.entity];
       // A contributor missing from the model cannot be drawn. The plan
       // refuses an unknown one (`source-unknown-entity`), so this means the
@@ -1258,13 +1426,64 @@
       out.push({
         name: name,
         entity: src.entity,
-        aspect: src.aspect,
+        aspect: drawn,
         label: e.label || titleCase(src.entity),
         // The contributor's own caveat. The aspect descriptor cannot say
         // it because it does not apply to every source. Examples are one
         // sensor in the sun, or a reading with an offset the house itself
         // writes, which must not be fused back in.
         note: typeof src.note === 'string' ? src.note : null
+      });
+    });
+    return out;
+  }
+
+  /* The entity's other readings that belong on one chart with `aspect`,
+   * from the descriptor's `related` sets: stages of one sensor, or a
+   * target and its actual value. A reading in several sets gets the
+   * members of each, once. A member the entity has not reported is left
+   * out. So is one that is undescribed or of another kind or unit,
+   * because the chart has one y scale and its readout formats every line
+   * as `aspect`. */
+  function relatedFor(descriptor, aspect, present) {
+    var fields = (descriptor && descriptor.fields) || {};
+    var own = fields[aspect];
+    var out = [], seen = {};
+    if (!own) return out;
+    seen[aspect] = true;
+    ((descriptor && descriptor.related) || []).forEach(function (set) {
+      if (!Array.isArray(set) || set.indexOf(aspect) === -1) return;
+      set.forEach(function (a) {
+        var f = fields[a];
+        if (seen[a] || present.indexOf(a) === -1 || !f || f.kind !== own.kind || f.unit !== own.unit) return;
+        seen[a] = true;
+        out.push({ name: a, aspect: a, label: f.label || a });
+      });
+    });
+    return out;
+  }
+
+  /* A person's trackers, for its overlay: one row per tracker its sources
+   * name, with the device's own battery, the accuracy and time of its last
+   * fix, and whether it is reported unavailable. */
+  function trackersOf(entities, state, person) {
+    var byName = {};
+    (entities || []).forEach(function (e) { byName[e.name] = e; });
+    var seen = {}, out = [];
+    Object.keys(person.sources || {}).sort().forEach(function (name) {
+      var e = byName[person.sources[name].entity];
+      if (!e || seen[e.name]) return;
+      seen[e.name] = true;
+      function read(aspect) { return stateValue(state, e.room, e.name, aspect); }
+      var fixedAt = read('fixed_at');
+      out.push({
+        entity: e.name,
+        room: e.room,
+        label: e.label || titleCase(e.name),
+        battery: typeof read('battery') === 'number' ? read('battery') : undefined,
+        accuracy: typeof read('accuracy') === 'number' ? read('accuracy') : undefined,
+        fixedAt: typeof fixedAt === 'number' ? fixedAt * 1000 : undefined,
+        unavailable: read('available') === false
       });
     });
     return out;
@@ -1362,10 +1581,148 @@
    * otherwise be drawn as a line between its codes and averaged. Without
    * a descriptor, the value's type decides. */
 
-  function historyShape(value, field) {
+  function historyShape(value, field, intervalS) {
+    // An amount per interval is drawn as bars over its intervals. A line
+    // through hourly amounts reads as a rate, and makes a 6 h forecast
+    // interval look like one spike.
+    if (intervalS) return 'bars';
     var kind = field && field.kind;
     if (kind === 'enum' || kind === 'boolean') return 'timeline';
     return typeof value === 'number' ? 'chart' : 'timeline';
+  }
+
+  /* The interval in seconds that each sample of an aspect totals over,
+   * from the entity file's `[aspects.<name>] interval_s`
+   * (docs/design.md#totals-over-intervals), or null. */
+  function intervalOf(entity, aspect) {
+    var s = entity && entity.intervals && entity.intervals[aspect];
+    return typeof s === 'number' && s > 0 ? s : null;
+  }
+
+  var DAY_MS = 86400e3;
+
+  // The most bars of one interval each that a window draws. Beyond this a
+  // bar is a local calendar day: a week of hourly bars is too thin to
+  // read, and "how much rain on Tuesday" asks for days.
+  var MAX_INTERVAL_BARS = 48;
+
+  // A day's interval is drawn as local days too, since a daily total is
+  // stamped at local midnight, not at UTC's.
+  function barsByDay(spanMs, intervalS) {
+    var ms = intervalS * 1000;
+    return ms === DAY_MS || (ms < DAY_MS && spanMs / ms > MAX_INTERVAL_BARS);
+  }
+
+  // A bar's start and end. Interval bars line up with the recorded stamps,
+  // offset `phase` from the epoch, so a unit stamping hours in a zone a
+  // half hour off UTC still gets one bar per hour. Day bars start at
+  // local midnight, and a day is not always 24 h long.
+  function barStart(t, byDay, ms, phase) {
+    if (!byDay) return t - ((((t - phase) % ms) + ms) % ms);
+    var d = new Date(t);
+    d.setHours(0, 0, 0, 0);
+    return d.getTime();
+  }
+
+  function barEnd(start, byDay, ms) {
+    if (!byDay) return start + ms;
+    var d = new Date(start);
+    d.setDate(d.getDate() + 1);
+    return d.getTime();
+  }
+
+  // Adds an amount, spread evenly over [a, b), to every bar it overlaps.
+  function spreadOver(add, a, b, amount, byDay, ms, phase) {
+    for (var start = barStart(a, byDay, ms, phase); start < b; start = barEnd(start, byDay, ms)) {
+      var end = barEnd(start, byDay, ms);
+      var inside = Math.min(end, b) - Math.max(start, a);
+      if (inside > 0) add(start, end, amount * inside / (b - a));
+    }
+  }
+
+  // The recorded rows as { t, amount }, oldest first.
+  function intervalRows(points) {
+    var rows = [];
+    (points || []).forEach(function (p) {
+      var t = Date.parse(p.ts);
+      if (!isNaN(t) && typeof p.value === 'number') rows.push({ t: t, amount: p.value });
+    });
+    return rows;
+  }
+
+  /* Bars for an interval aspect over a window: what was recorded, then
+   * what one forecast expects. `points` are the recorded rows, each at
+   * its interval's start. Each bar is { from, to, observed, forecast } in
+   * epoch ms and the aspect's unit. A bar holds its share of every value
+   * whose interval overlaps it, with the amount spread evenly over the
+   * interval, as `homeostat.intervals.total` counts it. The forecast is
+   * drawn only after the last recorded interval ends, so no stretch
+   * counts twice, and at most as far ahead as the window looks back, so a
+   * ten-day forecast does not squeeze a day's record into a corner. A
+   * forecast point without `d` says nothing about an interval and is left
+   * out. A stretch with nothing recorded has no bar, so a gap shows. */
+  function intervalBars(points, intervalS, win, forecast) {
+    var ms = intervalS * 1000;
+    var horizon = win.to + (win.to - win.from);
+    var to = forecast && forecast.to > win.to ? Math.min(forecast.to, horizon) : win.to;
+    var byDay = barsByDay(win.to - win.from, intervalS);
+    var rows = intervalRows(points);
+    var phase = rows.length ? rows[0].t : 0;
+    // Day bars are whole days, so the first one is not a fraction of a
+    // day that reads as a dry one.
+    var from = byDay ? barStart(win.from, true, ms, phase) : win.from;
+    var bars = {};
+    var adder = function (kind) {
+      return function (start, end, amount) {
+        if (end <= from || start >= to) return;
+        var bar = bars[start] || (bars[start] = { from: start, to: end, observed: 0, forecast: 0 });
+        bar[kind] += amount;
+      };
+    };
+    var observedEnd = win.from;
+    rows.forEach(function (r) {
+      spreadOver(adder('observed'), r.t, r.t + ms, r.amount, byDay, ms, phase);
+      observedEnd = Math.max(observedEnd, r.t + ms);
+    });
+    ((forecast && forecast.points) || []).forEach(function (p) {
+      if (!p.d) return;
+      var end = p.t + p.d * 1000;
+      var from = Math.max(p.t, observedEnd);
+      if (end <= from) return;
+      spreadOver(adder('forecast'), from, end, p.v * (end - from) / (end - p.t), byDay, ms, phase);
+    });
+    return Object.keys(bars)
+      .map(function (k) { return bars[k]; })
+      .sort(function (a, b) { return a.from - b.from; });
+  }
+
+  /* The total over the span that ends where the newest recorded interval
+   * ends, for a tile: 24 h, or one interval when that is longer. An
+   * interval is published after it ends, so the newest one ends before
+   * now and a total up to now would always be short. An interval that
+   * straddles the span's start counts by its share inside, as in
+   * `homeostat.intervals.total`. `coveredMs` is how much of the span the
+   * recorded intervals cover, so a tile can say when some are missing.
+   * `stale` is when the newest interval ended more than two intervals
+   * ago, as when its publisher has stopped. Null when nothing is
+   * recorded. */
+  function recentTotal(points, intervalS, nowMs) {
+    var ms = intervalS * 1000;
+    var rows = intervalRows(points);
+    if (!rows.length) return null;
+    var newest = rows.reduce(function (a, r) { return r.t > a.t ? r : a; });
+    var end = newest.t + ms;
+    var spanMs = Math.max(DAY_MS, ms);
+    var start = end - spanMs;
+    var total = 0, coveredMs = 0;
+    rows.forEach(function (r) {
+      var inside = Math.min(r.t + ms, end) - Math.max(r.t, start);
+      if (inside > 0) { total += r.amount * inside / ms; coveredMs += inside; }
+    });
+    return {
+      total: total, latest: newest.amount, end: end, spanMs: spanMs,
+      coveredMs: coveredMs, stale: nowMs - end > 2 * ms
+    };
   }
 
   /* One bucket per drawn column. The chart's viewBox width is the most
@@ -1560,8 +1917,9 @@
   /* What no view places: entities and family params the family cannot
    * reach from the nav.
    * An entity is placed by any of: a widget naming it, its room, a unit
-   * that publishes or drives it, a `people` widget when it is a person, or
-   * a generated `rooms` view (every entity) or `now` view (people).
+   * that publishes or drives it, a `people` widget when it is a person or
+   * a tracker no person lists, or a generated `rooms` view (every entity)
+   * or `now` view (people).
    * A param is placed by a `params` or `unit` widget for its unit, or by a
    * generated `setpoints` view.
    * Deviations and the map place nothing, because they show signals, not
@@ -1593,8 +1951,10 @@
         if (w.kind === 'people') persons = true;
       });
     });
+    var people = {};
+    if (persons) peopleEntities(entities).forEach(function (e) { people[e.name] = true; });
     var unplacedEntities = allEntities ? [] : entities.filter(function (e) {
-      return !placedEntity[e.name] && !(persons && e.capability === 'person');
+      return !placedEntity[e.name] && !people[e.name];
     });
     var unplacedParams = [];
     if (!allParams) {
@@ -1659,7 +2019,7 @@
   }
 
   return {
-    PRESENCE_ASPECTS: PRESENCE_ASPECTS,
+    OCCUPANCY_ASPECTS: OCCUPANCY_ASPECTS,
     viewsOf: viewsOf,
     placement: placement,
     unitCardPlan: unitCardPlan,
@@ -1671,15 +2031,27 @@
     isPaused: isPaused,
     viewFor: viewFor,
     historyShape: historyShape,
+    intervalOf: intervalOf,
+    intervalBars: intervalBars,
+    barsByDay: barsByDay,
+    recentTotal: recentTotal,
     bucketSeconds: bucketSeconds,
     timelineRuns: timelineRuns,
     timelineStats: timelineStats,
     titleCase: titleCase,
     entityKey: entityKey,
     stateValue: stateValue,
-    presenceValue: presenceValue,
+    occupancyReading: occupancyReading,
     personStatus: personStatus,
-    presenceEntityFromKey: presenceEntityFromKey,
+    peopleEntities: peopleEntities,
+    trackFixes: trackFixes,
+    thinTrack: thinTrack,
+    trackGradient: trackGradient,
+    circlePolygon: circlePolygon,
+    hexRgba: hexRgba,
+    hexColor: hexColor,
+    trackersOf: trackersOf,
+    occupancyEntityFromKey: occupancyEntityFromKey,
     unitNameFromHealthKey: unitNameFromHealthKey,
     applyMessage: applyMessage,
     computeDeviations: computeDeviations,
@@ -1691,6 +2063,7 @@
     forecastsFor: forecastsFor,
     decodeForecast: decodeForecast,
     contributorsFor: contributorsFor,
+    relatedFor: relatedFor,
     sourceUsage: sourceUsage,
     decodeIssues: decodeIssues,
     sourceLabel: sourceLabel,

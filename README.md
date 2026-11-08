@@ -123,7 +123,7 @@ Homeostat plan
   repo:  examples/starter-house
   world: empty
 
-Units to create (10):
+Units to create (11):
 
 + adapter zigbee (units/zigbee.toml)
     command: uv run units/zigbee.py
@@ -146,7 +146,7 @@ Grant table:
     -> livingroom_lamp  (room=livingroom, capability=light, write=shared, owner=zigbee)
     ...
 
-Plan tier: structural (10 units created, 9 grants added)
+Plan tier: structural (11 units created, 10 grants added)
 ```
 
 **Run a live house.** The integration-test fixtures work as small demos.

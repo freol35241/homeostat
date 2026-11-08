@@ -52,7 +52,7 @@ PY
 # generous.
 echo "waiting for every simulated device to reach the store..."
 deadline=$((SECONDS + 420))
-for pair in livingroom_lamp:on front_door:locked hallway_motion:occupancy \
+for pair in livingroom_lamp:on front_door:locked hallway_motion:motion \
             heatpump:indoor_temperature heatpump:setpoint alice:lat porch_switch:on; do
   entity="${pair%%:*}" aspect="${pair##*:}"
   until [ -n "$(latest "$entity" "$aspect")" ]; do

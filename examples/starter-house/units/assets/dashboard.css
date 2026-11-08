@@ -282,6 +282,8 @@ pre.view-text { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, mono
    the span it has left to cover, so it does not use the accent
    (docs/design.md#charts-forecasts-and-sources). */
 .chart-forecast.stale { stroke: var(--muted); opacity: .6; }
+.chart-bar { fill: var(--accent); stroke: none; }
+.chart-bar.forecast { opacity: .35; }
 .chart-now { stroke: var(--secondary); stroke-width: 1; stroke-dasharray: 3 3; opacity: .55;
   vector-effect: non-scaling-stroke; }
 .chart-grid { stroke: var(--border); stroke-width: 1; vector-effect: non-scaling-stroke; }
@@ -332,13 +334,19 @@ pre.view-text { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, mono
 .equilibrium .eq-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good); opacity: .55; }
 
 /* map (person entities) */
-/* `isolation` keeps Leaflet's own z-indexes (panes at 400, controls at
-   1000) inside the map. Without it the zoom buttons and marker labels sit
-   above the phone's tab bar and catch its taps. */
+/* `isolation` keeps MapLibre's own z-indexes (its controls, markers and
+   popups) inside the map. Without it the zoom buttons and marker labels
+   sit above the phone's tab bar and catch its taps. */
 .map-wrap { height: 320px; border-radius: 8px; overflow: hidden; background: var(--bg); isolation: isolate; }
+.map-wrap.map-unavailable { display: flex; align-items: center; justify-content: center; padding: 24px;
+  text-align: center; font-size: 13px; color: var(--secondary); }
+/* A popup in the page's colours. MapLibre's own is white, which a dark
+   theme's text cannot be read on. */
+.maplibregl-popup-content { background: var(--card); color: var(--ink); font: inherit; font-size: 12px;
+  border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; box-shadow: 0 1px 4px rgba(0,0,0,.2); }
+.maplibregl-popup-tip { display: none; }
 .map-hint { font-size: 12px; color: var(--muted); margin-top: 8px; }
 .map-nofix { font-size: 12px; color: var(--secondary); margin-top: 8px; }
-.person-marker { position: relative; }
 .person-marker-dot { width: 12px; height: 12px; border-radius: 50%; background: var(--accent);
   border: 2px solid var(--card); box-shadow: 0 1px 2px rgba(0,0,0,.3); }
 .person-marker-label { position: absolute; left: 16px; top: -5px; white-space: nowrap; font-size: 11px;
