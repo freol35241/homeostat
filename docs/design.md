@@ -1922,6 +1922,8 @@ interval_s = 3600
   `not-intervals` (a forecast point in the window has no `d`). It never
   counts as zero, because zero rain is the reading that turns the
   watering on.
+- The dashboard draws such an aspect as bars
+  ([Charts, forecasts and sources](#charts-forecasts-and-sources)).
 - How old a forecast may be is the consumer's call, as for `at`, so
   `total` does not check `issued`. An observed interval arrives after it
   ends, so the newest one usually ends before now. A window that runs
@@ -2450,6 +2452,36 @@ to one point per drawn column. For a boolean or enum they ask for
 `changes`. The descriptor decides which, so an enum coded as integers
 is not averaged. `class=cmd` draws a "Commanded" strip under the chart.
 It is the page's one view of intent against outcome.
+
+An aspect with an `interval_s` ([Totals over intervals](#totals-over-intervals))
+is drawn as bars, because a line through hourly amounts reads as a
+rate and makes a 6 h forecast interval look like one spike.
+
+- The page reads the raw rows and spreads each from its own stamp. The
+  recorder's buckets start at multiples of their width since the epoch,
+  which is not where a unit in another zone stamps its day. The read
+  starts one interval before the window, for the interval that
+  straddles its start.
+- A window of at most 48 intervals draws a bar per interval, lined up
+  with the stamps. A longer window, or an interval of a day, draws a
+  bar per local day, from midnight to midnight, and the first day is
+  drawn whole.
+- A bar holds its share of each value whose interval overlaps it, as
+  the SDK's totals count it. Recorded amounts are solid, and a negative
+  amount is drawn down from zero. One forecast continues after the last
+  recorded interval, faded, so no stretch counts twice, and at most as
+  far ahead as the window looks back. With several forecasts no
+  forecast bars are drawn, since two providers' bars on one axis would
+  add up to an amount neither predicted.
+- An interval with nothing recorded has no bar, so a gap shows.
+- A tile's big number is the total over the 24 h that end with the
+  newest recorded interval, or over that interval alone when it is
+  longer. "Has it rained?" is what a glance asks, and the latest hour is
+  0 most of the time. An interval is published after it ends, so the
+  span ends before now, and the caption says where. It also names the
+  latest interval, and how many hours of the span are recorded when
+  some are missing. A newest interval that ended more than two
+  intervals ago marks the tile `stale`.
 
 Forecasts reach the page live with state rather than from the
 recorder. The family sees what the house believes now, and a house

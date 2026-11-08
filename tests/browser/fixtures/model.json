@@ -33,7 +33,8 @@
      "note": "south-facing; reads high on a sunny afternoon",
      "precision": null
     }
-   }
+   },
+   "intervals": {}
   },
   {
    "name": "alex",
@@ -51,7 +52,8 @@
      "note": null,
      "precision": null
     }
-   }
+   },
+   "intervals": {}
   },
   {
    "name": "alex_phone",
@@ -62,7 +64,8 @@
    "write_mode": "shared",
    "owner": "stage",
    "commandable": false,
-   "sources": {}
+   "sources": {},
+   "intervals": {}
   },
   {
    "name": "front_door",
@@ -73,7 +76,8 @@
    "write_mode": "shared",
    "owner": "stage",
    "commandable": true,
-   "sources": {}
+   "sources": {},
+   "intervals": {}
   },
   {
    "name": "hallway_lamp",
@@ -84,7 +88,8 @@
    "write_mode": "shared",
    "owner": "stage",
    "commandable": true,
-   "sources": {}
+   "sources": {},
+   "intervals": {}
   },
   {
    "name": "heat_pump",
@@ -97,7 +102,8 @@
    "write_mode": "arbitrated",
    "owner": "stage",
    "commandable": true,
-   "sources": {}
+   "sources": {},
+   "intervals": {}
   },
   {
    "name": "kitchen_temp",
@@ -110,7 +116,8 @@
    "write_mode": "shared",
    "owner": "stage",
    "commandable": false,
-   "sources": {}
+   "sources": {},
+   "intervals": {}
   },
   {
    "name": "livingroom_lamp",
@@ -123,7 +130,8 @@
    "write_mode": "shared",
    "owner": "stage",
    "commandable": true,
-   "sources": {}
+   "sources": {},
+   "intervals": {}
   },
   {
    "name": "livingroom_temp",
@@ -137,7 +145,8 @@
    "write_mode": "shared",
    "owner": "stage",
    "commandable": false,
-   "sources": {}
+   "sources": {},
+   "intervals": {}
   },
   {
    "name": "robin",
@@ -148,7 +157,8 @@
    "write_mode": "shared",
    "owner": "stage",
    "commandable": false,
-   "sources": {}
+   "sources": {},
+   "intervals": {}
   },
   {
    "name": "spot",
@@ -161,7 +171,8 @@
    "write_mode": "shared",
    "owner": "stage",
    "commandable": false,
-   "sources": {}
+   "sources": {},
+   "intervals": {}
   },
   {
    "name": "stove",
@@ -175,7 +186,8 @@
    "write_mode": "shared",
    "owner": "stage",
    "commandable": true,
-   "sources": {}
+   "sources": {},
+   "intervals": {}
   },
   {
    "name": "porch_cam",
@@ -187,7 +199,22 @@
    "owner": "stage",
    "commandable": false,
    "sources": {},
-   "id": "porch-cam-1"
+   "id": "porch-cam-1",
+   "intervals": {}
+  },
+  {
+   "name": "rain",
+   "label": "rain",
+   "capability": "sensor",
+   "features": [],
+   "room": "garden",
+   "write_mode": "exclusive",
+   "owner": "weather",
+   "commandable": false,
+   "sources": {},
+   "intervals": {
+    "precipitation": 3600
+   }
   }
  ],
  "units": [
@@ -431,6 +458,11 @@
      "kind": "tile",
      "entity": "livingroom_temp",
      "aspect": "humidity"
+    },
+    {
+     "kind": "tile",
+     "entity": "rain",
+     "aspect": "precipitation"
     },
     {
      "kind": "people"

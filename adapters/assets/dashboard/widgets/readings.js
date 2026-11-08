@@ -1,6 +1,6 @@
 /* The tile and chart widgets: an entity's readings, now and over time. */
 import { ensureHistory, fetchHistory } from '../api.js';
-import { buildChart, buildTimeline, horizonCaption, issuedCaption, minMaxCaption } from '../charts.js';
+import { buildBars, buildChart, buildTimeline, fmtDuration, formatChartClock, formatChartTime, horizonCaption, issuedCaption, minMaxCaption } from '../charts.js';
 import { html } from '../html.js';
 import logic from '../logic.js';
 import { descriptorField, liveForecastsOf, localState, scheduleRender, stateValue, store } from '../store.js';
@@ -14,6 +14,8 @@ export function widgetTiles(entity, aspect) {
   var rows = aspect ? all.filter(function (r) { return r.aspect === aspect; }) : all;
   return html`${rows.map(function (r) {
     var sk = entity.name + '|' + r.aspect;
+    var intervalS = logic.intervalOf(entity, r.aspect);
+    if (intervalS) return intervalTile(entity, r, all.length > 1, intervalS);
     ensureHistory(entity.name, r.aspect);
     var s = localState.sparklines[sk];
     var forecast = liveForecastsOf(entity, r.aspect);
@@ -49,6 +51,55 @@ export function widgetTiles(entity, aspect) {
   })}`;
 }
 
+// The name of one interval in a caption: "latest hour" reads better than
+// "latest 1h".
+function intervalName(intervalS) {
+  if (intervalS === 3600) return 'hour';
+  if (intervalS === 86400) return 'day';
+  return '';
+}
+
+/* A tile for an amount per interval, such as hourly rain. The big number
+ * is the total over the last 24 h, because "has it rained?" is what a
+ * glance asks, and the latest hour is 0 most of the time. An interval
+ * longer than a day is totalled alone. The span ends where the newest
+ * recorded interval ends, which is before now, and the caption says
+ * when. The latest interval is the small line. */
+function intervalTile(entity, r, named, intervalS) {
+  var sk = entity.name + '|' + r.aspect;
+  ensureHistory(entity.name, r.aspect, intervalS);
+  var s = localState.sparklines[sk];
+  var loaded = !!(s && s.loaded);
+  var field = descriptorField(entity, r.aspect);
+  var now = Date.now();
+  var day = { from: now - 864e5, to: now };
+  // One forecast has room on a tile, as for a line. With several, the
+  // overlay tells them apart.
+  var forecast = liveForecastsOf(entity, r.aspect);
+  var spark = loaded
+    ? buildBars('tile-' + sk, logic.intervalBars(s.points, intervalS, day, forecast.length === 1 ? forecast[0].forecast : null),
+      { height: 36, sizeClass: 'chart-tile', aspect: r.aspect, window: day })
+    : '';
+  var recent = loaded ? logic.recentTotal(s.points, intervalS, now) : null;
+  var big = recent ? logic.formatAspect(r.aspect, field, recent.total) : r.display;
+  var day = recent && recent.spanMs === 864e5;
+  var caption = recent
+    ? ['last ' + (day ? '24 h' : fmtDuration(recent.spanMs)) + ' to ' +
+        (day ? formatChartClock(recent.end) : formatChartTime(recent.end)),
+      day ? 'latest ' + (intervalName(intervalS) ? intervalName(intervalS) + ' ' : '') + logic.formatAspect(r.aspect, field, recent.latest) : '',
+      // Rounded to the hour: a second short of the span is not missing.
+      Math.round(recent.coveredMs / 36e5) < Math.round(recent.spanMs / 36e5)
+        ? Math.round(recent.coveredMs / 36e5) + ' of ' + Math.round(recent.spanMs / 36e5) + ' h recorded'
+        : ''
+    ].filter(Boolean).join(' \u00b7 ')
+    : '';
+  var tileLabel = entity.label + (named ? ' \u00b7 ' + r.label : '');
+  return html`<div class="card tile clickable" data-action="history-detail" data-room="${entity.room}" data-entity="${entity.name}" data-aspect="${r.aspect}">
+    <div class="card-label" title="${entity.label}">${tileLabel.toUpperCase()}</div>
+    <div class="big${r.stale ? ' stale' : ''}">${big}</div>${spark}
+    <div class="caption">${caption}${recent && recent.stale ? html`<span class="stale-mark">stale</span>` : ''}</div></div>`;
+}
+
 // One aspect's history over a window, as a card.
 export function widgetChart(entity, aspect, hours) {
   var key = entity.name + '|' + aspect + '|' + hours;
@@ -56,11 +107,12 @@ export function widgetChart(entity, aspect, hours) {
   // The same rule as the detail overlay. A described enum or boolean is
   // drawn as runs, so the card draws a timeline and asks the recorder for
   // changes.
-  var shape = logic.historyShape(stateValue(entity.room, entity.name, aspect), field);
+  var intervalS = logic.intervalOf(entity, aspect);
+  var shape = logic.historyShape(stateValue(entity.room, entity.name, aspect), field, intervalS);
   var s = localState.charts[key];
   if (!s) {
     localState.charts[key] = { points: [], loaded: false, loading: true };
-    fetchHistory(entity.name, aspect, hours, shape).then(function (loaded) {
+    fetchHistory(entity.name, aspect, hours, shape, null, intervalS).then(function (loaded) {
       localState.charts[key] = loaded;
       scheduleRender();
     });
@@ -68,10 +120,20 @@ export function widgetChart(entity, aspect, hours) {
   }
   var value = stateValue(entity.room, entity.name, aspect);
   var beliefs = shape === 'timeline' ? [] : liveForecastsOf(entity, aspect);
+  var bars = shape === 'bars' && s.loaded
+    ? logic.intervalBars(s.points, intervalS, s.window, beliefs.length === 1 ? beliefs[0].forecast : null)
+    : [];
   var chart = !s.loaded ? ''
     : shape === 'timeline'
       ? buildTimeline('chart-' + key, s.points, { height: 64, sizeClass: 'chart-timeline', aspect: aspect, field: field, window: s.window })
-      : buildChart('chart-' + key, s.points, { height: 120, sizeClass: 'chart-card', aspect: aspect, area: true, gridlines: true, yLabels: true, window: s.window, forecast: beliefs });
+      : shape === 'bars'
+        ? buildBars('chart-' + key, bars, { height: 120, sizeClass: 'chart-card', aspect: aspect, gridlines: true, yLabels: true, window: s.window })
+        : buildChart('chart-' + key, s.points, { height: 120, sizeClass: 'chart-card', aspect: aspect, area: true, gridlines: true, yLabels: true, window: s.window, forecast: beliefs });
+  // An amount per interval reads as the window's recorded total, which is
+  // what the bars add up to. Its latest value is one interval's.
+  var big = shape === 'bars' && s.loaded
+    ? logic.formatAspect(aspect, field, bars.reduce(function (a, b) { return a + b.observed; }, 0))
+    : logic.formatAspect(aspect, field, value);
   // The same rule as a tile: a drawn forecast says when it was issued. One
   // line for one source. With several, the overlay names each.
   var beliefCaption = beliefs.length === 1
@@ -81,5 +143,5 @@ export function widgetChart(entity, aspect, hours) {
     : '';
   return html`<div class="card tile clickable span-all" data-action="history-detail" data-room="${entity.room}" data-entity="${entity.name}" data-aspect="${aspect}">
     <div class="card-label">${(entity.label + ' · ' + ((field && field.label) || aspect)).toUpperCase()} <span class="faint">${hours >= 48 ? Math.round(hours / 24) + 'd' : hours + 'h'}</span></div>
-    <div class="big">${logic.formatAspect(aspect, field, value)}</div>${chart}${beliefCaption}</div>`;
+    <div class="big">${big}</div>${chart}${beliefCaption}</div>`;
 }

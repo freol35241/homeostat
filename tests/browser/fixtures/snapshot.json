@@ -1,5 +1,6 @@
 {
  "state": {
+  "home/state/garden/rain/precipitation": 0.2,
   "home/state/global/spot/price": 0.71,
   "home/state/hallway/front_door/locked": false,
   "home/state/livingroom/livingroom_lamp/brightness": 60,
@@ -26,6 +27,7 @@
   "home/state/person/alex_phone/fixed_at": 1790000000
  },
  "forecasts": {
+  "home/forecast/garden/rain/precipitation/smhi": {"schema": 1, "issued": "2026-09-25T06:00:00Z", "points": [{"t": "2026-09-25T07:00:00Z", "v": 0.4, "d": 3600}, {"t": "2026-09-25T08:00:00Z", "v": 1.2, "d": 3600}, {"t": "2026-09-25T09:00:00Z", "v": 3.0, "d": 21600}]},
   "home/forecast/global/spot/price/nordpool": {
    "schema": 1,
    "issued": "2026-09-25T06:06:13.950012Z",

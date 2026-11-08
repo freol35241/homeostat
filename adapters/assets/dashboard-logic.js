@@ -1581,10 +1581,148 @@
    * otherwise be drawn as a line between its codes and averaged. Without
    * a descriptor, the value's type decides. */
 
-  function historyShape(value, field) {
+  function historyShape(value, field, intervalS) {
+    // An amount per interval is drawn as bars over its intervals. A line
+    // through hourly amounts reads as a rate, and makes a 6 h forecast
+    // interval look like one spike.
+    if (intervalS) return 'bars';
     var kind = field && field.kind;
     if (kind === 'enum' || kind === 'boolean') return 'timeline';
     return typeof value === 'number' ? 'chart' : 'timeline';
+  }
+
+  /* The interval in seconds that each sample of an aspect totals over,
+   * from the entity file's `[aspects.<name>] interval_s`
+   * (docs/design.md#totals-over-intervals), or null. */
+  function intervalOf(entity, aspect) {
+    var s = entity && entity.intervals && entity.intervals[aspect];
+    return typeof s === 'number' && s > 0 ? s : null;
+  }
+
+  var DAY_MS = 86400e3;
+
+  // The most bars of one interval each that a window draws. Beyond this a
+  // bar is a local calendar day: a week of hourly bars is too thin to
+  // read, and "how much rain on Tuesday" asks for days.
+  var MAX_INTERVAL_BARS = 48;
+
+  // A day's interval is drawn as local days too, since a daily total is
+  // stamped at local midnight, not at UTC's.
+  function barsByDay(spanMs, intervalS) {
+    var ms = intervalS * 1000;
+    return ms === DAY_MS || (ms < DAY_MS && spanMs / ms > MAX_INTERVAL_BARS);
+  }
+
+  // A bar's start and end. Interval bars line up with the recorded stamps,
+  // offset `phase` from the epoch, so a unit stamping hours in a zone a
+  // half hour off UTC still gets one bar per hour. Day bars start at
+  // local midnight, and a day is not always 24 h long.
+  function barStart(t, byDay, ms, phase) {
+    if (!byDay) return t - ((((t - phase) % ms) + ms) % ms);
+    var d = new Date(t);
+    d.setHours(0, 0, 0, 0);
+    return d.getTime();
+  }
+
+  function barEnd(start, byDay, ms) {
+    if (!byDay) return start + ms;
+    var d = new Date(start);
+    d.setDate(d.getDate() + 1);
+    return d.getTime();
+  }
+
+  // Adds an amount, spread evenly over [a, b), to every bar it overlaps.
+  function spreadOver(add, a, b, amount, byDay, ms, phase) {
+    for (var start = barStart(a, byDay, ms, phase); start < b; start = barEnd(start, byDay, ms)) {
+      var end = barEnd(start, byDay, ms);
+      var inside = Math.min(end, b) - Math.max(start, a);
+      if (inside > 0) add(start, end, amount * inside / (b - a));
+    }
+  }
+
+  // The recorded rows as { t, amount }, oldest first.
+  function intervalRows(points) {
+    var rows = [];
+    (points || []).forEach(function (p) {
+      var t = Date.parse(p.ts);
+      if (!isNaN(t) && typeof p.value === 'number') rows.push({ t: t, amount: p.value });
+    });
+    return rows;
+  }
+
+  /* Bars for an interval aspect over a window: what was recorded, then
+   * what one forecast expects. `points` are the recorded rows, each at
+   * its interval's start. Each bar is { from, to, observed, forecast } in
+   * epoch ms and the aspect's unit. A bar holds its share of every value
+   * whose interval overlaps it, with the amount spread evenly over the
+   * interval, as `homeostat.intervals.total` counts it. The forecast is
+   * drawn only after the last recorded interval ends, so no stretch
+   * counts twice, and at most as far ahead as the window looks back, so a
+   * ten-day forecast does not squeeze a day's record into a corner. A
+   * forecast point without `d` says nothing about an interval and is left
+   * out. A stretch with nothing recorded has no bar, so a gap shows. */
+  function intervalBars(points, intervalS, win, forecast) {
+    var ms = intervalS * 1000;
+    var horizon = win.to + (win.to - win.from);
+    var to = forecast && forecast.to > win.to ? Math.min(forecast.to, horizon) : win.to;
+    var byDay = barsByDay(win.to - win.from, intervalS);
+    var rows = intervalRows(points);
+    var phase = rows.length ? rows[0].t : 0;
+    // Day bars are whole days, so the first one is not a fraction of a
+    // day that reads as a dry one.
+    var from = byDay ? barStart(win.from, true, ms, phase) : win.from;
+    var bars = {};
+    var adder = function (kind) {
+      return function (start, end, amount) {
+        if (end <= from || start >= to) return;
+        var bar = bars[start] || (bars[start] = { from: start, to: end, observed: 0, forecast: 0 });
+        bar[kind] += amount;
+      };
+    };
+    var observedEnd = win.from;
+    rows.forEach(function (r) {
+      spreadOver(adder('observed'), r.t, r.t + ms, r.amount, byDay, ms, phase);
+      observedEnd = Math.max(observedEnd, r.t + ms);
+    });
+    ((forecast && forecast.points) || []).forEach(function (p) {
+      if (!p.d) return;
+      var end = p.t + p.d * 1000;
+      var from = Math.max(p.t, observedEnd);
+      if (end <= from) return;
+      spreadOver(adder('forecast'), from, end, p.v * (end - from) / (end - p.t), byDay, ms, phase);
+    });
+    return Object.keys(bars)
+      .map(function (k) { return bars[k]; })
+      .sort(function (a, b) { return a.from - b.from; });
+  }
+
+  /* The total over the span that ends where the newest recorded interval
+   * ends, for a tile: 24 h, or one interval when that is longer. An
+   * interval is published after it ends, so the newest one ends before
+   * now and a total up to now would always be short. An interval that
+   * straddles the span's start counts by its share inside, as in
+   * `homeostat.intervals.total`. `coveredMs` is how much of the span the
+   * recorded intervals cover, so a tile can say when some are missing.
+   * `stale` is when the newest interval ended more than two intervals
+   * ago, as when its publisher has stopped. Null when nothing is
+   * recorded. */
+  function recentTotal(points, intervalS, nowMs) {
+    var ms = intervalS * 1000;
+    var rows = intervalRows(points);
+    if (!rows.length) return null;
+    var newest = rows.reduce(function (a, r) { return r.t > a.t ? r : a; });
+    var end = newest.t + ms;
+    var spanMs = Math.max(DAY_MS, ms);
+    var start = end - spanMs;
+    var total = 0, coveredMs = 0;
+    rows.forEach(function (r) {
+      var inside = Math.min(r.t + ms, end) - Math.max(r.t, start);
+      if (inside > 0) { total += r.amount * inside / ms; coveredMs += inside; }
+    });
+    return {
+      total: total, latest: newest.amount, end: end, spanMs: spanMs,
+      coveredMs: coveredMs, stale: nowMs - end > 2 * ms
+    };
   }
 
   /* One bucket per drawn column. The chart's viewBox width is the most
@@ -1893,6 +2031,10 @@
     isPaused: isPaused,
     viewFor: viewFor,
     historyShape: historyShape,
+    intervalOf: intervalOf,
+    intervalBars: intervalBars,
+    barsByDay: barsByDay,
+    recentTotal: recentTotal,
     bucketSeconds: bucketSeconds,
     timelineRuns: timelineRuns,
     timelineStats: timelineStats,

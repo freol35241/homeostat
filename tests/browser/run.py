@@ -392,6 +392,43 @@ class RelatedReadings(PageTest):
         self.assertEqual(await self.page.locator("#overlay-panel .chart-contributor").count(), 2)
 
 
+class IntervalBars(PageTest):
+    """`docs/design.md#totals-over-intervals`: an aspect whose entity file
+    declares `interval_s` is drawn as bars, and its tile's big number is
+    the total over the 24 h that end with the newest recorded interval."""
+
+    TILE = '.tile[data-entity="rain"][data-aspect="precipitation"]'
+
+    async def test_a_tile_totals_the_last_day_and_draws_its_hours(self):
+        await self.view("now")
+        tile = self.page.locator(self.TILE)
+        await self.page.wait_for_selector(self.TILE + " rect.chart-bar")
+        # A third of 24 hours rain 0.6 each.
+        self.assertRegex(await tile.locator(".big").inner_text(), r"^4\.8")
+        self.assertRegex(await tile.locator(".caption").inner_text(), r"^last 24 h to .* · latest hour")
+        # The hour straddling the window's start is drawn whole, so 25
+        # hours show, and eight or nine of them rained.
+        self.assertIn(await tile.locator("rect.chart-bar:not(.forecast)").count(), (8, 9))
+        self.assertGreater(await tile.locator("rect.chart-bar.forecast").count(), 0)
+
+    async def test_the_overlay_draws_bars_and_a_week_in_days(self):
+        await self.view("now")
+        await self.page.click(self.TILE)
+        await self.page.wait_for_selector("#overlay-panel rect.chart-bar")
+        stats = (await self.page.locator("#overlay-panel .stat-row").inner_text()).upper()
+        self.assertIn("TOTAL", stats)
+        self.assertIn("AHEAD", stats, "the forecast after the record")
+        await self.page.click('[data-action="range-chip"][data-hours="168"]')
+        await self.page.wait_for_timeout(700)
+        days = await self.page.locator("#overlay-panel rect.chart-bar:not(.forecast)").count()
+        self.assertGreaterEqual(days, 7)
+        self.assertLessEqual(days, 8)
+        # An hour's window still holds the hour that straddles its start.
+        await self.page.click('[data-action="range-chip"][data-hours="1"]')
+        await self.page.wait_for_timeout(700)
+        self.assertGreater(await self.page.locator("#overlay-panel rect.chart-bar").count(), 0)
+
+
 class MapTracks(PageTest):
     """`docs/design.md#map-and-people`: a map with `hours` reads each
     person's track from the recorder and draws its marker in the colour

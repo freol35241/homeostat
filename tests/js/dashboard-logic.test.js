@@ -1068,6 +1068,100 @@ test('outcomes are pruned whether or not anything asks about them', () => {
   assert.deepEqual(Object.keys(recent), ['b']);
 });
 
+// ---- interval aspects ----
+
+const HOUR = 3600e3;
+const T0 = Date.UTC(2026, 10, 7, 0);  // an hour start, UTC
+const iso = (ms) => new Date(ms).toISOString();
+// Hourly rows as the recorder returns them, each at its hour's start.
+const hourly = (...amounts) => amounts.map((v, i) => ({ ts: iso(T0 + i * HOUR), value: v }));
+
+test('an aspect with an interval is drawn as bars, whatever its value', () => {
+  const rain = { intervals: { precipitation: 3600 } };
+  assert.equal(logic.intervalOf(rain, 'precipitation'), 3600);
+  assert.equal(logic.intervalOf(rain, 'wind'), null);
+  assert.equal(logic.intervalOf({}, 'precipitation'), null);
+  assert.equal(logic.historyShape(0.4, null, 3600), 'bars');
+  assert.equal(logic.historyShape(0.4, null, null), 'chart');
+});
+
+test('a short window has one bar per recorded interval, and a missing hour has none', () => {
+  const points = hourly(0.5, 0, 1.5);
+  points.splice(1, 1);
+  const bars = logic.intervalBars(points, 3600, { from: T0, to: T0 + 3 * HOUR }, null);
+  assert.deepEqual(bars.map((b) => [b.from, b.to, b.observed, b.forecast]), [
+    [T0, T0 + HOUR, 0.5, 0],
+    [T0 + 2 * HOUR, T0 + 3 * HOUR, 1.5, 0],
+  ]);
+});
+
+test('a forecast fills in after the last recorded hour, spread over its interval', () => {
+  // Recorded up to 02:00; a 6 h forecast interval from 01:00 holds 6 mm.
+  // Its first hour is already recorded, so 5 of its hours are drawn at 1 mm.
+  const forecast = { to: T0 + 7 * HOUR, points: [{ t: T0 + HOUR, v: 6, d: 6 * 3600 }, { t: T0, v: 9, d: null }] };
+  const bars = logic.intervalBars(hourly(0.5, 0.2), 3600, { from: T0, to: T0 + 4 * HOUR }, forecast);
+  assert.equal(bars.length, 7);
+  assert.deepEqual(bars.slice(0, 2).map((b) => [b.observed, b.forecast]), [[0.5, 0], [0.2, 0]]);
+  bars.slice(2).forEach((b) => {
+    assert.equal(b.observed, 0);
+    assert.ok(Math.abs(b.forecast - 1) < 1e-9);
+  });
+});
+
+test('interval bars line up with the stamps, not with the epoch', () => {
+  // A unit in a zone half an hour off UTC stamps its hours at :30.
+  const points = hourly(0.5, 1.5).map((p) => ({ ...p, ts: iso(Date.parse(p.ts) + 1800e3) }));
+  const bars = logic.intervalBars(points, 3600, { from: T0, to: T0 + 3 * HOUR }, null);
+  assert.deepEqual(bars.map((b) => [b.from - T0, b.observed]), [[1800e3, 0.5], [5400e3, 1.5]]);
+});
+
+test('a forecast is drawn at most as far ahead as the window looks back', () => {
+  const forecast = { to: T0 + 240 * HOUR, points: [{ t: T0 + 3 * HOUR, v: 237, d: 237 * 3600 }] };
+  const bars = logic.intervalBars(hourly(0.5, 0.2, 0.1), 3600, { from: T0, to: T0 + 3 * HOUR }, forecast);
+  assert.equal(bars[bars.length - 1].to, T0 + 6 * HOUR, 'three hours back, three ahead');
+  assert.ok(bars.length <= 6, 'and still in hours, not days');
+});
+
+test('a window of more than 48 intervals is drawn in local days', () => {
+  const week = { from: T0, to: T0 + 7 * 24 * HOUR };
+  const bars = logic.intervalBars(hourly(...Array(72).fill(0.25)), 3600, week, null);
+  bars.forEach((b) => {
+    assert.equal(new Date(b.from).getHours(), 0, 'a bar starts at local midnight');
+    assert.equal(new Date(b.to).getHours(), 0);
+  });
+  const total = bars.reduce((a, b) => a + b.observed, 0);
+  assert.ok(Math.abs(total - 18) < 1e-9, 'every hour lands in exactly one day');
+});
+
+test('a tile totals the 24 h ending with the newest recorded hour', () => {
+  // 26 hours recorded; the newest ends at 26:00, an hour before now.
+  const points = hourly(...Array(26).fill(0.1).map((v, i) => (i < 2 ? 5 : v)));
+  const now = T0 + 27 * HOUR;
+  const recent = logic.recentTotal(points, 3600, now);
+  assert.equal(recent.end, T0 + 26 * HOUR);
+  assert.ok(Math.abs(recent.total - 2.4) < 1e-9, 'the two old hours fall outside');
+  assert.equal(recent.latest, 0.1);
+  assert.deepEqual([recent.spanMs, recent.coveredMs, recent.stale], [24 * HOUR, 24 * HOUR, false]);
+  // A publisher that stopped three hours ago is stale, and a missing hour
+  // is counted.
+  points.splice(10, 1);
+  const later = logic.recentTotal(points, 3600, T0 + 29 * HOUR);
+  assert.deepEqual([later.coveredMs, later.stale], [23 * HOUR, true]);
+  assert.equal(logic.recentTotal([], 3600, now), null);
+});
+
+test('an interval that does not divide the day counts by its share', () => {
+  // Five-hour totals of 5: the 24 h ending with the newest hold four whole
+  // ones and four fifths of the one before, and nothing is missing.
+  const rows = [0, 1, 2, 3, 4, 5].map((i) => ({ ts: iso(T0 + i * 5 * HOUR), value: 5 }));
+  const recent = logic.recentTotal(rows, 5 * 3600, T0 + 31 * HOUR);
+  assert.ok(Math.abs(recent.total - 24) < 1e-9);
+  assert.equal(recent.coveredMs, recent.spanMs);
+  // An interval longer than a day is totalled alone.
+  const twoDays = logic.recentTotal([{ ts: iso(T0), value: 7 }], 2 * 86400, T0 + 49 * HOUR);
+  assert.deepEqual([twoDays.total, twoDays.spanMs], [7, 48 * HOUR]);
+});
+
 // ---- history shapes ----
 
 test('an undescribed reading is charted by its type: numbers a line, anything else a timeline', () => {
