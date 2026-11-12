@@ -168,16 +168,14 @@ pub fn load(root: &Path) -> (House, Vec<ValidationError>) {
 }
 
 fn toml_files(dir: &Path) -> Vec<String> {
-    let mut files: Vec<String> = fs::read_dir(dir)
-        .map(|entries| {
-            entries
-                .filter_map(std::result::Result::ok)
-                .filter(|e| e.path().is_file())
-                .filter_map(|e| e.file_name().into_string().ok())
-                .filter(|n| n.ends_with(".toml"))
-                .collect()
-        })
-        .unwrap_or_default();
+    let mut files: Vec<String> = fs::read_dir(dir).map_or_default(|entries| {
+        entries
+            .filter_map(std::result::Result::ok)
+            .filter(|e| e.path().is_file())
+            .filter_map(|e| e.file_name().into_string().ok())
+            .filter(|n| n.ends_with(".toml"))
+            .collect()
+    });
     files.sort();
     files
 }
