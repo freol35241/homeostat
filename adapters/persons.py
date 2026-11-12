@@ -19,18 +19,18 @@ which trackers are whose; the rule is fixed (`Persons.evaluate`).
 
 1. home if any usable tracker reports `home` or `sighted` as true;
 2. away if none does and either a usable tracker reports `home` as
-   false, or no usable tracker reports `home` and every usable
+   false, or no `home` tracker has ever reported and every usable
    `sighted` tracker reports false;
-3. otherwise unchanged. Losing sight of someone is not evidence that
-   they left.
+3. otherwise unchanged.
 
 A tracker is usable unless it reports `available = false`. The second
-case under rule 2 lets a person be away on WiFi evidence when no
-geofence answers: one tracked only by WiFi, or one whose app never
-reported or is unavailable. The adapter's own delay already stands
-behind that `false`. `presence_valid`
-is false while presence is held by rule 3, so the dashboard shows it as
-stale.
+case under rule 2 lets a person tracked only by WiFi be away, and one
+whose app has never reported. The adapter's own delay already stands
+behind that `false`. A geofence that has reported keeps the WiFi from
+deciding away, even while it is unavailable. A sleeping phone can drop
+off the broker and the WiFi together, so losing sight of it then is not
+evidence that the person left. `presence_valid` is false while presence is held by rule
+3, so the dashboard shows it as stale.
 
 Position: `lat`, `lon`, `accuracy` and `fixed_at` come from the newest
 fix whose accuracy is within max_accuracy_m. A fix counts once its
@@ -152,10 +152,12 @@ class Persons:
 
     def _presence(self, person: house.Entity, out: Outcome) -> None:
         says: dict[str, bool] = {}  # source name -> the usable tracker's boolean
+        geofenced = False  # a `home` source has reported, usable or not
         for name, src in person.sources.items():
             if src.aspect not in PRESENCE_ASPECTS:
                 continue
             value = self.readings.get(src.entity, {}).get(src.aspect)
+            geofenced = geofenced or (src.aspect == "home" and isinstance(value, bool))
             if self.usable(src.entity) and isinstance(value, bool):
                 says[name] = value
         sources = person.sources
@@ -174,10 +176,9 @@ class Persons:
         elif left:
             decided = left
             out.decision = f"away: {', '.join(left)} left the geofence"
-        # A usable geofence with an answer decided above, so none answers here.
-        elif sighted and sorted(sighted) == unseen:
+        elif not geofenced and sighted and sorted(sighted) == unseen:
             decided = unseen
-            out.decision = f"away: no geofence answers, and {', '.join(unseen)} has not seen the device"
+            out.decision = f"away: no geofence has reported, and {', '.join(unseen)} has not seen the device"
         else:
             out.decision = "unchanged: no usable tracker says home or left"
         if decided:

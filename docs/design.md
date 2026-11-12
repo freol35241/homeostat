@@ -2695,14 +2695,15 @@ which trackers are whose:
 
 - `presence` is home if any usable tracker reports `home` or `sighted`
   as true. It is away if none does and a usable tracker reports `home`
-  as false. When no usable tracker reports `home`, the person is also
-  away when every usable `sighted` tracker reports false. Without this a
-  person tracked only by WiFi could never be away, and nor could one
-  whose app never reported or has gone unavailable. A phone that dies
-  at home therefore reads away once the WiFi loses it, as it would
-  without an app. In any other case it is unchanged,
-  and `presence_valid` is false so the dashboard shows it as stale.
-  A tracker is usable unless it reports `available = false`.
+  as false. When no `home` tracker has ever reported, the person is
+  also away when every usable `sighted` tracker reports false.
+  Without it a person tracked only by WiFi could never be away, nor
+  could one whose app was never set up. A geofence that has reported
+  keeps that fallback off even while it is unavailable, because a
+  sleeping phone can drop off the broker and the WiFi together. In any
+  other case presence is unchanged, and `presence_valid` is false so
+  the dashboard shows it as stale. A tracker is usable unless it
+  reports `available = false`.
 - The position is the newest fix whose accuracy is within the unit's
   `max_accuracy_m`, which keeps coarse network locates off the map.
   When no fix qualifies, the last values stand. A tracker publishes
