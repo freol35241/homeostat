@@ -2910,6 +2910,10 @@ beyond the vocabulary row.
   `ready()`. An undelivered message is a `drop` with `delivery-failed`.
   The channel's `available` goes false until the next success, which
   shows as a deviation on `Now`.
+- A house that grants the dashboard `notifier` can send a channel text
+  by hand from the channel's overlay, to check a phone after it is set
+  up. The page waits for a new `delivered`, because a channel does not
+  report the text back. The text is capped at 1000 characters there.
 
 Rejected alternatives:
 

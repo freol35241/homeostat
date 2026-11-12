@@ -47,6 +47,10 @@ document.addEventListener('click', function (e) {
     sendCmd(room, entity, 'on', value);
     return;
   }
+  if (action === 'notify-send') {
+    sendNotification(el.getAttribute('data-room'), el.getAttribute('data-entity'), el.getAttribute('data-aspect'));
+    return;
+  }
   if (action === 'toggle-lock') {
     var lockRoom = el.getAttribute('data-room');
     var lockEntity = el.getAttribute('data-entity');
@@ -281,10 +285,38 @@ document.addEventListener('change', function (e) {
   }
 });
 
+// A notifier's typed text, sent as a message or an alert. Blank text is
+// not sent, as /api/cmd would refuse it. The box empties once the text is
+// on its way, and the line under it says what became of it.
+function sendNotification(room, entity, aspect) {
+  var box = document.getElementById('notify-' + entity);
+  var text = box ? box.value : '';
+  if (!text.trim()) {
+    if (box) box.focus();
+    return;
+  }
+  delete localState.notifyDrafts[entity];
+  if (box) box.value = '';
+  sendCmd(room, entity, aspect, text);
+}
+
+// Enter in a notifier's box sends the text as a message.
+document.addEventListener('keydown', function (e) {
+  var el = e.target;
+  if (e.key !== 'Enter' || !el.matches || !el.matches('[data-action="notify-text"]')) return;
+  e.preventDefault();
+  sendNotification(el.getAttribute('data-room'), el.getAttribute('data-entity'), 'message');
+});
+
 // live drag feedback: keep sliders responsive without re-render clobbering them
 document.addEventListener('input', function (e) {
   var el = e.target;
   if (!el.matches) return;
+
+  if (el.matches('[data-action="notify-text"]')) {
+    localState.notifyDrafts[el.getAttribute('data-entity')] = el.value;
+    return;
+  }
 
   if (el.matches('[data-action="slider"]')) {
     var kind = el.getAttribute('data-kind');

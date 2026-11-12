@@ -36,11 +36,12 @@ export function sendCmd(room, entity, aspect, value) {
   delete drafts[key];
   delete recent[key];
   var spec = entitySpec(room, entity);
+  var capability = spec ? spec.capability : null;
   var seq = ++cmdSeq;
   logic.trackCommand(pending, {
     room: room, entity: entity, aspect: aspect, value: value, seq: seq, tolerance: logic.cmdTolerance(aspect),
-    capability: spec ? spec.capability : null, descriptor: store.aspects[entity],
-    before: stateValue(room, entity, aspect)
+    capability: capability, descriptor: store.aspects[entity],
+    before: stateValue(room, entity, logic.readbackAspect(capability, aspect))
   }, Date.now(), 'sending');
   scheduleRender();
   fetch('/api/cmd', {
@@ -91,6 +92,10 @@ export function stepBase(room, entity, aspect) {
 
 // A commanded value in the words its control uses.
 function formatCmdValue(room, entity, aspect, value) {
+  if ((aspect === 'message' || aspect === 'alert') && typeof value === 'string') {
+    var text = value.length > 40 ? value.slice(0, 39) + '\u2026' : value;
+    return (aspect === 'alert' ? 'alert \u201c' : '\u201c') + text + '\u201d';
+  }
   if (aspect === 'brightness' && typeof value === 'number') return Math.round(value / 254 * 100) + '%';
   if (typeof value === 'boolean' && aspect === 'locked') return value ? 'locked' : 'unlocked';
   if (typeof value === 'boolean' && aspect === 'on') return value ? 'on' : 'off';
@@ -130,7 +135,7 @@ function commandStatus(key) {
     var text = 'Asked ' + fmt(entry.value);
     if (entry.outcome === 'draft') return { tone: 'busy', text: text };
     if (entry.seen !== undefined) text += ' · still ' + fmt(entry.seen);
-    else text += ' · waiting for the device';
+    else text += entry.readback === aspect ? ' · waiting for the device' : ' · waiting for delivery';
     var warning = commandWarning(room, entity);
     return warning ? { tone: 'warn', text: text + ' · ' + warning } : { tone: 'busy', text: text };
   }
@@ -227,7 +232,8 @@ function controlAspect(el) {
 // controls.
 var COMMAND_ACTIONS = {
   'toggle-light': 1, 'toggle-lock': 1, 'climate-step': 1, 'brightness-step': 1,
-  'aspect-step': 1, 'aspect-enum': 1, 'aspect-select': 1, 'aspect-slider': 1, 'slider': 1
+  'aspect-step': 1, 'aspect-enum': 1, 'aspect-select': 1, 'aspect-slider': 1, 'slider': 1,
+  'notify-send': 1
 };
 
 /* Applied after every render rather than built into each control's

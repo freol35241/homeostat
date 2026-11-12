@@ -298,6 +298,10 @@ async fn dashboard_serves_the_family_surface() {
         .declare_subscriber("home/cmd/livingroom/heat_pump/*")
         .await
         .expect("mode cmd subscriber");
+    let notify_cmd_sub = observer
+        .declare_subscriber("home/cmd/person/phone/*")
+        .await
+        .expect("notifier cmd subscriber");
 
     // First run resolves the dashboard's uv environment (aiohttp): generous.
     let mut dash = health_watch(&observer, "dashboard").await;
@@ -782,6 +786,56 @@ async fn dashboard_serves_the_family_surface() {
     assert_eq!(
         status, 400,
         "non-commandable climate aspect must be refused: {reply}"
+    );
+
+    // A notifier takes its text: `message` is the base aspect and `alert`
+    // the feature this phone declares. Each is published as it was typed,
+    // in the same manual-band envelope.
+    assert_eq!(commandable("phone"), json!(true), "granted notifier");
+    for aspect in ["message", "alert"] {
+        let (status, reply) = http_request(
+            &addr,
+            "POST",
+            "/api/cmd",
+            &[("X-Homeostat", "family")],
+            Some(
+                &json!({"room": "person", "entity": "phone", "aspect": aspect, "value": "Dinner is ready"}),
+            ),
+        );
+        assert_eq!(status, 200, "{aspect}: {reply}");
+        let cmd_sample = tokio::time::timeout(Duration::from_secs(30), notify_cmd_sub.recv_async())
+            .await
+            .expect("notifier cmd envelope observed")
+            .expect("sample");
+        assert_eq!(
+            cmd_sample.key_expr().as_str(),
+            format!("home/cmd/person/phone/{aspect}")
+        );
+        let envelope: Value =
+            serde_json::from_slice(&cmd_sample.payload().to_bytes()).expect("json");
+        assert_eq!(
+            envelope,
+            json!({"value": "Dinner is ready", "priority": "manual", "actor": "dashboard", "id": reply["id"]}),
+        );
+    }
+    // Text that is blank, too long or not a string never reaches the bus.
+    for value in [json!("  "), json!("x".repeat(1001)), json!(42)] {
+        let (status, reply) = http_request(
+            &addr,
+            "POST",
+            "/api/cmd",
+            &[("X-Homeostat", "family")],
+            Some(
+                &json!({"room": "person", "entity": "phone", "aspect": "message", "value": value}),
+            ),
+        );
+        assert_eq!(status, 400, "{value}: {reply}");
+    }
+    assert!(
+        tokio::time::timeout(Duration::from_secs(2), notify_cmd_sub.recv_async())
+            .await
+            .is_err(),
+        "refused text must never reach the bus"
     );
 
     // 2b. Aspect descriptors (docs/design.md#aspect-descriptors): the

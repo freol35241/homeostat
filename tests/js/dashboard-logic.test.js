@@ -889,6 +889,39 @@ test('a bridge republishing the old value is not an answer', () => {
   assert.equal(entry.seen, 21, 'the stale report is kept, for "still reports 21"');
 });
 
+test('a notifier is answered by a new delivered, not by its text', () => {
+  // The channel never reports the text back. It reports when the
+  // delivery service took the message.
+  const notify = (aspect, before) => cmd({
+    room: 'person', entity: 'phone', aspect: aspect, value: 'Dinner is ready', capability: 'notifier', before: before
+  });
+  let pending = logic.trackCommand({}, notify('message', 1700000000), 1000);
+  assert.equal(logic.resolveFromState(pending, 'home/state/person/phone/delivered', 1700000000), null,
+    'the receipt as it stood before the send');
+  const done = logic.resolveFromState(pending, 'home/state/person/phone/delivered', 1700000100);
+  assert.equal(done.outcome, 'confirmed');
+  assert.equal(done.key, 'person/phone/message');
+  assert.equal(logic.pendingFor(pending, 'person', 'phone', 'message'), null);
+
+  // The first receipt a channel ever gives answers too.
+  pending = logic.trackCommand({}, notify('alert', undefined), 1000);
+  assert.equal(logic.resolveFromState(pending, 'home/state/person/phone/delivered', 1700000200).key,
+    'person/phone/alert');
+
+  // Another entity's receipt, or another aspect, answers nothing.
+  pending = logic.trackCommand({}, notify('message', 1700000000), 1000);
+  assert.equal(logic.resolveFromState(pending, 'home/state/person/tablet/delivered', 1700000300), null);
+  assert.equal(logic.resolveFromState(pending, 'home/state/person/phone/acknowledged', 1700000300), null);
+  assert.equal(logic.pendingFor(pending, 'person', 'phone', 'message').outcome, 'pending');
+});
+
+test('only a notifier text is answered by another aspect', () => {
+  assert.equal(logic.readbackAspect('notifier', 'message'), 'delivered');
+  assert.equal(logic.readbackAspect('notifier', 'alert'), 'delivered');
+  assert.equal(logic.readbackAspect('light', 'on'), 'on');
+  assert.equal(logic.readbackAspect(null, 'setpoint'), 'setpoint');
+});
+
 test('a device that clamped the value has answered, with its own value', () => {
   // Not a timeout: the device moved, just not to where it was asked.
   const pending = logic.trackCommand({}, cmd({ aspect: 'setpoint', value: 99, before: 21, capability: 'climate' }), 1000);

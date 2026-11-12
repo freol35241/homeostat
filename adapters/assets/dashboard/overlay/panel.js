@@ -94,8 +94,10 @@ export function renderOverlayContent() {
   // re-runs its connectedCallback, which seeks to the live edge and calls
   // play(). That causes a stutter and a flash of native controls on every
   // delta.
+  var typing = typingIn();
   byId('overlay-head').innerHTML = r.body;
   byId('overlay-rest').innerHTML = r.rest || '';
+  if (typing) resumeTyping(typing);
   mountCameraLive(r.camera);
   wireChartInteractions(byId('overlay-body'));
   wireSourceLegend(byId('overlay-body'));
@@ -103,6 +105,22 @@ export function renderOverlayContent() {
   // returns, or when a group is toggled), and its controls need the
   // pending-command marks as much as the view's do.
   markPendingControls();
+}
+
+// A text box being typed in. Its text survives a swap through
+// localState, but the focus and the caret are on the old node, so they
+// are carried over by id.
+function typingIn() {
+  var el = document.activeElement;
+  if (!el || !el.id || !el.matches('#overlay-body input[type="text"]')) return null;
+  return { id: el.id, start: el.selectionStart, end: el.selectionEnd };
+}
+
+function resumeTyping(typing) {
+  var el = byId(typing.id);
+  if (!el) return;
+  el.focus();
+  el.setSelectionRange(typing.start, typing.end);
 }
 
 // The live player for `name`, or none. Mounting is idempotent: mounting

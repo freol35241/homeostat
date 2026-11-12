@@ -1,0 +1,14 @@
+schema = 1
+
+[entity]
+id = "phone-1"
+capability = "notifier"
+features = ["alert"]
+room = "person"
+
+[naming]
+en = "family phone"
+
+[write_policy]
+mode = "shared"
+owner = "reflector"

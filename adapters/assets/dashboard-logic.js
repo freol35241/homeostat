@@ -1053,6 +1053,15 @@
     return room + '/' + entity + '/' + aspect;
   }
 
+  /* The aspect whose report answers a command. Most devices report the
+   * commanded aspect back. A notifier does not report the text it was
+   * sent: the channel answers with a new `delivered`, the time the
+   * delivery service took the message (docs/design.md#notifications). */
+  function readbackAspect(capability, aspect) {
+    if (capability === 'notifier' && (aspect === 'message' || aspect === 'alert')) return 'delivered';
+    return aspect;
+  }
+
   /* One command per (room, entity, aspect). A second tap on the same
    * control replaces the first, which is what the user means. The
    * replaced request is still remembered. Its value is added to `asked`,
@@ -1079,7 +1088,8 @@
       tolerance: cmd.tolerance || 0,
       at: nowMs,
       timeoutMs: commandTimeoutMs(cmd.capability, cmd.descriptor, cmd.aspect),
-      outcome: stage || 'pending'
+      outcome: stage || 'pending',
+      readback: readbackAspect(cmd.capability, cmd.aspect)
     };
     return pending;
   }
@@ -1153,6 +1163,8 @@
   function resolveFromState(pending, key, value) {
     var parts = String(key).split('/');
     if (parts[0] !== 'home' || parts[1] !== 'state' || parts.length < 5) return null;
+    var answered = resolveFromReceipt(pending, parts[2], parts[3], parts[4], value);
+    if (answered) return answered;
     var pk = pendingKey(parts[2], parts[3], parts[4]);
     var entry = pending[pk];
     if (!entry || (entry.outcome !== 'pending' && entry.outcome !== 'sending')) return null;
@@ -1170,6 +1182,27 @@
     }
     delete pending[pk];
     return { key: pk, outcome: 'adjusted', value: entry.value, seen: value };
+  }
+
+  /* A command answered by another aspect (readbackAspect). Any new value
+   * of it confirms the command, because the receipt says the channel took
+   * a message and carries nothing to compare. `before` is the receipt as
+   * it stood when the command was sent. */
+  function resolveFromReceipt(pending, room, entity, aspect, value) {
+    var keys = Object.keys(pending);
+    for (var i = 0; i < keys.length; i++) {
+      var entry = pending[keys[i]];
+      var parts = keys[i].split('/');
+      if (parts[0] !== room || parts[1] !== entity || parts[2] === aspect) continue;
+      if (entry.readback !== aspect) continue;
+      if (entry.outcome !== 'pending' && entry.outcome !== 'sending') continue;
+      // Exactly equal: sameValue's relative tolerance spans half an hour
+      // at an epoch's size.
+      if (entry.before === value) continue;
+      delete pending[keys[i]];
+      return { key: keys[i], outcome: 'confirmed', value: entry.value };
+    }
+    return null;
   }
 
   /* Stages 2 and 3. Both arrive as health events addressed by cmd_id.
@@ -2088,6 +2121,7 @@
     aboutLines: aboutLines,
     pendingKey: pendingKey,
     trackCommand: trackCommand,
+    readbackAspect: readbackAspect,
     pendingFor: pendingFor,
     commandBase: commandBase,
     commandSent: commandSent,

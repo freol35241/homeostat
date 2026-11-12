@@ -165,6 +165,7 @@ COMMANDABLE = {
     "switch": {"on"},
     "climate": {"setpoint"},
     "burner": {"on", "power_level"},
+    "notifier": {"message", "alert"},
 }
 BASE_ASPECT = {
     "light": "on",
@@ -172,13 +173,15 @@ BASE_ASPECT = {
     "switch": "on",
     "climate": "setpoint",
     "burner": "on",
+    "notifier": "message",
 }
 # The vocabulary's value types, in the descriptor-command shape so one
 # check serves both: `on`/`locked` are bools (z2m, esphome, the lock
 # adapters), `brightness`/`color_temp` numbers (z2m, esphome), `setpoint`
-# a float (ivt490), `power_level` a number (aduro's 10/50/100). The
-# adapter checks bounds (docs/adapters.md, Commands). The type is checked
-# here so a JSON object cannot reach the bus in a manual-band envelope.
+# a float (ivt490), `power_level` a number (aduro's 10/50/100), and a
+# notifier's `message` and `alert` the text itself. The adapter checks
+# bounds (docs/adapters.md, Commands). The type is checked here so a JSON
+# object cannot reach the bus in a manual-band envelope.
 VOCABULARY_COMMANDS = {
     "on": {"type": "bool"},
     "locked": {"type": "bool"},
@@ -186,7 +189,12 @@ VOCABULARY_COMMANDS = {
     "color_temp": {"type": "float"},
     "setpoint": {"type": "float"},
     "power_level": {"type": "float"},
+    "message": {"type": "text"},
+    "alert": {"type": "text"},
 }
+# The longest text a person may send from the page. A notification is a
+# line or two, and a phone shows little more.
+MAX_TEXT_CHARS = 1000
 # Command bodies are four short fields. aiohttp's 1 MiB default would let
 # anything on the LAN make the dashboard buffer far more than it needs.
 MAX_BODY_BYTES = 64 * 1024
@@ -507,6 +515,16 @@ def command_value_ok(command: dict, value) -> bool:
         lo, hi = c.get("min"), c.get("max")
         return (lo is None or value >= lo) and (hi is None or value <= hi)
     return False
+
+
+def text_ok(value) -> bool:
+    """Return whether `value` is text a notifier may be sent.
+
+    It must be a string that is not blank and at most MAX_TEXT_CHARS long.
+    Only the vocabulary's text commands use this check, because a
+    descriptor declares no text command.
+    """
+    return isinstance(value, str) and bool(value.strip()) and len(value) <= MAX_TEXT_CHARS
 
 
 def reachable(session, spec: dict, aspect: str) -> bool:
@@ -1033,8 +1051,12 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         base = BASE_ASPECT.get(spec["capability"])
         vocabulary = aspect in allowed and (aspect == base or aspect in spec["features"])
         if vocabulary:
-            if not command_value_ok(VOCABULARY_COMMANDS[aspect], value):
-                return json_error(f"{entity} {aspect}: {value!r} is not a {VOCABULARY_COMMANDS[aspect]['type']}")
+            kind = VOCABULARY_COMMANDS[aspect]["type"]
+            if kind == "text":
+                if not text_ok(value):
+                    return json_error(f"{entity} {aspect}: the text must not be blank or over {MAX_TEXT_CHARS} characters")
+            elif not command_value_ok(VOCABULARY_COMMANDS[aspect], value):
+                return json_error(f"{entity} {aspect}: {value!r} is not a {kind}")
         else:
             with hub.lock:
                 command = descriptor_command(hub.aspects.get(entity), aspect)

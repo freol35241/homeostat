@@ -353,6 +353,61 @@ class RulesAboutControls(PageTest):
         self.assertIn("Nothing is listening", await status.text_content())
 
 
+class NotifierSend(PageTest):
+    """A notifier's overlay has a box to send it text by hand.
+
+    The text typed so far is a choice held outside the markup, so it and
+    the focus survive the re-render a state delta causes. The channel's
+    new `delivered` answers the send.
+    """
+
+    async def open_phone(self) -> None:
+        await self.view("everything")
+        await self.page.locator(
+            '#view [data-action="entity-detail"][data-entity="family_phone"]'
+        ).first.click()
+        await self.page.wait_for_timeout(400)
+
+    async def test_the_typed_text_survives_a_rerender(self):
+        await self.open_phone()
+        box = self.page.locator("#notify-family_phone")
+        await box.click()
+        await self.page.keyboard.type("Dinner is")
+        await self.house.push(
+            {"type": "state", "key": "home/state/person/family_phone/acknowledged", "value": 1}
+        )
+        await self.page.wait_for_timeout(400)
+        await self.page.keyboard.type(" ready")
+        self.assertEqual(await box.input_value(), "Dinner is ready")
+
+    async def test_a_send_is_answered_by_delivered(self):
+        await self.open_phone()
+        await self.page.fill("#notify-family_phone", "Dinner is ready")
+        await self.page.click('[data-action="notify-send"][data-aspect="alert"]')
+        await self.page.wait_for_timeout(300)
+        self.assertEqual(
+            self.house.posted("/api/cmd"),
+            [{"room": "person", "entity": "family_phone", "aspect": "alert", "value": "Dinner is ready"}],
+        )
+        self.assertEqual(await self.page.locator("#notify-family_phone").input_value(), "")
+        status = self.page.locator('[data-cmd-status="person/family_phone/alert"]')
+        self.assertIn("Dinner is ready", await status.text_content())
+
+        await self.house.push(
+            {"type": "state", "key": "home/state/person/family_phone/delivered", "value": 1800000100}
+        )
+        await self.page.wait_for_timeout(300)
+        self.assertIn("✓", await status.text_content())
+
+    async def test_blank_text_is_not_sent(self):
+        await self.open_phone()
+        await self.page.fill("#notify-family_phone", "   ")
+        await self.page.keyboard.press("Enter")
+        await self.page.click('[data-action="notify-send"][data-aspect="message"]')
+        await self.page.wait_for_timeout(300)
+        self.assertEqual(self.house.posted("/api/cmd"), [])
+
+
 class ViewsAreText(PageTest):
     """`docs/design.md#views-are-text`: a view shows the dashboard.toml
     block that makes it, so what is on screen has a name to say."""
