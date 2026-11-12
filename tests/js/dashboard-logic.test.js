@@ -889,27 +889,31 @@ test('a bridge republishing the old value is not an answer', () => {
   assert.equal(entry.seen, 21, 'the stale report is kept, for "still reports 21"');
 });
 
-test('a notifier is answered by a new delivered, not by its text', () => {
+test('a notifier send is answered by its channel\'s next delivered', () => {
   // The channel never reports the text back. It reports when the
   // delivery service took the message.
-  const notify = (aspect, before) => cmd({
-    room: 'person', entity: 'phone', aspect: aspect, value: 'Dinner is ready', capability: 'notifier', before: before
+  const notify = (aspect) => cmd({
+    room: 'person', entity: 'phone', aspect: aspect, value: 'Dinner is ready', capability: 'notifier', before: undefined
   });
-  let pending = logic.trackCommand({}, notify('message', 1700000000), 1000);
-  assert.equal(logic.resolveFromState(pending, 'home/state/person/phone/delivered', 1700000000), null,
-    'the receipt as it stood before the send');
+  let pending = logic.trackCommand({}, notify('message'), 1000);
   const done = logic.resolveFromState(pending, 'home/state/person/phone/delivered', 1700000100);
   assert.equal(done.outcome, 'confirmed');
   assert.equal(done.key, 'person/phone/message');
   assert.equal(logic.pendingFor(pending, 'person', 'phone', 'message'), null);
 
-  // The first receipt a channel ever gives answers too.
-  pending = logic.trackCommand({}, notify('alert', undefined), 1000);
-  assert.equal(logic.resolveFromState(pending, 'home/state/person/phone/delivered', 1700000200).key,
+  // A receipt equal to the last one answers too: ntfy stamps whole
+  // seconds, so two deliveries in one second report the same time.
+  pending = logic.trackCommand({}, notify('alert'), 1000);
+  assert.equal(logic.resolveFromState(pending, 'home/state/person/phone/delivered', 1700000100).key,
     'person/phone/alert');
 
+  // With both in flight, one receipt answers one of them.
+  pending = logic.trackCommand(logic.trackCommand({}, notify('message'), 1000), notify('alert'), 1000);
+  logic.resolveFromState(pending, 'home/state/person/phone/delivered', 1700000200);
+  assert.equal(Object.keys(pending).length, 1);
+
   // Another entity's receipt, or another aspect, answers nothing.
-  pending = logic.trackCommand({}, notify('message', 1700000000), 1000);
+  pending = logic.trackCommand({}, notify('message'), 1000);
   assert.equal(logic.resolveFromState(pending, 'home/state/person/tablet/delivered', 1700000300), null);
   assert.equal(logic.resolveFromState(pending, 'home/state/person/phone/acknowledged', 1700000300), null);
   assert.equal(logic.pendingFor(pending, 'person', 'phone', 'message').outcome, 'pending');

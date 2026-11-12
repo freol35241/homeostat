@@ -1054,7 +1054,7 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
             kind = VOCABULARY_COMMANDS[aspect]["type"]
             if kind == "text":
                 if not text_ok(value):
-                    return json_error(f"{entity} {aspect}: the text must not be blank or over {MAX_TEXT_CHARS} characters")
+                    return json_error(f"{entity} {aspect}: must be text, not blank, at most {MAX_TEXT_CHARS} characters")
             elif not command_value_ok(VOCABULARY_COMMANDS[aspect], value):
                 return json_error(f"{entity} {aspect}: {value!r} is not a {kind}")
         else:

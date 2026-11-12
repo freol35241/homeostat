@@ -107,19 +107,20 @@ export function renderOverlayContent() {
   markPendingControls();
 }
 
-// A text box being typed in. Its text survives a swap through
+// A notifier's text box being typed in. Its text survives a swap through
 // localState, but the focus and the caret are on the old node, so they
-// are carried over by id.
+// are carried over by id. Other boxes keep no draft, and focus carried
+// into one would put the caret in text that had just been reset.
 function typingIn() {
   var el = document.activeElement;
-  if (!el || !el.id || !el.matches('#overlay-body input[type="text"]')) return null;
+  if (!el || !el.id || !el.matches('#overlay-body [data-action="notify-text"]')) return null;
   return { id: el.id, start: el.selectionStart, end: el.selectionEnd };
 }
 
 function resumeTyping(typing) {
   var el = byId(typing.id);
   if (!el) return;
-  el.focus();
+  el.focus({ preventScroll: true });
   el.setSelectionRange(typing.start, typing.end);
 }
 

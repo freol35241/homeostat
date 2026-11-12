@@ -399,6 +399,42 @@ class NotifierSend(PageTest):
         await self.page.wait_for_timeout(300)
         self.assertIn("✓", await status.text_content())
 
+    async def test_enter_sends_a_message_and_an_unheard_one_keeps_its_text(self):
+        self.house.heard = False
+        await self.open_phone()
+        await self.page.fill("#notify-family_phone", "Anyone home?")
+        await self.page.press("#notify-family_phone", "Enter")
+        await self.page.wait_for_timeout(300)
+        self.assertEqual(
+            self.house.posted("/api/cmd"),
+            [{"room": "person", "entity": "family_phone", "aspect": "message", "value": "Anyone home?"}],
+        )
+        status = self.page.locator('[data-cmd-status="person/family_phone/message"]')
+        self.assertIn("Nothing is listening", await status.text_content())
+        self.assertEqual(await self.page.locator("#notify-family_phone").input_value(), "Anyone home?")
+
+    async def test_the_line_follows_the_latest_send(self):
+        # The two buttons share one line. An alert sent after a message
+        # shows its own stage, not the message's outcome.
+        await self.open_phone()
+        await self.page.fill("#notify-family_phone", "Dinner")
+        await self.page.click('[data-action="notify-send"][data-aspect="message"]')
+        await self.page.wait_for_timeout(300)
+        await self.house.push(
+            {"type": "state", "key": "home/state/person/family_phone/delivered", "value": 1800000100}
+        )
+        await self.page.wait_for_timeout(300)
+        await self.page.fill("#notify-family_phone", "Dinner, now")
+        await self.page.click('[data-action="notify-send"][data-aspect="alert"]')
+        await self.page.wait_for_timeout(300)
+        self.assertEqual(
+            await self.page.locator('[data-cmd-status="person/family_phone/message"]').count(), 0
+        )
+        self.assertIn(
+            "waiting for delivery",
+            await self.page.locator('[data-cmd-status="person/family_phone/alert"]').text_content(),
+        )
+
     async def test_blank_text_is_not_sent(self):
         await self.open_phone()
         await self.page.fill("#notify-family_phone", "   ")

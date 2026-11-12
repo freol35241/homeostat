@@ -2434,6 +2434,8 @@ naming the stage ("asked 22.5° · still 21.0°") and then the outcome.
     lost contest, since a retry would lose the same way.
   - An adapter drop carrying the id shows its reason.
   - Nothing within the wait is **no confirmation from the device**.
+  - A notifier's text is answered by its next `delivered` instead
+    ([Notifications](#notifications)).
 - Matching is by `id`. Matching by key and value would cross wires
   when someone taps twice. Values compare at the control's grain, so a
   bulb that rounds by one step of 0–254 is not shown as adjusted.
@@ -2912,8 +2914,10 @@ beyond the vocabulary row.
   shows as a deviation on `Now`.
 - A house that grants the dashboard `notifier` can send a channel text
   by hand from the channel's overlay, to check a phone after it is set
-  up. The page waits for a new `delivered`, because a channel does not
-  report the text back. The text is capped at 1000 characters there.
+  up. The page takes the channel's next `delivered` as the answer,
+  because a channel does not report the text back. That receipt carries
+  no id, so another message delivered during the wait answers too. The
+  text is capped at 1000 characters there.
 
 Rejected alternatives:
 

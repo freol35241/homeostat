@@ -1163,7 +1163,7 @@
   function resolveFromState(pending, key, value) {
     var parts = String(key).split('/');
     if (parts[0] !== 'home' || parts[1] !== 'state' || parts.length < 5) return null;
-    var answered = resolveFromReceipt(pending, parts[2], parts[3], parts[4], value);
+    var answered = resolveFromReceipt(pending, parts[2], parts[3], parts[4]);
     if (answered) return answered;
     var pk = pendingKey(parts[2], parts[3], parts[4]);
     var entry = pending[pk];
@@ -1184,11 +1184,12 @@
     return { key: pk, outcome: 'adjusted', value: entry.value, seen: value };
   }
 
-  /* A command answered by another aspect (readbackAspect). Any new value
-   * of it confirms the command, because the receipt says the channel took
-   * a message and carries nothing to compare. `before` is the receipt as
-   * it stood when the command was sent. */
-  function resolveFromReceipt(pending, room, entity, aspect, value) {
+  /* A command answered by another aspect (readbackAspect). Any report of
+   * it confirms the command, even one equal to the last: ntfy stamps
+   * `delivered` in whole seconds. The receipt carries no id, so a
+   * delivery of someone else's message during the wait answers too, and
+   * a drop that comes after it finds nothing left to end. */
+  function resolveFromReceipt(pending, room, entity, aspect) {
     var keys = Object.keys(pending);
     for (var i = 0; i < keys.length; i++) {
       var entry = pending[keys[i]];
@@ -1196,9 +1197,6 @@
       if (parts[0] !== room || parts[1] !== entity || parts[2] === aspect) continue;
       if (entry.readback !== aspect) continue;
       if (entry.outcome !== 'pending' && entry.outcome !== 'sending') continue;
-      // Exactly equal: sameValue's relative tolerance spans half an hour
-      // at an epoch's size.
-      if (entry.before === value) continue;
       delete pending[keys[i]];
       return { key: keys[i], outcome: 'confirmed', value: entry.value };
     }

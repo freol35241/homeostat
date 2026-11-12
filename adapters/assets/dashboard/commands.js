@@ -30,21 +30,22 @@ var STEP_SETTLE_MS = 600;
 
 var cmdSeq = 0;
 
+/* Resolves to whether the command went onto the bus with something
+ * listening, so a caller can tell a refusal from a send. */
 export function sendCmd(room, entity, aspect, value) {
   var key = logic.pendingKey(room, entity, aspect);
   clearTimeout(drafts[key]);
   delete drafts[key];
   delete recent[key];
   var spec = entitySpec(room, entity);
-  var capability = spec ? spec.capability : null;
   var seq = ++cmdSeq;
   logic.trackCommand(pending, {
     room: room, entity: entity, aspect: aspect, value: value, seq: seq, tolerance: logic.cmdTolerance(aspect),
-    capability: capability, descriptor: store.aspects[entity],
-    before: stateValue(room, entity, logic.readbackAspect(capability, aspect))
+    capability: spec ? spec.capability : null, descriptor: store.aspects[entity],
+    before: stateValue(room, entity, aspect)
   }, Date.now(), 'sending');
   scheduleRender();
-  fetch('/api/cmd', {
+  return fetch('/api/cmd', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Homeostat': 'family' },
     body: JSON.stringify({ room: room, entity: entity, aspect: aspect, value: value })
@@ -55,13 +56,21 @@ export function sendCmd(room, entity, aspect, value) {
     var outcome = logic.commandSent(pending, key, seq, body);
     if (outcome) announceOutcome(outcome);
     scheduleRender();
+    return !outcome;
   }).catch(function (e) {
     // Refused before it reached the bus, so there is nothing to wait for.
     var entry = pending[key];
     if (entry && entry.outcome === 'sending' && entry.seq === seq) delete pending[key];
     announceOutcome({ key: key, outcome: 'failed', value: value, reason: errText(e) });
     scheduleRender();
+    return false;
   });
+}
+
+/* Forget how a command on this control ended, so the line under it
+ * shows the next one. A notifier's two buttons share one line. */
+export function forgetOutcome(room, entity, aspect) {
+  delete recent[logic.pendingKey(room, entity, aspect)];
 }
 
 /* A stepper's tap. It is held as a draft for a moment, so the taps that
