@@ -93,9 +93,16 @@ async fn trackers_make_one_person() {
     expect_decision(&events, "away: geofence").await;
 
     // The phone drops off the broker. Its last geofence no longer counts,
-    // the router cannot say he left, so presence is held and marked stale.
+    // so the router decides, and it has not seen the phone.
     let phone_available = matched_publisher(&observer, &format!("{PHONE}/available")).await;
     put(&phone_available, json!(false)).await;
+    expect_decision(&events, "away: no geofence answers").await;
+
+    // The router's tracker goes unavailable too. Nothing can say, so
+    // presence is held and marked stale.
+    let wifi_available =
+        matched_publisher(&observer, "home/state/person/fredriks_phone/available").await;
+    put(&wifi_available, json!(false)).await;
     expect_decision(&events, "unchanged").await;
     common::expect_states(
         &position,

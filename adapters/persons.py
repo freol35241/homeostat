@@ -19,14 +19,16 @@ which trackers are whose; the rule is fixed (`Persons.evaluate`).
 
 1. home if any usable tracker reports `home` or `sighted` as true;
 2. away if none does and either a usable tracker reports `home` as
-   false, or the person lists no `home` source and every usable
+   false, or no usable tracker reports `home` and every usable
    `sighted` tracker reports false;
 3. otherwise unchanged. Losing sight of someone is not evidence that
    they left.
 
 A tracker is usable unless it reports `available = false`. The second
-case under rule 2 lets a person tracked only by WiFi be away; the
-adapter's own delay already stands behind that `false`. `presence_valid`
+case under rule 2 lets a person be away on WiFi evidence when no
+geofence answers: one tracked only by WiFi, or one whose app never
+reported or is unavailable. The adapter's own delay already stands
+behind that `false`. `presence_valid`
 is false while presence is held by rule 3, so the dashboard shows it as
 stale.
 
@@ -150,11 +152,9 @@ class Persons:
 
     def _presence(self, person: house.Entity, out: Outcome) -> None:
         says: dict[str, bool] = {}  # source name -> the usable tracker's boolean
-        geofenced = False
         for name, src in person.sources.items():
             if src.aspect not in PRESENCE_ASPECTS:
                 continue
-            geofenced = geofenced or src.aspect == "home"
             value = self.readings.get(src.entity, {}).get(src.aspect)
             if self.usable(src.entity) and isinstance(value, bool):
                 says[name] = value
@@ -174,9 +174,10 @@ class Persons:
         elif left:
             decided = left
             out.decision = f"away: {', '.join(left)} left the geofence"
-        elif not geofenced and sighted and sorted(sighted) == unseen:
+        # A usable geofence with an answer decided above, so none answers here.
+        elif sighted and sorted(sighted) == unseen:
             decided = unseen
-            out.decision = f"away: no geofence, and {', '.join(unseen)} has not seen the device"
+            out.decision = f"away: no geofence answers, and {', '.join(unseen)} has not seen the device"
         else:
             out.decision = "unchanged: no usable tracker says home or left"
         if decided:

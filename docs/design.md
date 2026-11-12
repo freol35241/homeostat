@@ -2695,9 +2695,12 @@ which trackers are whose:
 
 - `presence` is home if any usable tracker reports `home` or `sighted`
   as true. It is away if none does and a usable tracker reports `home`
-  as false. A person with no `home` source is also away when every
-  usable `sighted` tracker reports false, because otherwise a person
-  tracked only by WiFi could never be away. Otherwise it is unchanged,
+  as false. When no usable tracker reports `home`, the person is also
+  away when every usable `sighted` tracker reports false. Without this a
+  person tracked only by WiFi could never be away, and nor could one
+  whose app never reported or has gone unavailable. A phone that dies
+  at home therefore reads away once the WiFi loses it, as it would
+  without an app. In any other case it is unchanged,
   and `presence_valid` is false so the dashboard shows it as stale.
   A tracker is usable unless it reports `available = false`.
 - The position is the newest fix whose accuracy is within the unit's
