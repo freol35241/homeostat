@@ -57,9 +57,7 @@ fn http_request(
     headers: &[(&str, &str)],
     body: Option<&Value>,
 ) -> (u16, Value) {
-    let payload = body
-        .map(std::string::ToString::to_string)
-        .unwrap_or_default();
+    let payload = body.map_or_default(std::string::ToString::to_string);
     let mut request = format!("{method} {path} HTTP/1.1\r\nConnection: close\r\n");
     let mut has_host = false;
     for (name, value) in headers {

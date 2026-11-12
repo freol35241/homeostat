@@ -63,7 +63,9 @@ class PresenceTest(unittest.TestCase):
         self.rule.seen("fredriks_phone", "sighted", True)
         self.assertIs(self.evaluate().values["presence"], True)
 
-    def test_his_phone_dies_while_he_is_out_and_presence_is_held_stale(self):
+    def test_his_phone_drops_off_the_broker_and_presence_is_held_stale(self):
+        # A sleeping phone loses its session and the WiFi together. The
+        # geofence has reported, so the lost sighting cannot say he left.
         self.rule.seen("fredrik_phone", "home", True)
         self.rule.seen("fredrik_phone", "available", False)
         self.rule.seen("fredriks_phone", "sighted", False)
@@ -76,9 +78,24 @@ class PresenceTest(unittest.TestCase):
         self.rule.seen("fredrik_phone", "home", True)
         self.assertIs(self.evaluate().values["presence_valid"], True)
 
-    def test_a_sighting_alone_cannot_say_he_left_when_he_has_a_geofence(self):
+    def test_a_geofence_that_never_reported_leaves_the_wifi_to_decide(self):
+        self.rule.seen("fredriks_phone", "sighted", True)
+        self.assertIs(self.evaluate().values["presence"], True)
         self.rule.seen("fredriks_phone", "sighted", False)
-        self.assertNotIn("presence", self.evaluate().values)
+        out = self.evaluate()
+        self.assertIs(out.values["presence"], False)
+        self.assertIs(out.values["presence_valid"], True)
+        self.assertEqual(
+            out.decision, "away: no geofence has reported, and wifi has not seen the device"
+        )
+        self.assertEqual(out.used[("presence", "wifi")], True)
+        self.assertEqual(out.used[("presence", "geofence")], False)
+
+    def test_an_app_that_connected_but_never_reported_leaves_the_wifi_to_decide(self):
+        # Its last will says unavailable, and it never had a geofence state.
+        self.rule.seen("fredrik_phone", "available", False)
+        self.rule.seen("fredriks_phone", "sighted", False)
+        self.assertIs(self.evaluate().values["presence"], False)
 
     def test_wifi_only_falls_back_to_the_sightings(self):
         dad = person("dad", wifi=("dads_phone", "sighted"), tablet=("dads_tablet", "sighted"))
@@ -103,7 +120,8 @@ class PresenceTest(unittest.TestCase):
         self.assertEqual(out.used[("presence", "geofence")], False)
 
     def test_nothing_decided_a_held_presence(self):
-        self.rule.seen("fredriks_phone", "sighted", False)
+        self.rule.seen("fredriks_phone", "sighted", True)
+        self.rule.seen("fredriks_phone", "available", False)
         out = self.evaluate()
         self.assertEqual(
             (out.used[("presence", "geofence")], out.used[("presence", "wifi")]), (False, False)

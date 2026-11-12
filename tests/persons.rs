@@ -82,6 +82,13 @@ async fn trackers_make_one_person() {
     expect_state(&presence, json!(true)).await;
     expect_decision(&events, "home: wifi").await;
 
+    // While the geofence has never reported, the router decides away.
+    put(&wifi, json!(false)).await;
+    expect_state(&presence, json!(false)).await;
+    expect_decision(&events, "away: no geofence has reported").await;
+    put(&wifi, json!(true)).await;
+    expect_state(&presence, json!(true)).await;
+
     // The phone sleeps: a lost sighting is no evidence he left.
     put(&geofence, json!(true)).await;
     put(&wifi, json!(false)).await;
