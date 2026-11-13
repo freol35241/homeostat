@@ -41,6 +41,7 @@ editable_by = "owner"
 
 [bus.subscribes]
 state = "home/state/**"
+forecast = "home/forecast/**"
 cmd = "home/cmd/**"
 health = "home/health/**"
 config = "home/config/**"

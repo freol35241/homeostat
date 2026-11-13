@@ -1888,6 +1888,19 @@ it refilled, while the recorder held the data all along.
   while the first and last bucket's mean covers only part of its span.
 - It blocks until the recorder answers, so a unit calls it from its main
   thread or a thread of its own, not from a `subscribe` handler.
+- `ctx.forecast_history(binding, at=, valid_from=, valid_to=, limit=,
+  room=, entity=, aspect=, source=, timeout_s=30)` reads a subscribed
+  forecast's recorded issues the same way, decoded as `Forecast`s,
+  oldest first. With `at` it returns the forecast as it stood then.
+  With `valid_from` and `valid_to` it returns every issue that spoke
+  about the window, which is what checking a source against the
+  measured series reads. The window is half-open, as the recorder's
+  is, so its end must be after its start. With neither it returns the
+  current forecast. The binding is a forecast subscription, source
+  included, so a unit that reads back its own plan subscribes to it as
+  well. A `limit` of up to 10,000 keeps the newest issues. Without one,
+  a read that reaches 10,000 issues raises rather than drop the
+  oldest.
 
 ### Totals over intervals
 

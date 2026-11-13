@@ -1,4 +1,5 @@
-//! `ctx.history`: a unit reading a subscribed series' recorded past
+//! `ctx.history` and `ctx.forecast_history`: a unit reading a subscribed
+//! series' recorded past and its forecast's recorded issues
 //! (docs/design.md#reading-the-recorded-past), stamped publishes
 //! (docs/design.md#timestamps) and interval totals
 //! (docs/design.md#totals-over-intervals).
@@ -58,6 +59,13 @@ async fn a_unit_reads_back_what_the_recorder_holds() {
     // Half of the first hour's 0.5, then 0.0 and 1.5.
     await_mirror(&observer, &format!("{GAUGE}/window"), &json!(1.75)).await;
     await_mirror(&observer, &format!("{GAUGE}/short"), &json!("short")).await;
+    // Two forecast issues for the last hour: both cover it, the earlier
+    // one is the forecast as it stood between them, the later one is the
+    // forecast now, and a limit of one keeps the later.
+    await_mirror(&observer, &format!("{GAUGE}/issues"), &json!(2)).await;
+    await_mirror(&observer, &format!("{GAUGE}/as_of"), &json!(1.0)).await;
+    await_mirror(&observer, &format!("{GAUGE}/current"), &json!(2.0)).await;
+    await_mirror(&observer, &format!("{GAUGE}/newest"), &json!(true)).await;
 
     let replies = observer
         .get(format!("{GAUGE}/precipitation"))

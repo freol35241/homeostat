@@ -476,7 +476,8 @@ def history_key(space: str, entity: str, aspect: str) -> str:
     Parameters
     ----------
     space : str
-        'state' or 'cmd'.
+        'state', 'cmd' or 'forecast'. A forecast series key also ends in
+        its source.
     entity : str
         The entity's name.
     aspect : str
