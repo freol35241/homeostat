@@ -8,7 +8,7 @@
 import { VideoRTC } from '../video-rtc.js';
 import { connectWs, loadModel } from './api.js';
 import { currentView, renderShell } from './chrome.js';
-import { announceOutcome, markPendingControls, pending, recent, sendCmd, sendLightsOff, sendParam, stepBase, stepCmd } from './commands.js';
+import { announceOutcome, forgetOutcome, markPendingControls, pending, recent, sendCmd, sendLightsOff, sendParam, stepBase, stepCmd } from './commands.js';
 import logic from './logic.js';
 import { openEntityDetail } from './overlay/entity.js';
 import { fetchHistoryRange, fetchIssues, fetchLayerLines, fetchSourceEvents, openHistoryDetail } from './overlay/history.js';
@@ -45,6 +45,10 @@ document.addEventListener('click', function (e) {
     var entity = el.getAttribute('data-entity');
     var value = el.getAttribute('data-value') === 'true';
     sendCmd(room, entity, 'on', value);
+    return;
+  }
+  if (action === 'notify-send') {
+    sendNotification(el.getAttribute('data-room'), el.getAttribute('data-entity'), el.getAttribute('data-aspect'));
     return;
   }
   if (action === 'toggle-lock') {
@@ -281,10 +285,46 @@ document.addEventListener('change', function (e) {
   }
 });
 
+// A notifier's typed text, sent as a message or an alert. Blank text is
+// not sent, as /api/cmd would refuse it. The box empties once the text is
+// on the bus with something listening. A refused or unheard send leaves
+// the text there to try again. The line under the box says what became
+// of it, and the other button's last outcome is cleared so it does not
+// hide this one.
+function sendNotification(room, entity, aspect) {
+  var box = document.getElementById('notify-' + entity);
+  var text = box ? box.value : '';
+  if (!text.trim()) {
+    if (box) box.focus();
+    return;
+  }
+  forgetOutcome(room, entity, aspect === 'alert' ? 'message' : 'alert');
+  sendCmd(room, entity, aspect, text).then(function (sent) {
+    if (!sent || localState.notifyDrafts[entity] !== text) return; // typed on since
+    delete localState.notifyDrafts[entity];
+    var now = document.getElementById('notify-' + entity);
+    if (now) now.value = '';
+  });
+}
+
+// Enter in a notifier's box sends the text as a message. The Enter that
+// ends an IME composition only commits the text.
+document.addEventListener('keydown', function (e) {
+  var el = e.target;
+  if (e.key !== 'Enter' || e.isComposing || !el.matches || !el.matches('[data-action="notify-text"]')) return;
+  e.preventDefault();
+  sendNotification(el.getAttribute('data-room'), el.getAttribute('data-entity'), 'message');
+});
+
 // live drag feedback: keep sliders responsive without re-render clobbering them
 document.addEventListener('input', function (e) {
   var el = e.target;
   if (!el.matches) return;
+
+  if (el.matches('[data-action="notify-text"]')) {
+    localState.notifyDrafts[el.getAttribute('data-entity')] = el.value;
+    return;
+  }
 
   if (el.matches('[data-action="slider"]')) {
     var kind = el.getAttribute('data-kind');

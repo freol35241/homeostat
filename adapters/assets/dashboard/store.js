@@ -22,7 +22,8 @@ export var localState = {
   sliderDrag: {},   // key -> true while user is dragging
   sparklines: {},   // entity|aspect -> {points:[], window, loaded:bool, loading:bool}
   charts: {},       // entity|aspect|hours -> the same, for chart widgets
-  relations: {}     // unit -> true while its Drives/From sections are open
+  relations: {},    // unit -> true while its Drives/From sections are open
+  notifyDrafts: {}  // notifier -> the text typed but not sent
 };
 
 // detail overlay state (right slide-over / mobile sheet)

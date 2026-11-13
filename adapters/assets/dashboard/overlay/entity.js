@@ -2,7 +2,7 @@
 import { html } from '../html.js';
 import logic, { titleCase } from '../logic.js';
 import { showOverlay } from './panel.js';
-import { controlDisabled, findEntity, houseControls, overlay, store, unitLabel } from '../store.js';
+import { controlDisabled, findEntity, houseControls, localState, overlay, store, unitLabel } from '../store.js';
 import { aspectValueSpan, renderAspectControl } from '../widgets/controls.js';
 import { BESPOKE_WIDGET, relTime, widgetForClimate, widgetForEntity, widgetForSensor } from '../widgets/entity.js';
 
@@ -62,6 +62,22 @@ function renderTrackers(person) {
   return rows.length ? html`<div class="card-label" style="margin-top:20px;">Trackers</div>${rows}` : '';
 }
 
+// A box to send a notifier its text, so a phone can be checked by hand
+// after it is set up. The text typed so far is kept in localState,
+// because every state delta replaces this markup. `delivered` answers the
+// send (logic.readbackAspect).
+function renderSend(entity) {
+  var attrs = html` data-room="${entity.room}" data-entity="${entity.name}"`;
+  var alert = (entity.features || []).indexOf('alert') !== -1
+    ? html`<button data-action="notify-send"${attrs} data-aspect="alert">Send as alert</button>`
+    : '';
+  return html`<div class="card-label" style="margin-top:20px;">Send</div>
+    <div class="aspect-row notify-row">
+      <input type="text" id="notify-${entity.name}" maxlength="1000" placeholder="Message text" aria-label="Message text"
+        value="${localState.notifyDrafts[entity.name] || ''}" data-action="notify-text"${attrs}>
+      <div class="seg"><button data-action="notify-send"${attrs} data-aspect="message">Send</button>${alert}</div></div>`;
+}
+
 export function renderEntityDetailBody() {
   var entity = overlay.entity;
   var meta = titleCase(entity.room) + ' · ' + titleCase(entity.capability) +
@@ -91,7 +107,9 @@ export function renderEntityDetailBody() {
   // because a custom element cannot be set through innerHTML. Its sections
   // move to `rest`, below the mount, so the player stays above them.
   var middle = '', rest = html`${sections}`, camera = null;
-  if (entity.capability === 'camera') {
+  if (entity.capability === 'notifier') {
+    if (!controlDisabled(entity)) middle = renderSend(entity);
+  } else if (entity.capability === 'camera') {
     camera = entity.name;
     middle = html`<div class="card-label" style="margin-top:20px;">Live</div>`;
   } else if (entity.capability === 'sensor') {

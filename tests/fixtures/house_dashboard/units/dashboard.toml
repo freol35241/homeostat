@@ -27,3 +27,4 @@ grants = "home/meta/system/grants"
 lights = { key = "home/cmd/**", capability = "light", priority = "manual" }
 locks = { key = "home/cmd/**", capability = "lock", priority = "manual" }
 climate = { key = "home/cmd/**", capability = "climate", priority = "manual" }
+notifiers = { key = "home/cmd/**", capability = "notifier", priority = "manual" }

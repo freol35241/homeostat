@@ -80,6 +80,18 @@
    "intervals": {}
   },
   {
+   "name": "family_phone",
+   "label": "family phone",
+   "capability": "notifier",
+   "features": ["alert"],
+   "room": "person",
+   "write_mode": "shared",
+   "owner": "stage",
+   "commandable": true,
+   "sources": {},
+   "intervals": {}
+  },
+  {
    "name": "hallway_lamp",
    "label": "hallway lamp",
    "capability": "light",

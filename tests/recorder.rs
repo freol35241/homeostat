@@ -35,13 +35,15 @@ const FIXTURE: &str = "tests/fixtures/house_recorder";
 type Sub = Subscriber<FifoChannelHandler<Sample>>;
 
 /// A per-test store path: unique like the harness's per-test bus port.
+/// Each store gets a directory of its own, because the recorder seals
+/// months into `archive/` beside its store, and a shared one would let
+/// one test's cleanup remove the directory another recorder is writing.
 fn store_path(test: &str) -> PathBuf {
-    let path = std::env::temp_dir().join(format!(
-        "homeostat-recorder-{test}-{}.db",
-        std::process::id()
-    ));
-    let _ = std::fs::remove_file(&path);
-    path
+    let dir =
+        std::env::temp_dir().join(format!("homeostat-recorder-{test}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("store dir");
+    dir.join("history.db")
 }
 
 /// Spawns the fixture with its store at `db` and waits for the recorder.
@@ -1738,9 +1740,9 @@ fn assert_tally_matches_rows(db: &Path) {
     assert_eq!(tally, truth, "series tally drifted from the rows it counts");
 }
 
-/// The archive directory beside a test's store (the shared temp dir), and
-/// the files this store sealed into it, removed when the test ends however
-/// it ends: they are read-only and would otherwise outlive a failed run.
+/// The archive directory beside a test's store, removed when the test ends
+/// however it ends: its files are read-only and would otherwise outlive a
+/// failed run.
 struct ArchiveFiles {
     dir: PathBuf,
     stem: String,
@@ -1761,19 +1763,7 @@ impl ArchiveFiles {
     }
 
     fn remove(&self) {
-        let Ok(entries) = std::fs::read_dir(&self.dir) else {
-            return;
-        };
-        for entry in entries.flatten() {
-            if entry
-                .file_name()
-                .to_string_lossy()
-                .starts_with(&format!("{}-", self.stem))
-            {
-                let _ = std::fs::remove_file(entry.path());
-            }
-        }
-        let _ = std::fs::remove_dir(&self.dir); // only if nothing else is in it
+        let _ = std::fs::remove_dir_all(&self.dir);
     }
 }
 

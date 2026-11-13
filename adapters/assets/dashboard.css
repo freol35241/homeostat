@@ -440,6 +440,9 @@ select.control { border: 1px solid var(--border); background: var(--card); color
 .dial-row .aspect-label { align-self: flex-start; }
 input[type=text], input[type=time] { border: 1px solid var(--border); background: var(--card); color: var(--ink);
   border-radius: 6px; padding: 8px 10px; font-size: 13px; }
+/* a notifier's send box: the text, then its buttons, wrapping on a phone */
+.notify-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.notify-row input { flex: 1 1 200px; min-width: 0; }
 
 /* chips (rooms view) */
 .chips { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
