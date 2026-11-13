@@ -893,13 +893,15 @@ class Context:
 
         With `at`, the result is the forecast as it stood then: the latest
         issue at or before that instant. With `valid_from` and `valid_to`,
-        it is every issue that said something about that window, each with
-        only its points that overlap it. With neither, it is the current
-        forecast.
+        it is every issue that said something about the window
+        `[valid_from, valid_to)`, each with only its points that overlap
+        it. With neither, it is the current forecast.
 
         The read goes through a `[bus.subscribes]` binding on a forecast
         key, with its slots filled as for `publish`, source included, so a
         unit reads only the forecasts its manifest says it subscribes to.
+        A unit that reads back its own forecast subscribes to it as well
+        as publishing it.
 
         Like `history`, this raises when the recorder cannot answer, and an
         empty list means it holds no issue for the read. It blocks until
@@ -915,10 +917,11 @@ class Context:
         valid_from : datetime.datetime or None, optional
             The start of the window the issues must cover, timezone-aware.
         valid_to : datetime.datetime or None, optional
-            The end of that window, timezone-aware.
+            The end of that window, timezone-aware and after `valid_from`.
+            The window excludes it.
         limit : int or None, optional
-            The most issues to return; the newest are kept. Without it, a
-            read that reaches the recorder's limit raises instead.
+            The most issues to return, up to 10,000; the newest are kept.
+            Without it, a read that reaches 10,000 issues raises instead.
         room : str or None, optional
             The room slot, as for `publish`.
         entity : str or None, optional
@@ -944,8 +947,8 @@ class Context:
             If the binding is not a forecast key, the slots do not make one
             concrete key inside the declared expression, `at` is given with
             a window or the window lacks an end, a bound has no timezone,
-            `valid_to` is before `valid_from`, or `limit` is not a positive
-            integer.
+            `valid_to` is not after `valid_from`, or `limit` is not an
+            integer from 1 to 10,000.
         HistoryUnavailable
             If the house runs no recorder, the recorder does not answer, it
             answers with an error or with an issue it cannot decode, or no
@@ -965,10 +968,16 @@ class Context:
         for name, bound in (("at", at), ("valid_from", valid_from), ("valid_to", valid_to)):
             if bound is not None and bound.tzinfo is None:
                 raise ValueError(f"forecast_history {name} needs a timezone")
-        if valid_from is not None and valid_to is not None and valid_to < valid_from:
-            raise ValueError("forecast_history valid_to is before valid_from")
-        if limit is not None and (isinstance(limit, bool) or not isinstance(limit, int) or limit < 1):
-            raise ValueError(f"forecast_history limit {limit!r} is not a positive integer")
+        # The recorder's window is half-open, so an empty one would read as
+        # "no issue covered it" when nothing was asked.
+        if valid_from is not None and valid_to is not None and valid_to <= valid_from:
+            raise ValueError("forecast_history valid_to is not after valid_from")
+        # The recorder clamps a larger limit and keeps the newest, which
+        # would drop the oldest without saying so.
+        if limit is not None and (
+            isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= _HISTORY_LIMIT
+        ):
+            raise ValueError(f"forecast_history limit {limit!r} is not from 1 to {_HISTORY_LIMIT}")
         if not self._has_recorder():
             raise HistoryUnavailable("the house runs no recorder")
         reason = self._await_recorder(timeout_s)

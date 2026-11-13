@@ -480,7 +480,7 @@ class ForecastHistoryTest(unittest.TestCase):
     FROM = datetime.datetime(2026, 11, 6, 6, 0, tzinfo=UTC)
     TO = datetime.datetime(2026, 11, 7, 6, 0, tzinfo=UTC)
 
-    def context(self, answer, recorder=True):
+    def context(self, answer, recorder=True, stats=lambda: True):
         ctx = Context.__new__(Context)
         ctx.asked = []
         ctx._subscribes = {
@@ -495,7 +495,7 @@ class ForecastHistoryTest(unittest.TestCase):
         def get(selector, timeout_s=None):
             ctx.asked.append(selector)
             if selector == "home/history/stats":
-                return [(selector, {})]
+                return [(selector, {})] if stats() else []
             return answer(selector)
 
         ctx._session = types.SimpleNamespace(get_json=get)
@@ -545,6 +545,8 @@ class ForecastHistoryTest(unittest.TestCase):
             ("rain", {"valid_from": self.FROM}, ValueError),
             ("rain", {"valid_to": self.TO}, ValueError),
             ("rain", {"valid_from": self.TO, "valid_to": self.FROM}, ValueError),
+            ("rain", {"valid_from": self.FROM, "valid_to": self.FROM}, ValueError),
+            ("rain", {"limit": 10_001}, ValueError),
             ("rain", {"at": naive}, ValueError),
             ("rain", {"limit": 0}, ValueError),
             ("rain", {"limit": True}, ValueError),
@@ -562,8 +564,12 @@ class ForecastHistoryTest(unittest.TestCase):
             raise QueryError("store unavailable: disk I/O error")
 
         broken = {**ISSUE, "points": [{"t": "soon", "v": 1}]}
+        # Up for the wait, gone for the read and the second look.
+        answers = iter([True, False])
+        stopped = self.context(lambda selector: [], stats=lambda: next(answers))
         cases = (
             (self.context(lambda selector: [], recorder=False), "runs no recorder"),
+            (stopped, "stopped answering"),
             (self.context(refused), "store unavailable"),
             (self.context(lambda selector: [(selector, [broken])]), "does not decode"),
             (self.context(lambda selector: [(selector, [ISSUE] * 10_000)]), "pass limit"),
