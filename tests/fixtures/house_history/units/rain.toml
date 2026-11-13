@@ -12,9 +12,11 @@ shutdown_grace_s = 5
 
 [bus.subscribes]
 rain = "home/state/garden/rain_gauge/precipitation"
+outlook = "home/forecast/garden/rain_gauge/precipitation/rain"
 
 [bus.publishes]
 gauge = { key = "home/state/garden/rain_gauge/*" }
+outlook = { key = "home/forecast/garden/rain_gauge/precipitation/rain" }
 
 [entities]
 dir = "entities/rain/"

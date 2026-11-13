@@ -39,7 +39,8 @@ import tomllib
 import zenoh
 
 from . import house, intervals, keys
-from .forecast import Point
+from .forecast import Forecast, Point
+from .forecast import decode as decode_forecast
 from .session import QueryError, QueryTimeout, UnitSession
 from .stamps import Newest
 
@@ -87,10 +88,11 @@ _HISTORY_LIMIT = 10_000
 
 
 class HistoryUnavailable(Exception):
-    """`Context.history` could not read the window.
+    """`Context.history` or `Context.forecast_history` could not read.
 
     The house runs no recorder, the recorder did not answer or answered
-    with an error, or the window holds more rows than one read returns.
+    with an error, or the read holds more rows or issues than one read
+    returns.
     """
 
 
@@ -867,6 +869,136 @@ class Context:
                 f"the window holds {_HISTORY_LIMIT} rows or more; pass bucket_s"
             )
         return [{**row, "ts": datetime.datetime.fromisoformat(row["ts"])} for row in rows]
+
+    def forecast_history(
+        self,
+        binding: str,
+        *,
+        at: datetime.datetime | None = None,
+        valid_from: datetime.datetime | None = None,
+        valid_to: datetime.datetime | None = None,
+        limit: int | None = None,
+        room: str | None = None,
+        entity: str | None = None,
+        aspect: str | None = None,
+        source: str | None = None,
+        timeout_s: float = 30.0,
+    ) -> list[Forecast]:
+        """Read the recorded issues of a subscribed forecast.
+
+        A unit that checks a forecast against what happened, or scores its
+        own published plan, reads the issues here instead of keeping its
+        own copies, which are gone after every restart of the unit
+        (docs/design.md#reading-the-recorded-past).
+
+        With `at`, the result is the forecast as it stood then: the latest
+        issue at or before that instant. With `valid_from` and `valid_to`,
+        it is every issue that said something about that window, each with
+        only its points that overlap it. With neither, it is the current
+        forecast.
+
+        The read goes through a `[bus.subscribes]` binding on a forecast
+        key, with its slots filled as for `publish`, source included, so a
+        unit reads only the forecasts its manifest says it subscribes to.
+
+        Like `history`, this raises when the recorder cannot answer, and an
+        empty list means it holds no issue for the read. It blocks until
+        the recorder answers, so call it from the unit's main thread or a
+        thread of its own, not from a `subscribe` handler.
+
+        Parameters
+        ----------
+        binding : str
+            A `[bus.subscribes]` binding name with a forecast key.
+        at : datetime.datetime or None, optional
+            The instant to read the forecast as of, timezone-aware.
+        valid_from : datetime.datetime or None, optional
+            The start of the window the issues must cover, timezone-aware.
+        valid_to : datetime.datetime or None, optional
+            The end of that window, timezone-aware.
+        limit : int or None, optional
+            The most issues to return; the newest are kept. Without it, a
+            read that reaches the recorder's limit raises instead.
+        room : str or None, optional
+            The room slot, as for `publish`.
+        entity : str or None, optional
+            The entity slot, as for `publish`.
+        aspect : str or None, optional
+            The aspect slot, as for `publish`.
+        source : str or None, optional
+            The source slot: who published the forecast.
+        timeout_s : float, optional
+            Seconds to keep waiting for the recorder to come up, and then
+            for its answer.
+
+        Returns
+        -------
+        list of Forecast
+            The issues, oldest first.
+
+        Raises
+        ------
+        KeyError
+            If `binding` is not declared in `[bus.subscribes]`.
+        ValueError
+            If the binding is not a forecast key, the slots do not make one
+            concrete key inside the declared expression, `at` is given with
+            a window or the window lacks an end, a bound has no timezone,
+            `valid_to` is before `valid_from`, or `limit` is not a positive
+            integer.
+        HistoryUnavailable
+            If the house runs no recorder, the recorder does not answer, it
+            answers with an error or with an issue it cannot decode, or no
+            `limit` was given and the read holds 10,000 issues or more.
+        """
+        key = self._concrete_key(
+            binding, room=room, entity=entity, aspect=aspect, source=source, use="history"
+        )
+        segments = key.split("/")
+        if segments[1] != "forecast":
+            raise ValueError(f"forecast_history {binding!r}: not a forecast key")
+        windowed = valid_from is not None or valid_to is not None
+        if at is not None and windowed:
+            raise ValueError("forecast_history takes at or a window, not both")
+        if windowed and (valid_from is None or valid_to is None):
+            raise ValueError("forecast_history needs both valid_from and valid_to")
+        for name, bound in (("at", at), ("valid_from", valid_from), ("valid_to", valid_to)):
+            if bound is not None and bound.tzinfo is None:
+                raise ValueError(f"forecast_history {name} needs a timezone")
+        if valid_from is not None and valid_to is not None and valid_to < valid_from:
+            raise ValueError("forecast_history valid_to is before valid_from")
+        if limit is not None and (isinstance(limit, bool) or not isinstance(limit, int) or limit < 1):
+            raise ValueError(f"forecast_history limit {limit!r} is not a positive integer")
+        if not self._has_recorder():
+            raise HistoryUnavailable("the house runs no recorder")
+        reason = self._await_recorder(timeout_s)
+        if reason is not None:
+            raise HistoryUnavailable(reason)
+        params = [f"limit={limit if limit is not None else _HISTORY_LIMIT}"]
+        if at is not None:
+            params.append(f"at={_rfc3339(at)}")
+        if valid_from is not None and valid_to is not None:
+            params += [f"valid_from={_rfc3339(valid_from)}", f"valid_to={_rfc3339(valid_to)}"]
+        series = keys.history_key("forecast", segments[3], segments[4]) + "/" + segments[5]
+        try:
+            replies = self._session.get_json(series + "?" + ";".join(params), timeout_s=timeout_s)
+            # Nothing comes back for a series never recorded, and nothing
+            # from a recorder that has gone; `stats` tells the two apart.
+            if not replies and not self._session.get_json(_HISTORY_STATS, timeout_s=timeout_s):
+                raise HistoryUnavailable("the recorder stopped answering")
+        except QueryError as err:
+            raise HistoryUnavailable(str(err)) from err
+        issues = next((issues for _, issues in replies), [])
+        # The recorder keeps the newest issues past the limit, which would
+        # cut the oldest off without saying so.
+        if limit is None and len(issues) >= _HISTORY_LIMIT:
+            raise HistoryUnavailable(
+                f"the read holds {_HISTORY_LIMIT} issues or more; pass limit or a shorter window"
+            )
+        try:
+            return [decode_forecast(json.dumps(issue).encode()) for issue in issues]
+        except ValueError as err:
+            raise HistoryUnavailable(f"the recorder sent an issue that does not decode: {err}") from err
 
     def history_total(
         self,

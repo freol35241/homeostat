@@ -460,6 +460,123 @@ class HistoryTest(unittest.TestCase):
         self.assertEqual(len(ctx.history("rain", self.START, self.END, bucket_s=60)), 10_000)
 
 
+ISSUE = {
+    "schema": 1,
+    "issued": "2026-11-06T06:00:00.000000+00:00",
+    "points": [
+        {"t": "2026-11-06T07:00:00.000000+00:00", "v": 0.4, "d": 3600.0},
+        {"t": "2026-11-06T08:00:00.000000+00:00", "v": 0.0, "d": 3600.0},
+    ],
+}
+
+
+class ForecastHistoryTest(unittest.TestCase):
+    """`forecast_history` reads the recorded issues of a subscribed
+    forecast, as of an instant or over a window, and raises where
+    `history` does."""
+
+    UTC = datetime.timezone.utc
+    AT = datetime.datetime(2026, 11, 6, 9, 0, tzinfo=UTC)
+    FROM = datetime.datetime(2026, 11, 6, 6, 0, tzinfo=UTC)
+    TO = datetime.datetime(2026, 11, 7, 6, 0, tzinfo=UTC)
+
+    def context(self, answer, recorder=True):
+        ctx = Context.__new__(Context)
+        ctx.asked = []
+        ctx._subscribes = {
+            "rain": "home/forecast/garden/rain_gauge/precipitation/smhi",
+            "any_rain": "home/forecast/garden/rain_gauge/precipitation/*",
+            "gauge": "home/state/garden/rain_gauge/precipitation",
+        }
+        ctx._zones = ZONES
+        ctx._entities = []
+        ctx._has_recorder = lambda: recorder
+
+        def get(selector, timeout_s=None):
+            ctx.asked.append(selector)
+            if selector == "home/history/stats":
+                return [(selector, {})]
+            return answer(selector)
+
+        ctx._session = types.SimpleNamespace(get_json=get)
+        return ctx
+
+    def test_an_instant_reads_the_forecast_as_it_stood(self):
+        ctx = self.context(lambda selector: [(selector, [ISSUE])])
+        issues = ctx.forecast_history("rain", at=self.AT)
+        self.assertEqual(
+            ctx.asked[-1],
+            "home/history/forecast/rain_gauge/precipitation/smhi"
+            "?limit=10000;at=2026-11-06T09:00:00+00:00",
+        )
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0].issued, datetime.datetime(2026, 11, 6, 6, 0, tzinfo=self.UTC))
+        self.assertEqual([p.v for p in issues[0].points], [0.4, 0.0])
+        self.assertEqual(issues[0].points[0].d, 3600.0)
+
+    def test_a_window_reads_every_issue_that_covered_it(self):
+        ctx = self.context(lambda selector: [(selector, [ISSUE, ISSUE])])
+        local = datetime.timezone(datetime.timedelta(hours=1))
+        issues = ctx.forecast_history(
+            "any_rain", valid_from=self.FROM.astimezone(local), valid_to=self.TO, limit=5, source="met"
+        )
+        self.assertEqual(
+            ctx.asked[-1],
+            "home/history/forecast/rain_gauge/precipitation/met"
+            "?limit=5;valid_from=2026-11-06T06:00:00+00:00;valid_to=2026-11-07T06:00:00+00:00",
+        )
+        self.assertEqual(len(issues), 2)
+
+    def test_neither_reads_the_current_forecast(self):
+        ctx = self.context(lambda selector: [(selector, [ISSUE])])
+        ctx.forecast_history("rain")
+        self.assertEqual(
+            ctx.asked[-1], "home/history/forecast/rain_gauge/precipitation/smhi?limit=10000"
+        )
+
+    def test_nothing_recorded_is_empty(self):
+        self.assertEqual(self.context(lambda selector: []).forecast_history("rain"), [])
+
+    def test_bad_arguments_are_refused_before_asking(self):
+        ctx = self.context(lambda selector: [])
+        naive = self.AT.replace(tzinfo=None)
+        cases = (
+            ("rain", {"at": self.AT, "valid_from": self.FROM, "valid_to": self.TO}, ValueError),
+            ("rain", {"valid_from": self.FROM}, ValueError),
+            ("rain", {"valid_to": self.TO}, ValueError),
+            ("rain", {"valid_from": self.TO, "valid_to": self.FROM}, ValueError),
+            ("rain", {"at": naive}, ValueError),
+            ("rain", {"limit": 0}, ValueError),
+            ("rain", {"limit": True}, ValueError),
+            ("any_rain", {}, ValueError),  # the source slot is a wildcard
+            ("gauge", {}, ValueError),  # a state key
+            ("lamp", {}, KeyError),
+        )
+        for binding, kwargs, error in cases:
+            with self.subTest(binding=binding, kwargs=kwargs), self.assertRaises(error):
+                ctx.forecast_history(binding, **kwargs)
+        self.assertEqual(ctx.asked, [])
+
+    def test_what_cannot_be_read_raises(self):
+        def refused(selector):
+            raise QueryError("store unavailable: disk I/O error")
+
+        broken = {**ISSUE, "points": [{"t": "soon", "v": 1}]}
+        cases = (
+            (self.context(lambda selector: [], recorder=False), "runs no recorder"),
+            (self.context(refused), "store unavailable"),
+            (self.context(lambda selector: [(selector, [broken])]), "does not decode"),
+            (self.context(lambda selector: [(selector, [ISSUE] * 10_000)]), "pass limit"),
+        )
+        for ctx, reason in cases:
+            with self.subTest(reason=reason), self.assertRaisesRegex(HistoryUnavailable, reason):
+                ctx.forecast_history("rain")
+
+    def test_a_limit_asked_for_is_not_a_cut_read(self):
+        ctx = self.context(lambda selector: [(selector, [ISSUE] * 3)])
+        self.assertEqual(len(ctx.forecast_history("rain", limit=3)), 3)
+
+
 class HistoryTotalTest(unittest.TestCase):
     """`history_total` totals an interval aspect over a window. It reads
     one interval early, so an hour straddling the start counts in

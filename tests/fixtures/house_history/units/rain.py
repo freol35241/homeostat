@@ -9,10 +9,10 @@
 # ///
 """A rain gauge that reads its own readings back from the recorder.
 
-This is the fixture for `ctx.history`, stamped publishes and
-`ctx.history_total`. It publishes three hourly amounts, each stamped with
-the start of its hour, waits until the recorder holds them, and then
-publishes what it read:
+This is the fixture for `ctx.history`, stamped publishes,
+`ctx.history_total` and `ctx.forecast_history`. It publishes three hourly
+amounts, each stamped with the start of its hour, waits until the
+recorder holds them, and then publishes what it read:
 
 - `rows`, the raw row count;
 - `exact`, whether each row is stored at its hour's start to the
@@ -21,6 +21,14 @@ publishes what it read:
 - `window`, the total from half past the first hour to the end of the
   last, so the first hour counts half;
 - `short`, the reason a window running past the last hour is refused.
+
+It then publishes two issues of a forecast for the last hour, an hour
+apart, and publishes what it read back:
+
+- `issues`, how many issues covered that hour;
+- `as_of`, the value the forecast gave as it stood between the issues;
+- `current`, the value the forecast gives now;
+- `newest`, whether `limit=1` keeps the later issue.
 
 The test compares them with what was published.
 """
@@ -64,6 +72,22 @@ def main():
         ctx.history_total("rain", half_past, last_end + datetime.timedelta(hours=1))
     except IntervalsUncovered as err:
         ctx.publish("gauge", err.reason, aspect="short")
+
+    first, second = hours[0], hours[1]
+    ctx.publish_forecast("outlook", first, [(hours[2], 1.0, 3600)])
+    ctx.publish_forecast("outlook", second, [(hours[2], 2.0, 3600)])
+    deadline = time.monotonic() + 60
+    while True:
+        covering = ctx.forecast_history("outlook", valid_from=hours[2], valid_to=last_end)
+        if len(covering) == 2 or time.monotonic() > deadline:
+            break
+        time.sleep(0.2)
+    ctx.publish("gauge", len(covering), aspect="issues")
+    as_of = ctx.forecast_history("outlook", at=first + datetime.timedelta(minutes=30))
+    ctx.publish("gauge", as_of[0].points[0].v, aspect="as_of")
+    ctx.publish("gauge", ctx.forecast_history("outlook")[0].points[0].v, aspect="current")
+    newest = ctx.forecast_history("outlook", valid_from=hours[2], valid_to=last_end, limit=1)
+    ctx.publish("gauge", [issue.issued for issue in newest] == [second], aspect="newest")
     ctx.run()
 
 
