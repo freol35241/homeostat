@@ -378,26 +378,32 @@ impl Mosquitto {
         let port = free_port();
         let conf = std::env::temp_dir().join(format!("homeostat-mqtt-{port}.conf"));
         std::fs::write(&conf, body(port, &conf)).expect("write mosquitto config");
+        // The broker's own log, so a broker that never listens says why.
+        let log = std::env::temp_dir().join(format!("homeostat-mqtt-{port}.log"));
         // Debian puts mosquitto in /usr/sbin, which is not always on PATH.
-        let child = ["mosquitto", "/usr/sbin/mosquitto"]
+        let mut child = ["mosquitto", "/usr/sbin/mosquitto"]
             .iter()
             .find_map(|bin| {
+                let out = std::fs::File::create(&log).expect("create mosquitto log");
+                let err = out.try_clone().expect("clone mosquitto log");
                 Command::new(bin)
                     .args(["-c", conf.to_str().expect("utf-8 conf path")])
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
+                    .stdout(out)
+                    .stderr(err)
                     .spawn()
                     .ok()
             })
             .expect("spawn mosquitto (is it installed?)");
         let deadline = Instant::now() + Duration::from_secs(10);
         while std::net::TcpStream::connect(("127.0.0.1", port)).is_err() {
-            assert!(
-                Instant::now() < deadline,
-                "mosquitto never listened on {port}"
-            );
+            let exited = child.try_wait().expect("poll mosquitto");
+            if exited.is_some() || Instant::now() >= deadline {
+                let said = std::fs::read_to_string(&log).unwrap_or_default();
+                panic!("mosquitto never listened on {port} (exit: {exited:?}):\n{said}");
+            }
             std::thread::sleep(Duration::from_millis(50));
         }
+        let _ = std::fs::remove_file(&log);
         Self { child, port, conf }
     }
 }
