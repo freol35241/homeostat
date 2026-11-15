@@ -345,9 +345,10 @@ pub struct Mosquitto {
 }
 
 /// Where a test broker's files go: Cargo's temporary directory for
-/// integration tests, under `target/`. Ubuntu 26.04's mosquitto cannot open
-/// a configuration file under `/tmp`, though the file is the test user's
-/// and readable.
+/// integration tests, under `target/`. Ubuntu's `AppArmor` profile for
+/// mosquitto (from 26.04) lets it read only `/etc/mosquitto`, so the host
+/// grants this one tree in the profile's local include (`CLAUDE.md`, and the
+/// CI workflow).
 #[allow(dead_code)] // each test binary uses its own subset of the harness
 fn mosquitto_dir() -> PathBuf {
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
@@ -410,18 +411,10 @@ impl Mosquitto {
             let exited = child.try_wait().expect("poll mosquitto");
             if exited.is_some() || Instant::now() >= deadline {
                 let said = std::fs::read_to_string(&log).unwrap_or_default();
-                // A confined broker cannot say so itself. The kernel lists
-                // the AppArmor profiles it has loaded.
-                let confined: String =
-                    std::fs::read_to_string("/sys/kernel/security/apparmor/profiles")
-                        .unwrap_or_default()
-                        .lines()
-                        .filter(|line| line.contains("mosquitto"))
-                        .collect::<Vec<_>>()
-                        .join("\n");
                 panic!(
                     "mosquitto never listened on {port} (exit: {exited:?}):\n{said}\n\
-                     AppArmor profiles naming mosquitto: [{confined}]"
+                     If it could not open its config, see CLAUDE.md on mosquitto's \
+                     AppArmor profile."
                 );
             }
             std::thread::sleep(Duration::from_millis(50));

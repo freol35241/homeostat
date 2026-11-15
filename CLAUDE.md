@@ -91,6 +91,13 @@ uv run --script tests/browser/run.py
 
 The integration tests need `mosquitto`, `uv` and `node`; the browser suite needs `scripts/install_browser.sh`.
 
+From Ubuntu 26.04, AppArmor confines mosquitto to reading `/etc/mosquitto`, and the tests write each broker's files under `target/tmp`. Grant that tree once, as CI does:
+
+```
+echo "file $PWD/target/tmp/** r," | sudo tee /etc/apparmor.d/local/mosquitto
+sudo apparmor_parser -r /etc/apparmor.d/mosquitto
+```
+
 ### Generated files
 
 Edit the source, then regenerate. Tests refuse a stale copy.
