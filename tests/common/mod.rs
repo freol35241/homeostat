@@ -355,9 +355,8 @@ pub struct Mosquitto {
 
 /// Where a test broker's files go: Cargo's temporary directory for
 /// integration tests, under `target/`. Ubuntu's `AppArmor` profile for
-/// mosquitto (from 26.04) lets it read only `/etc/mosquitto`, so the host
-/// grants this one tree in the profile's local include (`CLAUDE.md`, and the
-/// CI workflow).
+/// mosquitto (from 26.04) lets it read only `/etc/mosquitto`, so such a host
+/// grants this one tree in the profile's local include (`CLAUDE.md`).
 #[allow(dead_code)] // each test binary uses its own subset of the harness
 fn mosquitto_dir() -> PathBuf {
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
@@ -404,7 +403,12 @@ impl Mosquitto {
         for _ in 0..5 {
             let port = free_port();
             let conf = mosquitto_dir().join(format!("homeostat-mqtt-{port}.conf"));
-            std::fs::write(&conf, body(port, &conf)).expect("write mosquitto config");
+            // Started as root, as in the CI container, mosquitto would drop
+            // to its own user and could not read the password file the
+            // test wrote. `user root` keeps it as the test's user; for any
+            // other user the setting has no effect.
+            let text = format!("user root\n{}", body(port, &conf));
+            std::fs::write(&conf, text).expect("write mosquitto config");
             // The broker's own log, so a broker that never runs says why.
             let log = mosquitto_dir().join(format!("homeostat-mqtt-{port}.log"));
             // Debian puts mosquitto in /usr/sbin, which is not always on PATH.

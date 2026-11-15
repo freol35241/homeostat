@@ -13,7 +13,7 @@
 # cross-compiles for $TARGETARCH, so a multi-arch `docker buildx build`
 # does not run rustc under QEMU.
 
-FROM --platform=$BUILDPLATFORM rust:1-bookworm@sha256:114c7a4425406451c2866b6aafe69fe29b1b298832db1277d411ac73c82d04d6 AS build
+FROM --platform=$BUILDPLATFORM rust:1-trixie@sha256:0b0ea86881537b3f645aace7e8e39556289f8787db057317c8d4978548213b9e AS build
 ARG TARGETARCH
 WORKDIR /src
 
@@ -56,7 +56,7 @@ RUN case "$TARGETARCH" in \
     && echo "$sha  /go2rtc" | sha256sum -c - \
     && chmod +x /go2rtc
 
-FROM debian:bookworm-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587
+FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2
 
 # Nothing in here needs root. The supervisor and every unit run as this
 # user. 1000 is the first login user on most single-user hosts, so a house
