@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "homeostat==0.22.0",
+#     "homeostat==0.22.1",
 # ]
 # ///
 """Arbiter service: holds the write lease for arbitrated entities.
@@ -16,7 +16,10 @@ Which entities are arbitrated comes from the grant table the core serves
 at home/meta/system/grants (`Bindings`), read live. An apply that flips an
 entity's write mode restarts the entity's adapter but not this service,
 whose own files are unchanged, so a set read from the repo at startup
-would go stale.
+would go stale. The core advances that table only when an apply
+completes, while the adapter restarts partway through the walk, so the
+service also follows home/meta/system/grants_pending, the tables of the
+applies started since the last one that completed, and routes on both.
 
 A wish for an arbitrated entity is checked against the lease on its
 (entity, aspect) (`Leases.wish`). If it wins, the envelope is forwarded
@@ -42,6 +45,7 @@ import os
 import signal
 import threading
 import time
+from functools import partial
 
 import homeostat
 from homeostat import house, keys
@@ -49,6 +53,7 @@ from homeostat.params import LiveParams
 
 PARAM = "hold_minutes"
 GRANTS_KEY = "home/meta/system/grants"
+PENDING_KEY = "home/meta/system/grants_pending"
 
 
 class Params(LiveParams):
@@ -82,32 +87,59 @@ def bindings(grants: list) -> tuple[frozenset, frozenset]:
 
 
 class Bindings:
-    """The arbitrated and bound entities, live from the grant table.
+    """The arbitrated and bound entities, live from the grant tables.
 
-    The core puts the table again when an apply completes. This follows the
-    LiveParams read pattern: subscribe, then seed with a get, and a table
-    the subscription has already delivered wins over the seed.
+    The core puts the applied table when an apply completes, and the pending
+    table when one starts and again when it completes. An entity counts as
+    arbitrated, or as bound, if either table says so. That is safe in both
+    directions while the walk restarts units one at a time:
 
-    `on_change` is called with the new arbitrated set on each live table.
-    The seed does not call it, because nothing is held before the first
-    wish.
+    - An entity becoming arbitrated. Before its adapter restarts, the
+      adapter takes the wish from home/cmd and does not hear the forward.
+      After the restart, it hears only the forward. Either way the command
+      runs once.
+    - An entity leaving arbitration. Before the restart, the adapter hears
+      only the forward. After it, the adapter takes the wish from home/cmd,
+      and the forward reaches no one.
+
+    While the adapter takes wishes from home/cmd, in either case, a refusal
+    is reported but does not stop the command. After a halted walk that
+    lasts until an apply completes, for an adapter the walk did not reach.
+
+    This follows the LiveParams read pattern for each key: subscribe, then
+    seed with a get, and a table the subscription has already delivered
+    wins over the seed.
+
+    `on_change` is called with the new arbitrated set on each live table,
+    under the lock, so two tables arriving together cannot apply their sets
+    in the wrong order. The seed does not call it, because nothing is held
+    before the first wish.
     """
 
     def __init__(self, session, on_change):
+        self._tables: dict[str, list] = {GRANTS_KEY: [], PENDING_KEY: []}
+        self._live: set[str] = set()
         # Both sets in one attribute, replaced in one assignment, so a
         # reader never pairs sets from different tables.
         self._sets: tuple[frozenset, frozenset] = (frozenset(), frozenset())
-        self._live = False
         self._on_change = on_change
-        self._sub = session.subscribe(GRANTS_KEY, self._on_grants)
-        for _key, value in session.get_json(GRANTS_KEY):
-            if not self._live:
-                self._sets = bindings(value)
+        self._lock = threading.Lock()
+        self._subs = [
+            session.subscribe(key, partial(self._on_table, key)) for key in (GRANTS_KEY, PENDING_KEY)
+        ]
+        for key in (GRANTS_KEY, PENDING_KEY):
+            for _key, value in session.get_json(key):
+                with self._lock:
+                    if key not in self._live:
+                        self._tables[key] = value
+                        self._sets = bindings(self._tables[GRANTS_KEY] + self._tables[PENDING_KEY])
 
-    def _on_grants(self, sample) -> None:
-        self._live = True
-        self._sets = bindings(json.loads(sample.payload.to_bytes()))
-        self._on_change(self._sets[0])
+    def _on_table(self, key: str, sample) -> None:
+        with self._lock:
+            self._live.add(key)
+            self._tables[key] = json.loads(sample.payload.to_bytes())
+            self._sets = bindings(self._tables[GRANTS_KEY] + self._tables[PENDING_KEY])
+            self._on_change(self._sets[0])
 
     def route(self, target: tuple[str, str]) -> str:
         """Return "arbitrated", "bound" or "unbound" for a (room, entity)."""
