@@ -30,6 +30,8 @@ var STEP_SETTLE_MS = 600;
 
 var cmdSeq = 0;
 
+/* Resolves to whether the command went onto the bus with something
+ * listening, so a caller can tell a refusal from a send. */
 export function sendCmd(room, entity, aspect, value) {
   var key = logic.pendingKey(room, entity, aspect);
   clearTimeout(drafts[key]);
@@ -43,7 +45,7 @@ export function sendCmd(room, entity, aspect, value) {
     before: stateValue(room, entity, aspect)
   }, Date.now(), 'sending');
   scheduleRender();
-  fetch('/api/cmd', {
+  return fetch('/api/cmd', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Homeostat': 'family' },
     body: JSON.stringify({ room: room, entity: entity, aspect: aspect, value: value })
@@ -54,13 +56,21 @@ export function sendCmd(room, entity, aspect, value) {
     var outcome = logic.commandSent(pending, key, seq, body);
     if (outcome) announceOutcome(outcome);
     scheduleRender();
+    return !outcome;
   }).catch(function (e) {
     // Refused before it reached the bus, so there is nothing to wait for.
     var entry = pending[key];
     if (entry && entry.outcome === 'sending' && entry.seq === seq) delete pending[key];
     announceOutcome({ key: key, outcome: 'failed', value: value, reason: errText(e) });
     scheduleRender();
+    return false;
   });
+}
+
+/* Forget how a command on this control ended, so the line under it
+ * shows the next one. A notifier's two buttons share one line. */
+export function forgetOutcome(room, entity, aspect) {
+  delete recent[logic.pendingKey(room, entity, aspect)];
 }
 
 /* A stepper's tap. It is held as a draft for a moment, so the taps that
@@ -91,6 +101,10 @@ export function stepBase(room, entity, aspect) {
 
 // A commanded value in the words its control uses.
 function formatCmdValue(room, entity, aspect, value) {
+  if ((aspect === 'message' || aspect === 'alert') && typeof value === 'string') {
+    var text = value.length > 40 ? value.slice(0, 39) + '\u2026' : value;
+    return (aspect === 'alert' ? 'alert \u201c' : '\u201c') + text + '\u201d';
+  }
   if (aspect === 'brightness' && typeof value === 'number') return Math.round(value / 254 * 100) + '%';
   if (typeof value === 'boolean' && aspect === 'locked') return value ? 'locked' : 'unlocked';
   if (typeof value === 'boolean' && aspect === 'on') return value ? 'on' : 'off';
@@ -130,7 +144,7 @@ function commandStatus(key) {
     var text = 'Asked ' + fmt(entry.value);
     if (entry.outcome === 'draft') return { tone: 'busy', text: text };
     if (entry.seen !== undefined) text += ' · still ' + fmt(entry.seen);
-    else text += ' · waiting for the device';
+    else text += entry.readback === aspect ? ' · waiting for the device' : ' · waiting for delivery';
     var warning = commandWarning(room, entity);
     return warning ? { tone: 'warn', text: text + ' · ' + warning } : { tone: 'busy', text: text };
   }
@@ -227,7 +241,8 @@ function controlAspect(el) {
 // controls.
 var COMMAND_ACTIONS = {
   'toggle-light': 1, 'toggle-lock': 1, 'climate-step': 1, 'brightness-step': 1,
-  'aspect-step': 1, 'aspect-enum': 1, 'aspect-select': 1, 'aspect-slider': 1, 'slider': 1
+  'aspect-step': 1, 'aspect-enum': 1, 'aspect-select': 1, 'aspect-slider': 1, 'slider': 1,
+  'notify-send': 1
 };
 
 /* Applied after every render rather than built into each control's
