@@ -2085,10 +2085,10 @@ async fn an_impossible_archive_window_fails_without_stopping_the_writer() {
         e["kind"] == "archive-failed"
     })
     .await;
+    // The words are CPython's and change between versions ("year ... is
+    // out of range", "year must be in 1..9999"); both name the year.
     assert!(
-        failed["error"]
-            .as_str()
-            .is_some_and(|e| e.contains("out of range")),
+        failed["error"].as_str().is_some_and(|e| e.contains("year")),
         "{failed}"
     );
 
