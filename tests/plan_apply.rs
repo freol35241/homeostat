@@ -671,6 +671,20 @@ async fn failing_unit_halts_walk_in_place() {
         None,
         "applied_commit does not advance on a halted walk"
     );
+    // The halted walk's rows stay pending, since a unit it restarted runs
+    // on its table, and the arbiter routes on them until an apply completes.
+    let pending: serde_json::Value = serde_json::from_str(
+        &meta_read(&observer, homeostat::bus::GRANTS_PENDING_KEY)
+            .await
+            .expect("pending grants served"),
+    )
+    .expect("pending grants are JSON");
+    assert!(
+        pending
+            .as_array()
+            .is_some_and(|rows| rows.iter().any(|g| g["unit"] == json!("waiter"))),
+        "{pending}"
+    );
 
     // A re-plan shows only the remaining work.
     let plan = cli(&["plan", house_arg, "--bus", &sup.endpoint]);

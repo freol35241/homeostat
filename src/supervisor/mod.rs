@@ -57,6 +57,9 @@ const ENV_LIVE_EDITS: &str = "HOMEOSTAT_LIVE_EDITS";
 pub struct WorldMeta {
     pub units: BTreeMap<String, WorldUnit>,
     pub grants: Vec<Grant>,
+    /// The rows of every grant table an apply has started on since the last
+    /// apply that completed ([`bus::GRANTS_PENDING_KEY`]).
+    pub pending_grants: Vec<Grant>,
     pub applied_commit: Option<String>,
 }
 
@@ -326,6 +329,33 @@ impl Core {
         let _ = self.session.put(bus::GRANTS_KEY, payload).await;
     }
 
+    /// Adds the rows of the table an apply is about to walk onto to the
+    /// pending table and publishes it. Rows from a halted apply stay, because
+    /// the units that walk restarted still run on its table.
+    async fn record_pending_grants(&self, incoming: &[Grant]) {
+        let payload = {
+            let mut world = self.world.lock().expect("world meta lock");
+            for grant in incoming {
+                if !world.pending_grants.contains(grant) {
+                    world.pending_grants.push(grant.clone());
+                }
+            }
+            serde_json::to_string(&world.pending_grants).expect("grants serialize")
+        };
+        let _ = self.session.put(bus::GRANTS_PENDING_KEY, payload).await;
+    }
+
+    /// Empties the pending table once an apply has completed and every unit
+    /// runs on the applied table.
+    async fn clear_pending_grants(&self) {
+        self.world
+            .lock()
+            .expect("world meta lock")
+            .pending_grants
+            .clear();
+        let _ = self.session.put(bus::GRANTS_PENDING_KEY, "[]").await;
+    }
+
     async fn record_applied_commit(&self, commit: String) {
         self.world.lock().expect("world meta lock").applied_commit = Some(commit.clone());
         let _ = self.session.put(bus::APPLIED_COMMIT_KEY, commit).await;
@@ -333,7 +363,7 @@ impl Core {
 
     /// Publishes the whole meta space (startup).
     async fn publish_meta(&self) {
-        let (units, grants): (Vec<(String, WorldUnit)>, Vec<Grant>) = {
+        let (units, grants, pending): (Vec<(String, WorldUnit)>, Vec<Grant>, Vec<Grant>) = {
             let world = self.world.lock().expect("world meta lock");
             (
                 world
@@ -342,6 +372,7 @@ impl Core {
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect(),
                 world.grants.clone(),
+                world.pending_grants.clone(),
             )
         };
         for (name, unit) in units {
@@ -360,6 +391,8 @@ impl Core {
         }
         let payload = serde_json::to_string(&grants).expect("grants serialize");
         let _ = self.session.put(bus::GRANTS_KEY, payload).await;
+        let payload = serde_json::to_string(&pending).expect("grants serialize");
+        let _ = self.session.put(bus::GRANTS_PENDING_KEY, payload).await;
     }
 }
 
@@ -405,6 +438,10 @@ async fn serve_meta(core: Arc<Core>) -> Result<(), String> {
                 entries.push((
                     bus::GRANTS_KEY.to_string(),
                     serde_json::to_vec(&world.grants).expect("grants serialize"),
+                ));
+                entries.push((
+                    bus::GRANTS_PENDING_KEY.to_string(),
+                    serde_json::to_vec(&world.pending_grants).expect("grants serialize"),
                 ));
                 if let Some(commit) = &world.applied_commit {
                     entries.push((

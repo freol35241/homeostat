@@ -151,6 +151,13 @@ async fn execute(core: &Arc<Core>, request: ApplyRequest) -> ApplyResult {
     }
 
     let walk = plan::walk_steps(&diff, &check, &world);
+    // The walk restarts units one at a time onto the new table, and the
+    // applied table advances only at its end. The arbiter routes on both
+    // until then, so a wish for an entity the walk binds or arbitrates is
+    // not lost in between.
+    if !walk.is_empty() && check.grants != world.grants {
+        core.record_pending_grants(&check.grants).await;
+    }
     let mut steps: Vec<ApplyStep> = Vec::new();
     let mut halted_at = None;
     let mut not_reached = Vec::new();
@@ -217,6 +224,7 @@ async fn execute(core: &Arc<Core>, request: ApplyRequest) -> ApplyResult {
         // The grant table and the applied commit advance only when the whole
         // plan applied, so a halted walk re-plans the remaining work.
         core.record_grants(check.grants.clone()).await;
+        core.clear_pending_grants().await;
         if let Some(commit) = request.base_commit {
             core.record_applied_commit(commit).await;
         }

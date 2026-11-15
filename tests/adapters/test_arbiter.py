@@ -3,13 +3,15 @@
 Also which entities it arbitrates, read from the grant table.
 """
 
+import json
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "adapters"))
 
-from arbiter import Leases, bindings
+from arbiter import GRANTS_KEY, PENDING_KEY, Bindings, Leases, bindings
 
 LAMP = ("hall", "lamp", "on")
 HOLD_S = 60.0
@@ -122,6 +124,88 @@ class BindingsTest(unittest.TestCase):
         arbitrated, bound = bindings(grants)
         self.assertEqual(arbitrated, {("hall", "door")})
         self.assertEqual(bound, {("hall", "door"), ("hall", "lamp")})
+
+
+class FakeSession:
+    """Serves seeds to get_json and keeps each subscription's handler."""
+
+    def __init__(self, seeds):
+        self.seeds = seeds
+        self.handlers = {}
+
+    def subscribe(self, key, handler):
+        self.handlers[key] = handler
+
+    def get_json(self, key):
+        return [(key, self.seeds[key])] if key in self.seeds else []
+
+    def put(self, key, table):
+        payload = SimpleNamespace(to_bytes=lambda: json.dumps(table).encode())
+        self.handlers[key](SimpleNamespace(payload=payload))
+
+
+def owner_row(*entities):
+    return {"unit": "z", "publish": "state", "entities": list(entities)}
+
+
+class RoutingDuringAnApplyTest(unittest.TestCase):
+    """While an apply walks, the arbiter routes on the applied table and the
+    pending one together, so a wish for an entity the walk binds or
+    arbitrates is not lost before the applied table advances."""
+
+    def setUp(self):
+        self.changes = []
+        applied = [owner_row(entity("hall", "door", "shared"))]
+        self.session = FakeSession({GRANTS_KEY: applied})
+        self.routes = Bindings(self.session, self.changes.append)
+
+    def test_without_an_apply_the_applied_table_decides(self):
+        self.assertEqual(self.routes.route(("hall", "door")), "bound")
+        self.assertEqual(self.routes.route(("hall", "lamp")), "unbound")
+
+    def test_an_entity_the_walk_arbitrates_or_binds_is_routed_at_once(self):
+        self.session.put(PENDING_KEY, [owner_row(
+            entity("hall", "door", "arbitrated"), entity("hall", "lamp", "arbitrated")
+        )])
+        self.assertEqual(self.routes.route(("hall", "door")), "arbitrated")
+        self.assertEqual(self.routes.route(("hall", "lamp")), "arbitrated")
+        self.assertEqual(self.changes[-1], {("hall", "door"), ("hall", "lamp")})
+
+    def test_an_entity_leaving_arbitration_stays_arbitrated_until_the_apply_completes(self):
+        arbitrated = [owner_row(entity("hall", "door", "arbitrated"))]
+        session = FakeSession({GRANTS_KEY: arbitrated})
+        routes = Bindings(session, self.changes.append)
+        session.put(PENDING_KEY, [owner_row(entity("hall", "door", "shared"))])
+        self.assertEqual(routes.route(("hall", "door")), "arbitrated")
+        # The apply completes: the applied table advances, then the pending
+        # one empties.
+        session.put(GRANTS_KEY, [owner_row(entity("hall", "door", "shared"))])
+        session.put(PENDING_KEY, [])
+        self.assertEqual(routes.route(("hall", "door")), "bound")
+        self.assertEqual(self.changes[-1], frozenset())
+
+    def test_a_table_delivered_live_wins_over_its_seed(self):
+        session = FakeSession({GRANTS_KEY: [owner_row(entity("hall", "door", "shared"))]})
+        seed = session.get_json
+
+        def get_json(key):
+            # A newer table arrives while the get is in flight.
+            if key == GRANTS_KEY:
+                session.put(GRANTS_KEY, [owner_row(entity("hall", "door", "arbitrated"))])
+            return seed(key)
+
+        session.get_json = get_json
+        routes = Bindings(session, self.changes.append)
+        self.assertEqual(routes.route(("hall", "door")), "arbitrated")
+
+    def test_a_pending_table_seeded_at_startup_counts(self):
+        session = FakeSession({
+            GRANTS_KEY: [owner_row(entity("hall", "door", "shared"))],
+            PENDING_KEY: [owner_row(entity("hall", "door", "arbitrated"))],
+        })
+        routes = Bindings(session, self.changes.append)
+        self.assertEqual(routes.route(("hall", "door")), "arbitrated")
+        self.assertEqual(self.changes, [], "a seed calls nothing")
 
 
 if __name__ == "__main__":

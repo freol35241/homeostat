@@ -14,6 +14,7 @@ shutdown_grace_s = 5
 cmd = "home/cmd/**"
 # Which entities are arbitrated, followed live across applies.
 grants = "home/meta/system/grants"
+grants_pending = "home/meta/system/grants_pending"
 
 [bus.publishes]
 arbiter = { key = "home/arbiter/**" }
