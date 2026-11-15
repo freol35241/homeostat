@@ -138,6 +138,15 @@ impl Supervisor {
         std::fs::read_to_string(&self.stderr_path).unwrap_or_default()
     }
 
+    /// The last `lines` lines the supervisor and its units printed, for a
+    /// failure message: a unit that never becomes ready says why there.
+    #[allow(dead_code)] // each test binary uses its own subset of the harness
+    pub fn output_tail(&self, lines: usize) -> String {
+        let all = self.stderr();
+        let kept: Vec<&str> = all.lines().rev().take(lines).collect();
+        kept.into_iter().rev().collect::<Vec<_>>().join("\n")
+    }
+
     pub fn pid(&self) -> i32 {
         i32::try_from(self.child.id()).expect("a pid fits i32")
     }
@@ -386,41 +395,56 @@ impl Mosquitto {
         })
     }
 
+    /// Starts a broker on a free port and waits until it says it is
+    /// running. A probed port can be taken by another test's broker or bus
+    /// before this one binds it, and a TCP connect would then reach that
+    /// listener instead, so readiness is the broker's own log line. A broker
+    /// that lost the bind is retried on a fresh port.
     fn spawn_conf(body: impl Fn(u16, &Path) -> String) -> Self {
-        let port = free_port();
-        let conf = mosquitto_dir().join(format!("homeostat-mqtt-{port}.conf"));
-        std::fs::write(&conf, body(port, &conf)).expect("write mosquitto config");
-        // The broker's own log, so a broker that never listens says why.
-        let log = mosquitto_dir().join(format!("homeostat-mqtt-{port}.log"));
-        // Debian puts mosquitto in /usr/sbin, which is not always on PATH.
-        let mut child = ["mosquitto", "/usr/sbin/mosquitto"]
-            .iter()
-            .find_map(|bin| {
-                let out = std::fs::File::create(&log).expect("create mosquitto log");
-                let err = out.try_clone().expect("clone mosquitto log");
-                Command::new(bin)
-                    .args(["-c", conf.to_str().expect("utf-8 conf path")])
-                    .stdout(out)
-                    .stderr(err)
-                    .spawn()
-                    .ok()
-            })
-            .expect("spawn mosquitto (is it installed?)");
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while std::net::TcpStream::connect(("127.0.0.1", port)).is_err() {
-            let exited = child.try_wait().expect("poll mosquitto");
-            if exited.is_some() || Instant::now() >= deadline {
+        for _ in 0..5 {
+            let port = free_port();
+            let conf = mosquitto_dir().join(format!("homeostat-mqtt-{port}.conf"));
+            std::fs::write(&conf, body(port, &conf)).expect("write mosquitto config");
+            // The broker's own log, so a broker that never runs says why.
+            let log = mosquitto_dir().join(format!("homeostat-mqtt-{port}.log"));
+            // Debian puts mosquitto in /usr/sbin, which is not always on PATH.
+            let mut child = ["mosquitto", "/usr/sbin/mosquitto"]
+                .iter()
+                .find_map(|bin| {
+                    let out = std::fs::File::create(&log).expect("create mosquitto log");
+                    let err = out.try_clone().expect("clone mosquitto log");
+                    Command::new(bin)
+                        .args(["-c", conf.to_str().expect("utf-8 conf path")])
+                        .stdout(out)
+                        .stderr(err)
+                        .spawn()
+                        .ok()
+                })
+                .expect("spawn mosquitto (is it installed?)");
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
                 let said = std::fs::read_to_string(&log).unwrap_or_default();
-                panic!(
-                    "mosquitto never listened on {port} (exit: {exited:?}):\n{said}\n\
-                     If it could not open its config, see CLAUDE.md on mosquitto's \
-                     AppArmor profile."
-                );
+                let exited = child.try_wait().expect("poll mosquitto");
+                if exited.is_none() && said.contains(" running") {
+                    let _ = std::fs::remove_file(&log);
+                    return Self { child, port, conf };
+                }
+                if exited.is_some() && said.contains("Address already in use") {
+                    let _ = std::fs::remove_file(&log);
+                    let _ = std::fs::remove_file(&conf);
+                    break;
+                }
+                if exited.is_some() || Instant::now() >= deadline {
+                    panic!(
+                        "mosquitto never ran on {port} (exit: {exited:?}):\n{said}\n\
+                         If it could not open its config, see CLAUDE.md on mosquitto's \
+                         AppArmor profile."
+                    );
+                }
+                std::thread::sleep(Duration::from_millis(50));
             }
-            std::thread::sleep(Duration::from_millis(50));
         }
-        let _ = std::fs::remove_file(&log);
-        Self { child, port, conf }
+        panic!("mosquitto lost the bind race for five probed ports");
     }
 }
 
