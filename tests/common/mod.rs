@@ -344,6 +344,17 @@ pub struct Mosquitto {
     conf: PathBuf,
 }
 
+/// Where a test broker's files go: Cargo's temporary directory for
+/// integration tests, under `target/`. Ubuntu 26.04's mosquitto cannot open
+/// a configuration file under `/tmp`, though the file is the test user's
+/// and readable.
+#[allow(dead_code)] // each test binary uses its own subset of the harness
+fn mosquitto_dir() -> PathBuf {
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    std::fs::create_dir_all(&dir).expect("create the broker's directory");
+    dir
+}
+
 #[allow(dead_code)] // each test binary uses its own subset of the harness
 impl Mosquitto {
     pub fn spawn() -> Self {
@@ -354,7 +365,7 @@ impl Mosquitto {
     /// fallback, so a unit that cannot present a password does not connect.
     #[allow(dead_code)] // each test binary uses its own subset of the harness
     pub fn spawn_with_auth(username: &str, password: &str) -> Self {
-        let passwd = std::env::temp_dir().join(format!(
+        let passwd = mosquitto_dir().join(format!(
             "homeostat-mqtt-passwd-{}-{username}",
             std::process::id()
         ));
@@ -376,10 +387,10 @@ impl Mosquitto {
 
     fn spawn_conf(body: impl Fn(u16, &Path) -> String) -> Self {
         let port = free_port();
-        let conf = std::env::temp_dir().join(format!("homeostat-mqtt-{port}.conf"));
+        let conf = mosquitto_dir().join(format!("homeostat-mqtt-{port}.conf"));
         std::fs::write(&conf, body(port, &conf)).expect("write mosquitto config");
         // The broker's own log, so a broker that never listens says why.
-        let log = std::env::temp_dir().join(format!("homeostat-mqtt-{port}.log"));
+        let log = mosquitto_dir().join(format!("homeostat-mqtt-{port}.log"));
         // Debian puts mosquitto in /usr/sbin, which is not always on PATH.
         let mut child = ["mosquitto", "/usr/sbin/mosquitto"]
             .iter()
@@ -399,7 +410,19 @@ impl Mosquitto {
             let exited = child.try_wait().expect("poll mosquitto");
             if exited.is_some() || Instant::now() >= deadline {
                 let said = std::fs::read_to_string(&log).unwrap_or_default();
-                panic!("mosquitto never listened on {port} (exit: {exited:?}):\n{said}");
+                // A confined broker cannot say so itself. The kernel lists
+                // the AppArmor profiles it has loaded.
+                let confined: String =
+                    std::fs::read_to_string("/sys/kernel/security/apparmor/profiles")
+                        .unwrap_or_default()
+                        .lines()
+                        .filter(|line| line.contains("mosquitto"))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                panic!(
+                    "mosquitto never listened on {port} (exit: {exited:?}):\n{said}\n\
+                     AppArmor profiles naming mosquitto: [{confined}]"
+                );
             }
             std::thread::sleep(Duration::from_millis(50));
         }
