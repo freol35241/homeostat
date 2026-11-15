@@ -43,10 +43,14 @@ async fn setup() -> (Mosquitto, Supervisor, zenoh::Session) {
         .history(true)
         .await
         .expect("liveliness subscriber");
-    let token = tokio::time::timeout(Duration::from_mins(1), token_sub.recv_async())
-        .await
-        .expect("adapter liveliness token within 60s")
-        .expect("liveliness stream open");
+    let Ok(token) = tokio::time::timeout(Duration::from_mins(1), token_sub.recv_async()).await
+    else {
+        panic!(
+            "no adapter liveliness token within 60s; the supervisor said:\n{}",
+            sup.output_tail(80)
+        );
+    };
+    let token = token.expect("liveliness stream open");
     assert_eq!(token.kind(), SampleKind::Put);
     (mosquitto, sup, observer)
 }

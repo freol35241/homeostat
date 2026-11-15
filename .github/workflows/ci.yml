@@ -40,6 +40,15 @@ jobs:
             tests/fixtures/house_*/units/*.py.lock
       - name: Install mosquitto
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends mosquitto
+      # Ubuntu's AppArmor profile for mosquitto (from 26.04) lets it read
+      # only /etc/mosquitto. The tests write each broker's files under
+      # target/tmp, so the profile's local include grants that one tree.
+      - name: Let the test brokers read their files
+        run: |
+          if [ -e /etc/apparmor.d/mosquitto ]; then
+            echo "file ${{ github.workspace }}/target/tmp/** r," | sudo tee /etc/apparmor.d/local/mosquitto
+            sudo apparmor_parser -r /etc/apparmor.d/mosquitto
+          fi
       # Resolve dependencies up front so the first run does not eat into
       # test timeouts. The tests run against the lockfile committed next to
       # each script. With --locked, a script edited past its lock fails here
