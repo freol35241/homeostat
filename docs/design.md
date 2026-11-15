@@ -281,7 +281,7 @@ A forecast key requires a `source`, and a state key has none
 | `home/forecast/{room}/{entity}/{aspect}/{source}` | the source's unit | one issue of a series' future |
 | `home/config/{unit}/{param}` | the core only | a live parameter value |
 | `home/meta/{unit}/manifest_hash`, `files_hash`, `manifest`, `log` | the core | the unit as applied; its captured output |
-| `home/meta/system/grants`, `grants_pending`, `applied_commit`, `about`, `apply` | the core | the grant table, the tables of applies under way, the applied commit, the running version; the apply queryable |
+| `home/meta/system/grants`, `grants_pending`, `applied_commit`, `about`, `apply` | the core | the grant table, the tables of applies started since the last that completed, the applied commit, the running version; the apply queryable |
 | `home/health/{unit}` | the supervisor | the unit's supervision status |
 | `home/health/{unit}/alive` | the unit | its liveliness token |
 | `home/health/{unit}/event` | the unit | its health events |
@@ -878,13 +878,17 @@ skipping it:
   publishes `home/meta/system/grants_pending`: the rows of every table
   an apply has started on since the last one completed, emptied when
   one does. The arbiter treats an entity as arbitrated, or as bound, if
-  either table says so. That holds a wish once in both directions. An
-  entity becoming arbitrated is forwarded from the start of the walk,
-  and its old adapter does not hear `home/arbiter/`. An entity leaving
-  arbitration is forwarded until the walk ends, and its new adapter
-  takes the wish from `home/cmd/` while the forward reaches no one. A
-  halted walk leaves its rows pending, because the units it restarted
-  still run on its table.
+  either table says so. Each wish then reaches the adapter once, in
+  either direction. An entity becoming arbitrated is forwarded from the
+  start of the walk, and its old adapter does not hear `home/arbiter/`.
+  An entity leaving arbitration is forwarded until the walk ends, and
+  its new adapter takes the wish from `home/cmd/` while the forward
+  reaches no one. While an adapter takes wishes from `home/cmd/`, a
+  refusal is reported but does not stop the command. A halted walk
+  leaves its rows pending, because the units it restarted still run on
+  its table. Until an apply completes, an adapter the walk did not reach
+  is arbitrated in name only, and a wish for an entity the walk removed
+  is forwarded to no one rather than dropped as `unbound`.
 - Adapters cannot hear a wish. Their templated `home/cmd/`
   subscriptions expand only over non-arbitrated entities
   ([Key expansion](#key-expansion)). An arbitrated entity that no
@@ -1179,7 +1183,8 @@ walk halted at and the units it did not reach, and the CLI exits 1.
 Earlier units keep their new incarnations. Neither the served grant
 table nor `applied_commit` advances, so a re-run plans the remaining
 work. The pending grant table keeps the halted walk's rows until an
-apply completes ([Arbitrated mode](#arbitrated-mode)). A supervisor that shuts down mid-walk halts it the same way.
+apply completes ([Arbitrated mode](#arbitrated-mode)). A supervisor that
+shuts down mid-walk halts it the same way.
 There is no automatic rollback. Undoing would be a second walk that can
 fail in the same way, and git already gives a forward path back.
 

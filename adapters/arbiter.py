@@ -22,7 +22,7 @@ whose own files are unchanged, so a set read from the repo at startup
 would go stale. The core advances that table only when an apply
 completes, while the adapter restarts partway through the walk, so the
 service also follows home/meta/system/grants_pending, the tables of the
-applies under way, and routes on both.
+applies started since the last one that completed, and routes on both.
 
 A wish for an arbitrated entity is checked against the lease on its
 (entity, aspect) (`Leases.wish`). If it wins, the envelope is forwarded
@@ -103,16 +103,20 @@ class Bindings:
       runs once.
     - An entity leaving arbitration. Before the restart, the adapter hears
       only the forward. After it, the adapter takes the wish from home/cmd,
-      and the forward reaches no one. A refusal in that window is reported
-      but does not stop the command.
+      and the forward reaches no one.
+
+    While the adapter takes wishes from home/cmd, in either case, a refusal
+    is reported but does not stop the command. After a halted walk that
+    lasts until an apply completes, for an adapter the walk did not reach.
 
     This follows the LiveParams read pattern for each key: subscribe, then
     seed with a get, and a table the subscription has already delivered
     wins over the seed.
 
-    `on_change` is called with the new arbitrated set on each live table.
-    The seed does not call it, because nothing is held before the first
-    wish.
+    `on_change` is called with the new arbitrated set on each live table,
+    under the lock, so two tables arriving together cannot apply their sets
+    in the wrong order. The seed does not call it, because nothing is held
+    before the first wish.
     """
 
     def __init__(self, session, on_change):
@@ -138,8 +142,7 @@ class Bindings:
             self._live.add(key)
             self._tables[key] = json.loads(sample.payload.to_bytes())
             self._sets = bindings(self._tables[GRANTS_KEY] + self._tables[PENDING_KEY])
-            arbitrated = self._sets[0]
-        self._on_change(arbitrated)
+            self._on_change(self._sets[0])
 
     def route(self, target: tuple[str, str]) -> str:
         """Return "arbitrated", "bound" or "unbound" for a (room, entity)."""

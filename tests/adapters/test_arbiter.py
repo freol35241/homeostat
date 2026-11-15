@@ -184,6 +184,20 @@ class RoutingDuringAnApplyTest(unittest.TestCase):
         self.assertEqual(routes.route(("hall", "door")), "bound")
         self.assertEqual(self.changes[-1], frozenset())
 
+    def test_a_table_delivered_live_wins_over_its_seed(self):
+        session = FakeSession({GRANTS_KEY: [owner_row(entity("hall", "door", "shared"))]})
+        seed = session.get_json
+
+        def get_json(key):
+            # A newer table arrives while the get is in flight.
+            if key == GRANTS_KEY:
+                session.put(GRANTS_KEY, [owner_row(entity("hall", "door", "arbitrated"))])
+            return seed(key)
+
+        session.get_json = get_json
+        routes = Bindings(session, self.changes.append)
+        self.assertEqual(routes.route(("hall", "door")), "arbitrated")
+
     def test_a_pending_table_seeded_at_startup_counts(self):
         session = FakeSession({
             GRANTS_KEY: [owner_row(entity("hall", "door", "shared"))],
