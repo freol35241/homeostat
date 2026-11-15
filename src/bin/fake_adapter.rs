@@ -8,7 +8,8 @@
 //! scenarios), and any publication on the crash key exits nonzero on demand.
 //! `--print-stdout`/`--print-stderr` print a known number of lines
 //! ("stdout-line-{i}" / "stderr-line-{i}") before touching the bus, for the
-//! supervisor's log-capture tests.
+//! supervisor's log-capture tests. `--ready-after-ms` waits before declaring
+//! the token, which holds an apply's walk at this unit for that long.
 
 use std::env;
 use std::time::Duration;
@@ -42,6 +43,9 @@ struct Args {
     /// Print this many lines to stderr before touching the bus.
     #[arg(long, default_value_t = 0)]
     print_stderr: u32,
+    /// Wait this many milliseconds before declaring the liveliness token.
+    #[arg(long, default_value_t = 0)]
+    ready_after_ms: u64,
 }
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 1)]
@@ -63,6 +67,7 @@ async fn main() {
     let session = zenoh::open(bus::connect_config(&endpoint))
         .await
         .expect("bus session");
+    tokio::time::sleep(Duration::from_millis(args.ready_after_ms)).await;
     let _token = session
         .liveliness()
         .declare_token(bus::liveliness_key(&unit))

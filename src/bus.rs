@@ -58,6 +58,12 @@ pub fn log_key(unit: &str) -> String {
 
 /// The grant table as applied, as JSON.
 pub const GRANTS_KEY: &str = "home/meta/system/grants";
+/// The grant tables of applies that have started since the last one that
+/// completed, merged into one JSON list of rows. It is empty when no apply is
+/// running and none has halted. While an apply walks, its units restart one
+/// at a time onto the new table, and the arbiter routes on this table and
+/// [`GRANTS_KEY`] together (docs/design.md#arbitrated-mode).
+pub const GRANTS_PENDING_KEY: &str = "home/meta/system/grants_pending";
 /// The house commit last applied.
 pub const APPLIED_COMMIT_KEY: &str = "home/meta/system/applied_commit";
 /// What is running, as one JSON document: this binary's version, the commit it

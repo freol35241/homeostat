@@ -603,6 +603,121 @@ async fn an_entity_made_arbitrated_by_apply_forwards_without_a_restart() {
     let _ = std::fs::remove_dir_all(&house);
 }
 
+/// The core advances the applied grant table only when an apply completes,
+/// but the walk restarts the entity's adapter partway through. A wish sent
+/// in between must still reach the device: the arbiter routes on the table
+/// the walk is moving to as well, which the core publishes when the walk
+/// starts and empties when the apply completes (docs/design.md#arbitrated-mode).
+/// A unit that is slow to become ready holds the walk open after the adapter.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_wish_during_the_apply_that_arbitrates_an_entity_forwards() {
+    let house = temp_house(FIXTURE, "arbiter-walk");
+    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("adapters/arbiter.py");
+    edit(
+        &house,
+        "units/arbiter.toml",
+        "uv run ../../../adapters/arbiter.py",
+        &format!("uv run {}", script.display()),
+    );
+    edit(
+        &house,
+        "entities/reflector/front_door.toml",
+        "mode = \"arbitrated\"",
+        "mode = \"shared\"",
+    );
+    let mut sup = Supervisor::spawn_at(&house, &[]);
+    let observer = sup.observer().await;
+    let mut watch = health_watch(&observer, "arbiter").await;
+    await_health(&mut watch, Duration::from_mins(1), |h| {
+        h.status == HealthStatus::Running
+    })
+    .await;
+    let reflector_pid = running_pid(&observer, "reflector").await;
+    let arbiter_sub = observer
+        .declare_subscriber(ARBITER_KEY)
+        .await
+        .expect("arbiter subscriber");
+
+    edit(
+        &house,
+        "entities/reflector/front_door.toml",
+        "mode = \"shared\"",
+        "mode = \"arbitrated\"",
+    );
+    std::fs::write(
+        house.join("units/slow.toml"),
+        "schema = 1\n\n[unit]\nname = \"slow\"\nkind = \"service\"\n\
+         description = \"Holds the walk open after the adapter\"\n\n[runtime]\n\
+         command = \"fake_adapter --ready-after-ms 8000 \
+         --state-key home/state/testroom/slow/value --crash-key home/cmd/testroom/slow/crash\"\n\
+         restart = \"always\"\nshutdown_grace_s = 5\n",
+    )
+    .expect("write the slow unit");
+    let house_arg = house.to_str().expect("utf-8 path").to_string();
+    let endpoint = sup.endpoint.clone();
+    let apply =
+        tokio::task::spawn_blocking(move || cli(&["apply", &house_arg, "--bus", &endpoint]));
+
+    // Wait for the adapter to come back on the new table, while the walk
+    // waits on the slow unit.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let health = observer.get(homeostat::bus::health_key("reflector")).await;
+        let restarted = match health {
+            Ok(replies) => {
+                let mut pid = None;
+                while let Ok(reply) = replies.recv_async().await {
+                    if let Ok(sample) = reply.result() {
+                        let h: Value = serde_json::from_slice(&sample.payload().to_bytes())
+                            .unwrap_or(Value::Null);
+                        if h["status"] == json!("running") {
+                            pid = h["pid"].as_u64();
+                        }
+                    }
+                }
+                pid.is_some_and(|pid| pid != reflector_pid)
+            }
+            Err(_) => false,
+        };
+        if restarted {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the reflector never restarted"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    let wish = envelope(json!(true), "automation", "scheduler");
+    put_cmd(&observer, &wish).await;
+    let forwarded = next_json(&arbiter_sub, Duration::from_secs(3)).await;
+    assert!(
+        !apply.is_finished(),
+        "the walk ended before the wish was checked"
+    );
+    assert_eq!(
+        forwarded,
+        Some(wish),
+        "a wish sent during the walk forwards"
+    );
+
+    let apply = apply.await.expect("apply task");
+    assert_cli_ok(&apply);
+    let replies = observer
+        .get("home/meta/system/grants_pending")
+        .await
+        .expect("pending get");
+    let reply = replies.recv_async().await.expect("a pending reply");
+    let pending: Value =
+        serde_json::from_slice(&reply.result().expect("an ok reply").payload().to_bytes())
+            .expect("JSON");
+    assert_eq!(pending, json!([]), "the pending table empties at the end");
+
+    sup.shutdown();
+    let _ = std::fs::remove_dir_all(&house);
+}
+
 /// Replaces `from` with `to` in a house file; the pattern must be present.
 fn edit(house: &std::path::Path, rel: &str, from: &str, to: &str) {
     let path = house.join(rel);
