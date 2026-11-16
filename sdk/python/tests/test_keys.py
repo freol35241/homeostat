@@ -91,6 +91,50 @@ class OptionsTest(unittest.TestCase):
         self.assertEqual(keys.cmd_envelope_options(payload), {"transition": 2})
 
 
+class HoldTest(unittest.TestCase):
+    """The `hold` field of a manual-band command (docs/design.md#hold-intents)."""
+
+    def test_a_built_envelope_carries_hold_only_when_given(self):
+        self.assertNotIn("hold", keys.cmd_envelope(1, "manual", "u"))
+        for hold in ("none", "report", "2026-11-17T06:00:00+01:00", "2026-11-17T05:00:00Z"):
+            envelope = keys.cmd_envelope(1, "manual", "u", hold=hold)
+            self.assertEqual(envelope["hold"], hold)
+            self.assertEqual(keys.parse_cmd_envelope(envelope), 1)
+            self.assertEqual(keys.cmd_envelope_hold(envelope), hold)
+
+    def test_a_release_carries_no_value(self):
+        envelope = keys.cmd_envelope(None, "manual", "u", hold="release")
+        self.assertNotIn("value", envelope)
+        self.assertIsNone(keys.parse_cmd_envelope(envelope))
+        with self.assertRaises(ValueError):
+            keys.cmd_envelope(True, "manual", "u", hold="release")
+
+    def test_only_a_release_may_leave_out_the_value(self):
+        with self.assertRaises(ValueError):
+            keys.parse_cmd_envelope({"priority": "manual", "hold": "none"})
+
+    def test_a_hold_below_the_manual_band_is_refused(self):
+        for priority in ("automation", "agent", "family"):
+            with self.assertRaises(ValueError, msg=priority):
+                keys.cmd_envelope(1, priority, "u", hold="none")
+            with self.assertRaises(ValueError, msg=priority):
+                keys.parse_cmd_envelope({"value": 1, "priority": priority, "hold": "none"})
+
+    def test_a_hold_is_a_word_or_an_instant_with_an_offset(self):
+        for hold in ("forever", "06:00", "2026-11-17T06:00:00", "", 30, None, ["none"]):
+            with self.assertRaises(ValueError, msg=repr(hold)):
+                keys.parse_cmd_envelope({"value": 1, "priority": "manual", "hold": hold})
+
+    def test_an_instant_reads_back_timezone_aware(self):
+        instant = keys.hold_instant("2026-11-17T06:00:00+01:00")
+        self.assertEqual(instant.isoformat(), "2026-11-17T06:00:00+01:00")
+        self.assertIsNone(keys.hold_instant("none"))
+
+    def test_hold_keys(self):
+        self.assertEqual(keys.hold_key("arbiter", "r", "e", "a"), "home/hold/arbiter/r/e/a")
+        self.assertEqual(keys.hold_keyexpr("arbiter"), "home/hold/arbiter/**")
+
+
 class CorrelationIdTest(unittest.TestCase):
     def test_every_built_envelope_carries_one(self):
         first = keys.cmd_envelope(21.5, "manual", "dashboard")

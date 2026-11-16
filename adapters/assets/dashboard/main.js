@@ -8,7 +8,7 @@
 import { VideoRTC } from '../video-rtc.js';
 import { connectWs, loadModel } from './api.js';
 import { currentView, renderShell } from './chrome.js';
-import { announceOutcome, forgetOutcome, markPendingControls, pending, recent, sendCmd, sendLightsOff, sendParam, stepBase, stepCmd } from './commands.js';
+import { announceOutcome, forgetOutcome, markPendingControls, pending, recent, releaseHold, sendCmd, sendLightsOff, sendParam, stepBase, stepCmd } from './commands.js';
 import logic from './logic.js';
 import { openEntityDetail } from './overlay/entity.js';
 import { fetchHistoryRange, fetchIssues, fetchLayerLines, fetchSourceEvents, openHistoryDetail } from './overlay/history.js';
@@ -49,6 +49,15 @@ document.addEventListener('click', function (e) {
   }
   if (action === 'notify-send') {
     sendNotification(el.getAttribute('data-room'), el.getAttribute('data-entity'), el.getAttribute('data-aspect'));
+    return;
+  }
+  if (action === 'hold-release') {
+    delete localState.holdTimes[el.getAttribute('data-key')];
+    releaseHold(el.getAttribute('data-room'), el.getAttribute('data-entity'), el.getAttribute('data-aspect'));
+    return;
+  }
+  if (action === 'hold-until') {
+    holdUntil(el.getAttribute('data-room'), el.getAttribute('data-entity'), el.getAttribute('data-aspect'), el.getAttribute('data-key'));
     return;
   }
   if (action === 'toggle-lock') {
@@ -291,6 +300,21 @@ document.addEventListener('change', function (e) {
 // the text there to try again. The line under the box says what became
 // of it, and the other button's last outcome is cleared so it does not
 // hide this one.
+// A new end for a family hold: the held value is sent again, holding
+// until the next time the clock shows the time picked.
+function holdUntil(room, entity, aspect, key) {
+  var box = document.getElementById('hold-time-' + entity + '-' + aspect);
+  var until = logic.holdUntil(box ? box.value : '', Date.now());
+  var hold = store.holds[key];
+  if (!until || !hold) {
+    if (box) box.focus();
+    return;
+  }
+  sendCmd(room, entity, aspect, hold.value, until).then(function (sent) {
+    if (sent) delete localState.holdTimes[key];
+  });
+}
+
 function sendNotification(room, entity, aspect) {
   var box = document.getElementById('notify-' + entity);
   var text = box ? box.value : '';
@@ -323,6 +347,10 @@ document.addEventListener('input', function (e) {
 
   if (el.matches('[data-action="notify-text"]')) {
     localState.notifyDrafts[el.getAttribute('data-entity')] = el.value;
+    return;
+  }
+  if (el.matches('[data-action="hold-time"]')) {
+    localState.holdTimes[el.getAttribute('data-key')] = el.value;
     return;
   }
 

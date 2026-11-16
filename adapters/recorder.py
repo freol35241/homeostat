@@ -1305,6 +1305,12 @@ class Recorder:
             except ValueError:
                 self.sess.health_event("drop", reason="invalid-command", key=key)
                 return
+            if keys.cmd_envelope_hold(payload) == "release":
+                # A release hands the aspect back and carries no value, so
+                # it has no sample. The envelope still says who released it.
+                raw = sample.payload.to_bytes().decode("utf-8", errors="replace")
+                self.writer.enqueue("events", (ts, key, raw))
+                return
         else:
             value = payload
         kind_value = typed(value)

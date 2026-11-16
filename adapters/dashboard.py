@@ -622,10 +622,10 @@ class Hub:
         # forecasts. The recorder's copy is for checking past forecasts
         # (/api/forecasts).
         self.forecasts: dict[str, object] = {}
-        # home/hold/{unit} -> what that arbiter is holding now. The
-        # preempt/refuse events say what happened; this says what is in
-        # force, which a browser opening during a hold needs
-        # (docs/design.md#arbitrated-mode).
+        # home/hold/{unit}/{room}/{entity}/{aspect} -> what that arbiter
+        # holds on the aspect now. The preempt/refuse events say what
+        # happened; this says what is in force, which a browser opening
+        # during a hold needs (docs/design.md#arbitrated-mode).
         self.holds: dict[str, object] = {}
         self.health: dict[str, object] = {}
         self.config: dict[str, object] = {}
@@ -660,7 +660,7 @@ class Hub:
         self._subs = [
             self.session.subscribe("home/state/**", self._on_state),
             self.session.subscribe("home/forecast/**", self._on_forecast),
-            self.session.subscribe("home/hold/*", self._on_hold),
+            self.session.subscribe("home/hold/**", self._on_hold),
             self.session.subscribe("home/health/**", self._on_health),
             self.session.subscribe("home/config/*/*", self._on_config),
             self.session.subscribe("home/discovery/*", self._on_discovery),
@@ -672,7 +672,7 @@ class Hub:
         for key, value in self.session.get_json("home/forecast/**"):
             with self.lock:
                 self.forecasts.setdefault(key, value)
-        for key, value in self.session.get_json("home/hold/*"):
+        for key, value in self.session.get_json("home/hold/**"):
             with self.lock:
                 self.holds.setdefault(key, value)
         for key, value in self.session.get_json("home/health/*"):
@@ -759,6 +759,13 @@ class Hub:
         self._emit({"type": "state", "key": key, "value": value})
 
     def _on_hold(self, sample) -> None:
+        if sample.kind == zenoh.SampleKind.DELETE:
+            # The hold ended. The page forgets the key on a null value.
+            key = str(sample.key_expr)
+            with self.lock:
+                self.holds.pop(key, None)
+            self._emit({"type": "hold", "key": key, "value": None})
+            return
         if (decoded := self._decode(sample)) is None:
             return
         key, value = decoded
@@ -1028,31 +1035,44 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         return ws
 
     async def api_cmd(request: web.Request) -> web.Response:
-        """POST /api/cmd {room, entity, aspect, value}: one command at the manual band.
+        """POST /api/cmd {room, entity, aspect, value, hold?}: one command at the manual band.
 
         The aspect must be in the capability's vocabulary, or one the
         entity's descriptor declares as a family-editable command, and the
         value must pass that command's type and constraint. The reply
         carries the envelope's id and `heard`, whether the command can
         reach its device (see `reachable`).
+
+        `hold` is for an arbitrated entity only (docs/design.md#hold-intents):
+        an RFC3339 instant to hold until, "none" to act without holding, or
+        "release" with no value to hand the aspect back. The page never saw
+        the device act, so it does not send "report".
         """
         try:
             body = await request.json()
             room, entity = str(body["room"]), str(body["entity"])
-            aspect, value = str(body["aspect"]), body["value"]
-        except (ValueError, KeyError, TypeError):  # TypeError: a non-object body
+            aspect, hold = str(body["aspect"]), body.get("hold")
+            value = None if hold == "release" else body["value"]
+        except (ValueError, KeyError, TypeError, AttributeError):  # a non-object body
             return json_error("body must be {room, entity, aspect, value}")
         spec = model.entities.get(entity)
         if spec is None or spec["room"] != room:
             return json_error(f"unknown entity {room}/{entity}")
         if not spec["commandable"]:
             return json_error(f"dashboard is not granted {spec['capability']} ({entity})")
+        if hold is not None:
+            if spec["write_mode"] != "arbitrated":
+                return json_error(f"{entity} is not arbitrated, so nothing holds it")
+            if hold == "report":
+                return json_error("the dashboard cannot report what a device did")
         allowed = COMMANDABLE.get(spec["capability"], set())
         base = BASE_ASPECT.get(spec["capability"])
         vocabulary = aspect in allowed and (aspect == base or aspect in spec["features"])
         if vocabulary:
             kind = VOCABULARY_COMMANDS[aspect]["type"]
-            if kind == "text":
+            if hold == "release":
+                pass
+            elif kind == "text":
                 if not text_ok(value):
                     return json_error(f"{entity} {aspect}: must be text, not blank, at most {MAX_TEXT_CHARS} characters")
             elif not command_value_ok(VOCABULARY_COMMANDS[aspect], value):
@@ -1062,12 +1082,20 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
                 command = descriptor_command(hub.aspects.get(entity), aspect)
             if command is None:
                 return json_error(f"{spec['capability']} {entity} takes no {aspect} command")
-            if not command_value_ok(command, value):
+            if hold != "release" and not command_value_ok(command, value):
                 return json_error(f"{entity} {aspect}: {value!r} is outside the declared constraint")
         # The manual band matches this unit's [bus.publishes] declaration
         # (units/dashboard.toml). The family wins over automations.
-        envelope = keys.cmd_envelope(value, "manual", "dashboard")
+        try:
+            envelope = keys.cmd_envelope(value, "manual", "dashboard", hold=hold)
+        except ValueError as error:
+            return json_error(str(error))
         key = keys.cmd_key(room, entity, aspect)
+        if hold == "release":
+            # Only the arbiter hears a release, and the hold record going
+            # away is its answer.
+            hub.session.put_json(key, envelope)
+            return web.json_response({"ok": True, "id": envelope["id"]})
         heard = await asyncio.get_running_loop().run_in_executor(
             None, reachable, hub.session, spec, aspect
         )

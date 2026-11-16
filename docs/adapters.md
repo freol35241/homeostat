@@ -279,7 +279,11 @@ Every command payload is an envelope:
 ```
 
 It may carry `options` beside the value, such as a light's
-`{"transition": 1.0}` (docs/design.md#command-options).
+`{"transition": 1.0}` (docs/design.md#command-options). A manual-band
+command may also carry `hold`, which is for the arbiter
+(docs/design.md#hold-intents). The adapter acts on the value and ignores
+`hold`, except that a `"report"` or a `"release"` asks the device for
+nothing.
 
 Subscribe on the expressions `keys.command_keyexprs(entity)`
 returns: `home/cmd/{room}/{entity}/**` for a plain entity,
@@ -297,7 +301,9 @@ Per command:
    drop below, because each one ends a command someone is waiting on.
    An adapter that honours command options calls
    `session.parse_command_with_options(sample)`, which also hands back
-   the envelope's `options`.
+   the envelope's `options`. Both return None, with no event, for a
+   `"report"` or a `"release"`, and an adapter that parses envelopes
+   itself must not act on either.
 3. Check the aspect is one the entity takes: the capability's base
    aspect, its declared `features`, or a dialect knob this adapter
    documents. Anything else drops with `invalid-command`.

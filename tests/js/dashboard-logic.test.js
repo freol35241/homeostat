@@ -176,20 +176,17 @@ test('a paused automation deviates as paused and taps to its unit', () => {
 // it stands above a band something is granted to drive that aspect at.
 const HOLD_UNTIL = Date.parse('2026-09-25T20:47:00Z');
 const NOW = Date.parse('2026-09-25T20:20:00Z');
+const HOLD_KEY = 'home/hold/arbiter/hallway/front_door/locked';
 const holdDoc = (over) => ({
-  'home/hold/arbiter': {
-    schema: 1,
-    holds: [
-      Object.assign(
-        {
-          room: 'hallway', entity: 'front_door', aspect: 'locked',
-          priority: 'manual', actor: 'dashboard',
-          since: '2026-09-25T20:17:00Z', until: '2026-09-25T20:47:00Z', refused: 0,
-        },
-        over || {},
-      ),
-    ],
-  },
+  [HOLD_KEY]: Object.assign(
+    {
+      schema: 1,
+      room: 'hallway', entity: 'front_door', aspect: 'locked',
+      priority: 'manual', actor: 'dashboard', value: true,
+      since: '2026-09-25T20:17:00Z', until: '2026-09-25T20:47:00Z', refused: 0,
+    },
+    over || {},
+  ),
 });
 
 test('a hold over something an automation drives is a deviation, from the moment it is taken', () => {
@@ -234,19 +231,19 @@ test('an expired hold is not a hold', () => {
 
 test('holds come back soonest-first, and a malformed entry is dropped rather than drawn', () => {
   const docs = {
-    'home/hold/arbiter': {
-      schema: 1,
-      holds: [
-        { room: 'hallway', entity: 'front_door', aspect: 'locked', priority: 'manual', actor: 'a', until: '2026-09-25T20:47:00Z' },
-        { room: 'livingroom', entity: 'heatpump', aspect: 'mode', priority: 'manual', actor: 'b', until: '2026-09-25T20:30:00Z' },
-        { room: 'livingroom', entity: 'heatpump', aspect: 'setpoint', priority: 'manual', actor: 'b', until: 'soon' },
-        { entity: 'heatpump', until: '2026-09-25T21:00:00Z' },
-      ],
-    },
+    'home/hold/arbiter/hallway/front_door/locked':
+      { room: 'hallway', entity: 'front_door', aspect: 'locked', priority: 'manual', actor: 'a', until: '2026-09-25T20:47:00Z' },
+    'home/hold/arbiter/livingroom/heatpump/mode':
+      { room: 'livingroom', entity: 'heatpump', aspect: 'mode', priority: 'manual', actor: 'b', until: '2026-09-25T20:30:00Z' },
+    'home/hold/arbiter/livingroom/heatpump/setpoint':
+      { room: 'livingroom', entity: 'heatpump', aspect: 'setpoint', priority: 'manual', actor: 'b', until: 'soon' },
+    'home/hold/arbiter/livingroom/heatpump/x': { entity: 'heatpump', until: '2026-09-25T21:00:00Z' },
+    'home/hold/arbiter/livingroom/heatpump/y': null,
   };
   const live = logic.liveHolds(docs, NOW);
   assert.deepEqual(live.map((h) => h.aspect), ['mode', 'locked']);
   assert.equal(live[0].refused, 0, 'a missing tally reads as none, not as undefined');
+  assert.equal(live[0].key, 'home/hold/arbiter/livingroom/heatpump/mode');
 });
 
 test('holdOn answers for one aspect, which is what a control asks', () => {
@@ -255,12 +252,26 @@ test('holdOn answers for one aspect, which is what a control asks', () => {
   assert.equal(logic.holdOn({}, 'hallway', 'front_door', 'locked', NOW), null);
 });
 
-test('a hold delta lands in the store and a snapshot replaces the lot', () => {
-  const store = { holds: { 'home/hold/old': { schema: 1, holds: [] } } };
-  assert.equal(logic.applyMessage(store, { type: 'hold', key: 'home/hold/arbiter', value: holdDoc()['home/hold/arbiter'] }, 0), 'hold');
-  assert.equal(store.holds['home/hold/arbiter'].holds.length, 1);
+test('a hold delta lands in the store, a null forgets it, and a snapshot replaces the lot', () => {
+  const store = { holds: { 'home/hold/arbiter/a/b/c': holdDoc()[HOLD_KEY] } };
+  assert.equal(logic.applyMessage(store, { type: 'hold', key: HOLD_KEY, value: holdDoc()[HOLD_KEY] }, 0), 'hold');
+  assert.equal(store.holds[HOLD_KEY].actor, 'dashboard');
+  logic.applyMessage(store, { type: 'hold', key: HOLD_KEY, value: null }, 0);
+  assert.equal(HOLD_KEY in store.holds, false, 'an ended hold is gone');
   logic.applyMessage(store, { type: 'snapshot', holds: {} }, 0);
   assert.deepEqual(store.holds, {});
+});
+
+test('a hold until a time of day is the next time the clock shows it', () => {
+  const at = (h, m) => new Date(2026, 10, 16, h, m).getTime();
+  const local = (iso) => { const d = new Date(iso); return [d.getDate(), d.getHours(), d.getMinutes()]; };
+  assert.deepEqual(local(logic.holdUntil('22:30', at(14, 0))), [16, 22, 30], 'later today');
+  assert.deepEqual(local(logic.holdUntil('06:00', at(14, 0))), [17, 6, 0], 'already past today: tomorrow');
+  assert.deepEqual(local(logic.holdUntil('14:00', at(14, 0))), [17, 14, 0], 'now is not later');
+  assert.match(logic.holdUntil('06:00', at(14, 0)), /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/,
+    'an instant with an offset, which is what the arbiter takes');
+  assert.equal(logic.holdUntil('', at(14, 0)), null);
+  assert.equal(logic.holdUntil('25:00', at(14, 0)), null);
 });
 
 test('deviations render in a stable order: supervision, state, setpoints', () => {

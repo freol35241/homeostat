@@ -287,7 +287,7 @@ codes! {
         `home/config/` and `home/meta/` are the core's alone. `home/health/`, \
         `home/discovery/` and `home/hold/` are per unit: a publish there must \
         sit under the publishing unit's own name (`home/health/{unit}/...`, \
-        `home/discovery/{unit}`, `home/hold/{unit}`). `home/arbiter/`, `home/clock/` and \
+        `home/discovery/{unit}`, `home/hold/{unit}/...`). `home/arbiter/`, `home/clock/` and \
         `home/history/` are each one service's output: only a `kind = \
         \"service\"` unit may publish them, and at most one per class. The \
         SDK only checks a published key against the declared expression, so \

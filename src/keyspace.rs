@@ -19,11 +19,12 @@ pub const CLASSES: &[&str] = &[
     "clock",
     "history",
     "discovery",
-    // What the arbiter is holding now: one document per arbiter unit
-    // (`home/hold/{unit}`), in the discovery shape. It is mirrored so a late
-    // joiner can ask whether an aspect is held right now, which an event
-    // stream cannot answer (docs/design.md#arbitrated-mode). This is held
-    // state. The audit trail of preempt and refuse events stays where it is.
+    // What the arbiter is holding now: one record per held aspect, under the
+    // arbiter's name (`home/hold/{unit}/{room}/{entity}/{aspect}`). It is
+    // mirrored so a late joiner can ask whether an aspect is held right now,
+    // which an event stream cannot answer (docs/design.md#arbitrated-mode).
+    // This is held state. The audit trail of preempt and refuse events stays
+    // where it is.
     "hold",
 ];
 

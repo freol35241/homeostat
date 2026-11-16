@@ -31,8 +31,10 @@ var STEP_SETTLE_MS = 600;
 var cmdSeq = 0;
 
 /* Resolves to whether the command went onto the bus with something
- * listening, so a caller can tell a refusal from a send. */
-export function sendCmd(room, entity, aspect, value) {
+ * listening, so a caller can tell a refusal from a send. `hold`, when
+ * given, is an instant the family hold lasts until
+ * (docs/design.md#hold-intents). */
+export function sendCmd(room, entity, aspect, value, hold) {
   var key = logic.pendingKey(room, entity, aspect);
   clearTimeout(drafts[key]);
   delete drafts[key];
@@ -48,7 +50,9 @@ export function sendCmd(room, entity, aspect, value) {
   return fetch('/api/cmd', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Homeostat': 'family' },
-    body: JSON.stringify({ room: room, entity: entity, aspect: aspect, value: value })
+    body: JSON.stringify(hold === undefined
+      ? { room: room, entity: entity, aspect: aspect, value: value }
+      : { room: room, entity: entity, aspect: aspect, value: value, hold: hold })
   }).then(function (r) {
     if (!r.ok) return r.text().then(function (t) { throw new Error(t || ('HTTP ' + r.status)); });
     return r.json();
@@ -194,6 +198,21 @@ export function announceOutcome(outcome) {
 
 function cssEscape(text) {
   return window.CSS && CSS.escape ? CSS.escape(text) : String(text).replace(/["\\]/g, '\\$&');
+}
+
+/* Hand an aspect back to the house. Nothing is sent to the device, so
+ * there is no command to track: the hold's record going away is the
+ * answer, and the page redraws when it does. */
+export function releaseHold(room, entity, aspect) {
+  fetch('/api/cmd', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Homeostat': 'family' },
+    body: JSON.stringify({ room: room, entity: entity, aspect: aspect, hold: 'release' })
+  }).then(function (r) {
+    if (!r.ok) return r.text().then(function (t) { throw new Error(t || ('HTTP ' + r.status)); });
+  }).catch(function (e) {
+    toast(errText(e));
+  });
 }
 
 export function sendLightsOff() {

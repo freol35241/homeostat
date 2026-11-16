@@ -201,20 +201,17 @@
   }
  },
  "holds": {
-  "home/hold/arbiter": {
+  "home/hold/arbiter/livingroom/heat_pump/mode": {
    "schema": 1,
-   "holds": [
-    {
-     "room": "livingroom",
-     "entity": "heat_pump",
-     "aspect": "mode",
-     "priority": "manual",
-     "actor": "dashboard",
-     "since": "2026-09-25T06:00:00Z",
-     "until": "2026-09-25T06:30:00Z",
-     "refused": 2
-    }
-   ]
+   "room": "livingroom",
+   "entity": "heat_pump",
+   "aspect": "mode",
+   "priority": "manual",
+   "actor": "dashboard",
+   "value": "heat",
+   "since": "2026-09-25T06:00:00Z",
+   "until": "2026-09-25T06:30:00Z",
+   "refused": 2
   }
  },
  "health": {

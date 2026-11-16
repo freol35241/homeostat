@@ -205,6 +205,28 @@ class ParseCommandTest(unittest.TestCase):
         self.assertEqual(session._session.puts[0][1]["cmd_id"], "badbeef0")
 
 
+    def test_a_report_or_a_release_asks_the_device_for_nothing(self):
+        # An adapter receives these only for an aspect nothing arbitrates.
+        # There is no hold to keep, and the device must not be driven.
+        session = stub_session()
+        for envelope in (
+            {"value": True, "priority": "manual", "hold": "report"},
+            {"priority": "manual", "hold": "release"},
+        ):
+            sample = FakeSample("home/cmd/kitchen/lamp/on", json.dumps(envelope).encode())
+            self.assertIsNone(session.parse_command(sample), envelope)
+        self.assertEqual(session._session.puts, [], "no drop event either")
+
+    def test_a_command_with_a_hold_until_or_none_reaches_the_device(self):
+        session = stub_session()
+        for hold in ("none", "2026-11-17T06:00:00+01:00"):
+            sample = FakeSample(
+                "home/cmd/kitchen/lamp/on",
+                json.dumps({"value": True, "priority": "manual", "hold": hold}).encode(),
+            )
+            self.assertEqual(session.parse_command(sample), ("on", True, None), hold)
+
+
 class HasSubscriberTest(unittest.TestCase):
     def test_answers_from_the_publishers_matching_status(self):
         session = stub_session()

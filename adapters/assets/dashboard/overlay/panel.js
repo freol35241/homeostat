@@ -107,13 +107,14 @@ export function renderOverlayContent() {
   markPendingControls();
 }
 
-// A notifier's text box being typed in. Its text survives a swap through
-// localState, but the focus and the caret are on the old node, so they
-// are carried over by id. Other boxes keep no draft, and focus carried
-// into one would put the caret in text that had just been reset.
+// A notifier's text box or a hold's end time being typed in. Its value
+// survives a swap through localState, but the focus and the caret are on
+// the old node, so they are carried over by id. Other boxes keep no
+// draft, and focus carried into one would put the caret in text that had
+// just been reset.
 function typingIn() {
   var el = document.activeElement;
-  if (!el || !el.id || !el.matches('#overlay-body [data-action="notify-text"]')) return null;
+  if (!el || !el.id || !el.matches('#overlay-body [data-action="notify-text"], #overlay-body [data-action="hold-time"]')) return null;
   return { id: el.id, start: el.selectionStart, end: el.selectionEnd };
 }
 
@@ -121,7 +122,8 @@ function resumeTyping(typing) {
   var el = byId(typing.id);
   if (!el) return;
   el.focus({ preventScroll: true });
-  el.setSelectionRange(typing.start, typing.end);
+  // A time field has no caret to put back.
+  if (el.type === 'text') el.setSelectionRange(typing.start, typing.end);
 }
 
 // The live player for `name`, or none. Mounting is idempotent: mounting

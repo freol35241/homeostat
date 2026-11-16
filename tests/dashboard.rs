@@ -706,6 +706,54 @@ async fn dashboard_serves_the_family_surface() {
         "lock command stamps the same manual-band envelope as any other command"
     );
 
+    // A hold intent is for an arbitrated entity, and the page never says
+    // what a device did (docs/design.md#hold-intents). Both are refused
+    // before the bus; front_door is shared.
+    for body in [
+        json!({"room": "livingroom", "entity": "front_door", "aspect": "locked", "hold": "release"}),
+        json!({"room": "livingroom", "entity": "front_door", "aspect": "locked", "value": true,
+               "hold": "2099-01-01T06:00:00Z"}),
+        json!({"room": "livingroom", "entity": "front_door", "aspect": "locked", "value": true,
+               "hold": "report"}),
+    ] {
+        let (status, reply) = http_request(
+            &addr,
+            "POST",
+            "/api/cmd",
+            &[("X-Homeostat", "family")],
+            Some(&body),
+        );
+        assert_eq!(status, 400, "{body}: {reply}");
+    }
+    assert!(
+        tokio::time::timeout(Duration::from_secs(2), lock_cmd_sub.recv_async())
+            .await
+            .is_err(),
+        "a refused hold must never reach the bus"
+    );
+
+    // Holds reach the page one record per aspect, and a deleted key
+    // reaches it as a null, so the page forgets a hold that ended.
+    let hold_key = "home/hold/arbiter/livingroom/front_door/locked";
+    let record = json!({"schema": 1, "room": "livingroom", "entity": "front_door",
+        "aspect": "locked", "priority": "manual", "actor": "dashboard", "value": true,
+        "since": "2026-11-16T10:00:00Z", "until": "2099-01-01T00:00:00Z", "refused": 0});
+    observer
+        .put(hold_key, record.to_string())
+        .await
+        .expect("hold put");
+    let delta = (0..20)
+        .map(|_| ws_read_message(&mut ws))
+        .find(|m| m["type"] == "hold" && m["key"] == hold_key)
+        .expect("hold delta on the open socket");
+    assert_eq!(delta["value"], record);
+    observer.delete(hold_key).await.expect("hold delete");
+    let delta = (0..20)
+        .map(|_| ws_read_message(&mut ws))
+        .find(|m| m["type"] == "hold" && m["key"] == hold_key)
+        .expect("hold delete on the open socket");
+    assert_eq!(delta["value"], Value::Null);
+
     // A switch command is refused: the capability is in COMMANDABLE, but
     // this dashboard's manifest (units/dashboard.toml) grants light, lock
     // and climate and not switch. The unit honours the grant table `plan`

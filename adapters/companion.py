@@ -256,7 +256,10 @@ def main():
             except ValueError:
                 drop("invalid-command", key=key)
                 return
-            if aspect not in CHANNELS or not isinstance(value, str) or not value.strip():
+            # A report or a release is for the arbiter, and nothing
+            # arbitrates a notifier, so one reaching here was sent in error.
+            stray = keys.cmd_envelope_hold(payload) in ("report", "release")
+            if stray or aspect not in CHANNELS or not isinstance(value, str) or not value.strip():
                 drop("invalid-command", key=key, aspect=aspect, value=value)
                 return
             actor = payload.get("actor")

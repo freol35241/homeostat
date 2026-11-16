@@ -4,6 +4,7 @@ Schema: home/{class}/{room}/{entity}/{aspect} for state, cmd, arbiter and
 forecast; home/health/{unit}[...] and home/meta/{unit}/... for supervision.
 """
 
+import datetime
 import re
 import secrets
 from typing import Any
@@ -287,6 +288,11 @@ def command_keyexprs(entity) -> list[str]:
 
 CMD_PRIORITIES = ("automation", "agent", "family", "manual")
 
+# The words a manual-band command's `hold` may carry besides an instant
+# (docs/design.md#hold-intents). "report" and "release" are for the
+# arbiter alone: neither is forwarded to the device.
+HOLD_WORDS = ("none", "report", "release")
+
 
 def cmd_envelope(
     value: Any,
@@ -295,6 +301,7 @@ def cmd_envelope(
     *,
     cmd_id: str | None = None,
     options: dict | None = None,
+    hold: str | None = None,
 ) -> dict:
     """Build a home/cmd/** payload (docs/design.md#cmd-envelopes).
 
@@ -312,7 +319,8 @@ def cmd_envelope(
     Parameters
     ----------
     value : Any
-        The command's value, JSON-encodable.
+        The command's value, JSON-encodable. None with ``hold="release"``,
+        which carries no value.
     priority : str
         One of `CMD_PRIORITIES`.
     actor : str
@@ -322,17 +330,24 @@ def cmd_envelope(
     options : dict or None, optional
         Command options (docs/design.md#command-options), such as
         ``{"transition": 1.0}``. Left out of the envelope when empty.
+    hold : str or None, optional
+        What the arbiter does with the family hold on the aspect
+        (docs/design.md#hold-intents): one of `HOLD_WORDS`, or an RFC3339
+        instant with an offset to hold until. Only a manual-band command
+        takes one. Left out of the envelope when None.
 
     Returns
     -------
     dict
         The envelope, with `value`, `priority`, `actor`, `id` and, when
-        given, `options`.
+        given, `options` and `hold`. A release has no `value`.
 
     Raises
     ------
     ValueError
-        If `options` is not an object with string keys.
+        If `options` is not an object with string keys, `hold` is not a
+        hold intent or is given below the manual band, or a release
+        carries a value.
     """
     envelope = {
         "value": value,
@@ -344,6 +359,13 @@ def cmd_envelope(
         _check_options(options)
     if options:
         envelope["options"] = options
+    if hold is not None:
+        _check_hold(hold, priority)
+        envelope["hold"] = hold
+        if hold == "release":
+            if value is not None:
+                raise ValueError("a release carries no value")
+            del envelope["value"]
     return envelope
 
 
@@ -381,23 +403,67 @@ def parse_cmd_envelope(payload: Any) -> Any:
     Returns
     -------
     Any
-        The envelope's `value`.
+        The envelope's `value`, or None for a release, which carries none.
 
     Raises
     ------
     ValueError
         On anything malformed: not an object, missing value or priority, an
-        unknown priority, or options that are not an object.
+        unknown priority, options that are not an object, or a `hold` that
+        is not a hold intent or sits below the manual band.
     """
     if not isinstance(payload, dict):
         raise ValueError("cmd payload is not a JSON object")
-    if "value" not in payload or "priority" not in payload:
-        raise ValueError("cmd envelope missing value or priority")
+    if "priority" not in payload:
+        raise ValueError("cmd envelope missing priority")
     if payload["priority"] not in CMD_PRIORITIES:
         raise ValueError(f"unknown priority {payload['priority']!r}")
     if "options" in payload:
         _check_options(payload["options"])
+    if "hold" in payload:
+        _check_hold(payload["hold"], payload["priority"])
+    if payload.get("hold") == "release":
+        return None
+    if "value" not in payload:
+        raise ValueError("cmd envelope missing value")
     return payload["value"]
+
+
+def cmd_envelope_hold(payload: Any) -> str | None:
+    """Return the hold intent of a cmd envelope, or None if it has none.
+
+    Call it on an envelope `parse_cmd_envelope` accepted, which has checked
+    the intent.
+
+    Parameters
+    ----------
+    payload : Any
+        A decoded cmd payload that passed `parse_cmd_envelope`.
+
+    Returns
+    -------
+    str or None
+        The envelope's `hold`: one of `HOLD_WORDS` or an RFC3339 instant.
+    """
+    return payload.get("hold")
+
+
+def hold_instant(hold: str) -> datetime.datetime | None:
+    """Return the instant a hold intent holds until, or None for a word.
+
+    Parameters
+    ----------
+    hold : str
+        A hold intent that `parse_cmd_envelope` or `cmd_envelope` accepted.
+
+    Returns
+    -------
+    datetime.datetime or None
+        The instant, timezone-aware, or None for one of `HOLD_WORDS`.
+    """
+    if hold in HOLD_WORDS:
+        return None
+    return datetime.datetime.fromisoformat(hold)
 
 
 def cmd_envelope_options(payload: Any) -> dict:
@@ -422,6 +488,26 @@ def cmd_envelope_options(payload: Any) -> dict:
 def _check_options(options: Any) -> None:
     if not isinstance(options, dict) or not all(isinstance(k, str) for k in options):
         raise ValueError("cmd envelope options is not an object with string keys")
+
+
+def _check_hold(hold: Any, priority: Any) -> None:
+    # The family hold belongs to the manual band, the band family surfaces
+    # command at. A lower band asking to hold or release it is a bug in
+    # its publisher, so it is refused rather than ignored.
+    if priority != "manual":
+        raise ValueError(f"a {priority} command takes no hold")
+    if hold in HOLD_WORDS:
+        return
+    if not isinstance(hold, str):
+        raise ValueError(f"hold {hold!r} is not a hold intent")
+    try:
+        instant = datetime.datetime.fromisoformat(hold)
+    except ValueError:
+        raise ValueError(f"hold {hold!r} is not a hold intent") from None
+    # A local time without an offset would be read in the arbiter's zone,
+    # which need not be the sender's.
+    if instant.tzinfo is None:
+        raise ValueError(f"hold {hold!r} has no UTC offset")
 
 
 def config_key(unit: str, param: str) -> str:
@@ -496,13 +582,40 @@ def history_key(space: str, entity: str, aspect: str) -> str:
     return "home/history/" + _segments(space, entity, aspect)
 
 
-def hold_key(unit: str) -> str:
-    """Return the key of what an arbiter is currently holding.
+def hold_key(unit: str, room: str, entity: str, aspect: str) -> str:
+    """Return the key of what an arbiter holds on one aspect.
 
-    There is one document per arbiter unit, in the discovery shape, and
-    the core mirrors it. The preempt and refuse events record what
-    happened. This key answers whether an aspect is held right now
-    (docs/design.md#arbitrated-mode).
+    The arbiter publishes one record per held aspect, under its own name,
+    and deletes it when the hold ends. The core mirrors them. The preempt
+    and refuse events record what happened. These keys answer whether an
+    aspect is held right now (docs/design.md#arbitrated-mode).
+
+    Parameters
+    ----------
+    unit : str
+        The arbiter unit's name.
+    room : str
+        The room the entity is in.
+    entity : str
+        The entity's name.
+    aspect : str
+        The held aspect.
+
+    Returns
+    -------
+    str
+        home/hold/{unit}/{room}/{entity}/{aspect}.
+
+    Raises
+    ------
+    ValueError
+        If a part is not a valid key segment.
+    """
+    return "home/hold/" + _segments(unit, room, entity, aspect)
+
+
+def hold_keyexpr(unit: str) -> str:
+    """Return the key expression matching every hold one arbiter publishes.
 
     Parameters
     ----------
@@ -512,14 +625,14 @@ def hold_key(unit: str) -> str:
     Returns
     -------
     str
-        home/hold/{unit}.
+        home/hold/{unit}/**.
 
     Raises
     ------
     ValueError
         If a part is not a valid key segment.
     """
-    return "home/hold/" + _segments(unit)
+    return "home/hold/" + _segments(unit) + "/**"
 
 
 def discovery_key(unit: str) -> str:

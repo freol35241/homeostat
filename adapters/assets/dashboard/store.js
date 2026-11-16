@@ -7,7 +7,7 @@ export var store = {
   model: { zones: {}, entities: [], units: [] },
   state: {},
   forecasts: {},    // home/forecast key -> that source's current forecast
-  holds: {},        // home/hold/{unit} -> what that arbiter is holding right now
+  holds: {},        // home/hold/{unit}/{room}/{entity}/{aspect} -> what that arbiter holds on it
   health: {},
   config: {},
   aspects: {},      // entity -> its adapter's aspect descriptor (from discovery)
@@ -23,7 +23,8 @@ export var localState = {
   sparklines: {},   // entity|aspect -> {points:[], window, loaded:bool, loading:bool}
   charts: {},       // entity|aspect|hours -> the same, for chart widgets
   relations: {},    // unit -> true while its Drives/From sections are open
-  notifyDrafts: {}  // notifier -> the text typed but not sent
+  notifyDrafts: {}, // notifier -> the text typed but not sent
+  holdTimes: {}     // hold key -> the end time picked but not sent
 };
 
 // detail overlay state (right slide-over / mobile sheet)

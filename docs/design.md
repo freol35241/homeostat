@@ -287,7 +287,7 @@ A forecast key requires a `source`, and a state key has none
 | `home/health/{unit}/event` | the unit | its health events |
 | `home/clock/minute`, `home/clock/date` | the clock service | civil time |
 | `home/discovery/{unit}` | an adapter | its view of its periphery |
-| `home/hold/{unit}` | the arbiter | what it currently holds |
+| `home/hold/{unit}/{room}/{entity}/{aspect}` | the arbiter | what it holds on the aspect now |
 | `home/history/...` | (recorder queryables) | history reads |
 
 ### Rooms, entities and zones
@@ -788,7 +788,7 @@ declare `home/arbiter/**` and forge post-arbitration commands.
 
 - `home/config/**` and `home/meta/**` belong to the core.
 - `home/health/{unit}/...`, `home/discovery/{unit}` and
-  `home/hold/{unit}` sit under the publisher's own name.
+  `home/hold/{unit}/...` sit under the publisher's own name.
 - `home/arbiter/`, `home/clock/` and `home/history/` each belong to one
   service.
 - A `home/state/` publish must name an entity the unit binds
@@ -804,7 +804,8 @@ Every payload on `home/cmd/**` and `home/arbiter/**` is an envelope:
 ```
 
 - `value` is the command. `priority` is the [band](#priority-bands),
-  which the SDK stamps from the manifest.
+  which the SDK stamps from the manifest. Only a release has no
+  `value`.
 - `actor` is the publishing unit. The recorder stores it with every
   command for the audit trail.
 - `id` is minted per command by the SDK. A command is a proposal that
@@ -816,6 +817,10 @@ Every payload on `home/cmd/**` and `home/arbiter/**` is an envelope:
 - `options` is optional. It holds the [command options](#command-options)
   for the owning adapter. The arbiter checks only that it is an object
   and forwards it with the rest of the envelope.
+- `hold` is optional, and only a manual-band command carries one. It
+  tells the arbiter what to do with the family hold
+  ([Hold intents](#hold-intents)). On a lower band it is
+  `invalid-command`.
 
 Adapters drop a payload that is not an envelope with `invalid-command`.
 Both classes travel with blocking congestion control at high priority
@@ -911,27 +916,65 @@ override ends on its own. Events land at
 
 Holds are also published as state. A browser that opens mid-hold needs
 to know whether the aspect is held now, and events do not answer that.
-The state is one document at `home/hold/{unit}`, mirrored by the core:
-`{schema, holds: [{room, entity, aspect, priority, actor, since,
-until, refused}]}`. `refused` counts the wishes the hold has turned
-away.
+Each lease in force is one record at
+`home/hold/{unit}/{room}/{entity}/{aspect}`, mirrored by the core:
+`{schema, room, entity, aspect, priority, actor, value, since, until,
+refused}`. `value` is what the holder asked for, or what the device
+reported. `refused` counts the wishes the hold has turned away.
 
-- It is one document rather than a key per lease. A restart publishes
-  an empty list with no keys to clear, expiry needs one timer, and a
-  reader sees a consistent set.
-- Enforcement runs on the monotonic clock, and `until` is its
-  wall-clock equivalent. A clock step cannot shorten or stretch a real
-  hold.
+- A record is put when its lease is taken or its count changes, and its
+  key is deleted when the lease ends. The mirror forgets a deleted key,
+  so a reader sees only holds in force.
+- The family's holds outlive the arbiter process. A restarted arbiter
+  reads its records back from the mirror, keeps those whose `until` is
+  still ahead, and deletes the rest. A core restart empties the mirror,
+  and with it every hold.
+- Enforcement runs on the monotonic clock. `since` and `until` are
+  wall-clock, fixed when the lease is taken. A clock step cannot shorten
+  or stretch a running hold, though one restored after a step is off by
+  the step.
 - Expiry is published. Arbitration expires leases lazily, on the next
-  wish, so a thread waits on the earliest deadline and republishes.
-  Readers also drop an entry past its `until`.
+  wish, so a thread waits on the earliest deadline and deletes the key.
+  Readers also drop a record past its `until`.
 
-There is no way to hand control back early. An equal or higher band
-refreshes the lease, and the only exit is expiry
-([Open questions](#open-questions)). Automation-owned entities cannot
-be arbitrated (`virtual-entity-arbitrated`). A
-[fed input](#device-feeds) never goes through the arbiter: it has one
-master, so there is nothing to arbitrate.
+Automation-owned entities cannot be arbitrated
+(`virtual-entity-arbitrated`). A [fed input](#device-feeds) never goes
+through the arbiter: it has one master, so there is nothing to
+arbitrate.
+
+#### Hold intents
+
+The manual band's lease is the family hold. A family surface says what
+should happen to it with the envelope's `hold`:
+
+| `hold` | Forwarded | The family hold |
+|---|---|---|
+| absent | yes | taken for `hold_minutes` |
+| `"none"` | yes | cleared |
+| an RFC3339 instant with an offset | yes | taken until then |
+| `"report"` | no | taken for `hold_minutes`, with the reported value |
+| `"release"` | no | cleared |
+
+- `"none"` acts without taking over. The value stands until something
+  else is sent, and an automation's next command goes through.
+- An instant names the end, such as tomorrow 06:00. It carries an
+  offset, so the arbiter needs no time zone. One already past holds
+  nothing.
+- `"report"` says the device already did it, so nothing is sent. An
+  adapter whose device acts on a button of its own reports the change,
+  and the press then holds like a tap on the dashboard.
+- `"release"` hands the aspect back. It carries no value. It clears a
+  hold whichever surface placed it. The device stays where it is until
+  an automation next commands it, and one that commands only on a
+  change of its inputs may not do so for a while.
+
+Clearing touches only the family hold. A lease a lower band holds stays
+where it is, because nothing took it over. An adapter receives
+`"report"` and `"release"` only for an aspect nothing arbitrates, where
+there is no hold to keep, and the SDK's command prologue drops both
+without an event. The dashboard sends no `hold` on a tap, `"release"`
+from "Resume automatic", and an instant from "Hold until"
+([Controls and the overlay](#controls-and-the-overlay)).
 
 ### Aspect descriptors
 
@@ -1490,7 +1533,7 @@ key's entry unless the entry has a newer stamp
 once per matching key with the last payload, byte for byte, and with
 its stamp. The mirrored
 spaces are `home/state/**`, `home/forecast/**`, `home/clock/*`,
-`home/discovery/*` and `home/hold/*`. `home/config/*/*` and
+`home/discovery/*` and `home/hold/**`. `home/config/*/*` and
 `home/health/*` have last-value queryables of their own
 ([Live parameters](#live-parameters), [Supervision](#supervision)).
 All are up before any unit spawns.
@@ -1545,7 +1588,7 @@ command as its envelope's `value`) and `home/forecast/**` into
 and every command envelope
 ([Logs and the audit trail](#logs-and-the-audit-trail)). It does not
 record `home/clock/**` (a derivable row every minute, forever),
-`home/meta/**`, `home/discovery/*`, `home/hold/*`, liveliness tokens or
+`home/meta/**`, `home/discovery/*`, `home/hold/**`, liveliness tokens or
 `home/history/**`. The schema is defined by `init_store()`, versioned
 by `PRAGMA user_version` and migrated in place.
 
@@ -2559,6 +2602,12 @@ value.
   manifest default counts as a deviation, so a house running off its
   manifest can be told apart from one running it. Only
   `editable_by = "family"` parameters get a control.
+- An arbitrated entity's overlay lists the family's holds on it, each
+  with its end ([Hold intents](#hold-intents)). "Hold until" sends the
+  held value again, held until the next time the browser's clock shows
+  the time picked. "Resume automatic" sends a release. A lower band's
+  lease is the house driving the aspect, and it shows only as `held` on
+  the aspect's row.
 
 Tapping an entity, a reading or a unit opens a detail overlay. Its
 width is a per-viewer `localStorage` preference. Two rules apply to
@@ -3355,9 +3404,6 @@ gaps it has not closed.
   lasts until the owner changes that parameter in the repo. Capturing
   it as a commit is not built. See
   [Repo and live values](#repo-and-live-values).
-- **Handing an arbiter hold back early.** Only expiry ends a hold.
-  Whether release belongs on the envelope or on an arbiter surface is
-  open. See [Arbitrated mode](#arbitrated-mode).
 - **Forecast uncertainty and corrections to the past** have no
   representation. A point is one scalar, and `state` keeps no
   reanalysis. See [Forecasts](#forecasts).

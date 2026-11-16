@@ -481,6 +481,7 @@ class Context:
         aspect: str | None = None,
         options: dict | None = None,
         at: datetime.datetime | None = None,
+        hold: str | None = None,
     ) -> None:
         """Publish through a `[bus.publishes]` expression to one concrete key.
 
@@ -493,6 +494,10 @@ class Context:
         `options` rides in the envelope beside the value, for the owning
         adapter (docs/design.md#command-options). An adapter ignores an
         option it does not support, so the device still reaches the value.
+
+        `hold` tells the arbiter what to do with the family hold on the
+        aspect (docs/design.md#hold-intents). Only a manual-band cmd
+        publish takes one. A release passes None as the value.
 
         `at` stamps a state value with the time it describes, as for
         `UnitSession.put_json` (docs/design.md#timestamps). An hourly total
@@ -516,6 +521,9 @@ class Context:
         at : datetime.datetime or None, optional
             The time a state value describes, timezone-aware and not in the
             future.
+        hold : str or None, optional
+            "none", "report", "release", or an RFC3339 instant with an
+            offset to hold until.
 
         Raises
         ------
@@ -524,9 +532,10 @@ class Context:
         ValueError
             If the slots do not make one concrete key inside the declared
             expression, a cmd publish declares no priority, `options` is not
-            an object with string keys, `options` is given for a publish
-            that is not a command, or `at` is given for one that is not
-            state, has no timezone or is in the future.
+            an object with string keys, `options` or `hold` is given for a
+            publish that is not a command, `hold` is not a hold intent or
+            the publish is below the manual band, or `at` is given for one
+            that is not state, has no timezone or is in the future.
         """
         spec = self._publishes[binding]
         segments = spec["key"].split("/")
@@ -540,11 +549,13 @@ class Context:
                     f"publish {binding!r} is a cmd publish with no priority "
                     "declared in the manifest"
                 )
-            value = keys.cmd_envelope(value, priority, self.unit, options=options)
+            value = keys.cmd_envelope(value, priority, self.unit, options=options, hold=hold)
             if self.paused:
                 return
         elif options is not None:
             raise ValueError(f"publish {binding!r} is not a cmd publish and takes no options")
+        elif hold is not None:
+            raise ValueError(f"publish {binding!r} is not a cmd publish and takes no hold")
         self._session.put_json(key, value, at=at)
 
     def publish_forecast(

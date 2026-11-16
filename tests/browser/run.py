@@ -692,21 +692,25 @@ class HoldsOnNow(PageTest):
         await self.house.push(
             {
                 "type": "hold",
-                "key": "home/hold/arbiter",
+                "key": "home/hold/arbiter/livingroom/heat_pump/mode",
+                "value": None,
+            }
+        )
+        await self.house.push(
+            {
+                "type": "hold",
+                "key": "home/hold/arbiter/hallway/front_door/locked",
                 "value": {
                     "schema": 1,
-                    "holds": [
-                        {
-                            "room": "hallway",
-                            "entity": "front_door",
-                            "aspect": "locked",
-                            "priority": "manual",
-                            "actor": "dashboard",
-                            "since": "2026-09-25T06:00:00Z",
-                            "until": "2099-01-01T00:00:00Z",
-                            "refused": 0,
-                        }
-                    ],
+                    "room": "hallway",
+                    "entity": "front_door",
+                    "aspect": "locked",
+                    "priority": "manual",
+                    "actor": "dashboard",
+                    "value": True,
+                    "since": "2026-09-25T06:00:00Z",
+                    "until": "2099-01-01T00:00:00Z",
+                    "refused": 0,
                 },
             }
         )
@@ -720,6 +724,56 @@ class HoldsOnNow(PageTest):
         marks = self.page.locator("#overlay-panel .stale-mark")
         texts = await marks.evaluate_all("els => els.map(e => e.textContent)")
         self.assertIn("held", texts)
+
+
+class FamilyHolds(PageTest):
+    """`docs/design.md#hold-intents`: a family hold shows on its entity
+    with its end, and can be given a new end or handed back to the house."""
+
+    async def open_heat_pump(self):
+        await self.view("heating")
+        await self.page.click('[data-action="entity-detail"][data-entity="heat_pump"]')
+        await self.page.wait_for_timeout(500)
+
+    async def test_a_family_hold_is_listed_with_its_end(self):
+        await self.open_heat_pump()
+        overlay = await self.page.locator("#overlay-panel").inner_text()
+        self.assertRegex(overlay, r"(?i)held\s+mode\s+by .+ until \d{2}:\d{2}")
+
+    async def test_resume_automatic_sends_a_release_and_nothing_else(self):
+        await self.open_heat_pump()
+        await self.page.click('[data-action="hold-release"][data-aspect="mode"]')
+        await self.page.wait_for_timeout(200)
+        self.assertEqual(
+            self.house.posted("/api/cmd"),
+            [{"room": "livingroom", "entity": "heat_pump", "aspect": "mode", "hold": "release"}],
+        )
+
+    async def test_a_new_end_sends_the_held_value_again_until_then(self):
+        await self.open_heat_pump()
+        box = self.page.locator('[data-action="hold-time"][data-aspect="mode"]')
+        await box.fill("22:30")
+        # A delta redraws the overlay; the time picked so far survives it.
+        await self.house.push({"type": "state", "key": "home/state/livingroom/heat_pump/mode", "value": "heat"})
+        await self.page.wait_for_timeout(200)
+        self.assertEqual(await box.input_value(), "22:30")
+        await self.page.click('[data-action="hold-until"][data-aspect="mode"]')
+        await self.page.wait_for_timeout(200)
+        [body] = self.house.posted("/api/cmd")
+        self.assertEqual((body["aspect"], body["value"]), ("mode", "heat"))
+        until = await self.page.evaluate(
+            "iso => { const d = new Date(iso); return [d.getHours(), d.getMinutes(), d.getTime() > Date.now()]; }",
+            body["hold"],
+        )
+        self.assertEqual(until, [22, 30, True], "the next 22:30 on the local clock")
+
+    async def test_an_ended_hold_leaves_the_list(self):
+        await self.open_heat_pump()
+        await self.house.push(
+            {"type": "hold", "key": "home/hold/arbiter/livingroom/heat_pump/mode", "value": None}
+        )
+        await self.page.wait_for_timeout(300)
+        self.assertEqual(await self.page.locator('[data-action="hold-release"]').count(), 0)
 
 
 class SmokePhone(Smoke):
