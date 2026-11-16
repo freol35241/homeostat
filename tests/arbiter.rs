@@ -14,7 +14,7 @@ use zenoh::pubsub::Subscriber;
 use zenoh::sample::SampleKind;
 
 use common::{
-    assert_cli_ok, assert_unit_contract, await_health, cli, config_write, health_watch,
+    assert_cli_ok, assert_unit_contract, await_health, cli, config_write, health_watch, rfc3339_in,
     running_pid, stdout, temp_house, Supervisor,
 };
 
@@ -343,7 +343,8 @@ async fn hold_intents_steer_the_family_hold() {
     );
 
     // An instant: forwarded, and held until then.
-    let until = with_hold(json!(true), "2099-01-01T06:00:00+01:00");
+    let instant = rfc3339_in(86_400);
+    let until = with_hold(json!(true), &instant);
     put_cmd(&observer, &until).await;
     let forwarded = next_json(&arbiter_sub, Duration::from_secs(10)).await;
     assert_eq!(forwarded, Some(until));
@@ -354,7 +355,7 @@ async fn hold_intents_steer_the_family_hold() {
             break;
         }
     }
-    assert_eq!(held_until, Some(json!("2099-01-01T05:00:00Z")));
+    assert_eq!(held_until, Some(json!(instant)));
 
     // A hold below the manual band is a bug in its publisher.
     let mut bad = envelope(json!(true), "automation", "scheduler");

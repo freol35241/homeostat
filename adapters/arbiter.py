@@ -185,7 +185,7 @@ class Leases:
 
     The manual band's lease is the family hold. A manual command's `hold`
     intent decides what happens to it (docs/design.md#hold-intents). Lower
-    bands take a lease for the hold time on every forward, as before.
+    bands take a lease for the hold time on every forward.
 
     Enforcement uses time.monotonic(), which a clock step cannot shorten
     or stretch. The published `since` and `until` are wall-clock, fixed
@@ -245,9 +245,10 @@ class Leases:
             self._held[target]["refused"] += 1
             return "refuse", holder
         seconds = hold_s
-        if hold not in (None, "none", "report", "release"):
+        instant = hold not in (None, "none", "report", "release")
+        if instant:
             seconds = keys.hold_instant(hold).timestamp() - self._wall()
-        if hold in ("none", "release") or seconds <= 0:
+        if hold in ("none", "release") or (instant and seconds <= 0):
             if holder is not None and holder["priority"] == "manual":
                 del self._held[target]
             return "forward", holder
@@ -414,7 +415,10 @@ def main():
                 if leases.prune():
                     publish_holds_locked()
                 deadline = leases.next_deadline()
-                timeout = None if deadline is None else max(0.05, deadline - time.monotonic())
+                # Capped, because a wait beyond threading.TIMEOUT_MAX raises
+                # and would end this thread. A long hold costs a wake-up an
+                # hour.
+                timeout = None if deadline is None else min(3600.0, max(0.05, deadline - time.monotonic()))
                 changed.wait(timeout=timeout)
 
     def cmd_handler(sample):

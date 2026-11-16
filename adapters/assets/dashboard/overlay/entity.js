@@ -78,6 +78,9 @@ function renderHolds(entity) {
     var attrs = html` data-room="${h.room}" data-entity="${h.entity}" data-aspect="${h.aspect}" data-key="${h.key}"`;
     var end = new Date(h.until);
     var clock = String(end.getHours()).padStart(2, '0') + ':' + String(end.getMinutes()).padStart(2, '0');
+    // A hold ending on another day names the day.
+    var ends = end.toDateString() === new Date().toDateString()
+      ? clock : end.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' }) + ' ' + clock;
     // A record without a value has nothing to send again.
     var extend = h.value === undefined || h.value === null ? '' : html`
       <input type="time" id="hold-time-${h.entity}-${h.aspect}" value="${localState.holdTimes[h.key] || clock}"
@@ -85,7 +88,7 @@ function renderHolds(entity) {
       <button data-action="hold-until"${attrs}>Hold until</button>`;
     return html`<div class="aspect-row hold-row">
       <span class="aspect-label">${titleCase(h.aspect)}</span>
-      <span class="muted">by ${unitLabel(h.actor)} until ${clock}</span>
+      <span class="muted">by ${unitLabel(h.actor)} until ${ends}</span>
       <div class="seg">${extend}<button data-action="hold-release"${attrs}>Resume automatic</button></div></div>`;
   });
   return html`<div class="card-label" style="margin-top:20px;">Held</div>${rows}`;

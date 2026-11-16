@@ -732,6 +732,54 @@ async fn dashboard_serves_the_family_surface() {
         "a refused hold must never reach the bus"
     );
 
+    // On the arbitrated garage door the dashboard sends a release with no
+    // value, and a value held until an instant. It still never reports.
+    let garage_sub = observer
+        .declare_subscriber("home/cmd/livingroom/garage_door/locked")
+        .await
+        .expect("garage cmd subscriber");
+    let until = common::rfc3339_in(3600);
+    for (body, expected) in [
+        (
+            json!({"room": "livingroom", "entity": "garage_door", "aspect": "locked", "hold": "release"}),
+            json!({"priority": "manual", "actor": "dashboard", "hold": "release"}),
+        ),
+        (
+            json!({"room": "livingroom", "entity": "garage_door", "aspect": "locked", "value": true,
+                   "hold": until}),
+            json!({"value": true, "priority": "manual", "actor": "dashboard", "hold": until}),
+        ),
+    ] {
+        let (status, reply) = http_request(
+            &addr,
+            "POST",
+            "/api/cmd",
+            &[("X-Homeostat", "family")],
+            Some(&body),
+        );
+        assert_eq!(status, 200, "{body}: {reply}");
+        let sample = tokio::time::timeout(Duration::from_secs(10), garage_sub.recv_async())
+            .await
+            .expect("garage envelope observed")
+            .expect("sample");
+        let mut envelope: Value =
+            serde_json::from_slice(&sample.payload().to_bytes()).expect("json");
+        assert_eq!(envelope["id"], reply["id"], "{reply}");
+        envelope.as_object_mut().expect("an object").remove("id");
+        assert_eq!(envelope, expected);
+    }
+    let (status, reply) = http_request(
+        &addr,
+        "POST",
+        "/api/cmd",
+        &[("X-Homeostat", "family")],
+        Some(
+            &json!({"room": "livingroom", "entity": "garage_door", "aspect": "locked",
+                     "value": true, "hold": "report"}),
+        ),
+    );
+    assert_eq!(status, 400, "the page never saw the device act: {reply}");
+
     // Holds reach the page one record per aspect, and a deleted key
     // reaches it as a null, so the page forgets a hold that ended.
     let hold_key = "home/hold/arbiter/livingroom/front_door/locked";

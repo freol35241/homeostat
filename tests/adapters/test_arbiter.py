@@ -149,6 +149,13 @@ class HoldIntentTest(unittest.TestCase):
         self.assertEqual(self.leases.next_deadline(), 1000.0 + 3600)
         self.assertEqual(self.wish("automation", "scheduler")[0], "refuse")
 
+    def test_a_zero_hold_time_still_takes_over(self):
+        # hold_minutes = 0: the wish wins and is reported as a takeover,
+        # and the hold it takes has already ended.
+        self.leases.wish(LAMP, "automation", "scheduler", HOLD_S)
+        self.assertEqual(self.leases.wish(LAMP, "manual", "family", 0.0, value=True)[0], "preempt")
+        self.assertEqual(self.held(), [])
+
     def test_an_instant_already_past_holds_nothing(self):
         self.wish("manual", value=True)
         self.wish("manual", value=False, hold="2023-11-14T22:00:00Z")
@@ -194,9 +201,13 @@ class RestoreTest(unittest.TestCase):
         before = Leases(clock, lambda: WALL)
         before.wish(LAMP, "manual", "dashboard", HOLD_S, value=True)
         [record] = before.records().values()
-        after = Leases(Clock(), lambda: WALL + HOLD_S)
-        after.restore([record, {"schema": 1, "holds": []}, "junk", dict(record, priority="boss")])
-        self.assertEqual(after.records(), {})
+        ended = Leases(Clock(), lambda: WALL + HOLD_S)
+        ended.restore([record])
+        self.assertEqual(ended.records(), {})
+        live = Leases(Clock(), lambda: WALL + 1)
+        live.restore([{"schema": 1, "holds": []}, "junk", dict(record, priority="boss"),
+                      dict(record, until="soon")])
+        self.assertEqual(live.records(), {})
 
 
 def entity(room, name, write):

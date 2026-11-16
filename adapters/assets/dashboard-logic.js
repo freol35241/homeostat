@@ -1856,6 +1856,7 @@
    *   and a matching state from before it says the aspect already had the
    *   value. Else nothing answered. A command older than what a capped
    *   query kept is not judged: its answer may have been cut.
+     A release or a report reaches no device, so nothing judges it.
    * - `taken-over`: another actor's command displaced its hold.
    * - `decision`: why one of its rules acted or did not (ctx.decision).
    * - `event`: one of its other health events. */
@@ -1889,6 +1890,8 @@
           entry.by = unitNameFromHealthKey(answer.key);
           entry.reason = answer.value.reason || null;
         }
+      } else if (envelope.hold === 'release' || envelope.hold === 'report') {
+        entry.outcome = envelope.hold === 'release' ? 'released' : 'reported';
       } else if (cut(c.ts, raw.answers_from) || cut(c.ts, series.from)) {
         entry.outcome = 'unknown';
       } else {

@@ -3,6 +3,7 @@
 Run: uv run --no-project --with-editable sdk/python python -m unittest discover sdk/python/tests
 """
 
+import datetime
 import unittest
 
 from homeostat import keys
@@ -123,6 +124,15 @@ class HoldTest(unittest.TestCase):
     def test_a_hold_is_a_word_or_an_instant_with_an_offset(self):
         for hold in ("forever", "06:00", "2026-11-17T06:00:00", "", 30, None, ["none"]):
             with self.assertRaises(ValueError, msg=repr(hold)):
+                keys.parse_cmd_envelope({"value": 1, "priority": "manual", "hold": hold})
+
+    def test_an_instant_is_at_most_the_horizon_ahead(self):
+        now = datetime.datetime.now(datetime.timezone.utc)
+        near = (now + keys.HOLD_HORIZON - datetime.timedelta(hours=1)).isoformat()
+        far = (now + keys.HOLD_HORIZON + datetime.timedelta(hours=1)).isoformat()
+        self.assertEqual(keys.parse_cmd_envelope({"value": 1, "priority": "manual", "hold": near}), 1)
+        for hold in (far, "2400-01-01T00:00:00Z", "9999-12-31T23:59:59+00:00"):
+            with self.assertRaises(ValueError, msg=hold):
                 keys.parse_cmd_envelope({"value": 1, "priority": "manual", "hold": hold})
 
     def test_an_instant_reads_back_timezone_aware(self):

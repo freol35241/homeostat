@@ -55,10 +55,7 @@
       });
     });
     Object.keys(snap.holds || {}).forEach(function (key) {
-      var doc = snap.holds[key];
-      doc.holds = (doc.holds || []).map(function (h) {
-        return Object.assign({}, h, { since: iso(now - 300e3), until: iso(now + 1500e3) });
-      });
+      snap.holds[key] = Object.assign({}, snap.holds[key], { since: iso(now - 300e3), until: iso(now + 1500e3) });
     });
     snap.type = 'snapshot';
     return snap;
@@ -161,6 +158,21 @@
 
   function command(body) {
     var key = 'home/state/' + body.room + '/' + body.entity + '/' + body.aspect;
+    if (body.hold !== undefined) {
+      // What the arbiter does with the family hold. The demo keeps no holds
+      // of its own, so the change lasts until the page reconnects.
+      var holdKey = 'home/hold/arbiter/' + body.room + '/' + body.entity + '/' + body.aspect;
+      var record = body.hold === 'release' || body.hold === 'none' ? null : {
+        schema: 1, room: body.room, entity: body.entity, aspect: body.aspect,
+        priority: 'manual', actor: 'dashboard', value: body.value,
+        since: iso(Date.now()), until: body.hold, refused: 0
+      };
+      setTimeout(function () { push({ type: 'hold', key: holdKey, value: record }); }, 300);
+      if (body.hold === 'release') {
+        commandIds += 1;
+        return { ok: true, id: 'demo' + commandIds };
+      }
+    }
     // The device's readback, a moment after the command.
     setTimeout(function () {
       setState(key, body.value);

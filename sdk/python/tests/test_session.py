@@ -227,6 +227,15 @@ class ParseCommandTest(unittest.TestCase):
             self.assertEqual(session.parse_command(sample), ("on", True, None), hold)
 
 
+class DeleteTest(unittest.TestCase):
+    def test_a_delete_goes_to_the_bus_as_one(self):
+        session = stub_session()
+        deleted = []
+        session._session.delete = deleted.append
+        session.delete("home/hold/arbiter/r/e/a")
+        self.assertEqual(deleted, ["home/hold/arbiter/r/e/a"])
+
+
 class HasSubscriberTest(unittest.TestCase):
     def test_answers_from_the_publishers_matching_status(self):
         session = stub_session()

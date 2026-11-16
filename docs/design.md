@@ -959,7 +959,7 @@ should happen to it with the envelope's `hold`:
   else is sent, and an automation's next command goes through.
 - An instant names the end, such as tomorrow 06:00. It carries an
   offset, so the arbiter needs no time zone. One already past holds
-  nothing.
+  nothing, and one more than a year ahead is `invalid-command`.
 - `"report"` says the device already did it, so nothing is sent. An
   adapter whose device acts on a button of its own reports the change,
   and the press then holds like a tap on the dashboard.

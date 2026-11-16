@@ -31,10 +31,8 @@ var STEP_SETTLE_MS = 600;
 var cmdSeq = 0;
 
 /* Resolves to whether the command went onto the bus with something
- * listening, so a caller can tell a refusal from a send. `hold`, when
- * given, is an instant the family hold lasts until
- * (docs/design.md#hold-intents). */
-export function sendCmd(room, entity, aspect, value, hold) {
+ * listening, so a caller can tell a refusal from a send. */
+export function sendCmd(room, entity, aspect, value) {
   var key = logic.pendingKey(room, entity, aspect);
   clearTimeout(drafts[key]);
   delete drafts[key];
@@ -50,9 +48,7 @@ export function sendCmd(room, entity, aspect, value, hold) {
   return fetch('/api/cmd', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Homeostat': 'family' },
-    body: JSON.stringify(hold === undefined
-      ? { room: room, entity: entity, aspect: aspect, value: value }
-      : { room: room, entity: entity, aspect: aspect, value: value, hold: hold })
+    body: JSON.stringify({ room: room, entity: entity, aspect: aspect, value: value })
   }).then(function (r) {
     if (!r.ok) return r.text().then(function (t) { throw new Error(t || ('HTTP ' + r.status)); });
     return r.json();
@@ -200,18 +196,26 @@ function cssEscape(text) {
   return window.CSS && CSS.escape ? CSS.escape(text) : String(text).replace(/["\\]/g, '\\$&');
 }
 
-/* Hand an aspect back to the house. Nothing is sent to the device, so
- * there is no command to track: the hold's record going away is the
- * answer, and the page redraws when it does. */
-export function releaseHold(room, entity, aspect) {
-  fetch('/api/cmd', {
+/* Change a family hold (docs/design.md#hold-intents): "release" hands
+ * the aspect back, and an instant holds `value` until then. Neither is
+ * tracked as a command. A release reaches no device, and a new end sends
+ * the value the device already holds, so no readback answers it. The
+ * hold's record changing is the answer, and the page redraws when it
+ * does. Resolves to whether the dashboard took it. */
+export function sendHold(room, entity, aspect, value, hold) {
+  var body = hold === 'release'
+    ? { room: room, entity: entity, aspect: aspect, hold: hold }
+    : { room: room, entity: entity, aspect: aspect, value: value, hold: hold };
+  return fetch('/api/cmd', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Homeostat': 'family' },
-    body: JSON.stringify({ room: room, entity: entity, aspect: aspect, hold: 'release' })
+    body: JSON.stringify(body)
   }).then(function (r) {
     if (!r.ok) return r.text().then(function (t) { throw new Error(t || ('HTTP ' + r.status)); });
+    return true;
   }).catch(function (e) {
     toast(errText(e));
+    return false;
   });
 }
 

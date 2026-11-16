@@ -293,6 +293,10 @@ CMD_PRIORITIES = ("automation", "agent", "family", "manual")
 # arbiter alone: neither is forwarded to the device.
 HOLD_WORDS = ("none", "report", "release")
 
+# The furthest a hold may name. A family hold is for tonight or a holiday,
+# and an end years out is a typo or a hold nobody will remember.
+HOLD_HORIZON = datetime.timedelta(days=366)
+
 
 def cmd_envelope(
     value: Any,
@@ -333,8 +337,9 @@ def cmd_envelope(
     hold : str or None, optional
         What the arbiter does with the family hold on the aspect
         (docs/design.md#hold-intents): one of `HOLD_WORDS`, or an RFC3339
-        instant with an offset to hold until. Only a manual-band command
-        takes one. Left out of the envelope when None.
+        instant with an offset to hold until, at most `HOLD_HORIZON` ahead.
+        Only a manual-band command takes one. Left out of the envelope
+        when None.
 
     Returns
     -------
@@ -508,6 +513,8 @@ def _check_hold(hold: Any, priority: Any) -> None:
     # which need not be the sender's.
     if instant.tzinfo is None:
         raise ValueError(f"hold {hold!r} has no UTC offset")
+    if instant - datetime.datetime.now(datetime.timezone.utc) > HOLD_HORIZON:
+        raise ValueError(f"hold {hold!r} is more than {HOLD_HORIZON.days} days ahead")
 
 
 def config_key(unit: str, param: str) -> str:

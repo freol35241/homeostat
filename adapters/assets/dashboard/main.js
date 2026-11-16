@@ -8,7 +8,7 @@
 import { VideoRTC } from '../video-rtc.js';
 import { connectWs, loadModel } from './api.js';
 import { currentView, renderShell } from './chrome.js';
-import { announceOutcome, forgetOutcome, markPendingControls, pending, recent, releaseHold, sendCmd, sendLightsOff, sendParam, stepBase, stepCmd } from './commands.js';
+import { announceOutcome, forgetOutcome, markPendingControls, pending, recent, sendCmd, sendHold, sendLightsOff, sendParam, stepBase, stepCmd } from './commands.js';
 import logic from './logic.js';
 import { openEntityDetail } from './overlay/entity.js';
 import { fetchHistoryRange, fetchIssues, fetchLayerLines, fetchSourceEvents, openHistoryDetail } from './overlay/history.js';
@@ -53,7 +53,7 @@ document.addEventListener('click', function (e) {
   }
   if (action === 'hold-release') {
     delete localState.holdTimes[el.getAttribute('data-key')];
-    releaseHold(el.getAttribute('data-room'), el.getAttribute('data-entity'), el.getAttribute('data-aspect'));
+    sendHold(el.getAttribute('data-room'), el.getAttribute('data-entity'), el.getAttribute('data-aspect'), null, 'release');
     return;
   }
   if (action === 'hold-until') {
@@ -294,12 +294,6 @@ document.addEventListener('change', function (e) {
   }
 });
 
-// A notifier's typed text, sent as a message or an alert. Blank text is
-// not sent, as /api/cmd would refuse it. The box empties once the text is
-// on the bus with something listening. A refused or unheard send leaves
-// the text there to try again. The line under the box says what became
-// of it, and the other button's last outcome is cleared so it does not
-// hide this one.
 // A new end for a family hold: the held value is sent again, holding
 // until the next time the clock shows the time picked.
 function holdUntil(room, entity, aspect, key) {
@@ -310,11 +304,17 @@ function holdUntil(room, entity, aspect, key) {
     if (box) box.focus();
     return;
   }
-  sendCmd(room, entity, aspect, hold.value, until).then(function (sent) {
+  sendHold(room, entity, aspect, hold.value, until).then(function (sent) {
     if (sent) delete localState.holdTimes[key];
   });
 }
 
+// A notifier's typed text, sent as a message or an alert. Blank text is
+// not sent, as /api/cmd would refuse it. The box empties once the text is
+// on the bus with something listening. A refused or unheard send leaves
+// the text there to try again. The line under the box says what became
+// of it, and the other button's last outcome is cleared so it does not
+// hide this one.
 function sendNotification(room, entity, aspect) {
   var box = document.getElementById('notify-' + entity);
   var text = box ? box.value : '';

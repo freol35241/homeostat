@@ -2109,3 +2109,13 @@ test('a decision event is listed as why its rule acted', () => {
   assert.deepEqual([d.rule, d.outcome], ['night_off', 'waiting: someone is home']);
   assert.equal(t.filter((e) => e.type === 'event').length, 0, 'not listed again as a plain event');
 });
+
+test('a release or a report reaches no device, so nothing judges it', () => {
+  const sent = (ts, envelope) => ({ ts, key: 'home/cmd/livingroom/lamp/on',
+    value: Object.assign({ priority: 'manual', actor: 'remote' }, envelope) });
+  const t = logic.unitTimeline(timelineRaw({
+    commands: [sent(300, { hold: 'release' }), sent(310, { value: true, hold: 'report' })],
+  }), timelineModel, {}, 'remote');
+  const outcomes = t.filter((e) => e.type === 'command').map((e) => e.outcome);
+  assert.deepEqual(outcomes, ['reported', 'released']);
+});
