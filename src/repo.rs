@@ -142,9 +142,9 @@ pub fn load(root: &Path) -> (House, Vec<ValidationError>) {
     (house, errors)
 }
 
-/// Parses the unit manifest at house-relative `path` and checks what one
-/// file can show: its schema version, and that its file stem is its unit
-/// name.
+/// Parses the unit manifest at house-relative `path`, adds the params every
+/// unit of its kind has, and checks what one file can show: its schema
+/// version, and that its file stem is its unit name.
 fn parse_unit(path: String, text: &str, errors: &mut Vec<ValidationError>) -> Option<LoadedUnit> {
     let mut manifest = parse_toml::<UnitManifest>(text, &path, errors)?;
     manifest.add_implicit_params();
@@ -194,7 +194,10 @@ impl House {
     /// parses and checks each file it reads. `units` are (file stem,
     /// manifest) pairs, read as `units/{stem}.toml`. `entities` are (owner,
     /// name, entity file) triples, read as `entities/{owner}/{name}.toml`.
-    /// Files keep the order given, where `load` sorts them by name.
+    /// Files keep the order given, where `load` sorts units by file name and
+    /// entities by owner, then file name. An entity's owner is taken as
+    /// given: unlike `load`, this does not read it from the owner's
+    /// `[entities]` table.
     ///
     /// Panics on any error `load` would report for these files.
     pub(crate) fn from_toml(units: &[(&str, &str)], entities: &[(&str, &str, &str)]) -> House {

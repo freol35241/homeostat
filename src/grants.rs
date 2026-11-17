@@ -1339,7 +1339,7 @@ mod tests {
         );
 
         let mut widened = house_with_lock(false);
-        let bus = widened.units[1].manifest.bus.as_mut().unwrap();
+        let bus = night_mode_bus(&mut widened);
         bus.publishes.get_mut("lock").unwrap().key = "home/cmd/hallway/lock/**".to_string();
         let (expanded, _, _) = expand(&widened);
         let (widened_grants, _, _) = resolve(&widened, &expanded);
@@ -1395,7 +1395,8 @@ mod tests {
         "#;
         let house = House::from_toml(&[("seer", seer)], &[("seer", "spot_price", spot_price)]);
         let (expanded, _, _) = expand(&house);
-        let (grants, errors, _) = resolve(&house, &expanded);
+        let (grants, warnings, errors) = resolve(&house, &expanded);
+        assert!(warnings.is_empty(), "{warnings:?}");
         assert!(errors.is_empty(), "{errors:?}");
         let seer = grants
             .iter()
@@ -1809,12 +1810,22 @@ mod tests {
         );
     }
 
+    /// The bus of `house_with_lock`'s `night_mode` automation.
+    fn night_mode_bus(house: &mut House) -> &mut crate::manifest::BusSection {
+        house
+            .units
+            .iter_mut()
+            .find(|u| u.manifest.unit.name == "night_mode")
+            .and_then(|u| u.manifest.bus.as_mut())
+            .expect("night_mode has a bus")
+    }
+
     /// The manual band belongs to the family's surfaces. An automation that
     /// claims it still plans, with a warning.
     #[test]
     fn manual_band_on_an_automation_is_a_plan_warning() {
         let mut house = house_with_lock(false);
-        let bus = house.units[1].manifest.bus.as_mut().unwrap();
+        let bus = night_mode_bus(&mut house);
         bus.publishes.get_mut("lock").unwrap().priority = Some(Priority::Manual);
         let (expanded, _, _) = expand(&house);
         let (_, warnings, _) = resolve(&house, &expanded);
