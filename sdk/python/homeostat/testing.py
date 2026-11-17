@@ -1,18 +1,19 @@
 """Test doubles for a unit's bus session, for unit tests without a bus.
 
-`FakeSession` is a `UnitSession` over a fake zenoh session. Every method
-is the real one, so a put is checked, encoded and stamped as on the bus,
-and a sample's age follows the real rule. Only the transport underneath
-is fake: it records what reaches it and answers gets from values the test
-serves.
+`FakeSession` is a `UnitSession` over a fake zenoh session. It inherits
+UnitSession's methods unchanged, so a put is checked, encoded and stamped
+by the real code, and a sample's age follows the real rule. The fake
+zenoh session records what reaches it and answers gets from values the
+test serves or fails. It is simpler than zenoh in the ways FakeSession's
+docstring lists.
 
 Pass a `FakeSession` to an adapter's translation code where the session
 goes, or to `Context(unit, root, session=...)` to run an automation's
 Context over a house directory. `FakeSample` is what the test hands to
 the unit's subscribers with `FakeSession.deliver`.
 
-A test that needs a reply served values cannot express, such as an error
-reply or a slow one, overrides `get_json_stamped` on its own session.
+A test that needs a reply neither `serve` nor `fail` can give, such as a
+slow one, overrides `get_json_stamped` on its own session.
 """
 
 import datetime
@@ -87,9 +88,9 @@ class _Handle:
 
 
 class _Reply:
-    def __init__(self, ok: FakeSample):
+    def __init__(self, ok: FakeSample | None = None, err: FakeSample | None = None):
         self.ok = ok
-        self.err = None
+        self.err = err
 
 
 class _Publisher:
@@ -100,7 +101,7 @@ class _Publisher:
     @property
     def matching_status(self) -> Any:
         matching = any(
-            zenoh.KeyExpr(expr).includes(self._key) for expr in self._fake.subscribed_elsewhere
+            zenoh.KeyExpr(expr).includes(self._key) for expr in list(self._fake.subscribed_elsewhere)
         )
         return type("MatchingStatus", (), {"matching": matching})()
 
@@ -156,15 +157,33 @@ class _Transport:
 
     def get(self, selector: str, timeout: float | None = None, payload: Any = None) -> list:
         self._fake.gets.append(selector)
+        expr = zenoh.KeyExpr(selector.split("?", 1)[0])
+        failed = [
+            error
+            for key, error in self._fake._failures.items()
+            if expr.includes(zenoh.KeyExpr(key))
+        ]
+        if failed:
+            return [
+                _Reply(err=FakeSample(selector, error.encode()))
+                for error in failed
+                if error is not None
+            ]
         if payload is not None:
             # A config write. The core would validate it; the fake stores
             # it as given and replies with it.
             value = json.loads(payload)
             self._fake.serve(selector, value)
             return [_Reply(FakeSample(selector, value))]
-        expr = zenoh.KeyExpr(selector.split("?", 1)[0])
         return [
-            _Reply(FakeSample(key, value, timestamp=stamp, attachment=str(age_s).encode()))
+            _Reply(
+                FakeSample(
+                    key,
+                    value,
+                    timestamp=stamp,
+                    attachment=None if age_s is None else str(age_s).encode(),
+                )
+            )
             for key, (value, age_s, stamp) in self._fake._served.items()
             if expr.includes(zenoh.KeyExpr(key))
         ]
@@ -197,7 +216,10 @@ class FakeSession(UnitSession):
     goes to `events` and not to `puts`. A put that the session refuses,
     such as a non-finite value, is not recorded, as it never reaches the
     bus. Gets are answered from the values set with `served` or `serve`,
-    by key expression. A put or a delete does not change what is served.
+    by key expression, or fail as `fail` says. A put or a delete does not
+    change what is served. The unit's own puts are not delivered to its own
+    subscribers, and its own subscribers do not count for `has_subscriber`.
+    A zenoh session in peer mode does both.
 
     Parameters
     ----------
@@ -246,7 +268,8 @@ class FakeSession(UnitSession):
         self.alive: set[str] = set()
         self.subscribed_elsewhere: set[str] = set()
         self.routers = list(routers)
-        self._served: dict[str, tuple[Any, float, Any]] = {}
+        self._served: dict[str, tuple[Any, float | None, Any]] = {}
+        self._failures: dict[str, str | None] = {}
         self._subscribers: list[tuple[zenoh.KeyExpr, Callable[[Any], None]]] = []
         super().__init__(unit, "", transport=_Transport(self))
         for key, value in (served or {}).items():
@@ -257,23 +280,48 @@ class FakeSession(UnitSession):
         """Whether this unit's liveliness token is declared."""
         return self.unit in self.alive
 
-    def serve(self, key: str, value: Any, *, age_s: float = 0.0, stamp: Any = None) -> None:
+    def serve(
+        self, key: str, value: Any, *, age_s: float | None = 0.0, stamp: Any = None
+    ) -> None:
         """Serve `value` at `key` to every later get that matches it.
 
-        Serving a key again replaces its value.
+        Serving a key again replaces its value, and ends a `fail` on it.
 
         Parameters
         ----------
         key : str
             The concrete key.
         value : Any
-            The value, JSON-encodable.
-        age_s : float, optional
-            The age the reply carries, in seconds.
+            The value. Bytes are sent as they are, and any other value is
+            encoded as JSON.
+        age_s : float or None, optional
+            The age the reply carries in its attachment, in seconds. None
+            sends no attachment.
         stamp : zenoh.Timestamp or None, optional
             The stamp the reply carries.
         """
+        self._failures.pop(key, None)
         self._served[key] = (value, age_s, stamp)
+
+    def fail(self, key: str, error: str | None = None) -> None:
+        """Make every later get that matches `key` fail, until it is served again.
+
+        The get receives an error reply carrying `error`, as zenoh delivers
+        a queryable's refusal. zenoh reports a get that ran out of time as
+        an error reply carrying "Timeout". With `error` None the get
+        receives no reply at all, as when nothing answers.
+
+        A failing key takes precedence over every served one, so the get
+        receives only the failures that match it.
+
+        Parameters
+        ----------
+        key : str
+            The concrete key.
+        error : str or None, optional
+            The error reply's payload, or None for no reply.
+        """
+        self._failures[key] = error
 
     def deliver(self, sample: FakeSample) -> None:
         """Hand `sample` to every subscriber whose key expression matches it.

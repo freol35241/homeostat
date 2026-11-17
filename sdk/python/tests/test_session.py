@@ -9,6 +9,8 @@ import json
 import threading
 import unittest
 
+from homeostat import keys
+from homeostat.session import ConfigWriteError, QueryError, QueryTimeout
 from homeostat.stamps import stamp_us
 from homeostat.testing import FakeSample, FakeSession
 
@@ -167,6 +169,50 @@ class ParseCommandTest(unittest.TestCase):
                 json.dumps({"value": True, "priority": "manual", "hold": hold}).encode(),
             )
             self.assertEqual(session.parse_command(sample), ("on", True, None), hold)
+
+
+class GetReplyTest(unittest.TestCase):
+    """What a get makes of the replies zenoh hands back."""
+
+    KEY = "home/history/stats"
+
+    def test_an_error_reply_raises_with_the_queryables_message(self):
+        session = FakeSession("u")
+        session.fail(self.KEY, json.dumps({"error": "store unavailable: disk I/O error"}))
+        with self.assertRaisesRegex(QueryError, "^store unavailable: disk I/O error$") as caught:
+            session.get_json(self.KEY)
+        self.assertNotIsInstance(caught.exception, QueryTimeout)
+
+    def test_zenohs_own_timeout_raises_query_timeout(self):
+        session = FakeSession("u")
+        session.fail(self.KEY, "Timeout")
+        with self.assertRaises(QueryTimeout):
+            session.get_json(self.KEY)
+
+    def test_a_reply_without_an_attachment_is_age_zero(self):
+        session = FakeSession("u")
+        session.serve("home/state/r/e/a", 1, age_s=None)
+        session.serve("home/state/r/e/b", 2, age_s=3.0)
+        self.assertEqual(
+            session.get_json_aged("home/state/r/e/*"),
+            [("home/state/r/e/a", 1, 0.0), ("home/state/r/e/b", 2, 3.0)],
+        )
+
+
+class WriteConfigTest(unittest.TestCase):
+    KEY = keys.config_key("pump", "hold_minutes")
+
+    def test_a_rejected_write_raises_with_the_cores_message(self):
+        session = FakeSession("u")
+        session.fail(self.KEY, json.dumps({"error": "90 is above the maximum 60"}))
+        with self.assertRaisesRegex(ConfigWriteError, "^90 is above the maximum 60$"):
+            session.write_config("pump", "hold_minutes", 90)
+
+    def test_a_write_nobody_answers_raises(self):
+        session = FakeSession("u")
+        session.fail(self.KEY)
+        with self.assertRaisesRegex(ConfigWriteError, "no reply"):
+            session.write_config("pump", "hold_minutes", 30)
 
 
 class DeleteTest(unittest.TestCase):
