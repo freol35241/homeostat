@@ -22,6 +22,11 @@ Fixed inventory, enough for the adapter's v1 vocabulary:
   - with --button, event "button" (key 5), device_class "button". Each
     relay command also fires its "single" event, so a test can press it
     on demand. Like a real device, it sends no event on subscribe.
+  - with --causes FILE, event "relay_cause" (key 6), whose event types are
+    the relay's causes. Writing a cause name to FILE makes the device fire
+    that cause and then flip the relay, as firmware does for a press or a
+    timer (docs/design.md#device-reported-causes). FILE is read and
+    emptied every 100 ms.
 
 Handles: HelloRequest, DeviceInfoRequest, ListEntitiesRequest (+ Done),
 SubscribeStatesRequest (sends the current state of every entity, then any
@@ -33,6 +38,7 @@ is ignored and does not crash the server.
 import argparse
 import asyncio
 import os
+from pathlib import Path
 
 from aioesphomeapi import api_pb2
 
@@ -57,6 +63,8 @@ LIST_ENTITIES_EVENT_RESPONSE = 107
 EVENT_RESPONSE = 108
 
 SWITCH_KEY, SENSOR_KEY, BINARY_SENSOR_KEY, RESERVED_SENSOR_KEY, EVENT_KEY = 1, 2, 3, 4, 5
+CAUSE_KEY = 6
+CAUSES = ["button", "valve_timeout"]
 
 
 def encode_varint(value: int) -> bytes:
@@ -104,14 +112,22 @@ class Device:
     so its state does not belong to a connection.
     """
 
-    def __init__(self, name: str, reserved_sensor: bool = False, button: bool = False):
+    def __init__(self, name: str, reserved_sensor: bool = False, button: bool = False, causes: bool = False):
         self.name = name
         self.button = button
+        self.causes = causes
         self.state = {"relay": False, "temperature": 21.5, "motion": True}
         # When set, the device also exposes a sensor whose object_id is the
         # reserved "available" aspect; the adapter must drop its states.
         self.reserved_sensor = reserved_sensor
         self.subscribers: set[asyncio.StreamWriter] = set()
+
+    def act(self, cause: str) -> None:
+        """Fire `cause`, then flip the relay, as firmware does on its own."""
+        for writer in set(self.subscribers):
+            writer.write(encode_message(EVENT_RESPONSE, api_pb2.EventResponse(key=CAUSE_KEY, event_type=cause)))
+        self.state["relay"] = not self.state["relay"]
+        self.broadcast_switch()
 
     def broadcast_switch(self) -> None:
         msg = api_pb2.SwitchStateResponse(key=SWITCH_KEY, state=self.state["relay"])
@@ -179,6 +195,15 @@ async def send_entity_list(writer: asyncio.StreamWriter, device: "Device") -> No
                 api_pb2.ListEntitiesEventResponse(
                     object_id="button", key=EVENT_KEY, name="Button", device_class="button",
                     event_types=["single", "double", "long"],
+                ),
+            )
+        )
+    if device.causes:
+        writer.write(
+            encode_message(
+                LIST_ENTITIES_EVENT_RESPONSE,
+                api_pb2.ListEntitiesEventResponse(
+                    object_id="relay_cause", key=CAUSE_KEY, name="Relay cause", event_types=CAUSES,
                 ),
             )
         )
@@ -272,12 +297,29 @@ async def main() -> None:
     parser.add_argument("--name", default="fake-esphome")
     parser.add_argument("--reserved-sensor", action="store_true")
     parser.add_argument("--button", action="store_true")
+    parser.add_argument("--causes", metavar="FILE")
     args = parser.parse_args()
 
-    device = Device(args.name, reserved_sensor=args.reserved_sensor, button=args.button)
+    device = Device(args.name, reserved_sensor=args.reserved_sensor, button=args.button, causes=bool(args.causes))
     server = await asyncio.start_server(make_handler(device), "127.0.0.1", args.port)
+    if args.causes:
+        asyncio.get_running_loop().create_task(watch_causes(device, Path(args.causes)))
     async with server:
         await server.serve_forever()
+
+
+async def watch_causes(device: Device, path: Path) -> None:
+    """Act on each cause name written to `path`."""
+    while True:
+        await asyncio.sleep(0.1)
+        try:
+            text = path.read_text()
+        except FileNotFoundError:
+            continue
+        if text.strip():
+            path.write_text("")
+            for cause in text.split():
+                device.act(cause)
 
 
 if __name__ == "__main__":

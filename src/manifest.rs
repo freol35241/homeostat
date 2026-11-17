@@ -625,6 +625,40 @@ pub struct EntityFile {
     /// the device's own words (`single`, `double`, `long`). A gesture
     /// without a table sends nothing (docs/design.md#gesture-actions).
     pub actions: Option<BTreeMap<String, BTreeMap<String, Action>>>,
+    /// `[causes]`: what the device reports about why its base aspect `on`
+    /// changed, so its adapter can tell a person at the device from a
+    /// rule on the device (docs/design.md#device-reported-causes).
+    /// Arbitrated entities only (`causes-not-arbitrated`), of a capability
+    /// whose base aspect is `on` (`causes-capability`).
+    pub causes: Option<Causes>,
+}
+
+/// `[causes]`: how an adapter attributes a change it did not command.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Causes {
+    /// The device entity that reports the causes, in the adapter's own
+    /// addressing. For ESPHome it is the `event` entity's `object_id` on the
+    /// same device, `{object_id}_cause` when absent. Its event types are
+    /// the causes.
+    pub event: Option<String>,
+    /// The causes that are a person's input at the device, such as
+    /// `button` or `wall_switch`. A change after one of these counts as
+    /// the family's. Any other cause is a rule on the device.
+    #[serde(default)]
+    pub person: Vec<String>,
+    /// What a change with no cause reported counts as. `person` treats it
+    /// as the family's, for firmware that reports no causes. Without it
+    /// such a change is reported as unattributed.
+    pub uncommanded: Option<Uncommanded>,
+}
+
+/// What a change with no cause counts as.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum Uncommanded {
+    /// A person at the device.
+    Person,
 }
 
 /// One target of a gesture: what the buttons service sends it. Exactly one

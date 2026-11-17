@@ -1,0 +1,47 @@
+schema = 1
+
+[unit]
+name = "arbiter"
+kind = "service"
+description = "Arbiter under test"
+
+[runtime]
+command = "uv run ../../../adapters/arbiter.py"
+restart = "always"
+shutdown_grace_s = 5
+
+[bus.subscribes]
+cmd = "home/cmd/**"
+# Which entities are arbitrated, followed live across applies.
+grants = "home/meta/system/grants"
+grants_pending = "home/meta/system/grants_pending"
+# Whether the core's replay after a restart is in, which it waits for.
+replay = "home/meta/system/replay"
+# The house clock's minute, whose offset a family policy's time of
+# day is read in (docs/design.md#family-policy).
+clock = "home/clock/minute"
+# Every unit's holds, which it resolves (docs/design.md#holds).
+holds = "home/hold/**"
+# Each holder's supervision status, the adapters' drops, and the devices'
+# availability (docs/design.md#when-a-holder-stops).
+health = "home/health/*"
+events = "home/health/*/event"
+available = "home/state/*/*/available"
+
+[bus.publishes]
+arbiter = { key = "home/arbiter/**" }
+# What it is holding, as state: one record per held aspect, put on change
+# and deleted when the hold ends (docs/design.md#arbitrated-mode).
+holds = { key = "home/hold/arbiter/**" }
+# What it resolved per aspect: the applied hold and the holds beneath.
+arbitration = { key = "home/arbitration/arbiter" }
+
+[params.hold_minutes]
+type = "float"
+default = 30
+editable_by = "family"
+
+[naming]
+sv = "skiljedomare"
+en = "arbiter"
+aliases = []

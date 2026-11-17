@@ -1,0 +1,2 @@
+error[causes-capability] door: capability "lock" has no base aspect "on" to attribute (entities/zigbee/door.toml)
+error[causes-not-arbitrated] lamp: [causes] needs mode "arbitrated", not "shared" (entities/zigbee/lamp.toml)

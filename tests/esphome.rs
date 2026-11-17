@@ -15,11 +15,14 @@ use serde_json::json;
 use zenoh::sample::SampleKind;
 
 use common::{
-    assert_unit_contract, await_discovery, await_mirror, await_states, expect_drop_event,
-    expect_states, free_port, Supervisor,
+    assert_unit_contract, await_discovery, await_health, await_mirror, await_states,
+    expect_drop_event, expect_states, free_port, health_watch, Supervisor,
 };
+use homeostat::bus::HealthStatus;
 
 const FIXTURE: &str = "tests/fixtures/house_esphome";
+/// The same device with its relay arbitrated and reporting its causes.
+const CAUSES_FIXTURE: &str = "tests/fixtures/house_esphome_causes";
 const DEVICES_ENV: &str = "HOMEOSTAT_ESPHOME_DEVICES";
 const EVENT_KEY: &str = "home/health/esphome/event";
 const RELAY_STATE_KEY: &str = "home/state/shed/relay/on";
@@ -108,10 +111,17 @@ async fn setup() -> (FakeEsphome, PathBuf, Supervisor, zenoh::Session) {
 }
 
 async fn setup_with(device_args: &[&str]) -> (FakeEsphome, PathBuf, Supervisor, zenoh::Session) {
+    setup_at(FIXTURE, device_args).await
+}
+
+async fn setup_at(
+    fixture: &str,
+    device_args: &[&str],
+) -> (FakeEsphome, PathBuf, Supervisor, zenoh::Session) {
     let device = FakeEsphome::spawn_with_args(device_args);
     let devices_path = devices_file(device.port);
     let sup = Supervisor::spawn_with_env(
-        FIXTURE,
+        fixture,
         &[(DEVICES_ENV, devices_path.to_str().expect("utf-8 path"))],
     );
     let observer = sup.observer().await;
@@ -440,4 +450,89 @@ async fn bound_device_entities_published_as_discovery() {
 async fn adapter_honors_unit_contract() {
     let (_device, _devices_path, mut sup, observer) = setup().await;
     assert_unit_contract(&mut sup, &observer, "esphome").await;
+}
+
+/// docs/design.md#device-reported-causes: a change after a person's cause
+/// is reported as the family's, so the arbiter holds it, and one after a
+/// rule's cause is recorded as the device's and clears the family's hold.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cause_the_device_reports_decides_who_changed_the_relay() {
+    const HOLD_KEY: &str = "home/hold/arbiter/shed/relay/on";
+    let trigger = std::env::temp_dir().join(format!(
+        "homeostat-esphome-causes-{}.txt",
+        std::process::id()
+    ));
+    std::fs::write(&trigger, "").expect("trigger file");
+    let (_device, _devices_path, mut sup, observer) = setup_at(
+        CAUSES_FIXTURE,
+        &["--causes", trigger.to_str().expect("utf-8 path")],
+    )
+    .await;
+    let mut watch = health_watch(&observer, "arbiter").await;
+    await_health(&mut watch, Duration::from_mins(1), |h| {
+        h.status == HealthStatus::Running
+    })
+    .await;
+    let hold_sub = observer
+        .declare_subscriber(HOLD_KEY)
+        .await
+        .expect("hold subscriber");
+    let event_sub = observer
+        .declare_subscriber(EVENT_KEY)
+        .await
+        .expect("event subscriber");
+    let state_sub = observer
+        .declare_subscriber(RELAY_STATE_KEY)
+        .await
+        .expect("relay subscriber");
+    await_states(&observer, &state_sub, &[(RELAY_STATE_KEY, json!(false))]).await;
+
+    // The button on the board: the family holds the relay on.
+    std::fs::write(&trigger, "button").expect("press");
+    let sample = tokio::time::timeout(Duration::from_secs(20), hold_sub.recv_async())
+        .await
+        .expect("a family hold within 20s")
+        .expect("stream open");
+    assert_eq!(sample.kind(), SampleKind::Put);
+    let record: serde_json::Value =
+        serde_json::from_slice(&sample.payload().to_bytes()).expect("JSON");
+    assert_eq!(
+        (&record["value"], &record["priority"], &record["actor"]),
+        (&json!(true), &json!("manual"), &json!("esphome"))
+    );
+
+    // The board's own timer: recorded as its rule, and the family's hold,
+    // whose value the device left, is cleared.
+    std::fs::write(&trigger, "valve_timeout").expect("timer");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut rule = None;
+    while rule.is_none() && Instant::now() < deadline {
+        let Ok(Ok(sample)) =
+            tokio::time::timeout(Duration::from_secs(1), event_sub.recv_async()).await
+        else {
+            continue;
+        };
+        let event: serde_json::Value =
+            serde_json::from_slice(&sample.payload().to_bytes()).expect("JSON");
+        if event["kind"] == json!("device-rule") {
+            rule = Some(event);
+        }
+    }
+    let rule = rule.expect("a device-rule event");
+    assert_eq!(
+        (&rule["entity"], &rule["rule"], &rule["value"]),
+        (&json!("relay"), &json!("valve_timeout"), &json!(false))
+    );
+    let sample = tokio::time::timeout(Duration::from_secs(20), hold_sub.recv_async())
+        .await
+        .expect("the family hold ends within 20s")
+        .expect("stream open");
+    assert_eq!(
+        sample.kind(),
+        SampleKind::Delete,
+        "the family's hold is cleared"
+    );
+
+    sup.shutdown();
+    let _ = std::fs::remove_file(&trigger);
 }

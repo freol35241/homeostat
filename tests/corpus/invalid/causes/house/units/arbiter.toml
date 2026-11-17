@@ -1,0 +1,15 @@
+schema = 1
+
+[unit]
+name = "arbiter"
+kind = "service"
+
+[runtime]
+command = "uv run units/arbiter.py"
+restart = "always"
+
+[bus.subscribes]
+cmd = "home/cmd/**"
+
+[bus.publishes]
+arbiter = { key = "home/arbiter/**" }

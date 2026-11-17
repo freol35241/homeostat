@@ -240,6 +240,7 @@ mod tests {
                 sources: None,
                 aspects: None,
                 actions: None,
+                causes: None,
             },
             path: format!("entities/{adapter}/{name}.toml"),
             owner: adapter.to_string(),

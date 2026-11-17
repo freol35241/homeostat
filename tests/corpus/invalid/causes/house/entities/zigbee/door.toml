@@ -1,0 +1,13 @@
+schema = 1
+
+[entity]
+id = "0x21"
+capability = "lock"
+room = "hallway"
+
+[write_policy]
+mode = "arbitrated"
+owner = "zigbee"
+
+[causes]
+uncommanded = "person"

@@ -124,6 +124,10 @@ class Entity:
     actions : dict of str to dict
         A button's `[actions]` as written: gesture to target entity to its
         action (docs/design.md#gesture-actions).
+    causes : dict or None
+        `[causes]` as written: how the adapter attributes a change it did
+        not command (docs/design.md#device-reported-causes). None without
+        the table.
     """
 
     name: str
@@ -144,6 +148,7 @@ class Entity:
     # [aspects]: aspect -> the interval in seconds each sample totals over.
     intervals: dict[str, int] = field(default_factory=dict)
     actions: dict[str, dict[str, dict]] = field(default_factory=dict)
+    causes: dict | None = None
 
 
 @dataclass
@@ -231,6 +236,7 @@ def _entity_from(path: Path, data: dict, default_owner: str) -> Entity:
             if "interval_s" in decl
         },
         actions={gesture: dict(targets) for gesture, targets in data.get("actions", {}).items()},
+        causes=dict(data["causes"]) if "causes" in data else None,
     )
 
 

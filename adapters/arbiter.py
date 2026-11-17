@@ -35,7 +35,8 @@ the hold that wins changes (docs/design.md#which-hold-wins).
 A manual-band command may carry a `hold` intent (docs/design.md#hold-intents):
 "none" forwards without holding, an RFC3339 instant holds until then,
 "HH:MM" holds until the house clock next shows it,
-"report" holds without forwarding because the device already did it, and
+"report" holds as a tap would, without forwarding, because the device
+already did it, and
 "release" hands the aspect back without forwarding anything.
 
 The family's holds are published at home/hold/{unit}/{room}/{entity}/
@@ -45,8 +46,8 @@ family's holds and the applied holds back from the mirror, so it sends
 nothing that was already sent. After a core restart it waits for the
 core's replay (home/meta/system/replay) to put them back first.
 
-A manual-band command without a `hold` takes the entity's family policy
-for its value (docs/design.md#family-policy): "none", until a local time
+A manual-band command without a `hold`, or with "report", takes the
+entity's family policy for its value (docs/design.md#family-policy): "none", until a local time
 of day, or until the next change of the hold beneath it. It follows
 home/clock/minute for the house's UTC offset, so a time of day ends when
 the house clock shows it.
@@ -546,6 +547,11 @@ class Resolver:
         if keys.is_time_of_day(hold):
             # A time of day is held as the policy's is, in the house's time.
             hold, policy = None, {"until": hold}
+        # A report says the device already did it, so nothing is sent. What
+        # it holds is the policy's to say, as for a tap.
+        report = hold == "report"
+        if report:
+            hold = None
         seconds = hold_s
         at = None
         next_change = False
@@ -563,7 +569,7 @@ class Resolver:
                     # the host's offset until one comes.
                     room, entity, aspect = target
                     effects.append(("event", "clock-unknown", {"room": room, "entity": entity, "aspect": aspect}))
-        instant = hold not in (None, "none", "report", "release")
+        instant = hold not in (None, "none", "release")
         if instant:
             seconds = keys.hold_instant(hold).timestamp() - self._wall()
         if hold in ("none", "release") or (instant and seconds <= 0):
@@ -581,7 +587,7 @@ class Resolver:
                 self._winner.pop(target, None)
             else:
                 self._winner[target] = won
-            return True
+            return not report
         wall = self._wall()
         family = {
             "id": cmd_id or secrets.token_hex(4),
@@ -604,8 +610,7 @@ class Resolver:
         self._family[target] = family
         self._applied[target] = {"id": family["id"], "unit": actor, "priority": "manual", "value": value}
         self._note_winner(target, self.winner(target), effects)
-        # A report says the device already did it, so nothing is sent.
-        return hold != "report"
+        return not report
 
     # ---- the house clock
 

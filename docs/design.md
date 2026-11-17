@@ -852,8 +852,10 @@ A grant is one publish resolved against the entities it reaches
 - **Binding rows** come from a binding unit's `home/state/` or
   `home/forecast/` publish over its own entities.
 
-Adapters' cmd subscriptions form no rows. Adapters embody entities
-rather than command them. Compromising an adapter compromises its bound
+Adapters' cmd subscriptions form no rows, and nor does the cmd publish
+with which an adapter reports a person's change at its own device
+([Device-reported causes](#device-reported-causes)). Adapters embody
+entities rather than command them. Compromising an adapter compromises its bound
 entities, and no grant could narrow that. Every
 bound entity sits in its owner's binding row, and keys are part of a
 row's identity. So moving an entity, flipping its write mode, changing
@@ -1172,7 +1174,7 @@ what should happen to it with the envelope's `hold`:
 | `"none"` | yes | cleared |
 | an RFC3339 instant with an offset | yes | taken until then |
 | `"HH:MM"` | yes | taken until the house clock next shows it |
-| `"report"` | no | taken for `hold_minutes`, with the reported value |
+| `"report"` | no | as the [family policy](#family-policy) says, or taken for `hold_minutes`, with the reported value |
 | `"release"` | no | cleared |
 
 - `"none"` acts without taking over. The value stands until something
@@ -1185,7 +1187,8 @@ what should happen to it with the envelope's `hold`:
   time zone either.
 - `"report"` says the device already did it, so nothing is sent. An
   adapter whose device acts on a button of its own reports the change,
-  and the press then holds like a tap on the dashboard.
+  and the press then holds like a tap on the dashboard
+  ([Device-reported causes](#device-reported-causes)).
 - `"release"` hands the aspect back. It carries no value. It clears a
   hold whichever surface placed it, and the hold beneath, if any, is
   sent at once ([Which hold wins](#which-hold-wins)). With none, the
@@ -1242,7 +1245,8 @@ any = { until = "next change" }
   family's hold lasts the 24 hours.
 - An explicit `hold` on the command wins over the policy, and a later
   family command replaces the hold, so a start after a stop clears the
-  lockout.
+  lockout. A `"report"` is the exception: the device already acted, so
+  nothing is sent, and the policy says what it holds, as for a tap.
 - While the stop holds, the flue rule's stop agrees with it and goes
   through ([Which hold wins](#which-hold-wins)).
 
@@ -1253,6 +1257,55 @@ and give an `until` the arbiter reads (`family-policy-until`). It
 travels with the entity in its owner's binding row of the grant table,
 which the arbiter follows live, so an edit applies from the start of
 the apply and needs no arbiter restart.
+
+#### Device-reported causes
+
+A change made at the device counts as the family's only when the device
+reports the person's input that caused it. A change the device reports
+as its own rule is the device's. An adapter attributes what its devices
+report, and does not guess about a device that reports nothing unless
+the entity file says so.
+
+```toml
+[causes]
+person = ["button", "wall_switch"]   # the causes that are a person's input
+event = "relay_1_cause"              # optional: the device entity reporting them
+uncommanded = "person"               # optional: firmware that reports no causes
+```
+
+- The device reports each cause just before the change it makes, on a
+  cause entity of its own per controlled entity. For ESPHome that is an
+  `event` entity whose event types are the causes, `{object_id}_cause`
+  unless `event` names another, so each relay of a two-gang board has
+  its own.
+- A change after a person's cause is reported to the arbiter as a
+  manual-band command with hold intent `"report"`. The family's hold is
+  then placed as the [family policy](#family-policy) says, and nothing
+  is sent, so the device is not told what it already did.
+- A change after any other cause is the device's rule. The adapter
+  records it as a `device-rule` health event with the entity, the rule
+  and the new value. If the family holds the aspect, it sends a
+  `"none"` command with the new value, which clears the hold, because
+  the device left the value the family asked for.
+- A change with no cause is reported as `unattributed`, unless the
+  entity file says `uncommanded = "person"`. That is the fallback for
+  firmware that reports nothing, and it is off by default.
+- The echo of the adapter's own command, and the states sent when it
+  connects, are not attributed. A cause reported before a change wins
+  over a command for the same value, because the device reports no
+  cause for a command it was sent. A cause fired while the adapter was
+  disconnected is lost, and the state it left is read on the next
+  connect.
+- Only the base aspect `on` is attributed. Plan refuses `[causes]` on an
+  entity that is not arbitrated (`causes-not-arbitrated`) or whose base
+  aspect is not `on` (`causes-capability`), and prints it on the
+  entity's line.
+
+`homeostat.causes.Attribution` holds the bookkeeping for any adapter.
+Of the shipped adapters only esphome reads `[causes]`; on an entity of
+another adapter the table attributes nothing. An entity without
+`[causes]` is not attributed, so a device that reports no causes needs
+no new firmware.
 
 ### Aspect descriptors
 
