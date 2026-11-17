@@ -554,12 +554,12 @@ async def run_device(
         client.subscribe_states(on_state)
 
     async def on_disconnect(expected: bool) -> None:
-        # A requested disconnect (adapter shutdown) is not a device loss,
-        # so only an unexpected one marks the entities unavailable. Other
-        # aspects keep their last values.
         # One entity can hold several device keys, a switch and its runtime
         # number, so each is marked once.
         entities = {entity.name: entity for entity, _info in key_map.values()}.values()
+        # A requested disconnect (adapter shutdown) is not a device loss,
+        # so only an unexpected one marks the entities unavailable. Other
+        # aspects keep their last values.
         if not expected:
             for entity in entities:
                 session.put_json(keys.state_key(entity.room, entity.name, "available"), False)
@@ -633,8 +633,17 @@ async def mdns_browse(unit, session, by_device, unbound_discovery, publish_disco
 
 
 def is_number(value) -> bool:
-    """Return whether a command value is a finite number, and not a bool."""
-    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+    """Return whether a command value is a finite number, and not a bool.
+
+    JSON gives an integer of any length, and one too large for a float
+    makes `isfinite` raise, so it counts as no number.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
 
 
 def cmd_handler(entity, entity_runtime, entity_lock, loop, session, attribution):
@@ -642,10 +651,10 @@ def cmd_handler(entity, entity_runtime, entity_lock, loop, session, attribution)
 
     A switch takes `on` (a bool), and `runtime_s` (a number within its
     number entity's bounds) when it is a declared feature and the device
-    has that entity. A light takes `on` (a bool), and `brightness` (0 to
-    254) and `color_temp` (numbers) when they are declared features. A
-    brightness out of range is dropped rather than clamped. Sensors take
-    no commands. A command for a device that is not
+    has that entity. A light takes `on` (a bool), and when they are
+    declared features `brightness` (a number from 0 to 254, dropped
+    outside that rather than clamped) and `color_temp` (a number). Sensors
+    take no commands. A command for a device that is not
     connected drops with `device-unavailable`; anything else that does not
     fit drops with `invalid-command`.
     """

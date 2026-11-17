@@ -367,7 +367,14 @@ async fn invalid_commands_never_reach_the_phone() {
         .expect("put");
     let event = expect_drop_event(&events, "invalid-command").await;
     assert_eq!(event["aspect"], "ring");
-    // Each drop ends its command by id, so the sender is not left waiting.
+    // Each drop ends its command by id, so the sender is not left waiting:
+    // one that is no envelope at all, and one whose value is not text.
+    alert
+        .put(json!({"value": "hello", "id": "c0ffee04"}).to_string())
+        .await
+        .expect("put");
+    let event = expect_drop_event(&events, "invalid-command").await;
+    assert_eq!(event["cmd_id"], json!("c0ffee04"));
     let mut with_id = wish(json!(42), "x");
     with_id["id"] = json!("c0ffee03");
     alert.put(with_id.to_string()).await.expect("put");
