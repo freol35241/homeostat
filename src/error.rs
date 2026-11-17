@@ -268,6 +268,18 @@ codes! {
         publishing under `home/arbiter/` whose key covers it. Arbitration is \
         a unit (adapters/arbiter.py), not core machinery: the house must \
         bind one before the first arbitrated entity plans.",
+    HoldNotArbitrated => "hold-not-arbitrated":
+        "A hold publish under `home/hold/` reaches an entity that is not \
+        arbitrated. A hold is a standing wish the arbiter resolves against \
+        the other holds on the aspect; an entity the arbiter does not \
+        arbitrate has nothing to resolve it, so the hold would hold \
+        nothing. Mark the entity arbitrated, or narrow the key \
+        (docs/design.md#holds).",
+    HoldBand => "hold-band":
+        "A hold publish declares a band other than `automation` or `agent`. \
+        The family's hold on an aspect is the arbiter's, placed by a \
+        manual-band command (docs/design.md#hold-intents), so a unit holds \
+        below it (docs/design.md#holds).",
     VirtualEntityFed => "virtual-entity-fed":
         "An `[inputs]` block sits on an entity bound by an automation. A fed \
         input is a device's control input (docs/design.md#device-feeds); a \
@@ -285,9 +297,10 @@ codes! {
     ReservedClassPublish => "reserved-class-publish":
         "A `[bus.publishes]` key sits in a class the unit may not write. \
         `home/config/` and `home/meta/` are the core's alone. `home/health/`, \
-        `home/discovery/` and `home/hold/` are per unit: a publish there must \
-        sit under the publishing unit's own name (`home/health/{unit}/...`, \
-        `home/discovery/{unit}`, `home/hold/{unit}/...`). `home/arbiter/`, `home/clock/` and \
+        `home/discovery/`, `home/hold/` and `home/arbitration/` are per unit: \
+        a publish there must sit under the publishing unit's own name \
+        (`home/health/{unit}/...`, `home/discovery/{unit}`, \
+        `home/hold/{unit}/...`, `home/arbitration/{unit}`). `home/arbiter/`, `home/clock/` and \
         `home/history/` are each one service's output: only a `kind = \
         \"service\"` unit may publish them, and at most one per class. The \
         SDK only checks a published key against the declared expression, so \

@@ -1,0 +1,15 @@
+schema = 1
+
+[unit]
+name = "setback"
+kind = "automation"
+description = "A holder under test; the tests publish its holds"
+
+[runtime]
+command = "fake_adapter"
+restart = "always"
+shutdown_grace_s = 5
+
+[bus.publishes]
+# A standing wish for the lock (docs/design.md#holds).
+locked = { key = "home/hold/setback/hallway/front_door/locked", capability = "lock", priority = "automation" }

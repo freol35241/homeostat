@@ -413,12 +413,11 @@
     return geo;
   }
 
-  /* ---- arbiter holds (docs/design.md#arbitrated-mode) ----
+  /* ---- the family's holds (docs/design.md#arbitrated-mode) ----
    *
-   * Each arbiter publishes one document of what it is holding. Every
-   * forwarded command takes a lease, not only a preemption, so most holds
-   * are the house working normally. A hold is only worth reporting when it
-   * displaced somebody.
+   * Each arbiter publishes one record per aspect the family holds. Every
+   * tap places one, so most holds are the family using the house. A hold is
+   * only worth reporting when it displaced somebody.
    */
   var CMD_BANDS = ['automation', 'agent', 'family', 'manual'];
 

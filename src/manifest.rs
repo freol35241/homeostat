@@ -47,6 +47,10 @@ pub struct Capability {
     pub aspects: &'static [&'static str],
     /// The reading and value that is out of the ordinary, if any.
     pub notable: Option<&'static str>,
+    /// The aspect and value a device is safe at, if any. Between two holds
+    /// at one band, the one for the rest value wins
+    /// (docs/design.md#which-hold-wins).
+    pub rest: Option<(&'static str, &'static str)>,
     /// The command options the vocabulary names for this capability.
     pub options: &'static [CommandOption],
     pub note: &'static str,
@@ -71,6 +75,7 @@ pub const VOCABULARY: &[Capability] = &[
         base: None,
         aspects: &[],
         notable: None,
+        rest: None,
         options: &[],
         note: "A boolean under its native name.",
     },
@@ -79,6 +84,7 @@ pub const VOCABULARY: &[Capability] = &[
         base: Some("on"),
         aspects: &["power_level", "flue_temperature", "boiler_temperature"],
         notable: None,
+        rest: Some(("on", "false")),
         options: &[],
         note: "`on` is the family lever, read back from the device's run state, never echoed from the command. `power_level` is the output setting as the device enumerates it (a constraint the adapter describes); the two temperatures in °C are what an interlock reads. Run-phase codes pass through raw until a second burner adapter exists to generalise against.",
     },
@@ -87,6 +93,7 @@ pub const VOCABULARY: &[Capability] = &[
         base: None,
         aspects: &["action"],
         notable: None,
+        rest: None,
         options: &[],
         note: "A thing a person presses: a remote, a wall button, a device's own button. `action` (string) is one press in the device's own words (`single`, `1_double`, `brightness_up_click`), not normalised. Every press is published, a repeat included, so an action is an event, not a state: a unit catching up after a restart is not handed the last one (docs/design.md#buttons). No commands.",
     },
@@ -95,6 +102,7 @@ pub const VOCABULARY: &[Capability] = &[
         base: None,
         aspects: &["motion"],
         notable: None,
+        rest: None,
         options: &[],
         note: "`motion` (bool). Media rides the go2rtc plane, never the bus.",
     },
@@ -103,6 +111,7 @@ pub const VOCABULARY: &[Capability] = &[
         base: Some("setpoint"),
         aspects: &["indoor_temperature", "feed_temperature"],
         notable: None,
+        rest: None,
         options: &[],
         note: "`setpoint` in °C is the family lever; the two readings are normalized when the device has them.",
     },
@@ -111,6 +120,7 @@ pub const VOCABULARY: &[Capability] = &[
         base: None,
         aspects: &[],
         notable: None,
+        rest: None,
         options: &[],
         note: "Reserved; no adapter binds it yet.",
     },
@@ -119,6 +129,7 @@ pub const VOCABULARY: &[Capability] = &[
         base: Some("on"),
         aspects: &["brightness", "color_temp"],
         notable: Some("on = true"),
+        rest: None,
         options: &[CommandOption {
             name: "transition",
             aspects: &["on", "brightness", "color_temp"],
@@ -131,6 +142,7 @@ pub const VOCABULARY: &[Capability] = &[
         base: Some("locked"),
         aspects: &[],
         notable: Some("locked = false"),
+        rest: None,
         options: &[],
         note: "",
     },
@@ -139,6 +151,7 @@ pub const VOCABULARY: &[Capability] = &[
         base: Some("message"),
         aspects: &["alert", "delivered", "acknowledged"],
         notable: None,
+        rest: None,
         options: &[],
         note: "A channel that reaches a person: a phone, a group chat. `message` and `alert` are commandable strings — the text itself — and two structurally separate delivery paths, granted and policed apart (an alert overrides quiet hours; a message never will). `delivered` is the epoch time the delivery service acknowledged the last message, never a human's receipt; `acknowledged` is the send time, on the adapter's clock, of the newest `alert` the person has seen, which only a channel with an app at the far end can report. Room `person` for one person's channel, `global` for a group (docs/design.md#notifications).",
     },
@@ -147,6 +160,7 @@ pub const VOCABULARY: &[Capability] = &[
         base: None,
         aspects: &["motion", "occupied"],
         notable: None,
+        rest: None,
         options: &[],
         note: "A room sensor, in the room it watches. `motion` (bool) is movement seen within the adapter's hold, as a PIR reports it; `false` means nothing moved, not that the room is empty. `occupied` (bool) is a body detected, moving or still, as an mmWave radar reports it. The adapter publishes whichever its device observes (docs/design.md#the-capability-vocabulary).",
     },
@@ -155,6 +169,7 @@ pub const VOCABULARY: &[Capability] = &[
         base: None,
         aspects: &["presence", "lat", "lon", "accuracy", "fixed_at"],
         notable: None,
+        rest: None,
         options: &[],
         note: "A human, computed from the trackers its `[sources]` list. Only an automation binds one (`person-bound-by-adapter`), and the shipped `persons` unit is the one that does. `presence` (bool) is whether the person is home; the dashboard's People tile reads it. Scalar position aspects; `fixed_at` is the fix's epoch timestamp. Room `person` (docs/design.md#map-and-people).",
     },
@@ -163,6 +178,7 @@ pub const VOCABULARY: &[Capability] = &[
         base: None,
         aspects: &["wan"],
         notable: Some("wan = false"),
+        rest: None,
         options: &[],
         note: "",
     },
@@ -171,6 +187,7 @@ pub const VOCABULARY: &[Capability] = &[
         base: None,
         aspects: &[],
         notable: None,
+        rest: None,
         options: &[],
         note: "Numeric aspects under descriptive names (`temperature`, `humidity`); widgets come from what is published.",
     },
@@ -179,6 +196,7 @@ pub const VOCABULARY: &[Capability] = &[
         base: Some("on"),
         aspects: &[],
         notable: None,
+        rest: None,
         options: &[],
         note: "",
     },
@@ -187,6 +205,7 @@ pub const VOCABULARY: &[Capability] = &[
         base: None,
         aspects: &["home", "sighted", "lat", "lon", "accuracy", "battery", "fixed_at"],
         notable: None,
+        rest: None,
         options: &[],
         note: "A device someone carries: a phone, a tag, a watch. `home` (bool) is inside the home geofence, and its `false` says the device left. `sighted` (bool) is seen on the home network, and its `false` says only that it was not seen within the adapter's delay. Scalar position aspects as on `person`, plus the device's `battery`; `fixed_at` is published after the fix's other aspects and completes it. Room `person` for one person's device. A `person` lists its trackers as sources (docs/design.md#map-and-people).",
     },
@@ -411,16 +430,20 @@ pub struct PublishSpec {
     /// this unit binds (`forecast-publish-unbound`). The key carries a
     /// sixth segment naming the forecast's source. Several sources can then
     /// forecast one series without overwriting each other
-    /// (`forecast-publish-conflict`).
+    /// (`forecast-publish-conflict`). Under `home/hold/` it is
+    /// `home/hold/{this unit}/{room}/{entity}/{aspect}`, and every entity it
+    /// reaches must be arbitrated (`hold-not-arbitrated`).
     pub key: String,
-    /// Required under `home/cmd/` (`publish-missing-capability`): the grant
-    /// resolves onto bound entities of this capability that the key covers.
-    /// Must be a known capability (`unknown-capability`).
+    /// Required under `home/cmd/` and, except on a service, `home/hold/`
+    /// (`publish-missing-capability`): the grant resolves onto entities of
+    /// this capability that the key covers. Must be a known capability
+    /// (`unknown-capability`).
     pub capability: Option<String>,
-    /// The band commands leave at. Required under `home/cmd/`
+    /// The band commands or holds leave at. Required where `capability` is
     /// (`publish-missing-priority`). Automations publish at `automation`;
     /// the family's surfaces (dashboard, voice) at `manual`, which always
-    /// wins in arbitration.
+    /// wins in arbitration. A hold is at `automation` or `agent`
+    /// (`hold-band`).
     pub priority: Option<Priority>,
 }
 

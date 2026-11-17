@@ -19,13 +19,18 @@ pub const CLASSES: &[&str] = &[
     "clock",
     "history",
     "discovery",
-    // What the arbiter is holding now: one record per held aspect, under the
-    // arbiter's name (`home/hold/{unit}/{room}/{entity}/{aspect}`). It is
-    // mirrored so a late joiner can ask whether an aspect is held right now,
-    // which an event stream cannot answer (docs/design.md#arbitrated-mode).
-    // This is held state. The audit trail of preempt and refuse events stays
-    // where it is.
+    // Standing wishes for arbitrated aspects: one record per held aspect,
+    // under the holder's name (`home/hold/{unit}/{room}/{entity}/{aspect}`),
+    // the family's under the arbiter's. They are mirrored so a late joiner
+    // can ask what is held right now, which an event stream cannot answer
+    // (docs/design.md#holds). The audit trail of preempt and refuse events
+    // stays where it is.
     "hold",
+    // What the arbiter resolved: per arbitrated aspect, the hold it applied
+    // and the holds beneath it, one document per arbiter unit
+    // (`home/arbitration/{unit}`). It is mirrored, and a restarted arbiter
+    // reads it back so it does not send an applied hold again.
+    "arbitration",
 ];
 
 /// The classes addressed per entity, as

@@ -20,7 +20,7 @@ Binding: an entity file's `id` is the bridge's MQTT_BASE_TOPIC
 (`aduro2mqtt` by default), and the file stem is the entity name. One
 entity per burner, capability `burner` with the `power_level` feature.
 The entity is arbitrated, so the family's `on` and an automation's
-`power_level` hold separate leases, and commands arrive on
+`power_level` are arbitrated apart, and commands arrive on
 home/arbiter/{room}/{entity}/{aspect}.
 
 State: each status field publishes under its firmware name, each
