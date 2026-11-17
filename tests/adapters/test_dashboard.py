@@ -298,20 +298,15 @@ class DescriptorCommandTest(unittest.TestCase):
             )
         )
 
-    # descriptor_command reads `fields` with .get without checking it is an
-    # object, so a list raises where commandable_aspects reads no fields.
-    @unittest.expectedFailure
     def test_a_descriptor_whose_fields_are_not_an_object_has_no_command(self):
         self.assertIsNone(descriptor_command({"fields": ["level"]}, "level"))
 
-    # descriptor_command passes a non-object constraint through, and
-    # command_value_ok raises on it: the 500 its bound check exists to avoid.
-    @unittest.expectedFailure
-    def test_no_command_it_returns_makes_the_value_check_raise(self):
+    def test_a_constraint_that_is_not_an_object_means_no_command(self):
         for constraint in ([0, 10], "0-10"):
             with self.subTest(constraint=constraint):
-                command = descriptor_command(described(type="float", constraint=constraint), "level")
-                self.assertIsInstance(command is None or command_value_ok(command, 5), bool)
+                self.assertIsNone(
+                    descriptor_command(described(type="float", constraint=constraint), "level")
+                )
 
 
 class CommandValueOkTest(unittest.TestCase):

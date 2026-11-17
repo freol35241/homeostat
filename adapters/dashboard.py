@@ -488,13 +488,19 @@ def descriptor_command(descriptor: dict | None, aspect: str) -> dict | None:
     The field's `values` are folded in for enums. None means undescribed,
     no command, or a tier the family may not write (the /api/param rule).
     """
-    field = ((descriptor or {}).get("fields") or {}).get(aspect)
+    # The core does not validate descriptors, so any level of one may be
+    # malformed; each reads as no command rather than a 500.
+    fields = (descriptor or {}).get("fields")
+    field = fields.get(aspect) if isinstance(fields, dict) else None
     if not isinstance(field, dict):
         return None
     command = field.get("command")
     if not isinstance(command, dict) or command.get("editable_by") != "family":
         return None
-    constraint = command.get("constraint") if isinstance(command.get("constraint"), dict) else {}
+    constraint = command.get("constraint")
+    if constraint is not None and not isinstance(constraint, dict):
+        return None
+    constraint = constraint or {}
     for bound in (command.get("step"), constraint.get("min"), constraint.get("max")):
         # A non-numeric bound would make command_value_ok raise (a 500),
         # and the page would insert it into an attribute, so treat the
