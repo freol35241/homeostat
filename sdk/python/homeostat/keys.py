@@ -492,7 +492,8 @@ def is_time_of_day(hold: Any) -> bool:
     bool
         True for `"00:00"` to `"23:59"`.
     """
-    return isinstance(hold, str) and re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", hold) is not None
+    # ASCII digits only, as the core reads them (tests/fixtures/time_of_day.json).
+    return isinstance(hold, str) and re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", hold, re.ASCII) is not None
 
 
 def hold_instant(hold: str) -> datetime.datetime | None:

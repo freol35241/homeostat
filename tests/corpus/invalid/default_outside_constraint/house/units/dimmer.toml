@@ -22,3 +22,9 @@ type = "time"
 default = "12:00"
 constraint = { after = "20:00", before = "02:00" }
 editable_by = "family"
+
+# Not "HH:MM": the SDK could not read it.
+[params.wake_time]
+type = "time"
+default = "7:30"
+editable_by = "family"

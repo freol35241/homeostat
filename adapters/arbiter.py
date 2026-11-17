@@ -616,12 +616,11 @@ class Resolver:
 
     def _next_time_of_day(self, hhmm) -> datetime.datetime | None:
         """Return the next local `HH:MM` as a naive local time, or None if it is not one."""
-        try:
-            hour, minute = (int(part) for part in str(hhmm).split(":"))
-            now = datetime.datetime.fromtimestamp(self._wall(), datetime.timezone(self._offset))
-            at = now.replace(hour=hour, minute=minute, second=0, microsecond=0, tzinfo=None)
-        except ValueError:
+        if not keys.is_time_of_day(hhmm):
             return None
+        hour, minute = (int(part) for part in hhmm.split(":"))
+        now = datetime.datetime.fromtimestamp(self._wall(), datetime.timezone(self._offset))
+        at = now.replace(hour=hour, minute=minute, second=0, microsecond=0, tzinfo=None)
         return at if at > now.replace(tzinfo=None) else at + datetime.timedelta(days=1)
 
     def _local_epoch(self, at: datetime.datetime) -> float:

@@ -261,6 +261,13 @@ class FamilyPolicyTest(Base):
         self.assertEqual(self.resolver.family_records(), {})
         self.assertTrue(self.command("automation", "flue_stop", False)[0], "the stop rule acts on the start")
 
+    def test_only_the_shared_grammar_is_a_time_of_day(self):
+        cases = json.loads((Path(__file__).resolve().parents[1] / "fixtures/time_of_day.json").read_text())
+        for s in cases["valid"]:
+            self.assertIsNotNone(self.resolver._next_time_of_day(s), s)
+        for s in [*cases["invalid"], None, 630]:
+            self.assertIsNone(self.resolver._next_time_of_day(s), repr(s))
+
     def test_a_time_of_day_intent_holds_as_the_policy_would(self):
         self.command("manual", "dashboard", False, hold="06:00", policy="none")
         [record] = self.resolver.family_records().values()
