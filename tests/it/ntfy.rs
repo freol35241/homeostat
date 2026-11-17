@@ -3,8 +3,6 @@
 //! bearer-token checking and a controllable outage) on a free port plus
 //! the real supervisor on the ntfy fixture house, and asserts on the bus.
 
-mod common;
-
 use std::io::{Read, Write};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
@@ -12,7 +10,7 @@ use std::time::{Duration, Instant};
 use homeostat::bus::HealthStatus;
 use serde_json::{json, Value};
 
-use common::{
+use crate::common::{
     assert_cli_ok, assert_unit_contract, await_health, await_mirror, await_states, cli,
     expect_drop_event, fixture_command, free_port, health_watch, matched_publisher, stdout,
     temp_house, StateSub, Supervisor,

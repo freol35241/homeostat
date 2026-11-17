@@ -10,8 +10,6 @@
 //! The store outlives the supervisor because it is a file named by
 //! `RECORDER_DB`, as in restore.rs.
 
-mod common;
-
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -19,7 +17,7 @@ use homeostat::bus::HealthStatus;
 use serde_json::{json, Value};
 use zenoh::time::{Timestamp, TimestampId, NTP64};
 
-use common::{await_health, await_mirror, cache_read, health_watch, Supervisor};
+use crate::common::{await_health, await_mirror, cache_read, health_watch, Supervisor};
 
 const FIXTURE: &str = "tests/fixtures/house_replay";
 const MOVED: &str = "tests/fixtures/house_replay_moved";

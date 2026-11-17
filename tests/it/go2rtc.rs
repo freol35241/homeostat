@@ -4,8 +4,6 @@
 //! `HOMEOSTAT_CAMERAS`, spawn it, poll its API, own the liveliness token,
 //! and translate child death into its own exit (supervisor restart).
 
-mod common;
-
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -13,7 +11,7 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 use zenoh::sample::SampleKind;
 
-use common::{free_port, Supervisor};
+use crate::common::{free_port, Supervisor};
 
 const FIXTURE: &str = "tests/fixtures/house_go2rtc";
 const CAMERAS_ENV: &str = "HOMEOSTAT_CAMERAS";

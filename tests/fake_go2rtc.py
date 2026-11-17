@@ -7,7 +7,7 @@
 """A minimal go2rtc for the camera integration tests.
 
 It serves the go2rtc shim's and the dashboard camera proxies' tests
-(tests/go2rtc.rs, tests/dashboard.rs; see docs/design.md#cameras). It
+(tests/it/go2rtc.rs, tests/it/dashboard.rs; see docs/design.md#cameras). It
 speaks the part of go2rtc's surface homeostat touches, and nothing else:
 
   - `-config <path>`: reads the shim's rendered config (JSON, which is a

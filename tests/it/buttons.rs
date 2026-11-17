@@ -2,8 +2,6 @@
 //! fixture house, where the reflector turns each command back into state,
 //! asserting on what a press sends (docs/design.md#gesture-actions).
 
-mod common;
-
 use std::time::Duration;
 
 use homeostat::bus::HealthStatus;
@@ -11,7 +9,7 @@ use serde_json::{json, Value};
 use zenoh::handlers::FifoChannelHandler;
 use zenoh::pubsub::Subscriber;
 
-use common::{await_health, health_watch, running_pid, Supervisor};
+use crate::common::{await_health, health_watch, running_pid, Supervisor};
 
 const FIXTURE: &str = "tests/fixtures/house_buttons";
 const PRESS_KEY: &str = "home/state/hall/remote/action";

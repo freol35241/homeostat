@@ -4,7 +4,7 @@
 #     "aioesphomeapi>=45,<46",
 # ]
 # ///
-"""A minimal ESPHome native-API device for the tests in tests/esphome.rs.
+"""A minimal ESPHome native-API device for the tests in tests/it/esphome.rs.
 
 It speaks the real plaintext wire protocol: a zero byte, a varint length,
 a varint message-type id, then the protobuf payload, as aioesphomeapi's

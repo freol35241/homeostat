@@ -555,12 +555,12 @@ was published at all.
 
 Adapters are tested end to end against the real supervisor and a real
 protocol endpoint, without mocking the bus. The pattern, from
-`tests/ivt490.rs`:
+`tests/it/ivt490.rs`:
 
 - A **fixture house** under `tests/fixtures/house_<adapter>/` with the
   manifest pointing at `../../adapters/<adapter>.py`, an endpoint that
   reads a port from `${VAR}`, and one or two entity files.
-- `tests/common` provides `Supervisor::spawn_with_env`, `Mosquitto` (a
+- `tests/it/common.rs` provides `Supervisor::spawn_with_env`, `Mosquitto` (a
   real broker on a free port) and `Mqtt` (a scripted client),
   `expect_states`, `expect_drop_event`, `expect_event_kind`,
   `health_watch` / `await_health`, and `process_alive`.

@@ -3,14 +3,12 @@
 //! companion fixture house, and asserts on both buses — the phone's MQTT
 //! subtree and the house bus.
 
-mod common;
-
 use std::time::Duration;
 
 use serde_json::{json, Value};
 use zenoh::sample::SampleKind;
 
-use common::{
+use crate::common::{
     assert_unit_contract, await_discovery, await_states, cache_read, expect_drop_event,
     expect_states, matched_publisher, next_event, Mosquitto, Mqtt, StateSub, Supervisor,
 };

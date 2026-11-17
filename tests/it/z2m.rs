@@ -2,15 +2,13 @@
 //! mosquitto broker on a free port plus the real supervisor on the z2m
 //! fixture house, and asserts on both buses.
 
-mod common;
-
 use std::time::Duration;
 
 use homeostat::bus::HealthStatus;
 use serde_json::{json, Value};
 use zenoh::sample::SampleKind;
 
-use common::{
+use crate::common::{
     assert_unit_contract, await_health, expect_drop_event, expect_event_kind, expect_states,
     health_watch, next_event, temp_house, Mosquitto, Mqtt, Supervisor,
 };

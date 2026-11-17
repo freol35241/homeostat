@@ -19,14 +19,12 @@
 //! are read both live and from the core mirror, so a publish that beats
 //! the subscriber is not lost.
 
-mod common;
-
 use std::time::Duration;
 
 use homeostat::bus::HealthStatus;
 use serde_json::json;
 
-use common::{await_health, await_states, health_watch, matched_publisher, Supervisor};
+use crate::common::{await_health, await_states, health_watch, matched_publisher, Supervisor};
 
 const FIXTURE: &str = "tests/fixtures/house_templates";
 
