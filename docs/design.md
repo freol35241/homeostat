@@ -2021,12 +2021,25 @@ ready ([Holds](#holds)), and its `ready` would not release a hold the
 replay brought back after it started.
 
 The core says where the replay stands at `home/meta/system/replay`:
-`"pending"` until the recorder has answered, `"done"` after, and
+`"pending"` until the arbiters' holds are back, `"done"` after, and
 `"none"` in a house without a recorder. An arbiter waits for it before
 it takes its holds back. Taking them back before the replay finds
-nothing, and the units' holds would be sent and then the family's. The
-wait stays under the supervisor's deadline for `ready`; past it the
-arbiter starts without the replay and reports `replay-late`.
+nothing, and the units' holds would be sent and then the family's.
+
+- The replay is the holds first, then state, and `"done"` comes between
+  the two, so the arbiters wait only for the short table.
+- `"done"` comes within 20 s of the core's start. A recorder that is not
+  running by then, or whose breaker opens, means no holds are replayed:
+  holds replayed after an arbiter stopped waiting would stand in the
+  mirror with nobody enforcing them. State is still replayed once the
+  recorder runs.
+- An arbiter waits 30 s, under the supervisor's deadline for `ready`;
+  past it the arbiter starts without the replay and reports
+  `replay-late`.
+- The recorder keeps `standing` true to the house: at its start it
+  rebuilds the table from the mirror, unless a replay is pending, so a
+  change it missed while it was down does not come back at the next
+  restart.
 
 The core publishes the replay rather than the recorder. Only an
 entity's binding unit publishes its state

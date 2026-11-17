@@ -179,6 +179,7 @@ pub async fn run(check: &CheckResult, root: &Path, listen: &str) -> Result<(), S
                 holds,
                 arbitration,
             },
+            arbiters(check),
         ));
     }
 
@@ -366,14 +367,14 @@ impl Core {
         let _ = self.session.put(bus::GRANTS_PENDING_KEY, payload).await;
     }
 
-    /// Empties the pending table once an apply has completed and every unit
-    /// runs on the applied table.
     /// Marks the replay after this start done and says so on the bus.
     pub async fn replay_done(&self) {
         self.world.lock().expect("world meta lock").replay = "done";
         let _ = self.session.put(bus::REPLAY_KEY, "\"done\"").await;
     }
 
+    /// Empties the pending table once an apply has completed and every unit
+    /// runs on the applied table.
     async fn clear_pending_grants(&self) {
         self.world
             .lock()
@@ -621,6 +622,20 @@ async fn serve_health(session: &Session, health: HealthMap) -> Result<(), String
 
 /// The unit that publishes under `home/history/`: the house's recorder, of
 /// which validation allows one (docs/design.md#reserved-classes).
+/// The units that publish `home/arbitration/{unit}`: the arbiters whose
+/// holds a replay gives back.
+fn arbiters(check: &CheckResult) -> std::collections::BTreeSet<String> {
+    check
+        .expanded
+        .iter()
+        .filter(|k| {
+            k.direction == crate::expand::Direction::Publishes
+                && k.source.starts_with("home/arbitration/")
+        })
+        .map(|k| k.unit.clone())
+        .collect()
+}
+
 fn recorder_unit(check: &CheckResult) -> Option<String> {
     check
         .expanded

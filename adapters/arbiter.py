@@ -77,9 +77,10 @@ PARAM = "hold_minutes"
 GRANTS_KEY = "home/meta/system/grants"
 PENDING_KEY = "home/meta/system/grants_pending"
 REPLAY_KEY = "home/meta/system/replay"
-# The longest wait for the core's replay, under the supervisor's one-minute
-# deadline for `ready`.
-REPLAY_WAIT_S = 45.0
+# The longest wait for the core's replay. The core says it is done within
+# 20 s of starting, or 5 s after the recorder runs (src/supervisor/replay.rs),
+# and this stays well under the supervisor's one-minute deadline for `ready`.
+REPLAY_WAIT_S = 30.0
 RANKS = keys.CMD_PRIORITIES
 
 

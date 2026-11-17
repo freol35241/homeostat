@@ -166,15 +166,16 @@ CREATE TABLE IF NOT EXISTS events (
   payload TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS events_key ON events (key, ts);
+CREATE INDEX IF NOT EXISTS events_ts ON events (ts);
 -- The latest record at every home/hold/** and home/arbitration/* key: what
--- an arbiter needs back after a core restart. A delete removes the row,
+-- an arbiter needs back after a core restart. Every unit's holds are
+-- kept, because which units are arbiters is the core's to say. A delete removes the row,
 -- so the table holds what is in force, not its history.
 CREATE TABLE IF NOT EXISTS standing (
   key TEXT PRIMARY KEY,
   ts INTEGER NOT NULL,
   payload TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS events_ts ON events (ts);
 -- The closed months sealed into archive files (see Writer._archive). A
 -- row is written as 'sealing' before its file is, so a crash at any
 -- point leaves a row that says what to finish or undo; only a 'sealed'
@@ -1262,6 +1263,37 @@ class Recorder:
             payload = sample.payload.to_bytes().decode("utf-8", errors="replace")
             self.writer.enqueue("events", (ts, key, payload))
 
+    def reconcile_standing(self) -> None:
+        """Make `standing` what the mirror holds now, unless a replay is pending.
+
+        A hold change made while this recorder was down, restarting or
+        unable to write was never recorded, and the next core restart would
+        bring the old record back. At start the mirror is the truth, except
+        right after a core restart, when it is empty until the core's
+        replay, which reads this table
+        (docs/design.md#replay-after-a-core-restart). Then, or with a core
+        that says nothing about its replay, the table is left as it is. Runs
+        before the writer starts, so the samples subscribed meanwhile land
+        after it.
+        """
+        try:
+            status = [value for _key, value in self.sess.get_json("home/meta/system/replay")]
+        except (session.QueryError, session.QueryTimeout):
+            return
+        if not status or status[0] == "pending":
+            return
+        rows = []
+        for expr in ("home/hold/**", "home/arbitration/*"):
+            for key, value, age in self.sess.get_json_aged(expr):
+                rows.append((key, int((time.time() - age) * 1_000_000), json.dumps(value)))
+        conn = sqlite3.connect(self.db_path, timeout=2.0)
+        try:
+            with conn:
+                conn.execute("DELETE FROM standing")
+                conn.executemany("INSERT INTO standing VALUES (?, ?, ?)", rows)
+        finally:
+            conn.close()
+
     def seed(self, exprs: list[str]) -> None:
         """Catch up from the core's state mirror.
 
@@ -2295,6 +2327,8 @@ def main():
     queryable = sess.declare_queryable(
         manifest["bus"]["publishes"]["history"]["key"], recorder.answer
     )
+    if any(e.startswith(("home/hold/", "home/arbitration/")) for e in manifest["bus"]["subscribes"].values()):
+        recorder.reconcile_standing()
     recorder.writer.thread.start()
     recorder.writer.checker.thread.start()
     recorder.seed(

@@ -405,3 +405,39 @@ class StandingTest(StoreTest):
     def test_a_record_that_is_not_json_is_left_out(self):
         self.flush([("home/hold/arbiter/hall/door/locked", 1, "not json")])
         self.assertEqual(standing(self.conn), [])
+
+
+class ReconcileStandingTest(StoreTest):
+    """At start, `standing` is rebuilt from the mirror unless a replay is
+    pending, so a change the recorder missed does not come back."""
+
+    def recorder(self, status, mirror):
+        rec = Recorder.__new__(Recorder)
+        rec.db_path = self.db
+        rec.sess = types.SimpleNamespace(
+            get_json=lambda expr: [(expr, status)] if status is not None else [],
+            get_json_aged=lambda expr: [(k, v, 1.0) for k, v in mirror if k.startswith(expr.rstrip("*"))],
+        )
+        return rec
+
+    def stale(self):
+        writer = Writer.__new__(Writer)
+        writer.db_path = self.db
+        writer._flush([
+            ("standing", ("home/hold/arbiter/hall/door/locked", 1, '{"value": true}')),
+            ("standing", ("home/arbitration/arbiter", 1, '{"schema": 1, "aspects": []}')),
+        ])
+
+    def test_after_a_missed_release_the_mirror_wins(self):
+        self.stale()
+        self.recorder("done", [("home/arbitration/arbiter", {"schema": 1, "aspects": [1]})]).reconcile_standing()
+        self.assertEqual(
+            [(r["key"], r["value"]) for r in standing(self.conn)],
+            [("home/arbitration/arbiter", {"schema": 1, "aspects": [1]})],
+        )
+
+    def test_a_pending_replay_or_a_silent_core_leaves_the_table(self):
+        for status in ("pending", None):
+            self.stale()
+            self.recorder(status, []).reconcile_standing()
+            self.assertEqual(len(standing(self.conn)), 2, status)

@@ -99,9 +99,11 @@ pub const HISTORY_LATEST_KEY: &str = "home/history/latest";
 pub const HISTORY_HOLDS_KEY: &str = "home/history/holds";
 
 /// Where the replay after this core's start stands, as a JSON string:
-/// `"none"` with no recorder in the house, `"pending"` until the recorder
-/// has answered, `"done"` after. An arbiter waits for it before it resolves,
-/// so it does not send a unit's hold and then the family's
+/// `"none"` with no recorder in the house, `"pending"` until the arbiters'
+/// holds are back, `"done"` after. It is also `"done"` when the read failed,
+/// or when the recorder did not run within 20 s, and then no holds are
+/// replayed. An arbiter waits for it before it resolves, so it does not send
+/// a unit's hold and then the family's
 /// (docs/design.md#replay-after-a-core-restart).
 pub const REPLAY_KEY: &str = "home/meta/system/replay";
 

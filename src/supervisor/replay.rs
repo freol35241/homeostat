@@ -25,6 +25,16 @@ pub const REPLAY_ID: u8 = 1;
 /// How long the core waits for the recorder's answer.
 const QUERY_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// How long the core waits for the recorder to run before it says the
+/// replay is done without the holds. An arbiter waits longer than this and
+/// the holds query together (`REPLAY_WAIT_S` in adapters/arbiter.py). Holds
+/// replayed after an arbiter gave up would stand in the mirror with nobody
+/// enforcing them, so they are then not replayed at all.
+const HOLDS_DEADLINE: Duration = Duration::from_secs(20);
+
+/// How long the core waits for the recorder's holds answer, a short table.
+const HOLDS_QUERY_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// How often the core checks whether the recorder is running.
 const POLL: Duration = Duration::from_millis(250);
 
@@ -55,18 +65,17 @@ pub struct Mirrors {
 }
 
 /// The hold records to replay: each arbiter's arbitration document, and the
-/// holds under that arbiter's own name, which are the family's. A unit's own
-/// holds are not replayed. The unit restarts with the core and asserts its
-/// holds again before it is ready, and its `ready` would not know to release
-/// a hold the replay brought back after it started. Keys the mirror holds are
-/// skipped.
-pub fn holds_to_replay(recorded: Vec<Latest>, held: &BTreeSet<String>) -> Vec<Latest> {
-    let arbiters: BTreeSet<String> = recorded
-        .iter()
-        .filter_map(|entry| entry.key.strip_prefix("home/arbitration/"))
-        .filter(|unit| !unit.contains('/'))
-        .map(str::to_string)
-        .collect();
+/// holds under that arbiter's own name, which are the family's. `arbiters`
+/// are the units the house declares as publishing `home/arbitration/{unit}`,
+/// so a removed arbiter's records stay out. A unit's own holds are not
+/// replayed. The unit restarts with the core and asserts its holds again
+/// before it is ready, and its `ready` would not know to release a hold the
+/// replay brought back after it started. Keys the mirror holds are skipped.
+pub fn holds_to_replay(
+    recorded: Vec<Latest>,
+    held: &BTreeSet<String>,
+    arbiters: &BTreeSet<String>,
+) -> Vec<Latest> {
     recorded
         .into_iter()
         .filter(|entry| {
@@ -113,23 +122,39 @@ pub fn replay_stamp(ts_us: u64) -> Timestamp {
     )
 }
 
-/// Waits for `recorder` to reach `running`, then replays once, and marks the
-/// replay done either way. Gives up quietly when the supervisor shuts down
-/// first. A failed read is logged and not retried: the house then starts as
-/// it would without a recorder.
-pub async fn replay_when_running(core: Arc<Core>, recorder: String, mirrors: Mirrors) {
+/// Waits for `recorder` to reach `running`, then replays the arbiters'
+/// holds, says the replay is done, and replays state. The arbiters wait for
+/// "done", so it is said within `HOLDS_DEADLINE` either way: when the
+/// recorder is not running by then, or its breaker opens or it stops, the
+/// holds are skipped and state is replayed once it runs. Gives up quietly
+/// when the supervisor shuts down first. A failed read is logged and not
+/// retried: the house then starts as it would without a recorder.
+pub async fn replay_when_running(
+    core: Arc<Core>,
+    recorder: String,
+    mirrors: Mirrors,
+    arbiters: BTreeSet<String>,
+) {
+    let started = tokio::time::Instant::now();
+    let mut holds_due = true;
     loop {
         if core.shutting_down() {
             return;
         }
-        let running = core
+        let status = core
             .health
             .lock()
             .expect("health map lock")
             .get(&recorder)
-            .is_some_and(|h| h.status == HealthStatus::Running);
-        if running {
+            .map(|h| h.status);
+        if status == Some(HealthStatus::Running) {
             break;
+        }
+        let gone = matches!(status, Some(HealthStatus::Open | HealthStatus::Stopped));
+        if holds_due && (gone || started.elapsed() >= HOLDS_DEADLINE) {
+            holds_due = false;
+            println!("[homeostat] no hold replay: {recorder} is not running");
+            core.replay_done().await;
         }
         tokio::time::sleep(POLL).await;
     }
@@ -141,7 +166,29 @@ pub async fn replay_when_running(core: Arc<Core>, recorder: String, mirrors: Mir
             .cloned()
             .collect()
     };
-    match read_latest(&core, bus::HISTORY_LATEST_KEY).await {
+    if holds_due {
+        match read_latest(&core, bus::HISTORY_HOLDS_KEY, HOLDS_QUERY_TIMEOUT).await {
+            Ok(recorded) => {
+                let mut held = keys(&mirrors.holds);
+                held.extend(keys(&mirrors.arbitration));
+                let entries = holds_to_replay(recorded, &held, &arbiters);
+                let count = entries.len();
+                for entry in entries {
+                    let _ = core
+                        .session
+                        .put(entry.key, entry.value.to_string())
+                        .timestamp(replay_stamp(entry.ts))
+                        .await;
+                }
+                println!("[homeostat] replayed {count} hold records from {recorder}");
+            }
+            Err(reason) => {
+                println!("[homeostat] no hold replay from {recorder}: {reason}");
+            }
+        }
+        core.replay_done().await;
+    }
+    match read_latest(&core, bus::HISTORY_LATEST_KEY, QUERY_TIMEOUT).await {
         Ok(latest) => {
             let bound = bound_entities(&core.world.lock().expect("world meta lock").grants);
             let held = keys(&mirrors.state);
@@ -160,33 +207,13 @@ pub async fn replay_when_running(core: Arc<Core>, recorder: String, mirrors: Mir
             println!("[homeostat] no replay from {recorder}: {reason}");
         }
     }
-    match read_latest(&core, bus::HISTORY_HOLDS_KEY).await {
-        Ok(recorded) => {
-            let mut held = keys(&mirrors.holds);
-            held.extend(keys(&mirrors.arbitration));
-            let entries = holds_to_replay(recorded, &held);
-            let count = entries.len();
-            for entry in entries {
-                let _ = core
-                    .session
-                    .put(entry.key, entry.value.to_string())
-                    .timestamp(replay_stamp(entry.ts))
-                    .await;
-            }
-            println!("[homeostat] replayed {count} hold records from {recorder}");
-        }
-        Err(reason) => {
-            println!("[homeostat] no hold replay from {recorder}: {reason}");
-        }
-    }
-    core.replay_done().await;
 }
 
-async fn read_latest(core: &Core, key: &str) -> Result<Vec<Latest>, String> {
+async fn read_latest(core: &Core, key: &str, timeout: Duration) -> Result<Vec<Latest>, String> {
     let replies = core
         .session
         .get(key)
-        .timeout(QUERY_TIMEOUT)
+        .timeout(timeout)
         .await
         .map_err(|e| format!("query failed: {e}"))?;
     let Ok(reply) = replies.recv_async().await else {
@@ -289,9 +316,12 @@ mod tests {
             entry("home/hold/arbiter/hallway/front_door/auto_relock"),
             entry("home/hold/heating/utility/stove/on"),
             entry("home/hold/stray"),
+            entry("home/arbitration/removed"),
+            entry("home/hold/removed/hallway/front_door/locked"),
         ];
         let held = BTreeSet::from(["home/hold/arbiter/hallway/front_door/auto_relock".to_string()]);
-        let keys: Vec<String> = holds_to_replay(recorded, &held)
+        let arbiters = BTreeSet::from(["arbiter".to_string()]);
+        let keys: Vec<String> = holds_to_replay(recorded, &held, &arbiters)
             .into_iter()
             .map(|e| e.key)
             .collect();
@@ -301,7 +331,7 @@ mod tests {
                 "home/arbitration/arbiter",
                 "home/hold/arbiter/hallway/front_door/locked"
             ],
-            "the unit's hold, the malformed key and the one the mirror holds stay out"
+            "the unit's hold, a malformed key, one the mirror holds and a removed arbiter's stay out"
         );
     }
 }
