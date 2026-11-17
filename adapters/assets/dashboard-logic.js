@@ -453,7 +453,11 @@
         room: h.room, entity: h.entity, aspect: h.aspect,
         priority: h.priority, actor: h.actor, value: h.value,
         refused: typeof h.refused === 'number' ? h.refused : 0,
-        until: until
+        until: until,
+        // Placed by the family policy "until next change": it ends when
+        // the unit hold beneath changes, and `until` is only its cap
+        // (docs/design.md#family-policy).
+        nextChange: h.next_change === true
       });
     });
     return out.sort(function (a, b) { return a.until - b.until; });
@@ -673,7 +677,7 @@
       if (!displaces(hold, model.driven)) return;
       var e = entityByName[hold.entity];
       var label = e ? e.label || titleCase(hold.entity) : titleCase(hold.entity);
-      var detail = 'held by ' + hold.actor + ' until ' + clockOf(hold.until);
+      var detail = 'held by ' + hold.actor + (hold.nextChange ? ' until the next change' : ' until ' + clockOf(hold.until));
       if (hold.refused) {
         detail += ' \u00b7 ' + hold.refused + (hold.refused === 1 ? ' wish' : ' wishes') + ' refused';
       }

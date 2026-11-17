@@ -160,7 +160,8 @@ function outcomeStatus(done, fmt, room, entity, aspect) {
   }
   if (done.outcome === 'held') {
     var hold = logic.holdOn(store.holds, room, entity, aspect, Date.now(), store.arbitration);
-    var until = hold && isFinite(hold.until) ? ' until ' + new Date(hold.until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+    var until = hold && hold.nextChange ? ' until the next change'
+      : hold && isFinite(hold.until) ? ' until ' + new Date(hold.until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
     return { tone: 'warn', text: 'Held by ' + done.by + (done.actor ? ' (' + done.actor + ')' : '') + until + ' · ' + fmt(done.value) + ' not sent' };
   }
   if (done.outcome === 'rejected') {

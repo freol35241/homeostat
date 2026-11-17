@@ -5,6 +5,7 @@ Also which entities it arbitrates and who may hold them, read from the
 grant table.
 """
 
+import datetime
 import json
 import sys
 import unittest
@@ -13,12 +14,24 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "adapters"))
 
-from arbiter import GRANTS_KEY, PENDING_KEY, Bindings, Resolver, bindings, holders
+from arbiter import (
+    GRANTS_KEY,
+    PENDING_KEY,
+    Bindings,
+    Resolver,
+    bindings,
+    holders,
+    policy_entry,
+)
 
 STOVE = ("utility", "stove", "on")
 LAMP = ("hall", "lamp", "on")
 HOLD_S = 60.0
 WALL = 1_700_000_000.0  # 2023-11-14T22:13:20Z
+CET = datetime.timedelta(hours=1)
+CEST = datetime.timedelta(hours=2)
+# A family stop's policy: hold until the next 06:00.
+STOP = {"until": "06:00"}
 
 
 class Clock:
@@ -45,6 +58,7 @@ class Base(unittest.TestCase):
             rest_of=lambda target: False if target == STOVE else None,
             clock=self.clock,
             wall=lambda: WALL + self.clock.now - 1000.0,
+            offset=CET,
         )
 
     def hold(self, unit, value, hold_id, target=STOVE, seen=None, **extra):
@@ -226,6 +240,101 @@ class CommandTest(Base):
         self.command("automation", "evening", True)
         self.resolver.resolve(STOVE, effects := [])
         self.assertEqual(effects, [])
+
+
+class FamilyPolicyTest(Base):
+    """The pellet burner of docs/design.md#family-policy: a family stop
+    holds until 06:00, a family start holds nothing."""
+
+    def test_a_stop_locks_out_automatic_starts_until_the_morning(self):
+        self.command("manual", "dashboard", False, cmd_id="c1", policy=STOP)
+        [record] = self.resolver.family_records().values()
+        # 23:13 local (+01:00), so the next 06:00 is tomorrow's.
+        self.assertEqual((record["until"], record["at"]), ("2023-11-15T05:00:00Z", "2023-11-15T06:00"))
+        self.assertFalse(self.command("automation", "start_rule", True)[0], "an automatic start is refused")
+        self.assertTrue(self.command("automation", "flue_stop", False)[0], "an automatic stop still goes through")
+
+    def test_a_start_holds_nothing_and_clears_a_stop(self):
+        self.command("manual", "dashboard", False, policy=STOP)
+        forwarded, _ = self.command("manual", "dashboard", True, policy="none")
+        self.assertTrue(forwarded)
+        self.assertEqual(self.resolver.family_records(), {})
+        self.assertTrue(self.command("automation", "flue_stop", False)[0], "the stop rule acts on the start")
+
+    def test_an_explicit_hold_wins_over_the_policy(self):
+        self.command("manual", "dashboard", True, hold="2023-11-14T23:13:20Z", policy="none")
+        self.assertEqual(self.resolver.next_deadline(), 1000.0 + 3600)
+
+    def test_without_a_policy_entry_the_hold_lasts_hold_minutes(self):
+        self.command("manual", "dashboard", True)
+        self.assertEqual(self.resolver.next_deadline(), 1000.0 + HOLD_S)
+
+    def test_a_time_of_day_follows_the_house_clock_across_dst(self):
+        self.resolver.set_offset(CEST, [])
+        self.command("manual", "dashboard", False, policy=STOP)
+        [record] = self.resolver.family_records().values()
+        self.assertEqual(record["until"], "2023-11-15T04:00:00Z")
+        # The clocks go back overnight. 06:00 is an hour later than it was.
+        self.resolver.set_offset(CET, [])
+        [record] = self.resolver.family_records().values()
+        self.assertEqual(record["until"], "2023-11-15T05:00:00Z")
+        self.assertEqual(self.resolver.next_deadline(), 1000.0 + 6 * 3600 + 46 * 60 + 40)
+
+    def test_next_change_ends_when_the_hold_beneath_changes(self):
+        self.hold("heating", True, "h1")
+        self.command("manual", "dashboard", False, cmd_id="c1", policy={"until": "next change"})
+        self.assertEqual(self.resolver.next_deadline(), 1000.0 + 24 * 3600, "at most a day")
+        self.assertEqual(self.forwards(self.hold("heating", True, "h1")), [], "the same hold again is no change")
+        effects = self.hold("heating", False, "h2")
+        self.assertEqual(self.forwards(effects), [(False, "heating", "h2")])
+        self.assertEqual(self.events(effects), ["resume"])
+        self.assertEqual(self.resolver.family_records(), {})
+
+    def test_next_change_without_a_hold_beneath_ends_when_one_comes(self):
+        self.command("manual", "dashboard", False, policy={"until": "next change"})
+        self.assertEqual(self.forwards(self.hold("heating", True, "h1")), [(True, "heating", "h1")])
+
+    def test_a_command_from_the_unit_beneath_is_a_change(self):
+        # Its command releases its hold, and the family's hold with it.
+        self.hold("heating", True, "h1")
+        self.command("manual", "dashboard", False, policy={"until": "next change"})
+        self.assertTrue(self.command("automation", "heating", True)[0])
+        self.assertEqual(self.resolver.family_records(), {})
+
+    def test_a_restart_keeps_how_the_policy_placed_the_hold(self):
+        self.hold("heating", True, "h1")
+        self.command("manual", "dashboard", False, cmd_id="c1", policy={"until": "next change"})
+        self.command("manual", "dashboard", False, cmd_id="c2", target=LAMP, policy=STOP)
+        records = list(self.resolver.family_records().values())
+        after = Resolver(
+            grant_of=lambda unit, target: (BANDS[unit], LOSS.get(unit)) if unit in BANDS else None,
+            rest_of=lambda target: None, clock=Clock(), wall=lambda: WALL, offset=CEST,
+        )
+        after.restore(records, self.resolver.document())
+        self.assertEqual(after.family_records(), self.resolver.family_records())
+        after.put_hold(STOVE, "heating", {"value": True, "id": "h1"}, WALL, [])
+        after.set_offset(CET, [])
+        self.assertIn(STOVE, after.family_records(), "the hold beneath is the one it was placed over")
+        after.put_hold(STOVE, "heating", {"value": False, "id": "h2"}, WALL, [])
+        self.assertEqual(list(after.family_records()), [LAMP])
+
+
+class CommandAgreesTest(Base):
+    def test_a_command_that_agrees_with_a_higher_hold_goes_through(self):
+        self.hold("planner", False, "p1")
+        self.assertTrue(self.command("automation", "flue_stop", False)[0])
+        self.assertFalse(self.command("automation", "start_rule", True)[0])
+
+
+class PolicyEntryTest(unittest.TestCase):
+    def test_a_key_matches_its_value_by_type(self):
+        values = {"false": "none", "1": {"until": "06:00"}, "high": "none", "any": {"until": "next change"}}
+        self.assertEqual(policy_entry(values, False), "none")
+        self.assertEqual(policy_entry(values, 1), {"until": "06:00"})
+        self.assertEqual(policy_entry(values, 1.0), {"until": "06:00"})
+        self.assertEqual(policy_entry(values, "high"), "none")
+        self.assertEqual(policy_entry(values, True), {"until": "next change"}, "true is not 1")
+        self.assertIsNone(policy_entry({"false": "none"}, 0), "0 is not false")
 
 
 class LifecycleTest(Base):
@@ -472,6 +581,22 @@ class RoutingDuringAnApplyTest(unittest.TestCase):
         self.assertEqual(routes.route(("hall", "door")), "arbitrated")
         # Once, with both tables, so restored holds are checked against them.
         self.assertEqual(changes, [{("hall", "door")}])
+
+
+
+class PolicyBindingTest(unittest.TestCase):
+    def test_the_policy_comes_from_the_newest_owner_row(self):
+        door = dict(entity("hall", "door", "arbitrated"), family={"locked": {"false": {"until": "23:00"}}})
+        session = FakeSession({GRANTS_KEY: [
+            {"unit": "dashboard", "publish": "locks", "capability": "lock", "entities": [entity("hall", "door", "arbitrated")]},
+            owner_row(door),
+        ]})
+        routes = Bindings(session, lambda arbitrated: None)
+        self.assertEqual(routes.policy_of(("hall", "door", "locked"), False), {"until": "23:00"})
+        self.assertIsNone(routes.policy_of(("hall", "door", "locked"), True))
+        # An apply that drops the policy decides from its start.
+        session.put(PENDING_KEY, [owner_row(entity("hall", "door", "arbitrated"))])
+        self.assertIsNone(routes.policy_of(("hall", "door", "locked"), False))
 
 
 if __name__ == "__main__":

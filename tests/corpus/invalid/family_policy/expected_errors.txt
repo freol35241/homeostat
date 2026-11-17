@@ -1,0 +1,4 @@
+error[family-policy-aspect] stove.colour: capability "burner" has no aspect "colour" (entities/zigbee/stove.toml)
+error[family-policy-not-arbitrated] lamp: [write_policy.family] needs mode "arbitrated", not "shared" (entities/zigbee/lamp.toml)
+error[family-policy-until] stove.on.false: until "6:00" is neither "HH:MM" nor "next change" (entities/zigbee/stove.toml)
+error[family-policy-until] stove.on.true: until "tomorrow" is neither "HH:MM" nor "next change" (entities/zigbee/stove.toml)

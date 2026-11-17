@@ -234,6 +234,7 @@ mod tests {
                 write_policy: WritePolicy {
                     mode: Some(mode),
                     owner: adapter.to_string(),
+                    family: BTreeMap::new(),
                 },
                 inputs: None,
                 sources: None,

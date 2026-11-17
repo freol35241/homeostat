@@ -1,0 +1,13 @@
+schema = 1
+
+[entity]
+id = "0x02"
+capability = "light"
+room = "hallway"
+
+[write_policy]
+mode = "shared"
+owner = "zigbee"
+
+[write_policy.family.on]
+false = { until = "06:00" }

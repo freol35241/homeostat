@@ -948,8 +948,9 @@ command goes through unless a hold refuses it. Events land at
 `home/health/{arbiter unit}/event`.
 
 The family's hold is the arbiter's own. A manual-band command places it
-for `hold_minutes`, a family-editable arbiter parameter, or as its
-[hold intent](#hold-intents) says. When it ends, the hold beneath is
+as its [hold intent](#hold-intents) says, or else as the entity's
+[family policy](#family-policy) says, or else for `hold_minutes`, a
+family-editable arbiter parameter. When it ends, the hold beneath is
 sent, so a forgotten override ends on its own. It is published as
 state, because a browser that opens mid-hold needs to know whether the
 aspect is held now, and events do not answer that. Each family hold is
@@ -957,7 +958,8 @@ one record at `home/hold/{arbiter}/{room}/{entity}/{aspect}`, mirrored
 by the core: `{schema, room, entity, aspect, priority, actor, value,
 id, since, until, refused}`. `value` is what the family asked for, or
 what the device reported. `refused` counts the commands the hold has
-turned away.
+turned away. A hold the family policy placed also carries `at` or
+`next_change` and `beneath`.
 
 - A record is put when the hold is placed or its count changes, and its
   key is deleted when the hold ends. The mirror forgets a deleted key,
@@ -1043,9 +1045,11 @@ over publishes `preempt`, and a lower one taking over after it
 `resume`. With nothing held it forwards nothing, and the device keeps
 what it has.
 
-A command holds nothing. A command below a hold in force, or at a
-hold's band with another value, gets a `refuse` that names the holder
-and echoes `cmd_id`; the sender's own hold does not count. A command
+A command holds nothing. A command whose value differs from a hold in
+force at or above its band gets a `refuse` that names the holder and
+echoes `cmd_id`; the sender's own hold does not count. A command that
+agrees with the hold goes through, so a stop rule still stops a burner
+the family stopped. A command
 that goes through records the hold in force as applied, so the hold
 beneath it is sent again only once it changes. A family nudge
 (`"none"`) is a command in this sense: the hold beneath does not undo
@@ -1101,7 +1105,7 @@ what should happen to it with the envelope's `hold`:
 
 | `hold` | Forwarded | The family hold |
 |---|---|---|
-| absent | yes | taken for `hold_minutes` |
+| absent | yes | as the [family policy](#family-policy) says, or taken for `hold_minutes` |
 | `"none"` | yes | cleared |
 | an RFC3339 instant with an offset | yes | taken until then |
 | `"report"` | no | taken for `hold_minutes`, with the reported value |
@@ -1127,6 +1131,56 @@ there is no hold to keep, and the SDK's command prologue drops both
 without an event. The dashboard sends no `hold` on a tap, `"release"`
 from "Resume automatic", and an instant from "Hold until"
 ([Controls and the overlay](#controls-and-the-overlay)).
+
+#### Family policy
+
+An entity file says, per aspect and value, what a family command
+without a `hold` holds. A pellet burner needs this. A family stop means
+"not today", so automatic starts should stay out until the morning. A
+family start lights the wood, and the flue rule that stops the pellet
+feed must still act on it. One hold length cannot serve both.
+
+```toml
+[write_policy.family.on]
+false = { until = "06:00" }   # a stop holds until the next 06:00
+true = "none"                 # a start holds nothing
+
+[write_policy.family.setpoint]
+any = { until = "next change" }
+```
+
+- A key is a value as TOML spells it: `true`, `false`, a number, or a
+  string. It matches by type, so `1` is not `true`. `any` covers the
+  values not listed, and a value with no entry holds for
+  `hold_minutes`.
+- `"none"` is the `"none"` intent: the command acts, and the family's
+  hold is cleared.
+- `until = "HH:MM"` holds until the house clock next shows that time.
+  The arbiter reads the house's UTC offset from `home/clock/minute` and
+  moves the end when the offset changes, so a stop placed before a DST
+  change still ends at 06:00 local time. The record's `at` is that
+  local time.
+- `until = "next change"` holds until the unit hold beneath it changes:
+  another hold wins below it, the hold is released, or one comes where
+  there was none. A command from the unit beneath releases that unit's
+  hold, so it counts as a change too. The hold ends after 24 hours at
+  the latest, which is the record's `until`. The record carries
+  `next_change` and `beneath`, the id of the hold it was placed over.
+  An automation that only sends commands holds nothing beneath, so the
+  family's hold lasts the 24 hours.
+- An explicit `hold` on the command wins over the policy, and a later
+  family command replaces the hold, so a start after a stop clears the
+  lockout.
+- While the stop holds, the flue rule's stop agrees with it and goes
+  through ([Which hold wins](#which-hold-wins)).
+
+Plan checks the policy and prints it on the entity's line. It must sit
+on an arbitrated entity (`family-policy-not-arbitrated`), name the
+capability's base aspect or one of its aspects (`family-policy-aspect`),
+and give an `until` the arbiter reads (`family-policy-until`). It
+travels with the entity in its owner's binding row of the grant table,
+which the arbiter follows live, so an edit applies from the start of
+the apply and needs no arbiter restart.
 
 ### Aspect descriptors
 
