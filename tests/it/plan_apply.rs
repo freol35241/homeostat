@@ -86,7 +86,6 @@ async fn behavioral_change_restarts_exactly_that_unit() {
     );
 
     sup.shutdown();
-    let _ = std::fs::remove_dir_all(&house);
 }
 
 /// (a2) A manifest edit that adds a publish is behavioral (the grant set is
@@ -125,7 +124,6 @@ async fn manifest_edit_adding_a_publish_renders_the_new_key() {
     );
 
     sup.shutdown();
-    let _ = std::fs::remove_dir_all(&house);
 }
 
 /// (b) A manifest-default change plans as parameter-only and applies with
@@ -181,7 +179,6 @@ async fn parameter_default_change_applies_with_zero_restarts() {
     );
 
     sup.shutdown();
-    let _ = std::fs::remove_dir_all(&house);
 }
 
 /// (b2) A constraint-only manifest edit plans as parameter-only with the
@@ -265,7 +262,6 @@ async fn constraint_only_change_refreshes_without_restart() {
         .expect("writes inside the new constraint still pass");
 
     sup.shutdown();
-    let _ = std::fs::remove_dir_all(&house);
 }
 
 /// A live edit survives an apply that leaves its default alone, including
@@ -374,7 +370,6 @@ async fn a_live_edit_survives_an_apply_that_keeps_its_default() {
     await_echo(&echo_sub, json!(3)).await;
 
     sup.shutdown();
-    let _ = std::fs::remove_dir_all(&house);
 }
 
 /// Live edits survive a supervisor restart. One whose default changed while
@@ -429,7 +424,6 @@ async fn a_live_edit_survives_a_supervisor_restart() {
     assert!(!saved.exists(), "the dropped edit is gone from the file");
 
     sup.shutdown();
-    let _ = std::fs::remove_dir_all(&house);
 }
 
 /// Waits up to 10 s for the probe to echo `want`.
@@ -535,7 +529,6 @@ async fn structural_change_starts_units_in_grant_order() {
     );
 
     sup.shutdown();
-    let _ = std::fs::remove_dir_all(&house);
 }
 
 /// (c2) Moving a granted entity between rooms is structural, not a bare
@@ -578,7 +571,6 @@ async fn entity_move_plans_as_structural() {
     );
 
     sup.shutdown();
-    let _ = std::fs::remove_dir_all(&house);
 }
 
 /// (c3) Moving an entity nobody is granted onto is structural too: the
@@ -622,7 +614,6 @@ async fn ungranted_entity_move_plans_as_structural() {
     );
 
     sup.shutdown();
-    let _ = std::fs::remove_dir_all(&house);
 }
 
 /// (d) A unit that fails to become ready mid-walk halts the apply in
@@ -698,7 +689,6 @@ async fn failing_unit_halts_walk_in_place() {
     );
 
     sup.shutdown();
-    let _ = std::fs::remove_dir_all(&house);
 }
 
 /// (e) A pending plan whose base commit is stale refuses to apply.
@@ -749,7 +739,6 @@ async fn stale_pending_plan_refuses_to_apply() {
     );
 
     sup.shutdown();
-    let _ = std::fs::remove_dir_all(&house);
 }
 
 /// A pending plan saved with `--reset-params` applies the reset it showed.
@@ -820,5 +809,4 @@ async fn a_pending_reset_plan_applies_its_reset() {
     );
 
     sup.shutdown();
-    let _ = std::fs::remove_dir_all(&house);
 }

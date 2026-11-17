@@ -16,7 +16,7 @@ use serde_json::{json, Value};
 
 use crate::common::{
     await_sample, config_write, expect_event_kind, expect_state, fixture_command, free_port,
-    next_sample, restart_unit, up, Supervisor,
+    next_sample, restart_unit, up, Scratch, Supervisor,
 };
 
 const FIXTURE: &str = "tests/fixtures/house_openwrt";
@@ -95,22 +95,18 @@ impl Drop for FakeOpenwrt {
     }
 }
 
-/// Writes a `HOMEOSTAT_OPENWRT` file (outside the repo: it holds credentials)
-/// giving each named router a fake endpoint's host and the read-only rpcd
-/// credentials. The fixture binds entities on "gw"; any further router is
-/// configured but unbound, which is all a second AP needs to be polled.
-fn routers_file(routers: &[(&str, u16)]) -> PathBuf {
+/// Writes a `HOMEOSTAT_OPENWRT` file in `scratch` (outside the repo: it
+/// holds credentials) giving each named router a fake endpoint's host and
+/// the read-only rpcd credentials. The fixture binds entities on "gw"; any
+/// further router is configured but unbound, which is all a second AP needs
+/// to be polled.
+fn routers_file(scratch: &Scratch, routers: &[(&str, u16)]) -> PathBuf {
     let plain: Vec<(&str, u16, &str)> = routers.iter().map(|&(n, p)| (n, p, "")).collect();
-    routers_file_with(&plain)
+    routers_file_with(scratch, &plain)
 }
 
 /// As `routers_file`, with extra TOML lines for each router's entry.
-fn routers_file_with(routers: &[(&str, u16, &str)]) -> PathBuf {
-    let tag: Vec<String> = routers
-        .iter()
-        .map(|(_, port, _)| port.to_string())
-        .collect();
-    let path = std::env::temp_dir().join(format!("homeostat-openwrt-{}.toml", tag.join("-")));
+fn routers_file_with(scratch: &Scratch, routers: &[(&str, u16, &str)]) -> PathBuf {
     let body = routers
         .iter()
         .map(|(name, port, extra)| {
@@ -120,17 +116,17 @@ fn routers_file_with(routers: &[(&str, u16, &str)]) -> PathBuf {
         })
         .collect::<Vec<_>>()
         .concat();
-    std::fs::write(&path, body).expect("write routers file");
-    path
+    scratch.file("routers.toml", &body)
 }
 
 /// Spawns the fake router + supervisor on the fixture and waits for the
 /// adapter to run.
-async fn setup() -> (FakeOpenwrt, PathBuf, Supervisor, zenoh::Session) {
+async fn setup() -> (FakeOpenwrt, Scratch, Supervisor, zenoh::Session) {
     let router = FakeOpenwrt::spawn().await;
-    let routers_path = routers_file(&[("gw", router.port)]);
+    let routers = Scratch::new("openwrt-routers");
+    let routers_path = routers_file(&routers, &[("gw", router.port)]);
     let (sup, observer) = start(&routers_path).await;
-    (router, routers_path, sup, observer)
+    (router, routers, sup, observer)
 }
 
 /// The supervisor on the fixture against a written routers file, up to the
@@ -153,7 +149,7 @@ async fn start(routers_path: &std::path::Path) -> (Supervisor, zenoh::Session) {
 /// shows the sighted station bound to its entity.
 #[tokio::test(flavor = "multi_thread")]
 async fn wifi_association_drives_sighted() {
-    let (router, _routers_path, mut sup, observer) = setup().await;
+    let (router, _routers, mut sup, observer) = setup().await;
     let sighted_sub = observer
         .declare_subscriber(SIGHTED_KEY)
         .await
@@ -212,7 +208,7 @@ async fn wifi_association_drives_sighted() {
 /// (docs/design.md#the-capability-vocabulary): it reports sightings and WAN.
 #[tokio::test(flavor = "multi_thread")]
 async fn connectivity_state_translates_to_bus() {
-    let (router, _routers_path, mut sup, observer) = setup().await;
+    let (router, _routers, mut sup, observer) = setup().await;
     let wan_sub = observer
         .declare_subscriber(WAN_KEY)
         .await
@@ -232,7 +228,7 @@ async fn connectivity_state_translates_to_bus() {
 /// recovery without a restart.
 #[tokio::test(flavor = "multi_thread")]
 async fn unreachable_router_drops_once_and_recovers() {
-    let (router, _routers_path, mut sup, observer) = setup().await;
+    let (router, _routers, mut sup, observer) = setup().await;
     let wan_sub = observer
         .declare_subscriber(WAN_KEY)
         .await
@@ -264,7 +260,7 @@ async fn unreachable_router_drops_once_and_recovers() {
 /// to work, so the assertion is about the framing and nothing else.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_chunked_ubus_reply_is_read_whole() {
-    let (router, _routers_path, mut sup, observer) = setup().await;
+    let (router, _routers, mut sup, observer) = setup().await;
     let sighted_sub = observer
         .declare_subscriber(SIGHTED_KEY)
         .await
@@ -293,7 +289,8 @@ async fn a_chunked_ubus_reply_is_read_whole() {
 async fn a_silent_router_cannot_assert_absence() {
     let gw = FakeOpenwrt::spawn().await;
     let ap = FakeOpenwrt::spawn().await;
-    let routers_path = routers_file(&[("gw", gw.port), ("ap", ap.port)]);
+    let routers = Scratch::new("openwrt-routers");
+    let routers_path = routers_file(&routers, &[("gw", gw.port), ("ap", ap.port)]);
     let (mut sup, observer) = start(&routers_path).await;
     let sighted_sub = observer
         .declare_subscriber(SIGHTED_KEY)
@@ -377,10 +374,14 @@ async fn no_fix_for(sub: &common::StateSub, secs: u64) {
 async fn a_sighting_at_a_located_router_is_a_fix() {
     let gw = FakeOpenwrt::spawn().await;
     let ap = FakeOpenwrt::spawn().await;
-    let routers_path = routers_file_with(&[
-        ("gw", gw.port, "lat = 59.33\nlon = 18.06\nradius_m = 40\n"),
-        ("ap", ap.port, ""),
-    ]);
+    let routers = Scratch::new("openwrt-routers");
+    let routers_path = routers_file_with(
+        &routers,
+        &[
+            ("gw", gw.port, "lat = 59.33\nlon = 18.06\nradius_m = 40\n"),
+            ("ap", ap.port, ""),
+        ],
+    );
     let (mut sup, observer) = start(&routers_path).await;
     let phone_sub = observer
         .declare_subscriber("home/state/person/dads_phone/*")
@@ -453,7 +454,9 @@ async fn a_sighting_at_a_located_router_is_a_fix() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_return_within_the_hold_is_a_fix_and_a_restart_is_not() {
     let gw = FakeOpenwrt::spawn().await;
-    let routers_path = routers_file_with(&[("gw", gw.port, "lat = 59.33\nlon = 18.06\n")]);
+    let routers = Scratch::new("openwrt-routers");
+    let routers_path =
+        routers_file_with(&routers, &[("gw", gw.port, "lat = 59.33\nlon = 18.06\n")]);
     let (mut sup, observer) = start(&routers_path).await;
     config_write(&observer, "home/config/openwrt/away_delay_s", json!(30))
         .await

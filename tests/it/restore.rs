@@ -12,24 +12,17 @@
 //! survives. The store outlives the supervisor because it is a file named
 //! by `RECORDER_DB`, as in recorder.rs.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 
 use serde_json::json;
 
-use crate::common::{await_mirror, cache_read, eventually, matched_publisher, up, Supervisor};
+use crate::common::{
+    await_mirror, cache_read, eventually, matched_publisher, up, Scratch, Supervisor,
+};
 
 const FIXTURE: &str = "tests/fixtures/house_restore";
 const LATCH: &str = "home/state/global/night_mode/on";
-
-fn store_path(test: &str) -> PathBuf {
-    let path = std::env::temp_dir().join(format!(
-        "homeostat-restore-{test}-{}.db",
-        std::process::id()
-    ));
-    let _ = std::fs::remove_file(&path);
-    path
-}
 
 /// Spawns the fixture against `db` and waits for both units.
 async fn setup(db: &Path) -> (Supervisor, zenoh::Session) {
@@ -49,7 +42,8 @@ async fn setup(db: &Path) -> (Supervisor, zenoh::Session) {
 /// standing afterwards rather than falling to the code default.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_latch_restores_its_decision_across_a_core_restart() {
-    let db = store_path("decision");
+    let scratch = Scratch::new("restore-decision");
+    let db = scratch.store();
     let (mut sup, observer) = setup(&db).await;
 
     // Nothing recorded yet, so the latch starts on its code default.
@@ -80,7 +74,6 @@ async fn a_latch_restores_its_decision_across_a_core_restart() {
     await_mirror(&observer, LATCH, &json!(true)).await;
 
     sup.shutdown();
-    let _ = std::fs::remove_file(&db);
 }
 
 /// The recorder is up but slow to answer, and `restore` must wait for it.

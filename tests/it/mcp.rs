@@ -16,7 +16,8 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 
 use crate::common::{
-    cache_read, eventually, free_port, matched_publisher, running_pid, temp_house, up, Supervisor,
+    cache_read, eventually, free_port, matched_publisher, running_pid, temp_house, up, Scratch,
+    Supervisor,
 };
 
 const FIXTURE: &str = "tests/fixtures/house_apply";
@@ -100,8 +101,8 @@ impl Drop for Mcp {
 /// `read_history` returns what the recorder wrote, over the bus end to end.
 #[tokio::test(flavor = "multi_thread")]
 async fn reads_serve_live_state_and_history() {
-    let db = std::env::temp_dir().join(format!("homeostat-mcp-history-{}.db", std::process::id()));
-    let _ = std::fs::remove_file(&db);
+    let scratch = Scratch::new("mcp-history");
+    let db = scratch.store();
     let (sup, observer) = up(
         || {
             Supervisor::spawn_with_env(
@@ -224,7 +225,6 @@ async fn reads_serve_live_state_and_history() {
     drop(mcp);
     let mut sup = sup;
     sup.shutdown();
-    let _ = std::fs::remove_file(&db);
 }
 
 /// (a'') `read_logs` reads a unit's captured stdout/stderr, tail-truncated
@@ -470,7 +470,6 @@ async fn http_transport_runs_as_supervised_unit() {
 
     // Supervisor shutdown also proves the unit exits cleanly within grace.
     sup.shutdown();
-    let _ = std::fs::remove_dir_all(&house);
 }
 
 /// The agent surface serves the whole house state, and reachability is
@@ -544,7 +543,6 @@ async fn the_http_surface_refuses_what_a_browser_can_send() {
     assert_eq!(status, 200, "the house's own origin is allowed");
 
     sup.shutdown();
-    let _ = std::fs::remove_dir_all(&house);
 }
 
 /// A LAN peer cannot make the server allocate or wait on its say-so: a
@@ -615,7 +613,6 @@ async fn the_http_surface_bounds_what_a_peer_can_make_it_read() {
     assert_eq!(status, 200);
 
     sup.shutdown();
-    let _ = std::fs::remove_dir_all(&house);
 }
 
 /// One HTTP POST: connect, send, read the full response. Retries while the

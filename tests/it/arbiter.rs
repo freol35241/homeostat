@@ -938,7 +938,6 @@ async fn an_entity_made_arbitrated_by_apply_forwards_without_a_restart() {
     .await;
 
     sup.shutdown();
-    let _ = std::fs::remove_dir_all(&house);
 }
 
 /// The core advances the applied grant table only when an apply completes,
@@ -1024,7 +1023,6 @@ async fn a_wish_during_the_apply_that_arbitrates_an_entity_forwards() {
     assert_eq!(pending, json!([]), "the pending table empties at the end");
 
     sup.shutdown();
-    let _ = std::fs::remove_dir_all(&house);
 }
 
 /// docs/design.md#family-policy: a family command without a `hold` takes the

@@ -11,19 +11,19 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 use zenoh::sample::SampleKind;
 
-use crate::common::{free_port, startup_permit, Supervisor};
+use crate::common::{free_port, startup_permit, Scratch, Supervisor};
 
 const FIXTURE: &str = "tests/fixtures/house_go2rtc";
 const CAMERAS_ENV: &str = "HOMEOSTAT_CAMERAS";
 const LISTEN_ENV: &str = "HOMEOSTAT_GO2RTC_LISTEN";
 
-/// A temp dir whose `go2rtc` executable is a wrapper around the fake
-/// (`tests/fake_go2rtc.py`). It is prepended to PATH so the shim's
+/// A `bin` dir in `scratch` whose `go2rtc` executable is a wrapper around
+/// the fake (`tests/fake_go2rtc.py`). It is prepended to PATH so the shim's
 /// bare-name spawn resolves to it, as it resolves to the binary image
 /// provisioning installs.
-fn fake_binary_dir() -> PathBuf {
+fn fake_binary_dir(scratch: &Scratch) -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
-    let dir = std::env::temp_dir().join(format!("homeostat-go2rtc-bin-{}", std::process::id()));
+    let dir = scratch.join("bin");
     std::fs::create_dir_all(&dir).expect("create fake binary dir");
     let wrapper = dir.join("go2rtc");
     std::fs::write(
@@ -39,14 +39,11 @@ fn fake_binary_dir() -> PathBuf {
     dir
 }
 
-fn cameras_file(tag: &str) -> PathBuf {
-    let path = std::env::temp_dir().join(format!("homeostat-go2rtc-cameras-{tag}.toml"));
-    std::fs::write(
-        &path,
+fn cameras_file(scratch: &Scratch) -> PathBuf {
+    scratch.file(
+        "cameras.toml",
         "[porch_cam]\nhost = \"192.0.2.7:2020\"\nusername = \"homeostat\"\npassword = \"secret123\"\n",
     )
-    .expect("write cameras file");
-    path
 }
 
 /// Raw HTTP GET against the fake go2rtc's API.
@@ -87,8 +84,9 @@ fn control_quit(port: u16) {
 async fn shim_owns_the_token_for_the_foreign_binary() {
     let api_port = free_port();
     let listen = format!("127.0.0.1:{api_port}");
-    let cameras_path = cameras_file(&api_port.to_string());
-    let bin_dir = fake_binary_dir();
+    let scratch = Scratch::new("go2rtc");
+    let cameras_path = cameras_file(&scratch);
+    let bin_dir = fake_binary_dir(&scratch);
     let path_env = format!(
         "{}:{}",
         bin_dir.display(),
