@@ -35,9 +35,11 @@ async fn press(session: &zenoh::Session, gesture: &str) {
 /// the old toggle, which the reflector turns back into the same state.
 async fn press_until(session: &zenoh::Session, cmds: &StateSub, gesture: &str, value: bool) -> Msg {
     let what = format!("command for {value} on a {gesture} press");
-    eventually(Duration::from_secs(10), &what, || async {
+    eventually(Duration::from_secs(20), &what, || async {
         press(session, gesture).await;
-        let cmd = next_sample(cmds, Duration::from_secs(1)).await?;
+        // Long enough that a slow command is not left queued behind the
+        // next press, where a later read would take it.
+        let cmd = next_sample(cmds, Duration::from_secs(5)).await?;
         (cmd.value()["value"] == json!(value)).then_some(cmd)
     })
     .await

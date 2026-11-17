@@ -646,7 +646,7 @@ async fn dashboard_serves_the_family_surface() {
         Some(&json!([1])),
     );
     assert_eq!(status, 400, "a JSON array body: {reply}");
-    // A mistyped or oversized command never reaches the bus.
+    // A mistyped or oversized command does not reach the bus.
     expect_silence(&lock_cmd_sub, SILENCE, "lock command").await;
 
     // A lock command is accepted: COMMANDABLE maps lock -> {"locked"}.
@@ -697,7 +697,7 @@ async fn dashboard_serves_the_family_surface() {
         );
         assert_eq!(status, 400, "{body}: {reply}");
     }
-    // A refused hold never reaches the bus.
+    // A refused hold does not reach the bus.
     expect_silence(&lock_cmd_sub, SILENCE, "lock command").await;
 
     // On the arbitrated garage door the dashboard sends a release with no
@@ -801,7 +801,7 @@ async fn dashboard_serves_the_family_surface() {
         Some(&json!({"room": "livingroom", "entity": "relay", "aspect": "on", "value": true})),
     );
     assert_eq!(status, 400, "ungranted capability must be refused: {reply}");
-    // An ungranted command never reaches the bus.
+    // An ungranted command does not reach the bus.
     expect_silence(&switch_cmd_sub, SILENCE, "switch command").await;
 
     // A climate command is accepted: COMMANDABLE maps climate ->
@@ -871,7 +871,7 @@ async fn dashboard_serves_the_family_surface() {
             &json!({"value": "Dinner is ready", "priority": "manual", "actor": "dashboard", "id": reply["id"]}),
         );
     }
-    // Text that is blank, too long or not a string never reaches the bus.
+    // Text that is blank, too long or not a string does not reach the bus.
     for value in [json!("  "), json!("x".repeat(1001)), json!(42)] {
         let (status, reply) = http_request(
             &addr,
@@ -884,7 +884,7 @@ async fn dashboard_serves_the_family_surface() {
         );
         assert_eq!(status, 400, "{value}: {reply}");
     }
-    // Refused text never reaches the bus.
+    // Refused text does not reach the bus.
     expect_silence(&notify_cmd_sub, SILENCE, "notifier command").await;
 
     // 2b. Aspect descriptors (docs/design.md#aspect-descriptors): the

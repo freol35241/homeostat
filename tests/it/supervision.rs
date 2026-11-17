@@ -8,7 +8,7 @@ use zenoh::sample::SampleKind;
 
 use crate::common::{
     await_health, await_running, health_watch, process_alive, running_pid, scan_health, up,
-    Supervisor,
+    Supervisor, SILENCE,
 };
 
 const STATE_KEY: &str = "home/state/testroom/fake_sensor/value";
@@ -165,10 +165,7 @@ async fn crash_loop_opens_circuit_breaker() {
     assert_eq!(open.last_exit_code, Some(1));
 
     // The breaker holds: nothing but `open` on the health key afterwards.
-    let relapse = scan_health(&mut watch, Duration::from_millis(1500), |h| {
-        h.status != HealthStatus::Open
-    })
-    .await;
+    let relapse = scan_health(&mut watch, SILENCE, |h| h.status != HealthStatus::Open).await;
     assert!(relapse.is_none(), "unit restarted after the breaker opened");
 
     sup.shutdown();

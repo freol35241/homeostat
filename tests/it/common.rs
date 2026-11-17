@@ -566,8 +566,9 @@ impl Mqtt {
 pub type StateSub = Subscriber<FifoChannelHandler<Sample>>;
 
 /// How long a test listens to show that something was not sent. A
-/// negative wait cannot end on a signal, so it is a fixed window, one
-/// for every suite.
+/// negative wait cannot end on a signal, so it is a fixed window. A test
+/// whose window must span one of the unit's own intervals, such as a poll
+/// cycle, uses that interval instead.
 pub const SILENCE: Duration = Duration::from_millis(1500);
 
 /// A sample off a subscription.
@@ -657,16 +658,19 @@ where
 /// Collects state samples until every `expected` (key, value) has appeared.
 pub async fn expect_states(sub: &StateSub, expected: &[(&str, Value)]) {
     let mut seen: HashMap<String, Value> = HashMap::new();
-    let what = format!("states {expected:?}");
-    await_sample(sub, Duration::from_secs(20), &what, |msg| {
-        if let Some(value) = &msg.json {
-            seen.insert(msg.key.clone(), value.clone());
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    while expected
+        .iter()
+        .any(|(key, value)| seen.get(*key) != Some(value))
+    {
+        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let msg = next_sample(sub, left)
+            .await
+            .unwrap_or_else(|| panic!("missing state keys; saw {seen:?}"));
+        if let Some(value) = msg.json {
+            seen.insert(msg.key, value);
         }
-        expected
-            .iter()
-            .all(|(key, value)| seen.get(*key) == Some(value))
-    })
-    .await;
+    }
 }
 
 /// Waits for a key to carry `expected`.

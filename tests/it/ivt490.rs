@@ -361,7 +361,7 @@ async fn setpoint_is_retained_and_the_expiring_offset_is_not() {
     late.subscribe(&format!("{BASE}/controller/set/+")).await;
 
     let mut seen: Vec<(String, Vec<u8>)> = Vec::new();
-    while let Some(message) = late.next_message(Duration::from_millis(1500)).await {
+    while let Some(message) = late.next_message(SILENCE).await {
         seen.push(message);
     }
 
