@@ -925,10 +925,10 @@ pub fn display_value(value: &toml::Value) -> String {
 }
 
 /// Parses a time of day: `"HH:MM"` on a 24-hour clock, two ASCII digits
-/// each side. The SDK reads a `time` parameter with Python's
-/// `time.fromisoformat`, which refuses `7:30` and `+7:30`, so the core
-/// refuses them too. `tests/fixtures/time_of_day.json` holds the cases
-/// every reader of the grammar is tested against.
+/// each side. It is the form every reader accepts: the SDK reads a `time`
+/// parameter with Python's `time.fromisoformat`, which refuses `7:30`, and
+/// the page and the arbiter read `HH:MM` only. `tests/fixtures/time_of_day.json`
+/// holds the cases every reader is tested against.
 pub(crate) fn parse_time(s: &str) -> Option<(u8, u8)> {
     let b = s.as_bytes();
     if b.len() != 5 || b[2] != b':' || ![0, 1, 3, 4].iter().all(|&i| b[i].is_ascii_digit()) {
@@ -1265,7 +1265,8 @@ mod tests {
             serde_json::from_str(include_str!("../tests/fixtures/time_of_day.json")).unwrap();
         for s in cases["valid"].as_array().unwrap() {
             let s = s.as_str().unwrap();
-            assert!(parse_time(s).is_some(), "{s:?} is a time of day");
+            let (hh, mm) = parse_time(s).unwrap_or_else(|| panic!("{s:?} is a time of day"));
+            assert_eq!(format!("{hh:02}:{mm:02}"), s);
         }
         for s in cases["invalid"].as_array().unwrap() {
             let s = s.as_str().unwrap();

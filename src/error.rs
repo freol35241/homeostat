@@ -225,8 +225,8 @@ codes! {
     InvalidDefault => "invalid-default":
         "A parameter's `default` does not fit its declared `type`, or violates \
         the parameter's own constraint. Types: bool, int, float (an integer \
-        literal is accepted), string, time (an ISO string such as \
-        \"22:00\").",
+        literal is accepted), string, time (`\"HH:MM\"`, two digits each \
+        side, such as \"22:00\").",
     MalformedConstraint => "malformed-constraint":
         "A parameter's `constraint` uses a key the type does not understand \
         (min/max on int and float, after/before on time), gives it a value \

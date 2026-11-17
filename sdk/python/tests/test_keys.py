@@ -9,6 +9,7 @@ import unittest
 from pathlib import Path
 
 from homeostat import keys
+from homeostat.automation import _typed
 
 
 class SegmentTest(unittest.TestCase):
@@ -143,7 +144,7 @@ class HoldTest(unittest.TestCase):
         cases = json.loads((Path(__file__).resolve().parents[3] / "tests/fixtures/time_of_day.json").read_text())
         for s in cases["valid"]:
             self.assertTrue(keys.is_time_of_day(s), s)
-            datetime.time.fromisoformat(s)
+            self.assertEqual(_typed("time", s).strftime("%H:%M"), s, "a `time` parameter reads it")
         for s in cases["invalid"]:
             self.assertFalse(keys.is_time_of_day(s), repr(s))
 
