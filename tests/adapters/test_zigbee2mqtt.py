@@ -226,6 +226,12 @@ class ButtonTest(unittest.TestCase):
         presses = [v for k, v in self.session.puts if k == "home/state/hall/remote/action"]
         self.assertEqual(presses, ["single", "single", "double"])
 
+    def test_a_retained_message_is_a_past_press(self):
+        # A device with `retain: true`: the broker hands its last message to
+        # every new subscription, as on an adapter restart.
+        self.bridge.on_message(f"{BASE}/0x09", json.dumps({"action": "single", "battery": 90}).encode(), True)
+        self.assertEqual(self.session.puts, [("home/state/hall/remote/battery", 90)])
+
     def test_the_legacy_action_sensor_clearing_itself_is_not_a_press(self):
         self.message({"action": "", "battery": 90})
         self.assertEqual(self.session.puts, [("home/state/hall/remote/battery", 90)])

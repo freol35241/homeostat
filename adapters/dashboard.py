@@ -763,9 +763,16 @@ class Hub:
             if not self.state_stamps.admit(key, getattr(sample, "timestamp", None)):
                 return
             self.state[key] = value
+            at = None
             if key.endswith("/action"):
-                self.action_at[key] = time.time()
-        self._emit({"type": "state", "key": key, "value": value})
+                # By the sample's own age, so a press the core replays after
+                # a restart keeps its time.
+                at = time.time() - self.session.sample_age(sample)
+                self.action_at[key] = at
+        message = {"type": "state", "key": key, "value": value}
+        if at is not None:
+            message["at"] = at
+        self._emit(message)
 
     def _on_hold(self, sample) -> None:
         if sample.kind == zenoh.SampleKind.DELETE:

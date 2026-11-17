@@ -155,7 +155,7 @@ def suggest(info) -> dict | None:
         if info.device_class in OCCUPANCY_DEVICE_CLASSES:
             return {"capability": "occupancy", "features": []}
         return {"capability": "binary_sensor", "features": []}
-    if isinstance(info, EventInfo) and info.device_class in ("", "button"):
+    if isinstance(info, EventInfo) and info.device_class in ("", "button", "doorbell"):
         return {"capability": "button", "features": []}
     return None
 

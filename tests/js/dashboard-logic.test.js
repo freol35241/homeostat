@@ -2125,8 +2125,10 @@ test('a press is timed when it arrives, and a snapshot carries the times the das
   const store = { state: {}, actionAt: {} };
   logic.applyMessage(store, { type: 'snapshot', state: { [key]: 'single' }, action_at: { [key]: 100 } }, 500);
   assert.equal(store.actionAt[key], 100, 'the snapshot says when, not the page');
-  logic.applyMessage(store, { type: 'state', key, value: 'single' }, 600);
-  assert.equal(store.actionAt[key], 600, 'a repeat is a new press');
-  logic.applyMessage(store, { type: 'state', key: 'home/state/hall/lamp/on', value: true }, 700);
+  logic.applyMessage(store, { type: 'state', key, value: 'single', at: 590 }, 600);
+  assert.equal(store.actionAt[key], 590, 'a repeat is a new press, timed by the dashboard');
+  logic.applyMessage(store, { type: 'state', key, value: 'single' }, 650);
+  assert.equal(store.actionAt[key], 650, 'without a time, on arrival');
+  logic.applyMessage(store, { type: 'state', key: 'home/state/hall/lamp/on', value: true, at: 700 }, 700);
   assert.deepEqual(Object.keys(store.actionAt), [key]);
 });

@@ -712,10 +712,14 @@ things follow:
 
 - A unit catching up must not be handed the last press as if it had
   just happened. `ctx.subscribe` leaves a button's `action` out of the
-  catch-up, and out of the redelivery when a paused automation resumes,
-  so a restarted automation acts only on presses made while it runs. The
-  mirror still keeps the last press, so the dashboard can show it with
-  its age.
+  catch-up, out of the redelivery when a paused automation resumes, and
+  out of the core's replay after a restart, so an automation acts only
+  on presses made while it runs. The mirror and the replay still carry
+  the last press, so the dashboard can show it with its age.
+- The broker hands a retained message to every new subscription. A z2m
+  device set to retain its state would replay its last press on every
+  reconnect, so the adapter does not publish the action of a retained
+  message.
 - The recorder stores each press as its own row. Two presses share a
   row only if the router stamped them in the same microsecond. The
   history overlay lists presses rather than drawing the runs of a
@@ -1890,7 +1894,9 @@ What each consumer does with a replay:
 
 - `subscribe` delivers it with its age, unless a newer value for the
   key was already delivered. A fusion sees an old input with its age
-  and decides with `Freshness`, instead of seeing nothing.
+  and decides with `Freshness`, instead of seeing nothing. A button's
+  last press is not delivered, because it is a past event
+  ([Buttons](#buttons)).
 - The dashboard shows it until a newer value arrives.
 - The recorder skips it, since it holds the row the replay came from.
 - `ivt490`'s device feeds ignore it

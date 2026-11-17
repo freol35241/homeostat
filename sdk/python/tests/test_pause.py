@@ -5,6 +5,8 @@ Run: uv run --no-project --with-editable sdk/python python -m unittest discover 
 """
 
 import datetime
+import pathlib
+import tempfile
 import threading
 import types
 import unittest
@@ -202,10 +204,6 @@ class DecisionTest(unittest.TestCase):
         )
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class PressTest(unittest.TestCase):
     """A button's `action` is a press, not a state
     (docs/design.md#buttons)."""
@@ -231,3 +229,39 @@ class PressTest(unittest.TestCase):
         ctx.subscribe("inputs", lambda key, value: delivered.append(key))
         self.assertEqual(delivered, [self.ACTION])
 
+    def test_a_replayed_press_is_not_a_press(self):
+        ctx = context()
+        ctx._subscribes = {"inputs": "home/state/**"}
+        ctx._buttons = {"remote"}
+        callbacks = []
+        ctx._session.subscribe = lambda expr, callback: callbacks.append(callback)
+        ctx._session.is_live = lambda sample: sample.live
+        delivered = []
+        ctx.subscribe("inputs", lambda key, value: delivered.append(value))
+        sample = lambda value, live: types.SimpleNamespace(
+            key_expr=self.ACTION, payload=types.SimpleNamespace(to_bytes=lambda: value),
+            timestamp=None, live=live,
+        )
+        callbacks[0](sample(b'"single"', live=False))
+        callbacks[0](sample(b'"double"', live=True))
+        self.assertEqual(delivered, ["double"])
+
+    def test_a_house_that_cannot_be_read_counts_an_action_as_a_press(self):
+        ctx = context(current=[(self.ACTION, "single", stamp(5))])
+        ctx._subscribes = {"inputs": "home/state/**"}
+        ctx._buttons = None
+        broken = tempfile.TemporaryDirectory()
+        self.addCleanup(broken.cleanup)
+        (pathlib.Path(broken.name) / "units").mkdir()
+        (pathlib.Path(broken.name) / "units" / "half.toml").write_text("[unit\nname =")
+        ctx._root = broken.name
+        events = []
+        ctx._session.health_event = lambda kind, **fields: events.append(fields.get("reason"))
+        delivered = []
+        ctx.subscribe("inputs", lambda key, value: delivered.append(key))
+        self.assertEqual(delivered, [])
+        self.assertEqual(events, ["house-unreadable"])
+
+
+if __name__ == "__main__":
+    unittest.main()

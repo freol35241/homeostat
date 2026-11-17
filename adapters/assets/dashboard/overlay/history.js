@@ -331,13 +331,13 @@ export function renderHistoryDetailBody() {
   var chartHtml, statsHtml;
   if (overlay.shape === 'presses') {
     var presses = points.slice().reverse();
-    chartHtml = presses.length
+    chartHtml = !loaded ? html`<div class="aspect-row faint">reading…</div>` : presses.length
       ? html`<div class="press-list">${presses.slice(0, PRESSES_SHOWN).map(function (p) {
         // To the second, because two presses are often in one minute.
         return html`<div class="aspect-row"><span class="aspect-label">${formatChartTime(Date.parse(p.ts), 1)}</span><span>${String(p.value)}</span></div>`;
       })}</div>`
       : html`<div class="aspect-row faint">no press in this window</div>`;
-    statsHtml = html`<div class="stat-row">${statText('Presses', String(points.length) + (points.length >= PRESSES_READ ? '+' : ''))}</div>`;
+    statsHtml = html`<div class="stat-row">${statText('Presses', !loaded ? '—' : String(points.length) + (points.length >= PRESSES_READ ? '+' : ''))}</div>`;
   } else if (overlay.shape === 'timeline') {
     chartHtml = buildTimeline('detail-chart', points, { height: wide ? 96 : 64, sizeClass: wide ? 'chart-timeline-wide' : 'chart-timeline', aspect: aspect, field: field, window: win });
     var tl = logic.timelineStats(logic.timelineRuns(points, win.from, win.to));

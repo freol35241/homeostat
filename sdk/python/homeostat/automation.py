@@ -352,9 +352,10 @@ class Context:
         again in the same way, so a handler sees each one at least once
         after the pause.
 
-        A button's `action` is an event, so neither the catch-up nor the
-        redelivery hands over the last press (docs/design.md#buttons). Only
-        presses made while the automation runs reach the handler.
+        A button's `action` is an event, so neither the catch-up, the
+        redelivery nor the core's replay after a restart hands over the last
+        press (docs/design.md#buttons). Only presses made while the
+        automation runs reach the handler.
 
         Parameters
         ----------
@@ -391,6 +392,10 @@ class Context:
             except ValueError:
                 return
             key = str(sample.key_expr)
+            if self._is_press(key) and not self._session.is_live(sample):
+                # The core replaying the last recorded press after a
+                # restart. It is a past event, not a press.
+                return
             with order:
                 if not newest.admit(key, getattr(sample, "timestamp", None)):
                     return
@@ -423,14 +428,23 @@ class Context:
         self._redeliveries.append(redeliver)
 
     def _is_press(self, key: str) -> bool:
-        """Return whether `key` is a button's `action`, a press and not a state."""
+        """Return whether `key` is a button's `action`, a press and not a state.
+
+        The house's buttons are read once per process. A house that cannot
+        be read counts every `action` as a press, because a press missed
+        does less harm than a stale one acted on, and is read again next
+        time.
+        """
         parts = key.split("/")
         if len(parts) != 5 or parts[1] != "state" or parts[4] != "action":
             return False
         if self._buttons is None:
-            self._buttons = {
-                e.name for e in house.load_house(self._root).entities if e.capability == "button"
-            }
+            try:
+                entities = house.load_house(self._root).entities
+            except (OSError, ValueError, KeyError) as err:
+                self._session.health_event("drop", reason="house-unreadable", key=key, error=str(err))
+                return True
+            self._buttons = {e.name for e in entities if e.capability == "button"}
         return parts[3] in self._buttons
 
     def _concrete_key(

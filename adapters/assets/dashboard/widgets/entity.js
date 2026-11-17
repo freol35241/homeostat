@@ -58,15 +58,17 @@ function widgetForOccupancy(entity) {
 }
 
 // A button's last press and how long ago it was. A press is an event, so
-// the age is what says whether it is news (docs/design.md#buttons).
-function widgetForButton(entity) {
+// the age is what says whether it is news (docs/design.md#buttons). In
+// its own overlay the row opens nothing.
+export function widgetForButton(entity, inOverlay) {
   var action = stateValue(entity.room, entity.name, 'action');
   var at = store.actionAt['home/state/' + entity.room + '/' + entity.name + '/action'];
   var age = at ? html`<span class="faint" title="${new Date(at * 1000).toLocaleString()}"> &middot; ${relTime(at * 1000)}</span>` : '';
-  return html`<div class="entity-row row-clickable" data-action="entity-detail" data-room="${entity.room}" data-entity="${entity.name}">
-    <span class="entity-name" title="${entity.label}">${entity.label}</span>
-    <span>${action === undefined ? html`<span class="faint">no press yet</span>` : String(action)}${age}</span>
-    </div>`;
+  var row = html`<span class="entity-name" title="${entity.label}">${entity.label}</span>
+    <span>${action === undefined ? html`<span class="faint">no press yet</span>` : String(action)}${age}</span>`;
+  return inOverlay
+    ? html`<div class="entity-row">${row}</div>`
+    : html`<div class="entity-row row-clickable" data-action="entity-detail" data-room="${entity.room}" data-entity="${entity.name}">${row}</div>`;
 }
 
 function widgetForLock(entity) {
