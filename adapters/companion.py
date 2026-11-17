@@ -128,10 +128,12 @@ def _number(value):
 
 
 class Phones:
-    """The phone-to-bus direction: one `on_message` per MQTT message.
+    """The phones' side of the bus: one `on_message` per MQTT message.
 
     It turns a phone's `available`, `presence`, `position` and `ack`
-    under `base` into its entities' aspects. `session` is anything with
+    under `base` into its entities' aspects. `put` and `drop` are shared
+    with the command direction in `main`, which publishes `delivered`
+    and reports refused commands through them. `session` is anything with
     `put_json` and `health_event`.
     """
 

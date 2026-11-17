@@ -507,7 +507,10 @@ def descriptor_command(descriptor: dict | None, aspect: str) -> dict | None:
         # field as having no command.
         if bound is not None and (isinstance(bound, bool) or not isinstance(bound, (int, float))):
             return None
-    return dict(command, values=field.get("values") or [])
+    values = field.get("values")
+    if values is not None and not isinstance(values, list):
+        return None
+    return dict(command, values=values or [])
 
 
 def command_value_ok(command: dict, value) -> bool:
@@ -524,10 +527,13 @@ def command_value_ok(command: dict, value) -> bool:
     if command.get("type") in ("float", "int"):
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             return False
-        if not math.isfinite(value):
-            return False  # json.loads admits NaN and Infinity
-        if command["type"] == "int" and not float(value).is_integer():
-            return False
+        try:
+            if not math.isfinite(value):
+                return False  # json.loads admits NaN and Infinity
+            if command["type"] == "int" and not float(value).is_integer():
+                return False
+        except OverflowError:
+            return False  # an integer too large for a float
         c = command.get("constraint") or {}
         lo, hi = c.get("min"), c.get("max")
         return (lo is None or value >= lo) and (hi is None or value <= hi)

@@ -308,6 +308,13 @@ class DescriptorCommandTest(unittest.TestCase):
                     descriptor_command(described(type="float", constraint=constraint), "level")
                 )
 
+    def test_enum_values_that_are_not_a_list_mean_no_command(self):
+        for values in (5, True, "eco"):
+            with self.subTest(values=values):
+                descriptor = described(type="enum")
+                descriptor["fields"]["level"]["values"] = values
+                self.assertIsNone(descriptor_command(descriptor, "level"))
+
 
 class CommandValueOkTest(unittest.TestCase):
     def test_an_enum_value_must_be_one_of_its_values(self):
@@ -333,6 +340,11 @@ class CommandValueOkTest(unittest.TestCase):
                 self.assertFalse(command_value_ok(command, value))
         self.assertTrue(command_value_ok({"type": "float"}, -1e9))
         self.assertTrue(command_value_ok({"type": "float", "constraint": None}, 3))
+
+    def test_an_integer_too_large_for_a_float_is_refused(self):
+        for kind in ("float", "int"):
+            with self.subTest(kind=kind):
+                self.assertFalse(command_value_ok({"type": kind}, 10**400))
 
     def test_an_int_must_be_integral(self):
         self.assertTrue(command_value_ok({"type": "int"}, 3))

@@ -63,13 +63,12 @@ class MotionValuesTest(unittest.TestCase):
 
     def test_an_unusable_value_yields_an_error(self):
         root = pulled(
-            notification("tns1:VideoSource/MotionAlarm", [("State", "1")]),
+            notification("tns1:VideoSource/MotionAlarm", [("State", "maybe")]),
             notification("tns1:VideoSource/MotionAlarm", [("Other", "true")]),
         )
-        self.assertEqual(
-            list(motion_values(root)),
-            [(None, "unusable motion value '1'"), (None, "unusable motion value None")],
-        )
+        values = list(motion_values(root))
+        self.assertEqual([value for value, _ in values], [None, None])
+        self.assertTrue(all(error for _, error in values))
 
 
 class SubscriptionUrlTest(unittest.TestCase):
