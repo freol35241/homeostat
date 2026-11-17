@@ -289,7 +289,6 @@ class RulesAboutControls(PageTest):
         await self.page.wait_for_timeout(400)
         self.assertEqual(await self.page.locator(".cmd-pending").count(), 0)
 
-
     async def test_a_view_switch_keeps_a_commands_mark(self):
         await self.view("downstairs")
         await self.page.locator('[data-action="toggle-light"][data-entity="livingroom_lamp"]').first.click()
@@ -908,7 +907,9 @@ class UnitOverlay(PageTest):
         await self.view("health")
         await self.page.locator('[data-action="unit-detail"]:visible').first.click()
         await self.page.wait_for_timeout(400)
-        self.assertIn("did not answer", await self.page.locator("#overlay-panel").inner_text())
+        self.assertIn(
+            "The log could not be read: unknown unit", await self.page.locator("#overlay-panel").inner_text()
+        )
         # The browser logs the failed request itself; that is not a fault.
         self.faults = [f for f in self.faults if "Failed to load resource" not in f]
 

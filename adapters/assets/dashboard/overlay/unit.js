@@ -1,4 +1,5 @@
 /* The unit overlay: a unit's health, parameters, events or timeline, and log. */
+import { getJson } from '../api.js';
 import { fmtOrDash, statusChipHtml } from '../chrome.js';
 import { html } from '../html.js';
 import logic, { titleCase, unitNameFromHealthKey } from '../logic.js';
@@ -6,19 +7,18 @@ import { renderOverlayContent, showOverlay } from './panel.js';
 import { findEntityByName, overlay, store, unitsByName } from '../store.js';
 import { renderEventRow } from '../views/health.js';
 import { renderParamRow, renderPauseSwitch } from '../widgets/params.js';
-import { getJson } from '../api.js';
 
 function fetchUnitLog(unitName) {
-  overlay.log = { lines: [], loaded: false, loading: true, failed: false };
+  overlay.log = { lines: [], loaded: false, loading: true, error: null };
   getJson('/api/logs?unit=' + encodeURIComponent(unitName) + '&lines=100')
     .then(function (data) {
       if (overlay.unit !== unitName) return; // the overlay moved on to another unit
-      overlay.log = { lines: Array.isArray(data) ? data : [], loaded: true, loading: false, failed: false };
+      overlay.log = { lines: Array.isArray(data) ? data : [], loaded: true, loading: false, error: null };
       if (overlay.open && overlay.type === 'unit') renderOverlayContent();
     })
-    .catch(function () {
+    .catch(function (e) {
       if (overlay.unit !== unitName) return;
-      overlay.log = { lines: [], loaded: true, loading: false, failed: true };
+      overlay.log = { lines: [], loaded: true, loading: false, error: e.message };
       if (overlay.open && overlay.type === 'unit') renderOverlayContent();
     });
 }
@@ -181,7 +181,7 @@ export function renderUnitDetailBody() {
   var log = overlay.log || { lines: [], loaded: false, loading: false };
   var logRows = log.lines.map(renderLogLine);
   var logHtml = log.loading ? html`<div class="empty-hint">Loading&hellip;</div>` :
-    log.failed ? html`<div class="empty-hint">The supervisor did not answer.</div>` :
+    log.error ? html`<div class="empty-hint">The log could not be read: ${log.error}</div>` :
     (logRows.length ? logRows : html`<div class="empty-hint">No output captured.</div>`);
 
   var body = html`<div class="muted">${titleCase(unit.kind || '')}</div>

@@ -52,7 +52,10 @@ export var overlay = {
   layer: '',
   issues: [],              // decoded stored issues for the current window
   issuesLoading: false,
-  issuesFailed: false,
+  // The error text of the last failed forecasts read, or null.
+  issuesError: null,
+  // Counts the forecasts reads, so only the newest one lands.
+  issuesRead: 0,
   sourceData: {},          // "<hours>|<entity>|<aspect>" -> fetched history of a sources or related line
   sourceEvents: {},        // same key -> when each source went in or out
   pinned: null,            // the issue time a reader pinned out of the braid

@@ -10,11 +10,11 @@
  * every state-delta render. Its container is therefore a detached DOM node
  * kept in mapState and moved into a new slot on each render, instead of
  * being rebuilt from an HTML string like the rest of the view. */
+import { getJson } from '../api.js';
 import { byId, html } from '../html.js';
 import logic from '../logic.js';
 import { stateValue, store } from '../store.js';
 import { relTime } from './entity.js';
-import { getJson } from '../api.js';
 
 // The vendored map files (adapters/assets/map/), found from this module's
 // own address so the page works under any path prefix.
