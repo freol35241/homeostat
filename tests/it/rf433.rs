@@ -11,8 +11,8 @@ use std::time::Duration;
 use serde_json::json;
 
 use crate::common::{
-    await_discovery, await_mirror, await_sample, expect_drop_event, expect_states, up, Mosquitto,
-    Mqtt, Supervisor,
+    assert_unit_contract, await_discovery, await_mirror, await_sample, expect_drop_event,
+    expect_states, up, Mosquitto, Mqtt, Supervisor,
 };
 
 const FIXTURE: &str = "tests/fixtures/house_rf433";
@@ -308,4 +308,12 @@ async fn availability_follows_the_bridge_lwt() {
     .await;
 
     sup.shutdown();
+}
+
+/// The adapter honors the unit contract: liveliness token when ready,
+/// clean SIGTERM shutdown within the grace, no orphans.
+#[tokio::test(flavor = "multi_thread")]
+async fn adapter_honors_unit_contract() {
+    let (_mosquitto, mut sup, observer) = setup().await;
+    assert_unit_contract(&mut sup, &observer, "rf433").await;
 }

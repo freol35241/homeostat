@@ -13,8 +13,8 @@ use std::time::Duration;
 use serde_json::{json, Value};
 
 use crate::common::{
-    await_sample, config_write, expect_event_kind, expect_state, next_sample, restart_unit, up,
-    FakeServer, Scratch, Supervisor,
+    assert_unit_contract, await_sample, config_write, expect_event_kind, expect_state, next_sample,
+    restart_unit, up, FakeServer, Scratch, Supervisor,
 };
 
 const FIXTURE: &str = "tests/fixtures/house_openwrt";
@@ -462,4 +462,12 @@ async fn a_return_within_the_hold_is_a_fix_and_a_restart_is_not() {
     no_fix_for(&phone_sub, 3).await;
 
     sup.shutdown();
+}
+
+/// The adapter honors the unit contract: liveliness token when ready,
+/// clean SIGTERM shutdown within the grace, no orphans.
+#[tokio::test(flavor = "multi_thread")]
+async fn adapter_honors_unit_contract() {
+    let (_router, _routers, mut sup, observer) = setup().await;
+    assert_unit_contract(&mut sup, &observer, "openwrt").await;
 }

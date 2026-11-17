@@ -9,8 +9,8 @@ use std::time::Duration;
 use serde_json::{json, Value};
 
 use crate::common::{
-    await_mirror, cache_read, expect_event_kind, expect_silence, expect_state, next_event,
-    next_sample, up, FakeServer, Scratch, StateSub, Supervisor, SILENCE,
+    assert_unit_contract, await_mirror, cache_read, expect_event_kind, expect_silence,
+    expect_state, next_event, next_sample, up, FakeServer, Scratch, StateSub, Supervisor, SILENCE,
 };
 
 const FIXTURE: &str = "tests/fixtures/house_onvif";
@@ -441,4 +441,12 @@ async fn a_chunked_soap_reply_is_read_whole() {
     trigger_until_motion(&camera, &state_sub, &observer, false).await;
 
     sup.shutdown();
+}
+
+/// The adapter honors the unit contract: liveliness token when ready,
+/// clean SIGTERM shutdown within the grace, no orphans.
+#[tokio::test(flavor = "multi_thread")]
+async fn adapter_honors_unit_contract() {
+    let (_camera, _cameras, mut sup, observer) = setup().await;
+    assert_unit_contract(&mut sup, &observer, "onvif").await;
 }
