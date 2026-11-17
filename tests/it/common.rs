@@ -250,6 +250,8 @@ impl FakeServer {
         let port = free_port();
         let (program, argv) =
             fixture_command(&format!("uv run {script} --port {port} {args}")).await;
+        // Held through uv, the fake outlives the kill (see `fixture_command`).
+        assert_ne!(program, "uv", "{script} did not resolve to its interpreter");
         let child = Command::new(program)
             .args(argv)
             .current_dir(env!("CARGO_MANIFEST_DIR"))
@@ -258,9 +260,12 @@ impl FakeServer {
             .spawn()
             .unwrap_or_else(|e| panic!("spawn {script} (is uv installed?): {e}"));
         // Built before the wait, so a fake that never listens is still killed.
-        let server = Self { child, port };
+        let mut server = Self { child, port };
         let deadline = Instant::now() + Duration::from_mins(1);
         while TcpStream::connect(("127.0.0.1", port)).is_err() {
+            if let Ok(Some(status)) = server.child.try_wait() {
+                panic!("{script} exited before listening ({status})");
+            }
             assert!(
                 Instant::now() < deadline,
                 "{script} never listened on {port}"

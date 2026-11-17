@@ -56,7 +56,7 @@ fn api_get(port: u16, path: &str) -> Option<(u16, Value)> {
 }
 
 fn control_quit(port: u16) {
-    // The process exits mid-response, so the reply is not read.
+    // The process exits mid-response, so the result is ignored.
     let _ = try_http(
         &format!("127.0.0.1:{port}"),
         "POST",
