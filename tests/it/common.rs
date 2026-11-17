@@ -3,6 +3,7 @@
 //! opens an observer session to assert on bus traffic.
 
 use std::collections::{BTreeSet, HashMap, VecDeque};
+use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
@@ -230,6 +231,201 @@ pub async fn fixture_command(command: &str) -> (String, Vec<String>) {
     let mut parts = resolved.split_whitespace().map(str::to_string);
     let program = parts.next().expect("a non-empty command");
     (program, parts.collect())
+}
+
+/// A fake device or service (`tests/fake_*.py`) on a free port, killed on
+/// drop. It runs as `uv run <script> --port <port> <args>`, resolved by
+/// `fixture_command`, so the process held here is the fake itself.
+pub struct FakeServer {
+    child: Child,
+    /// The port the fake listens on, on 127.0.0.1.
+    pub port: u16,
+}
+
+impl FakeServer {
+    /// Starts `script` (a path from the repo root) with `args` after its
+    /// `--port`, and waits until it accepts connections. The first run of a
+    /// fake resolves its uv environment, so the wait allows a minute.
+    pub async fn spawn(script: &str, args: &str) -> Self {
+        let port = free_port();
+        let (program, argv) =
+            fixture_command(&format!("uv run {script} --port {port} {args}")).await;
+        let child = Command::new(program)
+            .args(argv)
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap_or_else(|e| panic!("spawn {script} (is uv installed?): {e}"));
+        // Built before the wait, so a fake that never listens is still killed.
+        let server = Self { child, port };
+        let deadline = Instant::now() + Duration::from_mins(1);
+        while TcpStream::connect(("127.0.0.1", port)).is_err() {
+            assert!(
+                Instant::now() < deadline,
+                "{script} never listened on {port}"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        server
+    }
+
+    /// Sends `method path` with an empty body to the fake's control surface
+    /// and returns the response body. Panics unless the fake answers 200.
+    pub fn request(&self, method: &str, path: &str) -> Vec<u8> {
+        let addr = format!("127.0.0.1:{}", self.port);
+        let response = http(&addr, method, path, &[], Some(&[]));
+        assert_eq!(
+            response.status,
+            200,
+            "{method} {path}: {}",
+            String::from_utf8_lossy(&response.body)
+        );
+        response.body
+    }
+
+    /// POSTs a control endpoint, as `request` does.
+    pub fn control(&self, path: &str) {
+        self.request("POST", path);
+    }
+
+    /// Kills the fake and reaps it. To the unit under test, the device has
+    /// dropped off the network.
+    pub fn kill(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+impl Drop for FakeServer {
+    fn drop(&mut self) {
+        self.kill();
+    }
+}
+
+/// An HTTP response as `http` reads it.
+pub struct HttpResponse {
+    pub status: u16,
+    /// Header names and values in the order the server sent them.
+    pub headers: Vec<(String, String)>,
+    /// The body, with any chunked framing removed.
+    pub body: Vec<u8>,
+}
+
+/// Sends one HTTP/1.1 request on a fresh connection and reads the response
+/// until the server closes it. The request carries `Connection: close`,
+/// and a `Host` naming `addr` unless `headers` has one. With a `body` it
+/// also carries that body's `Content-Length`, unless `headers` has one: a
+/// test that declares a length it does not send passes its own. Panics
+/// when the request fails or the response has no HTTP/1.0 or HTTP/1.1
+/// status line.
+pub fn http(
+    addr: &str,
+    method: &str,
+    path: &str,
+    headers: &[(&str, &str)],
+    body: Option<&[u8]>,
+) -> HttpResponse {
+    try_http(addr, method, path, headers, body)
+        .unwrap_or_else(|e| panic!("{method} {path} at {addr}: {e}"))
+}
+
+/// As `http`, returning the failure instead of panicking. For a caller
+/// that retries while a server comes up, or expects it to hang up.
+pub fn try_http(
+    addr: &str,
+    method: &str,
+    path: &str,
+    headers: &[(&str, &str)],
+    body: Option<&[u8]>,
+) -> Result<HttpResponse, String> {
+    let has = |name: &str| headers.iter().any(|(n, _)| n.eq_ignore_ascii_case(name));
+    let mut head = format!("{method} {path} HTTP/1.1\r\nConnection: close\r\n");
+    if !has("host") {
+        head.push_str(&format!("Host: {addr}\r\n"));
+    }
+    for (name, value) in headers {
+        head.push_str(&format!("{name}: {value}\r\n"));
+    }
+    if let Some(body) = body {
+        if !has("content-length") {
+            head.push_str(&format!("Content-Length: {}\r\n", body.len()));
+        }
+    }
+    head.push_str("\r\n");
+    let mut request = head.into_bytes();
+    request.extend_from_slice(body.unwrap_or_default());
+
+    let mut stream = TcpStream::connect(addr).map_err(|e| format!("connect: {e}"))?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(30)))
+        .map_err(|e| format!("set read timeout: {e}"))?;
+    stream
+        .write_all(&request)
+        .map_err(|e| format!("send: {e}"))?;
+    let mut response = Vec::new();
+    stream
+        .read_to_end(&mut response)
+        .map_err(|e| format!("read: {e}"))?;
+
+    let split = response
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .ok_or_else(|| {
+            format!(
+                "no end of headers in {:?}",
+                String::from_utf8_lossy(&response)
+            )
+        })?;
+    let head = String::from_utf8_lossy(&response[..split]);
+    let mut lines = head.split("\r\n");
+    let status_line = lines.next().unwrap_or_default();
+    let status = status_line
+        .strip_prefix("HTTP/1.1 ")
+        .or_else(|| status_line.strip_prefix("HTTP/1.0 "))
+        .and_then(|rest| rest.split(' ').next())
+        .and_then(|code| code.parse().ok())
+        .ok_or_else(|| format!("no HTTP/1.x status line in {head:?}"))?;
+    let headers: Vec<(String, String)> = lines
+        .filter_map(|line| line.split_once(':'))
+        .map(|(name, value)| (name.to_string(), value.trim().to_string()))
+        .collect();
+    let chunked = headers.iter().any(|(name, value)| {
+        name.eq_ignore_ascii_case("transfer-encoding") && value.eq_ignore_ascii_case("chunked")
+    });
+    let body = &response[split + 4..];
+    let body = if chunked {
+        dechunk(body)?
+    } else {
+        body.to_vec()
+    };
+    Ok(HttpResponse {
+        status,
+        headers,
+        body,
+    })
+}
+
+/// Removes chunked transfer framing (RFC 9112, section 7.1). Chunk
+/// extensions and trailers are ignored.
+fn dechunk(mut raw: &[u8]) -> Result<Vec<u8>, String> {
+    let mut body = Vec::new();
+    loop {
+        let line = raw
+            .windows(2)
+            .position(|w| w == b"\r\n")
+            .ok_or("a chunk size line is cut off")?;
+        let size = std::str::from_utf8(&raw[..line])
+            .ok()
+            .and_then(|s| usize::from_str_radix(s.split(';').next()?.trim(), 16).ok())
+            .ok_or("a chunk size is not hex")?;
+        raw = &raw[line + 2..];
+        if size == 0 {
+            return Ok(body);
+        }
+        body.extend_from_slice(raw.get(..size).ok_or("a chunk is cut off")?);
+        raw = raw.get(size + 2..).ok_or("a chunk is cut off")?;
+    }
 }
 
 /// A free port no earlier call in this test process returned. The kernel

@@ -3,16 +3,14 @@
 //! WS-Security digest checking and a long poll) on a free port plus the
 //! real supervisor on the onvif fixture house, and asserts on the bus.
 
-use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde_json::{json, Value};
 
 use crate::common::{
-    await_mirror, cache_read, expect_event_kind, expect_silence, expect_state, fixture_command,
-    free_port, next_event, next_sample, up, Scratch, StateSub, Supervisor, SILENCE,
+    await_mirror, cache_read, expect_event_kind, expect_silence, expect_state, next_event,
+    next_sample, up, FakeServer, Scratch, StateSub, Supervisor, SILENCE,
 };
 
 const FIXTURE: &str = "tests/fixtures/house_onvif";
@@ -23,89 +21,34 @@ const AVAILABLE_KEY: &str = "home/state/hallway/hallway_cam/available";
 const USERNAME: &str = "homeostat";
 const PASSWORD: &str = "secret123";
 
-/// A fake ONVIF camera (`tests/fake_onvif.py`) on a free port, killed on
-/// drop. Spawned the same way the units themselves are: the interpreter
-/// of the script's own uv environment, exec'd directly (`fixture_command`
-/// says what spawning `uv run` itself leaks).
-struct FakeOnvif {
-    child: Child,
-    port: u16,
-}
+/// A fake ONVIF camera, with its count of handed-out subscriptions.
+struct FakeOnvif(FakeServer);
 
 impl FakeOnvif {
     async fn spawn() -> Self {
-        let port = free_port();
-        let (program, args) = fixture_command(&format!(
-            "uv run tests/fake_onvif.py --port {port} --username {USERNAME} --password {PASSWORD}"
-        ))
-        .await;
-        let child = Command::new(program)
-            .args(args)
-            .current_dir(env!("CARGO_MANIFEST_DIR"))
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("spawn fake onvif camera (is uv installed?)");
-        // First run resolves the fake camera's own uv env: generous.
-        let deadline = Instant::now() + Duration::from_mins(1);
-        while std::net::TcpStream::connect(("127.0.0.1", port)).is_err() {
-            assert!(
-                Instant::now() < deadline,
-                "fake onvif camera never listened on {port}"
-            );
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        Self { child, port }
-    }
-
-    /// POSTs a control endpoint (plain HTTP, out of the SOAP path).
-    fn control(&self, path: &str) {
-        let mut stream = std::net::TcpStream::connect(("127.0.0.1", self.port))
-            .expect("connect to fake camera control");
-        stream
-            .write_all(
-                format!(
-                    "POST {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-                )
-                .as_bytes(),
+        Self(
+            FakeServer::spawn(
+                "tests/fake_onvif.py",
+                &format!("--username {USERNAME} --password {PASSWORD}"),
             )
-            .expect("write control request");
-        let mut response = String::new();
-        stream
-            .read_to_string(&mut response)
-            .expect("read control response");
-        assert!(
-            response.starts_with("HTTP/1.1 200"),
-            "control {path}: {response}"
-        );
+            .await,
+        )
     }
 
     /// How many subscriptions the camera has handed out, from its own count.
     /// Outside the adapter, this is the only way to see a rotation.
     fn created(&self) -> u64 {
-        let mut stream = std::net::TcpStream::connect(("127.0.0.1", self.port))
-            .expect("connect to fake camera control");
-        stream
-            .write_all(
-                "POST /control/stats HTTP/1.1\r\nHost: 127.0.0.1\r\n\
-                 Content-Length: 0\r\nConnection: close\r\n\r\n"
-                    .as_bytes(),
-            )
-            .expect("write stats request");
-        let mut response = String::new();
-        stream
-            .read_to_string(&mut response)
-            .expect("read stats response");
-        let body = response.rsplit("\r\n\r\n").next().expect("stats body");
-        let value: Value = serde_json::from_str(body).expect("stats is JSON");
+        let value: Value =
+            serde_json::from_slice(&self.request("POST", "/control/stats")).expect("stats is JSON");
         value["created"].as_u64().expect("created is a number")
     }
 }
 
-impl Drop for FakeOnvif {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+impl std::ops::Deref for FakeOnvif {
+    type Target = FakeServer;
+
+    fn deref(&self) -> &FakeServer {
+        &self.0
     }
 }
 

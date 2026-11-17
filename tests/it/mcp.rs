@@ -7,8 +7,7 @@
 //! Every wait polls an observable condition within a deadline. No test
 //! uses a fixed port or a wall-clock sleep.
 
-use std::io::{BufRead, BufReader, Read, Write};
-use std::net::TcpStream;
+use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -16,8 +15,8 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 
 use crate::common::{
-    cache_read, eventually, free_port, matched_publisher, running_pid, temp_house, up, Scratch,
-    Supervisor,
+    cache_read, eventually, free_port, matched_publisher, running_pid, temp_house, try_http, up,
+    Scratch, Supervisor,
 };
 
 const FIXTURE: &str = "tests/fixtures/house_apply";
@@ -652,41 +651,22 @@ fn http_post_declaring(
     content_length: Option<usize>,
 ) -> Result<(u16, Value), String> {
     let body = message.to_string();
-    let mut stream = TcpStream::connect(addr).map_err(|e| e.to_string())?;
-    stream
-        .set_read_timeout(Some(Duration::from_secs(30)))
-        .map_err(|e| e.to_string())?;
-    let extra = extra
-        .iter()
-        .map(|(n, v)| format!("{n}: {v}\r\n"))
-        .collect::<Vec<_>>()
-        .concat();
-    let request = format!(
-        "POST /mcp HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\n\
-         Accept: application/json, text/event-stream\r\nConnection: close\r\n\
-         {extra}Content-Length: {}\r\n\r\n{body}",
-        content_length.unwrap_or(body.len())
-    );
-    stream
-        .write_all(request.as_bytes())
-        .map_err(|e| e.to_string())?;
-    let mut response = Vec::new();
-    stream
-        .read_to_end(&mut response)
-        .map_err(|e| e.to_string())?;
-    let response = String::from_utf8_lossy(&response).to_string();
-    let status: u16 = response
-        .split_whitespace()
-        .nth(1)
-        .and_then(|s| s.parse().ok())
-        .ok_or_else(|| format!("no status line in {response:?}"))?;
-    let body = response.split_once("\r\n\r\n").map_or("", |(_, body)| body);
+    let length = content_length.unwrap_or(body.len()).to_string();
+    let mut headers = vec![
+        ("Content-Type", "application/json"),
+        ("Accept", "application/json, text/event-stream"),
+        ("Content-Length", length.as_str()),
+    ];
+    headers.extend_from_slice(extra);
+    let response = try_http(addr, "POST", "/mcp", &headers, Some(body.as_bytes()))?;
+    let status = response.status;
+    let body = String::from_utf8_lossy(&response.body);
     // A refusal answers in plain text, so nothing about the house is
     // echoed to a caller that failed the gate.
     let value = if body.is_empty() || status == 403 || status == 413 {
         Value::Null
     } else {
-        serde_json::from_str(body).map_err(|e| format!("body is not JSON: {e}: {body:?}"))?
+        serde_json::from_str(&body).map_err(|e| format!("body is not JSON: {e}: {body:?}"))?
     };
     Ok((status, value))
 }

@@ -12,8 +12,9 @@ speaks the part of go2rtc's surface homeostat touches, and nothing else:
 
   - `-config <path>`: reads the shim's rendered config (JSON, which is a
     YAML subset and is what the shim writes), and takes `api.listen` and
-    the stream names from it. `--listen`/`--streams` override for direct
-    spawning without a config file (the dashboard test's path).
+    the stream names from it. `--port` (on 127.0.0.1) and `--streams`
+    override for direct spawning without a config file (the dashboard
+    test's path).
   - GET /api/streams -> {name: {"producers": [{"url": ...}]}}. The shim
     polls it for readiness, and the tests assert config rendering
     against it.
@@ -81,11 +82,11 @@ def make_app(streams: dict[str, str]) -> web.Application:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("-config", dest="config")
-    parser.add_argument("--listen")
+    parser.add_argument("--port", type=int)
     parser.add_argument("--streams", help="comma-separated stream names (no config file)")
     args = parser.parse_args()
 
-    listen = args.listen
+    listen = f"127.0.0.1:{args.port}" if args.port else None
     streams: dict[str, str] = {}
     if args.config:
         config = json.loads(Path(args.config).read_text())

@@ -7,16 +7,14 @@
 
 use crate::common;
 
-use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde_json::{json, Value};
 
 use crate::common::{
-    await_sample, config_write, expect_event_kind, expect_state, fixture_command, free_port,
-    next_sample, restart_unit, up, Scratch, Supervisor,
+    await_sample, config_write, expect_event_kind, expect_state, next_sample, restart_unit, up,
+    FakeServer, Scratch, Supervisor,
 };
 
 const FIXTURE: &str = "tests/fixtures/house_openwrt";
@@ -30,69 +28,14 @@ const PHONE_MAC: &str = "aa:bb:cc:dd:ee:ff";
 const USERNAME: &str = "homeostat";
 const PASSWORD: &str = "secret123";
 
-/// A fake ubus endpoint (`tests/fake_openwrt.py`) on a free port, killed on
-/// drop. Spawned the same way the units themselves are: out of the
-/// script's own uv environment, exec'd directly (`fixture_command`),
-/// so the handle held here is the interpreter's and not uv's.
-struct FakeOpenwrt {
-    child: Child,
-    port: u16,
-}
-
-impl FakeOpenwrt {
-    async fn spawn() -> Self {
-        let port = free_port();
-        let (program, args) = fixture_command(&format!(
-            "uv run tests/fake_openwrt.py --port {port} --username {USERNAME} --password {PASSWORD}"
-        ))
-        .await;
-        let child = Command::new(program)
-            .args(args)
-            .current_dir(env!("CARGO_MANIFEST_DIR"))
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("spawn fake openwrt router (is uv installed?)");
-        // First run resolves the fake router's own uv env: generous.
-        let deadline = Instant::now() + Duration::from_mins(1);
-        while std::net::TcpStream::connect(("127.0.0.1", port)).is_err() {
-            assert!(
-                Instant::now() < deadline,
-                "fake openwrt router never listened on {port}"
-            );
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        Self { child, port }
-    }
-
-    /// POSTs a control endpoint (plain HTTP, out of the JSON-RPC path).
-    fn control(&self, path: &str) {
-        let mut stream = std::net::TcpStream::connect(("127.0.0.1", self.port))
-            .expect("connect to fake router control");
-        stream
-            .write_all(
-                format!(
-                    "POST {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-                )
-                .as_bytes(),
-            )
-            .expect("write control request");
-        let mut response = String::new();
-        stream
-            .read_to_string(&mut response)
-            .expect("read control response");
-        assert!(
-            response.starts_with("HTTP/1.1 200"),
-            "control {path}: {response}"
-        );
-    }
-}
-
-impl Drop for FakeOpenwrt {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
+/// A fake ubus endpoint (`tests/fake_openwrt.py`) holding the read-only
+/// rpcd credentials.
+async fn spawn_router() -> FakeServer {
+    FakeServer::spawn(
+        "tests/fake_openwrt.py",
+        &format!("--username {USERNAME} --password {PASSWORD}"),
+    )
+    .await
 }
 
 /// Writes a `HOMEOSTAT_OPENWRT` file in `scratch` (outside the repo: it
@@ -121,8 +64,8 @@ fn routers_file_with(scratch: &Scratch, routers: &[(&str, u16, &str)]) -> PathBu
 
 /// Spawns the fake router + supervisor on the fixture and waits for the
 /// adapter to run.
-async fn setup() -> (FakeOpenwrt, Scratch, Supervisor, zenoh::Session) {
-    let router = FakeOpenwrt::spawn().await;
+async fn setup() -> (FakeServer, Scratch, Supervisor, zenoh::Session) {
+    let router = spawn_router().await;
     let routers = Scratch::new("openwrt-routers");
     let routers_path = routers_file(&routers, &[("gw", router.port)]);
     let (sup, observer) = start(&routers_path).await;
@@ -287,8 +230,8 @@ async fn a_chunked_ubus_reply_is_read_whole() {
 /// and both recover once every router answers.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_silent_router_cannot_assert_absence() {
-    let gw = FakeOpenwrt::spawn().await;
-    let ap = FakeOpenwrt::spawn().await;
+    let gw = spawn_router().await;
+    let ap = spawn_router().await;
     let routers = Scratch::new("openwrt-routers");
     let routers_path = routers_file(&routers, &[("gw", gw.port), ("ap", ap.port)]);
     let (mut sup, observer) = start(&routers_path).await;
@@ -372,8 +315,8 @@ async fn no_fix_for(sub: &common::StateSub, secs: u64) {
 /// gives none.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_sighting_at_a_located_router_is_a_fix() {
-    let gw = FakeOpenwrt::spawn().await;
-    let ap = FakeOpenwrt::spawn().await;
+    let gw = spawn_router().await;
+    let ap = spawn_router().await;
     let routers = Scratch::new("openwrt-routers");
     let routers_path = routers_file_with(
         &routers,
@@ -453,7 +396,7 @@ async fn a_sighting_at_a_located_router_is_a_fix() {
 /// minutes after it leaves, so that fix could outdate the phone's own.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_return_within_the_hold_is_a_fix_and_a_restart_is_not() {
-    let gw = FakeOpenwrt::spawn().await;
+    let gw = spawn_router().await;
     let routers = Scratch::new("openwrt-routers");
     let routers_path =
         routers_file_with(&routers, &[("gw", gw.port, "lat = 59.33\nlon = 18.06\n")]);

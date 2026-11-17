@@ -3,8 +3,6 @@
 //! bearer-token checking and a controllable outage) on a free port plus
 //! the real supervisor on the ntfy fixture house, and asserts on the bus.
 
-use std::io::{Read, Write};
-use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use homeostat::bus::HealthStatus;
@@ -12,8 +10,8 @@ use serde_json::{json, Value};
 
 use crate::common::{
     assert_cli_ok, assert_unit_contract, await_health, await_mirror, await_states, cli,
-    expect_drop_event, fixture_command, free_port, health_watch, matched_publisher, stdout,
-    temp_house, up, StateSub, Supervisor,
+    expect_drop_event, free_port, health_watch, matched_publisher, stdout, temp_house, up,
+    FakeServer, StateSub, Supervisor,
 };
 
 const FIXTURE: &str = "tests/fixtures/house_ntfy";
@@ -27,68 +25,17 @@ const ADULTS_MESSAGE: &str = "home/cmd/global/adults/message";
 const ALICE_AVAILABLE: &str = "home/state/person/alice_phone/available";
 const ALICE_DELIVERED: &str = "home/state/person/alice_phone/delivered";
 
-/// A fake ntfy server on a free port, killed on drop.
-struct FakeNtfy {
-    child: Child,
-    port: u16,
-}
+/// A fake ntfy server, with its record of accepted publishes.
+struct FakeNtfy(FakeServer);
 
 impl FakeNtfy {
     async fn spawn() -> Self {
-        let port = free_port();
-        let (program, args) = fixture_command(&format!(
-            "uv run tests/fake_ntfy.py --port {port} --token {TOKEN}"
-        ))
-        .await;
-        let child = Command::new(program)
-            .args(args)
-            .current_dir(env!("CARGO_MANIFEST_DIR"))
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("spawn fake ntfy (is uv installed?)");
-        let deadline = Instant::now() + Duration::from_mins(1);
-        while std::net::TcpStream::connect(("127.0.0.1", port)).is_err() {
-            assert!(
-                Instant::now() < deadline,
-                "fake ntfy never listened on {port}"
-            );
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        Self { child, port }
-    }
-
-    fn http(&self, method: &str, path: &str) -> String {
-        let mut stream =
-            std::net::TcpStream::connect(("127.0.0.1", self.port)).expect("connect to fake ntfy");
-        stream
-            .write_all(
-                format!(
-                    "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-                )
-                .as_bytes(),
-            )
-            .expect("write request");
-        let mut response = String::new();
-        stream.read_to_string(&mut response).expect("read response");
-        assert!(
-            response.starts_with("HTTP/1.0 200") || response.starts_with("HTTP/1.1 200"),
-            "{method} {path}: {response}"
-        );
-        response
-            .rsplit("\r\n\r\n")
-            .next()
-            .expect("body")
-            .to_string()
-    }
-
-    fn control(&self, path: &str) {
-        self.http("POST", path);
+        Self(FakeServer::spawn("tests/fake_ntfy.py", &format!("--token {TOKEN}")).await)
     }
 
     /// Every publish the server accepted so far.
     fn received(&self) -> Vec<Value> {
-        serde_json::from_str(&self.http("GET", "/control/received")).expect("received is JSON")
+        serde_json::from_slice(&self.request("GET", "/control/received")).expect("received is JSON")
     }
 
     /// Polls until the server has accepted `n` publishes.
@@ -109,10 +56,11 @@ impl FakeNtfy {
     }
 }
 
-impl Drop for FakeNtfy {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+impl std::ops::Deref for FakeNtfy {
+    type Target = FakeServer;
+
+    fn deref(&self) -> &FakeServer {
+        &self.0
     }
 }
 
