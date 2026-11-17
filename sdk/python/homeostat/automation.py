@@ -78,6 +78,11 @@ def context(root: str | Path = ".") -> "Context":
 # them.
 _ENTITY_ADDRESSED = ("state", "cmd", "forecast")
 
+
+def _as_json(value: Any) -> Any:
+    """Return `value` as JSON reads it back: a tuple as a list, and so on."""
+    return json.loads(json.dumps(value))
+
 # The recorder's store description. It is the only history selector that
 # answers whenever the recorder is up, whatever the store holds.
 _HISTORY_STATS = "home/history/stats"
@@ -260,6 +265,11 @@ class Context:
         # meets an `action` key (`_is_press`).
         self._buttons: set[str] | None = None
         self._session = UnitSession(unit, os.environ[keys.ENV_BUS])
+        if self._holds_anything():
+            # Read now, so a pause, which runs on a zenoh callback, never has
+            # to wait on a get.
+            with self._holds_lock:
+                self._own_holds()
         # (entity, aspect, source) -> last reported participation, so
         # `source_used` can emit on transition rather than on every call.
         self._sources_used: dict[tuple[str, str, str], bool] = {}
@@ -610,14 +620,19 @@ class Context:
             value = keys.cmd_envelope(value, priority, self.unit, options=options, hold=hold)
             if self.paused:
                 return
-            # A command from a unit first releases that unit's own hold on the
-            # aspect, so its hold does not refuse its own command
-            # (docs/design.md#holds).
+            self._session.put_json(key, value, at=at)
+            # A command from a unit releases that unit's own hold on the
+            # aspect (docs/design.md#holds). The arbiter drops the hold when
+            # the command arrives, so the key is deleted after it, for the
+            # mirror.
             if self._holds_anything():
                 self._release_key("/".join(["home", "hold", self.unit, *key.split("/")[2:5]]))
-        elif options is not None:
+            return
+        if segments[1] == "hold":
+            raise ValueError(f"publish {binding!r} is a hold publish; use ctx.hold")
+        if options is not None:
             raise ValueError(f"publish {binding!r} is not a cmd publish and takes no options")
-        elif hold is not None:
+        if hold is not None:
             raise ValueError(f"publish {binding!r} is not a cmd publish and takes no hold")
         self._session.put_json(key, value, at=at)
 
@@ -687,17 +702,22 @@ class Context:
             wish["until"] = until.astimezone(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
         if reason is not None:
             wish["reason"] = str(reason)
-        if self.paused:
-            return
+        # Under the lock, which `release` and a pause also take, so a hold
+        # and a release racing on two subscription threads cannot leave a
+        # key on the bus that the SDK no longer counts.
         with self._holds_lock:
+            if self.paused:
+                return
             holds = self._own_holds()
             self._asserted.add(key)
             current = holds.get(key)
-            if current is not None and {k: v for k, v in current.items() if k != "id"} == wish:
+            # Compared as JSON, so a tuple held again equals the list the
+            # mirror returned and keeps its id.
+            if current is not None and _as_json({k: v for k, v in current.items() if k != "id"}) == _as_json(wish):
                 return
             record = dict(wish, id=secrets.token_hex(4))
             holds[key] = record
-        self._session.put_json(key, record)
+            self._session.put_json(key, record)
 
     def release(
         self,
@@ -758,16 +778,15 @@ class Context:
             if key not in holds:
                 return
             del holds[key]
-        self._session.delete(key)
+            self._session.delete(key)
 
     def _release_all(self) -> None:
         with self._holds_lock:
             holds = self._own_holds()
-            held = list(holds)
+            for key in holds:
+                self._session.delete(key)
             holds.clear()
             self._asserted.clear()
-        for key in held:
-            self._session.delete(key)
 
     def publish_forecast(
         self,
@@ -1423,11 +1442,9 @@ class Context:
         if self._holds_anything():
             with self._holds_lock:
                 holds = self._own_holds()
-                stale = [key for key in holds if key not in self._asserted]
-                for key in stale:
+                for key in [key for key in holds if key not in self._asserted]:
                     del holds[key]
-            for key in stale:
-                self._session.delete(key)
+                    self._session.delete(key)
         self._session.ready()
 
     def run(self) -> None:

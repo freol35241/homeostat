@@ -331,6 +331,17 @@ def key_expr(key: str):
         return None
 
 
+def row_key(grant: dict, room: str, entity: str, aspect: str) -> str:
+    """Return the key a grant row reaches an aspect under.
+
+    A writer row commands it under home/cmd/; a holder row holds it under
+    the unit's own home/hold/ (docs/design.md#holds). Both drive it.
+    """
+    if grant.get("hold"):
+        return keys.hold_key(grant["unit"], room, entity, aspect)
+    return keys.cmd_key(room, entity, aspect)
+
+
 def driven_aspects(model: dict, grants: list, descriptors: dict[str, dict]) -> dict[str, str]:
     """Map each commandable aspect to the lowest band any unit may command it at.
 
@@ -360,7 +371,7 @@ def driven_aspects(model: dict, grants: list, descriptors: dict[str, dict]) -> d
                 continue
             for aspect in commandable_aspects(spec, descriptors.get(e["name"])):
                 try:
-                    ke = zenoh.KeyExpr(keys.cmd_key(e["room"], e["name"], aspect))
+                    ke = zenoh.KeyExpr(row_key(g, e["room"], e["name"], aspect))
                 except (KeyError, ValueError, zenoh.ZError):
                     continue
                 if not any(g_ke.intersects(ke) for g_ke in granted):
@@ -421,7 +432,7 @@ def unit_relations(
                 reached = set()
                 for aspect in aspects:
                     try:
-                        ke = zenoh.KeyExpr(keys.cmd_key(e["room"], e["name"], aspect))
+                        ke = zenoh.KeyExpr(row_key(g, e["room"], e["name"], aspect))
                     except (KeyError, ValueError, zenoh.ZError):
                         continue  # a grant row the core would not have written
                     if any(g_ke.intersects(ke) for g_ke in granted):

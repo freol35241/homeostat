@@ -293,10 +293,11 @@ class Resolver:
                 if hold.get(field) is not None:
                     candidate[field] = hold[field]
             out.append(candidate)
-        out.sort(
-            key=lambda c: (RANKS.index(c["priority"]), rest is not None and c["value"] == rest, c["seen"]),
-            reverse=True,
-        )
+        def is_rest(value) -> bool:
+            # By type too, so a hold of 0 is not the rest value False.
+            return rest is not None and type(value) is type(rest) and value == rest
+
+        out.sort(key=lambda c: (RANKS.index(c["priority"]), is_rest(c["value"]), c["seen"]), reverse=True)
         return out
 
     def winner(self, target, *, without: str | None = None) -> dict | None:
@@ -360,12 +361,20 @@ class Resolver:
 
         A manual-band command places, clears or reports the family's hold
         as its `hold` intent says (docs/design.md#hold-intents). A
-        lower-band command is refused when a hold above its band is in
-        force, or one at its band holds another value; the sender's own
-        hold does not count. A forwarded command holds nothing.
+        lower-band command first releases its sender's own hold. It is
+        refused when a hold above its band is in force, or one at its band
+        holds another value. A forwarded command holds nothing.
         """
         if priority == "manual":
             return self._family_command(target, actor, hold_s, effects, value, hold, cmd_id)
+        # A command from a unit first releases that unit's own hold. It goes
+        # here, with the command, and not when the SDK's delete of the key
+        # arrives: that comes on another subscriber, in either order, and
+        # resolving it on its own would send the hold beneath first or undo
+        # the command after.
+        held = self._holds.get(target)
+        if held is not None and held.pop(actor, None) is not None and not held:
+            del self._holds[target]
         won = self.winner(target, without=actor)
         if won is not None and (
             RANKS.index(won["priority"]) > RANKS.index(priority)
@@ -409,7 +418,13 @@ class Resolver:
                 self.resolve(target, effects)
                 return False
             self._applied_by_command(target, "manual", actor, value, cmd_id)
-            self._note_winner(target, self.winner(target), effects)
+            # The hold beneath stands again but is not sent, so no event
+            # says it took over.
+            won = self.winner(target)
+            if won is None:
+                self._winner.pop(target, None)
+            else:
+                self._winner[target] = won
             return True
         wall = self._wall()
         family = {
@@ -433,17 +448,28 @@ class Resolver:
     # ---- units' holds
 
     def put_hold(self, target, unit, record, seen: float, effects: list) -> bool:
-        """Take one unit's hold on `target` and resolve; False if it does not read as one."""
-        if not isinstance(record, dict) or "value" not in record or not isinstance(record.get("id"), str):
-            return False
-        deadline = None
-        if record.get("until") is not None:
+        """Take one unit's hold on `target` and resolve; False if it does not read as one.
+
+        A record that does not read as a hold drops the unit's hold, as the
+        mirror now carries that record and not the hold.
+        """
+        until = None
+        if isinstance(record, dict) and record.get("until") is not None:
             try:
                 until = datetime.datetime.fromisoformat(record["until"])
             except (TypeError, ValueError):
-                return False
-            if until.tzinfo is None:
-                return False
+                until = False
+        if (
+            not isinstance(record, dict)
+            or "value" not in record
+            or not isinstance(record.get("id"), str)
+            or until is False
+            or (until is not None and until.tzinfo is None)
+        ):
+            self.drop_hold(target, unit, effects)
+            return False
+        deadline = None
+        if until is not None:
             deadline = self._clock() + (until.timestamp() - self._wall())
         self._holds.setdefault(target, {})[unit] = {
             "value": record["value"], "id": record["id"], "until": record.get("until"),
@@ -582,6 +608,8 @@ class Resolver:
                 continue
             if isinstance(applied, dict) and "id" in applied:
                 self._applied[target] = applied
+            if isinstance(entry.get("refused"), int) and entry["refused"]:
+                self._refused[target] = entry["refused"]
 
 
 def main():
@@ -666,14 +694,14 @@ def main():
 
     hold_sub = session.subscribe("home/hold/**", on_hold)
 
-    # The family's holds and the applied holds outlive this process: the
-    # mirror kept what the last run published. This runs before Bindings,
-    # whose seed drops what stands on an entity no longer arbitrated.
+    # The family's holds, the units' holds and the applied holds outlive
+    # this process: the mirror kept what was published. This runs before
+    # Bindings, whose seed drops what stands on an entity no longer
+    # arbitrated. A failed read is not taken as "nothing held": a holder
+    # does not publish an unchanged hold again, so the unit fails and the
+    # supervisor starts it again.
     def mirrored(selector: str) -> list:
-        try:
-            return session.get_json_aged(selector, timeout_s=5)
-        except (homeostat.QueryTimeout, homeostat.QueryError):
-            return []
+        return session.get_json_aged(selector, timeout_s=5)
 
     kept = mirrored(keys.hold_keyexpr(unit))
     documents = [value for _key, value, _age in mirrored(document_key)]

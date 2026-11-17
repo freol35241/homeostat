@@ -512,33 +512,81 @@ fn build_grants(
     grants
 }
 
-/// Two units holding one entity at one band are told apart by the rest
-/// value (docs/design.md#which-hold-wins). Without one, the newest hold
-/// wins, so the outcome depends only on timing, and plan says so.
+/// Per held entity and band: each holder, its entity's capability, and the
+/// aspect each of its keys reaches (None for a wildcard).
+type HolderRows<'a> = Vec<(&'a str, &'a str, Vec<Option<String>>)>;
+
+/// Two units holding one aspect at one band are told apart by the
+/// aspect's rest value (docs/design.md#which-hold-wins). Without one, the
+/// newest hold wins, so the outcome depends only on timing, and plan says
+/// so.
 fn warn_same_rank_holders(grants: &[Grant], warnings: &mut Vec<String>) {
-    let mut holders: BTreeMap<(&str, String), BTreeSet<&str>> = BTreeMap::new();
+    // The aspect each of a row's keys holds on an entity: a literal, or
+    // None where a wildcard covers any aspect.
+    let aspects = |grant: &Grant, entity: &GrantEntity| -> Vec<Option<String>> {
+        let prefix = [
+            "home",
+            "hold",
+            grant.unit.as_str(),
+            entity.room.as_str(),
+            entity.name.as_str(),
+        ];
+        grant
+            .keys
+            .iter()
+            .filter_map(|raw| KeyExpr::parse(raw).ok())
+            .filter(|expr| expr.matches_prefix(&prefix))
+            .map(|expr| match expr.0.as_slice() {
+                [_, _, _, _, _, Segment::Literal(aspect)] => Some(aspect.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    let mut holders: BTreeMap<(&str, String), HolderRows> = BTreeMap::new();
     for grant in grants.iter().filter(|g| g.hold) {
         let Some(priority) = grant.priority else {
             continue;
         };
         for entity in &grant.entities {
-            let rest = VOCABULARY
-                .iter()
-                .find(|c| c.name == entity.capability)
-                .and_then(|c| c.rest);
-            if rest.is_none() {
-                holders
-                    .entry((entity.name.as_str(), priority.to_string()))
-                    .or_default()
-                    .insert(grant.unit.as_str());
-            }
+            holders
+                .entry((entity.name.as_str(), priority.to_string()))
+                .or_default()
+                .push((
+                    grant.unit.as_str(),
+                    entity.capability.as_str(),
+                    aspects(grant, entity),
+                ));
         }
     }
-    for ((entity, priority), units) in holders {
+    for ((entity, priority), rows) in holders {
+        let rest = VOCABULARY
+            .iter()
+            .find(|c| {
+                rows.first()
+                    .is_some_and(|(_, capability, _)| c.name == *capability)
+            })
+            .and_then(|c| c.rest)
+            .map(|(aspect, _)| aspect);
+        // Two keys share an aspect when both name it, or one is a wildcard.
+        // Sharing only the rest aspect is decided by the rest value.
+        let clash = |a: &Option<String>, b: &Option<String>| match (a, b) {
+            (Some(x), Some(y)) => x == y && Some(x.as_str()) != rest,
+            (Some(x), None) | (None, Some(x)) => Some(x.as_str()) != rest,
+            (None, None) => true,
+        };
+        let mut units: BTreeSet<&str> = BTreeSet::new();
+        for (i, (unit_a, _, keys_a)) in rows.iter().enumerate() {
+            for (unit_b, _, keys_b) in &rows[i + 1..] {
+                if unit_a != unit_b && keys_a.iter().any(|a| keys_b.iter().any(|b| clash(a, b))) {
+                    units.insert(unit_a);
+                    units.insert(unit_b);
+                }
+            }
+        }
         if units.len() > 1 {
             let names: Vec<&str> = units.into_iter().collect();
             warnings.push(format!(
-                "{} hold \"{entity}\" at {priority}, and its capability has no rest value: the newest hold wins",
+                "{} hold \"{entity}\" at {priority} on an aspect without a rest value: the newest hold wins",
                 names.join(" and ")
             ));
         }
@@ -1916,8 +1964,9 @@ mod tests {
     }
 
     #[test]
-    fn two_holders_at_one_band_warn_only_without_a_rest_value() {
-        // The burner has a rest value, so the two are told apart by it.
+    fn two_holders_of_the_rest_aspect_do_not_warn() {
+        // The burner's `on` has a rest value, so the two are told apart by
+        // it, even where one key's wildcard reaches beyond it.
         let (_grants, warnings, errors) = resolve_holding(&[
             (
                 "flue_guard",
@@ -1931,6 +1980,46 @@ mod tests {
             ),
         ]);
         assert!(errors.is_empty(), "{errors:?}");
+        assert!(warnings.is_empty(), "{warnings:?}");
+    }
+
+    #[test]
+    fn two_holders_of_an_aspect_without_a_rest_value_warn() {
+        // Both reach the burner's power_level, which has none.
+        let (_grants, warnings, _errors) = resolve_holding(&[
+            (
+                "flue_guard",
+                "home/hold/flue_guard/utility/stove/**",
+                Priority::Automation,
+            ),
+            (
+                "heating",
+                "home/hold/heating/utility/stove/power_level",
+                Priority::Automation,
+            ),
+        ]);
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("flue_guard and heating hold \"stove\"")),
+            "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn two_holders_of_different_aspects_do_not_warn() {
+        let (_grants, warnings, _errors) = resolve_holding(&[
+            (
+                "curve",
+                "home/hold/curve/utility/heat_pump/setpoint",
+                Priority::Automation,
+            ),
+            (
+                "price",
+                "home/hold/price/utility/heat_pump/offset",
+                Priority::Automation,
+            ),
+        ]);
         assert!(warnings.is_empty(), "{warnings:?}");
     }
 

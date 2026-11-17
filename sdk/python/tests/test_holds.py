@@ -32,10 +32,19 @@ def context(mirror=()):
     ctx._holds = None
     ctx._asserted = set()
     ctx._holds_lock = threading.Lock()
-    ctx.puts, ctx.deletes, ctx.events = [], [], []
+    ctx.puts, ctx.deletes, ctx.events, ctx.log = [], [], [], []
+
+    def put(key, value, at=None):
+        ctx.puts.append((key, value))
+        ctx.log.append(("put", key))
+
+    def delete(key):
+        ctx.deletes.append(key)
+        ctx.log.append(("delete", key))
+
     ctx._session = types.SimpleNamespace(
-        put_json=lambda key, value, at=None: ctx.puts.append((key, value)),
-        delete=ctx.deletes.append,
+        put_json=put,
+        delete=delete,
         get_json=lambda expr, timeout_s=None: list(mirror),
         health_event=lambda kind, **fields: ctx.events.append(kind),
         ready=lambda: ctx.events.append("ready"),
@@ -104,11 +113,17 @@ class ReleaseTest(unittest.TestCase):
         self.assertEqual(ctx.deletes, [HOLD])
 
     def test_a_command_releases_the_units_own_hold_on_the_aspect(self):
+        # The command first, so the arbiter, which drops the hold with the
+        # command, does not resolve the delete on its own first.
         ctx = context()
         ctx.hold("stove", False)
         ctx.publish("start", True)
-        self.assertEqual(ctx.deletes, [HOLD])
-        self.assertEqual(ctx.puts[-1][0], CMD)
+        self.assertEqual(ctx.log[1:], [("put", CMD), ("delete", HOLD)])
+
+    def test_a_hold_publish_is_not_published_raw(self):
+        ctx = context()
+        with self.assertRaises(ValueError):
+            ctx.publish("stove", False)
 
     def test_ready_releases_what_was_not_asserted_again(self):
         old = {"value": True, "priority": "automation", "id": "0ld0ld01"}

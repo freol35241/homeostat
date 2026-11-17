@@ -1053,8 +1053,8 @@ arbitrate.
 
 #### Hold intents
 
-The manual band's lease is the family hold. A family surface says what
-should happen to it with the envelope's `hold`:
+A manual-band command places the family's hold. A family surface says
+what should happen to it with the envelope's `hold`:
 
 | `hold` | Forwarded | The family hold |
 |---|---|---|
@@ -1073,9 +1073,9 @@ should happen to it with the envelope's `hold`:
   adapter whose device acts on a button of its own reports the change,
   and the press then holds like a tap on the dashboard.
 - `"release"` hands the aspect back. It carries no value. It clears a
-  hold whichever surface placed it. The device stays where it is until
-  an automation next commands it, and one that commands only on a
-  change of its inputs may not do so for a while.
+  hold whichever surface placed it, and the hold beneath, if any, is
+  sent at once ([Which hold wins](#which-hold-wins)). With none, the
+  device stays where it is until something commands it.
 
 Clearing touches only the family hold. A unit's hold beneath stays
 where it is, because nothing took it over. An adapter receives

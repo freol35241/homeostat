@@ -108,11 +108,19 @@ class WhichHoldWinsTest(Base):
         self.resolver.expire(effects := [])
         self.assertEqual(self.forwards(effects), [(True, "heating", "h1")])
 
-    def test_a_record_that_is_not_a_hold_is_refused(self):
+    def test_a_record_that_is_not_a_hold_is_refused_and_drops_the_hold(self):
         effects = []
         for record in ({"id": "x"}, {"value": 1}, "junk", {"value": 1, "id": "x", "until": "soon"}):
             self.assertFalse(self.resolver.put_hold(STOVE, "heating", record, WALL, effects), record)
         self.assertEqual(effects, [])
+        self.hold("heating", True, "h1")
+        self.resolver.put_hold(STOVE, "heating", "junk", WALL, [])
+        self.assertIsNone(self.resolver.winner(STOVE), "the mirror now holds the junk, not the hold")
+
+    def test_the_rest_value_is_matched_by_type(self):
+        self.hold("flue_guard", 0, "f1", seen=2.0)
+        self.hold("heating", True, "h1", seen=1.0)
+        self.assertEqual(self.resolver.winner(STOVE)["unit"], "flue_guard", "0 is not False: the newest wins")
 
 
 class FamilyTest(Base):
@@ -138,8 +146,10 @@ class FamilyTest(Base):
 
     def test_a_nudge_over_a_hold_is_not_undone(self):
         self.hold("heating", True, "h1")
+        self.command("manual", "dashboard", True, cmd_id="c1")
         forwarded, effects = self.command("manual", "dashboard", False, hold="none", cmd_id="n1")
         self.assertTrue(forwarded)
+        self.assertEqual(effects, [], "the hold beneath stands again, but nothing is sent or said")
         self.resolver.resolve(STOVE, effects := [])
         self.assertEqual(self.forwards(effects), [], "the hold beneath waits for its next change")
         self.assertEqual(self.forwards(self.hold("heating", True, "h2")), [(True, "heating", "h2")])
@@ -190,6 +200,25 @@ class CommandTest(Base):
         self.hold("heating", True, "h1")
         self.assertTrue(self.command("automation", "heating", False)[0])
 
+    def test_a_command_releases_its_senders_hold_whichever_arrives_first(self):
+        # The SDK deletes the hold's key after the command. The two arrive
+        # on two subscribers, in either order, and neither order may send
+        # the hold beneath or undo the command.
+        for delete_first in (False, True):
+            with self.subTest(delete_first=delete_first):
+                self.setUp()
+                self.hold("heating", 18, "h1", target=LAMP)
+                self.hold("planner", 21, "p1", target=LAMP)
+                if delete_first:
+                    effects = self.drop("planner", target=LAMP)
+                    self.assertEqual(self.forwards(effects), [(18, "heating", "h1")], "a release sends the hold beneath")
+                    continue
+                forwarded, effects = self.command("agent", "planner", 22, target=LAMP)
+                self.assertTrue(forwarded)
+                self.assertEqual(self.forwards(effects), [])
+                self.assertEqual(self.forwards(self.drop("planner", target=LAMP)), [], "the late delete undoes nothing")
+                self.assertEqual(self.resolver.winner(LAMP)["unit"], "heating")
+
     def test_the_hold_beneath_a_command_waits_for_its_next_change(self):
         self.hold("heating", True, "h1")
         self.command("automation", "evening", True)
@@ -218,6 +247,7 @@ class LifecycleTest(Base):
             clock=later, wall=lambda: WALL + 20,
         )
         after.restore(records, document)
+        self.assertEqual(after.document()["aspects"][1]["refused"], 0)
         after.put_hold(STOVE, "heating", {"value": True, "id": "h1"}, WALL, effects := [])
         self.assertEqual(effects, [])
         after.resolve_all(effects)
