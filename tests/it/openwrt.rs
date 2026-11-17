@@ -5,7 +5,7 @@
 //! second with a 2s away-delay, so sighting transitions land within the
 //! timeouts.
 
-mod common;
+use crate::common;
 
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -17,7 +17,7 @@ use zenoh::sample::SampleKind;
 
 use homeostat::bus::HealthStatus;
 
-use common::{
+use crate::common::{
     await_health, config_write, expect_event_kind, expect_state, fixture_command, free_port,
     health_watch, Supervisor,
 };

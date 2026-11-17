@@ -3,8 +3,6 @@
 //! WS-Security digest checking and a long poll) on a free port plus the
 //! real supervisor on the onvif fixture house, and asserts on the bus.
 
-mod common;
-
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -13,7 +11,7 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 use zenoh::sample::SampleKind;
 
-use common::{
+use crate::common::{
     await_mirror, cache_read, expect_event_kind, expect_state, fixture_command, free_port,
     next_event, StateSub, Supervisor,
 };

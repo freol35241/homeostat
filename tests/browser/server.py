@@ -9,7 +9,7 @@ are a few lines of JSON here. A test can also decide when a delta arrives
 and therefore when the page re-renders.
 
 The page and its assets are not canned. The canary test in
-tests/dashboard.rs (a real supervised house, booted once) checks that
+tests/it/dashboard.rs (a real supervised house, booted once) checks that
 model.json carries the same fields as the real unit's /api/model. Nothing
 checks snapshot.json that way, so it holds only shapes the unit emits.
 

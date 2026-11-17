@@ -15,8 +15,6 @@
 //! clock mirror subscribes `home/clock/*` from the start. With delivery
 //! guaranteed, per-session ordering makes every silence assertion sound.
 
-mod common;
-
 use std::time::Duration;
 
 use homeostat::bus::HealthStatus;
@@ -25,7 +23,7 @@ use zenoh::handlers::FifoChannelHandler;
 use zenoh::pubsub::Subscriber;
 use zenoh::sample::Sample;
 
-use common::{
+use crate::common::{
     await_health, await_matching, cache_read, config_write, health_watch, matched_publisher,
     Publisher, Supervisor,
 };

@@ -3,7 +3,7 @@
 //! asserting on the forward/preempt/refuse/expiry contract of
 //! docs/design.md#arbitrated-mode.
 
-mod common;
+use crate::common;
 
 use std::time::Duration;
 
@@ -13,7 +13,7 @@ use zenoh::handlers::FifoChannelHandler;
 use zenoh::pubsub::Subscriber;
 use zenoh::sample::SampleKind;
 
-use common::{
+use crate::common::{
     assert_cli_ok, assert_unit_contract, await_health, cli, config_write, health_watch, rfc3339_in,
     running_pid, stdout, temp_house, Supervisor,
 };

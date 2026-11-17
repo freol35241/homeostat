@@ -1,14 +1,12 @@
 //! Supervision integration tests: each scenario spawns the real `homeostat`
 //! binary on a fixture house and asserts on the bus.
 
-mod common;
-
 use std::time::{Duration, Instant};
 
 use homeostat::bus::{Health, HealthStatus, LogEntry};
 use zenoh::sample::SampleKind;
 
-use common::{await_health, health_watch, process_alive, scan_health, Supervisor};
+use crate::common::{await_health, health_watch, process_alive, scan_health, Supervisor};
 
 const STATE_KEY: &str = "home/state/testroom/fake_sensor/value";
 const CRASH_KEY: &str = "home/cmd/testroom/fake_sensor/crash";

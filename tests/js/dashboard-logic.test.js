@@ -2,7 +2,7 @@
 // (adapters/assets/dashboard-logic.js), run by `node --test tests/js`,
 // Node's built-in runner, with no packages. The DOM wiring
 // (adapters/assets/dashboard/) is covered by the browser suite
-// (tests/browser), the server-side one (tests/dashboard.rs) and manual
+// (tests/browser), the server-side one (tests/it/dashboard.rs) and manual
 // testing.
 'use strict';
 const test = require('node:test');

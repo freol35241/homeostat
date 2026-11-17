@@ -3037,7 +3037,7 @@ written with the `html` tag (`assets/dashboard/html.js`). The tag
 escapes every interpolated value unless the value is itself markup, so
 a forgotten escape cannot turn a label from the house into markup.
 `tests/browser` drives the real page against canned fixtures. A canary
-in `tests/dashboard.rs` checks the fixtures' field names against a real
+in `tests/it/dashboard.rs` checks the fixtures' field names against a real
 `/api/model`. The browser suite is a broad net and does not replace
 opening a browser on a change.
 

@@ -1,5 +1,5 @@
 {
-  "comment": "The Host values the dashboard and the MCP server must both admit or both refuse. Read by src/mcp/http.rs (unit test) and tests/dashboard.rs (against the running dashboard). A house-network address is private, loopback, link-local or unspecified IPv4, or loopback, unspecified, unique-local or link-local IPv6; a name must be one the house answers to.",
+  "comment": "The Host values the dashboard and the MCP server must both admit or both refuse. Read by src/mcp/http.rs (unit test) and tests/it/dashboard.rs (against the running dashboard). A house-network address is private, loopback, link-local or unspecified IPv4, or loopback, unspecified, unique-local or link-local IPv6; a name must be one the house answers to.",
   "allowed": [
     "localhost",
     "localhost:8080",

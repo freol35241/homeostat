@@ -12,15 +12,13 @@
 //! survives. The store outlives the supervisor because it is a file named
 //! by `RECORDER_DB`, as in recorder.rs.
 
-mod common;
-
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use homeostat::bus::HealthStatus;
 use serde_json::{json, Value};
 
-use common::{await_health, await_mirror, health_watch, matched_publisher, Supervisor};
+use crate::common::{await_health, await_mirror, health_watch, matched_publisher, Supervisor};
 
 const FIXTURE: &str = "tests/fixtures/house_restore";
 const LATCH: &str = "home/state/global/night_mode/on";

@@ -11,8 +11,6 @@
 //! (attic, cellar), so the `evening_lights` automation running on the real
 //! clock does not react to them.
 
-mod common;
-
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -25,7 +23,7 @@ use zenoh::handlers::FifoChannelHandler;
 use zenoh::pubsub::Subscriber;
 use zenoh::sample::Sample;
 
-use common::{
+use crate::common::{
     await_health, await_mirror, config_write, health_watch, matched_publisher, Publisher,
     Supervisor,
 };

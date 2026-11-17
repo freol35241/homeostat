@@ -2,14 +2,12 @@
 //! mosquitto broker on a free port plus the real supervisor on the
 //! owntracks fixture house, and asserts on both buses.
 
-mod common;
-
 use std::time::Duration;
 
 use serde_json::{json, Value};
 use zenoh::sample::SampleKind;
 
-use common::{
+use crate::common::{
     assert_unit_contract, expect_drop_event, expect_states, next_event, Mosquitto, Mqtt, Supervisor,
 };
 

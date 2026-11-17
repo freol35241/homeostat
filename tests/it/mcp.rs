@@ -7,8 +7,6 @@
 //! Every wait polls an observable condition within a deadline. No test
 //! uses a fixed port or a wall-clock sleep.
 
-mod common;
-
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
@@ -18,7 +16,7 @@ use std::time::{Duration, Instant};
 use homeostat::bus::HealthStatus;
 use serde_json::{json, Value};
 
-use common::{
+use crate::common::{
     await_base_units, await_health, cache_read, free_port, health_watch, matched_publisher,
     running_pid, temp_house, Supervisor,
 };

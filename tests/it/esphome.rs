@@ -4,7 +4,7 @@
 //! plus the real supervisor on the esphome fixture house, and asserts on
 //! both buses.
 
-mod common;
+use crate::common;
 
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 use zenoh::sample::SampleKind;
 
-use common::{
+use crate::common::{
     assert_unit_contract, await_discovery, await_health, await_mirror, await_states,
     expect_drop_event, expect_states, free_port, health_watch, Supervisor,
 };

@@ -8,14 +8,16 @@
 //! built from trackers, the unit reads them off the bus, and the person's
 //! aspects and its decisions land where the dashboard reads them.
 
-mod common;
+use crate::common;
 
 use std::time::Duration;
 
 use homeostat::bus::HealthStatus;
 use serde_json::{json, Value};
 
-use common::{await_health, expect_state, health_watch, matched_publisher, Publisher, Supervisor};
+use crate::common::{
+    await_health, expect_state, health_watch, matched_publisher, Publisher, Supervisor,
+};
 
 const FIXTURE: &str = "tests/fixtures/house_persons";
 const PERSON: &str = "home/state/person/fredrik";

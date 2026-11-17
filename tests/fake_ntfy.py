@@ -2,7 +2,7 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""A minimal ntfy server for the tests in tests/ntfy.rs.
+"""A minimal ntfy server for the tests in tests/it/ntfy.rs.
 
 See docs/design.md#notifications. It speaks the two calls the adapter
 makes: GET /v1/health -> {"healthy": true}, and POST /{topic} with the

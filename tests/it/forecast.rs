@@ -14,14 +14,12 @@
 //!    is read here through a session that was not connected when the unit
 //!    published.
 
-mod common;
-
 use std::time::Duration;
 
 use homeostat::bus::HealthStatus;
 use serde_json::Value;
 
-use common::{await_health, health_watch, matched_publisher, Supervisor};
+use crate::common::{await_health, health_watch, matched_publisher, Supervisor};
 
 const FIXTURE: &str = "tests/fixtures/house_forecast";
 const FORECAST_KEY: &str = "home/forecast/global/spot_price/price/nordpool";

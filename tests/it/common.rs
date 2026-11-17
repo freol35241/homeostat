@@ -28,7 +28,6 @@ impl Supervisor {
     /// Spawns `homeostat up <fixture> --listen <fresh port>` with the
     /// `fake_adapter` binary's directory on PATH, and waits until the bus
     /// endpoint accepts connections.
-    #[allow(dead_code)] // each test binary uses its own subset of the harness
     pub fn spawn(fixture: &str) -> Self {
         Self::spawn_with_env(fixture, &[])
     }
@@ -61,7 +60,6 @@ impl Supervisor {
 
     /// Like `spawn_with_env`, on an absolute house path (temp-dir copies
     /// that tests edit between plan and apply).
-    #[allow(dead_code)] // each test binary uses its own subset of the harness
     pub fn spawn_at(house: &std::path::Path, envs: &[(&str, &str)]) -> Self {
         for _ in 0..5 {
             if let Some(sup) = Self::try_spawn(house, envs) {
@@ -140,7 +138,6 @@ impl Supervisor {
 
     /// The last `lines` lines the supervisor and its units printed, for a
     /// failure message: a unit that never becomes ready says why there.
-    #[allow(dead_code)] // each test binary uses its own subset of the harness
     pub fn output_tail(&self, lines: usize) -> String {
         let all = self.stderr();
         let kept: Vec<&str> = all.lines().rev().take(lines).collect();
@@ -192,7 +189,6 @@ impl Supervisor {
 
     /// Graceful teardown used by tests that already asserted what they
     /// needed: SIGTERM, then require a clean exit.
-    #[allow(dead_code)] // each test binary uses its own subset of the harness
     pub fn shutdown(&mut self) {
         self.signal(libc::SIGTERM);
         let code = self.wait_exit(Duration::from_secs(10));
@@ -227,7 +223,6 @@ impl Drop for Supervisor {
 /// Falls back to the command as given when uv cannot resolve the script,
 /// as `process::resolve` does. If that fixture then fails to start, the
 /// test fails visibly; a leaked process would go unnoticed.
-#[allow(dead_code)] // each test binary uses its own subset of the harness
 pub async fn fixture_command(command: &str) -> (String, Vec<String>) {
     let resolved =
         homeostat::supervisor::process::resolve(command, Path::new(env!("CARGO_MANIFEST_DIR")))
@@ -238,12 +233,12 @@ pub async fn fixture_command(command: &str) -> (String, Vec<String>) {
 }
 
 /// A free port no earlier call in this test process returned. The kernel
-/// readily hands a just-closed port out again, and a binary's tests run
+/// readily hands a just-closed port out again, and the tests run
 /// concurrently. Two tests given the same port each start a broker or a
 /// supervisor on it, and the loser's fails to bind. Its spawn only checks
 /// that something accepts on the port, so it carries on against the
 /// winner's, and the test then asserts on another test's house. Unique
-/// within the process is enough: cargo runs test binaries one at a time.
+/// within the process is enough: every suite runs in this one binary.
 pub fn free_port() -> u16 {
     static HANDED_OUT: Mutex<BTreeSet<u16>> = Mutex::new(BTreeSet::new());
     let mut handed_out = HANDED_OUT
@@ -262,7 +257,6 @@ pub fn free_port() -> u16 {
 }
 
 /// True while a process exists and is not a zombie.
-#[allow(dead_code)] // each test binary uses its own subset of the harness
 pub fn process_alive(pid: u32) -> bool {
     let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
         return false;
@@ -346,7 +340,6 @@ where
 }
 
 /// A mosquitto broker on a free port, killed on drop.
-#[allow(dead_code)] // each test binary uses its own subset of the harness
 pub struct Mosquitto {
     child: Child,
     pub port: u16,
@@ -357,14 +350,12 @@ pub struct Mosquitto {
 /// integration tests, under `target/`. Ubuntu's `AppArmor` profile for
 /// mosquitto (from 26.04) lets it read only `/etc/mosquitto`, so such a host
 /// grants this one tree in the profile's local include (`CLAUDE.md`).
-#[allow(dead_code)] // each test binary uses its own subset of the harness
 fn mosquitto_dir() -> PathBuf {
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
     std::fs::create_dir_all(&dir).expect("create the broker's directory");
     dir
 }
 
-#[allow(dead_code)] // each test binary uses its own subset of the harness
 impl Mosquitto {
     pub fn spawn() -> Self {
         Self::spawn_conf(|port, _| format!("listener {port} 127.0.0.1\nallow_anonymous true\n"))
@@ -372,7 +363,6 @@ impl Mosquitto {
 
     /// A broker that requires the given credentials, with no anonymous
     /// fallback, so a unit that cannot present a password does not connect.
-    #[allow(dead_code)] // each test binary uses its own subset of the harness
     pub fn spawn_with_auth(username: &str, password: &str) -> Self {
         let passwd = mosquitto_dir().join(format!(
             "homeostat-mqtt-passwd-{}-{username}",
@@ -462,16 +452,13 @@ impl Drop for Mosquitto {
 
 /// An MQTT test client: publishes are acknowledged (QoS 1) before returning,
 /// incoming messages are buffered so acks and messages can interleave.
-#[allow(dead_code)] // each test binary uses its own subset of the harness
 pub struct Mqtt {
     client: AsyncClient,
     events: tokio::sync::mpsc::UnboundedReceiver<Event>,
     inbox: VecDeque<(String, Vec<u8>)>,
 }
 
-#[allow(dead_code)] // each test binary uses its own subset of the harness
 impl Mqtt {
-    #[allow(dead_code)] // each test binary uses its own subset of the harness
     pub async fn connect_auth(port: u16, id: &str, username: &str, password: &str) -> Self {
         Self::connect_with(port, id, Some((username, password))).await
     }
@@ -568,7 +555,6 @@ impl Mqtt {
 pub type StateSub = Subscriber<FifoChannelHandler<Sample>>;
 
 /// Collects state samples until every `expected` (key, value) has appeared.
-#[allow(dead_code)] // each test binary uses its own subset of the harness
 pub async fn expect_states(sub: &StateSub, expected: &[(&str, Value)]) {
     let mut seen: HashMap<String, Value> = HashMap::new();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
@@ -587,7 +573,6 @@ pub async fn expect_states(sub: &StateSub, expected: &[(&str, Value)]) {
 }
 
 /// Waits for a key to carry `expected`.
-#[allow(dead_code)] // each test binary uses its own subset of the harness
 pub async fn expect_state(sub: &StateSub, expected: Value) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
     loop {
@@ -606,7 +591,6 @@ pub async fn expect_state(sub: &StateSub, expected: Value) {
 /// Polls the core state mirror until `key` holds `expected`. This is the
 /// late-joiner read path. Publishes that predate a test's subscriber
 /// (connect-time availability, first states) are only observable here.
-#[allow(dead_code)] // each test binary uses its own subset of the harness
 pub async fn await_mirror(observer: &zenoh::Session, key: &str, expected: &serde_json::Value) {
     let deadline = tokio::time::Instant::now() + Duration::from_mins(1);
     loop {
@@ -633,7 +617,6 @@ pub async fn await_mirror(observer: &zenoh::Session, key: &str, expected: &serde
 /// The next health event, whatever it is. Unlike `expect_drop_event` this
 /// does not scan past events that do not match, which is what a test needs
 /// when it asserts that some event was not emitted.
-#[allow(dead_code)] // each test binary uses its own subset of the harness
 pub async fn next_event(sub: &StateSub) -> Value {
     let sample = tokio::time::timeout(Duration::from_secs(20), sub.recv_async())
         .await
@@ -643,7 +626,6 @@ pub async fn next_event(sub: &StateSub) -> Value {
 }
 
 /// Reads health events until one matches the expected drop reason.
-#[allow(dead_code)] // each test binary uses its own subset of the harness
 pub async fn expect_drop_event(sub: &StateSub, reason: &str) -> Value {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
     loop {
@@ -663,7 +645,6 @@ pub async fn expect_drop_event(sub: &StateSub, reason: &str) -> Value {
 /// Reads health events until one matches the expected kind. Degraded
 /// conditions (a recorder backend outage, say) publish kind = condition,
 /// unlike dropped-input events.
-#[allow(dead_code)] // each test binary uses its own subset of the harness
 pub async fn expect_event_kind(sub: &StateSub, kind: &str) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
     loop {
@@ -683,7 +664,6 @@ pub type Publisher = zenoh::pubsub::Publisher<'static>;
 
 /// Declares a publisher and waits until a subscriber matches it, so the
 /// writer does not filter out anything this publisher puts.
-#[allow(dead_code)] // each test binary uses its own subset of the harness
 pub async fn matched_publisher(session: &zenoh::Session, key: &str) -> Publisher {
     let publisher = session
         .declare_publisher(key.to_string())
@@ -694,7 +674,6 @@ pub async fn matched_publisher(session: &zenoh::Session, key: &str) -> Publisher
 }
 
 /// Waits until a subscriber matches the publisher.
-#[allow(dead_code)] // each test binary uses its own subset of the harness
 pub async fn await_matching(publisher: &Publisher) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
@@ -712,7 +691,6 @@ pub async fn await_matching(publisher: &Publisher) {
 }
 
 /// Writes a parameter through the core's query-with-payload write path.
-#[allow(dead_code)] // each test binary uses its own subset of the harness
 pub async fn config_write(
     session: &zenoh::Session,
     key: &str,
@@ -737,7 +715,6 @@ pub async fn config_write(
 /// with a pid, and when the supervisor gets SIGTERM it exits cleanly
 /// inside `shutdown_grace_s` and leaves no orphan. Each adapter suite
 /// calls it once, so a new adapter's suite gets the check with one line.
-#[allow(dead_code)] // each test binary uses its own subset of the harness
 pub async fn assert_unit_contract(sup: &mut Supervisor, observer: &zenoh::Session, unit: &str) {
     let mut watch = health_watch(observer, unit).await;
     let health = await_health(&mut watch, Duration::from_secs(10), |h| {
@@ -767,7 +744,6 @@ pub async fn assert_unit_contract(sup: &mut Supervisor, observer: &zenoh::Sessio
 /// drains the subscription and reads the core mirror until every expected
 /// key carries its value. `sub` must already be declared (declaring it
 /// after the mirror read would open the opposite gap).
-#[allow(dead_code)]
 pub async fn await_states(observer: &zenoh::Session, sub: &StateSub, expected: &[(&str, Value)]) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
     let mut seen: HashMap<String, Value> = HashMap::new();
@@ -810,7 +786,6 @@ pub async fn await_states(observer: &zenoh::Session, sub: &StateSub, expected: &
 /// core mirror of `home/discovery/*` until `ready` accepts it (the record
 /// count, say). The MCP surface reads it the same way, and it is the only
 /// path a test can rely on when the publish may predate its subscriber.
-#[allow(dead_code)]
 pub async fn await_discovery<F>(observer: &zenoh::Session, unit: &str, ready: F) -> Value
 where
     F: Fn(&Value) -> bool,
@@ -834,7 +809,6 @@ where
 }
 
 /// Reads a concrete key from a core queryable, decoding JSON.
-#[allow(dead_code)] // each test binary uses its own subset of the harness
 pub async fn cache_read(session: &zenoh::Session, key: &str) -> Option<Value> {
     let replies = session.get(key).await.expect("cache read query");
     while let Ok(reply) = replies.recv_async().await {
@@ -849,7 +823,6 @@ pub async fn cache_read(session: &zenoh::Session, key: &str) -> Option<Value> {
 
 /// Reads a concrete key from a core queryable as a raw string (meta values
 /// like hashes and commits are not JSON).
-#[allow(dead_code)] // each test binary uses its own subset of the harness
 pub async fn meta_read(session: &zenoh::Session, key: &str) -> Option<String> {
     let replies = session.get(key).await.expect("meta read query");
     while let Ok(reply) = replies.recv_async().await {
@@ -861,7 +834,6 @@ pub async fn meta_read(session: &zenoh::Session, key: &str) -> Option<String> {
 }
 
 /// The unit's current pid per the health queryable; panics unless running.
-#[allow(dead_code)] // each test binary uses its own subset of the harness
 pub async fn running_pid(session: &zenoh::Session, unit: &str) -> u64 {
     let health = cache_read(session, &bus::health_key(unit))
         .await
@@ -876,7 +848,6 @@ pub async fn running_pid(session: &zenoh::Session, unit: &str) -> u64 {
 
 /// Waits until both fixture units are running and returns (probe pid,
 /// reflector pid). Generous timeout: the first run resolves probe's uv env.
-#[allow(dead_code)] // each test binary uses its own subset of the harness
 pub async fn await_base_units(session: &zenoh::Session) -> (u64, u64) {
     let mut probe = health_watch(session, "probe").await;
     await_health(&mut probe, Duration::from_mins(2), |h| {
@@ -896,7 +867,6 @@ pub async fn await_base_units(session: &zenoh::Session) -> (u64, u64) {
 
 /// A fresh editable copy of the `fixture` house (repo-relative path) in a
 /// temp dir named after `tag`.
-#[allow(dead_code)] // each test binary uses its own subset of the harness
 pub fn temp_house(fixture: &str, tag: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("homeostat-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -907,7 +877,6 @@ pub fn temp_house(fixture: &str, tag: &str) -> PathBuf {
     dir
 }
 
-#[allow(dead_code)] // each test binary uses its own subset of the harness
 fn copy_dir(src: &Path, dst: &Path) {
     std::fs::create_dir_all(dst).expect("create dir");
     for entry in std::fs::read_dir(src).expect("read fixture dir") {
@@ -921,7 +890,6 @@ fn copy_dir(src: &Path, dst: &Path) {
     }
 }
 
-#[allow(dead_code)] // each test binary uses its own subset of the harness
 pub fn git(house: &Path, args: &[&str]) -> String {
     let output = Command::new("git")
         .arg("-C")
@@ -938,13 +906,11 @@ pub fn git(house: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&output.stdout).trim().to_string()
 }
 
-#[allow(dead_code)] // each test binary uses its own subset of the harness
 pub fn git_init_commit(house: &Path) -> String {
     git(house, &["init", "-q", "-b", "main"]);
     git_commit_all(house, "initial")
 }
 
-#[allow(dead_code)] // each test binary uses its own subset of the harness
 pub fn git_commit_all(house: &Path, message: &str) -> String {
     git(house, &["add", "-A"]);
     git(house, &["commit", "-qm", message]);
@@ -952,7 +918,6 @@ pub fn git_commit_all(house: &Path, message: &str) -> String {
 }
 
 /// Runs the homeostat CLI, returning its output.
-#[allow(dead_code)] // each test binary uses its own subset of the harness
 pub fn cli(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_homeostat"))
         .args(args)
@@ -961,17 +926,14 @@ pub fn cli(args: &[&str]) -> Output {
         .expect("run homeostat CLI")
 }
 
-#[allow(dead_code)] // each test binary uses its own subset of the harness
 pub fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).to_string()
 }
 
-#[allow(dead_code)] // each test binary uses its own subset of the harness
 pub fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).to_string()
 }
 
-#[allow(dead_code)] // each test binary uses its own subset of the harness
 pub fn assert_cli_ok(output: &Output) {
     assert!(
         output.status.success(),
@@ -981,24 +943,23 @@ pub fn assert_cli_ok(output: &Output) {
     );
 }
 
-/// Caps how many houses one test binary brings up at the same moment.
+/// Caps how many of the dashboard suite's houses start at the same moment.
 ///
-/// Every test here spawns its own supervisor, and cargo runs a binary's
-/// tests in parallel, so five four-unit houses resolve and start together.
-/// On a two-core runner the slowest starves past its health deadline and
-/// fails a test that nothing about it broke. Parallelism pays for very
-/// little. Measured on the dashboard suite, the five tests take 23.3 s
-/// run serially and 12.9 s in parallel on sixteen cores, but 23.5 s versus
-/// 20.7 s on two, because the tests mostly wait on fixed delays. Two at a
-/// time keeps most of the gain on a developer's machine and removes the
-/// herd from the runner.
+/// Every test spawns its own supervisor, and cargo runs the tests in
+/// parallel, so the dashboard suite's four-unit houses resolve and start
+/// together. On a two-core runner the slowest starves past its health
+/// deadline and fails a test that nothing about it broke. Parallelism pays
+/// for very little there. Measured when the suite had five tests, they
+/// took 23.3 s run serially and 12.9 s in parallel on sixteen cores, but
+/// 23.5 s versus 20.7 s on two, because the tests mostly wait on fixed
+/// delays. Two at a time keeps most of the gain on a developer's machine.
+/// The other suites' houses start uncapped beside these.
 ///
 /// The permit covers startup only. Hold it until the units under test
 /// report healthy, then drop it: the body of a test costs nothing to
 /// overlap, and holding it longer would serialize the whole suite.
 static STARTUP: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
 
-#[allow(dead_code)] // each test binary uses its own subset of the harness
 pub async fn startup_permit() -> tokio::sync::SemaphorePermit<'static> {
     STARTUP
         .acquire()
@@ -1009,7 +970,6 @@ pub async fn startup_permit() -> tokio::sync::SemaphorePermit<'static> {
 /// The RFC3339 UTC instant `secs` seconds from now, to the whole second.
 /// A hold may name an end at most a year ahead, so a test cannot use a
 /// fixed far-future date.
-#[allow(dead_code)] // each test binary uses its own subset of the harness
 pub fn rfc3339_in(secs: u64) -> String {
     let at = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

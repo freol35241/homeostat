@@ -4,7 +4,7 @@
 #     "aiohttp>=3.9,<4",
 # ]
 # ///
-"""A minimal ONVIF Profile S pull-point event service for tests/onvif.rs.
+"""A minimal ONVIF Profile S pull-point event service for tests/it/onvif.rs.
 
 See docs/design.md#cameras. It speaks the real SOAP shapes the adapter
 sends: CreatePullPointSubscription, PullMessages (a long poll against a

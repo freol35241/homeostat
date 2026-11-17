@@ -6,14 +6,12 @@
 //! does not retract, so the assertions here are about when `false` appears
 //! and when it does not.
 
-mod common;
-
 use std::time::Duration;
 
 use serde_json::json;
 use zenoh::sample::SampleKind;
 
-use common::{await_mirror, expect_drop_event, expect_states, Mosquitto, Mqtt, Supervisor};
+use crate::common::{await_mirror, expect_drop_event, expect_states, Mosquitto, Mqtt, Supervisor};
 
 const FIXTURE: &str = "tests/fixtures/house_rf433";
 const PORT_ENV: &str = "HOMEOSTAT_TEST_MQTT_PORT";

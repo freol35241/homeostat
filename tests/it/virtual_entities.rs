@@ -10,8 +10,6 @@
 //! `home/state/**` from supervisor start, so the writer does not filter
 //! out the automation's put.
 
-mod common;
-
 use std::time::Duration;
 
 use homeostat::bus::{Health, HealthStatus};
@@ -20,7 +18,7 @@ use zenoh::handlers::FifoChannelHandler;
 use zenoh::pubsub::Subscriber;
 use zenoh::sample::Sample;
 
-use common::{
+use crate::common::{
     await_health, await_matching, config_write, health_watch, matched_publisher, Supervisor,
 };
 

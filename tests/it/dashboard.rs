@@ -34,7 +34,7 @@
 //!    non-camera entity 404s. There is no snapshot route: a still frame
 //!    needs a transcode the media plane does not carry.
 
-mod common;
+use crate::common;
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -43,7 +43,7 @@ use std::time::{Duration, Instant};
 use homeostat::bus::{self, HealthStatus};
 use serde_json::{json, Value};
 
-use common::{await_health, health_watch, startup_permit, Supervisor};
+use crate::common::{await_health, health_watch, startup_permit, Supervisor};
 
 const FIXTURE: &str = "tests/fixtures/house_dashboard";
 const LAMP_CMD: &str = "home/cmd/livingroom/lamp/on";
@@ -236,7 +236,7 @@ async fn browser_fixtures_still_look_like_the_real_model() {
     let (status, model) = http_request(&addr, "GET", "/api/model", &[], None);
     assert_eq!(status, 200);
 
-    let fixture: Value = serde_json::from_str(include_str!("browser/fixtures/model.json"))
+    let fixture: Value = serde_json::from_str(include_str!("../browser/fixtures/model.json"))
         .expect("browser fixture model is JSON");
 
     let names =
@@ -1100,7 +1100,7 @@ async fn dashboard_serves_the_family_surface() {
     );
     assert_eq!(status, 403, "write without X-Homeostat must be refused");
     // The Host rule is the MCP server's too: one table pins both.
-    let table: Value = serde_json::from_str(include_str!("fixtures/host_gate.json"))
+    let table: Value = serde_json::from_str(include_str!("../fixtures/host_gate.json"))
         .expect("host_gate.json is JSON");
     for (list, want) in [("allowed", 200), ("refused", 403)] {
         for host in table[list].as_array().expect("a list of hosts") {

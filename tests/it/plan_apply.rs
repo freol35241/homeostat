@@ -8,14 +8,12 @@
 //! Each supervisor gets a fresh ephemeral endpoint, and every wait polls a
 //! bus-observable condition within a deadline instead of sleeping.
 
-mod common;
-
 use std::path::Path;
 use std::time::Duration;
 
 use serde_json::{json, Value};
 
-use common::{
+use crate::common::{
     assert_cli_ok, await_base_units, cache_read, cli, config_write, git_commit_all,
     git_init_commit, meta_read, running_pid, stderr, stdout, temp_house, Supervisor,
 };

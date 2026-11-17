@@ -11,15 +11,13 @@
 //! writes it fails here, and so does a stamp that does not reach the store
 //! to the microsecond.
 
-mod common;
-
 use std::path::PathBuf;
 use std::time::Duration;
 
 use homeostat::bus::HealthStatus;
 use serde_json::json;
 
-use common::{await_health, await_mirror, health_watch, Supervisor};
+use crate::common::{await_health, await_mirror, health_watch, Supervisor};
 
 /// The newest amount is stamped at the start of the previous hour, so the
 /// mirror must report it as between one and two of these old.
