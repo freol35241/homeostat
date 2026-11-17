@@ -1,0 +1,13 @@
+schema = 1
+
+[unit]
+name = "lights"
+kind = "automation"
+
+[runtime]
+command = "uv run units/lights.py"
+restart = "on-failure"
+
+# A command stands for nothing once it is sent, so it has no on_loss.
+[bus.publishes]
+lamp = { key = "home/cmd/kitchen/lamp/on", capability = "light", priority = "automation", on_loss = "release" }

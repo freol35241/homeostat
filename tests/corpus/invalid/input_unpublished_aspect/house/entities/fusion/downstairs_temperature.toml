@@ -1,0 +1,9 @@
+schema = 1
+
+[entity]
+capability = "sensor"
+features = ["temperature"]
+room = "global"
+
+[write_policy]
+owner = "fusion"

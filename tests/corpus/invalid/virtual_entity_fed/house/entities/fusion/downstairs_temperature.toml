@@ -1,0 +1,13 @@
+schema = 1
+
+[entity]
+capability = "sensor"
+features = ["temperature"]
+room = "global"
+
+[write_policy]
+owner = "fusion"
+
+# A computed value has no device to take a control input.
+[inputs]
+reference = { entity = "hall_temperature", aspect = "temperature" }

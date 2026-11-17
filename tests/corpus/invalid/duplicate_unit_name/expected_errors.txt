@@ -1,0 +1,2 @@
+error[duplicate-unit-name] night_mode: defined in units/night_mode.toml and units/night_mode_copy.toml
+error[unit-name-mismatch] night_mode: manifest file is units/night_mode_copy.toml but [unit] name is "night_mode"; the SDK reads units/night_mode.toml (units/night_mode_copy.toml)

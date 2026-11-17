@@ -1,0 +1,1 @@
+error[write-mode-required] lamp: capability "light" takes commands, so [write_policy] needs a mode (entities/zigbee/lamp.toml)

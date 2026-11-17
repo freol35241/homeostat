@@ -1,0 +1,1 @@
+error[zone-room-collision] kitchen: zone name "kitchen" collides with a room name (zones.toml)

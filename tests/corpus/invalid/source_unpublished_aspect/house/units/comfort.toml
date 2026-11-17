@@ -1,0 +1,18 @@
+schema = 1
+
+[unit]
+name = "comfort"
+kind = "automation"
+
+[runtime]
+command = "uv run units/comfort.py"
+restart = "on-failure"
+
+[bus.subscribes]
+inputs = "home/state/global/downstairs_temperature/**"
+
+[bus.publishes]
+index = { key = "home/state/global/comfort_index/value" }
+
+[entities]
+dir = "entities/comfort/"

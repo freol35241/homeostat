@@ -1,0 +1,1 @@
+error[unsupported-schema] zigbee: schema 2 is not supported (expected 1) (units/zigbee.toml)

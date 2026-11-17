@@ -1,0 +1,10 @@
+schema = 1
+
+[entity]
+id = "0x03"
+capability = "sensor"
+features = ["temperature"]
+room = "downstairs"
+
+[write_policy]
+owner = "zigbee"

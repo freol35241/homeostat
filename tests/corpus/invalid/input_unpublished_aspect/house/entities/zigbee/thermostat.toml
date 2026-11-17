@@ -1,0 +1,14 @@
+schema = 1
+
+[entity]
+id = "0x08"
+capability = "climate"
+room = "bedroom"
+
+[write_policy]
+mode = "shared"
+owner = "zigbee"
+
+# fusion publishes only the temperature of downstairs_temperature.
+[inputs]
+indoor_humidity_actual = { entity = "downstairs_temperature", aspect = "humidity" }

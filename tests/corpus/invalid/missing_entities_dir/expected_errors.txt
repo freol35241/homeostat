@@ -1,0 +1,1 @@
+error[missing-entities-dir] zigbee: entities dir "entities/zigbe/" not found

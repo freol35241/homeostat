@@ -1,0 +1,1 @@
+error[input-unpublished-aspect] thermostat.indoor_humidity_actual: "fusion" does not publish home/state/global/downstairs_temperature/humidity; a fed aspect must be in its owner's [bus.publishes] (entities/zigbee/thermostat.toml)
