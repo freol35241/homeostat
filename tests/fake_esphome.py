@@ -27,6 +27,9 @@ Fixed inventory, enough for the adapter's v1 vocabulary:
     that cause and then flip the relay, as firmware does for a press or a
     timer (docs/design.md#device-reported-causes). FILE is read and
     emptied every 100 ms.
+  - with --runtime, number "relay_runtime_s" (key 7, 1-3600 s, step 1,
+    600 at start): the relay's runtime, which a NumberCommandRequest sets
+    and echoes back (docs/design.md#device-timed-runtime).
 
 Handles: HelloRequest, DeviceInfoRequest, ListEntitiesRequest (+ Done),
 SubscribeStatesRequest (sends the current state of every entity, then any
@@ -59,11 +62,15 @@ BINARY_SENSOR_STATE_RESPONSE = 21
 SENSOR_STATE_RESPONSE = 25
 SWITCH_STATE_RESPONSE = 26
 SWITCH_COMMAND_REQUEST = 33
+LIST_ENTITIES_NUMBER_RESPONSE = 49
+NUMBER_STATE_RESPONSE = 50
+NUMBER_COMMAND_REQUEST = 51
 LIST_ENTITIES_EVENT_RESPONSE = 107
 EVENT_RESPONSE = 108
 
 SWITCH_KEY, SENSOR_KEY, BINARY_SENSOR_KEY, RESERVED_SENSOR_KEY, EVENT_KEY = 1, 2, 3, 4, 5
 CAUSE_KEY = 6
+RUNTIME_KEY = 7
 CAUSES = ["button", "valve_timeout"]
 
 
@@ -112,11 +119,15 @@ class Device:
     so its state does not belong to a connection.
     """
 
-    def __init__(self, name: str, reserved_sensor: bool = False, button: bool = False, causes: bool = False):
+    def __init__(
+        self, name: str, reserved_sensor: bool = False, button: bool = False, causes: bool = False,
+        runtime: bool = False,
+    ):
         self.name = name
         self.button = button
         self.causes = causes
-        self.state = {"relay": False, "temperature": 21.5, "motion": True}
+        self.runtime = runtime
+        self.state = {"relay": False, "temperature": 21.5, "motion": True, "runtime": 600.0}
         # When set, the device also exposes a sensor whose object_id is the
         # reserved "available" aspect; the adapter must drop its states.
         self.reserved_sensor = reserved_sensor
@@ -198,6 +209,16 @@ async def send_entity_list(writer: asyncio.StreamWriter, device: "Device") -> No
                 ),
             )
         )
+    if device.runtime:
+        writer.write(
+            encode_message(
+                LIST_ENTITIES_NUMBER_RESPONSE,
+                api_pb2.ListEntitiesNumberResponse(
+                    object_id="relay_runtime_s", key=RUNTIME_KEY, name="Relay runtime",
+                    min_value=1, max_value=3600, step=1, unit_of_measurement="s",
+                ),
+            )
+        )
     if device.causes:
         writer.write(
             encode_message(
@@ -235,6 +256,13 @@ async def send_states(writer: asyncio.StreamWriter, device: Device) -> None:
             encode_message(
                 SENSOR_STATE_RESPONSE,
                 api_pb2.SensorStateResponse(key=RESERVED_SENSOR_KEY, state=1.0),
+            )
+        )
+    if device.runtime:
+        writer.write(
+            encode_message(
+                NUMBER_STATE_RESPONSE,
+                api_pb2.NumberStateResponse(key=RUNTIME_KEY, state=device.state["runtime"]),
             )
         )
     await writer.drain()
@@ -275,6 +303,14 @@ def make_handler(device: Device):
                     device.state["relay"] = cmd.state
                     device.broadcast_switch()
                     await writer.drain()
+                elif msg_type == NUMBER_COMMAND_REQUEST:
+                    cmd = api_pb2.NumberCommandRequest()
+                    cmd.ParseFromString(data)
+                    device.state["runtime"] = cmd.state
+                    msg = api_pb2.NumberStateResponse(key=RUNTIME_KEY, state=cmd.state)
+                    for subscriber in set(device.subscribers):
+                        subscriber.write(encode_message(NUMBER_STATE_RESPONSE, msg))
+                    await writer.drain()
                 elif msg_type == PING_REQUEST:
                     writer.write(encode_message(PING_RESPONSE, api_pb2.PingResponse()))
                     await writer.drain()
@@ -298,9 +334,13 @@ async def main() -> None:
     parser.add_argument("--reserved-sensor", action="store_true")
     parser.add_argument("--button", action="store_true")
     parser.add_argument("--causes", metavar="FILE")
+    parser.add_argument("--runtime", action="store_true")
     args = parser.parse_args()
 
-    device = Device(args.name, reserved_sensor=args.reserved_sensor, button=args.button, causes=bool(args.causes))
+    device = Device(
+        args.name, reserved_sensor=args.reserved_sensor, button=args.button, causes=bool(args.causes),
+        runtime=args.runtime,
+    )
     server = await asyncio.start_server(make_handler(device), "127.0.0.1", args.port)
     if args.causes:
         asyncio.get_running_loop().create_task(watch_causes(device, Path(args.causes)))

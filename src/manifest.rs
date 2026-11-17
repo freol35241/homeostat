@@ -194,11 +194,11 @@ pub const VOCABULARY: &[Capability] = &[
     Capability {
         name: "switch",
         base: Some("on"),
-        aspects: &[],
+        aspects: &["runtime_s"],
         notable: None,
         rest: None,
         options: &[],
-        note: "",
+        note: "`runtime_s` (a feature, seconds) is how long the device keeps itself on after an `on`, timed by its own firmware, so a valve or a pump closes on time even when the network does not reach it then. A unit commands it before `on`; it is a reading too, kept by the device. Of the shipped adapters, esphome maps it (docs/design.md#device-timed-runtime).",
     },
     Capability {
         name: "tracker",

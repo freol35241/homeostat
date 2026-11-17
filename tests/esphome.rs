@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use serde_json::json;
+use serde_json::{json, Value};
 use zenoh::sample::SampleKind;
 
 use common::{
@@ -118,10 +118,19 @@ async fn setup_at(
     fixture: &str,
     device_args: &[&str],
 ) -> (FakeEsphome, PathBuf, Supervisor, zenoh::Session) {
+    let house = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(fixture);
+    setup_in(&house, device_args).await
+}
+
+/// As `setup_at`, on a house at any path.
+async fn setup_in(
+    house: &std::path::Path,
+    device_args: &[&str],
+) -> (FakeEsphome, PathBuf, Supervisor, zenoh::Session) {
     let device = FakeEsphome::spawn_with_args(device_args);
     let devices_path = devices_file(device.port);
-    let sup = Supervisor::spawn_with_env(
-        fixture,
+    let sup = Supervisor::spawn_at(
+        house,
         &[(DEVICES_ENV, devices_path.to_str().expect("utf-8 path"))],
     );
     let observer = sup.observer().await;
@@ -535,4 +544,84 @@ async fn a_cause_the_device_reports_decides_who_changed_the_relay() {
 
     sup.shutdown();
     let _ = std::fs::remove_file(&trigger);
+}
+
+/// docs/design.md#device-timed-runtime: a switch with the `runtime_s`
+/// feature reads and sets the device's `{object_id}_runtime_s` number,
+/// within the number's own bounds.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_switch_runtime_is_the_devices_number() {
+    const RUNTIME_KEY: &str = "home/state/shed/relay/runtime_s";
+    let house = common::temp_house(FIXTURE, "esphome-runtime");
+    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("adapters/esphome.py");
+    let manifest = house.join("units/esphome.toml");
+    let text = std::fs::read_to_string(&manifest).expect("manifest");
+    std::fs::write(
+        &manifest,
+        text.replace(
+            "uv run ../../../adapters/esphome.py",
+            &format!("uv run {}", script.display()),
+        ),
+    )
+    .expect("manifest");
+    let relay = house.join("entities/esphome/relay.toml");
+    let text = std::fs::read_to_string(&relay).expect("relay");
+    std::fs::write(
+        &relay,
+        text.replace(
+            "capability = \"switch\"",
+            "capability = \"switch\"\nfeatures = [\"runtime_s\"]",
+        ),
+    )
+    .expect("relay");
+    let (_device, _devices_path, mut sup, observer) = setup_in(&house, &["--runtime"]).await;
+
+    let state_sub = observer
+        .declare_subscriber(RUNTIME_KEY)
+        .await
+        .expect("runtime subscriber");
+    await_states(&observer, &state_sub, &[(RUNTIME_KEY, json!(600.0))]).await;
+    let doc = await_discovery(&observer, "esphome", |doc| {
+        doc.as_array().is_some_and(|records| {
+            records.iter().any(|r| {
+                r["id"] == json!("shed/relay") && r["aspects"]["fields"]["runtime_s"].is_object()
+            })
+        })
+    })
+    .await;
+    let relay = doc
+        .as_array()
+        .expect("records")
+        .iter()
+        .find(|r| r["id"] == json!("shed/relay"))
+        .expect("relay record")
+        .clone();
+    assert_eq!(
+        relay["aspects"]["fields"]["runtime_s"]["command"]["constraint"],
+        json!({"min": 1.0, "max": 3600.0})
+    );
+    assert_eq!(
+        relay["aspects"]["groups"],
+        json!(["control", "readings"]),
+        "the runtime is a control, not a diagnostic"
+    );
+
+    let event_sub = observer
+        .declare_subscriber(EVENT_KEY)
+        .await
+        .expect("event subscriber");
+    let cmd =
+        |value: Value| json!({"value": value, "priority": "manual", "actor": "test"}).to_string();
+    observer
+        .put("home/cmd/shed/relay/runtime_s", cmd(json!(120)))
+        .await
+        .expect("cmd put");
+    await_states(&observer, &state_sub, &[(RUNTIME_KEY, json!(120.0))]).await;
+    observer
+        .put("home/cmd/shed/relay/runtime_s", cmd(json!(99_999)))
+        .await
+        .expect("cmd put");
+    expect_drop_event(&event_sub, "invalid-command").await;
+
+    sup.shutdown();
 }

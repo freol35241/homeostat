@@ -1,2 +1,3 @@
 error[causes-capability] door: capability "lock" has no base aspect "on" to attribute (entities/zigbee/door.toml)
 error[causes-not-arbitrated] lamp: [causes] needs mode "arbitrated", not "shared" (entities/zigbee/lamp.toml)
+error[causes-runtime] valve: the device closes on its own after runtime_s, so uncommanded = "person" would make each close the family's (entities/zigbee/valve.toml)

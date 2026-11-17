@@ -21,7 +21,12 @@ Binding: an entity file's `id` is `{device}/{object_id}`. The capability
 the entity file declares drives translation; the wire does not redescribe
 a bound entity (`state_values`):
 
-- switch: capability `switch`, aspect `on`.
+- switch: capability `switch`, aspect `on`. With the feature
+  `runtime_s` declared, the device's `number` entity
+  `{object_id}_runtime_s` is the switch's `runtime_s`: how long the
+  firmware keeps the switch on after an `on`, timed on the device
+  (docs/design.md#device-timed-runtime). It is published as a reading and
+  takes commands within the number's own bounds.
 - light: capability `light`, aspect `on`, plus `brightness` and
   `color_temp` when declared as features.
 - sensor: capability `sensor`, aspect = the device_class, else the
@@ -72,7 +77,9 @@ so firmware that reports no causes works unchanged.
 Health events: `drop` (malformed-payload, invalid-command,
 device-unavailable, reserved-aspect, list-entities-failed,
 mdns-record-error, cause-unusable for a cause entity that is bound or
-named by two entities), mdns-unavailable, device-rule and unattributed.
+named by two entities), mdns-unavailable, device-rule, unattributed,
+and runtime-missing for a switch with `runtime_s` whose device has no
+runtime number.
 """
 
 import asyncio
@@ -96,6 +103,8 @@ from aioesphomeapi import (
     EventInfo,
     LightInfo,
     LightState,
+    NumberInfo,
+    NumberState,
     ReconnectLogic,
     SensorInfo,
     SensorState,
@@ -116,6 +125,7 @@ OCCUPANCY_DEVICE_CLASSES = {"motion", "occupancy", "presence"}
 # `b / 254`), so brightness is rescaled both ways to match it. color_temp
 # is mireds on both sides and is only rounded to an int.
 BRIGHTNESS_SCALE = 254
+RUNTIME_ASPECT = "runtime_s"
 
 
 class Causes:
@@ -351,6 +361,27 @@ def describe(info) -> dict:
     return body
 
 
+def runtime_object_id(entity) -> str:
+    """Return the object_id of the number entity holding a switch's runtime."""
+    return f"{entity.id.partition('/')[2]}_{RUNTIME_ASPECT}"
+
+
+def runtime_field(info) -> dict:
+    """Return the descriptor field of a switch's runtime, from its number entity.
+
+    The bounds are the number's own, which the firmware enforces.
+    """
+    # The bounds travel as float32, so 0.1 arrives as 0.100000001.
+    command: dict = {
+        "type": "float",
+        "constraint": {"min": round(info.min_value, 3), "max": round(info.max_value, 3)},
+        "editable_by": "family",
+    }
+    if info.step:
+        command["step"] = round(info.step, 3)
+    return {"label": "runtime", "kind": "number", "unit": "s", "group": "control", "command": command}
+
+
 def state_values(entity, info, state):
     """Translate one incoming ESPHome EntityState into (aspect, value) pairs.
 
@@ -358,10 +389,12 @@ def state_values(entity, info, state):
     the entity file says the device is drives translation, and the wire is
     not used to re-derive it (as in zigbee2mqtt.py).
     """
-    if isinstance(state, (SensorState, BinarySensorState)) and state.missing_state:
+    if isinstance(state, (SensorState, BinarySensorState, NumberState)) and state.missing_state:
         return
     if entity.capability == "switch" and isinstance(state, SwitchState):
         yield "on", bool(state.state)
+    elif entity.capability == "switch" and isinstance(state, NumberState) and RUNTIME_ASPECT in entity.features:
+        yield RUNTIME_ASPECT, state.state
     elif entity.capability == "light" and isinstance(state, LightState):
         yield "on", bool(state.state)
         if "brightness" in entity.features:
@@ -399,6 +432,12 @@ async def run_device(
     key_map: dict[int, tuple] = {}
     # The cause event entity's key -> the entity whose causes it reports.
     cause_map: dict[int, house.Entity] = {}
+    # The number entity that holds each switch's runtime.
+    by_runtime = {
+        runtime_object_id(e): e
+        for e in bound.values()
+        if e.capability == "switch" and RUNTIME_ASPECT in e.features
+    }
     # A cause entity is an event entity no entity file binds, so a cause
     # cannot hide a bound entity's state. One named by two entities says
     # nothing about either.
@@ -428,12 +467,15 @@ async def run_device(
             return
         records = []
         new_key_map = {}
+        runtimes = {}
         for info in infos:
             entity = bound.get(info.object_id)
+            runtime_of = by_runtime.get(info.object_id) if isinstance(info, NumberInfo) and entity is None else None
+            owner = entity or runtime_of
             record = {
                 "id": f"{device}/{info.object_id}",
-                "configured": entity is not None,
-                "entity": entity.name if entity else None,
+                "configured": owner is not None,
+                "entity": owner.name if owner else None,
                 "suggested": suggest(info),
                 "description": describe(info),
             }
@@ -442,8 +484,24 @@ async def run_device(
             records.append(record)
             if entity is not None:
                 new_key_map[info.key] = (entity, info)
+            if runtime_of is not None:
+                runtimes[runtime_of.name] = (runtime_of, info)
+        # A switch's runtime is an aspect of the switch, so its field joins
+        # the switch's descriptor, in a group of its own.
+        for record in records:
+            hit = runtimes.get(record["entity"]) if "aspects" in record else None
+            if hit is not None:
+                record["aspects"]["fields"][RUNTIME_ASPECT] = runtime_field(hit[1])
+                record["aspects"]["groups"] = ["control", *record["aspects"]["groups"]]
+        on_device = {e.name for e, _info in new_key_map.values()}
+        for entity in by_runtime.values():
+            if entity.name in on_device and entity.name not in runtimes:
+                session.health_event(
+                    "runtime-missing", device=device, entity=entity.name, object_id=runtime_object_id(entity)
+                )
         key_map.clear()
         key_map.update(new_key_map)
+        key_map.update({info.key: (entity, info) for entity, info in runtimes.values()})
         cause_map.clear()
         cause_map.update({
             info.key: by_cause[info.object_id]
@@ -455,6 +513,9 @@ async def run_device(
         with entity_lock:
             for entity, info in new_key_map.values():
                 entity_runtime[entity.name] = {"client": client, "key": info.key}
+            for name, (_entity, info) in runtimes.items():
+                if name in entity_runtime:
+                    entity_runtime[name]["runtime"] = info
         bound_discovery[device] = records
         publish_discovery()
         for entity, _info in new_key_map.values():
@@ -570,7 +631,9 @@ async def mdns_browse(unit, session, by_device, unbound_discovery, publish_disco
 def cmd_handler(entity, entity_runtime, entity_lock, loop, session, attribution):
     """Return the command handler for one entity.
 
-    A switch takes `on` (a bool). A light takes `on` (a bool), and
+    A switch takes `on` (a bool), and `runtime_s` (a number within its
+    number entity's bounds) when it is a declared feature and the device
+    has that entity. A light takes `on` (a bool), and
     `brightness` and `color_temp` (numbers) when they are declared
     features. Sensors take no commands. A command for a device that is not
     connected drops with `device-unavailable`; anything else that does not
@@ -590,7 +653,19 @@ def cmd_handler(entity, entity_runtime, entity_lock, loop, session, attribution)
             return
         client, esp_key = target["client"], target["key"]
 
-        if entity.capability == "switch":
+        if entity.capability == "switch" and aspect == RUNTIME_ASPECT:
+            number = target.get("runtime")
+            if (
+                number is None
+                or RUNTIME_ASPECT not in entity.features
+                or isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not number.min_value <= value <= number.max_value
+            ):
+                session.health_event("drop", reason="invalid-command", key=key, cmd_id=cmd_id)
+                return
+            loop.call_soon_threadsafe(client.number_command, number.key, float(value))
+        elif entity.capability == "switch":
             if aspect != "on" or not isinstance(value, bool):
                 session.health_event("drop", reason="invalid-command", key=key)
                 return
