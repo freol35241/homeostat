@@ -180,98 +180,57 @@ pub fn expand(house: &House) -> (Vec<ExpandedKey>, Vec<String>, Vec<ValidationEr
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::manifest::{
-        BusSection, EntitiesSection, EntityFile, EntitySection, RestartPolicy, RuntimeSection,
-        UnitManifest, UnitSection, WritePolicy,
-    };
-    use crate::repo::{LoadedEntity, LoadedUnit};
-    use std::collections::BTreeMap;
 
-    fn adapter_unit(name: &str, bus: BusSection) -> LoadedUnit {
-        LoadedUnit {
-            manifest: UnitManifest {
-                schema: 1,
-                unit: UnitSection {
-                    name: name.to_string(),
-                    kind: UnitKind::Adapter,
-                    description: None,
-                    watches: None,
-                },
-                runtime: RuntimeSection {
-                    command: "true".to_string(),
-                    restart: RestartPolicy::Always,
-                    shutdown_grace_s: None,
-                    env: None,
-                },
-                discovery: None,
-                bus: Some(bus),
-                params: None,
-                entities: None,
-                naming: None,
-            },
-            path: format!("units/{name}.toml"),
-        }
-    }
+    const LAMP: &str = r#"
+        schema = 1
 
-    fn entity(
-        name: &str,
-        room: &str,
-        capability: &str,
-        mode: WriteMode,
-        adapter: &str,
-    ) -> LoadedEntity {
-        LoadedEntity {
-            name: name.to_string(),
-            file: EntityFile {
-                schema: 1,
-                entity: EntitySection {
-                    id: Some(name.to_string()),
-                    capability: capability.to_string(),
-                    features: vec![],
-                    room: room.to_string(),
-                },
-                naming: None,
-                write_policy: WritePolicy {
-                    mode: Some(mode),
-                    owner: adapter.to_string(),
-                    family: BTreeMap::new(),
-                },
-                inputs: None,
-                sources: None,
-                aspects: None,
-                actions: None,
-                causes: None,
-            },
-            path: format!("entities/{adapter}/{name}.toml"),
-            owner: adapter.to_string(),
-        }
-    }
+        [entity]
+        id = "lamp"
+        capability = "light"
+        room = "kitchen"
+
+        [write_policy]
+        mode = "shared"
+        owner = "zigbee"
+    "#;
+
+    const LOCK: &str = r#"
+        schema = 1
+
+        [entity]
+        id = "lock"
+        capability = "lock"
+        room = "hallway"
+
+        [write_policy]
+        mode = "arbitrated"
+        owner = "zigbee"
+    "#;
 
     #[test]
     fn adapter_template_splits_cmd_and_arbiter_by_write_mode() {
-        let mut subscribes = BTreeMap::new();
-        subscribes.insert(
-            "commands".to_string(),
-            "home/cmd/{room}/{entity}/**".to_string(),
-        );
-        subscribes.insert(
-            "arbiter_commands".to_string(),
-            "home/arbiter/{room}/{entity}/**".to_string(),
-        );
-        let bus = BusSection {
-            subscribes,
-            publishes: BTreeMap::new(),
-        };
+        let zigbee = r#"
+            schema = 1
 
-        let house = House {
-            units: vec![adapter_unit("zigbee", bus)],
-            entities: vec![
-                entity("lamp", "kitchen", "light", WriteMode::Shared, "zigbee"),
-                entity("lock", "hallway", "lock", WriteMode::Arbitrated, "zigbee"),
-            ],
-            zones: BTreeMap::new(),
-            dashboard: None,
-        };
+            [unit]
+            name = "zigbee"
+            kind = "adapter"
+
+            [runtime]
+            command = "true"
+            restart = "always"
+
+            [entities]
+            dir = "entities/zigbee/"
+
+            [bus.subscribes]
+            commands = "home/cmd/{room}/{entity}/**"
+            arbiter_commands = "home/arbiter/{room}/{entity}/**"
+        "#;
+        let house = House::from_toml(
+            &[("zigbee", zigbee)],
+            &[("zigbee", "lamp", LAMP), ("zigbee", "lock", LOCK)],
+        );
 
         let (expanded, _warnings, errors) = expand(&house);
         assert!(errors.is_empty(), "{errors:?}");
@@ -294,28 +253,24 @@ mod tests {
 
     #[test]
     fn cmd_template_expands_to_nothing_without_error_when_all_bound_entities_are_arbitrated() {
-        let mut subscribes = BTreeMap::new();
-        subscribes.insert(
-            "commands".to_string(),
-            "home/cmd/{room}/{entity}/**".to_string(),
-        );
-        let bus = BusSection {
-            subscribes,
-            publishes: BTreeMap::new(),
-        };
+        let zigbee = r#"
+            schema = 1
 
-        let house = House {
-            units: vec![adapter_unit("zigbee", bus)],
-            entities: vec![entity(
-                "lock",
-                "hallway",
-                "lock",
-                WriteMode::Arbitrated,
-                "zigbee",
-            )],
-            zones: BTreeMap::new(),
-            dashboard: None,
-        };
+            [unit]
+            name = "zigbee"
+            kind = "adapter"
+
+            [runtime]
+            command = "true"
+            restart = "always"
+
+            [entities]
+            dir = "entities/zigbee/"
+
+            [bus.subscribes]
+            commands = "home/cmd/{room}/{entity}/**"
+        "#;
+        let house = House::from_toml(&[("zigbee", zigbee)], &[("zigbee", "lock", LOCK)]);
 
         let (expanded, _warnings, errors) = expand(&house);
         assert!(errors.is_empty(), "{errors:?}");
@@ -329,22 +284,21 @@ mod tests {
     /// but empty one is a house part-way built.
     #[test]
     fn a_template_in_a_unit_with_no_entities_table_is_an_error() {
-        let mut subscribes = BTreeMap::new();
-        subscribes.insert(
-            "commands".to_string(),
-            "home/cmd/{room}/{entity}/**".to_string(),
-        );
-        let bus = BusSection {
-            subscribes,
-            publishes: BTreeMap::new(),
-        };
+        let latches = r#"
+            schema = 1
 
-        let house = House {
-            units: vec![adapter_unit("latches", bus)],
-            entities: vec![],
-            zones: BTreeMap::new(),
-            dashboard: None,
-        };
+            [unit]
+            name = "latches"
+            kind = "adapter"
+
+            [runtime]
+            command = "true"
+            restart = "always"
+
+            [bus.subscribes]
+            commands = "home/cmd/{room}/{entity}/**"
+        "#;
+        let house = House::from_toml(&[("latches", latches)], &[]);
 
         let (_expanded, warnings, errors) = expand(&house);
         assert_eq!(errors.len(), 1, "{errors:?}");
@@ -355,27 +309,24 @@ mod tests {
 
     #[test]
     fn a_template_in_a_unit_whose_entities_dir_is_empty_warns() {
-        let mut subscribes = BTreeMap::new();
-        subscribes.insert(
-            "commands".to_string(),
-            "home/cmd/{room}/{entity}/**".to_string(),
-        );
-        let bus = BusSection {
-            subscribes,
-            publishes: BTreeMap::new(),
-        };
+        let latches = r#"
+            schema = 1
 
-        let mut unit = adapter_unit("latches", bus);
-        unit.manifest.entities = Some(EntitiesSection {
-            dir: "entities/latches/".to_string(),
-        });
+            [unit]
+            name = "latches"
+            kind = "adapter"
 
-        let house = House {
-            units: vec![unit],
-            entities: vec![],
-            zones: BTreeMap::new(),
-            dashboard: None,
-        };
+            [runtime]
+            command = "true"
+            restart = "always"
+
+            [entities]
+            dir = "entities/latches/"
+
+            [bus.subscribes]
+            commands = "home/cmd/{room}/{entity}/**"
+        "#;
+        let house = House::from_toml(&[("latches", latches)], &[]);
 
         let (_expanded, warnings, errors) = expand(&house);
         assert!(errors.is_empty(), "{errors:?}");

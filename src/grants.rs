@@ -1055,144 +1055,109 @@ mod tests {
     use super::*;
     use crate::expand::expand;
 
-    use crate::manifest::{
-        BusSection, EntityFile, EntitySection, PublishSpec, RestartPolicy, RuntimeSection,
-        SourceRef, UnitManifest, UnitSection, WritePolicy,
-    };
-    use crate::repo::{LoadedEntity, LoadedUnit};
+    const ZIGBEE: &str = r#"
+        schema = 1
 
-    fn unit(name: &str, kind: UnitKind, bus: BusSection) -> LoadedUnit {
-        LoadedUnit {
-            manifest: UnitManifest {
-                schema: 1,
-                unit: UnitSection {
-                    name: name.to_string(),
-                    kind,
-                    description: None,
-                    watches: None,
-                },
-                runtime: RuntimeSection {
-                    command: "true".to_string(),
-                    restart: RestartPolicy::Always,
-                    shutdown_grace_s: None,
-                    env: None,
-                },
-                discovery: None,
-                bus: Some(bus),
-                params: None,
-                entities: None,
-                naming: None,
-            },
-            path: format!("units/{name}.toml"),
-        }
-    }
+        [unit]
+        name = "zigbee"
+        kind = "adapter"
 
-    fn entity(
-        name: &str,
-        room: &str,
-        capability: &str,
-        mode: WriteMode,
-        adapter: &str,
-    ) -> LoadedEntity {
-        LoadedEntity {
-            name: name.to_string(),
-            file: EntityFile {
-                schema: 1,
-                entity: EntitySection {
-                    id: Some(name.to_string()),
-                    capability: capability.to_string(),
-                    features: vec![],
-                    room: room.to_string(),
-                },
-                naming: None,
-                write_policy: WritePolicy {
-                    mode: Some(mode),
-                    owner: adapter.to_string(),
-                    family: BTreeMap::new(),
-                },
-                inputs: None,
-                sources: None,
-                aspects: None,
-                actions: None,
-                causes: None,
-            },
-            path: format!("entities/{adapter}/{name}.toml"),
-            owner: adapter.to_string(),
-        }
-    }
+        [runtime]
+        command = "true"
+        restart = "always"
+
+        [entities]
+        dir = "entities/zigbee/"
+
+        [bus.subscribes]
+        commands = "home/cmd/{room}/{entity}/**"
+        arbiter_commands = "home/arbiter/{room}/{entity}/**"
+    "#;
+
+    const NIGHT_MODE: &str = r#"
+        schema = 1
+
+        [unit]
+        name = "night_mode"
+        kind = "automation"
+
+        [runtime]
+        command = "true"
+        restart = "always"
+
+        [bus.publishes.lock]
+        key = "home/cmd/hallway/lock/lock"
+        capability = "lock"
+        priority = "automation"
+    "#;
+
+    const ARBITER: &str = r#"
+        schema = 1
+
+        [unit]
+        name = "arbiter"
+        kind = "service"
+
+        [runtime]
+        command = "true"
+        restart = "always"
+
+        # A service (not an adapter) cannot use {room}/{entity} templates, so
+        # it covers arbitrated entities with a plain wildcard instead.
+        [bus.publishes.forwarded]
+        key = "home/arbiter/**"
+    "#;
+
+    const LOCK_ENTITIES: &[(&str, &str, &str)] = &[
+        (
+            "zigbee",
+            "lamp",
+            r#"
+                schema = 1
+
+                [entity]
+                id = "lamp"
+                capability = "light"
+                room = "kitchen"
+
+                [write_policy]
+                mode = "shared"
+                owner = "zigbee"
+            "#,
+        ),
+        (
+            "zigbee",
+            "lock",
+            r#"
+                schema = 1
+
+                [entity]
+                id = "lock"
+                capability = "lock"
+                room = "hallway"
+
+                [write_policy]
+                mode = "arbitrated"
+                owner = "zigbee"
+            "#,
+        ),
+    ];
 
     /// Builds a house with an arbitrated lock and a shared lamp, both bound
     /// to adapter "zigbee", plus an automation wishing to command the lock.
-    /// `arbiter_bus` lets each test decide whether an arbiter-class publish
+    /// `arbiter` lets each test decide whether an arbiter-class publish
     /// covers the lock.
-    fn house_with_lock(arbiter_bus: Option<BusSection>) -> House {
-        let mut zigbee_subscribes = BTreeMap::new();
-        zigbee_subscribes.insert(
-            "commands".to_string(),
-            "home/cmd/{room}/{entity}/**".to_string(),
-        );
-        zigbee_subscribes.insert(
-            "arbiter_commands".to_string(),
-            "home/arbiter/{room}/{entity}/**".to_string(),
-        );
-        let zigbee_bus = BusSection {
-            subscribes: zigbee_subscribes,
-            publishes: BTreeMap::new(),
-        };
-
-        let mut night_mode_publishes = BTreeMap::new();
-        night_mode_publishes.insert(
-            "lock".to_string(),
-            PublishSpec {
-                key: "home/cmd/hallway/lock/lock".to_string(),
-                capability: Some("lock".to_string()),
-                priority: Some(Priority::Automation),
-                on_loss: None,
-            },
-        );
-        let night_mode_bus = BusSection {
-            subscribes: BTreeMap::new(),
-            publishes: night_mode_publishes,
-        };
-
-        let mut units = vec![
-            unit("zigbee", UnitKind::Adapter, zigbee_bus),
-            unit("night_mode", UnitKind::Automation, night_mode_bus),
-        ];
-        if let Some(arbiter_bus) = arbiter_bus {
-            units.push(unit("arbiter", UnitKind::Service, arbiter_bus));
+    fn house_with_lock(arbiter: bool) -> House {
+        let mut units = vec![("zigbee", ZIGBEE), ("night_mode", NIGHT_MODE)];
+        if arbiter {
+            units.push(("arbiter", ARBITER));
         }
-
-        House {
-            units,
-            entities: vec![
-                entity("lamp", "kitchen", "light", WriteMode::Shared, "zigbee"),
-                entity("lock", "hallway", "lock", WriteMode::Arbitrated, "zigbee"),
-            ],
-            zones: BTreeMap::new(),
-            dashboard: None,
-        }
+        House::from_toml(&units, LOCK_ENTITIES)
     }
 
     #[test]
     fn arbitrated_entity_covered_by_arbiter_publish_has_no_errors() {
-        let mut publishes = BTreeMap::new();
-        // A service (not an adapter) cannot use {room}/{entity} templates, so
-        // it covers arbitrated entities with a plain wildcard instead.
-        publishes.insert(
-            "forwarded".to_string(),
-            PublishSpec {
-                key: "home/arbiter/**".to_string(),
-                capability: None,
-                priority: None,
-                on_loss: None,
-            },
-        );
-        let arbiter_bus = BusSection {
-            subscribes: BTreeMap::new(),
-            publishes,
-        };
-        let house = house_with_lock(Some(arbiter_bus));
+        let house = house_with_lock(true);
 
         let (expanded, _warnings, expand_errors) = expand(&house);
         assert!(expand_errors.is_empty(), "{expand_errors:?}");
@@ -1235,27 +1200,11 @@ mod tests {
     /// write-policy changes structural (docs/design.md#tiers).
     #[test]
     fn entity_move_and_policy_flip_change_the_grant_table() {
-        let arbiter_bus = || {
-            let mut publishes = BTreeMap::new();
-            publishes.insert(
-                "forwarded".to_string(),
-                PublishSpec {
-                    key: "home/arbiter/**".to_string(),
-                    capability: None,
-                    priority: None,
-                    on_loss: None,
-                },
-            );
-            Some(BusSection {
-                subscribes: BTreeMap::new(),
-                publishes,
-            })
-        };
-        let baseline = house_with_lock(arbiter_bus());
+        let baseline = house_with_lock(true);
         let (expanded, _, _) = expand(&baseline);
         let (grants, _, _) = resolve(&baseline, &expanded);
 
-        let mut moved = house_with_lock(arbiter_bus());
+        let mut moved = house_with_lock(true);
         moved.entities[1].file.entity.room = "porch".to_string();
         // The publish key still names the old room, so re-expansion changes
         // the granted set. The tables differ either way.
@@ -1266,7 +1215,7 @@ mod tests {
             "a room move must change the grant table"
         );
 
-        let mut flipped = house_with_lock(arbiter_bus());
+        let mut flipped = house_with_lock(true);
         flipped.entities[0].file.write_policy.mode = Some(WriteMode::Exclusive);
         // The lamp is granted to nobody; flip the lock instead, which
         // night_mode writes.
@@ -1283,58 +1232,61 @@ mod tests {
     /// keys and publishes its state; automation "buttons" commands it.
     /// `listens` decides whether modes declares the cmd subscription.
     fn house_with_latch(listens: bool) -> House {
-        let mut modes_subscribes = BTreeMap::new();
+        let mut modes = String::from(
+            r#"
+            schema = 1
+
+            [unit]
+            name = "modes"
+            kind = "automation"
+
+            [runtime]
+            command = "true"
+            restart = "always"
+
+            [entities]
+            dir = "entities/modes/"
+
+            [bus.publishes.state]
+            key = "home/state/{room}/{entity}/**"
+
+            [bus.subscribes]
+        "#,
+        );
         if listens {
-            modes_subscribes.insert(
-                "commands".to_string(),
-                "home/cmd/{room}/{entity}/**".to_string(),
-            );
+            modes.push_str(r#"commands = "home/cmd/{room}/{entity}/**""#);
         }
-        let mut modes_publishes = BTreeMap::new();
-        modes_publishes.insert(
-            "state".to_string(),
-            PublishSpec {
-                key: "home/state/{room}/{entity}/**".to_string(),
-                capability: None,
-                priority: None,
-                on_loss: None,
-            },
-        );
-        let modes_bus = BusSection {
-            subscribes: modes_subscribes,
-            publishes: modes_publishes,
-        };
+        let buttons = r#"
+            schema = 1
 
-        let mut buttons_publishes = BTreeMap::new();
-        buttons_publishes.insert(
-            "mode".to_string(),
-            PublishSpec {
-                key: "home/cmd/global/house_mode/on".to_string(),
-                capability: Some("switch".to_string()),
-                priority: Some(Priority::Automation),
-                on_loss: None,
-            },
-        );
-        let buttons_bus = BusSection {
-            subscribes: BTreeMap::new(),
-            publishes: buttons_publishes,
-        };
+            [unit]
+            name = "buttons"
+            kind = "automation"
 
-        House {
-            units: vec![
-                unit("modes", UnitKind::Automation, modes_bus),
-                unit("buttons", UnitKind::Automation, buttons_bus),
-            ],
-            entities: vec![entity(
-                "house_mode",
-                "global",
-                "switch",
-                WriteMode::Shared,
-                "modes",
-            )],
-            zones: BTreeMap::new(),
-            dashboard: None,
-        }
+            [runtime]
+            command = "true"
+            restart = "always"
+
+            [bus.publishes.mode]
+            key = "home/cmd/global/house_mode/on"
+            capability = "switch"
+            priority = "automation"
+        "#;
+        let house_mode = r#"
+            schema = 1
+
+            [entity]
+            capability = "switch"
+            room = "global"
+
+            [write_policy]
+            mode = "shared"
+            owner = "modes"
+        "#;
+        House::from_toml(
+            &[("modes", &modes), ("buttons", buttons)],
+            &[("modes", "house_mode", house_mode)],
+        )
     }
 
     #[test]
@@ -1377,7 +1329,7 @@ mod tests {
     /// must diff as a grant delta and show in the plan.
     #[test]
     fn widening_a_key_expression_changes_the_grant_table() {
-        let house = house_with_lock(None);
+        let house = house_with_lock(false);
         let (expanded, _, _) = expand(&house);
         let (grants, _, _) = resolve(&house, &expanded);
         let night_mode = grants.iter().find(|g| g.unit == "night_mode").unwrap();
@@ -1386,7 +1338,7 @@ mod tests {
             vec!["home/cmd/hallway/lock/lock".to_string()]
         );
 
-        let mut widened = house_with_lock(None);
+        let mut widened = house_with_lock(false);
         let bus = widened.units[1].manifest.bus.as_mut().unwrap();
         bus.publishes.get_mut("lock").unwrap().key = "home/cmd/hallway/lock/**".to_string();
         let (expanded, _, _) = expand(&widened);
@@ -1413,34 +1365,35 @@ mod tests {
     /// delta for apply to act on.
     #[test]
     fn a_forecast_publish_binds_its_entity() {
-        let mut publishes = BTreeMap::new();
-        publishes.insert(
-            "curve".to_string(),
-            PublishSpec {
-                key: "home/forecast/global/spot_price/price/nordpool".to_string(),
-                capability: None,
-                priority: None,
-                on_loss: None,
-            },
-        );
-        let house = House {
-            units: vec![unit(
-                "seer",
-                UnitKind::Automation,
-                BusSection {
-                    subscribes: BTreeMap::new(),
-                    publishes,
-                },
-            )],
-            entities: vec![entity(
-                "spot_price",
-                "global",
-                "sensor",
-                WriteMode::Exclusive,
-                "seer",
-            )],
-            ..House::default()
-        };
+        let seer = r#"
+            schema = 1
+
+            [unit]
+            name = "seer"
+            kind = "automation"
+
+            [runtime]
+            command = "true"
+            restart = "always"
+
+            [entities]
+            dir = "entities/seer/"
+
+            [bus.publishes.curve]
+            key = "home/forecast/global/spot_price/price/nordpool"
+        "#;
+        let spot_price = r#"
+            schema = 1
+
+            [entity]
+            capability = "sensor"
+            room = "global"
+
+            [write_policy]
+            mode = "exclusive"
+            owner = "seer"
+        "#;
+        let house = House::from_toml(&[("seer", seer)], &[("seer", "spot_price", spot_price)]);
         let (expanded, _, _) = expand(&house);
         let (grants, errors, _) = resolve(&house, &expanded);
         assert!(errors.is_empty(), "{errors:?}");
@@ -1495,48 +1448,68 @@ mod tests {
         );
     }
 
+    /// An adapter that binds sensors and publishes nothing the tests read.
+    const ESPHOME: &str = r#"
+        schema = 1
+
+        [unit]
+        name = "esphome"
+        kind = "adapter"
+
+        [runtime]
+        command = "true"
+        restart = "always"
+
+        [entities]
+        dir = "entities/esphome/"
+    "#;
+
     /// Builds a house where `forecaster` units each publish one concrete
     /// forecast key, and `esphome` owns the entity being forecast.
     fn house_forecasting(entity_name: &str, room: &str, forecasters: &[(&str, &str)]) -> House {
-        let mut units = vec![unit(
-            "esphome",
-            UnitKind::Adapter,
-            BusSection {
-                subscribes: BTreeMap::new(),
-                publishes: BTreeMap::new(),
-            },
-        )];
-        for (name, key) in forecasters {
-            let mut publishes = BTreeMap::new();
-            publishes.insert(
-                "curve".to_string(),
-                PublishSpec {
-                    key: (*key).to_string(),
-                    capability: None,
-                    priority: None,
-                    on_loss: None,
-                },
-            );
-            units.push(unit(
-                name,
-                UnitKind::Automation,
-                BusSection {
-                    subscribes: BTreeMap::new(),
-                    publishes,
-                },
-            ));
-        }
-        House {
-            units,
-            entities: vec![entity(
-                entity_name,
-                room,
-                "sensor",
-                WriteMode::Shared,
-                "esphome",
-            )],
-            ..House::default()
-        }
+        let forecasters: Vec<(&str, String)> = forecasters
+            .iter()
+            .map(|&(name, key)| {
+                let manifest = format!(
+                    r#"
+                    schema = 1
+
+                    [unit]
+                    name = "{name}"
+                    kind = "automation"
+
+                    [runtime]
+                    command = "true"
+                    restart = "always"
+
+                    [bus.publishes.curve]
+                    key = "{key}"
+                "#
+                );
+                (name, manifest)
+            })
+            .collect();
+        let mut units = vec![("esphome", ESPHOME)];
+        units.extend(
+            forecasters
+                .iter()
+                .map(|(name, text)| (*name, text.as_str())),
+        );
+        let sensor = format!(
+            r#"
+            schema = 1
+
+            [entity]
+            id = "{entity_name}"
+            capability = "sensor"
+            room = "{room}"
+
+            [write_policy]
+            mode = "shared"
+            owner = "esphome"
+        "#
+        );
+        House::from_toml(&units, &[("esphome", entity_name, &sensor)])
     }
 
     /// A forecast may name an entity this unit does not bind; state may not. A
@@ -1617,69 +1590,65 @@ mod tests {
     /// an adapter owns. `subscribes` decides whether the fusion reads what it
     /// claims to.
     fn house_with_sources(source_aspect: &str, subscribes: Option<&str>) -> House {
-        let mut publishes = BTreeMap::new();
-        publishes.insert(
-            "fused".to_string(),
-            PublishSpec {
-                key: "home/state/global/fused_temp/temperature".to_string(),
-                capability: None,
-                priority: None,
-                on_loss: None,
-            },
+        let subscribes = subscribes.map_or_default(|expr| format!(r#"inputs = "{expr}""#));
+        let fusion = format!(
+            r#"
+            schema = 1
+
+            [unit]
+            name = "fusion"
+            kind = "automation"
+
+            [runtime]
+            command = "true"
+            restart = "always"
+
+            [entities]
+            dir = "entities/fusion/"
+
+            [bus.subscribes]
+            {subscribes}
+
+            [bus.publishes.fused]
+            key = "home/state/global/fused_temp/temperature"
+        "#
         );
-        let mut subs = BTreeMap::new();
-        if let Some(expr) = subscribes {
-            subs.insert("inputs".to_string(), expr.to_string());
-        }
-        let mut sources = BTreeMap::new();
-        sources.insert(
-            "station".to_string(),
-            SourceRef {
-                entity: "outdoor_temp".to_string(),
-                aspect: source_aspect.to_string(),
-                note: None,
-                precision: None,
-            },
+        let outdoor_temp = r#"
+            schema = 1
+
+            [entity]
+            id = "outdoor_temp"
+            capability = "sensor"
+            room = "global"
+
+            [write_policy]
+            mode = "shared"
+            owner = "esphome"
+        "#;
+        let fused_temp = format!(
+            r#"
+            schema = 1
+
+            [entity]
+            capability = "sensor"
+            room = "global"
+
+            [write_policy]
+            mode = "shared"
+            owner = "fusion"
+
+            [sources.station]
+            entity = "outdoor_temp"
+            aspect = "{source_aspect}"
+        "#
         );
-        let mut fused = entity(
-            "fused_temp",
-            "global",
-            "sensor",
-            WriteMode::Shared,
-            "fusion",
-        );
-        fused.file.sources = Some(sources);
-        House {
-            units: vec![
-                unit(
-                    "esphome",
-                    UnitKind::Adapter,
-                    BusSection {
-                        subscribes: BTreeMap::new(),
-                        publishes: BTreeMap::new(),
-                    },
-                ),
-                unit(
-                    "fusion",
-                    UnitKind::Automation,
-                    BusSection {
-                        subscribes: subs,
-                        publishes,
-                    },
-                ),
+        House::from_toml(
+            &[("esphome", ESPHOME), ("fusion", &fusion)],
+            &[
+                ("esphome", "outdoor_temp", outdoor_temp),
+                ("fusion", "fused_temp", &fused_temp),
             ],
-            entities: vec![
-                entity(
-                    "outdoor_temp",
-                    "global",
-                    "sensor",
-                    WriteMode::Shared,
-                    "esphome",
-                ),
-                fused,
-            ],
-            ..House::default()
-        }
+        )
     }
 
     /// A declared source resolves to the contributor's own state key. The
@@ -1759,19 +1728,19 @@ mod tests {
     /// are structural).
     #[test]
     fn a_change_to_an_ungranted_entity_changes_the_grant_table() {
+        let zigbee = [
+            ZIGBEE,
+            r#"
+            [bus.publishes.state]
+            key = "home/state/{room}/{entity}/**"
+            "#,
+        ]
+        .concat();
         let with_state = || {
-            let mut house = house_with_lock(None);
-            let bus = house.units[0].manifest.bus.as_mut().unwrap();
-            bus.publishes.insert(
-                "state".to_string(),
-                PublishSpec {
-                    key: "home/state/{room}/{entity}/**".to_string(),
-                    capability: None,
-                    priority: None,
-                    on_loss: None,
-                },
-            );
-            house
+            House::from_toml(
+                &[("zigbee", &zigbee), ("night_mode", NIGHT_MODE)],
+                LOCK_ENTITIES,
+            )
         };
         let baseline = with_state();
         let (expanded, _, _) = expand(&baseline);
@@ -1810,20 +1779,26 @@ mod tests {
     /// one exclusive entity are one writer.
     #[test]
     fn two_bindings_in_one_unit_are_one_writer() {
-        let mut house = house_with_lock(None);
+        let night_mode = [
+            NIGHT_MODE,
+            r#"
+            [bus.publishes.lamp_on]
+            key = "home/cmd/kitchen/lamp/on"
+            capability = "light"
+            priority = "automation"
+
+            [bus.publishes.lamp_brightness]
+            key = "home/cmd/kitchen/lamp/brightness"
+            capability = "light"
+            priority = "automation"
+            "#,
+        ]
+        .concat();
+        let mut house = House::from_toml(
+            &[("zigbee", ZIGBEE), ("night_mode", &night_mode)],
+            LOCK_ENTITIES,
+        );
         house.entities[0].file.write_policy.mode = Some(WriteMode::Exclusive);
-        let bus = house.units[1].manifest.bus.as_mut().unwrap();
-        for (name, aspect) in [("lamp_on", "on"), ("lamp_brightness", "brightness")] {
-            bus.publishes.insert(
-                name.to_string(),
-                PublishSpec {
-                    key: format!("home/cmd/kitchen/lamp/{aspect}"),
-                    capability: Some("light".to_string()),
-                    priority: Some(Priority::Automation),
-                    on_loss: None,
-                },
-            );
-        }
         let (expanded, _, _) = expand(&house);
         let (_, _, errors) = resolve(&house, &expanded);
         assert!(
@@ -1838,7 +1813,7 @@ mod tests {
     /// claims it still plans, with a warning.
     #[test]
     fn manual_band_on_an_automation_is_a_plan_warning() {
-        let mut house = house_with_lock(None);
+        let mut house = house_with_lock(false);
         let bus = house.units[1].manifest.bus.as_mut().unwrap();
         bus.publishes.get_mut("lock").unwrap().priority = Some(Priority::Manual);
         let (expanded, _, _) = expand(&house);
@@ -1853,7 +1828,7 @@ mod tests {
 
     #[test]
     fn arbitrated_entity_with_no_arbiter_publish_is_a_plan_error() {
-        let house = house_with_lock(None);
+        let house = house_with_lock(false);
         let (expanded, _warnings, expand_errors) = expand(&house);
         assert!(expand_errors.is_empty(), "{expand_errors:?}");
 
@@ -1869,86 +1844,124 @@ mod tests {
     /// A house with an arbitrated burner and a shared lamp, an arbiter, and
     /// automations holding at `band` under the given keys.
     fn house_holding(holders: &[(&str, &str, Priority)]) -> House {
-        let mut arbiter_publishes = BTreeMap::new();
-        arbiter_publishes.insert(
-            "arbiter".to_string(),
-            PublishSpec {
-                key: "home/arbiter/**".to_string(),
-                capability: None,
-                priority: None,
-                on_loss: None,
-            },
-        );
-        arbiter_publishes.insert(
-            "holds".to_string(),
-            PublishSpec {
-                key: "home/hold/arbiter/**".to_string(),
-                capability: None,
-                priority: None,
-                on_loss: None,
-            },
-        );
-        let mut units = vec![unit(
-            "arbiter",
-            UnitKind::Service,
-            BusSection {
-                subscribes: BTreeMap::new(),
-                publishes: arbiter_publishes,
-            },
-        )];
-        for (name, key, band) in holders {
-            let mut publishes = BTreeMap::new();
-            publishes.insert(
-                "hold".to_string(),
-                PublishSpec {
-                    key: (*key).to_string(),
-                    capability: Some(
-                        if key.contains("lamp") {
-                            "light"
-                        } else if key.contains("heat_pump") {
-                            "climate"
-                        } else {
-                            "burner"
-                        }
-                        .to_string(),
-                    ),
-                    priority: Some(*band),
-                    on_loss: None,
-                },
-            );
-            units.push(unit(
-                name,
-                UnitKind::Automation,
-                BusSection {
-                    subscribes: BTreeMap::new(),
-                    publishes,
-                },
-            ));
-        }
-        units.push(unit(
-            "aduro",
-            UnitKind::Adapter,
-            BusSection {
-                subscribes: BTreeMap::new(),
-                publishes: BTreeMap::new(),
-            },
-        ));
-        House {
-            units,
-            entities: vec![
-                entity("stove", "utility", "burner", WriteMode::Arbitrated, "aduro"),
-                entity("lamp", "kitchen", "light", WriteMode::Shared, "aduro"),
-                entity(
-                    "heat_pump",
-                    "utility",
-                    "climate",
-                    WriteMode::Arbitrated,
-                    "aduro",
-                ),
+        let holders: Vec<(&str, String)> = holders
+            .iter()
+            .map(|&(name, key, band)| (name, holder(name, key, band)))
+            .collect();
+        house_with_holders(&holders)
+    }
+
+    /// The manifest of automation `name` holding under `key` at `band`. It
+    /// ends in the hold's own table, so a test may append to it.
+    fn holder(name: &str, key: &str, band: Priority) -> String {
+        let capability = if key.contains("lamp") {
+            "light"
+        } else if key.contains("heat_pump") {
+            "climate"
+        } else {
+            "burner"
+        };
+        format!(
+            r#"
+            schema = 1
+
+            [unit]
+            name = "{name}"
+            kind = "automation"
+
+            [runtime]
+            command = "true"
+            restart = "always"
+
+            [bus.publishes.hold]
+            key = "{key}"
+            capability = "{capability}"
+            priority = "{band}"
+            "#
+        )
+    }
+
+    /// The house of [`house_holding`], with each holder given as its
+    /// (name, manifest).
+    fn house_with_holders(holders: &[(&str, String)]) -> House {
+        let arbiter = r#"
+            schema = 1
+
+            [unit]
+            name = "arbiter"
+            kind = "service"
+
+            [runtime]
+            command = "true"
+            restart = "always"
+
+            [bus.publishes.arbiter]
+            key = "home/arbiter/**"
+
+            [bus.publishes.holds]
+            key = "home/hold/arbiter/**"
+        "#;
+        let aduro = r#"
+            schema = 1
+
+            [unit]
+            name = "aduro"
+            kind = "adapter"
+
+            [runtime]
+            command = "true"
+            restart = "always"
+
+            [entities]
+            dir = "entities/aduro/"
+        "#;
+        let stove = r#"
+            schema = 1
+
+            [entity]
+            id = "stove"
+            capability = "burner"
+            room = "utility"
+
+            [write_policy]
+            mode = "arbitrated"
+            owner = "aduro"
+        "#;
+        let lamp = r#"
+            schema = 1
+
+            [entity]
+            id = "lamp"
+            capability = "light"
+            room = "kitchen"
+
+            [write_policy]
+            mode = "shared"
+            owner = "aduro"
+        "#;
+        let heat_pump = r#"
+            schema = 1
+
+            [entity]
+            id = "heat_pump"
+            capability = "climate"
+            room = "utility"
+
+            [write_policy]
+            mode = "arbitrated"
+            owner = "aduro"
+        "#;
+        let mut units = vec![("arbiter", arbiter)];
+        units.extend(holders.iter().map(|(name, text)| (*name, text.as_str())));
+        units.push(("aduro", aduro));
+        House::from_toml(
+            &units,
+            &[
+                ("aduro", "stove", stove),
+                ("aduro", "lamp", lamp),
+                ("aduro", "heat_pump", heat_pump),
             ],
-            zones: BTreeMap::new(),
-            dashboard: None,
-        }
+        )
     }
 
     fn resolve_holding(
@@ -2105,27 +2118,18 @@ mod tests {
 
     #[test]
     fn on_loss_rides_the_holder_row_and_only_a_hold_takes_it() {
-        let mut house = house_holding(&[(
+        let flue_guard = holder(
             "flue_guard",
             "home/hold/flue_guard/utility/stove/on",
             Priority::Automation,
-        )]);
-        let guard = house
-            .units
-            .iter_mut()
-            .find(|u| u.manifest.unit.name == "flue_guard")
-            .expect("the holder");
-        let publishes = &mut guard.manifest.bus.as_mut().expect("bus").publishes;
-        publishes.get_mut("hold").expect("hold").on_loss = Some(OnLoss::Keep);
-        publishes.insert(
-            "state".to_string(),
-            PublishSpec {
-                key: "home/state/utility/stove/flue".to_string(),
-                capability: None,
-                priority: None,
-                on_loss: Some(OnLoss::Release),
-            },
-        );
+        ) + r#"
+            on_loss = "keep"
+
+            [bus.publishes.state]
+            key = "home/state/utility/stove/flue"
+            on_loss = "release"
+        "#;
+        let house = house_with_holders(&[("flue_guard", flue_guard)]);
         let (expanded, _warnings, _expand_errors) = expand(&house);
         let (grants, _warnings, errors) = resolve(&house, &expanded);
         let row = grants.iter().find(|g| g.hold).expect("a holder row");
