@@ -239,7 +239,7 @@ def main():
         (f"{base}/+/person/position", 1),
         (f"{base}/+/notifier/ack", 1),
     ]
-    client = mqtt.connect(endpoint, on_phone_message, topics)
+    client = mqtt.connect(endpoint, on_phone_message, topics, health=session.health_event)
     client.on_publish = on_publish
 
     def cmd_handler(entity):
@@ -251,16 +251,19 @@ def main():
             except ValueError:
                 drop("malformed-payload", key=key)
                 return
+            # The id ends a command someone is waiting on, so every drop
+            # below carries it.
+            cmd_id = keys.cmd_envelope_id(payload)
             try:
                 value = keys.parse_cmd_envelope(payload)
             except ValueError:
-                drop("invalid-command", key=key)
+                drop("invalid-command", key=key, cmd_id=cmd_id)
                 return
             # A report or a release is for the arbiter, and nothing
             # arbitrates a notifier, so one reaching here was sent in error.
             stray = keys.cmd_envelope_hold(payload) in ("report", "release")
             if stray or aspect not in CHANNELS or not isinstance(value, str) or not value.strip():
-                drop("invalid-command", key=key, aspect=aspect, value=value)
+                drop("invalid-command", key=key, aspect=aspect, value=value, cmd_id=cmd_id)
                 return
             actor = payload.get("actor")
             body = json.dumps(

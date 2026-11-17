@@ -263,6 +263,15 @@ class BridgeTest(unittest.TestCase):
         self.message("0x03", {"state": "ON"})
         self.assertEqual(self.session.events[0]["reason"], "unknown-device")
 
+    def test_an_unknown_device_is_reported_once_per_inventory(self):
+        self.message("bridge/devices", [{"friendly_name": "0x01"}])
+        for _ in range(3):
+            self.message("0x03", {"state": "ON"})
+        self.assertEqual([e["reason"] for e in self.session.events], ["unknown-device"])
+        self.message("bridge/devices", [{"friendly_name": "0x01"}])
+        self.message("0x03", {"state": "ON"})
+        self.assertEqual(len(self.session.events), 2, "a new inventory reports it again")
+
     def test_state_fields_become_aspects(self):
         self.message("0x01", {"state": "ON", "brightness": 80, "color": {"x": 0.3}})
         self.assertEqual(
