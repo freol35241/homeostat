@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "homeostat==0.22.1",
+#     "homeostat==0.23.0",
 #     "aiohttp>=3.12.14,<4",
 # ]
 # ///
@@ -328,6 +328,17 @@ def key_expr(key: str):
         return None
 
 
+def row_key(grant: dict, room: str, entity: str, aspect: str) -> str:
+    """Return the key a grant row reaches an aspect under.
+
+    A writer row commands it under home/cmd/; a holder row holds it under
+    the unit's own home/hold/ (docs/design.md#holds). Both drive it.
+    """
+    if grant.get("hold"):
+        return keys.hold_key(grant["unit"], room, entity, aspect)
+    return keys.cmd_key(room, entity, aspect)
+
+
 def driven_aspects(model: dict, grants: list, descriptors: dict[str, dict]) -> dict[str, str]:
     """Map each commandable aspect to the lowest band any unit may command it at.
 
@@ -357,7 +368,7 @@ def driven_aspects(model: dict, grants: list, descriptors: dict[str, dict]) -> d
                 continue
             for aspect in commandable_aspects(spec, descriptors.get(e["name"])):
                 try:
-                    ke = zenoh.KeyExpr(keys.cmd_key(e["room"], e["name"], aspect))
+                    ke = zenoh.KeyExpr(row_key(g, e["room"], e["name"], aspect))
                 except (KeyError, ValueError, zenoh.ZError):
                     continue
                 if not any(g_ke.intersects(ke) for g_ke in granted):
@@ -418,7 +429,7 @@ def unit_relations(
                 reached = set()
                 for aspect in aspects:
                     try:
-                        ke = zenoh.KeyExpr(keys.cmd_key(e["room"], e["name"], aspect))
+                        ke = zenoh.KeyExpr(row_key(g, e["room"], e["name"], aspect))
                     except (KeyError, ValueError, zenoh.ZError):
                         continue  # a grant row the core would not have written
                     if any(g_ke.intersects(ke) for g_ke in granted):
@@ -619,11 +630,16 @@ class Hub:
         # forecasts. The recorder's copy is for checking past forecasts
         # (/api/forecasts).
         self.forecasts: dict[str, object] = {}
-        # home/hold/{unit} -> what that arbiter is holding now. The
-        # preempt/refuse events say what happened; this says what is in
-        # force, which a browser opening during a hold needs
-        # (docs/design.md#arbitrated-mode).
+        # home/hold/{unit}/{room}/{entity}/{aspect} -> what that arbiter
+        # holds on the aspect now. The preempt/refuse events say what
+        # happened; this says what is in force, which a browser opening
+        # during a hold needs (docs/design.md#arbitrated-mode).
         self.holds: dict[str, object] = {}
+        # home/arbitration/{unit} -> per aspect the hold that arbiter
+        # applied and the holds in force, winner first. The page reads the
+        # units' holds from here, because a hold the arbiter does not count
+        # stays at its key (docs/design.md#when-a-holder-stops).
+        self.arbitration: dict[str, object] = {}
         self.health: dict[str, object] = {}
         self.config: dict[str, object] = {}
         # entity name -> its adapter's aspect descriptor, taken from the
@@ -647,6 +663,10 @@ class Hub:
         # restart is older than a live one for the same key and must not
         # replace it on the page, whichever arrives first.
         self.state_stamps = Newest()
+        # State key ending in /action -> the epoch second of its last value.
+        # A button's action is a press, and how long ago it was is what says
+        # whether it is news (docs/design.md#buttons).
+        self.action_at: dict[str, float] = {}
         self._about: dict = {}
         self._about_at = -MODEL_TTL_S
 
@@ -657,21 +677,27 @@ class Hub:
         self._subs = [
             self.session.subscribe("home/state/**", self._on_state),
             self.session.subscribe("home/forecast/**", self._on_forecast),
-            self.session.subscribe("home/hold/*", self._on_hold),
+            self.session.subscribe("home/hold/**", self._on_hold),
+            self.session.subscribe("home/arbitration/*", self._on_arbitration),
             self.session.subscribe("home/health/**", self._on_health),
             self.session.subscribe("home/config/*/*", self._on_config),
             self.session.subscribe("home/discovery/*", self._on_discovery),
         ]
-        for key, value, _age, stamp in self.session.get_json_stamped("home/state/**"):
+        for key, value, age, stamp in self.session.get_json_stamped("home/state/**"):
             with self.lock:
                 if self.state_stamps.admit(key, stamp, catch_up=True):
                     self.state[key] = value
+                    if key.endswith("/action"):
+                        self.action_at[key] = time.time() - age
         for key, value in self.session.get_json("home/forecast/**"):
             with self.lock:
                 self.forecasts.setdefault(key, value)
-        for key, value in self.session.get_json("home/hold/*"):
+        for key, value in self.session.get_json("home/hold/**"):
             with self.lock:
                 self.holds.setdefault(key, value)
+        for key, value in self.session.get_json("home/arbitration/*"):
+            with self.lock:
+                self.arbitration.setdefault(key, value)
         for key, value in self.session.get_json("home/health/*"):
             with self.lock:
                 self.health.setdefault(key, value)
@@ -730,9 +756,11 @@ class Hub:
                 "state": dict(self.state),
                 "forecasts": dict(self.forecasts),
                 "holds": dict(self.holds),
+                "arbitration": dict(self.arbitration),
                 "health": dict(self.health),
                 "config": dict(self.config),
                 "aspects": dict(self.aspects),
+                "action_at": dict(self.action_at),
             }
 
     def _decode(self, sample):
@@ -753,15 +781,39 @@ class Hub:
             if not self.state_stamps.admit(key, getattr(sample, "timestamp", None)):
                 return
             self.state[key] = value
-        self._emit({"type": "state", "key": key, "value": value})
+            at = None
+            if key.endswith("/action"):
+                # By the sample's own age, so a press the core replays after
+                # a restart keeps its time.
+                at = time.time() - self.session.sample_age(sample)
+                self.action_at[key] = at
+        message = {"type": "state", "key": key, "value": value}
+        if at is not None:
+            message["at"] = at
+        self._emit(message)
 
     def _on_hold(self, sample) -> None:
+        if sample.kind == zenoh.SampleKind.DELETE:
+            # The hold ended. The page forgets the key on a null value.
+            key = str(sample.key_expr)
+            with self.lock:
+                self.holds.pop(key, None)
+            self._emit({"type": "hold", "key": key, "value": None})
+            return
         if (decoded := self._decode(sample)) is None:
             return
         key, value = decoded
         with self.lock:
             self.holds[key] = value
         self._emit({"type": "hold", "key": key, "value": value})
+
+    def _on_arbitration(self, sample) -> None:
+        if (decoded := self._decode(sample)) is None:
+            return
+        key, value = decoded
+        with self.lock:
+            self.arbitration[key] = value
+        self._emit({"type": "arbitration", "key": key, "value": value})
 
     def _on_forecast(self, sample) -> None:
         if (decoded := self._decode(sample)) is None:
@@ -1000,9 +1052,10 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
     async def ws_handler(request: web.Request) -> web.WebSocketResponse:
         """GET /ws: a snapshot, then live deltas.
 
-        The snapshot holds state, forecasts, holds, health, config and every
+        The snapshot holds state, forecasts, holds, health, config, every
         aspect descriptor adapters publish in their discovery records
-        (docs/design.md#aspect-descriptors).
+        (docs/design.md#aspect-descriptors), and when each `action` was last
+        published, which is a button's last press (docs/design.md#buttons).
         """
         ws = web.WebSocketResponse(heartbeat=30)
         await ws.prepare(request)
@@ -1025,31 +1078,44 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         return ws
 
     async def api_cmd(request: web.Request) -> web.Response:
-        """POST /api/cmd {room, entity, aspect, value}: one command at the manual band.
+        """POST /api/cmd {room, entity, aspect, value, hold?}: one command at the manual band.
 
         The aspect must be in the capability's vocabulary, or one the
         entity's descriptor declares as a family-editable command, and the
         value must pass that command's type and constraint. The reply
         carries the envelope's id and `heard`, whether the command can
         reach its device (see `reachable`).
+
+        `hold` is for an arbitrated entity only (docs/design.md#hold-intents):
+        an RFC3339 instant or "HH:MM" to hold until, "none" to act without holding, or
+        "release" with no value to hand the aspect back. The page never saw
+        the device act, so it does not send "report".
         """
         try:
             body = await request.json()
             room, entity = str(body["room"]), str(body["entity"])
-            aspect, value = str(body["aspect"]), body["value"]
-        except (ValueError, KeyError, TypeError):  # TypeError: a non-object body
+            aspect, hold = str(body["aspect"]), body.get("hold")
+            value = None if hold == "release" else body["value"]
+        except (ValueError, KeyError, TypeError, AttributeError):  # a non-object body
             return json_error("body must be {room, entity, aspect, value}")
         spec = model.entities.get(entity)
         if spec is None or spec["room"] != room:
             return json_error(f"unknown entity {room}/{entity}")
         if not spec["commandable"]:
             return json_error(f"dashboard is not granted {spec['capability']} ({entity})")
+        if hold is not None:
+            if spec["write_mode"] != "arbitrated":
+                return json_error(f"{entity} is not arbitrated, so nothing holds it")
+            if hold == "report":
+                return json_error("the dashboard cannot report what a device did")
         allowed = COMMANDABLE.get(spec["capability"], set())
         base = BASE_ASPECT.get(spec["capability"])
         vocabulary = aspect in allowed and (aspect == base or aspect in spec["features"])
         if vocabulary:
             kind = VOCABULARY_COMMANDS[aspect]["type"]
-            if kind == "text":
+            if hold == "release":
+                pass
+            elif kind == "text":
                 if not text_ok(value):
                     return json_error(f"{entity} {aspect}: must be text, not blank, at most {MAX_TEXT_CHARS} characters")
             elif not command_value_ok(VOCABULARY_COMMANDS[aspect], value):
@@ -1059,12 +1125,20 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
                 command = descriptor_command(hub.aspects.get(entity), aspect)
             if command is None:
                 return json_error(f"{spec['capability']} {entity} takes no {aspect} command")
-            if not command_value_ok(command, value):
+            if hold != "release" and not command_value_ok(command, value):
                 return json_error(f"{entity} {aspect}: {value!r} is outside the declared constraint")
         # The manual band matches this unit's [bus.publishes] declaration
         # (units/dashboard.toml). The family wins over automations.
-        envelope = keys.cmd_envelope(value, "manual", "dashboard")
+        try:
+            envelope = keys.cmd_envelope(value, "manual", "dashboard", hold=hold)
+        except ValueError as error:
+            return json_error(str(error))
         key = keys.cmd_key(room, entity, aspect)
+        if hold == "release":
+            # Only the arbiter hears a release, and the hold record going
+            # away is its answer.
+            hub.session.put_json(key, envelope)
+            return web.json_response({"ok": True, "id": envelope["id"]})
         heard = await asyncio.get_running_loop().run_in_executor(
             None, reachable, hub.session, spec, aspect
         )

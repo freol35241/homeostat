@@ -2,9 +2,9 @@
 import { html } from '../html.js';
 import logic, { titleCase } from '../logic.js';
 import { showOverlay } from './panel.js';
-import { controlDisabled, findEntity, houseControls, localState, overlay, store, unitLabel } from '../store.js';
+import { controlDisabled, descriptorField, findEntity, houseControls, localState, overlay, store, unitLabel } from '../store.js';
 import { aspectValueSpan, renderAspectControl } from '../widgets/controls.js';
-import { BESPOKE_WIDGET, relTime, widgetForClimate, widgetForEntity, widgetForSensor } from '../widgets/entity.js';
+import { BESPOKE_WIDGET, relTime, widgetForButton, widgetForClimate, widgetForEntity, widgetForSensor } from '../widgets/entity.js';
 
 export function openEntityDetail(room, entityName) {
   var entity = findEntity(room, entityName);
@@ -22,12 +22,11 @@ export function openEntityDetail(room, entityName) {
 function renderAspectRow(entity, r) {
   var attrs = html` data-room="${entity.room}" data-entity="${entity.name}" data-aspect="${r.aspect}"`;
   var value = aspectValueSpan(r);
-  // An arbiter lease is in force on this aspect, so automations' commands
-  // for it are being refused. `Now` shows this only when the hold
-  // displaced somebody. The control shows it whenever the aspect is held,
-  // because this is where a person looks when they wonder why the house
-  // is not driving it (docs/design.md#views-are-text).
-  var hold = logic.holdOn(store.holds, entity.room, entity.name, r.aspect, Date.now());
+  // A hold is in force on this aspect, so commands below it are refused.
+  // `Now` shows a family hold only when it displaced somebody. The control
+  // shows any hold, because this is where a person looks when they wonder
+  // why the house is not driving it (docs/design.md#views-are-text).
+  var hold = logic.holdOn(store.holds, entity.room, entity.name, r.aspect, Date.now(), store.arbitration);
   var heldMark = hold
     ? html`<span class="stale-mark" title="${'held by ' + hold.actor + ' at the ' + hold.priority + ' band'}">held</span>`
     : '';
@@ -60,6 +59,46 @@ function renderTrackers(person) {
       <span class="aspect-label">${t.label}</span><span class="muted">${parts.join(' \u00b7 ')}</span></div>`;
   });
   return rows.length ? html`<div class="card-label" style="margin-top:20px;">Trackers</div>${rows}` : '';
+}
+
+// What holds this entity's aspects (docs/design.md#holds). The family's
+// holds come first, each with a new end, which sends the held value again
+// with that end, or a hand-back to the house
+// (docs/design.md#hold-intents). The end picked so far is kept in
+// localState, because every state delta replaces this markup. A unit's
+// hold that counts is listed with its reason and nothing to press: its
+// unit releases it.
+function renderHolds(entity) {
+  if (entity.write_mode !== 'arbitrated') return '';
+  var mine = function (h) { return h.room === entity.room && h.entity === entity.name; };
+  var family = logic.liveHolds(store.holds, Date.now()).filter(mine);
+  var units = logic.unitHolds(store.arbitration, Date.now()).filter(mine);
+  if (!family.length && !units.length) return '';
+  var rows = controlDisabled(entity) ? [] : family.map(function (h) {
+    var attrs = html` data-room="${h.room}" data-entity="${h.entity}" data-aspect="${h.aspect}" data-key="${h.key}"`;
+    var end = new Date(h.until);
+    var clock = String(end.getHours()).padStart(2, '0') + ':' + String(end.getMinutes()).padStart(2, '0');
+    // A hold ending on another day names the day.
+    var ends = end.toDateString() === new Date().toDateString()
+      ? clock : end.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' }) + ' ' + clock;
+    // A record without a value has nothing to send again.
+    var extend = h.value === undefined || h.value === null ? '' : html`
+      <input type="time" id="hold-time-${h.entity}-${h.aspect}" value="${localState.holdTimes[h.key] || clock}"
+        aria-label="Hold until" data-action="hold-time"${attrs}>
+      <button data-action="hold-until"${attrs}>Hold until</button>`;
+    return html`<div class="aspect-row hold-row">
+      <span class="aspect-label">${titleCase(h.aspect)}</span>
+      <span class="muted">by ${unitLabel(h.actor)} until ${h.nextChange ? 'the next change' : ends}</span>
+      <div class="seg">${extend}<button data-action="hold-release"${attrs}>Resume automatic</button></div></div>`;
+  });
+  units.forEach(function (h) {
+    var value = logic.formatAspect(h.aspect, descriptorField(entity, h.aspect), h.value);
+    var ends = isFinite(h.until) ? ' until ' + new Date(h.until).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' }) : '';
+    rows.push(html`<div class="aspect-row hold-row">
+      <span class="aspect-label">${titleCase(h.aspect)}</span>
+      <span class="muted">${value} · ${unitLabel(h.actor)}${h.reason ? ' · ' + h.reason : ''}${ends}</span></div>`);
+  });
+  return rows.length ? html`<div class="card-label" style="margin-top:20px;">Held</div>${rows}` : '';
 }
 
 // A box to send a notifier its text, so a phone can be checked by hand
@@ -112,6 +151,8 @@ export function renderEntityDetailBody() {
   } else if (entity.capability === 'camera') {
     camera = entity.name;
     middle = html`<div class="card-label" style="margin-top:20px;">Live</div>`;
+  } else if (entity.capability === 'button') {
+    middle = html`<div class="card-label" style="margin-top:20px;">Last press</div>${widgetForButton(entity, true)}`;
   } else if (entity.capability === 'sensor') {
     // A described sensor's readings are its sections, and tapping each
     // opens its history. An undescribed sensor keeps the sparkline rows
@@ -126,7 +167,7 @@ export function renderEntityDetailBody() {
       ${entity.capability === 'climate' ? widgetForClimate(entity, true) : widgetForEntity(entity)}`;
   }
   var head = html`<div class="muted" style="margin-top:2px;">${meta}</div>
-    <div class="muted" style="margin-top:6px;">${ownerLine}</div>${middle}`;
+    <div class="muted" style="margin-top:6px;">${ownerLine}</div>${middle}${renderHolds(entity)}`;
   // Without a camera everything goes in one half, and the mount stays
   // empty.
   return camera
