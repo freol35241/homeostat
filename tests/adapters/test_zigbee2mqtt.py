@@ -6,6 +6,8 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
+from homeostat.testing import FakeSession
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "adapters"))
 
 from zigbee2mqtt import (
@@ -26,18 +28,6 @@ def entity(name, capability, features=(), room="hall", dev_id=None):
     return SimpleNamespace(
         name=name, room=room, capability=capability, features=list(features), id=dev_id or name
     )
-
-
-class FakeSession:
-    def __init__(self):
-        self.puts = []
-        self.events = []
-
-    def put_json(self, key, value):
-        self.puts.append((key, value))
-
-    def health_event(self, kind, **fields):
-        self.events.append({"kind": kind, **fields})
 
 
 class DialectTest(unittest.TestCase):

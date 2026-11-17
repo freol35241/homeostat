@@ -10,7 +10,8 @@ import json
 import sys
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
+
+from homeostat.testing import FakeSample, FakeSession
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "adapters"))
 
@@ -557,16 +558,17 @@ def hold_row(unit, band, keys, *entities):
 class HoldersTest(unittest.TestCase):
     def test_a_hold_row_gives_its_unit_a_band_on_the_keys_it_covers(self):
         stove = {"name": "stove", "room": "utility", "capability": "burner", "write": "arbitrated", "owner": "aduro"}
-        session = FakeSession({GRANTS_KEY: [
+        grants = [
             hold_row("heating", "automation", ["home/hold/heating/utility/stove/on"], stove),
             {"unit": "aduro", "publish": "state", "entities": [stove]},
-        ]})
+        ]
+        session = FakeSession(served={GRANTS_KEY: grants})
         routes = Bindings(session, lambda arbitrated: None)
         self.assertEqual(routes.grant_of("heating", STOVE), ("automation", None))
         self.assertIsNone(routes.grant_of("heating", ("utility", "stove", "power_level")))
         self.assertIsNone(routes.grant_of("flue_guard", STOVE))
         self.assertIs(routes.rest_of(STOVE), False)
-        self.assertEqual(set(holders(session.seeds[GRANTS_KEY])), {("utility", "stove")})
+        self.assertEqual(set(holders(grants)), {("utility", "stove")})
 
 
 def entity(room, name, write):
@@ -586,37 +588,13 @@ class BindingsTest(unittest.TestCase):
         self.assertEqual(bound, {("hall", "door"), ("hall", "lamp")})
 
 
-class FakeSession:
-    """Serves seeds to get_json and keeps each subscription's handler."""
-
-    def __init__(self, seeds):
-        self.seeds = seeds
-        self.handlers = {}
-        self.events = []
-
-    def subscribe(self, key, handler):
-        self.handlers[key] = handler
-
-    def health_event(self, kind, **fields):
-        self.events.append((kind, fields))
-
-    def get_json(self, key):
-        return [(key, self.seeds[key])] if key in self.seeds else []
-
-    def put(self, key, table):
-        self.put_raw(key, json.dumps(table).encode())
-
-    def put_raw(self, key, raw):
-        self.handlers[key](SimpleNamespace(payload=SimpleNamespace(to_bytes=lambda: raw)))
-
-
 def owner_row(*entities):
     return {"unit": "z", "publish": "state", "entities": list(entities)}
 
 
 class MalformedTableTest(unittest.TestCase):
     def test_a_table_that_does_not_read_leaves_the_last_in_force(self):
-        session = FakeSession({GRANTS_KEY: [owner_row(entity("hall", "door", "arbitrated"))]})
+        session = FakeSession(served={GRANTS_KEY: [owner_row(entity("hall", "door", "arbitrated"))]})
         changes = []
         routes = Bindings(session, changes.append)
         bad = (
@@ -626,19 +604,19 @@ class MalformedTableTest(unittest.TestCase):
         )
         for key in (GRANTS_KEY, PENDING_KEY):
             for raw in bad:
-                session.put_raw(key, raw)
+                session.deliver(FakeSample(key, raw))
         self.assertEqual(len(session.events), 2 * len(bad))
         self.assertEqual(changes, [{("hall", "door")}], "only the seed changed anything")
         self.assertEqual(routes.route(("hall", "door")), "arbitrated")
         # A good table still lands after the bad ones.
-        session.put(PENDING_KEY, [owner_row(entity("hall", "lamp", "arbitrated"))])
+        session.deliver(FakeSample(PENDING_KEY, [owner_row(entity("hall", "lamp", "arbitrated"))]))
         self.assertEqual(routes.route(("hall", "lamp")), "arbitrated")
 
     def test_a_seed_that_does_not_read_stops_the_unit(self):
         # With no table in force there is nothing to route on; the
         # supervisor starting the arbiter again is the retry.
         with self.assertRaises(KeyError):
-            Bindings(FakeSession({GRANTS_KEY: [{"unit": "z", "entities": [{}]}]}), lambda arbitrated: None)
+            Bindings(FakeSession(served={GRANTS_KEY: [{"unit": "z", "entities": [{}]}]}), lambda arbitrated: None)
 
 
 class RoutingDuringAnApplyTest(unittest.TestCase):
@@ -649,7 +627,7 @@ class RoutingDuringAnApplyTest(unittest.TestCase):
     def setUp(self):
         self.changes = []
         applied = [owner_row(entity("hall", "door", "shared"))]
-        self.session = FakeSession({GRANTS_KEY: applied})
+        self.session = FakeSession(served={GRANTS_KEY: applied})
         self.routes = Bindings(self.session, self.changes.append)
 
     def test_without_an_apply_the_applied_table_decides(self):
@@ -657,34 +635,34 @@ class RoutingDuringAnApplyTest(unittest.TestCase):
         self.assertEqual(self.routes.route(("hall", "lamp")), "unbound")
 
     def test_an_entity_the_walk_arbitrates_or_binds_is_routed_at_once(self):
-        self.session.put(PENDING_KEY, [owner_row(
+        self.session.deliver(FakeSample(PENDING_KEY, [owner_row(
             entity("hall", "door", "arbitrated"), entity("hall", "lamp", "arbitrated")
-        )])
+        )]))
         self.assertEqual(self.routes.route(("hall", "door")), "arbitrated")
         self.assertEqual(self.routes.route(("hall", "lamp")), "arbitrated")
         self.assertEqual(self.changes[-1], {("hall", "door"), ("hall", "lamp")})
 
     def test_an_entity_leaving_arbitration_stays_arbitrated_until_the_apply_completes(self):
         arbitrated = [owner_row(entity("hall", "door", "arbitrated"))]
-        session = FakeSession({GRANTS_KEY: arbitrated})
+        session = FakeSession(served={GRANTS_KEY: arbitrated})
         routes = Bindings(session, self.changes.append)
-        session.put(PENDING_KEY, [owner_row(entity("hall", "door", "shared"))])
+        session.deliver(FakeSample(PENDING_KEY, [owner_row(entity("hall", "door", "shared"))]))
         self.assertEqual(routes.route(("hall", "door")), "arbitrated")
         # The apply completes: the applied table advances, then the pending
         # one empties.
-        session.put(GRANTS_KEY, [owner_row(entity("hall", "door", "shared"))])
-        session.put(PENDING_KEY, [])
+        session.deliver(FakeSample(GRANTS_KEY, [owner_row(entity("hall", "door", "shared"))]))
+        session.deliver(FakeSample(PENDING_KEY, []))
         self.assertEqual(routes.route(("hall", "door")), "bound")
         self.assertEqual(self.changes[-1], frozenset())
 
     def test_a_table_delivered_live_wins_over_its_seed(self):
-        session = FakeSession({GRANTS_KEY: [owner_row(entity("hall", "door", "shared"))]})
+        session = FakeSession(served={GRANTS_KEY: [owner_row(entity("hall", "door", "shared"))]})
         seed = session.get_json
 
         def get_json(key):
             # A newer table arrives while the get is in flight.
             if key == GRANTS_KEY:
-                session.put(GRANTS_KEY, [owner_row(entity("hall", "door", "arbitrated"))])
+                session.deliver(FakeSample(GRANTS_KEY, [owner_row(entity("hall", "door", "arbitrated"))]))
             return seed(key)
 
         session.get_json = get_json
@@ -692,7 +670,7 @@ class RoutingDuringAnApplyTest(unittest.TestCase):
         self.assertEqual(routes.route(("hall", "door")), "arbitrated")
 
     def test_a_pending_table_seeded_at_startup_counts(self):
-        session = FakeSession({
+        session = FakeSession(served={
             GRANTS_KEY: [owner_row(entity("hall", "door", "shared"))],
             PENDING_KEY: [owner_row(entity("hall", "door", "arbitrated"))],
         })
@@ -707,7 +685,7 @@ class RoutingDuringAnApplyTest(unittest.TestCase):
 class PolicyBindingTest(unittest.TestCase):
     def test_the_policy_comes_from_the_newest_owner_row(self):
         door = dict(entity("hall", "door", "arbitrated"), family={"locked": {"false": {"until": "23:00"}}})
-        session = FakeSession({GRANTS_KEY: [
+        session = FakeSession(served={GRANTS_KEY: [
             {"unit": "dashboard", "publish": "locks", "capability": "lock", "entities": [entity("hall", "door", "arbitrated")]},
             owner_row(door),
         ]})
@@ -715,7 +693,7 @@ class PolicyBindingTest(unittest.TestCase):
         self.assertEqual(routes.policy_of(("hall", "door", "locked"), False), {"until": "23:00"})
         self.assertIsNone(routes.policy_of(("hall", "door", "locked"), True))
         # An apply that drops the policy decides from its start.
-        session.put(PENDING_KEY, [owner_row(entity("hall", "door", "arbitrated"))])
+        session.deliver(FakeSample(PENDING_KEY, [owner_row(entity("hall", "door", "arbitrated"))]))
         self.assertIsNone(routes.policy_of(("hall", "door", "locked"), False))
 
 

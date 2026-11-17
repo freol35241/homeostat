@@ -200,6 +200,10 @@ class Context:
         The automation unit's name; its manifest is units/{unit}.toml.
     root : str or Path, optional
         The house root.
+    session : UnitSession or None, optional
+        The bus session to use. None opens one against HOMEOSTAT_BUS. A
+        test passes a `homeostat.testing.FakeSession` here to run the
+        Context without a bus.
 
     Attributes
     ----------
@@ -212,10 +216,12 @@ class Context:
     Raises
     ------
     KeyError
-        If HOMEOSTAT_BUS is unset.
+        If HOMEOSTAT_BUS is unset and no session is given.
     """
 
-    def __init__(self, unit: str, root: str | Path = "."):
+    def __init__(
+        self, unit: str, root: str | Path = ".", session: UnitSession | None = None
+    ):
         root = Path(root)
         self._root = root
         manifest = tomllib.loads((root / "units" / f"{unit}.toml").read_text())
@@ -264,7 +270,9 @@ class Context:
         # The house's button entities, read on the first catch-up that
         # meets an `action` key (`_is_press`).
         self._buttons: set[str] | None = None
-        self._session = UnitSession(unit, os.environ[keys.ENV_BUS])
+        if session is None:
+            session = UnitSession(unit, os.environ[keys.ENV_BUS])
+        self._session = session
         if self._holds_anything():
             # Read now, so a pause, which runs on a zenoh callback, never has
             # to wait on a get.

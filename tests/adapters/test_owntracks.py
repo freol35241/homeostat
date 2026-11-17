@@ -6,23 +6,13 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
+from homeostat.testing import FakeSession
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "adapters"))
 
 from owntracks import MAX_UNBOUND, Tracker
 
 ALICE = SimpleNamespace(name="alice", room="person", id="alice/phone")
-
-
-class FakeSession:
-    def __init__(self):
-        self.puts = []
-        self.events = []
-
-    def put_json(self, key, value):
-        self.puts.append((key, value))
-
-    def health_event(self, kind, **fields):
-        self.events.append({"kind": kind, **fields})
 
 
 class TrackerTest(unittest.TestCase):

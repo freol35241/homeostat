@@ -1,22 +1,14 @@
-"""clock.py's boundary arithmetic, loaded directly from the adapter
-script (it is not part of the homeostat package) since it is a pure
-function with no bus: reused by the same discovery run as the SDK's own
-tests (see the module docstring in any sibling test file for the command).
-
-Run: uv run --no-project --with-editable sdk/python python -m unittest discover sdk/python/tests
-"""
+"""clock.py's boundary arithmetic, a pure function, without a bus."""
 
 import datetime
-import importlib.util
+import sys
 import unittest
 import zoneinfo
 from pathlib import Path
 
-_SPEC = importlib.util.spec_from_file_location(
-    "clock_under_test", Path(__file__).resolve().parents[3] / "adapters" / "clock.py"
-)
-clock = importlib.util.module_from_spec(_SPEC)
-_SPEC.loader.exec_module(clock)
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "adapters"))
+
+import clock
 
 
 class NextBoundaryTest(unittest.TestCase):

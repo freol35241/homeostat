@@ -6,12 +6,12 @@ Run: uv run --no-project --with-editable sdk/python python -m unittest discover 
 import datetime
 import functools
 import time
-import types
 import unittest
 
 from homeostat.automation import Context
-from homeostat.session import UnitSession
 from homeostat.stamps import Newest, stamp_us
+from homeostat.testing import FakeSample, FakeSession
+from houses import automation, house
 
 ROUTER = "f413c7630f684d5b96917cb73d0a46b8"
 REPLAY = "01"
@@ -44,22 +44,6 @@ class FakeStamp:
 def at(seconds_ago: float, publisher: str = ROUTER) -> FakeStamp:
     now = datetime.datetime.now(datetime.UTC)
     return FakeStamp(now - datetime.timedelta(seconds=seconds_ago), publisher)
-
-
-class FakeSample:
-    def __init__(self, key, payload: bytes, stamp=None):
-        self.key_expr = key
-        self.payload = types.SimpleNamespace(to_bytes=lambda: payload)
-        self.timestamp = stamp
-
-
-def session_with_router(routers=(ROUTER,)) -> UnitSession:
-    sess = UnitSession.__new__(UnitSession)
-    sess._router_ids = set()
-    sess._session = types.SimpleNamespace(
-        info=types.SimpleNamespace(routers_zid=lambda: list(routers))
-    )
-    return sess
 
 
 class StampUsTest(unittest.TestCase):
@@ -116,7 +100,7 @@ class NewestTest(unittest.TestCase):
 
 class LiveOrReplayTest(unittest.TestCase):
     def test_no_stamp_is_live(self):
-        sess = session_with_router()
+        sess = FakeSession(routers=[ROUTER])
         sample = FakeSample("k", b"1")
         self.assertTrue(sess.is_live(sample))
         self.assertEqual(sess.sample_age(sample), 0.0)
@@ -124,32 +108,32 @@ class LiveOrReplayTest(unittest.TestCase):
     def test_the_routers_stamp_is_live_even_when_it_is_old(self):
         # A live sample is stamped on arrival, so its age is not read from
         # the stamp: a clock difference between hosts must not age it.
-        sess = session_with_router()
-        sample = FakeSample("k", b"1", at(30, ROUTER))
+        sess = FakeSession(routers=[ROUTER])
+        sample = FakeSample("k", b"1", timestamp=at(30, ROUTER))
         self.assertTrue(sess.is_live(sample))
         self.assertEqual(sess.sample_age(sample), 0.0)
 
     def test_a_publishers_stamp_is_a_replay_aged_from_the_stamp(self):
-        sess = session_with_router()
-        sample = FakeSample("k", b"1", at(600, REPLAY))
+        sess = FakeSession(routers=[ROUTER])
+        sample = FakeSample("k", b"1", timestamp=at(600, REPLAY))
         self.assertFalse(sess.is_live(sample))
         self.assertAlmostEqual(sess.sample_age(sample), 600, delta=2)
 
     def test_a_replay_stamped_in_the_future_is_age_zero(self):
-        sess = session_with_router()
-        sample = FakeSample("k", b"1", at(-60, REPLAY))
+        sess = FakeSession(routers=[ROUTER])
+        sample = FakeSample("k", b"1", timestamp=at(-60, REPLAY))
         self.assertEqual(sess.sample_age(sample), 0.0)
 
     def test_with_no_router_known_every_sample_is_live(self):
-        sess = session_with_router(routers=())
-        self.assertTrue(sess.is_live(FakeSample("k", b"1", at(600, REPLAY))))
+        sess = FakeSession()
+        self.assertTrue(sess.is_live(FakeSample("k", b"1", timestamp=at(600, REPLAY))))
 
     def test_the_router_is_looked_up_once(self):
         calls = []
-        sess = session_with_router()
+        sess = FakeSession(routers=[ROUTER])
         sess._session.info.routers_zid = lambda: calls.append(1) or [ROUTER]
         for _ in range(3):
-            sess.is_live(FakeSample("k", b"1", at(1, ROUTER)))
+            sess.is_live(FakeSample("k", b"1", timestamp=at(1, ROUTER)))
         self.assertEqual(len(calls), 1)
 
 
@@ -161,80 +145,71 @@ class SubscribeMergeTest(unittest.TestCase):
     def context(self, catch_up, during_get=None):
         """A context whose bus answers the catch-up get with `catch_up`.
 
-        `during_get(callback)` runs inside the get, as a live sample that
-        lands between subscribing and the get's answer.
+        `during_get(deliver)` runs inside the get, as a live sample that
+        lands between subscribing and the get's answer. The session is
+        `self.session`, and the handler appends to `self.delivered`.
         """
-        ctx = Context.__new__(Context)
-        ctx._subscribes = {"lamp": self.KEY}
-        ctx._variants = lambda expr: [expr]
-        ctx._subs = []
-        ctx._redeliveries = []
-        callbacks = []
-        router = session_with_router()
+        self.session = FakeSession("lamp", routers=[ROUTER])
+        for key, value, age_s, stamp in catch_up:
+            self.session.serve(key, value, age_s=age_s, stamp=stamp)
+        if during_get:
+            served = self.session.get_json_stamped
 
-        def subscribe(expr, callback):
-            callbacks.append(callback)
-            return object()
+            def get_json_stamped(selector, *, timeout_s=None):
+                if selector == self.KEY:
+                    during_get(self.session.deliver)
+                return served(selector, timeout_s=timeout_s)
 
-        def get_json_stamped(expr):
-            if during_get:
-                during_get(callbacks[0])
-            return catch_up
+            self.session.get_json_stamped = get_json_stamped
+        manifest = automation("lamp", f'[bus.subscribes]\nlamp = "{self.KEY}"\n')
+        self.delivered = []
+        return Context("lamp", house(self, {"units/lamp.toml": manifest}), session=self.session)
 
-        ctx._session = types.SimpleNamespace(
-            subscribe=subscribe,
-            get_json_stamped=get_json_stamped,
-            sample_age=router.sample_age,
-        )
-        ctx.delivered = []
-        ctx.callbacks = callbacks
-        return ctx
-
-    def handler(self, ctx):
-        return lambda key, value, age_s: ctx.delivered.append((value, round(age_s)))
+    def handler(self):
+        return lambda key, value, age_s: self.delivered.append((value, round(age_s)))
 
     def test_a_catch_up_is_delivered_with_the_mirrors_age(self):
         ctx = self.context([(self.KEY, True, 42.0, at(42))])
-        ctx.subscribe("lamp", self.handler(ctx))
-        self.assertEqual(ctx.delivered, [(True, 42)])
+        ctx.subscribe("lamp", self.handler())
+        self.assertEqual(self.delivered, [(True, 42)])
 
     def test_a_replay_arriving_live_carries_its_age(self):
         ctx = self.context([])
-        ctx.subscribe("lamp", self.handler(ctx))
-        ctx.callbacks[0](FakeSample(self.KEY, b"true", at(300, REPLAY)))
-        self.assertEqual(ctx.delivered, [(True, 300)])
+        ctx.subscribe("lamp", self.handler())
+        self.session.deliver(FakeSample(self.KEY, b"true", timestamp=at(300, REPLAY)))
+        self.assertEqual(self.delivered, [(True, 300)])
 
     def test_a_replay_after_a_live_value_is_dropped(self):
         ctx = self.context([])
-        ctx.subscribe("lamp", self.handler(ctx))
-        ctx.callbacks[0](FakeSample(self.KEY, b"false", at(0, ROUTER)))
-        ctx.callbacks[0](FakeSample(self.KEY, b"true", at(300, REPLAY)))
-        self.assertEqual(ctx.delivered, [(False, 0)])
+        ctx.subscribe("lamp", self.handler())
+        self.session.deliver(FakeSample(self.KEY, b"false", timestamp=at(0, ROUTER)))
+        self.session.deliver(FakeSample(self.KEY, b"true", timestamp=at(300, REPLAY)))
+        self.assertEqual(self.delivered, [(False, 0)])
 
     def test_a_live_value_after_a_replay_is_delivered(self):
         ctx = self.context([])
-        ctx.subscribe("lamp", self.handler(ctx))
-        ctx.callbacks[0](FakeSample(self.KEY, b"true", at(300, REPLAY)))
-        ctx.callbacks[0](FakeSample(self.KEY, b"false", at(0, ROUTER)))
-        self.assertEqual(ctx.delivered, [(True, 300), (False, 0)])
+        ctx.subscribe("lamp", self.handler())
+        self.session.deliver(FakeSample(self.KEY, b"true", timestamp=at(300, REPLAY)))
+        self.session.deliver(FakeSample(self.KEY, b"false", timestamp=at(0, ROUTER)))
+        self.assertEqual(self.delivered, [(True, 300), (False, 0)])
 
     def test_a_catch_up_older_than_a_live_sample_during_the_get_is_dropped(self):
         stamp = at(60)
         ctx = self.context(
             [(self.KEY, True, 60.0, stamp)],
-            during_get=lambda cb: cb(FakeSample(self.KEY, b"false", at(0, ROUTER))),
+            during_get=lambda cb: cb(FakeSample(self.KEY, b"false", timestamp=at(0, ROUTER))),
         )
-        ctx.subscribe("lamp", self.handler(ctx))
-        self.assertEqual(ctx.delivered, [(False, 0)])
+        ctx.subscribe("lamp", self.handler())
+        self.assertEqual(self.delivered, [(False, 0)])
 
     def test_the_catch_up_of_a_value_delivered_live_is_not_repeated(self):
         stamp = at(1, ROUTER)
         ctx = self.context(
             [(self.KEY, True, 1.0, stamp)],
-            during_get=lambda cb: cb(FakeSample(self.KEY, b"true", stamp)),
+            during_get=lambda cb: cb(FakeSample(self.KEY, b"true", timestamp=stamp)),
         )
-        ctx.subscribe("lamp", self.handler(ctx))
-        self.assertEqual(ctx.delivered, [(True, 0)])
+        ctx.subscribe("lamp", self.handler())
+        self.assertEqual(self.delivered, [(True, 0)])
 
     def test_a_two_argument_handler_gets_values_without_ages(self):
         ctx = self.context([(self.KEY, True, 42.0, at(42))])
@@ -245,8 +220,8 @@ class SubscribeMergeTest(unittest.TestCase):
 
 class AgeClockTest(unittest.TestCase):
     def test_age_uses_the_wall_clock_in_microseconds(self):
-        sess = session_with_router()
-        sample = FakeSample("k", b"1", at(2.5, REPLAY))
+        sess = FakeSession(routers=[ROUTER])
+        sample = FakeSample("k", b"1", timestamp=at(2.5, REPLAY))
         before = time.time()
         age = sess.sample_age(sample)
         self.assertGreaterEqual(age, 2.4)

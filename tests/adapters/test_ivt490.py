@@ -6,6 +6,8 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
+from homeostat.testing import FakeSession
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "adapters"))
 
 from ivt490 import (
@@ -20,18 +22,6 @@ from ivt490 import (
 
 PUMP = SimpleNamespace(name="heatpump", room="utility", id="ivt", inputs={})
 KEY = "home/state/utility/heatpump/"
-
-
-class FakeSession:
-    def __init__(self):
-        self.puts = []
-        self.events = []
-
-    def put_json(self, key, value):
-        self.puts.append((key, value))
-
-    def health_event(self, kind, **fields):
-        self.events.append({"kind": kind, **fields})
 
 
 class DialectTest(unittest.TestCase):
