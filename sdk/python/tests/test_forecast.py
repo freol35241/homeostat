@@ -40,6 +40,14 @@ class EncodeTest(unittest.TestCase):
         payload = encode(t(8), [(t(9), 1.0), (t(10), 2.0), (t(13), 3.0)])
         self.assertEqual([p.t.hour for p in decode(payload).points], [9, 10, 13])
 
+    def test_decode_refuses_what_encode_refuses(self):
+        # json.loads reads NaN and Infinity, which encode will not write.
+        payload = json.loads(encode(t(8), [(t(9), 1.0)]))
+        for bad in ("NaN", "Infinity", "-Infinity"):
+            raw = json.dumps(payload).replace("1.0", bad).encode()
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                decode(raw)
+
     def test_encode_sorts_rather_than_demanding_sorted_input(self):
         payload = encode(t(8), [(t(11), 3.0), (t(9), 1.0), (t(10), 2.0)])
         self.assertEqual([p.v for p in decode(payload).points], [1.0, 2.0, 3.0])

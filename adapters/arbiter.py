@@ -194,6 +194,18 @@ def policy_entry(values: dict, value):
     return values.get("any")
 
 
+def is_table(value) -> bool:
+    """Return whether a decoded grant table has the shape the arbiter reads.
+
+    The core serves a list of rows, each with a list of entities.
+    """
+    return isinstance(value, list) and all(
+        isinstance(row, dict) and isinstance(row.get("entities"), list)
+        and all(isinstance(e, dict) for e in row["entities"])
+        for row in value
+    )
+
+
 class Bindings:
     """The arbitrated and bound entities and the hold grants, live from the grant tables.
 
@@ -228,6 +240,7 @@ class Bindings:
     """
 
     def __init__(self, session, on_change):
+        self._session = session
         self._tables: dict[str, list] = {GRANTS_KEY: [], PENDING_KEY: []}
         self._live: set[str] = set()
         # Everything read from one pair of tables, in one attribute,
@@ -242,6 +255,9 @@ class Bindings:
         seeded = False
         for key in (GRANTS_KEY, PENDING_KEY):
             for _key, value in session.get_json(key):
+                if not is_table(value):
+                    session.health_event("drop", reason="malformed-payload", key=key)
+                    continue
                 with self._lock:
                     if key not in self._live:
                         self._tables[key] = value
@@ -256,9 +272,18 @@ class Bindings:
         return (*bindings(tables), holders(tables), policies(tables))
 
     def _on_table(self, key: str, sample) -> None:
+        # A table that does not read leaves the last one in force: routing
+        # on nothing would hand every arbitrated entity to its adapter.
+        try:
+            table = json.loads(sample.payload.to_bytes())
+        except ValueError:
+            table = None
+        if not is_table(table):
+            self._session.health_event("drop", reason="malformed-payload", key=key)
+            return
         with self._lock:
             self._live.add(key)
-            self._tables[key] = json.loads(sample.payload.to_bytes())
+            self._tables[key] = table
             self._sets = self._read()
             self._on_change(self._sets[0])
 

@@ -685,6 +685,7 @@ class SourceUsedTest(unittest.TestCase):
     def context(self):
         ctx = Context.__new__(Context)
         ctx._sources_used = {}
+        ctx._reports_lock = threading.Lock()
         ctx.emitted = []
         ctx._session = types.SimpleNamespace(
             health_event=lambda kind, **f: ctx.emitted.append((kind, f))

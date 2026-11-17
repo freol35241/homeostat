@@ -568,19 +568,38 @@ class FakeSession:
         self.seeds = seeds
         self.handlers = {}
 
+        self.events = []
+
     def subscribe(self, key, handler):
         self.handlers[key] = handler
+
+    def health_event(self, kind, **fields):
+        self.events.append((kind, fields))
 
     def get_json(self, key):
         return [(key, self.seeds[key])] if key in self.seeds else []
 
     def put(self, key, table):
-        payload = SimpleNamespace(to_bytes=lambda: json.dumps(table).encode())
-        self.handlers[key](SimpleNamespace(payload=payload))
+        self.put_raw(key, json.dumps(table).encode())
+
+    def put_raw(self, key, raw):
+        self.handlers[key](SimpleNamespace(payload=SimpleNamespace(to_bytes=lambda: raw)))
 
 
 def owner_row(*entities):
     return {"unit": "z", "publish": "state", "entities": list(entities)}
+
+
+class MalformedTableTest(unittest.TestCase):
+    def test_a_table_that_does_not_read_leaves_the_last_in_force(self):
+        session = FakeSession({GRANTS_KEY: {"not": "a list"}})
+        routes = Bindings(session, lambda arbitrated: None)
+        self.assertEqual(session.events, [("drop", {"reason": "malformed-payload", "key": GRANTS_KEY})])
+        session.put(GRANTS_KEY, [owner_row(entity("hall", "door", "arbitrated"))])
+        for raw in (b"not json", b"[1, 2]", b'[{"unit": "z"}]'):
+            session.put_raw(GRANTS_KEY, raw)
+        self.assertEqual(routes.route(("hall", "door")), "arbitrated")
+        self.assertEqual(len(session.events), 4)
 
 
 class RoutingDuringAnApplyTest(unittest.TestCase):

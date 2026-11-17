@@ -459,8 +459,9 @@ def decode(payload: bytes) -> Forecast:
         if not isinstance(item, dict):
             raise ValueError("a forecast point is not an object")
         v = item.get("v")
-        if isinstance(v, bool) or not isinstance(v, (int, float)):
-            raise ValueError(f"forecast value must be a number, got {v!r}")
+        # json.loads reads NaN and Infinity, which encode refuses.
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
+            raise ValueError(f"forecast value must be a finite number, got {v!r}")
         points.append(Point(_parse_ts(item.get("t")), float(v), _extent(item.get("d"))))
     for earlier, later in pairwise(points):
         if earlier.t >= later.t:

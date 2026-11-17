@@ -69,5 +69,21 @@ class LiveParamsTest(unittest.TestCase):
             params.get("other")
 
 
+    def test_an_invalid_live_value_during_the_seed_keeps_the_served_one(self):
+        # The subscription delivers a bad value before the seed's get
+        # returns. It is not kept, so it must not stop the served one.
+        session = FakeSession([("home/config/u/hold_minutes", 5)])
+        original = session.subscribe
+
+        def subscribe(keyexpr, callback):
+            sub = original(keyexpr, callback)
+            callback(sample("home/config/u/hold_minutes", "seven"))
+            return sub
+
+        session.subscribe = subscribe
+        params = LiveParams(session, {"hold_minutes": 30.0})
+        self.assertEqual(params.get("hold_minutes"), 5)
+
+
 if __name__ == "__main__":
     unittest.main()

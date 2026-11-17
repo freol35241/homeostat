@@ -160,6 +160,7 @@ class DecisionTest(unittest.TestCase):
     def context(self, enabled=True):
         ctx = context(enabled=enabled)
         ctx._decisions = {}
+        ctx._reports_lock = threading.Lock()
         ctx.emitted = []
         ctx._session.health_event = lambda kind, **fields: ctx.emitted.append((kind, fields))
         return ctx
