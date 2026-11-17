@@ -62,8 +62,9 @@ a hold an adapter could not deliver is sent again when the device is
 back.
 
 Health events at home/health/{unit}/event: `drop` (off-schema-key,
-invalid-command, unbound, malformed-hold), `refuse` when a command loses
-to a hold, `preempt` when a higher hold takes over, `resume` when a
+invalid-command, unbound, malformed-hold, and malformed-payload for a
+grant table that does not read), `refuse` when a command loses to a
+hold, `preempt` when a higher hold takes over, `resume` when a
 lower one takes over after it, `replay-late` when the core's replay
 after a restart did not come in time and the arbiter starts without it,
 and `clock-unknown` when a family policy's time of day is placed before
@@ -194,18 +195,6 @@ def policy_entry(values: dict, value):
     return values.get("any")
 
 
-def is_table(value) -> bool:
-    """Return whether a decoded grant table has the shape the arbiter reads.
-
-    The core serves a list of rows, each with a list of entities.
-    """
-    return isinstance(value, list) and all(
-        isinstance(row, dict) and isinstance(row.get("entities"), list)
-        and all(isinstance(e, dict) for e in row["entities"])
-        for row in value
-    )
-
-
 class Bindings:
     """The arbitrated and bound entities and the hold grants, live from the grant tables.
 
@@ -255,36 +244,45 @@ class Bindings:
         seeded = False
         for key in (GRANTS_KEY, PENDING_KEY):
             for _key, value in session.get_json(key):
-                if not is_table(value):
-                    session.health_event("drop", reason="malformed-payload", key=key)
-                    continue
                 with self._lock:
                     if key not in self._live:
-                        self._tables[key] = value
-                        self._sets = self._read()
+                        # A seed that does not read raises: with no table
+                        # in force there is nothing to route on, and the
+                        # supervisor starting the unit again is the retry.
+                        tables = {**self._tables, key: value}
+                        self._sets = self._read(tables)
+                        self._tables = tables
                         seeded = True
         if seeded:
             with self._lock:
                 self._on_change(self._sets[0])
 
-    def _read(self) -> tuple:
-        tables = self._tables[GRANTS_KEY] + self._tables[PENDING_KEY]
-        return (*bindings(tables), holders(tables), policies(tables))
+    @staticmethod
+    def _read(tables: dict) -> tuple:
+        """Return the sets one pair of tables gives.
+
+        Raises
+        ------
+        ValueError, KeyError, TypeError or AttributeError
+            If a table does not have the shape the core serves.
+        """
+        rows = tables[GRANTS_KEY] + tables[PENDING_KEY]
+        return (*bindings(rows), holders(rows), policies(rows))
 
     def _on_table(self, key: str, sample) -> None:
         # A table that does not read leaves the last one in force: routing
-        # on nothing would hand every arbitrated entity to its adapter.
-        try:
-            table = json.loads(sample.payload.to_bytes())
-        except ValueError:
-            table = None
-        if not is_table(table):
-            self._session.health_event("drop", reason="malformed-payload", key=key)
-            return
+        # on nothing would hand every arbitrated entity to its adapter. The
+        # sets are read from the new table before anything is replaced.
         with self._lock:
+            try:
+                tables = {**self._tables, key: json.loads(sample.payload.to_bytes())}
+                sets = self._read(tables)
+            except (ValueError, KeyError, TypeError, AttributeError):
+                self._session.health_event("drop", reason="malformed-payload", key=key)
+                return
             self._live.add(key)
-            self._tables[key] = table
-            self._sets = self._read()
+            self._tables = tables
+            self._sets = sets
             self._on_change(self._sets[0])
 
     def route(self, target: tuple[str, str]) -> str:

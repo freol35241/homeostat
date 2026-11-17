@@ -567,7 +567,6 @@ class FakeSession:
     def __init__(self, seeds):
         self.seeds = seeds
         self.handlers = {}
-
         self.events = []
 
     def subscribe(self, key, handler):
@@ -592,14 +591,29 @@ def owner_row(*entities):
 
 class MalformedTableTest(unittest.TestCase):
     def test_a_table_that_does_not_read_leaves_the_last_in_force(self):
-        session = FakeSession({GRANTS_KEY: {"not": "a list"}})
-        routes = Bindings(session, lambda arbitrated: None)
-        self.assertEqual(session.events, [("drop", {"reason": "malformed-payload", "key": GRANTS_KEY})])
-        session.put(GRANTS_KEY, [owner_row(entity("hall", "door", "arbitrated"))])
-        for raw in (b"not json", b"[1, 2]", b'[{"unit": "z"}]'):
-            session.put_raw(GRANTS_KEY, raw)
+        session = FakeSession({GRANTS_KEY: [owner_row(entity("hall", "door", "arbitrated"))]})
+        changes = []
+        routes = Bindings(session, changes.append)
+        bad = (
+            b"not json", b"[1, 2]", b'{"not": "a list"}', b'[{"unit": "z"}]',
+            b'[{"unit": "z", "entities": [{}]}]',
+            b'[{"unit": "h", "hold": true, "entities": [{"room": "a", "name": "b", "write": "shared"}], "keys": 5}]',
+        )
+        for key in (GRANTS_KEY, PENDING_KEY):
+            for raw in bad:
+                session.put_raw(key, raw)
+        self.assertEqual(len(session.events), 2 * len(bad))
+        self.assertEqual(changes, [{("hall", "door")}], "only the seed changed anything")
         self.assertEqual(routes.route(("hall", "door")), "arbitrated")
-        self.assertEqual(len(session.events), 4)
+        # A good table still lands after the bad ones.
+        session.put(PENDING_KEY, [owner_row(entity("hall", "lamp", "arbitrated"))])
+        self.assertEqual(routes.route(("hall", "lamp")), "arbitrated")
+
+    def test_a_seed_that_does_not_read_stops_the_unit(self):
+        # With no table in force there is nothing to route on; the
+        # supervisor starting the arbiter again is the retry.
+        with self.assertRaises(KeyError):
+            Bindings(FakeSession({GRANTS_KEY: [{"unit": "z", "entities": [{}]}]}), lambda arbitrated: None)
 
 
 class RoutingDuringAnApplyTest(unittest.TestCase):
