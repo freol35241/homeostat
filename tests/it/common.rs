@@ -946,17 +946,22 @@ pub fn assert_cli_ok(output: &Output) {
 
 /// Caps how many houses start at the same moment.
 ///
-/// Every test spawns its own supervisor, and cargo runs the tests in
-/// parallel. Started all at once, the houses' units resolve and import
-/// together, and on a two-core runner the slowest starves past its health
-/// deadline and fails a test that nothing about it broke. One start per
-/// core keeps the machine busy without starving any of them.
+/// Every test spawns its own supervisor, and cargo runs one test per core.
+/// Started all at once, the houses' units resolve and import together, and
+/// on a two-core runner the slowest starves past its health deadline and
+/// fails a test that nothing about it broke. A cap equal to the core count
+/// would never bind, so it is half of it, and at least two.
+///
+/// `up` takes a permit, and so does a test that subscribes before its
+/// units run. A few tests start a house and wait on it for something other
+/// than a unit running, and go without one.
 ///
 /// The permit covers start-up only. `up` holds it until the units under
 /// test run, then drops it: the body of a test costs nothing to overlap,
 /// and holding it longer would serialize the suite.
 static STARTUP: std::sync::LazyLock<tokio::sync::Semaphore> = std::sync::LazyLock::new(|| {
-    tokio::sync::Semaphore::new(std::thread::available_parallelism().map_or(2, usize::from))
+    let cores = std::thread::available_parallelism().map_or(2, usize::from);
+    tokio::sync::Semaphore::new((cores / 2).max(2))
 });
 
 /// A start-up permit, for a test that starts its house without `up`

@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 
 use crate::common::{
     assert_unit_contract, await_running, expect_drop_event, expect_event_kind, expect_states,
-    next_event, temp_house, up, Mosquitto, Mqtt, Supervisor,
+    next_event, startup_permit, temp_house, up, Mosquitto, Mqtt, Supervisor,
 };
 
 const FIXTURE: &str = "tests/fixtures/house_z2m";
@@ -782,12 +782,14 @@ async fn a_base_topic_that_matches_nothing_reports_bridge_silent() {
     // Subscribed before the adapter is up: its watchdog starts at ready
     // and reports once, so a subscriber declared after the liveliness
     // token can arrive too late on a loaded host and wait for nothing.
+    let permit = startup_permit().await;
     let (mosquitto, mut sup, observer) = start_at(&house).await;
     let event_sub = observer
         .declare_subscriber(EVENT_KEY)
         .await
         .expect("event subscriber");
     await_running(&observer, "zigbee", Duration::from_mins(1)).await;
+    drop(permit);
 
     // The estate is alive under the real prefix; the adapter is listening
     // somewhere else entirely.

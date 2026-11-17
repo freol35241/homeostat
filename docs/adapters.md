@@ -565,7 +565,7 @@ protocol endpoint, without mocking the bus. The pattern, from
   manifest pointing at `../../../adapters/<adapter>.py`, an endpoint that
   reads a port from `${VAR}`, and one or two entity files.
 - `tests/it/common.rs` provides `up`, which starts the house under the
-  suite-wide start-up cap and waits for the named units to run;
+  start-up cap and waits for the named units to run;
   `Mosquitto` (a real broker on a free port) and `Mqtt` (a scripted
   client); `expect_states`, `expect_drop_event`, `expect_event_kind`,
   `await_running`, `restart_unit`, `health_watch` / `await_health`, and
