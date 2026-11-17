@@ -19,6 +19,9 @@ Fixed inventory, enough for the adapter's v1 vocabulary:
   - switch "relay" (key 1)
   - sensor "temperature" (key 2), device_class "temperature"
   - binary_sensor "motion" (key 3), device_class "motion"
+  - with --button, event "button" (key 5), device_class "button". Each
+    relay command also fires its "single" event, so a test can press it
+    on demand. Like a real device, it sends no event on subscribe.
 
 Handles: HelloRequest, DeviceInfoRequest, ListEntitiesRequest (+ Done),
 SubscribeStatesRequest (sends the current state of every entity, then any
@@ -50,8 +53,10 @@ BINARY_SENSOR_STATE_RESPONSE = 21
 SENSOR_STATE_RESPONSE = 25
 SWITCH_STATE_RESPONSE = 26
 SWITCH_COMMAND_REQUEST = 33
+LIST_ENTITIES_EVENT_RESPONSE = 107
+EVENT_RESPONSE = 108
 
-SWITCH_KEY, SENSOR_KEY, BINARY_SENSOR_KEY, RESERVED_SENSOR_KEY = 1, 2, 3, 4
+SWITCH_KEY, SENSOR_KEY, BINARY_SENSOR_KEY, RESERVED_SENSOR_KEY, EVENT_KEY = 1, 2, 3, 4, 5
 
 
 def encode_varint(value: int) -> bytes:
@@ -99,8 +104,9 @@ class Device:
     so its state does not belong to a connection.
     """
 
-    def __init__(self, name: str, reserved_sensor: bool = False):
+    def __init__(self, name: str, reserved_sensor: bool = False, button: bool = False):
         self.name = name
+        self.button = button
         self.state = {"relay": False, "temperature": 21.5, "motion": True}
         # When set, the device also exposes a sensor whose object_id is the
         # reserved "available" aspect; the adapter must drop its states.
@@ -111,6 +117,9 @@ class Device:
         msg = api_pb2.SwitchStateResponse(key=SWITCH_KEY, state=self.state["relay"])
         for writer in set(self.subscribers):
             writer.write(encode_message(SWITCH_STATE_RESPONSE, msg))
+            if self.button:
+                press = api_pb2.EventResponse(key=EVENT_KEY, event_type="single")
+                writer.write(encode_message(EVENT_RESPONSE, press))
             if self.reserved_sensor:
                 # Re-announce the reserved-aspect sensor too, so tests can
                 # provoke its (dropped) state on demand instead of racing
@@ -160,6 +169,16 @@ async def send_entity_list(writer: asyncio.StreamWriter, device: "Device") -> No
                 LIST_ENTITIES_SENSOR_RESPONSE,
                 api_pb2.ListEntitiesSensorResponse(
                     object_id="available", key=RESERVED_SENSOR_KEY, name="Available"
+                ),
+            )
+        )
+    if device.button:
+        writer.write(
+            encode_message(
+                LIST_ENTITIES_EVENT_RESPONSE,
+                api_pb2.ListEntitiesEventResponse(
+                    object_id="button", key=EVENT_KEY, name="Button", device_class="button",
+                    event_types=["single", "double", "long"],
                 ),
             )
         )
@@ -252,9 +271,10 @@ async def main() -> None:
     parser.add_argument("--port", type=int, default=int(os.environ.get("FAKE_ESPHOME_PORT", "6053")))
     parser.add_argument("--name", default="fake-esphome")
     parser.add_argument("--reserved-sensor", action="store_true")
+    parser.add_argument("--button", action="store_true")
     args = parser.parse_args()
 
-    device = Device(args.name, reserved_sensor=args.reserved_sensor)
+    device = Device(args.name, reserved_sensor=args.reserved_sensor, button=args.button)
     server = await asyncio.start_server(make_handler(device), "127.0.0.1", args.port)
     async with server:
         await server.serve_forever()

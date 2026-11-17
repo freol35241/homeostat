@@ -19,8 +19,10 @@ State: JSON on {base}/{id} fans out to home/state/{room}/{entity}/{aspect}.
 z2m's `state` field becomes `on` (lights, switches) or `locked` (locks).
 On a room sensor (`occupancy`), z2m's `occupancy` becomes `motion`, since
 on most devices it is a PIR, and `presence` becomes `occupied`, which is
-what z2m calls an mmWave radar's reading. Other scalar fields keep their
-z2m names. When availability is enabled in
+what z2m calls an mmWave radar's reading. On a `button`, z2m's `action`
+is published on every press, a repeat included, and the empty action
+that z2m's legacy action sensor sends after a press is not one. Other
+scalar fields keep their z2m names. When availability is enabled in
 the z2m config, {base}/{id}/availability becomes the reserved `available`
 aspect. Without it the aspect does not appear. `Bridge.on_message` has the
 details.
@@ -132,6 +134,8 @@ def suggest(exposes):
             return {"capability": "lock", "features": []}
         if exp.get("type") == "binary" and exp.get("property") in OCCUPANCY_ASPECTS:
             return {"capability": "occupancy", "features": []}
+        if exp.get("type") == "enum" and exp.get("property") == "action":
+            return {"capability": "button", "features": []}
     return None
 
 
@@ -477,6 +481,8 @@ class Bridge:
         for z2m_field, value in payload.items():
             if isinstance(value, (dict, list)):
                 continue  # composite fields (color, ...) deferred
+            if entity.capability == "button" and z2m_field == "action" and value in ("", None):
+                continue  # the legacy action sensor clearing itself, not a press
             aspect, value = state_aspect(entity.capability, z2m_field, value)
             if aspect == "available":
                 # Reserved for the adapter's own liveness signal.

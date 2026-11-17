@@ -13,6 +13,7 @@ export var store = {
   aspects: {},      // entity -> its adapter's aspect descriptor (from discovery)
   events: [],
   lastSeen: {},
+  actionAt: {},     // state key ending in /action -> epoch second of its last value
   connected: false,
   view: 'now',
   roomsFilter: 'all'

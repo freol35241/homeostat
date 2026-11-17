@@ -15,6 +15,7 @@ use std::fmt;
 pub const CAPABILITIES: &[&str] = &[
     "binary_sensor",
     "burner",
+    "button",
     "camera",
     "climate",
     "cover",
@@ -80,6 +81,14 @@ pub const VOCABULARY: &[Capability] = &[
         notable: None,
         options: &[],
         note: "`on` is the family lever, read back from the device's run state, never echoed from the command. `power_level` is the output setting as the device enumerates it (a constraint the adapter describes); the two temperatures in °C are what an interlock reads. Run-phase codes pass through raw until a second burner adapter exists to generalise against.",
+    },
+    Capability {
+        name: "button",
+        base: None,
+        aspects: &["action"],
+        notable: None,
+        options: &[],
+        note: "A thing a person presses: a remote, a wall button, a device's own button. `action` (string) is one press in the device's own words (`single`, `1_double`, `brightness_up_click`), not normalised. Every press is published, a repeat included, so an action is an event, not a state: a unit catching up after a restart is not handed the last one (docs/design.md#buttons). No commands.",
     },
     Capability {
         name: "camera",
@@ -644,8 +653,8 @@ pub struct EntitySection {
     /// otherwise have to invent a name for a device that does not exist.
     #[serde(default)]
     pub id: Option<String>,
-    /// One of: `binary_sensor`, `burner`, `camera`, `climate`, `cover`,
-    /// `light`, `lock`, `notifier`, `occupancy`, `person`, `router`,
+    /// One of: `binary_sensor`, `burner`, `button`, `camera`, `climate`,
+    /// `cover`, `light`, `lock`, `notifier`, `occupancy`, `person`, `router`,
     /// `sensor`, `switch`, `tracker` (`unknown-capability`). Decides the base aspect,
     /// the dashboard widget and which cmd grants apply.
     pub capability: String,

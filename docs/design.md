@@ -652,7 +652,7 @@ reviews and the dependency graph the apply walk follows.
 
 A capability says what kind of thing an entity is. The list is fixed in
 the core (`CAPABILITIES` in `src/manifest.rs`): `binary_sensor`,
-`burner`, `camera`, `climate`, `cover`, `light`, `lock`, `notifier`,
+`burner`, `button`, `camera`, `climate`, `cover`, `light`, `lock`, `notifier`,
 `occupancy`, `person`, `router`, `sensor`, `switch`, `tracker`. An
 unknown one is `unknown-capability`. Each capability has a row in
 `VOCABULARY`, which a test keeps in step and which is rendered into
@@ -674,8 +674,8 @@ and `{aspect}_valid`, a boolean beside a reading that the device itself
 may stop trusting. Some rows are less obvious. `camera` has `motion`,
 and its media never goes on the bus ([Cameras](#cameras)). `tracker`
 and `person` are described in [Map and people](#map-and-people).
-`notifier` is described in [Notifications](#notifications). `cover` is
-reserved.
+`notifier` is described in [Notifications](#notifications). `button`
+is described in [Buttons](#buttons). `cover` is reserved.
 
 An aspect names what the device observed, so a consumer can tell what a
 `false` means. `occupancy` is a room sensor. A PIR publishes `motion`:
@@ -695,6 +695,34 @@ The vocabulary grows by need. The inputs an automation or an interlock
 needs belong in the vocabulary, and thresholds are configuration. A
 proposal built for one case (a `mode` capability, or a `heat_source`
 spanning a burner and a heat pump) waits for a second case.
+
+#### Buttons
+
+A `button` is something a person presses: a remote, a wall button, a
+device's own button. Its one aspect, `action`, is a press in the
+device's own words: `single`, `double` and `long` on one remote,
+`1_single` or `brightness_up_click` on another. The words are not
+normalised, because devices do not agree on how many gestures there are
+or what they mean. The adapter's descriptor lists the actions a device
+can send, so an automation author can see them.
+
+An action is an event, not a state. Every press is published, the same
+action twice included, and nothing is published between presses. Two
+things follow:
+
+- A unit catching up must not be handed the last press as if it had
+  just happened. `ctx.subscribe` leaves a button's `action` out of the
+  catch-up, and out of the redelivery when a paused automation resumes,
+  so a restarted automation acts only on presses made while it runs. The
+  mirror still keeps the last press, so the dashboard can show it with
+  its age.
+- The recorder stores each press as its own row. Two presses share a
+  row only if the router stamped them in the same microsecond. The
+  history overlay lists presses rather than drawing the runs of a
+  state, which would merge a repeat into the press before it.
+
+A button takes no commands and needs no write mode. What a press should
+do is an automation's decision.
 
 Presence and connectivity are house state. Network metrics are
 observability and belong to the monitoring tooling beside homeostat,

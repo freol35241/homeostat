@@ -29,6 +29,9 @@ a bound entity (`state_values`):
 - binary_sensor: capability `binary_sensor`, aspect named the same way,
   or capability `occupancy` for device classes motion, occupancy and
   presence (`occupancy_aspect`).
+- event: capability `button`, aspect `action`, the event type the device
+  fires (`single`, `double`, `long`, as its YAML names them). Every event
+  is published, a repeat included, and the device sends none on connect.
 
 Configuration: a device is reached at `{device}.local:6053` (mDNS) unless
 the TOML file that HOMEOSTAT_ESPHOME_DEVICES names gives it a `host`
@@ -66,6 +69,8 @@ from aioesphomeapi import (
     BinarySensorInfo,
     BinarySensorState,
     ColorMode,
+    Event,
+    EventInfo,
     LightInfo,
     LightState,
     ReconnectLogic,
@@ -150,6 +155,8 @@ def suggest(info) -> dict | None:
         if info.device_class in OCCUPANCY_DEVICE_CLASSES:
             return {"capability": "occupancy", "features": []}
         return {"capability": "binary_sensor", "features": []}
+    if isinstance(info, EventInfo) and info.device_class in ("", "button"):
+        return {"capability": "button", "features": []}
     return None
 
 
@@ -213,6 +220,13 @@ def aspect_descriptor(entity, info) -> dict | None:
         if info.device_class in NOTABLE_DEVICE_CLASSES:
             field["notable"] = True
         fields[aspect] = field
+    elif entity.capability == "button" and isinstance(info, EventInfo):
+        # The event types the device's YAML declares are the actions it can
+        # send.
+        fields["action"] = {
+            "label": aspect_label(info, "action"), "kind": "enum", "group": "readings",
+            "values": [{"value": t, "label": t} for t in info.event_types],
+        }
     if not fields:
         return None
     return {"schema": 1, "groups": ["readings"], "fields": fields}
@@ -244,6 +258,8 @@ def describe(info) -> dict:
         body["unit_of_measurement"] = info.unit_of_measurement
     if isinstance(info, LightInfo):
         body["supported_color_modes"] = [m.name for m in info.supported_color_modes]
+    if isinstance(info, EventInfo):
+        body["event_types"] = list(info.event_types)
     return body
 
 
@@ -270,6 +286,8 @@ def state_values(entity, info, state):
         yield occupancy_aspect(info), bool(state.state)
     elif entity.capability == "binary_sensor" and isinstance(state, BinarySensorState):
         yield native_aspect(info), bool(state.state)
+    elif entity.capability == "button" and isinstance(state, Event) and state.event_type:
+        yield "action", state.event_type
 
 
 async def run_device(device, bound, devices_conf, session, entity_runtime, entity_lock, bound_discovery, publish_discovery):

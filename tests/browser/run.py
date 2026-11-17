@@ -726,6 +726,37 @@ class HoldsOnNow(PageTest):
         self.assertIn("held", texts)
 
 
+class Buttons(PageTest):
+    """`docs/design.md#buttons`: a button shows its last press and its
+    age, and its history lists every press, a repeat included."""
+
+    CARD = '[data-action="entity-detail"][data-entity="hallway_remote"]'
+
+    async def test_the_card_shows_the_last_press_and_its_age(self):
+        await self.view("everything")
+        card = self.page.locator(self.CARD).first
+        self.assertRegex(await card.inner_text(), r"double · 2 min ago")
+        await self.house.push(
+            {"type": "state", "key": "home/state/hallway/hallway_remote/action", "value": "single"}
+        )
+        await self.page.wait_for_timeout(300)
+        self.assertRegex(await card.inner_text(), r"single · just now")
+
+    async def test_the_history_lists_each_press(self):
+        await self.view("everything")
+        await self.page.locator(self.CARD).first.click()
+        await self.page.wait_for_timeout(400)
+        self.assertIn("LAST PRESS", (await self.page.locator("#overlay-panel").inner_text()).upper())
+        await self.page.click('#overlay-panel [data-action="history-detail"][data-aspect="action"]')
+        await self.page.wait_for_timeout(600)
+        rows = await self.page.locator("#overlay-panel .press-list .aspect-row").evaluate_all(
+            "els => els.map(e => e.lastElementChild.textContent)"
+        )
+        self.assertEqual(rows, ["double", "single", "single"], "newest first, the repeat kept")
+        panel = await self.page.locator("#overlay-panel").inner_text()
+        self.assertRegex(panel, r"(?i)3\s+presses")
+
+
 class FamilyHolds(PageTest):
     """`docs/design.md#hold-intents`: a family hold shows on its entity
     with its end, and can be given a new end or handed back to the house."""

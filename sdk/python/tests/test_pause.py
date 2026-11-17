@@ -204,3 +204,30 @@ class DecisionTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PressTest(unittest.TestCase):
+    """A button's `action` is a press, not a state
+    (docs/design.md#buttons)."""
+
+    ACTION = "home/state/hall/remote/action"
+
+    def test_the_last_press_is_not_caught_up_or_redelivered(self):
+        ctx = context(current=[(self.ACTION, "single", stamp(5)), (STATE, 21.0, stamp(5))])
+        ctx._subscribes = {"inputs": "home/state/**"}
+        ctx._buttons = {"remote"}
+        delivered = []
+        ctx.subscribe("inputs", lambda key, value: delivered.append(key))
+        ctx._redeliveries[0]()
+        self.assertEqual(delivered, [STATE, STATE])
+
+    def test_an_action_on_another_capability_is_state(self):
+        # z2m passes `action` through under its own name on a device bound
+        # as a sensor; that entity is not a button.
+        ctx = context(current=[(self.ACTION, "single", stamp(5))])
+        ctx._subscribes = {"inputs": "home/state/**"}
+        ctx._buttons = set()
+        delivered = []
+        ctx.subscribe("inputs", lambda key, value: delivered.append(key))
+        self.assertEqual(delivered, [self.ACTION])
+

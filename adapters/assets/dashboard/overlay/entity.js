@@ -144,6 +144,8 @@ export function renderEntityDetailBody() {
   } else if (entity.capability === 'camera') {
     camera = entity.name;
     middle = html`<div class="card-label" style="margin-top:20px;">Live</div>`;
+  } else if (entity.capability === 'button') {
+    middle = html`<div class="card-label" style="margin-top:20px;">Last press</div>${widgetForEntity(entity)}`;
   } else if (entity.capability === 'sensor') {
     // A described sensor's readings are its sections, and tapping each
     // opens its history. An undescribed sensor keeps the sparkline rows

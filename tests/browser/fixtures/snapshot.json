@@ -25,7 +25,11 @@
   "home/state/porch/porch_cam/available": true,
   "home/state/person/alex_phone/battery": 64,
   "home/state/person/alex_phone/accuracy": 14,
-  "home/state/person/alex_phone/fixed_at": 1790000000
+  "home/state/person/alex_phone/fixed_at": 1790000000,
+  "home/state/hallway/hallway_remote/action": "double"
+ },
+ "action_at": {
+  "home/state/hallway/hallway_remote/action": 0
  },
  "forecasts": {
   "home/forecast/garden/rain/precipitation/smhi": {"schema": 1, "issued": "2026-09-25T06:00:00Z", "points": [{"t": "2026-09-25T07:00:00Z", "v": 0.4, "d": 3600}, {"t": "2026-09-25T08:00:00Z", "v": 1.2, "d": 3600}, {"t": "2026-09-25T09:00:00Z", "v": 3.0, "d": 21600}]},

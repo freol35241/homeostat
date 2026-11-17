@@ -2,7 +2,7 @@
  * shows the current forecast, one layer beside the record (the sources
  * the value is derived from, the entity's related readings, or every
  * forecast the recorder kept), and the commands sent to the aspect. */
-import { fetchHistory } from '../api.js';
+import { PRESSES_READ, fetchHistory } from '../api.js';
 import { buildBars, buildChart, buildTimeline, fmtDuration, formatChartClock, formatChartTime, formatChartValue, horizonCaption, issuedCaption } from '../charts.js';
 import { html } from '../html.js';
 import logic, { titleCase } from '../logic.js';
@@ -15,6 +15,9 @@ var RANGE_PRESETS = [{ label: '1h', hours: 1 }, { label: '6h', hours: 6 }, { lab
 // longer be told apart and the fetch gets large. The page says how many it
 // drew, so the reader knows when the window is not fully shown.
 var BRAID_ISSUES = 40;
+
+// The newest presses of a button the list shows.
+var PRESSES_SHOWN = 100;
 
 // detail overlay, range-selectable
 export function fetchHistoryRange(entityName, aspect, hours, shape) {
@@ -202,6 +205,13 @@ export function openHistoryDetail(room, entityName, aspect) {
   overlay.intervalS = logic.intervalOf(entity, aspect);
   overlay.shape = logic.historyShape(live, field, overlay.intervalS);
   overlay.shapeSettled = described || live !== undefined || !!overlay.intervalS;
+  // A button's presses are listed one by one. A timeline draws the runs of
+  // a state and would merge a repeated press into the one before it
+  // (docs/design.md#buttons).
+  if (entity.capability === 'button' && aspect === 'action') {
+    overlay.shape = 'presses';
+    overlay.shapeSettled = true;
+  }
   overlay.range = 24;
   overlay.rangeData = {};
   overlay.cmdData = {};
@@ -319,7 +329,16 @@ export function renderHistoryDetailBody() {
   // only swapping a class.
   var wide = overlayWide();
   var chartHtml, statsHtml;
-  if (overlay.shape === 'timeline') {
+  if (overlay.shape === 'presses') {
+    var presses = points.slice().reverse();
+    chartHtml = presses.length
+      ? html`<div class="press-list">${presses.slice(0, PRESSES_SHOWN).map(function (p) {
+        // To the second, because two presses are often in one minute.
+        return html`<div class="aspect-row"><span class="aspect-label">${formatChartTime(Date.parse(p.ts), 1)}</span><span>${String(p.value)}</span></div>`;
+      })}</div>`
+      : html`<div class="aspect-row faint">no press in this window</div>`;
+    statsHtml = html`<div class="stat-row">${statText('Presses', String(points.length) + (points.length >= PRESSES_READ ? '+' : ''))}</div>`;
+  } else if (overlay.shape === 'timeline') {
     chartHtml = buildTimeline('detail-chart', points, { height: wide ? 96 : 64, sizeClass: wide ? 'chart-timeline-wide' : 'chart-timeline', aspect: aspect, field: field, window: win });
     var tl = logic.timelineStats(logic.timelineRuns(points, win.from, win.to));
     statsHtml = html`<div class="stat-row">

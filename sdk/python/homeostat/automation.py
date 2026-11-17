@@ -249,6 +249,9 @@ class Context:
         # (entity, aspect) -> interval_s from the house's entity files, read
         # on the first `history_total`.
         self._intervals: dict[tuple[str, str], int] | None = None
+        # The house's button entities, read on the first catch-up that
+        # meets an `action` key (`_is_press`).
+        self._buttons: set[str] | None = None
         self._session = UnitSession(unit, os.environ[keys.ENV_BUS])
         # (entity, aspect, source) -> last reported participation, so
         # `source_used` can emit on transition rather than on every call.
@@ -349,6 +352,10 @@ class Context:
         again in the same way, so a handler sees each one at least once
         after the pause.
 
+        A button's `action` is an event, so neither the catch-up nor the
+        redelivery hands over the last press (docs/design.md#buttons). Only
+        presses made while the automation runs reach the handler.
+
         Parameters
         ----------
         binding : str
@@ -394,6 +401,8 @@ class Context:
             self._subs.append(self._session.subscribe(expr, callback))
         for expr in exprs:
             for key, value, age_s, stamp in self._session.get_json_stamped(expr):
+                if self._is_press(key):
+                    continue
                 # Under the lock, so a live sample for the same key, which
                 # is newer, is delivered after the catch-up and not before.
                 with order:
@@ -404,12 +413,25 @@ class Context:
         def redeliver() -> None:
             for expr in exprs:
                 for key, value, age_s, stamp in self._session.get_json_stamped(expr):
+                    if self._is_press(key):
+                        continue
                     with order:
                         if newest.older(key, stamp):
                             continue
                         deliver(key, value, age_s)
 
         self._redeliveries.append(redeliver)
+
+    def _is_press(self, key: str) -> bool:
+        """Return whether `key` is a button's `action`, a press and not a state."""
+        parts = key.split("/")
+        if len(parts) != 5 or parts[1] != "state" or parts[4] != "action":
+            return False
+        if self._buttons is None:
+            self._buttons = {
+                e.name for e in house.load_house(self._root).entities if e.capability == "button"
+            }
+        return parts[3] in self._buttons
 
     def _concrete_key(
         self,

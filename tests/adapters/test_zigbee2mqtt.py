@@ -15,6 +15,7 @@ from zigbee2mqtt import (
     describe,
     inventory,
     state_aspect,
+    suggest,
     value_body,
 )
 
@@ -199,6 +200,39 @@ class InventoryTest(unittest.TestCase):
         self.assertEqual((records[0]["configured"], records[0]["entity"]), (True, "lamp"))
         self.assertEqual(records[0]["suggested"], {"capability": "light", "features": []})
         self.assertEqual((records[1]["configured"], records[1]["suggested"]), (False, None))
+
+
+ACTION_EXPOSE = {"type": "enum", "property": "action", "access": 1, "values": ["single", "double", "long"]}
+
+
+class ButtonTest(unittest.TestCase):
+    """A remote bound as `button` (docs/design.md#buttons)."""
+
+    def setUp(self):
+        self.session = FakeSession()
+        self.remote = entity("remote", "button", dev_id="0x09")
+        self.bridge = Bridge(self.session, "zigbee", BASE, {"0x09": self.remote})
+
+    def message(self, payload):
+        self.bridge.on_message(f"{BASE}/0x09", json.dumps(payload).encode())
+
+    def test_a_device_exposing_an_action_is_suggested_as_a_button(self):
+        battery = {"type": "numeric", "property": "battery", "unit": "%"}
+        self.assertEqual(suggest([battery, ACTION_EXPOSE]), {"capability": "button", "features": []})
+
+    def test_every_press_is_published_a_repeat_included(self):
+        for action in ("single", "single", "double"):
+            self.message({"action": action, "battery": 90})
+        presses = [v for k, v in self.session.puts if k == "home/state/hall/remote/action"]
+        self.assertEqual(presses, ["single", "single", "double"])
+
+    def test_the_legacy_action_sensor_clearing_itself_is_not_a_press(self):
+        self.message({"action": "", "battery": 90})
+        self.assertEqual(self.session.puts, [("home/state/hall/remote/battery", 90)])
+
+    def test_the_descriptor_lists_the_actions_the_device_can_send(self):
+        field = describe("button", [ACTION_EXPOSE])["fields"]["action"]
+        self.assertEqual([v["value"] for v in field["values"]], ["single", "double", "long"])
 
 
 class BridgeTest(unittest.TestCase):

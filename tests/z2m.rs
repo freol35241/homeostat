@@ -77,6 +77,39 @@ async fn z2m_state_translates_to_bus_state() {
     sup.shutdown();
 }
 
+/// A remote bound as a `button` (docs/design.md#buttons) publishes every
+/// press, the same action twice included, and the empty action that z2m's
+/// legacy action sensor sends after a press is not one.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_button_publishes_every_press() {
+    const ACTION_KEY: &str = "home/state/hallway/hallway_remote/action";
+    let (mosquitto, mut sup, observer) = setup().await;
+    let action_sub = observer
+        .declare_subscriber(ACTION_KEY)
+        .await
+        .expect("action subscriber");
+    let mut mqtt = Mqtt::connect(mosquitto.port, "test-button").await;
+    for payload in [
+        r#"{"action":"single","battery":90}"#,
+        r#"{"action":"","battery":90}"#,
+        r#"{"action":"single","battery":90}"#,
+        r#"{"action":"double","battery":90}"#,
+    ] {
+        mqtt.publish("zigbee2mqtt/remote_hallway_1", payload).await;
+    }
+    let mut presses = Vec::new();
+    for _ in 0..3 {
+        let sample = tokio::time::timeout(Duration::from_secs(10), action_sub.recv_async())
+            .await
+            .expect("a press within 10s")
+            .expect("stream open");
+        presses.push(serde_json::from_slice::<Value>(&sample.payload().to_bytes()).expect("JSON"));
+    }
+    assert_eq!(presses, [json!("single"), json!("single"), json!("double")]);
+
+    sup.shutdown();
+}
+
 /// (b) Bus commands translate to zigbee2mqtt/{device}/set. The lock's
 /// arbitrated command path (home/cmd -> arbiter -> home/arbiter -> z2m) is
 /// covered separately below, in `manual_lock_command_reaches_mqtt_via_arbiter`.

@@ -54,6 +54,10 @@
         return Object.assign({}, p, { t: iso(now + i * 3600e3) });
       });
     });
+    // A button's last press, two minutes ago.
+    Object.keys(snap.action_at || {}).forEach(function (key) {
+      snap.action_at[key] = (now - 120e3) / 1000;
+    });
     Object.keys(snap.holds || {}).forEach(function (key) {
       snap.holds[key] = Object.assign({}, snap.holds[key], { since: iso(now - 300e3), until: iso(now + 1500e3) });
     });
