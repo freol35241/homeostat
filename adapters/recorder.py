@@ -21,8 +21,9 @@ envelopes raw in `events`.
 Reads: one queryable on the manifest's `history` key (home/history/**).
 It answers home/history/{state|cmd}/{entity}/{aspect},
 home/history/forecast/{entity}/{aspect}/{source}, home/history/events,
-home/history/stats and home/history/latest. Each path's parameters and
-reply shape are documented on the method that answers it.
+home/history/stats, home/history/latest and home/history/holds. Each
+path's parameters and reply shape are documented on the method that
+answers it.
 
 Live parameters (home/config/{unit}/*):
 
@@ -93,6 +94,7 @@ EVENTS_KEY = zenoh.KeyExpr("home/history/events")
 STATS_KEY = zenoh.KeyExpr("home/history/stats")
 LATEST_KEY = zenoh.KeyExpr("home/history/latest")
 FORECAST_KEY = zenoh.KeyExpr("home/history/forecast/**")
+HOLDS_KEY = zenoh.KeyExpr("home/history/holds")
 
 # Store layout, stamped in PRAGMA user_version. init_store migrates older
 # files in place:
@@ -107,7 +109,8 @@ FORECAST_KEY = zenoh.KeyExpr("home/history/forecast/**")
 #   providers for one aspect are two series (docs/design.md#forecasts).
 # - 5: forecast series with an empty source get LEGACY_SOURCE.
 # - 6: the `archives` table.
-STORE_VERSION = 6
+# - 7: the `standing` table.
+STORE_VERSION = 7
 
 # The source of forecast series migrated from before version 4. The store
 # has no record of who issued those rows, so it uses a reserved name
@@ -163,6 +166,14 @@ CREATE TABLE IF NOT EXISTS events (
   payload TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS events_key ON events (key, ts);
+-- The latest record at every home/hold/** and home/arbitration/* key: what
+-- an arbiter needs back after a core restart. A delete removes the row,
+-- so the table holds what is in force, not its history.
+CREATE TABLE IF NOT EXISTS standing (
+  key TEXT PRIMARY KEY,
+  ts INTEGER NOT NULL,
+  payload TEXT NOT NULL
+);
 CREATE INDEX IF NOT EXISTS events_ts ON events (ts);
 -- The closed months sealed into archive files (see Writer._archive). A
 -- row is written as 'sealing' before its file is, so a crash at any
@@ -589,6 +600,11 @@ class Writer:
         "  ?, (SELECT id FROM rooms WHERE name = ?), ?, ?)"
     )
     EVENTS_INSERT = "INSERT INTO events VALUES (?, ?, ?)"
+    STANDING_PUT = (
+        "INSERT INTO standing VALUES (?, ?, ?)"
+        " ON CONFLICT (key) DO UPDATE SET ts = excluded.ts, payload = excluded.payload"
+    )
+    STANDING_DELETE = "DELETE FROM standing WHERE key = ?"
     # OR IGNORE, as for samples: a producer that republishes an issue
     # unchanged (after a restart, or redelivered from the mirror) must not
     # store it twice. (series_id, issued_ts, valid_ts) identifies one
@@ -627,8 +643,20 @@ class Writer:
                     self.EVENTS_INSERT,
                     [row for table, row in rows if table == "events"],
                 )
+                # One at a time and in order, so a put and a delete of one
+                # key in a batch end as they did on the bus.
+                for table, row in rows:
+                    if table == "standing":
+                        self._standing(conn, row)
         finally:
             conn.close()
+
+    def _standing(self, conn: sqlite3.Connection, row: tuple) -> None:
+        key, ts, payload = row
+        if payload is None:
+            conn.execute(self.STANDING_DELETE, (key,))
+        else:
+            conn.execute(self.STANDING_PUT, (key, ts, payload))
 
     def _flush_each(self, rows: list) -> list:
         """Insert the rows one statement each, returning those refused.
@@ -648,6 +676,9 @@ class Writer:
                     "events": self.EVENTS_INSERT,
                 }
                 for table, row in rows:
+                    if table == "standing":
+                        self._standing(conn, row)
+                        continue
                     sql = statements[table]
                     try:
                         conn.execute(sql, self._bind(table, row))
@@ -1191,7 +1222,8 @@ class Recorder:
         state sample is skipped when the store already holds its series at
         or after it. A replay then never duplicates the row it came from.
 
-        State and cmd go to `samples`, forecasts to `forecasts`. Every
+        State and cmd go to `samples`, forecasts to `forecasts`, and holds
+        and arbitration documents to `standing`, the latest per key. Every
         other key (health, config) lands raw in `events`, the audit table
         that home/history/events reads.
         """
@@ -1218,6 +1250,14 @@ class Recorder:
             self._record_sample(ts, key, parts, sample)
         elif len(parts) > 1 and parts[1] == "forecast":
             self._record_forecast(ts, key, parts, sample)
+        elif len(parts) > 1 and parts[1] in ("hold", "arbitration"):
+            # Kept as the latest record per key, for the core's replay after
+            # a restart (docs/design.md#replay-after-a-core-restart).
+            if sample.kind == zenoh.SampleKind.DELETE:
+                self.writer.enqueue("standing", (key, ts, None))
+            else:
+                payload = sample.payload.to_bytes().decode("utf-8", errors="replace")
+                self.writer.enqueue("standing", (key, ts, payload))
         else:
             payload = sample.payload.to_bytes().decode("utf-8", errors="replace")
             self.writer.enqueue("events", (ts, key, payload))
@@ -1406,6 +1446,8 @@ class Recorder:
             self._answer_stats(query)
         elif LATEST_KEY.includes(asked):
             self._answer_latest(query)
+        elif HOLDS_KEY.includes(asked):
+            self._answer_holds(query)
         elif FORECAST_KEY.includes(asked):
             # Same rule as events: the forecast path takes different
             # parameters and replies with issues instead of rows, so a
@@ -1632,6 +1674,26 @@ class Recorder:
         finally:
             conn.close()
 
+    def _answer_holds(self, query: zenoh.Query) -> None:
+        """Answer home/history/holds with the latest record at every hold and arbitration key.
+
+        One message, a JSON array of {key, value, ts}, as for
+        home/history/latest. The core reads it after a restart to give the
+        arbiters back what its mirror lost
+        (docs/design.md#replay-after-a-core-restart).
+        """
+        try:
+            conn = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True, timeout=2.0)
+        except sqlite3.Error as err:
+            query.reply_err(json.dumps(f"store unavailable: {err}"))
+            return
+        try:
+            query.reply(str(HOLDS_KEY), json.dumps(standing(conn)))
+        except sqlite3.Error as err:
+            query.reply_err(json.dumps(f"store unavailable: {err}"))
+        finally:
+            conn.close()
+
     def _answer_stats(self, query: zenoh.Query) -> None:
         """Answer home/history/stats with one message describing the store.
 
@@ -1673,6 +1735,22 @@ def holds_state_at(conn: sqlite3.Connection, entity: str, aspect: str, ts: int) 
     """
     newest = newest_state_ts(conn, entity, aspect)
     return newest is not None and newest >= ts - SEED_TOLERANCE_US
+
+
+def standing(conn: sqlite3.Connection) -> list[dict]:
+    """Return every row of `standing` as {key, value, ts}, ordered by key.
+
+    A payload that is not JSON is left out: the core could not put it back
+    as a record anyway.
+    """
+    out = []
+    for key, ts, payload in conn.execute("SELECT key, ts, payload FROM standing ORDER BY key"):
+        try:
+            value = json.loads(payload)
+        except ValueError:
+            continue
+        out.append({"key": key, "value": value, "ts": ts})
+    return out
 
 
 def latest_state(conn: sqlite3.Connection) -> list[dict]:

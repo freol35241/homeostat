@@ -39,8 +39,10 @@ A manual-band command may carry a `hold` intent (docs/design.md#hold-intents):
 
 The family's holds are published at home/hold/{unit}/{room}/{entity}/
 {aspect} and the outcome per aspect at home/arbitration/{unit}, both
-mirrored by the core. A restart takes the family's holds and the applied
-holds back from the mirror, so it sends nothing that was already sent.
+mirrored by the core and kept by the recorder. A restart takes the
+family's holds and the applied holds back from the mirror, so it sends
+nothing that was already sent. After a core restart it waits for the
+core's replay (home/meta/system/replay) to put them back first.
 
 Configuration: the live parameter hold_minutes (family-editable), seeded
 from the manifest default.
@@ -52,8 +54,9 @@ back.
 
 Health events at home/health/{unit}/event: `drop` (off-schema-key,
 invalid-command, unbound, malformed-hold), `refuse` when a command loses
-to a hold, `preempt` when a higher hold takes over, and `resume` when a
-lower one takes over after it.
+to a hold, `preempt` when a higher hold takes over, `resume` when a
+lower one takes over after it, and `replay-late` when the core's replay
+after a restart did not come in time and the arbiter starts without it.
 """
 
 import datetime
@@ -73,6 +76,10 @@ from homeostat.params import LiveParams
 PARAM = "hold_minutes"
 GRANTS_KEY = "home/meta/system/grants"
 PENDING_KEY = "home/meta/system/grants_pending"
+REPLAY_KEY = "home/meta/system/replay"
+# The longest wait for the core's replay, under the supervisor's one-minute
+# deadline for `ready`.
+REPLAY_WAIT_S = 45.0
 RANKS = keys.CMD_PRIORITIES
 
 
@@ -822,6 +829,28 @@ def main():
     # supervisor starts it again.
     def mirrored(selector: str) -> list:
         return session.get_json_aged(selector, timeout_s=5)
+
+    # After a core restart the core replays the family's holds and the
+    # arbitration document from the recorder
+    # (docs/design.md#replay-after-a-core-restart). Taking them back before
+    # that finds nothing, and the units' holds would be sent and then the
+    # family's. A core that serves no replay status has no replay to wait
+    # for.
+    replayed = threading.Event()
+
+    def on_replay(sample) -> None:
+        try:
+            if json.loads(sample.payload.to_bytes()) != "pending":
+                replayed.set()
+        except ValueError:
+            replayed.set()
+
+    replay_sub = session.subscribe(REPLAY_KEY, on_replay)
+    if all(status != "pending" for _key, status in session.get_json(REPLAY_KEY)):
+        replayed.set()
+    if not replayed.wait(REPLAY_WAIT_S):
+        session.health_event("replay-late", waited_s=REPLAY_WAIT_S)
+    replay_sub.undeclare()
 
     kept = mirrored(keys.hold_keyexpr(unit))
     documents = [value for _key, value, _age in mirrored(document_key)]

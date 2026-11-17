@@ -16,6 +16,7 @@ from recorder import (
     MAX_QUERY_LIMIT,
     SEED_TOLERANCE_US,
     Recorder,
+    Writer,
     archive_boundary_us,
     as_issues,
     bucketed,
@@ -31,6 +32,7 @@ from recorder import (
     parse_params,
     rows_per_day,
     split_selector,
+    standing,
     typed,
 )
 
@@ -372,3 +374,34 @@ class CommandRecordTest(unittest.TestCase):
         rec = self.recorder()
         self.record(rec, b'{"value": "heat", "priority": "manual", "hold": "none"}')
         self.assertEqual([table for table, _ in rec.queued], ["samples", "events"])
+
+
+class StandingTest(StoreTest):
+    """The latest hold and arbitration record per key, for the core's replay
+    after a restart (docs/design.md#replay-after-a-core-restart)."""
+
+    def flush(self, rows):
+        writer = Writer.__new__(Writer)
+        writer.db_path = self.db
+        writer._flush([("standing", row) for row in rows])
+
+    def test_a_put_replaces_and_a_delete_removes_in_bus_order(self):
+        key = "home/hold/arbiter/hall/door/locked"
+        self.flush([
+            (key, 1, '{"value": true}'),
+            (key, 2, '{"value": false}'),
+            ("home/arbitration/arbiter", 2, '{"schema": 1}'),
+            ("home/hold/arbiter/hall/door/other", 3, '{"value": 1}'),
+            ("home/hold/arbiter/hall/door/other", 4, None),
+        ])
+        self.assertEqual(
+            standing(self.conn),
+            [
+                {"key": "home/arbitration/arbiter", "value": {"schema": 1}, "ts": 2},
+                {"key": key, "value": {"value": False}, "ts": 2},
+            ],
+        )
+
+    def test_a_record_that_is_not_json_is_left_out(self):
+        self.flush([("home/hold/arbiter/hall/door/locked", 1, "not json")])
+        self.assertEqual(standing(self.conn), [])
