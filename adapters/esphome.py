@@ -77,7 +77,9 @@ so firmware that reports no causes works unchanged.
 Health events: `drop` (malformed-payload, invalid-command,
 device-unavailable, reserved-aspect, list-entities-failed,
 mdns-record-error, cause-unusable for a cause entity that is bound or
-named by two entities), mdns-unavailable, device-rule and unattributed.
+named by two entities), mdns-unavailable, device-rule, unattributed,
+and runtime-missing for a switch with `runtime_s` whose device has no
+runtime number.
 """
 
 import asyncio
@@ -369,11 +371,14 @@ def runtime_field(info) -> dict:
 
     The bounds are the number's own, which the firmware enforces.
     """
+    # The bounds travel as float32, so 0.1 arrives as 0.100000001.
     command: dict = {
-        "type": "float", "constraint": {"min": info.min_value, "max": info.max_value}, "editable_by": "family",
+        "type": "float",
+        "constraint": {"min": round(info.min_value, 3), "max": round(info.max_value, 3)},
+        "editable_by": "family",
     }
     if info.step:
-        command["step"] = info.step
+        command["step"] = round(info.step, 3)
     return {"label": "runtime", "kind": "number", "unit": "s", "group": "control", "command": command}
 
 
@@ -388,7 +393,7 @@ def state_values(entity, info, state):
         return
     if entity.capability == "switch" and isinstance(state, SwitchState):
         yield "on", bool(state.state)
-    elif entity.capability == "switch" and isinstance(state, NumberState):
+    elif entity.capability == "switch" and isinstance(state, NumberState) and RUNTIME_ASPECT in entity.features:
         yield RUNTIME_ASPECT, state.state
     elif entity.capability == "light" and isinstance(state, LightState):
         yield "on", bool(state.state)
@@ -465,7 +470,7 @@ async def run_device(
         runtimes = {}
         for info in infos:
             entity = bound.get(info.object_id)
-            runtime_of = by_runtime.get(info.object_id) if isinstance(info, NumberInfo) else None
+            runtime_of = by_runtime.get(info.object_id) if isinstance(info, NumberInfo) and entity is None else None
             owner = entity or runtime_of
             record = {
                 "id": f"{device}/{info.object_id}",
@@ -482,11 +487,18 @@ async def run_device(
             if runtime_of is not None:
                 runtimes[runtime_of.name] = (runtime_of, info)
         # A switch's runtime is an aspect of the switch, so its field joins
-        # the switch's descriptor.
+        # the switch's descriptor, in a group of its own.
         for record in records:
             hit = runtimes.get(record["entity"]) if "aspects" in record else None
             if hit is not None:
                 record["aspects"]["fields"][RUNTIME_ASPECT] = runtime_field(hit[1])
+                record["aspects"]["groups"] = ["control", *record["aspects"]["groups"]]
+        on_device = {e.name for e, _info in new_key_map.values()}
+        for entity in by_runtime.values():
+            if entity.name in on_device and entity.name not in runtimes:
+                session.health_event(
+                    "runtime-missing", device=device, entity=entity.name, object_id=runtime_object_id(entity)
+                )
         key_map.clear()
         key_map.update(new_key_map)
         key_map.update({info.key: (entity, info) for entity, info in runtimes.values()})

@@ -1393,7 +1393,15 @@ times the close itself instead.
 - For ESPHome, the firmware exposes a `number` entity
   `{object_id}_runtime_s` beside the switch, with `restore_value` so it
   survives a reboot, and its turn-on script reads it. The number's own
-  bounds are the command's.
+  bounds are the command's, and the adapter describes the runtime as a
+  control. A switch declaring the feature on a device without the
+  number is reported as `runtime-missing`.
+- The timed close is a change no command caused. On a switch with
+  [`[causes]`](#device-reported-causes), the firmware reports a cause
+  for its timer, such as `timer`, so the close is recorded as the
+  device's rule. Plan refuses `uncommanded = "person"` on a switch with
+  `runtime_s` (`causes-runtime`), because every close would then count
+  as the family's and hold the switch off.
 
 The runtime is an aspect and not a command option `duration` on `on`.
 An option changes how the device reaches a value, not what happens

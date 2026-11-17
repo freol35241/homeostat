@@ -1,0 +1,15 @@
+schema = 1
+
+[entity]
+id = "0x22"
+capability = "switch"
+features = ["runtime_s"]
+room = "hallway"
+
+[write_policy]
+mode = "arbitrated"
+owner = "zigbee"
+
+[causes]
+person = ["button"]
+uncommanded = "person"

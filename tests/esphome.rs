@@ -600,6 +600,11 @@ async fn a_switch_runtime_is_the_devices_number() {
         relay["aspects"]["fields"]["runtime_s"]["command"]["constraint"],
         json!({"min": 1.0, "max": 3600.0})
     );
+    assert_eq!(
+        relay["aspects"]["groups"],
+        json!(["control", "readings"]),
+        "the runtime is a control, not a diagnostic"
+    );
 
     let event_sub = observer
         .declare_subscriber(EVENT_KEY)

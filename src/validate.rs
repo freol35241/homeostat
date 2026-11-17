@@ -506,6 +506,21 @@ fn check_causes(
             file.cloned(),
         ));
     }
+    let timed = entity.file.entity.features.iter().any(|f| f == "runtime_s");
+    if timed
+        && entity
+            .file
+            .causes
+            .as_ref()
+            .is_some_and(|c| c.uncommanded.is_some())
+    {
+        errors.push(ValidationError::new(
+            Code::CausesRuntime,
+            &entity.name,
+            "the device closes on its own after runtime_s, so uncommanded = \"person\" would make each close the family's",
+            file.cloned(),
+        ));
+    }
     let base = VOCABULARY
         .iter()
         .find(|c| c.name == capability)

@@ -314,6 +314,13 @@ codes! {
         "An entity declares `[causes]` on a capability whose base aspect is \
         not `on`. Attribution covers the base aspect of a light, a switch \
         or a burner (docs/design.md#device-reported-causes).",
+    CausesRuntime => "causes-runtime":
+        "An entity with the feature `runtime_s` declares `uncommanded = \
+        \"person\"`. Its device turns it off on its own when the runtime \
+        ends, with no cause reported, so every timed close would count as \
+        the family's and hold the switch off \
+        (docs/design.md#device-timed-runtime). Have the firmware report a \
+        cause for the timer instead.",
     ActionsNotButton => "actions-not-button":
         "An entity file declares `[actions]` on a capability other than \
         `button`. Only a button reports gestures \
