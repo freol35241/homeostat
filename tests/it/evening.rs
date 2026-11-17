@@ -18,13 +18,11 @@
 use std::time::Duration;
 
 use serde_json::{json, Value};
-use zenoh::handlers::FifoChannelHandler;
-use zenoh::pubsub::Subscriber;
-use zenoh::sample::Sample;
 
 use crate::common::{
-    await_matching, cache_read, config_write, matched_publisher, restart_unit, up, Publisher,
-    Supervisor,
+    await_matching, await_sample, cache_read, config_write, eventually, expect_event_kind,
+    expect_silence, matched_publisher, next_sample, restart_unit, up, Publisher, StateSub,
+    Supervisor, SILENCE,
 };
 
 const SIM_FIXTURE: &str = "tests/fixtures/house_evening_sim";
@@ -33,8 +31,6 @@ const ENABLED_KEY: &str = "home/config/evening_lights/enabled";
 const LAMP_CMD: &str = "home/cmd/livingroom/lamp/on";
 const LAMP_STATE: &str = "home/state/livingroom/lamp/on";
 const PRESENCE_STATE: &str = "home/state/livingroom/presence_sensor/occupied";
-
-type Sub = Subscriber<FifoChannelHandler<Sample>>;
 
 /// Spawns the sim fixture, waits for the automation and the reflector to
 /// run, and returns matched publishers for the lamp and presence state keys.
@@ -62,39 +58,21 @@ async fn put_state(publisher: &Publisher, value: Value) {
     publisher.put(value.to_string()).await.expect("state put");
 }
 
-/// Like `cache_read`, retrying until a value shows up (for values that
-/// appear once a unit has started).
-async fn cache_read_eventually(session: &zenoh::Session, key: &str, timeout: Duration) -> Value {
-    let deadline = tokio::time::Instant::now() + timeout;
-    loop {
-        if let Some(value) = cache_read(session, key).await {
-            return value;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "no value at {key} within {timeout:?}"
-        );
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-}
-
 /// Expects the lamp-off command within the timeout: a cmd envelope whose
 /// value is `false`, priority and actor stamped from the automation's own
 /// manifest declaration (docs/design.md#cmd-envelopes). The SDK's
 /// Context.publish does the stamping; the automation's code does not.
-async fn expect_lamp_off(sub: &Sub, timeout: Duration) {
-    let sample = tokio::time::timeout(timeout, sub.recv_async())
+async fn expect_lamp_off(sub: &StateSub, timeout: Duration) {
+    let cmd = next_sample(sub, timeout)
         .await
-        .expect("lamp command within timeout")
-        .expect("cmd stream open");
-    assert_eq!(sample.key_expr().as_str(), LAMP_CMD);
-    let envelope: Value =
-        serde_json::from_slice(&sample.payload().to_bytes()).expect("cmd payload is JSON");
+        .expect("lamp command within timeout");
+    assert_eq!(cmd.key, LAMP_CMD);
+    let envelope = cmd.value();
     let cmd_id = envelope["id"]
         .as_str()
         .expect("envelope carries a correlation id");
     assert_eq!(
-        envelope,
+        *envelope,
         json!({
             "value": false,
             "priority": "automation",
@@ -105,36 +83,6 @@ async fn expect_lamp_off(sub: &Sub, timeout: Duration) {
     );
 }
 
-/// Asserts no lamp command arrives within the window.
-async fn expect_no_command(sub: &Sub, window: Duration) {
-    if let Ok(Ok(sample)) = tokio::time::timeout(window, sub.recv_async()).await {
-        panic!(
-            "unexpected command {} = {}",
-            sample.key_expr(),
-            String::from_utf8_lossy(&sample.payload().to_bytes())
-        );
-    }
-}
-
-/// Waits until the reflector's lamp-off echo (`state on = false`) reaches
-/// the observer. The echo passed the router before reaching us, so it is
-/// queued to the automation ahead of anything we put afterwards, so a late
-/// echo cannot override staging the lamp back on after this.
-async fn await_echo_off(state_sub: &Sub) {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    loop {
-        let sample = tokio::time::timeout_at(deadline, state_sub.recv_async())
-            .await
-            .expect("lamp state echo within 10s")
-            .expect("state stream open");
-        let value: Value =
-            serde_json::from_slice(&sample.payload().to_bytes()).expect("state payload is JSON");
-        if value == json!(false) {
-            return;
-        }
-    }
-}
-
 /// (a) The real clock's payloads match the documented schema: RFC3339
 /// local time with offset on the minute, date at the day boundary, both
 /// served to late joiners by the core clock cache (no wall-clock wait).
@@ -143,8 +91,10 @@ async fn clock_payloads_match_schema() {
     let mut sup = Supervisor::spawn("tests/fixtures/house_evening");
     let observer = sup.observer().await;
 
-    let minute =
-        cache_read_eventually(&observer, "home/clock/minute", Duration::from_mins(1)).await;
+    let minute = eventually(Duration::from_mins(1), "clock minute in the mirror", || {
+        cache_read(&observer, "home/clock/minute")
+    })
+    .await;
     let Value::String(minute) = minute else {
         panic!("minute payload is not a JSON string: {minute}");
     };
@@ -160,7 +110,10 @@ async fn clock_payloads_match_schema() {
         "Europe/Stockholm offset, got {offset}"
     );
 
-    let date = cache_read_eventually(&observer, "home/clock/date", Duration::from_secs(10)).await;
+    let date = eventually(Duration::from_secs(10), "clock date in the mirror", || {
+        cache_read(&observer, "home/clock/date")
+    })
+    .await;
     let Value::String(date) = date else {
         panic!("date payload is not a JSON string: {date}");
     };
@@ -192,12 +145,21 @@ async fn off_time_crossing_with_presence_drives_lights() {
     put_state(&lamp, json!(true)).await;
     put_state(&presence, json!(false)).await;
     tick(&observer, "21:59").await;
-    expect_no_command(&cmd_sub, Duration::from_millis(1500)).await;
+    expect_silence(&cmd_sub, SILENCE, "lamp command").await;
 
     // Crossing off_time (default 22:00) turns the lamp off.
     tick(&observer, "22:00").await;
     expect_lamp_off(&cmd_sub, Duration::from_secs(10)).await;
-    await_echo_off(&state_sub).await;
+    // The reflector's lamp-off echo passed the router before it reached
+    // the observer, so it is queued to the automation ahead of anything put
+    // after this, and a late echo cannot override staging the lamp on.
+    await_sample(
+        &state_sub,
+        Duration::from_secs(10),
+        "lamp state echo off",
+        |msg| msg.value() == &json!(false),
+    )
+    .await;
 
     // Someone is home: the lamp comes back on and stays on past off_time.
     // Zenoh orders samples per key, not across keys (each subscription's
@@ -205,10 +167,10 @@ async fn off_time_crossing_with_presence_drives_lights() {
     // before staging the lamp against it. The lamp is off, so nothing may
     // fire meanwhile.
     put_state(&presence, json!(true)).await;
-    expect_no_command(&cmd_sub, Duration::from_millis(1500)).await;
+    expect_silence(&cmd_sub, SILENCE, "lamp command").await;
     put_state(&lamp, json!(true)).await;
     tick(&observer, "22:05").await;
-    expect_no_command(&cmd_sub, Duration::from_millis(1500)).await;
+    expect_silence(&cmd_sub, SILENCE, "lamp command").await;
 
     // They leave: lights out on the presence change, no tick needed.
     put_state(&presence, json!(false)).await;
@@ -236,25 +198,25 @@ async fn a_paused_automation_sends_nothing_and_catches_up_on_resume() {
     put_state(&lamp, json!(true)).await;
     put_state(&presence, json!(false)).await;
     tick(&observer, "21:59").await;
-    expect_no_command(&cmd_sub, Duration::from_millis(1500)).await;
+    expect_silence(&cmd_sub, SILENCE, "lamp command").await;
 
     config_write(&observer, ENABLED_KEY, json!(false))
         .await
         .expect("the switch is a bool parameter every automation has");
-    expect_event(&events, "paused").await;
+    expect_event_kind(&events, "paused").await;
 
     // Crossing off_time while paused: the decision is made, the command is
     // not sent, and the decision says so (ctx.decision).
     tick(&observer, "22:00").await;
     expect_decision(&events, "turning lights off (paused)").await;
-    expect_no_command(&cmd_sub, Duration::from_secs(2)).await;
+    expect_silence(&cmd_sub, SILENCE, "lamp command").await;
 
     // Resuming delivers the current clock minute again, which is past
     // off_time, so the lamp goes off with no new tick.
     config_write(&observer, ENABLED_KEY, json!(true))
         .await
         .expect("resume");
-    expect_event(&events, "resumed").await;
+    expect_event_kind(&events, "resumed").await;
     expect_decision(&events, "turning lights off").await;
     expect_lamp_off(&cmd_sub, Duration::from_secs(10)).await;
 
@@ -262,36 +224,14 @@ async fn a_paused_automation_sends_nothing_and_catches_up_on_resume() {
 }
 
 /// Waits up to 10 s for a `decision` event with this outcome.
-async fn expect_decision(events: &Sub, outcome: &str) {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    loop {
-        let sample = tokio::time::timeout_at(deadline, events.recv_async())
-            .await
-            .unwrap_or_else(|_| panic!("a decision \"{outcome}\" within 10s"))
-            .expect("event stream open");
-        let event: Value =
-            serde_json::from_slice(&sample.payload().to_bytes()).expect("event payload is JSON");
-        if event["kind"] == "decision" && event["outcome"] == outcome {
-            assert_eq!(event["rule"], "night_off");
-            return;
-        }
-    }
-}
-
-/// Waits up to 10 s for a health event of `kind`.
-async fn expect_event(events: &Sub, kind: &str) {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    loop {
-        let sample = tokio::time::timeout_at(deadline, events.recv_async())
-            .await
-            .unwrap_or_else(|_| panic!("a {kind} event within 10s"))
-            .expect("event stream open");
-        let event: Value =
-            serde_json::from_slice(&sample.payload().to_bytes()).expect("event payload is JSON");
-        if event["kind"] == kind {
-            return;
-        }
-    }
+async fn expect_decision(events: &StateSub, outcome: &str) {
+    let what = format!("decision \"{outcome}\"");
+    let decision = await_sample(events, Duration::from_secs(10), &what, |msg| {
+        let event = msg.value();
+        event["kind"] == "decision" && event["outcome"] == outcome
+    })
+    .await;
+    assert_eq!(decision.value()["rule"], "night_off");
 }
 
 /// (c) A parameter edit reaches the running automation live (same pid, no
@@ -320,13 +260,13 @@ async fn off_time_edit_applies_live_and_survives_restart() {
     // key, and a 22:30 tick racing the config update on another thread
     // would fire under the old 22:00. Nothing is staged yet, so nothing
     // may fire during the settle window.
-    expect_no_command(&cmd_sub, Duration::from_millis(1500)).await;
+    expect_silence(&cmd_sub, SILENCE, "lamp command").await;
 
     // The old off_time (22:00) no longer fires...
     put_state(&lamp, json!(true)).await;
     put_state(&presence, json!(false)).await;
     tick(&observer, "22:30").await;
-    expect_no_command(&cmd_sub, Duration::from_millis(1500)).await;
+    expect_silence(&cmd_sub, SILENCE, "lamp command").await;
 
     // ...the new one does, in the same process, so no restart happened.
     // (Health publishes on transitions only, so read the current state
@@ -357,12 +297,12 @@ async fn off_time_edit_applies_live_and_survives_restart() {
     // tells the two apart: it is silent under the surviving 23:30 and would
     // fire had the value reverted to 22:00.
     tick(&observer, "22:30").await;
-    expect_no_command(&cmd_sub, Duration::from_millis(1500)).await;
+    expect_silence(&cmd_sub, SILENCE, "lamp command").await;
     await_matching(&lamp).await;
     await_matching(&presence).await;
     put_state(&lamp, json!(true)).await;
     put_state(&presence, json!(false)).await;
-    expect_no_command(&cmd_sub, Duration::from_millis(1500)).await;
+    expect_silence(&cmd_sub, SILENCE, "lamp command").await;
     tick(&observer, "23:35").await;
     expect_lamp_off(&cmd_sub, Duration::from_secs(10)).await;
 
@@ -394,14 +334,7 @@ async fn out_of_constraint_write_is_rejected() {
         .expect_err("unknown parameter rejected");
 
     // No rejected value reached the config key...
-    if let Ok(Ok(sample)) =
-        tokio::time::timeout(Duration::from_millis(1500), config_sub.recv_async()).await
-    {
-        panic!(
-            "rejected write leaked onto the bus: {}",
-            String::from_utf8_lossy(&sample.payload().to_bytes())
-        );
-    }
+    expect_silence(&config_sub, SILENCE, "rejected write on the bus").await;
     // ...reads still return the old value...
     let value = cache_read(&observer, OFF_TIME_KEY).await;
     assert_eq!(value, Some(json!("22:00")), "old value stands");

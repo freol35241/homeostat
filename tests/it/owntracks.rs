@@ -7,8 +7,8 @@ use std::time::Duration;
 use serde_json::{json, Value};
 
 use crate::common::{
-    assert_unit_contract, expect_drop_event, expect_states, next_event, up, Mosquitto, Mqtt,
-    Supervisor,
+    assert_unit_contract, await_sample, expect_drop_event, expect_silence, expect_states,
+    next_event, next_sample, up, Mosquitto, Mqtt, Supervisor, SILENCE,
 };
 
 const FIXTURE: &str = "tests/fixtures/house_owntracks";
@@ -81,16 +81,8 @@ async fn non_location_type_is_ignored() {
     .await;
 
     // No event and no state within a generous window.
-    let no_event = tokio::time::timeout(Duration::from_millis(1500), event_sub.recv_async()).await;
-    assert!(
-        no_event.is_err(),
-        "transition payload must not raise a health event"
-    );
-    let no_state = tokio::time::timeout(Duration::from_millis(500), state_sub.recv_async()).await;
-    assert!(
-        no_state.is_err(),
-        "transition payload must not publish state"
-    );
+    expect_silence(&event_sub, SILENCE, "health event for a transition payload").await;
+    expect_silence(&state_sub, SILENCE, "state for a transition payload").await;
 
     // Still translating afterwards.
     mqtt.publish(
@@ -183,12 +175,10 @@ async fn seen_devices_published_as_discovery() {
         r#"{"_type":"location","lat":1.0,"lon":2.0}"#,
     )
     .await;
-    let sample = tokio::time::timeout(Duration::from_secs(10), sub.recv_async())
+    let first = next_sample(&sub, Duration::from_secs(10))
         .await
-        .expect("discovery document within 10s")
-        .expect("discovery sample");
-    let mut doc: Value =
-        serde_json::from_slice(&sample.payload().to_bytes()).expect("discovery is JSON");
+        .expect("discovery document within 10s");
+    let doc = first.value();
     assert_eq!(
         doc.as_array().expect("discovery is an array").len(),
         1,
@@ -202,16 +192,14 @@ async fn seen_devices_published_as_discovery() {
         r#"{"_type":"location","lat":3.0,"lon":4.0}"#,
     )
     .await;
-    loop {
-        let sample = tokio::time::timeout(Duration::from_secs(10), sub.recv_async())
-            .await
-            .expect("second discovery document within 10s")
-            .expect("discovery sample");
-        doc = serde_json::from_slice(&sample.payload().to_bytes()).expect("discovery is JSON");
-        if doc.as_array().expect("discovery is an array").len() == 2 {
-            break;
-        }
-    }
+    let second = await_sample(
+        &sub,
+        Duration::from_secs(10),
+        "second discovery document",
+        |msg| msg.value().as_array().expect("discovery is an array").len() == 2,
+    )
+    .await;
+    let doc = second.value();
 
     let records = doc.as_array().expect("discovery is an array");
     let alice = records
@@ -253,7 +241,7 @@ async fn seen_devices_published_as_discovery() {
             .to_bytes(),
     )
     .expect("mirrored discovery is JSON");
-    assert_eq!(mirrored, doc, "mirror serves the same document");
+    assert_eq!(mirrored, *doc, "mirror serves the same document");
 
     sup.shutdown();
 }

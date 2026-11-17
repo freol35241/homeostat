@@ -11,7 +11,8 @@ use std::time::Duration;
 use serde_json::json;
 
 use crate::common::{
-    await_mirror, expect_drop_event, expect_states, up, Mosquitto, Mqtt, Supervisor,
+    await_discovery, await_mirror, await_sample, expect_drop_event, expect_states, up, Mosquitto,
+    Mqtt, Supervisor,
 };
 
 const FIXTURE: &str = "tests/fixtures/house_rf433";
@@ -151,23 +152,22 @@ async fn unbound_codes_reach_discovery_not_the_health_feed() {
 
     mqtt.publish(EVENTS, "8675309").await;
 
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
-    loop {
-        let sample = tokio::time::timeout_at(deadline, discovery_sub.recv_async())
-            .await
-            .expect("a discovery record within 20s")
-            .expect("discovery stream open");
-        let records: serde_json::Value =
-            serde_json::from_slice(&sample.payload().to_bytes()).expect("discovery is JSON");
-        if let Some(found) = records
+    let unbound = |records: &serde_json::Value| {
+        records
             .as_array()
             .and_then(|rs| rs.iter().find(|r| r["id"] == "8675309"))
-        {
-            assert_eq!(found["configured"], json!(false));
-            assert_eq!(found["entity"], json!(null));
-            break;
-        }
-    }
+            .cloned()
+    };
+    let doc = await_sample(
+        &discovery_sub,
+        Duration::from_secs(20),
+        "discovery record for the unbound code",
+        |msg| unbound(msg.value()).is_some(),
+    )
+    .await;
+    let found = unbound(doc.value()).expect("the unbound code's record");
+    assert_eq!(found["configured"], json!(false));
+    assert_eq!(found["entity"], json!(null));
 
     sup.shutdown();
 }
@@ -195,23 +195,20 @@ async fn unbound_discovery_stays_capped_at_two_hundred() {
     // The debounce means only the final state after the flood settles is
     // worth reading; poll until a record for the last code appears, which
     // can only happen once every code has been processed.
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
-    let records = loop {
-        let sample = tokio::time::timeout_at(deadline, discovery_sub.recv_async())
-            .await
-            .expect("a discovery record within 20s")
-            .expect("discovery stream open");
-        let records: serde_json::Value =
-            serde_json::from_slice(&sample.payload().to_bytes()).expect("discovery is JSON");
-        let has_last = records
-            .as_array()
-            .is_some_and(|rs| rs.iter().any(|r| r["id"] == "90000200"));
-        if has_last {
-            break records;
-        }
-    };
+    let doc = await_sample(
+        &discovery_sub,
+        Duration::from_secs(20),
+        "discovery record for the last code",
+        |msg| {
+            msg.value()
+                .as_array()
+                .is_some_and(|rs| rs.iter().any(|r| r["id"] == "90000200"))
+        },
+    )
+    .await;
 
-    let unbound_ids: Vec<&str> = records
+    let unbound_ids: Vec<&str> = doc
+        .value()
         .as_array()
         .expect("discovery is an array")
         .iter()
@@ -243,26 +240,7 @@ async fn descriptors_mark_a_detector_notable() {
     let (_mosquitto, mut sup, observer) = setup().await;
     // Published once at startup, so it is read from the mirror rather than
     // waited for on a subscriber.
-    let records = loop {
-        let replies = observer
-            .get("home/discovery/rf433")
-            .await
-            .expect("discovery get");
-        let mut found = None;
-        while let Ok(reply) = replies.recv_async().await {
-            if let Ok(sample) = reply.result() {
-                if let Ok(value) =
-                    serde_json::from_slice::<serde_json::Value>(&sample.payload().to_bytes())
-                {
-                    found = Some(value);
-                }
-            }
-        }
-        if let Some(value) = found {
-            break value;
-        }
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    };
+    let records = await_discovery(&observer, "rf433", |_| true).await;
     let records = records.as_array().expect("discovery is a list").clone();
 
     let smoke = records

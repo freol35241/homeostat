@@ -7,8 +7,8 @@ use std::time::Duration;
 use serde_json::json;
 
 use crate::common::{
-    assert_unit_contract, expect_drop_event, expect_event_kind, expect_states, up, Mosquitto, Mqtt,
-    Supervisor,
+    assert_unit_contract, expect_drop_event, expect_event_kind, expect_silence, expect_states,
+    next_sample, up, Mosquitto, Mqtt, Supervisor, SILENCE,
 };
 
 const FIXTURE: &str = "tests/fixtures/house_aduro";
@@ -110,35 +110,27 @@ async fn status_translates_on_change_only() {
 
     // Drain: the first poll may still be delivering; then republish the
     // same document and require silence.
-    while tokio::time::timeout(Duration::from_millis(500), state_sub.recv_async())
+    while next_sample(&state_sub, Duration::from_millis(500))
         .await
-        .is_ok()
+        .is_some()
     {}
     mqtt.publish(&format!("{BASE}/status"), &status(25.5)).await;
-    let silence = tokio::time::timeout(Duration::from_millis(1500), state_sub.recv_async()).await;
-    assert!(
-        silence.is_err(),
-        "unchanged status republished to the bus: {silence:?}"
-    );
+    expect_silence(
+        &state_sub,
+        SILENCE,
+        "republish of an unchanged status to the bus",
+    )
+    .await;
 
     // One field moves: one sample.
     mqtt.publish(&format!("{BASE}/status"), &status(26.0)).await;
-    let sample = tokio::time::timeout(Duration::from_secs(10), state_sub.recv_async())
+    let changed = next_sample(&state_sub, Duration::from_secs(10))
         .await
-        .expect("changed field within 10s")
-        .expect("state stream open");
-    assert_eq!(
-        sample.key_expr().as_str(),
-        "home/state/livingroom/burner/flue_temperature"
-    );
-    let silence = tokio::time::timeout(Duration::from_millis(1500), state_sub.recv_async()).await;
-    assert!(
-        silence.is_err(),
-        "unchanged fields republished: {silence:?}"
-    );
+        .expect("changed field within 10s");
+    assert_eq!(changed.key, "home/state/livingroom/burner/flue_temperature");
+    expect_silence(&state_sub, SILENCE, "republish of an unchanged field").await;
 
-    let no_event = tokio::time::timeout(Duration::from_millis(500), event_sub.recv_async()).await;
-    assert!(no_event.is_err(), "unexpected health event: {no_event:?}");
+    expect_silence(&event_sub, SILENCE, "health event").await;
 
     // A non-object payload is malformed.
     mqtt.publish(&format!("{BASE}/status"), "[1, 2, 3]").await;
@@ -279,11 +271,8 @@ async fn commands_reach_set_topic_via_arbiter_per_aspect() {
         .put(ON_CMD_KEY, wish.to_string())
         .await
         .expect("cmd put");
-    let silence = mqtt.next_message(Duration::from_millis(1500)).await;
-    assert!(
-        silence.is_none(),
-        "refused automation wish reached MQTT: {silence:?}"
-    );
+    mqtt.expect_silence(SILENCE, "refused automation wish on MQTT")
+        .await;
 
     // Per-aspect leases: the same automation's power_level passes.
     let wish = json!({"value": 50, "priority": "automation", "actor": "heat_plan"});
@@ -347,11 +336,8 @@ async fn invalid_commands_drop_with_events() {
     observer.put(ON_ARBITER_KEY, "true").await.expect("cmd put");
     expect_drop_event(&event_sub, "invalid-command").await;
 
-    let silence = mqtt.next_message(Duration::from_millis(1500)).await;
-    assert!(
-        silence.is_none(),
-        "an invalid command reached MQTT: {silence:?}"
-    );
+    mqtt.expect_silence(SILENCE, "invalid command on MQTT")
+        .await;
 
     sup.shutdown();
 }

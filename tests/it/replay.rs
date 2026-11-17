@@ -16,7 +16,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde_json::{json, Value};
 use zenoh::time::{Timestamp, TimestampId, NTP64};
 
-use crate::common::{await_mirror, await_running, cache_read, edit, temp_house, up, Supervisor};
+use crate::common::{
+    await_mirror, await_running, await_sample, cache_read, edit, eventually, temp_house, up,
+    Supervisor,
+};
 
 const FIXTURE: &str = "tests/fixtures/house_replay";
 const LAMP: &str = "home/state/livingroom/lamp/on";
@@ -73,22 +76,12 @@ async fn history(session: &zenoh::Session, entity: &str, aspect: &str) -> Vec<Va
 
 /// Waits until the recorder's newest row for the aspect is `expected`.
 async fn await_recorded(session: &zenoh::Session, entity: &str, aspect: &str, expected: &Value) {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-    loop {
-        if history(session, entity, aspect)
-            .await
-            .last()
-            .map(|row| &row["value"])
-            == Some(expected)
-        {
-            return;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "recorder never held {expected} for {entity}/{aspect}"
-        );
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
+    let what = format!("recorded {expected} for {entity}/{aspect}");
+    eventually(Duration::from_secs(30), &what, || async {
+        let rows = history(session, entity, aspect).await;
+        (rows.last().map(|row| &row["value"]) == Some(expected)).then_some(())
+    })
+    .await;
 }
 
 /// A mirror reply: the value, its stamp and the age the mirror reports.
@@ -148,19 +141,14 @@ where
         .declare_subscriber("home/health/probe/event")
         .await
         .expect("probe event subscriber");
-    let deadline = tokio::time::Instant::now() + Duration::from_mins(1);
-    let mut last = Value::Null;
-    loop {
-        let sample = tokio::time::timeout_at(deadline, sub.recv_async())
-            .await
-            .unwrap_or_else(|_| panic!("probe never reported a match; last: {last}"))
-            .expect("event stream open");
-        let event: Value = serde_json::from_slice(&sample.payload().to_bytes()).expect("JSON");
-        if event["kind"] == "seen" && pred(&event) {
-            return event;
-        }
-        last = event;
-    }
+    let msg = await_sample(
+        &sub,
+        Duration::from_mins(1),
+        "matching probe report",
+        |msg| msg.value()["kind"] == "seen" && pred(msg.value()),
+    )
+    .await;
+    msg.value().clone()
 }
 
 /// The core stamps a sample that arrives without a stamp, every subscriber
@@ -231,7 +219,11 @@ async fn the_mirror_keeps_the_newest_stamp_and_ages_a_past_one() {
         .timestamp(stamp_ago(ten_minutes, 7))
         .await
         .expect("old put");
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    // The mirror takes one session's puts in order, so once a later put
+    // from `writer` is mirrored, the old one has been handled.
+    let marker = "home/state/test/probe/marker";
+    writer.put(marker, "1").await.expect("marker put");
+    await_mirror(&observer, marker, &json!(1)).await;
     assert_eq!(cache_read(&observer, held).await, Some(json!(1)));
 
     // A value stamped ten minutes ago on an empty key: kept, and ten
@@ -305,15 +297,12 @@ async fn state_comes_back_after_a_core_restart_with_its_age() {
     let age = seen["age_s"].as_f64().expect("age_s");
     assert!(age >= gap.as_secs_f64(), "probe saw age {age}");
 
-    // Nothing the store did not hold, and no second row for what it did.
+    // Nothing the store did not hold.
     assert_eq!(
         cache_read(&observer, FAN).await,
         None,
         "the fan was never recorded"
     );
-    tokio::time::sleep(Duration::from_secs(2)).await;
-    let rows = history(&observer, "lamp", "on").await;
-    assert_eq!(rows.len(), 1, "the replay was not recorded again: {rows:?}");
 
     // A live value replaces the replay everywhere.
     command(&observer, LAMP, json!(false)).await;
@@ -322,6 +311,19 @@ async fn state_comes_back_after_a_core_restart_with_its_age() {
     assert!(mirrored.age_s < 5.0, "age {}", mirrored.age_s);
     let seen = await_seen(&observer, |e| e["value"] == json!(false)).await;
     assert!(seen["age_s"].as_f64().expect("age_s") < 5.0, "{seen}");
+
+    // No second row for what the store held. The probe saw the replay
+    // before the live command went out, so the router sent the recorder
+    // the replay ahead of the live value. Once the live value is recorded,
+    // a recorded replay would be too.
+    await_recorded(&observer, "lamp", "on", &json!(false)).await;
+    let rows = history(&observer, "lamp", "on").await;
+    let values: Vec<&Value> = rows.iter().map(|row| &row["value"]).collect();
+    assert_eq!(
+        values,
+        [&json!(true), &json!(false)],
+        "the replay was not recorded again: {rows:?}"
+    );
 
     sup.shutdown();
     let _ = std::fs::remove_file(&db);
@@ -422,15 +424,13 @@ const LOCK_CMD: &str = "home/cmd/hallway/front_door/locked";
 /// Waits until the recorder holds a record at `key`, read from
 /// home/history/holds.
 async fn await_standing(session: &zenoh::Session, key: &str) -> Value {
-    for _ in 0..100 {
-        if let Some(Value::Array(rows)) = cache_read(session, "home/history/holds").await {
-            if let Some(row) = rows.iter().find(|r| r["key"] == json!(key)) {
-                return row["value"].clone();
-            }
-        }
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
-    panic!("the recorder never kept {key}");
+    let what = format!("recorded hold at {key}");
+    eventually(Duration::from_secs(20), &what, || async {
+        let rows = cache_read(session, "home/history/holds").await?;
+        let row = rows.as_array()?.iter().find(|r| r["key"] == json!(key))?;
+        Some(row["value"].clone())
+    })
+    .await
 }
 
 /// The family's hold outlives a core restart
@@ -459,15 +459,15 @@ async fn the_familys_hold_comes_back_after_a_core_restart() {
     drop(observer);
     let (mut sup, observer) = setup(HOLDS_FIXTURE, &db, &units).await;
 
-    let mut done = false;
-    for _ in 0..100 {
-        if cache_read(&observer, "home/meta/system/replay").await == Some(json!("done")) {
-            done = true;
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
-    assert!(done, "the core says the replay is done");
+    eventually(
+        Duration::from_secs(20),
+        "replay marker \"done\"",
+        || async {
+            (cache_read(&observer, "home/meta/system/replay").await == Some(json!("done")))
+                .then_some(())
+        },
+    )
+    .await;
     let back = cache_read(&observer, FAMILY_HOLD)
         .await
         .expect("the family's hold is back in the mirror");
@@ -488,18 +488,14 @@ async fn the_familys_hold_comes_back_after_a_core_restart() {
         )
         .await
         .expect("cmd put");
-    let mut refused = None;
-    while let Ok(Ok(sample)) =
-        tokio::time::timeout(Duration::from_secs(10), events.recv_async()).await
-    {
-        let event: Value = serde_json::from_slice(&sample.payload().to_bytes()).expect("json");
-        if event["kind"] == json!("refuse") {
-            refused = Some(event);
-            break;
-        }
-    }
-    let refused = refused.expect("the restarted arbiter refuses below the family's hold");
-    assert_eq!(refused["holder_actor"], json!("owner"));
+    let refused = await_sample(
+        &events,
+        Duration::from_secs(10),
+        "refusal below the family's hold",
+        |msg| msg.value()["kind"] == json!("refuse"),
+    )
+    .await;
+    assert_eq!(refused.value()["holder_actor"], json!("owner"));
 
     sup.shutdown();
     let _ = std::fs::remove_file(&db);

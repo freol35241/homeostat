@@ -12,11 +12,10 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
-use zenoh::sample::SampleKind;
 
 use crate::common::{
-    assert_unit_contract, await_discovery, await_mirror, await_states, expect_drop_event,
-    expect_states, free_port, up, Supervisor,
+    assert_unit_contract, await_discovery, await_mirror, await_sample, await_states,
+    expect_drop_event, expect_states, free_port, next_sample, up, Supervisor,
 };
 
 const FIXTURE: &str = "tests/fixtures/house_esphome";
@@ -324,14 +323,10 @@ async fn an_event_entity_publishes_every_press() {
     }
     let mut presses = Vec::new();
     for _ in 0..2 {
-        let sample = tokio::time::timeout(Duration::from_secs(20), action_sub.recv_async())
+        let press = next_sample(&action_sub, Duration::from_secs(20))
             .await
-            .expect("a press within 20s")
-            .expect("stream open");
-        presses.push(
-            serde_json::from_slice::<serde_json::Value>(&sample.payload().to_bytes())
-                .expect("JSON"),
-        );
+            .expect("a press within 20s");
+        presses.push(press.value().clone());
     }
     assert_eq!(
         presses,
@@ -489,13 +484,10 @@ async fn a_cause_the_device_reports_decides_who_changed_the_relay() {
 
     // The button on the board: the family holds the relay on.
     std::fs::write(&trigger, "button").expect("press");
-    let sample = tokio::time::timeout(Duration::from_secs(20), hold_sub.recv_async())
+    let hold = next_sample(&hold_sub, Duration::from_secs(20))
         .await
-        .expect("a family hold within 20s")
-        .expect("stream open");
-    assert_eq!(sample.kind(), SampleKind::Put);
-    let record: serde_json::Value =
-        serde_json::from_slice(&sample.payload().to_bytes()).expect("JSON");
+        .expect("a family hold within 20s");
+    let record = hold.value();
     assert_eq!(
         (&record["value"], &record["priority"], &record["actor"]),
         (&json!(true), &json!("manual"), &json!("esphome"))
@@ -504,34 +496,22 @@ async fn a_cause_the_device_reports_decides_who_changed_the_relay() {
     // The board's own timer: recorded as its rule, and the family's hold,
     // whose value the device left, is cleared.
     std::fs::write(&trigger, "valve_timeout").expect("timer");
-    let deadline = Instant::now() + Duration::from_secs(20);
-    let mut rule = None;
-    while rule.is_none() && Instant::now() < deadline {
-        let Ok(Ok(sample)) =
-            tokio::time::timeout(Duration::from_secs(1), event_sub.recv_async()).await
-        else {
-            continue;
-        };
-        let event: serde_json::Value =
-            serde_json::from_slice(&sample.payload().to_bytes()).expect("JSON");
-        if event["kind"] == json!("device-rule") {
-            rule = Some(event);
-        }
-    }
-    let rule = rule.expect("a device-rule event");
+    let event = await_sample(
+        &event_sub,
+        Duration::from_secs(20),
+        "device-rule event",
+        |msg| msg.value()["kind"] == json!("device-rule"),
+    )
+    .await;
+    let rule = event.value();
     assert_eq!(
         (&rule["entity"], &rule["rule"], &rule["value"]),
         (&json!("relay"), &json!("valve_timeout"), &json!(false))
     );
-    let sample = tokio::time::timeout(Duration::from_secs(20), hold_sub.recv_async())
+    let end = next_sample(&hold_sub, Duration::from_secs(20))
         .await
-        .expect("the family hold ends within 20s")
-        .expect("stream open");
-    assert_eq!(
-        sample.kind(),
-        SampleKind::Delete,
-        "the family's hold is cleared"
-    );
+        .expect("the family hold ends within 20s");
+    assert!(end.json.is_none(), "the family's hold is cleared");
 
     sup.shutdown();
     let _ = std::fs::remove_file(&trigger);

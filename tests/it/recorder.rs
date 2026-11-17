@@ -19,18 +19,13 @@ use homeostat::bus::HealthStatus;
 use rusqlite::types::Value as SqlValue;
 use rusqlite::{Connection, OpenFlags};
 use serde_json::{json, Value};
-use zenoh::handlers::FifoChannelHandler;
-use zenoh::pubsub::Subscriber;
-use zenoh::sample::Sample;
 
 use crate::common::{
-    await_health, await_mirror, config_write, health_watch, matched_publisher, up, Publisher,
-    Supervisor,
+    await_health, await_mirror, await_sample, config_write, health_watch, matched_publisher, up,
+    Publisher, StateSub, Supervisor,
 };
 
 const FIXTURE: &str = "tests/fixtures/house_recorder";
-
-type Sub = Subscriber<FifoChannelHandler<Sample>>;
 
 /// A per-test store path: unique like the harness's per-test bus port.
 /// Each store gets a directory of its own, because the recorder seals
@@ -116,22 +111,15 @@ async fn rows_eventually(db: &Path, sql: &str, n: usize, timeout: Duration) -> V
 }
 
 /// Reads recorder health events until one satisfies `pred`.
-async fn await_event<F>(sub: &Sub, timeout: Duration, pred: F) -> Value
+async fn await_event<F>(sub: &StateSub, timeout: Duration, pred: F) -> Value
 where
     F: Fn(&Value) -> bool,
 {
-    let deadline = tokio::time::Instant::now() + timeout;
-    loop {
-        let sample = tokio::time::timeout_at(deadline, sub.recv_async())
-            .await
-            .expect("recorder event within timeout")
-            .expect("event stream open");
-        let event: Value =
-            serde_json::from_slice(&sample.payload().to_bytes()).expect("event is JSON");
-        if pred(&event) {
-            return event;
-        }
-    }
+    let msg = await_sample(sub, timeout, "matching recorder event", |msg| {
+        pred(msg.value())
+    })
+    .await;
+    msg.value().clone()
 }
 
 /// Ok replies for a history get, as (concrete key, decoded rows).

@@ -14,8 +14,8 @@ use std::time::Duration;
 use serde_json::{json, Value};
 
 use crate::common::{
-    assert_cli_ok, cache_read, cli, config_write, edit, git_commit_all, git_init_commit, meta_read,
-    running_pid, stderr, stdout, temp_house, up, Supervisor,
+    assert_cli_ok, await_sample, cache_read, cli, config_write, edit, git_commit_all,
+    git_init_commit, meta_read, running_pid, stderr, stdout, temp_house, up, StateSub, Supervisor,
 };
 
 const FIXTURE: &str = "tests/fixtures/house_apply";
@@ -166,18 +166,7 @@ async fn parameter_default_change_applies_with_zero_restarts() {
     assert!(!text.contains("restart"), "no restart steps: {text}");
 
     // The running unit echoes the new value: it saw the config put live.
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    loop {
-        let sample = tokio::time::timeout_at(deadline, echo_sub.recv_async())
-            .await
-            .expect("echo of the new value within 10s")
-            .expect("echo stream open");
-        let value: Value =
-            serde_json::from_slice(&sample.payload().to_bytes()).expect("echo payload is JSON");
-        if value == json!(5) {
-            break;
-        }
-    }
+    await_echo(&echo_sub, json!(5)).await;
 
     assert_eq!(
         running_pid(&observer, "probe").await,
@@ -444,24 +433,12 @@ async fn a_live_edit_survives_a_supervisor_restart() {
 }
 
 /// Waits up to 10 s for the probe to echo `want`.
-async fn await_echo(
-    echo_sub: &zenoh::pubsub::Subscriber<
-        zenoh::handlers::FifoChannelHandler<zenoh::sample::Sample>,
-    >,
-    want: Value,
-) {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    loop {
-        let sample = tokio::time::timeout_at(deadline, echo_sub.recv_async())
-            .await
-            .unwrap_or_else(|_| panic!("echo of {want} within 10s"))
-            .expect("echo stream open");
-        let value: Value =
-            serde_json::from_slice(&sample.payload().to_bytes()).expect("echo payload is JSON");
-        if value == want {
-            return;
-        }
-    }
+async fn await_echo(echo_sub: &StateSub, want: Value) {
+    let what = format!("echo of {want}");
+    await_sample(echo_sub, Duration::from_secs(10), &what, |msg| {
+        msg.json.as_ref() == Some(&want)
+    })
+    .await;
 }
 
 fn add_watcher_pair(house: &Path, adapter: &str, room: &str, entity: &str, automation: &str) {

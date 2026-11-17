@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 
 use crate::common::{
-    cache_read, free_port, matched_publisher, running_pid, temp_house, up, Supervisor,
+    cache_read, eventually, free_port, matched_publisher, running_pid, temp_house, up, Supervisor,
 };
 
 const FIXTURE: &str = "tests/fixtures/house_apply";
@@ -242,21 +242,11 @@ async fn read_logs_and_events_over_mcp() {
     .await;
 
     // Wait for the logger's known startup lines to land in its ring buffer.
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        let n = cache_read(&observer, &homeostat::bus::log_key("logger"))
-            .await
-            .and_then(|v| v.as_array().map(std::vec::Vec::len))
-            .unwrap_or(0);
-        if n >= 8 {
-            break;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "logger never captured its startup lines"
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    eventually(Duration::from_secs(10), "logger startup lines", || async {
+        let lines = cache_read(&observer, &homeostat::bus::log_key("logger")).await?;
+        (lines.as_array()?.len() >= 8).then_some(())
+    })
+    .await;
 
     let mut mcp = Mcp::connect(&sup.endpoint);
 
