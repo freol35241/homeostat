@@ -44,8 +44,8 @@ use homeostat::bus;
 use serde_json::{json, Value};
 
 use crate::common::{
-    await_running, await_sample, cache_read, eventually, expect_silence, next_sample, up,
-    Supervisor, FIRST_RUN, SILENCE,
+    await_running, await_sample, cache_read, eventually, expect_silence, http, next_sample, up,
+    FakeServer, HttpResponse, Supervisor, FIRST_RUN, SILENCE,
 };
 
 const FIXTURE: &str = "tests/fixtures/house_dashboard";
@@ -53,6 +53,8 @@ const LAMP_CMD: &str = "home/cmd/livingroom/lamp/on";
 const LAMP_STATE: &str = "home/state/livingroom/lamp/on";
 const OFF_TIME_KEY: &str = "home/config/evening_lights/off_time";
 
+/// One request with an optional JSON body. The reply body is parsed as
+/// JSON, or Null when it is empty or not JSON.
 fn http_request(
     addr: &str,
     method: &str,
@@ -60,96 +62,20 @@ fn http_request(
     headers: &[(&str, &str)],
     body: Option<&Value>,
 ) -> (u16, Value) {
-    let payload = body.map_or_default(std::string::ToString::to_string);
-    let mut request = format!("{method} {path} HTTP/1.1\r\nConnection: close\r\n");
-    let mut has_host = false;
-    for (name, value) in headers {
-        has_host |= name.eq_ignore_ascii_case("host");
-        request.push_str(&format!("{name}: {value}\r\n"));
+    let payload = body.map(Value::to_string);
+    let mut headers = headers.to_vec();
+    if payload.is_some() {
+        headers.push(("Content-Type", "application/json"));
     }
-    if !has_host {
-        request.push_str(&format!("Host: {addr}\r\n"));
-    }
-    if body.is_some() {
-        request.push_str(&format!(
-            "Content-Type: application/json\r\nContent-Length: {}\r\n",
-            payload.len()
-        ));
-    }
-    request.push_str("\r\n");
-    request.push_str(&payload);
-
-    let mut stream = TcpStream::connect(addr).expect("connect dashboard");
-    stream
-        .set_read_timeout(Some(Duration::from_secs(30)))
-        .expect("read timeout");
-    stream.write_all(request.as_bytes()).expect("send request");
-    let mut response = Vec::new();
-    stream.read_to_end(&mut response).expect("read response");
-    let response = String::from_utf8_lossy(&response).to_string();
-    let status: u16 = response
-        .split_whitespace()
-        .nth(1)
-        .and_then(|s| s.parse().ok())
-        .unwrap_or_else(|| panic!("no status line in {response:?}"));
-    let body = response.split_once("\r\n\r\n").map_or("", |(_, b)| b);
-    let value = if body.trim().is_empty() {
-        Value::Null
-    } else {
-        serde_json::from_str(body.trim()).unwrap_or(Value::Null)
-    };
-    (status, value)
-}
-
-/// Like `http_request`, but keeps raw headers and body bytes instead of
-/// parsing the body as JSON. The Range/Content-Range assertions on the
-/// binary /tiles.pmtiles response need them.
-fn http_request_bytes(
-    addr: &str,
-    path: &str,
-    headers: &[(&str, &str)],
-) -> (u16, Vec<(String, String)>, Vec<u8>) {
-    let mut request = format!("GET {path} HTTP/1.1\r\nConnection: close\r\n");
-    let mut has_host = false;
-    for (name, value) in headers {
-        has_host |= name.eq_ignore_ascii_case("host");
-        request.push_str(&format!("{name}: {value}\r\n"));
-    }
-    if !has_host {
-        request.push_str(&format!("Host: {addr}\r\n"));
-    }
-    request.push_str("\r\n");
-
-    let mut stream = TcpStream::connect(addr).expect("connect dashboard");
-    stream
-        .set_read_timeout(Some(Duration::from_secs(30)))
-        .expect("read timeout");
-    stream.write_all(request.as_bytes()).expect("send request");
-    let mut response = Vec::new();
-    stream.read_to_end(&mut response).expect("read response");
-
-    let split_at = response
-        .windows(4)
-        .position(|w| w == b"\r\n\r\n")
-        .expect("header/body split");
-    let header_block = String::from_utf8_lossy(&response[..split_at]).to_string();
-    let body = response[split_at + 4..].to_vec();
-
-    let mut lines = header_block.split("\r\n");
-    let status_line = lines.next().unwrap_or("");
-    let status: u16 = status_line
-        .split_whitespace()
-        .nth(1)
-        .and_then(|s| s.parse().ok())
-        .unwrap_or_else(|| panic!("no status line in {status_line:?}"));
-    let headers = lines
-        .filter_map(|l| {
-            l.split_once(": ")
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-        })
-        .collect();
-
-    (status, headers, body)
+    let response = http(
+        addr,
+        method,
+        path,
+        &headers,
+        payload.as_deref().map(str::as_bytes),
+    );
+    let value = serde_json::from_slice(&response.body).unwrap_or(Value::Null);
+    (response.status, value)
 }
 
 /// Minimal WebSocket client: handshake, then text frames on demand.
@@ -414,7 +340,9 @@ async fn dashboard_serves_the_family_surface() {
     // with the cached old logic. The result is an empty page that takes no
     // taps, with a healthy backend behind it (docs/design.md#the-page).
     let revalidates = |path: &str| {
-        let (status, headers, _) = http_request_bytes(&addr, path, &[]);
+        let HttpResponse {
+            status, headers, ..
+        } = http(&addr, "GET", path, &[], None);
         assert_eq!(status, 200, "{path}");
         let cache_control = headers
             .iter()
@@ -448,7 +376,7 @@ async fn dashboard_serves_the_family_surface() {
         "/assets/dashboard/widgets/entity.js",
     ] {
         revalidates(path);
-        let (_, headers, _) = http_request_bytes(&addr, path, &[]);
+        let HttpResponse { headers, .. } = http(&addr, "GET", path, &[], None);
         let content_type = headers
             .iter()
             .find(|(name, _)| name.eq_ignore_ascii_case("content-type"))
@@ -463,7 +391,7 @@ async fn dashboard_serves_the_family_surface() {
         "/assets/dashboard/nope.js",
         "/assets/dashboard/%00.js",
     ] {
-        let (status, _, _) = http_request_bytes(&addr, path, &[]);
+        let HttpResponse { status, .. } = http(&addr, "GET", path, &[], None);
         assert_eq!(status, 404, "{path} must 404");
     }
 
@@ -484,7 +412,9 @@ async fn dashboard_serves_the_family_surface() {
             "application/x-protobuf",
         ),
     ] {
-        let (status, headers, _) = http_request_bytes(&addr, path, &[]);
+        let HttpResponse {
+            status, headers, ..
+        } = http(&addr, "GET", path, &[], None);
         assert_eq!(status, 200, "{path}");
         let content_type = headers
             .iter()
@@ -500,7 +430,7 @@ async fn dashboard_serves_the_family_surface() {
         "/assets/map/../README.md",
         "/assets/map/nope.png",
     ] {
-        let (status, _, _) = http_request_bytes(&addr, path, &[]);
+        let HttpResponse { status, .. } = http(&addr, "GET", path, &[], None);
         assert_eq!(status, 404, "{path} must 404");
     }
 
@@ -1134,7 +1064,11 @@ async fn dashboard_serves_configured_tiles() {
     assert_eq!(status, 200, "{model}");
     assert_eq!(model["tiles"], json!(true), "{model}");
 
-    let (status, headers, body) = http_request_bytes(&addr, "/tiles.pmtiles", &[]);
+    let HttpResponse {
+        status,
+        headers,
+        body,
+    } = http(&addr, "GET", "/tiles.pmtiles", &[], None);
     assert_eq!(status, 200);
     assert_eq!(body, contents);
     assert!(
@@ -1144,8 +1078,17 @@ async fn dashboard_serves_configured_tiles() {
         "{headers:?}"
     );
 
-    let (status, headers, body) =
-        http_request_bytes(&addr, "/tiles.pmtiles", &[("Range", "bytes=0-4")]);
+    let HttpResponse {
+        status,
+        headers,
+        body,
+    } = http(
+        &addr,
+        "GET",
+        "/tiles.pmtiles",
+        &[("Range", "bytes=0-4")],
+        None,
+    );
     assert_eq!(status, 206, "{headers:?}");
     assert_eq!(body, &contents[..5]);
     assert!(
@@ -1444,49 +1387,6 @@ async fn dashboard_gathers_an_automations_timeline() {
     sup.shutdown();
 }
 
-/// A fake go2rtc (`tests/fake_go2rtc.py`) spawned directly on a free port.
-/// The dashboard proxies reach it through `HOMEOSTAT_GO2RTC`, as they
-/// would reach the shim-supervised real one on localhost.
-struct FakeGo2rtc {
-    child: std::process::Child,
-    port: u16,
-}
-
-impl FakeGo2rtc {
-    async fn spawn(streams: &str) -> Self {
-        let port = common::free_port();
-        // Not through `uv run`: it would stay alive as the script's parent
-        // and the handle below would kill it rather than the server.
-        let (program, args) = common::fixture_command(&format!(
-            "uv run tests/fake_go2rtc.py --listen 127.0.0.1:{port} --streams {streams}"
-        ))
-        .await;
-        let child = std::process::Command::new(program)
-            .args(args)
-            .current_dir(env!("CARGO_MANIFEST_DIR"))
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .expect("spawn fake go2rtc (is uv installed?)");
-        let deadline = Instant::now() + Duration::from_mins(1);
-        while TcpStream::connect(("127.0.0.1", port)).is_err() {
-            assert!(
-                Instant::now() < deadline,
-                "fake go2rtc never listened on {port}"
-            );
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        Self { child, port }
-    }
-}
-
-impl Drop for FakeGo2rtc {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
-
 /// Sends one masked client text frame (an all-zero mask key is valid RFC
 /// 6455 masking, and XOR with zero leaves the payload readable).
 fn ws_send_text(stream: &mut TcpStream, payload: &str) {
@@ -1520,9 +1420,11 @@ fn ws_read_frame(stream: &mut TcpStream) -> (u8, Vec<u8>) {
 async fn dashboard_proxies_camera_media() {
     // The fake serves only the stream go2rtc would have: named by
     // the entity's id, which the fixture keeps distinct from its name.
-    let go2rtc = FakeGo2rtc::spawn("porch_cam_native").await;
+    let go2rtc = FakeServer::spawn("tests/fake_go2rtc.py", "--streams porch_cam_native").await;
     let port = common::free_port();
     let addr = format!("127.0.0.1:{port}");
+    // The dashboard proxies reach it through `HOMEOSTAT_GO2RTC`, as they
+    // would reach the shim-supervised real one on localhost.
     let go2rtc_url = format!("http://127.0.0.1:{}", go2rtc.port);
     let (mut sup, _observer) = up(
         || {

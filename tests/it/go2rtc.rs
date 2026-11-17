@@ -4,14 +4,13 @@
 //! `HOMEOSTAT_CAMERAS`, spawn it, poll its API, own the liveliness token,
 //! and translate child death into its own exit (supervisor restart).
 
-use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
 use zenoh::sample::SampleKind;
 
-use crate::common::{free_port, startup_permit, Scratch, Supervisor};
+use crate::common::{free_port, startup_permit, try_http, Scratch, Supervisor};
 
 const FIXTURE: &str = "tests/fixtures/house_go2rtc";
 const CAMERAS_ENV: &str = "HOMEOSTAT_CAMERAS";
@@ -46,34 +45,25 @@ fn cameras_file(scratch: &Scratch) -> PathBuf {
     )
 }
 
-/// Raw HTTP GET against the fake go2rtc's API.
+/// GET against the fake go2rtc's API: the status and the JSON body, or
+/// None when the request fails or the body is not JSON.
 fn api_get(port: u16, path: &str) -> Option<(u16, Value)> {
-    let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).ok()?;
-    stream
-        .write_all(
-            format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
-                .as_bytes(),
-        )
-        .ok()?;
-    let mut response = String::new();
-    stream.read_to_string(&mut response).ok()?;
-    let status: u16 = response.split_whitespace().nth(1)?.parse().ok()?;
-    let body = response.split("\r\n\r\n").nth(1)?;
-    // aiohttp answers chunked on HTTP/1.1: strip chunk framing lines.
-    let json_line = body.lines().find(|l| l.trim_start().starts_with('{'))?;
-    Some((status, serde_json::from_str(json_line).ok()?))
+    let response = try_http(&format!("127.0.0.1:{port}"), "GET", path, &[], None).ok()?;
+    Some((
+        response.status,
+        serde_json::from_slice(&response.body).ok()?,
+    ))
 }
 
 fn control_quit(port: u16) {
-    let mut stream =
-        std::net::TcpStream::connect(("127.0.0.1", port)).expect("connect for control quit");
-    stream
-        .write_all(
-            b"POST /control/quit HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-        )
-        .expect("write control quit");
-    let mut sink = String::new();
-    let _ = stream.read_to_string(&mut sink); // the process exits mid-response
+    // The process exits mid-response, so the result is ignored.
+    let _ = try_http(
+        &format!("127.0.0.1:{port}"),
+        "POST",
+        "/control/quit",
+        &[],
+        Some(&[]),
+    );
 }
 
 /// The whole shim contract in one walk: config rendered from the

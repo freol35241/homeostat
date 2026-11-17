@@ -6,16 +6,14 @@
 
 use crate::common;
 
-use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde_json::{json, Value};
 
 use crate::common::{
     assert_unit_contract, await_discovery, await_mirror, await_sample, await_states,
-    expect_drop_event, expect_states, free_port, next_sample, up, Scratch, Supervisor,
+    expect_drop_event, expect_states, next_sample, up, FakeServer, Scratch, Supervisor,
 };
 
 const FIXTURE: &str = "tests/fixtures/house_esphome";
@@ -25,71 +23,6 @@ const DEVICES_ENV: &str = "HOMEOSTAT_ESPHOME_DEVICES";
 const EVENT_KEY: &str = "home/health/esphome/event";
 const RELAY_STATE_KEY: &str = "home/state/shed/relay/on";
 const RELAY_CMD_KEY: &str = "home/cmd/shed/relay/on";
-
-/// A fake ESPHome device (`tests/fake_esphome.py`) on a free port, killed on
-/// drop. Spawned the same way the units themselves are: `uv run`.
-struct FakeEsphome {
-    child: Child,
-    port: u16,
-}
-
-impl FakeEsphome {
-    #[allow(dead_code)]
-    fn spawn() -> Self {
-        Self::spawn_with_args(&[])
-    }
-
-    fn spawn_with_args(extra: &[&str]) -> Self {
-        let port = free_port();
-        // Own process group: `uv run` wraps the python fake, and killing only
-        // the wrapper leaves the device alive. kill() takes the whole group so
-        // that the dropout happens.
-        let child = Command::new("uv")
-            .args([
-                "run",
-                "tests/fake_esphome.py",
-                "--port",
-                &port.to_string(),
-                "--name",
-                "shed",
-            ])
-            .args(extra)
-            .current_dir(env!("CARGO_MANIFEST_DIR"))
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .process_group(0)
-            .spawn()
-            .expect("spawn fake esphome device (is uv installed?)");
-        // First run resolves the fake device's own uv env: generous.
-        let deadline = Instant::now() + Duration::from_mins(1);
-        while std::net::TcpStream::connect(("127.0.0.1", port)).is_err() {
-            assert!(
-                Instant::now() < deadline,
-                "fake esphome device never listened on {port}"
-            );
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        Self { child, port }
-    }
-
-    /// Kills the fake device and everything under it (the `uv` wrapper's
-    /// process group), reaping the wrapper.
-    fn kill(&mut self) {
-        unsafe {
-            libc::kill(
-                -i32::try_from(self.child.id()).expect("a pid fits i32"),
-                libc::SIGKILL,
-            )
-        };
-        let _ = self.child.wait();
-    }
-}
-
-impl Drop for FakeEsphome {
-    fn drop(&mut self) {
-        self.kill();
-    }
-}
 
 /// Writes a `HOMEOSTAT_ESPHOME_DEVICES` file in `scratch` (outside the
 /// repo, where device addresses and keys live) giving the fixture's "shed"
@@ -103,7 +36,7 @@ fn devices_file(scratch: &Scratch, port: u16) -> PathBuf {
 
 /// Spawns the fake device + supervisor on the fixture and waits for the
 /// adapter to run.
-async fn setup(device_args: &[&str]) -> (FakeEsphome, Scratch, Supervisor, zenoh::Session) {
+async fn setup(device_args: &[&str]) -> (FakeServer, Scratch, Supervisor, zenoh::Session) {
     let house = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(FIXTURE);
     setup_in(&house, device_args, &["esphome"]).await
 }
@@ -113,8 +46,12 @@ async fn setup_in(
     house: &std::path::Path,
     device_args: &[&str],
     units: &[&str],
-) -> (FakeEsphome, Scratch, Supervisor, zenoh::Session) {
-    let device = FakeEsphome::spawn_with_args(device_args);
+) -> (FakeServer, Scratch, Supervisor, zenoh::Session) {
+    let device = FakeServer::spawn(
+        "tests/fake_esphome.py",
+        &format!("--name shed {}", device_args.join(" ")),
+    )
+    .await;
     let devices = Scratch::new("esphome-devices");
     let devices_path = devices_file(&devices, device.port);
     let (sup, observer) = up(
