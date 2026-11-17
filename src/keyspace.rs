@@ -26,6 +26,11 @@ pub const CLASSES: &[&str] = &[
     // This is held state. The audit trail of preempt and refuse events stays
     // where it is.
     "hold",
+    // What the arbiter resolved: per arbitrated aspect, the hold it applied
+    // and the holds beneath it, one document per arbiter unit
+    // (`home/arbitration/{unit}`). It is mirrored, and a restarted arbiter
+    // reads it back so it does not send an applied hold again.
+    "arbitration",
 ];
 
 /// The classes addressed per entity, as

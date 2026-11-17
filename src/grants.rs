@@ -12,14 +12,16 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Code, ValidationError};
 use crate::expand::{Direction, ExpandedKey};
 use crate::keyspace::{KeyExpr, Segment};
-use crate::manifest::{Priority, UnitKind, WriteMode, CAPABILITIES};
+use crate::manifest::{Priority, UnitKind, WriteMode, CAPABILITIES, VOCABULARY};
 use crate::repo::House;
 
 /// One resolved grant: a publish expression resolved against the concrete
 /// entity set. A cmd-class row is a writer: a non-adapter's cmd publish, with
-/// its capability and band. A state-class row is a binding: a binding unit's
-/// state publish over the entities it binds. The table is also the dependency
-/// graph (unit -> entities -> owner units).
+/// its capability and band. A hold-class row is a holder: a unit's hold
+/// publish, with its capability and band, over the arbitrated entities it may
+/// hold. A state-class row is a binding: a binding unit's state publish over
+/// the entities it binds. The table is also the dependency graph (unit ->
+/// entities -> owner units).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Grant {
     pub unit: String,
@@ -37,12 +39,16 @@ pub struct Grant {
     pub keys: Vec<String>,
     /// Granted entities (key match + capability match), sorted by name.
     pub entities: Vec<GrantEntity>,
+    /// A hold-class row: the unit may hold these entities' aspects
+    /// (docs/design.md#holds). Left out of the table when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hold: bool,
 }
 
 impl Grant {
     /// A cmd-class row: a writer. State rows record bindings only.
     pub fn is_cmd(&self) -> bool {
-        self.capability.is_some()
+        self.capability.is_some() && !self.hold
     }
 }
 
@@ -385,10 +391,17 @@ fn build_grants(
                 priority: None,
                 keys,
                 entities: bound,
+                hold: false,
             });
             continue;
         }
-        if class != "cmd" || key.kind == UnitKind::Adapter {
+        // A service's hold publish is its own output, as the arbiter's
+        // family holds are, and grants nothing.
+        let hold = class == "hold";
+        if hold && key.kind == UnitKind::Service {
+            continue;
+        }
+        if !hold && (class != "cmd" || key.kind == UnitKind::Adapter) {
             continue;
         }
 
@@ -396,7 +409,10 @@ fn build_grants(
             errors.push(ValidationError::new(
                 Code::PublishMissingCapability,
                 subject,
-                format!("cmd publish \"{}\" must declare a capability", key.source),
+                format!(
+                    "{class} publish \"{}\" must declare a capability",
+                    key.source
+                ),
                 Some(unit.path.clone()),
             ));
             continue;
@@ -414,19 +430,35 @@ fn build_grants(
             errors.push(ValidationError::new(
                 Code::PublishMissingPriority,
                 subject,
-                format!("cmd publish \"{}\" must declare a priority", key.source),
+                format!("{class} publish \"{}\" must declare a priority", key.source),
                 Some(unit.path.clone()),
             ));
             continue;
         };
+        if hold && !matches!(priority, Priority::Automation | Priority::Agent) {
+            errors.push(ValidationError::new(
+                Code::HoldBand,
+                subject,
+                format!("hold publish \"{}\" declares priority \"{priority}\"; a unit holds at automation or agent", key.source),
+                Some(unit.path.clone()),
+            ));
+            continue;
+        }
 
         let mut granted: Vec<GrantEntity> = house
             .entities
             .iter()
             .filter(|e| e.file.entity.capability == capability)
             .filter(|e| {
-                let prefix = ["home", "cmd", e.file.entity.room.as_str(), e.name.as_str()];
-                key.exprs.iter().any(|expr| expr.matches_prefix(&prefix))
+                let (room, name) = (e.file.entity.room.as_str(), e.name.as_str());
+                if hold {
+                    // home/hold/{unit}/{room}/{entity}/{aspect}
+                    let prefix = ["home", "hold", key.unit.as_str(), room, name];
+                    key.exprs.iter().any(|expr| expr.matches_prefix(&prefix))
+                } else {
+                    let prefix = ["home", "cmd", room, name];
+                    key.exprs.iter().any(|expr| expr.matches_prefix(&prefix))
+                }
             })
             .map(|e| GrantEntity {
                 name: e.name.clone(),
@@ -442,10 +474,23 @@ fn build_grants(
         if granted.is_empty() {
             warnings.push(format!("publish {subject} matches no entities"));
         }
+        if hold {
+            for entity in granted.iter().filter(|e| e.write != WriteMode::Arbitrated) {
+                errors.push(ValidationError::new(
+                    Code::HoldNotArbitrated,
+                    subject.clone(),
+                    format!(
+                        "hold publish \"{}\" reaches \"{}\", which is {}, not arbitrated",
+                        key.source, entity.name, entity.write
+                    ),
+                    Some(unit.path.clone()),
+                ));
+            }
+        }
         // The manual band belongs to the family's surfaces (dashboard, voice)
         // and is exempt from exclusive-write checks. Nothing forbids an
         // automation from claiming it, but the plan warns about it.
-        if priority == Priority::Manual && unit.manifest.unit.kind != UnitKind::Service {
+        if !hold && priority == Priority::Manual && unit.manifest.unit.kind != UnitKind::Service {
             warnings.push(format!(
                 "publish {subject} declares priority \"manual\" on {} \"{}\"; the manual band is the family's and is exempt from exclusive-write checks",
                 unit.manifest.unit.kind, key.unit
@@ -458,11 +503,46 @@ fn build_grants(
             priority: Some(priority),
             keys,
             entities: granted,
+            hold,
         });
     }
 
     grants.sort_by(|a, b| (&a.unit, &a.publish).cmp(&(&b.unit, &b.publish)));
+    warn_same_rank_holders(&grants, warnings);
     grants
+}
+
+/// Two units holding one entity at one band are told apart by the rest
+/// value (docs/design.md#which-hold-wins). Without one, the newest hold
+/// wins, so the outcome depends only on timing, and plan says so.
+fn warn_same_rank_holders(grants: &[Grant], warnings: &mut Vec<String>) {
+    let mut holders: BTreeMap<(&str, String), BTreeSet<&str>> = BTreeMap::new();
+    for grant in grants.iter().filter(|g| g.hold) {
+        let Some(priority) = grant.priority else {
+            continue;
+        };
+        for entity in &grant.entities {
+            let rest = VOCABULARY
+                .iter()
+                .find(|c| c.name == entity.capability)
+                .and_then(|c| c.rest);
+            if rest.is_none() {
+                holders
+                    .entry((entity.name.as_str(), priority.to_string()))
+                    .or_default()
+                    .insert(grant.unit.as_str());
+            }
+        }
+    }
+    for ((entity, priority), units) in holders {
+        if units.len() > 1 {
+            let names: Vec<&str> = units.into_iter().collect();
+            warnings.push(format!(
+                "{} hold \"{entity}\" at {priority}, and its capability has no rest value: the newest hold wins",
+                names.join(" and ")
+            ));
+        }
+    }
 }
 
 /// Write-policy enforcement: two writers on an exclusive entity is an error.
@@ -808,7 +888,8 @@ fn check_forecast_conflicts(expanded: &[ExpandedKey], errors: &mut Vec<Validatio
 }
 
 /// Reserved classes (docs/design.md#reserved-classes). `config` and `meta`
-/// belong to the core. `health`, `discovery` and `hold` are per unit, under
+/// belong to the core. `health`, `discovery`, `hold` and `arbitration` are
+/// per unit, under
 /// the publishing unit's own name. `arbiter`, `clock` and `history` are each
 /// one service's output. The SDK only checks that a published key is within a
 /// declared expression. Without this check an automation could declare
@@ -852,7 +933,9 @@ fn check_reserved_classes(
                 "\"{}\" publishes under home/{class}/, which only the core writes",
                 key.source
             )),
-            "health" | "discovery" | "hold" if next.as_deref() != Some(key.unit.as_str()) => {
+            "health" | "discovery" | "hold" | "arbitration"
+                if next.as_deref() != Some(key.unit.as_str()) =>
+            {
                 Some(format!(
                     "\"{}\" must sit under this unit's own name: home/{class}/{}/...",
                     key.source, key.unit
@@ -1690,6 +1773,199 @@ mod tests {
             errors
                 .iter()
                 .any(|e| e.code == Code::ArbitratedUncovered && e.subject == "lock"),
+            "{errors:?}"
+        );
+    }
+
+    /// A house with an arbitrated burner and a shared lamp, an arbiter, and
+    /// automations holding at `band` under the given keys.
+    fn house_holding(holders: &[(&str, &str, Priority)]) -> House {
+        let mut arbiter_publishes = BTreeMap::new();
+        arbiter_publishes.insert(
+            "arbiter".to_string(),
+            PublishSpec {
+                key: "home/arbiter/**".to_string(),
+                capability: None,
+                priority: None,
+            },
+        );
+        arbiter_publishes.insert(
+            "holds".to_string(),
+            PublishSpec {
+                key: "home/hold/arbiter/**".to_string(),
+                capability: None,
+                priority: None,
+            },
+        );
+        let mut units = vec![unit(
+            "arbiter",
+            UnitKind::Service,
+            BusSection {
+                subscribes: BTreeMap::new(),
+                publishes: arbiter_publishes,
+            },
+        )];
+        for (name, key, band) in holders {
+            let mut publishes = BTreeMap::new();
+            publishes.insert(
+                "hold".to_string(),
+                PublishSpec {
+                    key: (*key).to_string(),
+                    capability: Some(
+                        if key.contains("lamp") {
+                            "light"
+                        } else if key.contains("heat_pump") {
+                            "climate"
+                        } else {
+                            "burner"
+                        }
+                        .to_string(),
+                    ),
+                    priority: Some(*band),
+                },
+            );
+            units.push(unit(
+                name,
+                UnitKind::Automation,
+                BusSection {
+                    subscribes: BTreeMap::new(),
+                    publishes,
+                },
+            ));
+        }
+        units.push(unit(
+            "aduro",
+            UnitKind::Adapter,
+            BusSection {
+                subscribes: BTreeMap::new(),
+                publishes: BTreeMap::new(),
+            },
+        ));
+        House {
+            units,
+            entities: vec![
+                entity("stove", "utility", "burner", WriteMode::Arbitrated, "aduro"),
+                entity("lamp", "kitchen", "light", WriteMode::Shared, "aduro"),
+                entity(
+                    "heat_pump",
+                    "utility",
+                    "climate",
+                    WriteMode::Arbitrated,
+                    "aduro",
+                ),
+            ],
+            zones: BTreeMap::new(),
+            dashboard: None,
+        }
+    }
+
+    fn resolve_holding(
+        holders: &[(&str, &str, Priority)],
+    ) -> (Vec<Grant>, Vec<String>, Vec<ValidationError>) {
+        let house = house_holding(holders);
+        let (expanded, _warnings, expand_errors) = expand(&house);
+        assert!(expand_errors.is_empty(), "{expand_errors:?}");
+        resolve(&house, &expanded)
+    }
+
+    #[test]
+    fn a_hold_publish_is_a_holder_row() {
+        let (grants, warnings, errors) = resolve_holding(&[(
+            "heating",
+            "home/hold/heating/utility/stove/on",
+            Priority::Automation,
+        )]);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let row = grants
+            .iter()
+            .find(|g| g.unit == "heating")
+            .expect("a holder row");
+        assert!(row.hold && !row.is_cmd(), "a holder is not a writer");
+        assert_eq!(row.priority, Some(Priority::Automation));
+        assert_eq!(row.entities[0].name, "stove");
+        assert!(
+            !grants.iter().any(|g| g.unit == "arbiter" && g.hold),
+            "the arbiter's own family holds grant nothing"
+        );
+    }
+
+    #[test]
+    fn a_hold_on_an_entity_nobody_arbitrates_is_refused() {
+        let (_grants, _warnings, errors) = resolve_holding(&[(
+            "lights",
+            "home/hold/lights/kitchen/lamp/on",
+            Priority::Automation,
+        )]);
+        assert!(
+            errors.iter().any(|e| e.code == Code::HoldNotArbitrated),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn a_hold_at_the_family_bands_is_refused() {
+        for band in [Priority::Family, Priority::Manual] {
+            let (_grants, _warnings, errors) =
+                resolve_holding(&[("heating", "home/hold/heating/utility/stove/on", band)]);
+            assert!(
+                errors.iter().any(|e| e.code == Code::HoldBand),
+                "{band}: {errors:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn two_holders_at_one_band_warn_only_without_a_rest_value() {
+        // The burner has a rest value, so the two are told apart by it.
+        let (_grants, warnings, errors) = resolve_holding(&[
+            (
+                "flue_guard",
+                "home/hold/flue_guard/utility/stove/on",
+                Priority::Automation,
+            ),
+            (
+                "heating",
+                "home/hold/heating/utility/stove/**",
+                Priority::Automation,
+            ),
+        ]);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert!(warnings.is_empty(), "{warnings:?}");
+    }
+
+    #[test]
+    fn two_holders_at_one_band_without_a_rest_value_warn() {
+        let (_grants, warnings, errors) = resolve_holding(&[
+            (
+                "curve",
+                "home/hold/curve/utility/heat_pump/setpoint",
+                Priority::Automation,
+            ),
+            (
+                "setback",
+                "home/hold/setback/utility/heat_pump/setpoint",
+                Priority::Automation,
+            ),
+        ]);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("curve and setback hold \"heat_pump\" at automation")),
+            "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn a_hold_under_another_units_name_is_refused() {
+        let (_grants, _warnings, errors) = resolve_holding(&[(
+            "heating",
+            "home/hold/arbiter/utility/stove/on",
+            Priority::Automation,
+        )]);
+        assert!(
+            errors.iter().any(|e| e.code == Code::ReservedClassPublish),
             "{errors:?}"
         );
     }

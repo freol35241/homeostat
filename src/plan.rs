@@ -757,6 +757,10 @@ fn render_grant(grant: &Grant, mark: char, out: &mut String) {
         format!("  {mark} ")
     };
     match (&grant.capability, grant.priority) {
+        (Some(capability), Some(priority)) if grant.hold => out.push_str(&format!(
+            "{prefix}{}.{}  holds  capability={capability}  priority={priority}\n",
+            grant.unit, grant.publish
+        )),
         (Some(capability), Some(priority)) => out.push_str(&format!(
             "{prefix}{}.{}  capability={capability}  priority={priority}\n",
             grant.unit, grant.publish

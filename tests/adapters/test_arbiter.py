@@ -1,6 +1,8 @@
-"""The arbiter's rule, without a bus: who holds an aspect, and for how long.
+"""The arbiter's rule, without a bus: which hold wins an aspect, what a
+command does, and what is forwarded.
 
-Also which entities it arbitrates, read from the grant table.
+Also which entities it arbitrates and who may hold them, read from the
+grant table.
 """
 
 import json
@@ -11,10 +13,12 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "adapters"))
 
-from arbiter import GRANTS_KEY, PENDING_KEY, Bindings, Leases, bindings
+from arbiter import GRANTS_KEY, PENDING_KEY, Bindings, Resolver, bindings, holders
 
+STOVE = ("utility", "stove", "on")
 LAMP = ("hall", "lamp", "on")
 HOLD_S = 60.0
+WALL = 1_700_000_000.0  # 2023-11-14T22:13:20Z
 
 
 class Clock:
@@ -25,189 +29,235 @@ class Clock:
         return self.now
 
 
-WALL = 1_700_000_000.0  # 2023-11-14T22:13:20Z
+BANDS = {"heating": "automation", "flue_guard": "automation", "planner": "agent"}
 
 
-class LeasesTest(unittest.TestCase):
+class Base(unittest.TestCase):
+    """A resolver where `heating` and `flue_guard` hold at automation and
+    `planner` at agent, and the stove's rest value is on = false."""
+
     def setUp(self):
         self.clock = Clock()
-        self.leases = Leases(self.clock, lambda: WALL + self.clock.now - 1000.0)
+        self.resolver = Resolver(
+            band_of=lambda unit, target: BANDS.get(unit),
+            rest_of=lambda target: False if target == STOVE else None,
+            clock=self.clock,
+            wall=lambda: WALL + self.clock.now - 1000.0,
+        )
 
-    def wish(self, priority, actor="someone", target=LAMP, **kw):
-        return self.leases.wish(target, priority, actor, HOLD_S, **kw)
+    def hold(self, unit, value, hold_id, target=STOVE, seen=None, **extra):
+        effects = []
+        record = {"value": value, "id": hold_id, **extra}
+        self.resolver.put_hold(target, unit, record, WALL + (seen or self.clock.now), effects)
+        return effects
 
-    def held(self):
-        return list(self.leases.records().values())
+    def drop(self, unit, target=STOVE):
+        effects = []
+        self.resolver.drop_hold(target, unit, effects)
+        return effects
 
-    def test_an_unheld_aspect_forwards_and_is_then_held(self):
-        self.assertEqual(self.wish("automation"), ("forward", None))
-        self.assertEqual(self.leases.next_deadline(), 1000.0 + HOLD_S)
+    def command(self, priority, actor, value=None, target=STOVE, **kw):
+        effects = []
+        forwarded = self.resolver.command(target, priority, actor, HOLD_S, effects, value=value, **kw)
+        return forwarded, effects
 
-    def test_a_lower_band_is_refused_and_counted_against_the_hold(self):
-        self.wish("manual", "family")
-        action, holder = self.wish("automation", "scheduler")
-        self.assertEqual(action, "refuse")
-        self.assertEqual((holder["priority"], holder["actor"]), ("manual", "family"))
-        self.wish("automation", "scheduler")
-        [hold] = self.held()
-        self.assertEqual(hold["refused"], 2)
-        self.assertEqual(hold["actor"], "family", "a refusal leaves the hold as it was")
+    @staticmethod
+    def forwards(effects):
+        return [(e[2]["value"], e[2]["actor"], e[2]["id"]) for e in effects if e[0] == "forward"]
 
-    def test_a_higher_band_preempts_and_takes_the_hold(self):
-        self.wish("automation", "scheduler")
-        action, holder = self.wish("manual", "family")
-        self.assertEqual(action, "preempt")
-        self.assertEqual(holder["actor"], "scheduler")
-        [hold] = self.held()
-        self.assertEqual((hold["priority"], hold["actor"]), ("manual", "family"))
+    @staticmethod
+    def events(effects):
+        return [e[1] for e in effects if e[0] == "event"]
 
-    def test_the_same_band_refreshes_the_hold_and_its_tally(self):
-        self.wish("agent", "a")
-        self.wish("automation")  # refused: one against the hold
-        self.clock.now += 30
-        self.assertEqual(self.wish("agent", "b")[0], "forward")
-        [hold] = self.held()
-        self.assertEqual((hold["actor"], hold["refused"]), ("b", 0))
-        self.assertEqual(self.leases.next_deadline(), 1030.0 + HOLD_S)
 
-    def test_an_expired_hold_reopens_the_aspect(self):
-        self.wish("manual", "family")
+class WhichHoldWinsTest(Base):
+    def test_a_hold_is_forwarded_once(self):
+        self.assertEqual(self.forwards(self.hold("heating", True, "h1")), [(True, "heating", "h1")])
+        self.resolver.resolve(STOVE, effects := [])
+        self.assertEqual(effects, [], "the applied hold is not sent again")
+
+    def test_a_higher_band_wins_and_its_end_hands_back(self):
+        self.hold("heating", True, "h1")
+        effects = self.hold("planner", False, "p1")
+        self.assertEqual(self.forwards(effects), [(False, "planner", "p1")])
+        self.assertEqual(self.events(effects), ["preempt"])
+        effects = self.drop("planner")
+        self.assertEqual(self.forwards(effects), [(True, "heating", "h1")])
+        self.assertEqual(self.events(effects), ["resume"])
+
+    def test_at_one_band_the_rest_value_wins(self):
+        self.hold("flue_guard", False, "f1", seen=1.0)
+        effects = self.hold("heating", True, "h1", seen=2.0)
+        self.assertEqual(self.forwards(effects), [], "the newer start loses to the stop")
+        self.assertEqual(self.resolver.winner(STOVE)["unit"], "flue_guard")
+
+    def test_without_a_rest_value_the_newest_wins(self):
+        self.hold("heating", 19, "h1", target=LAMP, seen=1.0)
+        effects = self.hold("flue_guard", 21, "f1", target=LAMP, seen=2.0)
+        self.assertEqual(self.forwards(effects), [(21, "flue_guard", "f1")])
+
+    def test_a_hold_without_a_grant_does_not_count(self):
+        self.assertEqual(self.hold("stranger", True, "s1"), [])
+        self.assertIsNone(self.resolver.winner(STOVE))
+
+    def test_a_hold_ends_at_its_until(self):
+        self.hold("heating", True, "h1")
+        self.hold("planner", False, "p1", until="2023-11-14T22:14:20Z")  # 60 s after WALL
+        self.assertEqual(self.resolver.next_deadline(), 1000.0 + 60)
+        self.clock.now += 60
+        self.resolver.expire(effects := [])
+        self.assertEqual(self.forwards(effects), [(True, "heating", "h1")])
+
+    def test_a_record_that_is_not_a_hold_is_refused(self):
+        effects = []
+        for record in ({"id": "x"}, {"value": 1}, "junk", {"value": 1, "id": "x", "until": "soon"}):
+            self.assertFalse(self.resolver.put_hold(STOVE, "heating", record, WALL, effects), record)
+        self.assertEqual(effects, [])
+
+
+class FamilyTest(Base):
+    def test_the_family_masks_a_hold_and_hands_back_when_it_ends(self):
+        self.hold("heating", True, "h1")
+        forwarded, effects = self.command("manual", "dashboard", False, cmd_id="c1")
+        self.assertTrue(forwarded, "the family's command is sent itself")
+        self.assertEqual(self.events(effects), ["preempt"])
+        self.assertEqual(self.forwards(self.hold("heating", True, "h2")), [], "masked")
         self.clock.now += HOLD_S
-        self.assertEqual(self.wish("automation"), ("forward", None))
+        self.resolver.expire(effects := [])
+        self.assertEqual(self.forwards(effects), [(True, "heating", "h2")], "sent when the family's hold ends")
 
-    def test_aspects_are_held_independently(self):
-        self.wish("manual", "family")
-        offset = ("hall", "lamp", "brightness")
-        self.assertEqual(self.wish("automation", target=offset), ("forward", None))
+    def test_release_sends_the_hold_beneath_at_once_and_nothing_without_one(self):
+        self.hold("heating", True, "h1")
+        self.command("manual", "dashboard", False, cmd_id="c1")
+        forwarded, effects = self.command("manual", "dashboard", hold="release")
+        self.assertFalse(forwarded)
+        self.assertEqual(self.forwards(effects), [(True, "heating", "h1")])
+        self.command("manual", "dashboard", False, target=LAMP)
+        forwarded, effects = self.command("manual", "dashboard", hold="release", target=LAMP)
+        self.assertEqual((forwarded, self.forwards(effects)), (False, []))
 
-    def test_prune_drops_only_what_has_ended(self):
-        self.wish("manual", target=("a", "x", "on"))
-        self.clock.now += 10
-        self.wish("manual", target=("b", "y", "on"))
-        self.assertFalse(self.leases.prune())
-        self.clock.now = 1000.0 + HOLD_S
-        self.assertTrue(self.leases.prune())
-        self.assertEqual(self.leases.next_deadline(), 1010.0 + HOLD_S)
+    def test_a_nudge_over_a_hold_is_not_undone(self):
+        self.hold("heating", True, "h1")
+        forwarded, effects = self.command("manual", "dashboard", False, hold="none", cmd_id="n1")
+        self.assertTrue(forwarded)
+        self.resolver.resolve(STOVE, effects := [])
+        self.assertEqual(self.forwards(effects), [], "the hold beneath waits for its next change")
+        self.assertEqual(self.forwards(self.hold("heating", True, "h2")), [(True, "heating", "h2")])
 
-    def test_a_record_is_in_wall_time_and_fixed_when_taken(self):
-        self.wish("manual", value=True)
+    def test_a_report_holds_without_sending(self):
+        forwarded, _ = self.command("manual", "esphome", False, hold="report")
+        self.assertFalse(forwarded)
+        self.assertEqual(self.resolver.winner(STOVE)["value"], False)
+
+    def test_an_instant_holds_until_then_and_one_past_holds_nothing(self):
+        self.command("manual", "dashboard", True, hold="2023-11-14T23:13:20+00:00")
+        self.assertEqual(self.resolver.next_deadline(), 1000.0 + 3600)
+        self.command("manual", "dashboard", False, hold="2023-11-14T22:00:00Z")
+        self.assertIsNone(self.resolver.winner(STOVE))
+
+    def test_the_family_record_carries_the_value_and_wall_time(self):
+        self.command("manual", "dashboard", True, cmd_id="c1")
         self.clock.now += 15
-        [hold] = self.held()
-        self.assertEqual(hold["schema"], 1)
-        self.assertEqual((hold["room"], hold["entity"], hold["aspect"]), LAMP)
-        self.assertEqual(hold["value"], True)
-        self.assertEqual(hold["since"], "2023-11-14T22:13:20Z")
-        self.assertEqual(hold["until"], "2023-11-14T22:14:20Z")
-
-    def test_retain_drops_holds_on_entities_no_longer_arbitrated(self):
-        self.wish("manual", target=("a", "x", "on"))
-        self.wish("manual", target=("a", "x", "level"))
-        self.wish("manual", target=("b", "y", "on"))
-        self.assertFalse(self.leases.retain(frozenset({("a", "x"), ("b", "y")})))
-        self.assertTrue(self.leases.retain(frozenset({("b", "y")})))
-        self.assertEqual(list(self.leases.records()), [("b", "y", "on")])
-
-    def test_the_records_leave_out_an_ended_hold_before_it_is_pruned(self):
-        self.wish("manual")
-        self.clock.now += HOLD_S
-        self.assertEqual(self.held(), [])
+        [record] = self.resolver.family_records().values()
+        self.assertEqual(
+            {k: record[k] for k in ("actor", "value", "id", "since", "until", "refused")},
+            {"actor": "dashboard", "value": True, "id": "c1", "since": "2023-11-14T22:13:20Z",
+             "until": "2023-11-14T22:14:20Z", "refused": 0},
+        )
 
 
-class HoldIntentTest(unittest.TestCase):
-    """What a manual command's `hold` does to the family hold
-    (docs/design.md#hold-intents)."""
+class CommandTest(Base):
+    def test_a_command_with_nothing_held_goes_through_and_holds_nothing(self):
+        forwarded, effects = self.command("automation", "evening", True)
+        self.assertTrue(forwarded)
+        self.assertEqual(effects, [])
+        self.assertIsNone(self.resolver.winner(STOVE))
 
-    def setUp(self):
-        self.clock = Clock()
-        self.leases = Leases(self.clock, lambda: WALL + self.clock.now - 1000.0)
+    def test_a_command_below_a_hold_is_refused_and_counted(self):
+        self.command("manual", "dashboard", False)
+        forwarded, effects = self.command("automation", "evening", True, cmd_id="c9")
+        self.assertFalse(forwarded)
+        [(_, kind, fields)] = effects
+        self.assertEqual((kind, fields["holder_actor"], fields["cmd_id"]), ("refuse", "dashboard", "c9"))
+        self.assertEqual(next(iter(self.resolver.family_records().values()))["refused"], 1)
 
-    def wish(self, priority, actor="family", **kw):
-        return self.leases.wish(LAMP, priority, actor, HOLD_S, **kw)
+    def test_at_one_band_a_command_must_agree_with_the_hold(self):
+        self.hold("heating", True, "h1")
+        self.assertFalse(self.command("automation", "evening", False)[0])
+        self.assertTrue(self.command("automation", "evening", True)[0])
 
-    def held(self):
-        return list(self.leases.records().values())
+    def test_a_command_does_not_lose_to_its_senders_own_hold(self):
+        self.hold("heating", True, "h1")
+        self.assertTrue(self.command("automation", "heating", False)[0])
 
-    def test_none_acts_without_taking_over(self):
-        self.assertEqual(self.wish("manual", value=True, hold="none"), ("forward", None))
-        self.assertEqual(self.held(), [])
-        self.assertEqual(self.wish("automation", "scheduler")[0], "forward")
-
-    def test_none_clears_a_family_hold_but_leaves_a_lower_lease(self):
-        self.wish("manual", value=True)
-        self.wish("manual", value=False, hold="none")
-        self.assertEqual(self.held(), [])
-        self.wish("agent", "planner")
-        self.wish("manual", value=True, hold="none")
-        [hold] = self.held()
-        self.assertEqual(hold["actor"], "planner", "nothing took the agent's lease over")
-
-    def test_an_instant_holds_until_then(self):
-        until = "2023-11-14T23:13:20+00:00"  # an hour after WALL
-        self.assertEqual(self.wish("manual", value=True, hold=until)[0], "forward")
-        [hold] = self.held()
-        self.assertEqual(hold["until"], "2023-11-14T23:13:20Z")
-        self.assertEqual(self.leases.next_deadline(), 1000.0 + 3600)
-        self.assertEqual(self.wish("automation", "scheduler")[0], "refuse")
-
-    def test_a_zero_hold_time_still_takes_over(self):
-        # hold_minutes = 0: the wish wins and is reported as a takeover,
-        # and the hold it takes has already ended.
-        self.leases.wish(LAMP, "automation", "scheduler", HOLD_S)
-        self.assertEqual(self.leases.wish(LAMP, "manual", "family", 0.0, value=True)[0], "preempt")
-        self.assertEqual(self.held(), [])
-
-    def test_an_instant_already_past_holds_nothing(self):
-        self.wish("manual", value=True)
-        self.wish("manual", value=False, hold="2023-11-14T22:00:00Z")
-        self.assertEqual(self.held(), [])
-
-    def test_report_holds_what_the_device_did(self):
-        self.wish("automation", "scheduler")
-        self.assertEqual(self.wish("manual", "esphome", value=False, hold="report")[0], "preempt")
-        [hold] = self.held()
-        self.assertEqual((hold["priority"], hold["actor"], hold["value"]), ("manual", "esphome", False))
-
-    def test_release_clears_a_hold_another_surface_placed(self):
-        self.wish("manual", "esphome", value=False, hold="report")
-        self.wish("manual", "dashboard", hold="release")
-        self.assertEqual(self.held(), [])
-        self.assertEqual(self.wish("automation", "scheduler"), ("forward", None))
-
-    def test_release_leaves_a_lower_lease(self):
-        self.wish("automation", "scheduler")
-        self.wish("manual", "dashboard", hold="release")
-        self.assertEqual([h["actor"] for h in self.held()], ["scheduler"])
+    def test_the_hold_beneath_a_command_waits_for_its_next_change(self):
+        self.hold("heating", True, "h1")
+        self.command("automation", "evening", True)
+        self.resolver.resolve(STOVE, effects := [])
+        self.assertEqual(effects, [])
 
 
-class RestoreTest(unittest.TestCase):
-    """A restarted arbiter takes back the holds the mirror kept."""
+class LifecycleTest(Base):
+    def test_retain_forgets_entities_no_longer_arbitrated(self):
+        self.hold("heating", True, "h1")
+        self.command("manual", "dashboard", True, target=LAMP)
+        self.assertTrue(self.resolver.retain(frozenset({("hall", "lamp")})))
+        self.assertIsNone(self.resolver.winner(STOVE))
+        self.assertEqual(list(self.resolver.family_records()), [LAMP])
 
-    def test_a_hold_still_in_force_comes_back_with_its_deadline(self):
-        clock = Clock()
-        before = Leases(clock, lambda: WALL)
-        before.wish(LAMP, "manual", "dashboard", HOLD_S, value=True)
-        before.wish(LAMP, "automation", "scheduler", HOLD_S)  # refused
-        records = list(before.records().values())
+    def test_a_restart_sends_nothing_already_applied(self):
+        self.hold("heating", True, "h1")
+        self.command("manual", "dashboard", False, cmd_id="c1", target=LAMP)
+        records = list(self.resolver.family_records().values())
+        document = self.resolver.document()
 
         later = Clock()
         later.now = 50.0
-        after = Leases(later, lambda: WALL + 20)
-        after.restore(records)
-        self.assertEqual(list(after.records().values()), records)
+        after = Resolver(
+            band_of=lambda unit, target: BANDS.get(unit), rest_of=lambda target: None,
+            clock=later, wall=lambda: WALL + 20,
+        )
+        after.restore(records, document)
+        after.put_hold(STOVE, "heating", {"value": True, "id": "h1"}, WALL, effects := [])
+        self.assertEqual(effects, [])
+        after.resolve_all(effects)
+        self.assertEqual(effects, [], "neither the hold nor the family's is sent again")
         self.assertEqual(after.next_deadline(), 50.0 + HOLD_S - 20)
 
-    def test_an_ended_or_unreadable_record_is_skipped(self):
-        clock = Clock()
-        before = Leases(clock, lambda: WALL)
-        before.wish(LAMP, "manual", "dashboard", HOLD_S, value=True)
-        [record] = before.records().values()
-        ended = Leases(Clock(), lambda: WALL + HOLD_S)
-        ended.restore([record])
-        self.assertEqual(ended.records(), {})
-        live = Leases(Clock(), lambda: WALL + 1)
-        live.restore([{"schema": 1, "holds": []}, "junk", dict(record, priority="boss"),
-                      dict(record, until="soon")])
-        self.assertEqual(live.records(), {})
+    def test_an_ended_or_unreadable_family_record_is_skipped(self):
+        self.command("manual", "dashboard", True, cmd_id="c1")
+        [record] = self.resolver.family_records().values()
+        ended = Resolver(lambda u, t: None, lambda t: None, clock=Clock(), wall=lambda: WALL + HOLD_S)
+        ended.restore([record, "junk", {"room": "x"}], None)
+        self.assertEqual(ended.family_records(), {})
+
+    def test_the_document_lists_the_holds_winner_first(self):
+        self.hold("heating", True, "h1")
+        self.hold("planner", False, "p1", reason="away")
+        [entry] = self.resolver.document()["aspects"]
+        self.assertEqual([h["unit"] for h in entry["holds"]], ["planner", "heating"])
+        self.assertEqual(entry["holds"][0]["reason"], "away")
+        self.assertEqual(entry["applied"]["id"], "p1")
+
+
+def hold_row(unit, band, keys, *entities):
+    return {"unit": unit, "publish": "hold", "capability": "burner", "priority": band,
+            "keys": keys, "entities": list(entities), "hold": True}
+
+
+class HoldersTest(unittest.TestCase):
+    def test_a_hold_row_gives_its_unit_a_band_on_the_keys_it_covers(self):
+        stove = {"name": "stove", "room": "utility", "capability": "burner", "write": "arbitrated", "owner": "aduro"}
+        session = FakeSession({GRANTS_KEY: [
+            hold_row("heating", "automation", ["home/hold/heating/utility/stove/on"], stove),
+            {"unit": "aduro", "publish": "state", "entities": [stove]},
+        ]})
+        routes = Bindings(session, lambda arbitrated: None)
+        self.assertEqual(routes.band_of("heating", STOVE), "automation")
+        self.assertIsNone(routes.band_of("heating", ("utility", "stove", "power_level")))
+        self.assertIsNone(routes.band_of("flue_guard", STOVE))
+        self.assertIs(routes.rest_of(STOVE), False)
+        self.assertEqual(set(holders(session.seeds[GRANTS_KEY])), {("utility", "stove")})
 
 
 def entity(room, name, write):

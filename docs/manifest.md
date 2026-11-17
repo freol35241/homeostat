@@ -104,9 +104,9 @@ One publish the unit is allowed.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `capability` | string | no | Required under `home/cmd/` (`publish-missing-capability`): the grant resolves onto bound entities of this capability that the key covers. Must be a known capability (`unknown-capability`). |
-| `key` | string | yes | Key expression. Under `home/state/` it must name a bound entity's room and entity literally or by template (`state-publish-unbound`). Under `home/forecast/` the entity must exist but need not be one this unit binds (`forecast-publish-unbound`). The key carries a sixth segment naming the forecast's source. Several sources can then forecast one series without overwriting each other (`forecast-publish-conflict`). |
-| `priority` | [Priority](#priority) | no | The band commands leave at. Required under `home/cmd/` (`publish-missing-priority`). Automations publish at `automation`; the family's surfaces (dashboard, voice) at `manual`, which always wins in arbitration. |
+| `capability` | string | no | Required under `home/cmd/` and, except on a service, `home/hold/` (`publish-missing-capability`): the grant resolves onto entities of this capability that the key covers. Must be a known capability (`unknown-capability`). |
+| `key` | string | yes | Key expression. Under `home/state/` it must name a bound entity's room and entity literally or by template (`state-publish-unbound`). Under `home/forecast/` the entity must exist but need not be one this unit binds (`forecast-publish-unbound`). The key carries a sixth segment naming the forecast's source. Several sources can then forecast one series without overwriting each other (`forecast-publish-conflict`). Under `home/hold/` it is `home/hold/{this unit}/{room}/{entity}/{aspect}`, and every entity it reaches must be arbitrated (`hold-not-arbitrated`). |
+| `priority` | [Priority](#priority) | no | The band commands or holds leave at. Required where `capability` is (`publish-missing-priority`). Automations publish at `automation`; the family's surfaces (dashboard, voice) at `manual`, which always wins in arbitration. A hold is at `automation` or `agent` (`hold-band`). |
 
 ### DiscoveryMode
 
@@ -366,25 +366,25 @@ house's text, the grant table and the bus; no widget carries markup.
 
 ## Capability vocabulary
 
-What an entity of each capability publishes under which names (docs/adapters.md, State). The base aspect is what commands target and the dashboard widget renders; the other named aspects are what `features` may declare or the vocabulary reserves; notable is the reading that counts as a deviation on `Now`. Anything else an adapter publishes passes through under its native name.
+What an entity of each capability publishes under which names (docs/adapters.md, State). The base aspect is what commands target and the dashboard widget renders; the other named aspects are what `features` may declare or the vocabulary reserves; notable is the reading that counts as a deviation on `Now`; rest is the value the device is safe at, which wins between two holds at one band. Anything else an adapter publishes passes through under its native name.
 
-| Capability | Base aspect | Other named aspects | Notable | Notes |
-|---|---|---|---|---|
-| `binary_sensor` | — | — | — | A boolean under its native name. |
-| `burner` | `on` | `power_level`, `flue_temperature`, `boiler_temperature` | — | `on` is the family lever, read back from the device's run state, never echoed from the command. `power_level` is the output setting as the device enumerates it (a constraint the adapter describes); the two temperatures in °C are what an interlock reads. Run-phase codes pass through raw until a second burner adapter exists to generalise against. |
-| `button` | — | `action` | — | A thing a person presses: a remote, a wall button, a device's own button. `action` (string) is one press in the device's own words (`single`, `1_double`, `brightness_up_click`), not normalised. Every press is published, a repeat included, so an action is an event, not a state: a unit catching up after a restart is not handed the last one (docs/design.md#buttons). No commands. |
-| `camera` | — | `motion` | — | `motion` (bool). Media rides the go2rtc plane, never the bus. |
-| `climate` | `setpoint` | `indoor_temperature`, `feed_temperature` | — | `setpoint` in °C is the family lever; the two readings are normalized when the device has them. |
-| `cover` | — | — | — | Reserved; no adapter binds it yet. |
-| `light` | `on` | `brightness`, `color_temp` | `on = true` | `brightness` 0–254 (the Zigbee2MQTT scale the dashboard assumes), `color_temp` in mired. |
-| `lock` | `locked` | — | `locked = false` |  |
-| `notifier` | `message` | `alert`, `delivered`, `acknowledged` | — | A channel that reaches a person: a phone, a group chat. `message` and `alert` are commandable strings — the text itself — and two structurally separate delivery paths, granted and policed apart (an alert overrides quiet hours; a message never will). `delivered` is the epoch time the delivery service acknowledged the last message, never a human's receipt; `acknowledged` is the send time, on the adapter's clock, of the newest `alert` the person has seen, which only a channel with an app at the far end can report. Room `person` for one person's channel, `global` for a group (docs/design.md#notifications). |
-| `occupancy` | — | `motion`, `occupied` | — | A room sensor, in the room it watches. `motion` (bool) is movement seen within the adapter's hold, as a PIR reports it; `false` means nothing moved, not that the room is empty. `occupied` (bool) is a body detected, moving or still, as an mmWave radar reports it. The adapter publishes whichever its device observes (docs/design.md#the-capability-vocabulary). |
-| `person` | — | `presence`, `lat`, `lon`, `accuracy`, `fixed_at` | — | A human, computed from the trackers its `[sources]` list. Only an automation binds one (`person-bound-by-adapter`), and the shipped `persons` unit is the one that does. `presence` (bool) is whether the person is home; the dashboard's People tile reads it. Scalar position aspects; `fixed_at` is the fix's epoch timestamp. Room `person` (docs/design.md#map-and-people). |
-| `router` | — | `wan` | `wan = false` |  |
-| `sensor` | — | — | — | Numeric aspects under descriptive names (`temperature`, `humidity`); widgets come from what is published. |
-| `switch` | `on` | — | — |  |
-| `tracker` | — | `home`, `sighted`, `lat`, `lon`, `accuracy`, `battery`, `fixed_at` | — | A device someone carries: a phone, a tag, a watch. `home` (bool) is inside the home geofence, and its `false` says the device left. `sighted` (bool) is seen on the home network, and its `false` says only that it was not seen within the adapter's delay. Scalar position aspects as on `person`, plus the device's `battery`; `fixed_at` is published after the fix's other aspects and completes it. Room `person` for one person's device. A `person` lists its trackers as sources (docs/design.md#map-and-people). |
+| Capability | Base aspect | Other named aspects | Notable | Rest | Notes |
+|---|---|---|---|---|---|
+| `binary_sensor` | — | — | — | — | A boolean under its native name. |
+| `burner` | `on` | `power_level`, `flue_temperature`, `boiler_temperature` | — | `on = false` | `on` is the family lever, read back from the device's run state, never echoed from the command. `power_level` is the output setting as the device enumerates it (a constraint the adapter describes); the two temperatures in °C are what an interlock reads. Run-phase codes pass through raw until a second burner adapter exists to generalise against. |
+| `button` | — | `action` | — | — | A thing a person presses: a remote, a wall button, a device's own button. `action` (string) is one press in the device's own words (`single`, `1_double`, `brightness_up_click`), not normalised. Every press is published, a repeat included, so an action is an event, not a state: a unit catching up after a restart is not handed the last one (docs/design.md#buttons). No commands. |
+| `camera` | — | `motion` | — | — | `motion` (bool). Media rides the go2rtc plane, never the bus. |
+| `climate` | `setpoint` | `indoor_temperature`, `feed_temperature` | — | — | `setpoint` in °C is the family lever; the two readings are normalized when the device has them. |
+| `cover` | — | — | — | — | Reserved; no adapter binds it yet. |
+| `light` | `on` | `brightness`, `color_temp` | `on = true` | — | `brightness` 0–254 (the Zigbee2MQTT scale the dashboard assumes), `color_temp` in mired. |
+| `lock` | `locked` | — | `locked = false` | — |  |
+| `notifier` | `message` | `alert`, `delivered`, `acknowledged` | — | — | A channel that reaches a person: a phone, a group chat. `message` and `alert` are commandable strings — the text itself — and two structurally separate delivery paths, granted and policed apart (an alert overrides quiet hours; a message never will). `delivered` is the epoch time the delivery service acknowledged the last message, never a human's receipt; `acknowledged` is the send time, on the adapter's clock, of the newest `alert` the person has seen, which only a channel with an app at the far end can report. Room `person` for one person's channel, `global` for a group (docs/design.md#notifications). |
+| `occupancy` | — | `motion`, `occupied` | — | — | A room sensor, in the room it watches. `motion` (bool) is movement seen within the adapter's hold, as a PIR reports it; `false` means nothing moved, not that the room is empty. `occupied` (bool) is a body detected, moving or still, as an mmWave radar reports it. The adapter publishes whichever its device observes (docs/design.md#the-capability-vocabulary). |
+| `person` | — | `presence`, `lat`, `lon`, `accuracy`, `fixed_at` | — | — | A human, computed from the trackers its `[sources]` list. Only an automation binds one (`person-bound-by-adapter`), and the shipped `persons` unit is the one that does. `presence` (bool) is whether the person is home; the dashboard's People tile reads it. Scalar position aspects; `fixed_at` is the fix's epoch timestamp. Room `person` (docs/design.md#map-and-people). |
+| `router` | — | `wan` | `wan = false` | — |  |
+| `sensor` | — | — | — | — | Numeric aspects under descriptive names (`temperature`, `humidity`); widgets come from what is published. |
+| `switch` | `on` | — | — | — |  |
+| `tracker` | — | `home`, `sighted`, `lat`, `lon`, `accuracy`, `battery`, `fixed_at` | — | — | A device someone carries: a phone, a tag, a watch. `home` (bool) is inside the home geofence, and its `false` says the device left. `sighted` (bool) is seen on the home network, and its `false` says only that it was not seen within the adapter's delay. Scalar position aspects as on `person`, plus the device's `battery`; `fixed_at` is published after the fix's other aspects and completes it. Room `person` for one person's device. A `person` lists its trackers as sources (docs/design.md#map-and-people). |
 
 Every capability may also publish:
 

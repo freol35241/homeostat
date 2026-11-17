@@ -293,6 +293,14 @@ CMD_PRIORITIES = ("automation", "agent", "family", "manual")
 # arbiter alone: neither is forwarded to the device.
 HOLD_WORDS = ("none", "report", "release")
 
+# The aspect and value each capability's device is safe at, where it has
+# one (VOCABULARY's `rest` in src/manifest.rs, which a test there checks this
+# against). Between two holds at one band, the one for the rest value wins
+# (docs/design.md#which-hold-wins).
+REST_VALUES = {
+    "burner": ("on", False),
+}
+
 # The furthest a hold may name. A family hold is for tonight or a holiday,
 # and an end years out is a typo or a hold nobody will remember.
 HOLD_HORIZON = datetime.timedelta(days=366)

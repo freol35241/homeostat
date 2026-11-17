@@ -219,9 +219,11 @@ use, each in one sense. Where a word has two senses, both are listed.
 - **Envelope.** A command's payload: `{value, priority, actor, id}`,
   and optionally `options`. The SDK stamps the priority from the
   manifest and the actor with the unit.
-- **Arbiter.** The service that orders commands to arbitrated entities.
-  It grants a **hold** (a lease per entity and aspect) to the winning
-  band. See [Arbitrated mode](#arbitrated-mode).
+- **Arbiter.** The service that decides what an arbitrated aspect is
+  sent. Units' holds and the family's hold stand on the aspect, and it
+  forwards the one that wins. See [Arbitrated mode](#arbitrated-mode).
+- **Hold.** A standing wish for an arbitrated aspect, as opposed to a
+  command, which is a one-off push. See [Holds](#holds).
 - **Latch.** A commandable virtual entity: an automation-owned entity
   whose owner sets its state from the commands it receives.
 - **Virtual entity.** An entity an automation owns. Its value is
@@ -287,7 +289,8 @@ A forecast key requires a `source`, and a state key has none
 | `home/health/{unit}/event` | the unit | its health events |
 | `home/clock/minute`, `home/clock/date` | the clock service | civil time |
 | `home/discovery/{unit}` | an adapter | its view of its periphery |
-| `home/hold/{unit}/{room}/{entity}/{aspect}` | the arbiter | what it holds on the aspect now |
+| `home/hold/{unit}/{room}/{entity}/{aspect}` | a holder, or the arbiter for the family | a standing wish for the aspect ([Holds](#holds)) |
+| `home/arbitration/{unit}` | the arbiter | per aspect, the hold it applied and the holds in force |
 | `home/history/...` | (recorder queryables) | history reads |
 
 ### Rooms, entities and zones
@@ -617,6 +620,7 @@ offers the surface the manifest declares and nothing more:
 - `ctx.params` ([Live parameters](#live-parameters));
 - `ctx.publish`;
 - `ctx.publish_forecast` ([Forecasts](#forecasts));
+- `ctx.hold` and `ctx.release` ([Holds](#holds));
 - `ctx.restore`
   ([Restoring a unit's own last value](#restoring-a-units-own-last-value));
 - `ctx.source_used`
@@ -819,8 +823,9 @@ plan decides which classes a unit may declare at all
 declare `home/arbiter/**` and forge post-arbitration commands.
 
 - `home/config/**` and `home/meta/**` belong to the core.
-- `home/health/{unit}/...`, `home/discovery/{unit}` and
-  `home/hold/{unit}/...` sit under the publisher's own name.
+- `home/health/{unit}/...`, `home/discovery/{unit}`,
+  `home/hold/{unit}/...` and `home/arbitration/{unit}` sit under the
+  publisher's own name.
 - `home/arbiter/`, `home/clock/` and `home/history/` each belong to one
   service.
 - A `home/state/` publish must name an entity the unit binds
@@ -934,40 +939,112 @@ skipping it:
 - The arbiter's output is its own class, so no subscription confuses a
   wish with a grant.
 
-The token is a **lease** per (entity, aspect). One entity can carry
-independent control dimensions: the family sets a heat pump's
-`setpoint` while an automation drives its outdoor offset. A wish is
-forwarded when no lease is in force or when it is at or above the
-holder's band. It then takes or refreshes the lease for `hold_minutes`,
-a family-editable arbiter parameter. A takeover from a strictly lower
-band publishes `preempt`. A wish below the holder's band gets a
-`refuse` that names the holder and echoes `cmd_id`. When a lease
-expires, automations can command the aspect again, so a forgotten
-override ends on its own. Events land at
+Arbitration is per (entity, aspect). One entity can carry independent
+control dimensions: the family sets a heat pump's `setpoint` while an
+automation drives its outdoor offset. Two kinds of write reach an
+aspect. A command says "do this now", and a hold says "keep it like
+this" ([Holds](#holds)). The arbiter forwards the hold that wins, and a
+command goes through unless a hold refuses it. Events land at
 `home/health/{arbiter unit}/event`.
 
-Holds are also published as state. A browser that opens mid-hold needs
-to know whether the aspect is held now, and events do not answer that.
-Each lease in force is one record at
-`home/hold/{unit}/{room}/{entity}/{aspect}`, mirrored by the core:
-`{schema, room, entity, aspect, priority, actor, value, since, until,
-refused}`. `value` is what the holder asked for, or what the device
-reported. `refused` counts the wishes the hold has turned away.
+The family's hold is the arbiter's own. A manual-band command places it
+for `hold_minutes`, a family-editable arbiter parameter, or as its
+[hold intent](#hold-intents) says. When it ends, the hold beneath is
+sent, so a forgotten override ends on its own. It is published as
+state, because a browser that opens mid-hold needs to know whether the
+aspect is held now, and events do not answer that. Each family hold is
+one record at `home/hold/{arbiter}/{room}/{entity}/{aspect}`, mirrored
+by the core: `{schema, room, entity, aspect, priority, actor, value,
+id, since, until, refused}`. `value` is what the family asked for, or
+what the device reported. `refused` counts the commands the hold has
+turned away.
 
-- A record is put when its lease is taken or its count changes, and its
-  key is deleted when the lease ends. The mirror forgets a deleted key,
+- A record is put when the hold is placed or its count changes, and its
+  key is deleted when the hold ends. The mirror forgets a deleted key,
   so a reader sees only holds in force.
 - The family's holds outlive the arbiter process. A restarted arbiter
   reads its records back from the mirror, keeps those whose `until` is
   still ahead, and deletes the rest. A core restart empties the mirror,
   and with it every hold.
 - Enforcement runs on the monotonic clock. `since` and `until` are
-  wall-clock, fixed when the lease is taken. A clock step cannot shorten
+  wall-clock, fixed when the hold is placed. A clock step cannot shorten
   or stretch a running hold, though one restored after a step is off by
   the step.
-- Expiry is published. Arbitration expires leases lazily, on the next
-  wish, so a thread waits on the earliest deadline and deletes the key.
-  Readers also drop a record past its `until`.
+- Expiry is published. A thread waits on the earliest end of any hold,
+  then resolves what it stood on and deletes the key. Readers also drop
+  a record past its `until`.
+
+#### Holds
+
+A unit holds an arbitrated aspect by publishing at
+`home/hold/{unit}/{room}/{entity}/{aspect}`:
+
+```json
+{"value": false, "priority": "automation", "until": "2026-11-18T05:00:00Z",
+ "reason": "flue hot", "id": "4c1e9a20"}
+```
+
+- `value` is what the holder wants. `until` is optional and absolute;
+  without it the hold stands until it is released. `reason` is optional
+  text for the people reading the house. `id` is minted per change, so
+  a forward names the hold that caused it.
+- Publishing again replaces the unit's hold on the aspect, and deleting
+  the key releases it. A unit has at most one hold per aspect.
+- The publish is declared in `[bus.publishes]` with a capability and a
+  band, as a command publish is, and plan prints it as a holder row:
+  `heating.stove  holds  capability=burner  priority=automation`. The
+  band comes from that row, not from the payload. A hold reaches only
+  arbitrated entities (`hold-not-arbitrated`), at `automation` or
+  `agent` (`hold-band`); the family's hold is the arbiter's. A service's
+  hold publish grants nothing, which is how the arbiter publishes the
+  family's.
+
+The SDK's `ctx.hold` publishes a hold and `ctx.release` deletes it.
+Holding the same value, `until` and `reason` again publishes nothing,
+so a rule may hold on every evaluation. A unit asserts its holds before
+`ready`, and `ready` releases any hold from before a restart that it did
+not assert again; an unchanged wish keeps its id across the restart, so
+the arbiter does not send it twice. A command from a unit first
+releases that unit's own hold on the aspect, so its hold does not
+refuse its own command. A paused automation releases its holds, and
+its rules hold again from the redelivery when it resumes.
+
+A hold stands until it ends, is released, or its holder loses the
+grant. Holds are kept in the core's mirror, so a core restart empties
+them, and each holder asserts its holds again as it starts.
+
+#### Which hold wins
+
+The family's hold ranks above every unit's, and a unit's hold ranks by
+the band of its grant. At one rank, the hold for the aspect's rest
+value wins: the value its device is safe at, `rest` in the vocabulary
+([The capability vocabulary](#the-capability-vocabulary)), such as
+`on = false` for a burner. That decides two automations on a burner:
+while the flue rule holds `false` and the start rule holds `true`, the
+burner stays off. Without a rest value the newest hold wins, and plan
+warns when two units hold one entity at one band of a capability that
+has none, because the outcome then depends only on timing.
+
+The arbiter records, per aspect, the id of the hold it last applied.
+When the winner's id differs, it forwards the winner to `home/arbiter/`,
+with the holder as `actor` and the hold's `id`. A higher hold taking
+over publishes `preempt`, and a lower one taking over after it
+`resume`. With nothing held it forwards nothing, and the device keeps
+what it has.
+
+A command holds nothing. A command below a hold in force, or at a
+hold's band with another value, gets a `refuse` that names the holder
+and echoes `cmd_id`; the sender's own hold does not count. A command
+that goes through records the hold in force as applied, so the hold
+beneath it is sent again only once it changes. A family nudge
+(`"none"`) is a command in this sense: the hold beneath does not undo
+it.
+
+What the arbiter resolved is one document at `home/arbitration/{arbiter}`,
+mirrored by the core: per aspect, the `applied` hold, the `holds` in
+force with the winner first, and how many commands were `refused`. A
+restarted arbiter reads the applied ids back from it, so it sends
+nothing that was already sent.
 
 Automation-owned entities cannot be arbitrated
 (`virtual-entity-arbitrated`). A [fed input](#device-feeds) never goes
@@ -1000,7 +1077,7 @@ should happen to it with the envelope's `hold`:
   an automation next commands it, and one that commands only on a
   change of its inputs may not do so for a while.
 
-Clearing touches only the family hold. A lease a lower band holds stays
+Clearing touches only the family hold. A unit's hold beneath stays
 where it is, because nothing took it over. An adapter receives
 `"report"` and `"release"` only for an aspect nothing arbitrates, where
 there is no hold to keep, and the SDK's command prologue drops both
@@ -1088,7 +1165,7 @@ with, such as no fuel, lists on the dashboard. `fault` belongs to that
 adapter; the vocabulary does not name it.
 
 - It is not modelled as `switch` plus sensors. "Is it making heat"
-  would then be read from dialect fields. Per-aspect leases also need
+  would then be read from dialect fields. Per-aspect holds also need
   `on` and `power_level` on one entity, so that holding the burner off
   does not freeze an automation's power level. `power_level` is in the
   vocabulary for safety too, since a flue cutout's threshold depends on
@@ -1102,9 +1179,8 @@ Interlocks stay the device's job. Homeostat is not in the safety path,
 because no band fits an interlock. At `automation`, an interlock shares
 the band of the loop it guards against and is taken over within a
 minute. At `manual`, it works but attributes a cutout to the family in
-every audit surface. A hold is also timed, while an interlock is
-conditional. Refreshing the hold on each sample makes a continuous
-writer, and if that writer dies the burner is released without notice.
+every audit surface. A unit's hold for the rest value fits a guard
+best, but it ranks below the family's, so a tap passes it.
 A house-local cutout at the automation band is welcome as a second
 layer, but the house must not rely on it.
 
@@ -1525,7 +1601,10 @@ may edit it, which suits an owner-only frost guard. A declared
 - While `enabled` is false, `ctx.publish` drops the automation's
   `home/cmd` publishes. The SDK enforces it rather than the author's
   code, because a dashboard switch promises that off does nothing.
-- Only commands stop. The automation keeps deciding, its virtual
+- Its [holds](#holds) are released, and `ctx.hold` holds nothing while
+  it is paused. A standing wish is driving the house as much as a
+  command is.
+- Only commands and holds stop. The automation keeps deciding, its virtual
   sensors keep publishing state and its parameters stay live. Other
   automations often read those sensors. `ctx.paused` tells the
   automation it is paused, and `ctx.decision` marks what it would
@@ -1565,7 +1644,8 @@ key's entry unless the entry has a newer stamp
 once per matching key with the last payload, byte for byte, and with
 its stamp. The mirrored
 spaces are `home/state/**`, `home/forecast/**`, `home/clock/*`,
-`home/discovery/*` and `home/hold/**`. `home/config/*/*` and
+`home/discovery/*`, `home/hold/**` and `home/arbitration/*`.
+`home/config/*/*` and
 `home/health/*` have last-value queryables of their own
 ([Live parameters](#live-parameters), [Supervision](#supervision)).
 All are up before any unit spawns.
@@ -1620,7 +1700,8 @@ command as its envelope's `value`) and `home/forecast/**` into
 and every command envelope
 ([Logs and the audit trail](#logs-and-the-audit-trail)). It does not
 record `home/clock/**` (a derivable row every minute, forever),
-`home/meta/**`, `home/discovery/*`, `home/hold/**`, liveliness tokens or
+`home/meta/**`, `home/discovery/*`, `home/hold/**`,
+`home/arbitration/*`, liveliness tokens or
 `home/history/**`. The schema is defined by `init_store()`, versioned
 by `PRAGMA user_version` and migrated in place.
 
@@ -2141,7 +2222,7 @@ indoor_temperature_actual = { entity = "indoor_temperature", aspect = "temperatu
   [apply walk](#the-apply-walk) orders by grants only.
 - One computation may do both, feeding one output and commanding
   another. Nothing guarantees the two land together. An automation that
-  needs that holds the command's lease and feeds against it.
+  needs that holds the commanded aspect and feeds against it.
 
 Rejected alternatives:
 
@@ -2161,7 +2242,7 @@ sensors and a weather service all have opinions about the outdoor air.
 - Whether something is physical or virtual is invisible and does not
   shape a key.
 - Whether something is commandable or read-only is a property of an
-  aspect, not of an entity. Leases are per aspect, and descriptors
+  aspect, not of an entity. Holds are per aspect, and descriptors
   carry `command` per field ([Aspect descriptors](#aspect-descriptors)).
   A heat pump's `feed_temperature` is a reading, and its
   `feed_temperature_target` takes commands. Asking "sensor or
@@ -2639,9 +2720,7 @@ value.
 - An arbitrated entity's overlay lists the family's holds on it, each
   with its end ([Hold intents](#hold-intents)). "Hold until" sends the
   held value again, held until the next time the browser's clock shows
-  the time picked. "Resume automatic" sends a release. A lower band's
-  lease is the house driving the aspect, and it shows only as `held` on
-  the aspect's row.
+  the time picked. "Resume automatic" sends a release.
 
 Tapping an entity, a reading or a unit opens a detail overlay. Its
 width is a per-viewer `localStorage` preference. Two rules apply to
@@ -2717,8 +2796,8 @@ empty page. The `deviations` feed draws from:
   ([Pausing an automation](#pausing-an-automation));
 - arbiter holds that displaced somebody.
 
-The arbiter leases every forwarded command, so most holds are just the
-house working. A hold is listed as a deviation when it displaced
+The family holds every aspect it taps, so most holds are the family
+using the house. A hold is listed as a deviation when it displaced
 somebody: when it stands at a band above the lowest band at which
 anything is granted to command that aspect (`driven` in `/api/model`).
 Two other rules were rejected. "Once it has refused something" depends

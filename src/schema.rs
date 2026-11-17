@@ -102,10 +102,12 @@ fn render_vocabulary(out: &mut String) {
          (docs/adapters.md, State). The base aspect is what commands target \
          and the dashboard widget renders; the other named aspects are what \
          `features` may declare or the vocabulary reserves; notable is the \
-         reading that counts as a deviation on `Now`. Anything else an \
-         adapter publishes passes through under its native name.\n\n",
+         reading that counts as a deviation on `Now`; rest is the value the \
+         device is safe at, which wins between two holds at one band. \
+         Anything else an adapter publishes passes through under its native \
+         name.\n\n",
     );
-    out.push_str("| Capability | Base aspect | Other named aspects | Notable | Notes |\n|---|---|---|---|---|\n");
+    out.push_str("| Capability | Base aspect | Other named aspects | Notable | Rest | Notes |\n|---|---|---|---|---|---|\n");
     for c in crate::manifest::VOCABULARY {
         let base = c.base.map_or_else(|| "—".into(), |b| format!("`{b}`"));
         let aspects = if c.aspects.is_empty() {
@@ -118,8 +120,11 @@ fn render_vocabulary(out: &mut String) {
                 .join(", ")
         };
         let notable = c.notable.map_or_else(|| "—".into(), |n| format!("`{n}`"));
+        let rest = c
+            .rest
+            .map_or_else(|| "—".into(), |(a, v)| format!("`{a} = {v}`"));
         out.push_str(&format!(
-            "| `{}` | {base} | {aspects} | {notable} | {} |\n",
+            "| `{}` | {base} | {aspects} | {notable} | {rest} | {} |\n",
             c.name,
             c.note.replace('|', "\\|")
         ));
@@ -326,6 +331,25 @@ mod tests {
             names, CAPABILITIES,
             "VOCABULARY rows must match CAPABILITIES, in order"
         );
+    }
+
+    /// The arbiter reads rest values from the SDK's copy, so the two must
+    /// agree. The SDK spells each as `"capability": ("aspect", value)` with
+    /// a Python literal.
+    #[test]
+    fn the_sdk_carries_every_rest_value() {
+        let sdk = include_str!("../sdk/python/homeostat/keys.py");
+        for c in crate::manifest::VOCABULARY {
+            if let Some((aspect, value)) = c.rest {
+                let python = match value {
+                    "true" => "True".to_string(),
+                    "false" => "False".to_string(),
+                    other => other.to_string(),
+                };
+                let entry = format!("\"{}\": (\"{aspect}\", {python})", c.name);
+                assert!(sdk.contains(&entry), "keys.REST_VALUES lacks {entry}");
+            }
+        }
     }
 
     #[test]

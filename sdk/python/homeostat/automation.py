@@ -28,6 +28,7 @@ import datetime
 import inspect
 import json
 import os
+import secrets
 import signal
 import threading
 import time
@@ -241,6 +242,12 @@ class Context:
         self.unit = unit
         self.params = _Params(self)
         self._lock = threading.Lock()
+        # hold key -> the record this unit holds there, and whether it has
+        # been asserted since start (`hold`, `ready`). Read from the mirror on
+        # first use, so a restart keeps a hold's id when its wish is unchanged.
+        self._holds: dict[str, dict] | None = None
+        self._asserted: set[str] = set()
+        self._holds_lock = threading.Lock()
         self._param_values: dict[str, Any] = {}
         self._subs: list = []
         # One per subscribe: delivers the binding's current values again.
@@ -289,6 +296,10 @@ class Context:
         if paused == was_paused:
             return
         self._session.health_event("paused" if paused else "resumed")
+        if paused and self._holds_anything():
+            # A paused automation stops driving the house, so it stops
+            # holding too. Its rules hold again from the redelivery on resume.
+            self._release_all()
         if not paused:
             # Outside the zenoh callback, which must not block on a get.
             threading.Thread(target=self._redeliver, daemon=True).start()
@@ -473,7 +484,18 @@ class Context:
         else:
             expr = self._subscribes[binding]
         segments = expr.split("/")
-        if segments[1] in _ENTITY_ADDRESSED:
+        if segments[1] == "hold":
+            # home/hold/{unit}/{room}/{entity}/{aspect}, under this unit's name.
+            names = ("room", "entity", "aspect")
+            defaults = dict(zip(names, segments[3:6], strict=False))
+            parts = []
+            for slot, given in (("room", room), ("entity", entity), ("aspect", aspect)):
+                part = given if given is not None else defaults.get(slot)
+                if part is None or "*" in part or "{" in part:
+                    raise ValueError(f"{use} {binding!r} needs a concrete {slot}")
+                parts.append(part)
+            key = "/".join(["home", "hold", self.unit, *parts])
+        elif segments[1] in _ENTITY_ADDRESSED:
             if segments[1] == "forecast":
                 names = ("room", "entity", "aspect", "source")
                 slots = {
@@ -588,11 +610,164 @@ class Context:
             value = keys.cmd_envelope(value, priority, self.unit, options=options, hold=hold)
             if self.paused:
                 return
+            # A command from a unit first releases that unit's own hold on the
+            # aspect, so its hold does not refuse its own command
+            # (docs/design.md#holds).
+            if self._holds_anything():
+                self._release_key("/".join(["home", "hold", self.unit, *key.split("/")[2:5]]))
         elif options is not None:
             raise ValueError(f"publish {binding!r} is not a cmd publish and takes no options")
         elif hold is not None:
             raise ValueError(f"publish {binding!r} is not a cmd publish and takes no hold")
         self._session.put_json(key, value, at=at)
+
+    def hold(
+        self,
+        binding: str,
+        value: Any,
+        *,
+        room: str | None = None,
+        entity: str | None = None,
+        aspect: str | None = None,
+        until: datetime.datetime | None = None,
+        reason: str | None = None,
+    ) -> None:
+        """Hold an arbitrated aspect at `value` until released (docs/design.md#holds).
+
+        A hold is a standing wish. The arbiter sends the value of the hold
+        that wins the aspect, and when that hold ends, the next one takes
+        over without anyone sending again. A command (`publish`) is a
+        one-off push instead.
+
+        Holding the same value, `until` and `reason` again publishes
+        nothing, so a rule may hold on every evaluation. A unit asserts its
+        holds before `ready`, and `ready` releases any hold from before a
+        restart that was not asserted again. While the automation is paused
+        it holds nothing.
+
+        Parameters
+        ----------
+        binding : str
+            A `[bus.publishes]` binding under `home/hold/`.
+        value : Any
+            The value to hold, JSON-encodable.
+        room : str or None, optional
+            The room slot; required where the expression's is a wildcard.
+        entity : str or None, optional
+            The entity slot; required where the expression's is a wildcard.
+        aspect : str or None, optional
+            The aspect slot; required where the expression's is a wildcard.
+        until : datetime.datetime or None, optional
+            When the hold ends by itself, timezone-aware and at most
+            `keys.HOLD_HORIZON` ahead. Without it the hold stands until
+            released.
+        reason : str or None, optional
+            Why, in a few words, for the people reading the house.
+
+        Raises
+        ------
+        KeyError
+            If `binding` is not declared in `[bus.publishes]`.
+        ValueError
+            If `binding` is not a hold publish, the slots do not make one
+            concrete key inside the declared expression, or `until` has no
+            timezone or is beyond the horizon.
+        """
+        spec = self._publishes[binding]
+        if spec["key"].split("/")[1] != "hold":
+            raise ValueError(f"publish {binding!r} is not a hold publish")
+        key = self._concrete_key(binding, room=room, entity=entity, aspect=aspect)
+        wish: dict[str, Any] = {"value": value, "priority": spec["priority"]}
+        if until is not None:
+            if until.tzinfo is None:
+                raise ValueError("a hold's until needs a timezone")
+            now = datetime.datetime.now(datetime.timezone.utc)
+            if until - now > keys.HOLD_HORIZON:
+                raise ValueError(f"a hold's until may be at most {keys.HOLD_HORIZON.days} days ahead")
+            wish["until"] = until.astimezone(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+        if reason is not None:
+            wish["reason"] = str(reason)
+        if self.paused:
+            return
+        with self._holds_lock:
+            holds = self._own_holds()
+            self._asserted.add(key)
+            current = holds.get(key)
+            if current is not None and {k: v for k, v in current.items() if k != "id"} == wish:
+                return
+            record = dict(wish, id=secrets.token_hex(4))
+            holds[key] = record
+        self._session.put_json(key, record)
+
+    def release(
+        self,
+        binding: str,
+        *,
+        room: str | None = None,
+        entity: str | None = None,
+        aspect: str | None = None,
+    ) -> None:
+        """Release this unit's hold on an aspect (docs/design.md#holds).
+
+        Releasing an aspect the unit does not hold does nothing.
+
+        Parameters
+        ----------
+        binding : str
+            A `[bus.publishes]` binding under `home/hold/`.
+        room : str or None, optional
+            The room slot; required where the expression's is a wildcard.
+        entity : str or None, optional
+            The entity slot; required where the expression's is a wildcard.
+        aspect : str or None, optional
+            The aspect slot; required where the expression's is a wildcard.
+
+        Raises
+        ------
+        KeyError
+            If `binding` is not declared in `[bus.publishes]`.
+        ValueError
+            If `binding` is not a hold publish, or the slots do not make one
+            concrete key inside the declared expression.
+        """
+        if self._publishes[binding]["key"].split("/")[1] != "hold":
+            raise ValueError(f"publish {binding!r} is not a hold publish")
+        self._release_key(self._concrete_key(binding, room=room, entity=entity, aspect=aspect))
+
+    def _holds_anything(self) -> bool:
+        """Whether the manifest declares a hold publish."""
+        return any(spec["key"].split("/")[1] == "hold" for spec in self._publishes.values())
+
+    def _own_holds(self) -> dict[str, dict]:
+        """Return the holds this unit has published, read from the mirror once.
+
+        Called with `self._holds_lock` held.
+        """
+        if self._holds is None:
+            self._holds = {
+                key: record
+                for key, record in self._session.get_json(keys.hold_keyexpr(self.unit))
+                if isinstance(record, dict)
+            }
+        return self._holds
+
+    def _release_key(self, key: str) -> None:
+        with self._holds_lock:
+            self._asserted.discard(key)
+            holds = self._own_holds()
+            if key not in holds:
+                return
+            del holds[key]
+        self._session.delete(key)
+
+    def _release_all(self) -> None:
+        with self._holds_lock:
+            holds = self._own_holds()
+            held = list(holds)
+            holds.clear()
+            self._asserted.clear()
+        for key in held:
+            self._session.delete(key)
 
     def publish_forecast(
         self,
@@ -1239,7 +1414,20 @@ class Context:
         self._session.health_event("decision", rule=rule, outcome=outcome)
 
     def ready(self) -> None:
-        """Declare the liveliness token: the unit is able to do its job."""
+        """Declare the liveliness token: the unit is able to do its job.
+
+        A hold from before a restart that the unit has not asserted again
+        is released first. The unit decides what it holds before it says it
+        is ready, so nothing waits on a clock (docs/design.md#holds).
+        """
+        if self._holds_anything():
+            with self._holds_lock:
+                holds = self._own_holds()
+                stale = [key for key in holds if key not in self._asserted]
+                for key in stale:
+                    del holds[key]
+            for key in stale:
+                self._session.delete(key)
         self._session.ready()
 
     def run(self) -> None:

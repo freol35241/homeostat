@@ -25,6 +25,7 @@ const EVENT_KEY: &str = "home/health/arbiter/event";
 const HOLD_MINUTES_KEY: &str = "home/config/arbiter/hold_minutes";
 const HOLDS: &str = "home/hold/arbiter/**";
 const HOLD_KEY: &str = "home/hold/arbiter/hallway/front_door/locked";
+const SETBACK_HOLD: &str = "home/hold/setback/hallway/front_door/locked";
 
 type Sub = Subscriber<FifoChannelHandler<zenoh::sample::Sample>>;
 
@@ -242,6 +243,76 @@ async fn a_hold_counts_what_it_refuses() {
     sup.shutdown();
 }
 
+/// A restarted arbiter reads the applied hold back from its arbitration
+/// document, so a unit's hold that was already sent is not sent again
+/// (docs/design.md#which-hold-wins).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_restarted_arbiter_sends_nothing_already_applied() {
+    let (mut sup, observer) = setup().await;
+    let arbiter_sub = observer
+        .declare_subscriber(ARBITER_KEY)
+        .await
+        .expect("arbiter subscriber");
+    observer
+        .put(
+            SETBACK_HOLD,
+            json!({"value": false, "priority": "automation", "id": "5e7bac02"}).to_string(),
+        )
+        .await
+        .expect("hold put");
+    assert!(
+        next_json(&arbiter_sub, Duration::from_secs(10))
+            .await
+            .is_some(),
+        "the hold is applied"
+    );
+    // The document carries it before the restart.
+    let mut documented = false;
+    for _ in 0..50 {
+        let doc = common::cache_read(&observer, "home/arbitration/arbiter").await;
+        if doc.is_some_and(|d| d["aspects"][0]["applied"]["id"] == json!("5e7bac02")) {
+            documented = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        documented,
+        "the arbitration document names the applied hold"
+    );
+
+    let pid = running_pid(&observer, "arbiter").await;
+    let mut watch = health_watch(&observer, "arbiter").await;
+    unsafe {
+        libc::kill(i32::try_from(pid).expect("a pid fits i32"), libc::SIGKILL);
+    }
+    await_health(&mut watch, Duration::from_mins(1), |h| {
+        h.status == HealthStatus::Running && h.pid != Some(u32::try_from(pid).expect("pid fits"))
+    })
+    .await;
+    expect_silence(
+        &arbiter_sub,
+        Duration::from_secs(2),
+        "a forward of the hold already applied",
+    )
+    .await;
+
+    // A changed hold is still sent.
+    observer
+        .put(
+            SETBACK_HOLD,
+            json!({"value": true, "priority": "automation", "id": "5e7bac03"}).to_string(),
+        )
+        .await
+        .expect("hold put");
+    let forwarded = next_json(&arbiter_sub, Duration::from_secs(10))
+        .await
+        .expect("the changed hold is sent");
+    assert_eq!(forwarded["id"], json!("5e7bac03"));
+
+    sup.shutdown();
+}
+
 /// A manual command's `hold` decides what happens to the family hold
 /// (docs/design.md#hold-intents): "none" forwards and holds nothing,
 /// "report" holds without forwarding, "release" hands the aspect back
@@ -283,13 +354,9 @@ async fn hold_intents_steer_the_family_hold() {
         "nothing held the aspect"
     );
 
-    // "report": the device already did it. The family hold is taken over
-    // the automation's lease, and nothing is forwarded.
+    // "report": the device already did it. The family hold is taken, and
+    // nothing is forwarded.
     put_cmd(&observer, &with_hold(json!(false), "report")).await;
-    let event = next_json(&event_sub, Duration::from_secs(10))
-        .await
-        .expect("preempt event");
-    assert_eq!(event["kind"], json!("preempt"));
     let mut record = None;
     while let Some((key, put)) = next_hold(&hold_sub, Duration::from_secs(10)).await {
         if key == HOLD_KEY
@@ -361,8 +428,7 @@ async fn hold_intents_steer_the_family_hold() {
     let mut bad = envelope(json!(true), "automation", "scheduler");
     bad["hold"] = json!("none");
     put_cmd(&observer, &bad).await;
-    // The instant above preempted the automation's lease; that event is
-    // still queued.
+    // Skip whatever else the steps above reported.
     let mut dropped = None;
     while let Some(event) = next_json(&event_sub, Duration::from_secs(10)).await {
         if event["kind"] == json!("drop") {
@@ -436,13 +502,14 @@ async fn holds_survive_an_arbiter_restart() {
     sup.shutdown();
 }
 
-/// (a)(b)(c)(d) The full lease lifecycle on one arbitrated entity: an
-/// automation wish forwards and takes the lease; a manual wish preempts it
-/// (event fired) and forwards; a subsequent automation wish is refused (no
-/// forward, event fired); shrinking `hold_minutes` to a sub-second value and
-/// waiting it out reopens the entity, so automation wishes flow again.
+/// A unit's hold and the family's on one arbitrated aspect
+/// (docs/design.md#which-hold-wins): a command with nothing held forwards
+/// and holds nothing; a unit's hold is forwarded as soon as it is placed;
+/// the family's hold masks it (preempt), refuses the unit's commands, and
+/// when it ends the unit's hold is sent again (resume) without anyone
+/// sending; at the unit's band a command must agree with its hold.
 #[tokio::test(flavor = "multi_thread")]
-async fn forward_preempt_refuse_and_expiry() {
+async fn a_units_hold_is_masked_by_the_family_and_sent_when_it_ends() {
     let (mut sup, observer) = setup().await;
     let arbiter_sub = observer
         .declare_subscriber(ARBITER_KEY)
@@ -453,34 +520,38 @@ async fn forward_preempt_refuse_and_expiry() {
         .await
         .expect("event subscriber");
 
-    // (a) No holder yet: an automation wish forwards unchanged, options
-    // included, and takes the lease at the automation band.
+    // A command with nothing held forwards unchanged, options included.
     let mut auto_wish = envelope(json!(true), "automation", "scheduler");
     auto_wish["options"] = json!({"transition": 1.0});
     put_cmd(&observer, &auto_wish).await;
-    let forwarded = next_json(&arbiter_sub, Duration::from_secs(10))
-        .await
-        .expect("automation wish forwarded");
-    assert_eq!(forwarded, auto_wish, "envelope forwarded unchanged");
+    let forwarded = next_json(&arbiter_sub, Duration::from_secs(10)).await;
+    assert_eq!(forwarded, Some(auto_wish), "envelope forwarded unchanged");
     expect_silence(
         &event_sub,
         Duration::from_millis(500),
-        "event on a clean take",
+        "event on a free aspect",
     )
     .await;
 
-    // Shrink hold_minutes now, before the manual takeover below: the next
-    // lease taken (by the manual wish) is computed from the new value, so
-    // it will expire in well under a second once we wait it out in (d).
-    let written = config_write(&observer, HOLD_MINUTES_KEY, json!(0.01))
+    // The unit's hold is sent at once, under its name and id.
+    observer
+        .put(
+            SETBACK_HOLD,
+            json!({"value": false, "priority": "automation", "id": "5e7bac01"}).to_string(),
+        )
+        .await
+        .expect("hold put");
+    let applied =
+        json!({"value": false, "priority": "automation", "actor": "setback", "id": "5e7bac01"});
+    let forwarded = next_json(&arbiter_sub, Duration::from_secs(10)).await;
+    assert_eq!(forwarded, Some(applied.clone()), "the hold is applied");
+
+    // A short family hold masks it.
+    config_write(&observer, HOLD_MINUTES_KEY, json!(0.02))
         .await
         .expect("write accepted");
-    assert_eq!(written, json!(0.01));
     await_hold_minutes_applied(&observer, 5).await;
-
-    // (b) A manual wish preempts the still-active (strictly lower)
-    // automation holder: preempt event, then the forward.
-    let manual_wish = envelope(json!(false), "manual", "owner");
+    let manual_wish = envelope(json!(true), "manual", "owner");
     put_cmd(&observer, &manual_wish).await;
     let event = next_json(&event_sub, Duration::from_secs(10))
         .await
@@ -493,56 +564,62 @@ async fn forward_preempt_refuse_and_expiry() {
             "entity": "front_door",
             "aspect": "locked",
             "from_priority": "automation",
-            "from_actor": "scheduler",
+            "from_actor": "setback",
             "to_priority": "manual",
             "to_actor": "owner",
         })
     );
-    let forwarded = next_json(&arbiter_sub, Duration::from_secs(10))
-        .await
-        .expect("manual wish forwarded");
-    assert_eq!(forwarded, manual_wish, "envelope forwarded unchanged");
+    let forwarded = next_json(&arbiter_sub, Duration::from_secs(10)).await;
+    assert_eq!(
+        forwarded,
+        Some(manual_wish),
+        "the family's command is sent itself"
+    );
 
-    // (c) An automation wish right afterwards is refused: the manual lease
-    // (just taken, hold_minutes now 0.01 = 0.6s) is still active and
-    // strictly higher. No forward; a refuse event instead.
-    put_cmd(&observer, &auto_wish).await;
+    // While it stands, a command below it is refused.
+    put_cmd(
+        &observer,
+        &envelope(json!(false), "automation", "scheduler"),
+    )
+    .await;
     let event = next_json(&event_sub, Duration::from_secs(10))
         .await
         .expect("refuse event");
+    assert_eq!(event["kind"], json!("refuse"));
+    assert_eq!(event["holder_actor"], json!("owner"));
+
+    // When it ends, the unit's hold is sent again: nobody sends anything.
+    let event = next_json(&event_sub, Duration::from_secs(10))
+        .await
+        .expect("resume event");
+    assert_eq!(event["kind"], json!("resume"));
+    assert_eq!(event["to_actor"], json!("setback"));
+    let forwarded = next_json(&arbiter_sub, Duration::from_secs(10)).await;
     assert_eq!(
-        event,
-        json!({
-            "kind": "refuse",
-            "room": "hallway",
-            "entity": "front_door",
-            "aspect": "locked",
-            "priority": "automation",
-            "actor": "scheduler",
-            "cmd_id": "c0ffee01",
-            "holder_priority": "manual",
-            "holder_actor": "owner",
-        })
+        forwarded,
+        Some(applied),
+        "the hold beneath is sent when the family's ends"
     );
+
+    // At the hold's own band a command must agree with it.
+    put_cmd(&observer, &envelope(json!(true), "automation", "scheduler")).await;
+    let event = next_json(&event_sub, Duration::from_secs(10))
+        .await
+        .expect("refuse event");
+    assert_eq!(event["holder_actor"], json!("setback"));
+    let agreeing = envelope(json!(false), "automation", "scheduler");
+    put_cmd(&observer, &agreeing).await;
+    assert_eq!(
+        next_json(&arbiter_sub, Duration::from_secs(10)).await,
+        Some(agreeing)
+    );
+
+    // Released, nothing stands, and nothing is sent.
+    observer.delete(SETBACK_HOLD).await.expect("hold delete");
     expect_silence(
         &arbiter_sub,
-        Duration::from_millis(500),
-        "forward of a refused wish",
-    )
-    .await;
-
-    // (d) Once the shrunk lease's deadline passes, the entity reopens: the
-    // same automation wish now forwards again, taking a fresh lease.
-    tokio::time::sleep(Duration::from_millis(900)).await;
-    put_cmd(&observer, &auto_wish).await;
-    let forwarded = next_json(&arbiter_sub, Duration::from_secs(10))
-        .await
-        .expect("automation wish forwards again after expiry");
-    assert_eq!(forwarded, auto_wish);
-    expect_silence(
-        &event_sub,
-        Duration::from_millis(500),
-        "event on an expiry re-take",
+        Duration::from_millis(800),
+        "a forward on release",
     )
     .await;
 
@@ -713,6 +790,8 @@ async fn wish_for_an_unbound_entity_drops_with_health_event() {
 #[tokio::test(flavor = "multi_thread")]
 async fn an_entity_made_arbitrated_by_apply_forwards_without_a_restart() {
     let house = temp_house(FIXTURE, "arbiter-flip");
+    // A hold grant on a shared lock is a plan error, so the holder goes.
+    std::fs::remove_file(house.join("units/setback.toml")).expect("remove the holder");
     let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("adapters/arbiter.py");
     edit(
         &house,
@@ -779,8 +858,15 @@ async fn an_entity_made_arbitrated_by_apply_forwards_without_a_restart() {
         "the arbiter was not restarted"
     );
 
-    // The forwarded wish took a 30-minute hold. Once the entity is shared
+    // A family wish takes a 30-minute hold. Once the entity is shared
     // again its adapter takes commands directly, so the hold must go.
+    let family = envelope(json!(false), "manual", "owner");
+    put_cmd(&observer, &family).await;
+    assert_eq!(
+        next_json(&arbiter_sub, Duration::from_secs(10)).await,
+        Some(family),
+        "the family's wish is forwarded and holds"
+    );
     let hold_sub = observer
         .declare_subscriber(HOLDS)
         .await
@@ -812,6 +898,8 @@ async fn an_entity_made_arbitrated_by_apply_forwards_without_a_restart() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_wish_during_the_apply_that_arbitrates_an_entity_forwards() {
     let house = temp_house(FIXTURE, "arbiter-walk");
+    // A hold grant on a shared lock is a plan error, so the holder goes.
+    std::fs::remove_file(house.join("units/setback.toml")).expect("remove the holder");
     let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("adapters/arbiter.py");
     edit(
         &house,

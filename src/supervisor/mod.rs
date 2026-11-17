@@ -127,6 +127,9 @@ pub async fn run(check: &CheckResult, root: &Path, listen: &str) -> Result<(), S
     // republishes only on change, and a restarted arbiter reads its holds
     // back from here (docs/design.md#arbitrated-mode).
     mirror(&session, "home/hold/**").await?;
+    // What the arbiter resolved, so a restarted arbiter does not send an
+    // applied hold again (docs/design.md#which-hold-wins).
+    mirror(&session, "home/arbitration/*").await?;
 
     let mut world = WorldMeta {
         grants: check.grants.clone(),
