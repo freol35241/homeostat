@@ -1,0 +1,1 @@
+error[hold-band] heating.stove: hold publish "home/hold/heating/utility/stove/on" declares priority "manual"; a unit holds at automation or agent (units/heating.toml)

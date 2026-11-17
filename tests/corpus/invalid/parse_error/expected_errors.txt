@@ -1,0 +1,1 @@
+error[parse-error] entities/zigbee/lamp.toml: string values must be quoted, expected literal string

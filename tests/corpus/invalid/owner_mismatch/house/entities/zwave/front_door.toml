@@ -1,0 +1,10 @@
+schema = 1
+
+[entity]
+id = "7"
+capability = "lock"
+room = "hallway"
+
+[write_policy]
+mode = "shared"
+owner = "zwave"

@@ -488,20 +488,29 @@ def descriptor_command(descriptor: dict | None, aspect: str) -> dict | None:
     The field's `values` are folded in for enums. None means undescribed,
     no command, or a tier the family may not write (the /api/param rule).
     """
-    field = ((descriptor or {}).get("fields") or {}).get(aspect)
+    # The core does not validate descriptors, so any level of one may be
+    # malformed; each reads as no command rather than a 500.
+    fields = (descriptor or {}).get("fields")
+    field = fields.get(aspect) if isinstance(fields, dict) else None
     if not isinstance(field, dict):
         return None
     command = field.get("command")
     if not isinstance(command, dict) or command.get("editable_by") != "family":
         return None
-    constraint = command.get("constraint") if isinstance(command.get("constraint"), dict) else {}
+    constraint = command.get("constraint")
+    if constraint is not None and not isinstance(constraint, dict):
+        return None
+    constraint = constraint or {}
     for bound in (command.get("step"), constraint.get("min"), constraint.get("max")):
         # A non-numeric bound would make command_value_ok raise (a 500),
         # and the page would insert it into an attribute, so treat the
         # field as having no command.
         if bound is not None and (isinstance(bound, bool) or not isinstance(bound, (int, float))):
             return None
-    return dict(command, values=field.get("values") or [])
+    values = field.get("values")
+    if values is not None and not isinstance(values, list):
+        return None
+    return dict(command, values=values or [])
 
 
 def command_value_ok(command: dict, value) -> bool:
@@ -518,10 +527,13 @@ def command_value_ok(command: dict, value) -> bool:
     if command.get("type") in ("float", "int"):
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             return False
-        if not math.isfinite(value):
-            return False  # json.loads admits NaN and Infinity
-        if command["type"] == "int" and not float(value).is_integer():
-            return False
+        try:
+            if not math.isfinite(value):
+                return False  # json.loads admits NaN and Infinity
+            if command["type"] == "int" and not float(value).is_integer():
+                return False
+        except OverflowError:
+            return False  # an integer too large for a float
         c = command.get("constraint") or {}
         lo, hi = c.get("min"), c.get("max")
         return (lo is None or value >= lo) and (hi is None or value <= hi)

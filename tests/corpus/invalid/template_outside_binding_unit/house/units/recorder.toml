@@ -1,0 +1,13 @@
+schema = 1
+
+[unit]
+name = "recorder"
+kind = "service"
+
+[runtime]
+command = "uv run units/recorder.py"
+restart = "always"
+
+# A service binds no entities for {room} and {entity} to expand over.
+[bus.subscribes]
+state = "home/state/{room}/{entity}/**"

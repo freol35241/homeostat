@@ -1,0 +1,1 @@
+error[virtual-entity-fed] downstairs_temperature: automation-owned entities have no device inputs to feed (entities/fusion/downstairs_temperature.toml)

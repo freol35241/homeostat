@@ -1,0 +1,13 @@
+schema = 1
+
+[unit]
+name = "heating"
+kind = "automation"
+
+[runtime]
+command = "uv run units/heating.py"
+restart = "on-failure"
+
+# The manual band is the family's. A unit holds at automation or agent.
+[bus.publishes]
+stove = { key = "home/hold/heating/utility/stove/on", capability = "burner", priority = "manual" }

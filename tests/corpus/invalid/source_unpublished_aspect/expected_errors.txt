@@ -1,0 +1,1 @@
+error[source-unpublished-aspect] comfort_index.humidity: "fusion" does not publish home/state/global/downstairs_temperature/humidity; a declared source must be in its owner's [bus.publishes] (entities/comfort/comfort_index.toml)

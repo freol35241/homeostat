@@ -1,0 +1,13 @@
+schema = 1
+
+[entity]
+capability = "sensor"
+room = "global"
+
+[write_policy]
+owner = "comfort"
+
+# fusion publishes only the temperature of downstairs_temperature.
+[sources.humidity]
+entity = "downstairs_temperature"
+aspect = "humidity"

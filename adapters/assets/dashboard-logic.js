@@ -770,10 +770,14 @@
     if (!cmd) return null;
     var tier = cmd.editable_by || 'owner';
     if (tier !== 'family') return { kind: 'readonly', tier: tier };
+    // A constraint or enum values of the wrong shape, or a step/min/max
+    // that is not a number, mean the descriptor is malformed, so no control
+    // is drawn. The server finds no command in it either.
+    var shaped = function (v, array) {
+      return v === undefined || v === null || (typeof v === 'object' && Array.isArray(v) === array);
+    };
+    if (!shaped(cmd.constraint, false) || !shaped(field.values, true)) return null;
     var c = cmd.constraint || {};
-    // step/min/max are used in attributes and arithmetic. A non-number
-    // there means the descriptor is malformed, so no control is drawn. The
-    // server refuses the command too.
     var bounds = [cmd.step, c.min, c.max];
     for (var i = 0; i < bounds.length; i++) {
       if (bounds[i] !== undefined && (typeof bounds[i] !== 'number' || !isFinite(bounds[i]))) return null;

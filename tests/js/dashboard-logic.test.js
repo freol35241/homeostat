@@ -649,6 +649,13 @@ test('controls follow the command type and tier; ungranted renders inert', () =>
   assert.equal(inert[1].control.disabled, true);
   assert.equal(logic.controlFor({ command: { type: 'int', constraint: { min: 0, max: 5 }, editable_by: 'family' } }, true).kind, 'slider');
   assert.equal(logic.controlFor({ label: 'x' }, true), null, 'no command, no control');
+  const family = (command) => ({ command: Object.assign({ editable_by: 'family' }, command) });
+  for (const constraint of [[0, 10], '0-10', 0]) {
+    assert.equal(logic.controlFor(family({ type: 'float', constraint }), true), null, 'a constraint that is not an object');
+  }
+  for (const values of [5, true, 'eco']) {
+    assert.equal(logic.controlFor(Object.assign(family({ type: 'enum' }), { values }), true), null, 'enum values that are not a list');
+  }
 });
 
 test('richer controls: a select past four values, a stepper for non-temperatures, coarse slider steps', () => {

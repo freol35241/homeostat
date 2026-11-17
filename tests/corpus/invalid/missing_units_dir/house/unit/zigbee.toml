@@ -1,0 +1,22 @@
+schema = 1
+
+[unit]
+name = "zigbee"
+kind = "adapter"
+
+[runtime]
+command = "uv run units/zigbee.py"
+restart = "always"
+
+[discovery]
+mode = "static"
+endpoint = "mqtt://localhost:1883"
+
+[bus.publishes]
+state = { key = "home/state/{room}/{entity}/**" }
+
+[bus.subscribes]
+commands = "home/cmd/{room}/{entity}/**"
+
+[entities]
+dir = "entities/zigbee/"

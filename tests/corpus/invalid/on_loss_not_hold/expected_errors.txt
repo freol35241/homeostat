@@ -1,0 +1,1 @@
+error[on-loss-not-hold] lights.lamp: publish "home/cmd/kitchen/lamp/on" declares on_loss, which only a hold publish takes (units/lights.toml)

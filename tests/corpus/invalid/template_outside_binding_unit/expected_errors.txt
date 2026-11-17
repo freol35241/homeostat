@@ -1,0 +1,1 @@
+error[template-outside-binding-unit] recorder.state: "home/state/{room}/{entity}/**" uses {room}/{entity} templates, which only entity-binding units (adapters and automations) may use (units/recorder.toml)

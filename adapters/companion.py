@@ -127,111 +127,127 @@ def _number(value):
     return value
 
 
+class Phones:
+    """The phones' side of the bus: one `on_message` per MQTT message.
+
+    It turns a phone's `available`, `presence`, `position` and `ack`
+    under `base` into its entities' aspects. `put` and `drop` are shared
+    with the command direction in `main`, which publishes `delivered`
+    and reports refused commands through them. `session` is anything with
+    `put_json` and `health_event`.
+    """
+
+    def __init__(self, session, base: str, entities):
+        self.session = session
+        self.base = base
+        self.by_id = {e.id: e for e in entities}
+        # A phone's entities, for the one topic that addresses the phone
+        # itself rather than one of its faces.
+        self.by_phone: dict[str, list] = {}
+        for entity in entities:
+            self.by_phone.setdefault(entity.id.split("/")[0], []).append(entity)
+        self.seen_unknown: set[str] = set()
+        self.available: dict[str, bool] = {}
+        self.acknowledged: dict[str, float] = {}
+
+    def drop(self, reason, **fields):
+        self.session.health_event("drop", reason=reason, **fields)
+
+    def put(self, entity, aspect, value):
+        self.session.put_json(keys.state_key(entity.room, entity.name, aspect), value)
+
+    def set_available(self, entity, value: bool) -> None:
+        # On transition only (docs/adapters.md §7).
+        if self.available.get(entity.name) == value:
+            return
+        self.available[entity.name] = value
+        self.put(entity, "available", value)
+
+    def on_message(self, topic: str, raw: bytes) -> None:
+        """Translate one message from a phone's subtree onto the bus."""
+        rest = topic[len(self.base) + 1 :].split("/")
+        phone, leaf = rest[0], rest[-1]
+        entity_id = "/".join(rest[:-1])
+        try:
+            payload = json.loads(raw)
+        except ValueError:
+            self.drop("malformed-payload", topic=topic)
+            return
+
+        if leaf == "available":
+            entities = self.by_phone.get(phone)
+            if not entities:
+                if phone not in self.seen_unknown:
+                    self.seen_unknown.add(phone)
+                    self.drop("unknown-device", topic=topic)
+                return
+            if not isinstance(payload, bool):
+                self.drop("malformed-payload", topic=topic)
+                return
+            for entity in entities:
+                self.set_available(entity, payload)
+            return
+
+        entity = self.by_id.get(entity_id)
+        if entity is None:
+            # Once per subtree: a phone the owner has not bound yet keeps
+            # publishing, and repeating the event per fix would bury the
+            # health feed.
+            if entity_id not in self.seen_unknown:
+                self.seen_unknown.add(entity_id)
+                self.drop("unknown-device", topic=topic)
+            return
+
+        if leaf == "presence":
+            if not isinstance(payload, bool):
+                self.drop("malformed-payload", topic=topic)
+                return
+            self.put(entity, "home", payload)
+        elif leaf == "position":
+            lat = _number(payload.get("lat")) if isinstance(payload, dict) else None
+            lon = _number(payload.get("lon")) if isinstance(payload, dict) else None
+            if lat is None or lon is None:
+                self.drop("malformed-payload", topic=topic)
+                return
+            self.put(entity, "lat", lat)
+            self.put(entity, "lon", lon)
+            for field in POSITION_OPTIONAL:
+                value = _number(payload.get(field))
+                if value is not None:
+                    self.put(entity, field, value)
+            fixed_at = _number(payload.get("fixed_at"))
+            self.put(entity, "fixed_at", fixed_at if fixed_at is not None else time.time())
+        elif leaf == "ack":
+            sent_at = _number(payload)
+            if sent_at is None:
+                self.drop("malformed-payload", topic=topic)
+                return
+            # The person may open an older alert after a newer one, and
+            # QoS 1 may repeat an ack, so `acknowledged` only moves forward.
+            if sent_at > self.acknowledged.get(entity.name, 0):
+                self.acknowledged[entity.name] = sent_at
+                self.put(entity, "acknowledged", sent_at)
+
+
 def main():
     unit = os.environ[keys.ENV_UNIT]
     config = house.load_adapter(unit)
     endpoint = mqtt.parse_endpoint(config.endpoint)
     base = mqtt.base_topic(endpoint, DEFAULT_BASE_TOPIC)
 
-    by_id = {e.id: e for e in config.entities}
-    # A phone's entities, for the one topic that addresses the phone
-    # itself rather than one of its faces.
-    by_phone: dict[str, list] = {}
-    for entity in config.entities:
-        by_phone.setdefault(entity.id.split("/")[0], []).append(entity)
-
     session = homeostat.connect()
+    phones = Phones(session, base, config.entities)
 
-    seen_unknown: set[str] = set()
-    available: dict[str, bool] = {}
-    acknowledged: dict[str, float] = {}
     # PUBACK arrives on the network thread; the mid is the only handle
     # paho gives back, so the notifier waits for it there.
     pending: dict[int, object] = {}
     lock = threading.Lock()
 
-    def drop(reason, **fields):
-        session.health_event("drop", reason=reason, **fields)
-
-    def put(entity, aspect, value):
-        session.put_json(keys.state_key(entity.room, entity.name, aspect), value)
-
-    def set_available(entity, value: bool) -> None:
-        # On transition only (docs/adapters.md §7).
-        if available.get(entity.name) == value:
-            return
-        available[entity.name] = value
-        put(entity, "available", value)
-
-    def on_phone_message(client, userdata, msg):
-        rest = msg.topic[len(base) + 1 :].split("/")
-        phone, leaf = rest[0], rest[-1]
-        entity_id = "/".join(rest[:-1])
-        try:
-            payload = json.loads(msg.payload)
-        except ValueError:
-            drop("malformed-payload", topic=msg.topic)
-            return
-
-        if leaf == "available":
-            entities = by_phone.get(phone)
-            if not entities:
-                if phone not in seen_unknown:
-                    seen_unknown.add(phone)
-                    drop("unknown-device", topic=msg.topic)
-                return
-            if not isinstance(payload, bool):
-                drop("malformed-payload", topic=msg.topic)
-                return
-            for entity in entities:
-                set_available(entity, payload)
-            return
-
-        entity = by_id.get(entity_id)
-        if entity is None:
-            # Once per subtree: a phone the owner has not bound yet keeps
-            # publishing, and repeating the event per fix would bury the
-            # health feed.
-            if entity_id not in seen_unknown:
-                seen_unknown.add(entity_id)
-                drop("unknown-device", topic=msg.topic)
-            return
-
-        if leaf == "presence":
-            if not isinstance(payload, bool):
-                drop("malformed-payload", topic=msg.topic)
-                return
-            put(entity, "home", payload)
-        elif leaf == "position":
-            lat = _number(payload.get("lat")) if isinstance(payload, dict) else None
-            lon = _number(payload.get("lon")) if isinstance(payload, dict) else None
-            if lat is None or lon is None:
-                drop("malformed-payload", topic=msg.topic)
-                return
-            put(entity, "lat", lat)
-            put(entity, "lon", lon)
-            for field in POSITION_OPTIONAL:
-                value = _number(payload.get(field))
-                if value is not None:
-                    put(entity, field, value)
-            fixed_at = _number(payload.get("fixed_at"))
-            put(entity, "fixed_at", fixed_at if fixed_at is not None else time.time())
-        elif leaf == "ack":
-            sent_at = _number(payload)
-            if sent_at is None:
-                drop("malformed-payload", topic=msg.topic)
-                return
-            # The person may open an older alert after a newer one, and
-            # QoS 1 may repeat an ack, so `acknowledged` only moves forward.
-            if sent_at > acknowledged.get(entity.name, 0):
-                acknowledged[entity.name] = sent_at
-                put(entity, "acknowledged", sent_at)
-
     def on_publish(client, userdata, mid, reason_code=None, properties=None):
         with lock:
             entity = pending.pop(mid, None)
         if entity is not None:
-            put(entity, "delivered", time.time())
+            phones.put(entity, "delivered", time.time())
 
     topics = [
         (f"{base}/+/available", 1),
@@ -239,7 +255,12 @@ def main():
         (f"{base}/+/person/position", 1),
         (f"{base}/+/notifier/ack", 1),
     ]
-    client = mqtt.connect(endpoint, on_phone_message, topics, health=session.health_event)
+    client = mqtt.connect(
+        endpoint,
+        lambda _client, _userdata, msg: phones.on_message(msg.topic, msg.payload),
+        topics,
+        health=session.health_event,
+    )
     client.on_publish = on_publish
 
     def cmd_handler(entity):
@@ -249,7 +270,7 @@ def main():
             try:
                 payload = json.loads(sample.payload.to_bytes())
             except ValueError:
-                drop("malformed-payload", key=key)
+                phones.drop("malformed-payload", key=key)
                 return
             # The id ends a command someone is waiting on, so every drop
             # below carries it.
@@ -257,13 +278,13 @@ def main():
             try:
                 value = keys.parse_cmd_envelope(payload)
             except ValueError:
-                drop("invalid-command", key=key, cmd_id=cmd_id)
+                phones.drop("invalid-command", key=key, cmd_id=cmd_id)
                 return
             # A report or a release is for the arbiter, and nothing
             # arbitrates a notifier, so one reaching here was sent in error.
             stray = keys.cmd_envelope_hold(payload) in ("report", "release")
             if stray or aspect not in CHANNELS or not isinstance(value, str) or not value.strip():
-                drop("invalid-command", key=key, aspect=aspect, value=value, cmd_id=cmd_id)
+                phones.drop("invalid-command", key=key, aspect=aspect, value=value, cmd_id=cmd_id)
                 return
             actor = payload.get("actor")
             body = json.dumps(

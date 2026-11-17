@@ -1,0 +1,13 @@
+schema = 1
+
+[unit]
+name = "lights"
+kind = "automation"
+
+[runtime]
+command = "uv run units/lights.py"
+restart = "on-failure"
+
+# The lamp is shared, so no arbiter resolves a hold on it.
+[bus.publishes]
+lamp = { key = "home/hold/lights/kitchen/lamp/on", capability = "light", priority = "automation" }
