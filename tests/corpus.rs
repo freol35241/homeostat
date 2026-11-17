@@ -110,3 +110,64 @@ fn the_family_policy_rides_the_owners_binding_row() {
         .iter()
         .any(|e| e["name"] == "front_door_lock" && e.get("family").is_some()));
 }
+
+/// Generic units run in many fixture houses, each with its own copy of the
+/// unit's manifest. The copies must agree on what the unit is, what it
+/// touches and what it lets the owner set. How a house starts the unit
+/// (`[runtime]`), where a recorder keeps its store (`discovery.endpoint`)
+/// and the unit's description are the house's own, so they are not
+/// compared. The reference copy for an adapter is `house_reference`'s; the
+/// reflector is a test binary, so its reference is `house_apply`'s.
+#[test]
+fn copies_of_a_generic_manifest_agree() {
+    // A house whose unit of that name is a stand-in, not the generic unit.
+    let stand_ins = [("recorder", "house_restore_slow")];
+    let mut houses: Vec<PathBuf> = fs::read_dir(manifest_dir().join("tests/fixtures"))
+        .expect("read tests/fixtures")
+        .map(|entry| entry.expect("fixture entry").path())
+        .collect();
+    houses.push(manifest_dir().join("examples/starter-house"));
+    let mut out_of_step = Vec::new();
+    for (unit, reference) in [
+        ("arbiter", REFERENCE),
+        ("recorder", REFERENCE),
+        ("reflector", "tests/fixtures/house_apply"),
+    ] {
+        let file = format!("units/{unit}.toml");
+        let expected = comparable(&manifest_dir().join(reference).join(&file));
+        for house in &houses {
+            let path = house.join(&file);
+            let name = house.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if !path.exists() || stand_ins.contains(&(unit, name)) {
+                continue;
+            }
+            if comparable(&path) != expected {
+                out_of_step.push(
+                    path.strip_prefix(manifest_dir())
+                        .unwrap()
+                        .display()
+                        .to_string(),
+                );
+            }
+        }
+    }
+    assert!(
+        out_of_step.is_empty(),
+        "these manifests differ from their reference copy:\n{}",
+        out_of_step.join("\n")
+    );
+}
+
+/// The manifest at `path` without the parts a house chooses for itself.
+fn comparable(path: &Path) -> toml::Table {
+    let text = fs::read_to_string(path).expect("read manifest");
+    let mut manifest: toml::Table = toml::from_str(&text).expect("manifest parses");
+    manifest.remove("runtime");
+    if let Some(toml::Value::Table(unit)) = manifest.get_mut("unit") {
+        unit.remove("description");
+    }
+    if let Some(toml::Value::Table(discovery)) = manifest.get_mut("discovery") {
+        discovery.remove("endpoint");
+    }
+    manifest
+}
