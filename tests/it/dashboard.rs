@@ -272,6 +272,10 @@ async fn dashboard_serves_the_family_surface() {
         .declare_subscriber("home/cmd/livingroom/front_door/locked")
         .await
         .expect("lock cmd subscriber");
+    let garage_sub = observer
+        .declare_subscriber("home/cmd/livingroom/garage_door/locked")
+        .await
+        .expect("garage cmd subscriber");
     let switch_cmd_sub = observer
         .declare_subscriber("home/cmd/livingroom/relay/on")
         .await
@@ -702,10 +706,6 @@ async fn dashboard_serves_the_family_surface() {
 
     // On the arbitrated garage door the dashboard sends a release with no
     // value, and a value held until an instant. It still never reports.
-    let garage_sub = observer
-        .declare_subscriber("home/cmd/livingroom/garage_door/locked")
-        .await
-        .expect("garage cmd subscriber");
     let until = common::rfc3339_in(3600);
     for (body, expected) in [
         (

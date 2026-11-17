@@ -23,5 +23,12 @@ discovery = { key = "home/discovery/ivt490" }
 commands = "home/cmd/{room}/{entity}/**"
 arbiter_commands = "home/arbiter/{room}/{entity}/**"
 
+# How long the controller may stay silent before its entities read as
+# unavailable.
+[params.availability_timeout_s]
+type = "float"
+default = 300.0
+editable_by = "owner"
+
 [entities]
 dir = "entities/ivt490/"

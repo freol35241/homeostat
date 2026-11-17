@@ -778,7 +778,8 @@ class FamilyHolds(PageTest):
     async def test_a_family_hold_is_listed_with_its_end(self):
         await self.open_heat_pump()
         overlay = await self.page.locator("#overlay-panel").inner_text()
-        self.assertRegex(overlay, r"(?i)held\s+mode\s+by .+ until \d{2}:\d{2}")
+        # An end past midnight is shown with its date.
+        self.assertRegex(overlay, r"(?i)held\s+mode\s+by .+ until (\w+ \d+ \w+ )?\d{2}:\d{2}")
 
     async def test_resume_automatic_sends_a_release_and_nothing_else(self):
         await self.open_heat_pump()
