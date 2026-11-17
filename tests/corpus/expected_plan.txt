@@ -82,6 +82,7 @@ Units to create (14):
 
 Expanded keys:
 
+  esphome publishes discovery: home/discovery/esphome
   esphome publishes state: home/state/{room}/{entity}/**
     -> home/state/global/outdoor_temp/**
   esphome subscribes commands: home/cmd/{room}/{entity}/**

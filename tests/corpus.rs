@@ -111,26 +111,38 @@ fn the_family_policy_rides_the_owners_binding_row() {
         .any(|e| e["name"] == "front_door_lock" && e.get("family").is_some()));
 }
 
-/// Generic units run in many fixture houses, each with its own copy of the
+/// Generic units run in many fixture houses, each with a copy of the
 /// unit's manifest. The copies must agree on what the unit is, what it
 /// touches and what it lets the owner set. How a house starts the unit
-/// (`[runtime]`), where a recorder keeps its store (`discovery.endpoint`)
-/// and the unit's description are the house's own, so they are not
-/// compared. The reference copy for an adapter is `house_reference`'s; the
-/// reflector is a test binary, so its reference is `house_apply`'s.
+/// (`[runtime]`), where a static endpoint points and the description are
+/// the house's own, so they are not compared.
+///
+/// The starter house is left out: its units are a release's, and a
+/// manifest change on main reaches it with the scripts at the next
+/// release. Units whose copies carry per-house bindings or naming (the
+/// dashboard, buttons, ntfy, persons) are left out too, and so is the
+/// corpus, whose houses are trimmed to the error each one shows.
 #[test]
 fn copies_of_a_generic_manifest_agree() {
-    // A house whose unit of that name is a stand-in, not the generic unit.
-    let stand_ins = [("recorder", "house_restore_slow")];
-    let mut houses: Vec<PathBuf> = fs::read_dir(manifest_dir().join("tests/fixtures"))
+    // A house that runs a variant of the unit on purpose.
+    let variants = [
+        // A stand-in that answers slowly.
+        ("recorder", "house_restore_slow"),
+        // Adds the cause reports and the hold subscriptions.
+        ("esphome", "house_esphome_causes"),
+    ];
+    let houses: Vec<PathBuf> = fs::read_dir(manifest_dir().join("tests/fixtures"))
         .expect("read tests/fixtures")
         .map(|entry| entry.expect("fixture entry").path())
         .collect();
-    houses.push(manifest_dir().join("examples/starter-house"));
     let mut out_of_step = Vec::new();
     for (unit, reference) in [
         ("arbiter", REFERENCE),
         ("recorder", REFERENCE),
+        ("esphome", REFERENCE),
+        ("owntracks", REFERENCE),
+        ("zigbee", REFERENCE),
+        ("clock", "tests/fixtures/house_evening"),
         ("reflector", "tests/fixtures/house_apply"),
     ] {
         let file = format!("units/{unit}.toml");
@@ -138,7 +150,7 @@ fn copies_of_a_generic_manifest_agree() {
         for house in &houses {
             let path = house.join(&file);
             let name = house.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if !path.exists() || stand_ins.contains(&(unit, name)) {
+            if !path.exists() || variants.contains(&(unit, name)) {
                 continue;
             }
             if comparable(&path) != expected {
@@ -150,6 +162,14 @@ fn copies_of_a_generic_manifest_agree() {
                 );
             }
         }
+    }
+    for (unit, house) in variants {
+        assert!(
+            manifest_dir()
+                .join(format!("tests/fixtures/{house}/units/{unit}.toml"))
+                .exists(),
+            "the variant {house}/units/{unit}.toml is gone"
+        );
     }
     assert!(
         out_of_step.is_empty(),

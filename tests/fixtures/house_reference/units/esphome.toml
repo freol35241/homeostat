@@ -16,6 +16,7 @@ service = "_esphomelib._tcp"
 
 [bus.publishes]
 state = { key = "home/state/{room}/{entity}/**" }
+discovery = { key = "home/discovery/esphome" }
 
 [bus.subscribes]
 commands = "home/cmd/{room}/{entity}/**"
