@@ -148,7 +148,6 @@ class ReleaseTest(unittest.TestCase):
         self.assertEqual(len(ctx.puts), 1, "a paused automation holds nothing")
 
 
-
 class HoldWhileTest(unittest.TestCase):
     """A guard with hysteresis: hold above 200, release below 180."""
 

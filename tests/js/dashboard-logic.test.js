@@ -2133,15 +2133,28 @@ test('a press is timed when it arrives, and a snapshot carries the times the das
   assert.deepEqual(Object.keys(store.actionAt), [key]);
 });
 
-test("a unit's hold is read from its key and stands without an until", () => {
-  const holds = {
-    'home/hold/heating/utility/stove/on': { value: false, priority: 'automation', reason: 'flue hot', id: 'f1' },
-    'home/hold/heating/utility/stove/power_level': { value: 3, priority: 'automation', until: '2026-09-25T20:00:00Z', id: 'p1' },
+test("the units' holds are the arbitration document's, and the family's hold is the one in force", () => {
+  const arbitration = {
+    'home/arbitration/arbiter': {
+      schema: 1,
+      aspects: [
+        {
+          room: 'hallway', entity: 'front_door', aspect: 'locked', refused: 0, applied: { id: 'p1' },
+          holds: [
+            { unit: 'planner', priority: 'agent', value: true, reason: 'away', id: 'p1', family: false },
+            { unit: 'heating', priority: 'automation', value: false, id: 'h1', until: '2026-09-25T20:00:00Z', family: false },
+          ],
+        },
+      ],
+    },
   };
-  const [hold] = logic.liveHolds(holds, NOW);
-  assert.deepEqual(
-    { room: hold.room, entity: hold.entity, aspect: hold.aspect, actor: hold.actor, reason: hold.reason, until: hold.until },
-    { room: 'utility', entity: 'stove', aspect: 'on', actor: 'heating', reason: 'flue hot', until: Infinity });
-  assert.equal(logic.liveHolds(holds, NOW).length, 1, 'the ended one is dropped');
+  const holds = logic.unitHolds(arbitration, NOW);
+  assert.deepEqual(holds.map((h) => [h.actor, h.winner, h.until]), [['planner', true, Infinity]],
+    'the ended one is dropped');
+  assert.equal(logic.holdOn({}, 'hallway', 'front_door', 'locked', NOW, arbitration).actor, 'planner');
+  assert.equal(logic.holdOn(holdDoc(), 'hallway', 'front_door', 'locked', NOW, arbitration).actor, 'dashboard',
+    "the family's hold outranks every unit's");
+  const store = { arbitration: {} };
+  logic.applyMessage(store, { type: 'arbitration', key: 'home/arbitration/arbiter', value: arbitration['home/arbitration/arbiter'] }, 0);
+  assert.equal(logic.unitHolds(store.arbitration, NOW).length, 1);
 });
-

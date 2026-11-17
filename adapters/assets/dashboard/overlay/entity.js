@@ -22,12 +22,11 @@ export function openEntityDetail(room, entityName) {
 function renderAspectRow(entity, r) {
   var attrs = html` data-room="${entity.room}" data-entity="${entity.name}" data-aspect="${r.aspect}"`;
   var value = aspectValueSpan(r);
-  // An arbiter lease is in force on this aspect, so automations' commands
-  // for it are being refused. `Now` shows this only when the hold
-  // displaced somebody. The control shows it whenever the aspect is held,
-  // because this is where a person looks when they wonder why the house
-  // is not driving it (docs/design.md#views-are-text).
-  var hold = logic.holdOn(store.holds, entity.room, entity.name, r.aspect, Date.now());
+  // A hold is in force on this aspect, so commands below it are refused.
+  // `Now` shows a family hold only when it displaced somebody. The control
+  // shows any hold, because this is where a person looks when they wonder
+  // why the house is not driving it (docs/design.md#views-are-text).
+  var hold = logic.holdOn(store.holds, entity.room, entity.name, r.aspect, Date.now(), store.arbitration);
   var heldMark = hold
     ? html`<span class="stale-mark" title="${'held by ' + hold.actor + ' at the ' + hold.priority + ' band'}">held</span>`
     : '';
@@ -67,16 +66,14 @@ function renderTrackers(person) {
 // with that end, or a hand-back to the house
 // (docs/design.md#hold-intents). The end picked so far is kept in
 // localState, because every state delta replaces this markup. A unit's
-// hold is listed with its reason and nothing to press: its unit releases
-// it.
+// hold that counts is listed with its reason and nothing to press: its
+// unit releases it.
 function renderHolds(entity) {
   if (entity.write_mode !== 'arbitrated') return '';
-  var held = logic.liveHolds(store.holds, Date.now()).filter(function (h) {
-    return h.room === entity.room && h.entity === entity.name;
-  });
-  if (!held.length) return '';
-  var family = held.filter(function (h) { return h.priority === 'manual'; });
-  var units = held.filter(function (h) { return h.priority !== 'manual'; });
+  var mine = function (h) { return h.room === entity.room && h.entity === entity.name; };
+  var family = logic.liveHolds(store.holds, Date.now()).filter(mine);
+  var units = logic.unitHolds(store.arbitration, Date.now()).filter(mine);
+  if (!family.length && !units.length) return '';
   var rows = controlDisabled(entity) ? [] : family.map(function (h) {
     var attrs = html` data-room="${h.room}" data-entity="${h.entity}" data-aspect="${h.aspect}" data-key="${h.key}"`;
     var end = new Date(h.until);

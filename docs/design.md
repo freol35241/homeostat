@@ -1054,11 +1054,13 @@ Units restart during every apply, one at a time, and a device must not
 move because one holder was briefly away. The arbiter follows each
 unit's supervision status at `home/health/{unit}`:
 
-- While the supervisor brings a holder back (`starting`, `backoff`), its
-  holds count as before. Its `ready` then releases any it does not
-  assert again.
-- Once the holder is gone, its breaker `open` or `stopped` for good, the
-  hold publish's `on_loss` decides. `keep` keeps its holds standing.
+- While the supervisor brings a holder back, its holds count as before.
+  Its `ready` then releases any it does not assert again. A holder
+  stopped for an apply's restart, or with the whole house at a shutdown,
+  is reported `stopped`, and its holds count too: the supervisor reports
+  the same status for a unit coming straight back.
+- Once the holder is gone, its breaker `open`, the hold publish's
+  `on_loss` decides. `keep` keeps its holds standing.
   `release` lets the holds beneath win. Without it, a hold for the
   aspect's rest value is kept and any other ends: a dead flue guard
   keeps the burner off, and a dead start rule just stops asking.
@@ -1071,10 +1073,12 @@ releases it.
 
 A forward is also a delivery. When an adapter drops one because the
 device is away (`device-unavailable`, naming the forward's id), the
-arbiter sends that hold again once the device's `available` returns,
-and only then. A device changed by hand while it was away is not
-changed back, and a dropped command is not sent again, because a
-command is a one-off push.
+arbiter sends that hold again once the device's `available` returns.
+Nothing else is sent then: a device changed by hand while it was away
+is not changed back, and a dropped command is not sent again, because
+a command is a one-off push. The applied entry carries `undelivered`
+meanwhile, so an arbiter restart keeps it. Of the shipped adapters,
+esphome reports `device-unavailable`.
 
 What the arbiter resolved is one document at `home/arbitration/{arbiter}`,
 mirrored by the core: per aspect, the `applied` hold, the `holds` in

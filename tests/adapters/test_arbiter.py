@@ -278,13 +278,30 @@ class WhenAHolderStopsTest(Base):
     def test_a_gone_holders_rest_value_hold_stands_and_any_other_ends(self):
         self.hold("heating", True, "h1", seen=1.0)
         self.hold("flue_guard", False, "f1", seen=2.0)
-        self.resolver.holder("flue_guard", True, effects := [])
+        effects = []
+        self.resolver.holder("flue_guard", True, effects)
         self.assertEqual(self.forwards(effects), [], "a dead flue guard keeps the burner off")
         self.resolver.holder("flue_guard", False, [])
         self.drop("flue_guard")
         self.hold("heating", True, "h2")
-        self.resolver.holder("heating", True, effects := [])
+        self.resolver.holder("heating", True, [])
         self.assertIsNone(self.resolver.winner(STOVE), "a dead start rule stops asking")
+
+    def test_a_declared_release_ends_even_a_rest_value_hold(self):
+        LOSS["flue_guard"] = "release"
+        self.addCleanup(LOSS.pop, "flue_guard")
+        self.hold("flue_guard", False, "f1")
+        self.resolver.holder("flue_guard", True, [])
+        self.assertIsNone(self.resolver.winner(STOVE))
+
+    def test_a_holder_away_but_not_gone_moves_nothing(self):
+        # What an apply's restart looks like: the holder is briefly away,
+        # and nobody marks it gone.
+        self.hold("heating", 19, "h1", target=LAMP)
+        self.hold("planner", 23, "p1", target=LAMP)
+        self.resolver.holder("planner", False, effects := [])
+        self.assertEqual(effects, [])
+        self.assertEqual(self.resolver.winner(LAMP)["unit"], "planner")
 
     def test_a_declared_keep_keeps_any_hold(self):
         self.hold("heating", 19, "h1", target=LAMP)
@@ -310,6 +327,19 @@ class DeliveryTest(Base):
         self.assertEqual(self.forwards(effects), [(True, "heating", "h1")])
         self.resolver.available("utility", "stove", effects := [])
         self.assertEqual(effects, [], "once")
+
+    def test_an_undelivered_hold_survives_an_arbiter_restart(self):
+        self.hold("heating", True, "h1")
+        self.resolver.undelivered("h1")
+        document = self.resolver.document()
+        after = Resolver(
+            grant_of=lambda unit, target: (BANDS[unit], None) if unit in BANDS else None,
+            rest_of=lambda target: None, clock=Clock(), wall=lambda: WALL,
+        )
+        after.restore([], document)
+        after.put_hold(STOVE, "heating", {"value": True, "id": "h1"}, WALL, [])
+        after.available("utility", "stove", effects := [])
+        self.assertEqual([e[2]["id"] for e in effects if e[0] == "forward"], ["h1"])
 
     def test_a_delivered_hold_is_not_sent_again(self):
         self.hold("heating", True, "h1")

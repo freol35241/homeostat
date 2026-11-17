@@ -801,9 +801,19 @@ class FamilyHolds(PageTest):
     async def test_a_units_hold_is_listed_with_its_reason_and_nothing_to_press(self):
         await self.house.push(
             {
-                "type": "hold",
-                "key": "home/hold/stage/livingroom/heat_pump/setpoint",
-                "value": {"value": 19.0, "priority": "automation", "reason": "night setback", "id": "s1"},
+                "type": "arbitration",
+                "key": "home/arbitration/arbiter",
+                "value": {
+                    "schema": 1,
+                    "aspects": [
+                        {
+                            "room": "livingroom", "entity": "heat_pump", "aspect": "setpoint",
+                            "applied": {"id": "s1"}, "refused": 0,
+                            "holds": [{"unit": "stage", "priority": "automation", "value": 19.0,
+                                       "reason": "night setback", "id": "s1", "family": False}],
+                        }
+                    ],
+                },
             }
         )
         await self.open_heat_pump()

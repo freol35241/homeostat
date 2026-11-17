@@ -159,8 +159,8 @@ function outcomeStatus(done, fmt, room, entity, aspect) {
     return { tone: 'warn', text: 'The device settled on ' + fmt(done.seen) + ' (asked ' + fmt(done.value) + ')' };
   }
   if (done.outcome === 'held') {
-    var hold = logic.holdOn(store.holds, room, entity, aspect, Date.now());
-    var until = hold && hold.until ? ' until ' + new Date(hold.until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+    var hold = logic.holdOn(store.holds, room, entity, aspect, Date.now(), store.arbitration);
+    var until = hold && isFinite(hold.until) ? ' until ' + new Date(hold.until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
     return { tone: 'warn', text: 'Held by ' + done.by + (done.actor ? ' (' + done.actor + ')' : '') + until + ' · ' + fmt(done.value) + ' not sent' };
   }
   if (done.outcome === 'rejected') {

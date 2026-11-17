@@ -638,6 +638,11 @@ class Hub:
         # happened; this says what is in force, which a browser opening
         # during a hold needs (docs/design.md#arbitrated-mode).
         self.holds: dict[str, object] = {}
+        # home/arbitration/{unit} -> per aspect the hold that arbiter
+        # applied and the holds in force, winner first. The page reads the
+        # units' holds from here, because a hold the arbiter does not count
+        # stays at its key (docs/design.md#when-a-holder-stops).
+        self.arbitration: dict[str, object] = {}
         self.health: dict[str, object] = {}
         self.config: dict[str, object] = {}
         # entity name -> its adapter's aspect descriptor, taken from the
@@ -676,6 +681,7 @@ class Hub:
             self.session.subscribe("home/state/**", self._on_state),
             self.session.subscribe("home/forecast/**", self._on_forecast),
             self.session.subscribe("home/hold/**", self._on_hold),
+            self.session.subscribe("home/arbitration/*", self._on_arbitration),
             self.session.subscribe("home/health/**", self._on_health),
             self.session.subscribe("home/config/*/*", self._on_config),
             self.session.subscribe("home/discovery/*", self._on_discovery),
@@ -692,6 +698,9 @@ class Hub:
         for key, value in self.session.get_json("home/hold/**"):
             with self.lock:
                 self.holds.setdefault(key, value)
+        for key, value in self.session.get_json("home/arbitration/*"):
+            with self.lock:
+                self.arbitration.setdefault(key, value)
         for key, value in self.session.get_json("home/health/*"):
             with self.lock:
                 self.health.setdefault(key, value)
@@ -750,6 +759,7 @@ class Hub:
                 "state": dict(self.state),
                 "forecasts": dict(self.forecasts),
                 "holds": dict(self.holds),
+                "arbitration": dict(self.arbitration),
                 "health": dict(self.health),
                 "config": dict(self.config),
                 "aspects": dict(self.aspects),
@@ -799,6 +809,14 @@ class Hub:
         with self.lock:
             self.holds[key] = value
         self._emit({"type": "hold", "key": key, "value": value})
+
+    def _on_arbitration(self, sample) -> None:
+        if (decoded := self._decode(sample)) is None:
+            return
+        key, value = decoded
+        with self.lock:
+            self.arbitration[key] = value
+        self._emit({"type": "arbitration", "key": key, "value": value})
 
     def _on_forecast(self, sample) -> None:
         if (decoded := self._decode(sample)) is None:

@@ -249,14 +249,14 @@ class Resolver:
     wall-clock, fixed when it is placed, because another process, and this
     one after a restart, can only use a wall-clock deadline.
 
-    A holder that is gone, its breaker open or stopped for good, keeps the
-    holds its `on_loss` keeps: by default those for the rest value
-    (docs/design.md#when-a-holder-stops). While the supervisor brings it
-    back, its holds count as before.
+    A holder that is gone, its breaker open, keeps the holds its `on_loss`
+    keeps: by default those for the rest value
+    (docs/design.md#when-a-holder-stops). Otherwise its holds count.
 
     A hold forwarded to a device its adapter found unavailable is sent
-    again when the device's `available` returns, and only then. A device
-    changed by hand while it was away is not changed back.
+    again when the device's `available` returns. A device changed by hand
+    while it was away is not changed back. The applied entry carries
+    `undelivered` meanwhile, so an arbiter restart keeps it.
 
     Pure bookkeeping: no bus, no threads. Each change appends what it
     causes to `effects`, as ("forward", target, envelope) or ("event",
@@ -521,11 +521,18 @@ class Resolver:
         for target in sorted(t for t, held in self._holds.items() if unit in held):
             self.resolve(target, effects)
 
-    def undelivered(self, cmd_id: str) -> None:
-        """Note that the adapter dropped the forward `cmd_id` with the device away."""
+    def undelivered(self, cmd_id: str) -> bool:
+        """Note that the adapter dropped the forward `cmd_id` with the device away.
+
+        Returns whether a hold's forward was named.
+        """
+        named = False
         for target, applied in self._applied.items():
             if applied.get("id") == cmd_id and "command" not in applied:
+                applied["undelivered"] = True
                 self._undelivered.add(target)
+                named = True
+        return named
 
     def available(self, room: str, entity: str, effects: list) -> None:
         """Send again what an adapter could not deliver while the device was away."""
@@ -533,6 +540,8 @@ class Resolver:
             self._undelivered.discard(target)
             won = self.winner(target)
             applied = self._applied.get(target)
+            if applied is not None:
+                applied.pop("undelivered", None)
             if won is None or applied is None or won["id"] != applied.get("id"):
                 continue
             effects.append((
@@ -662,6 +671,8 @@ class Resolver:
                 continue
             if isinstance(applied, dict) and "id" in applied:
                 self._applied[target] = applied
+                if applied.get("undelivered"):
+                    self._undelivered.add(target)
             if isinstance(entry.get("refused"), int) and entry["refused"]:
                 self._refused[target] = entry["refused"]
 
@@ -748,9 +759,11 @@ def main():
 
     hold_sub = session.subscribe("home/hold/**", on_hold)
 
-    # A holder is gone once its breaker opens or it stops for good. While
-    # the supervisor brings it back (starting, backoff), its holds count.
-    gone_statuses = ("open", "stopped")
+    # A holder is gone once its breaker opens. The supervisor also reports
+    # `stopped` for a unit an apply restarts and for every unit at a
+    # shutdown, so `stopped` is not gone: a holder briefly away must not
+    # move the device. A holder an apply removes loses its grant instead.
+    gone_statuses = ("open",)
 
     def on_health(sample) -> None:
         holder = str(sample.key_expr).split("/")[2]
@@ -778,7 +791,8 @@ def main():
             and isinstance(event.get("cmd_id"), str)
         ):
             with changed:
-                resolver.undelivered(event["cmd_id"])
+                if resolver.undelivered(event["cmd_id"]) and routes_box:
+                    carry_out_locked([])
 
     def on_available(sample) -> None:
         parts = str(sample.key_expr).split("/")
