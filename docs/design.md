@@ -1375,6 +1375,31 @@ Rejected alternatives: an adapter holding modes in memory (which is an
 automation dressed as an adapter), a `mode` capability, and a relay
 (which launders the band).
 
+### Device-timed runtime
+
+Some switches must not stay on: an irrigation valve, a pump, a pulse
+relay. Such a device often sits at the edge of the Wi-Fi, so a close
+sent over the network when the run ends may never arrive. The device
+times the close itself instead.
+
+- A `switch` may declare the feature `runtime_s`: how many seconds the
+  device keeps itself on after an `on`. It is a reading the device keeps
+  and a command it takes, so it is recorded and the dashboard can set it
+  under a grant, within the bounds the adapter describes.
+- A unit sets `runtime_s` and then sends `on`. The device closes on its
+  own clock, whatever happens to the network, the adapter or the core
+  meanwhile. If the runtime write is lost, the firmware's own value
+  stands, which is the last one it kept.
+- For ESPHome, the firmware exposes a `number` entity
+  `{object_id}_runtime_s` beside the switch, with `restore_value` so it
+  survives a reboot, and its turn-on script reads it. The number's own
+  bounds are the command's.
+
+The runtime is an aspect and not a command option `duration` on `on`.
+An option changes how the device reaches a value, not what happens
+after it, and an option would leave the runtime invisible on the bus
+between commands.
+
 ### Burners and interlocks
 
 `burner` is a small capability for a combustion heat source. Its base
