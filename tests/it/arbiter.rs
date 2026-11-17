@@ -392,21 +392,38 @@ async fn an_undelivered_hold_is_sent_when_the_device_is_back() {
         .await
         .expect("event put");
     // The arbiter hears the drop and the device on separate subscriptions,
-    // and a return it hears first sends nothing, as above. So the device
-    // returns until the forward is sent.
-    let forwarded = eventually(
+    // and a return it hears first sends nothing, as above. The document
+    // marks the hold undelivered once the drop is handled.
+    eventually(
         Duration::from_secs(10),
-        "forward of the undelivered hold",
+        "arbitration document marking the hold undelivered",
         || async {
-            observer
-                .put(available, "true")
-                .await
-                .expect("available put");
-            next_json(&arbiter_sub, Duration::from_millis(500)).await
+            let doc = cache_read(&observer, "home/arbitration/arbiter").await?;
+            (doc["aspects"][0]["applied"]["undelivered"] == json!(true)).then_some(())
         },
     )
     .await;
+    observer
+        .put(available, "true")
+        .await
+        .expect("available put");
+    let forwarded = next_json(&arbiter_sub, Duration::from_secs(10))
+        .await
+        .expect("forward of the undelivered hold");
     assert_eq!(forwarded["id"], json!("5e7bac05"));
+    // Sent, the hold is no longer marked.
+    eventually(
+        Duration::from_secs(10),
+        "arbitration document without the undelivered mark",
+        || async {
+            let doc = cache_read(&observer, "home/arbitration/arbiter").await?;
+            doc["aspects"][0]["applied"]
+                .get("undelivered")
+                .is_none()
+                .then_some(())
+        },
+    )
+    .await;
 
     sup.shutdown();
 }

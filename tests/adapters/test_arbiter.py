@@ -512,6 +512,17 @@ class DeliveryTest(Base):
         after.available("utility", "stove", effects := [])
         self.assertEqual([e[2]["id"] for e in effects if e[0] == "forward"], ["h1"])
 
+    def test_the_undelivered_flag_changes_the_document(self):
+        # The unit puts the document again only when it differs from the
+        # last one put, so a document must not change after it is taken.
+        self.hold("heating", True, "h1")
+        delivered = self.resolver.document()
+        self.resolver.undelivered("h1")
+        undelivered = self.resolver.document()
+        self.assertNotEqual(undelivered, delivered)
+        self.resolver.available("utility", "stove", [])
+        self.assertNotEqual(self.resolver.document(), undelivered)
+
     def test_a_delivered_hold_is_not_sent_again(self):
         self.hold("heating", True, "h1")
         self.resolver.available("utility", "stove", effects := [])
