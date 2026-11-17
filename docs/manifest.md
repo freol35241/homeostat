@@ -186,6 +186,7 @@ a key segment (`invalid-name`).
 
 | Field | Type | Required | Description |
 |---|---|---|---|
+| `actions` | table of name → table of name → [Action](#action) | no | `[actions.<gesture>]`, on a `button` entity only (`actions-not-button`): what the buttons service commands when the button reports that gesture, keyed by the target entity's name (`action-unknown-target`). The gesture is the button's `action` in the device's own words (`single`, `double`, `long`). A gesture without a table sends nothing (docs/design.md#gesture-actions). |
 | `aspects` | table of name → [AspectDecl](#aspectdecl) | no | `[aspects]`: what the house declares about one of this entity's aspects, keyed by the aspect's name. It is for a fact the reading itself cannot carry and its publisher may have no way to describe, as an automation publishes no aspect descriptor. Each aspect must be one the owner publishes (`aspect-unpublished`). |
 | `entity` | [EntitySection](#entitysection) | yes |  |
 | `inputs` | table of name → [InputSource](#inputsource) | no | `[inputs]`: device inputs fed from one source each, keyed by the adapter's own input name (e.g. `indoor_temperature_actual`). A fed input is a continuous signal with one source, not a command. It stops being a command aspect for this entity and does not go through the arbiter. The device's own validity window decides when it is stale. Only a device entity can be fed (`virtual-entity-fed`). The adapter decides which input names exist. |
@@ -193,6 +194,20 @@ a key segment (`invalid-name`).
 | `schema` | integer | yes | Contract version. Must be 1. |
 | `sources` | table of name → [SourceRef](#sourceref) | no | `[sources]`: the readings this entity's value is derived from, keyed by a short name for each contributor. The history overlay draws them beside the computed value (docs/design.md#sources). They must be declared because they cannot be inferred: a unit subscribes to many keys for many reasons, and its subscriptions do not say which feed which published aspect. This is separate from `[inputs]`. A device feed carries a runtime contract that does not apply here. A wired input also stops being a command aspect, which would collide on a commandable virtual entity. |
 | `write_policy` | [WritePolicy](#writepolicy) | yes |  |
+
+### Action
+
+One target of a gesture: what the buttons service sends it. Exactly one
+of `toggle` and `set`, or `hold = "release"` alone (`action-shape`).
+Each aspect named is the target capability's base aspect or one of its
+aspects (`action-aspect`).
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `hold` | string | no | The hold intent the commands carry (docs/design.md#hold-intents): `"none"`, `"release"`, or `"HH:MM"` to hold until the house clock next shows that time. Arbitrated targets only (`action-hold-not-arbitrated`). Without it the target's family policy decides. A release carries no value and hands back the target's base aspect. |
+| `set` | table | no | The values to send, one command per aspect. |
+| `toggle` | string | no | A boolean aspect to flip: the command sends the opposite of the target's current state, read from the core's mirror. With no state known, the press sends nothing. |
+| `unlocks` | boolean | no | Whether this action may unlock a lock. A remote is easy to press by mistake, so unlocking needs saying (`action-unlocks`). |
 
 ### AspectDecl
 

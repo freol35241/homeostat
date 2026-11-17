@@ -318,6 +318,7 @@ fn check_entities(house: &House, errors: &mut Vec<ValidationError>) {
         }
 
         check_family_policy(house, entity, capability, file.as_ref(), errors);
+        check_actions(house, entity, capability, file.as_ref(), errors);
 
         // An adapter binds devices, so its entity files address them. An
         // automation's do not: a computed value has no device behind it, and
@@ -419,13 +420,7 @@ fn check_family_policy(
             file.cloned(),
         ));
     }
-    let clock = house.units.iter().any(|u| {
-        u.manifest
-            .bus
-            .iter()
-            .flat_map(|b| b.publishes.values())
-            .any(|p| p.key == CLOCK_MINUTE)
-    });
+    let clock = has_clock(house);
     let vocabulary = VOCABULARY.iter().find(|c| c.name == capability);
     for (aspect, values) in &policy.family {
         let known = vocabulary.is_some_and(|c| {
@@ -444,7 +439,7 @@ fn check_family_policy(
                 if until == "next change" {
                     continue;
                 }
-                if until.len() != 5 || parse_time(until).is_none() {
+                if !is_time_of_day(until) {
                     errors.push(ValidationError::new(
                         Code::FamilyPolicyUntil,
                         format!("{}.{aspect}.{value}", entity.name),
@@ -453,7 +448,7 @@ fn check_family_policy(
                     ));
                 } else if !clock {
                     errors.push(ValidationError::new(
-                        Code::FamilyPolicyNoClock,
+                        Code::TimeOfDayNoClock,
                         format!("{}.{aspect}.{value}", entity.name),
                         format!("until \"{until}\" is a time of day, and no unit publishes {CLOCK_MINUTE}"),
                         file.cloned(),
@@ -466,6 +461,126 @@ fn check_family_policy(
 
 /// The key whose payload carries the house's local time and UTC offset.
 const CLOCK_MINUTE: &str = "home/clock/minute";
+
+/// Whether some unit publishes the house clock's minute.
+fn has_clock(house: &House) -> bool {
+    house.units.iter().any(|u| {
+        u.manifest
+            .bus
+            .iter()
+            .flat_map(|b| b.publishes.values())
+            .any(|p| p.key == CLOCK_MINUTE)
+    })
+}
+
+/// Whether `s` is a 24-hour `"HH:MM"`, as a time-of-day hold is written.
+fn is_time_of_day(s: &str) -> bool {
+    s.len() == 5 && parse_time(s).is_some()
+}
+
+/// A button's `[actions]` (docs/design.md#gesture-actions): each target
+/// exists, each aspect is the target's, each action says one thing to
+/// send, a hold goes only to an arbitrated target, and an unlock is
+/// declared.
+fn check_actions(
+    house: &House,
+    entity: &LoadedEntity,
+    capability: &str,
+    file: Option<&String>,
+    errors: &mut Vec<ValidationError>,
+) {
+    let Some(actions) = &entity.file.actions else {
+        return;
+    };
+    if capability != "button" {
+        errors.push(ValidationError::new(
+            Code::ActionsNotButton,
+            &entity.name,
+            format!("[actions] needs capability \"button\", not \"{capability}\""),
+            file.cloned(),
+        ));
+    }
+    let clock = has_clock(house);
+    for (gesture, targets) in actions {
+        for (name, action) in targets {
+            let subject = format!("{}.{gesture}.{name}", entity.name);
+            let err = |code: Code, message: String| {
+                ValidationError::new(code, subject.clone(), message, file.cloned())
+            };
+            let Some(target) = house.entities.iter().find(|e| &e.name == name) else {
+                errors.push(err(
+                    Code::ActionUnknownTarget,
+                    format!("target entity \"{name}\" does not exist"),
+                ));
+                continue;
+            };
+            let target_capability = target.file.entity.capability.as_str();
+            let vocabulary = VOCABULARY.iter().find(|c| c.name == target_capability);
+            let release = action.hold.as_deref() == Some("release");
+            let sends = usize::from(action.toggle.is_some()) + usize::from(action.set.is_some());
+            let hold_ok = action
+                .hold
+                .as_deref()
+                .is_none_or(|h| h == "none" || h == "release" || is_time_of_day(h));
+            if !hold_ok
+                || action.set.as_ref().is_some_and(BTreeMap::is_empty)
+                || if release { sends != 0 } else { sends != 1 }
+            {
+                errors.push(err(
+                    Code::ActionShape,
+                    "an action takes one of toggle and set, or hold = \"release\" alone, and a hold of \"none\", \"release\" or \"HH:MM\"".to_string(),
+                ));
+                continue;
+            }
+            let mut aspects: Vec<&str> = action.toggle.iter().map(String::as_str).collect();
+            aspects.extend(action.set.iter().flat_map(|s| s.keys().map(String::as_str)));
+            let base = vocabulary.and_then(|c| c.base);
+            if release && base.is_none() {
+                errors.push(err(
+                    Code::ActionAspect,
+                    format!("capability \"{target_capability}\" has no base aspect to release"),
+                ));
+            }
+            for aspect in &aspects {
+                if !vocabulary.is_some_and(|c| c.base == Some(aspect) || c.aspects.contains(aspect))
+                {
+                    errors.push(err(
+                        Code::ActionAspect,
+                        format!("capability \"{target_capability}\" has no aspect \"{aspect}\""),
+                    ));
+                }
+            }
+            if action.hold.is_some() && target.file.write_policy.mode() != WriteMode::Arbitrated {
+                errors.push(err(
+                    Code::ActionHoldNotArbitrated,
+                    format!("target \"{name}\" is not arbitrated, so the action takes no hold"),
+                ));
+            }
+            if action.hold.as_deref().is_some_and(is_time_of_day) && !clock {
+                errors.push(err(
+                    Code::TimeOfDayNoClock,
+                    format!(
+                        "hold \"{}\" is a time of day, and no unit publishes {CLOCK_MINUTE}",
+                        action.hold.as_deref().unwrap_or_default()
+                    ),
+                ));
+            }
+            let unlocks = target_capability == "lock"
+                && (action.toggle.as_deref() == Some("locked")
+                    || action
+                        .set
+                        .as_ref()
+                        .and_then(|s| s.get("locked"))
+                        .is_some_and(|v| v.as_bool() != Some(true)));
+            if unlocks && !action.unlocks {
+                errors.push(err(
+                    Code::ActionUnlocks,
+                    format!("the action can unlock \"{name}\"; say unlocks = true"),
+                ));
+            }
+        }
+    }
+}
 
 /// The aspects a person's source may name: presence evidence (`home`,
 /// `sighted`) or a position fix (`lat`, read with its `lon`, `accuracy` and

@@ -34,6 +34,7 @@ the hold that wins changes (docs/design.md#which-hold-wins).
 
 A manual-band command may carry a `hold` intent (docs/design.md#hold-intents):
 "none" forwards without holding, an RFC3339 instant holds until then,
+"HH:MM" holds until the house clock next shows it,
 "report" holds without forwarding because the device already did it, and
 "release" hands the aspect back without forwarding anything.
 
@@ -542,6 +543,9 @@ class Resolver:
         }
 
     def _family_command(self, target, actor, hold_s, effects, value, hold, cmd_id, policy) -> bool:
+        if keys.is_time_of_day(hold):
+            # A time of day is held as the policy's is, in the house's time.
+            hold, policy = None, {"until": hold}
         seconds = hold_s
         at = None
         next_change = False

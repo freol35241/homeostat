@@ -1113,6 +1113,7 @@ mod tests {
                 inputs: None,
                 sources: None,
                 aspects: None,
+                actions: None,
             },
             path: format!("entities/{adapter}/{name}.toml"),
             owner: adapter.to_string(),

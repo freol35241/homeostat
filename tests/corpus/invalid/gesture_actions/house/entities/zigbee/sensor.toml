@@ -1,0 +1,12 @@
+schema = 1
+
+[entity]
+id = "0x11"
+capability = "sensor"
+room = "hallway"
+
+[write_policy]
+owner = "zigbee"
+
+[actions.single]
+lamp = { toggle = "on", set = { on = true }, hold = "none" }

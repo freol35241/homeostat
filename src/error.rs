@@ -298,11 +298,37 @@ codes! {
     FamilyPolicyUntil => "family-policy-until":
         "A family policy entry's `until` is neither a time of day `\"HH:MM\"` \
         nor `\"next change\"` (docs/design.md#family-policy).",
-    FamilyPolicyNoClock => "family-policy-no-clock":
-        "A family policy entry holds until a time of day, and no unit \
-        publishes `home/clock/minute`. The arbiter reads the house's UTC \
-        offset from that minute (docs/design.md#family-policy), so without \
-        the clock service it would end the hold in the host's time zone.",
+    TimeOfDayNoClock => "time-of-day-no-clock":
+        "A family policy entry or a gesture action holds until a time of \
+        day, and no unit publishes `home/clock/minute`. The arbiter reads \
+        the house's UTC offset from that minute \
+        (docs/design.md#family-policy), so without the clock service it \
+        would end the hold in the host's time zone.",
+    ActionsNotButton => "actions-not-button":
+        "An entity file declares `[actions]` on a capability other than \
+        `button`. Only a button reports gestures \
+        (docs/design.md#gesture-actions).",
+    ActionUnknownTarget => "action-unknown-target":
+        "A gesture action names a target entity that no unit binds.",
+    ActionAspect => "action-aspect":
+        "A gesture action names an aspect that is neither the target \
+        capability's base aspect nor one of its aspects, or releases a \
+        target whose capability has no base aspect \
+        (docs/design.md#the-capability-vocabulary).",
+    ActionShape => "action-shape":
+        "A gesture action does not say one thing to send. It takes exactly \
+        one of `toggle` and `set`, or `hold = \"release\"` alone, and a \
+        `hold` of `\"none\"`, `\"release\"` or `\"HH:MM\"` \
+        (docs/design.md#gesture-actions).",
+    ActionHoldNotArbitrated => "action-hold-not-arbitrated":
+        "A gesture action carries a `hold` toward an entity that is not \
+        arbitrated. A hold intent tells the arbiter what to do with the \
+        family's hold (docs/design.md#hold-intents), and only an \
+        arbitrated entity's commands reach the arbiter.",
+    ActionUnlocks => "action-unlocks":
+        "A gesture action can unlock a lock and does not say \
+        `unlocks = true`. A remote is easy to press by mistake, so an \
+        action that opens a door is declared as one.",
     VirtualEntityFed => "virtual-entity-fed":
         "An `[inputs]` block sits on an entity bound by an automation. A fed \
         input is a device's control input (docs/design.md#device-feeds); a \

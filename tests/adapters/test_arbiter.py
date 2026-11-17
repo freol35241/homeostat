@@ -261,6 +261,11 @@ class FamilyPolicyTest(Base):
         self.assertEqual(self.resolver.family_records(), {})
         self.assertTrue(self.command("automation", "flue_stop", False)[0], "the stop rule acts on the start")
 
+    def test_a_time_of_day_intent_holds_as_the_policy_would(self):
+        self.command("manual", "dashboard", False, hold="06:00", policy="none")
+        [record] = self.resolver.family_records().values()
+        self.assertEqual((record["until"], record["at"]), ("2023-11-15T05:00:00Z", "2023-11-15T06:00"))
+
     def test_an_explicit_hold_wins_over_the_policy(self):
         self.command("manual", "dashboard", True, hold="2023-11-14T23:13:20Z", policy="none")
         self.assertEqual(self.resolver.next_deadline(), 1000.0 + 3600)

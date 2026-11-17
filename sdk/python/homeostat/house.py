@@ -121,6 +121,9 @@ class Entity:
         `[sources]`: contributor name to the reading the value derives from.
     intervals : dict of str to int
         `[aspects]`: aspect name to the `interval_s` its samples total over.
+    actions : dict of str to dict
+        A button's `[actions]` as written: gesture to target entity to its
+        action (docs/design.md#gesture-actions).
     """
 
     name: str
@@ -140,6 +143,7 @@ class Entity:
     sources: dict[str, SourceRef] = field(default_factory=dict)
     # [aspects]: aspect -> the interval in seconds each sample totals over.
     intervals: dict[str, int] = field(default_factory=dict)
+    actions: dict[str, dict[str, dict]] = field(default_factory=dict)
 
 
 @dataclass
@@ -226,6 +230,7 @@ def _entity_from(path: Path, data: dict, default_owner: str) -> Entity:
             for aspect, decl in data.get("aspects", {}).items()
             if "interval_s" in decl
         },
+        actions={gesture: dict(targets) for gesture, targets in data.get("actions", {}).items()},
     )
 
 

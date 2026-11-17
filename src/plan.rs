@@ -837,6 +837,15 @@ fn render_unit(check: &CheckResult, unit: &LoadedUnit, out: &mut String) {
                 out.push_str(&format!("  family.{aspect}: {}", entries.join(", ")));
             }
             out.push('\n');
+            // A button's gesture actions (docs/design.md#gesture-actions).
+            for (gesture, targets) in entity.file.actions.iter().flatten() {
+                for (target, action) in targets {
+                    out.push_str(&format!(
+                        "        {gesture} \u{2192} {target}: {}\n",
+                        describe_action(action)
+                    ));
+                }
+            }
         }
     }
 
@@ -884,6 +893,30 @@ fn render_expanded(key: &ExpandedKey, out: &mut String) {
             out.push_str(&format!("    -> {expr}\n"));
         }
     }
+}
+
+/// One gesture action as the plan prints it: what is sent, then the hold.
+fn describe_action(action: &crate::manifest::Action) -> String {
+    let mut parts = Vec::new();
+    if let Some(aspect) = &action.toggle {
+        parts.push(format!("toggle {aspect}"));
+    }
+    if let Some(set) = &action.set {
+        let values: Vec<String> = set
+            .iter()
+            .map(|(aspect, value)| format!("{aspect}={}", display_value(value)))
+            .collect();
+        parts.push(format!("set {}", values.join(" ")));
+    }
+    match action.hold.as_deref() {
+        Some("release") if parts.is_empty() => parts.push("release".to_string()),
+        Some(hold) => parts.push(format!("hold {hold}")),
+        None => {}
+    }
+    if action.unlocks {
+        parts.push("unlocks".to_string());
+    }
+    parts.join(", ")
 }
 
 #[cfg(test)]

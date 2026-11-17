@@ -618,6 +618,40 @@ pub struct EntityFile {
     /// as an automation publishes no aspect descriptor. Each aspect must be
     /// one the owner publishes (`aspect-unpublished`).
     pub aspects: Option<BTreeMap<String, AspectDecl>>,
+    /// `[actions.<gesture>]`, on a `button` entity only
+    /// (`actions-not-button`): what the buttons service commands when the
+    /// button reports that gesture, keyed by the target entity's name
+    /// (`action-unknown-target`). The gesture is the button's `action` in
+    /// the device's own words (`single`, `double`, `long`). A gesture
+    /// without a table sends nothing (docs/design.md#gesture-actions).
+    pub actions: Option<BTreeMap<String, BTreeMap<String, Action>>>,
+}
+
+/// One target of a gesture: what the buttons service sends it. Exactly one
+/// of `toggle` and `set`, or `hold = "release"` alone (`action-shape`).
+/// Each aspect named is the target capability's base aspect or one of its
+/// aspects (`action-aspect`).
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Action {
+    /// A boolean aspect to flip: the command sends the opposite of the
+    /// target's current state, read from the core's mirror. With no state
+    /// known, the press sends nothing.
+    pub toggle: Option<String>,
+    /// The values to send, one command per aspect.
+    #[schemars(with = "Option<BTreeMap<String, serde_json::Value>>")]
+    pub set: Option<BTreeMap<String, toml::Value>>,
+    /// The hold intent the commands carry (docs/design.md#hold-intents):
+    /// `"none"`, `"release"`, or `"HH:MM"` to hold until the house clock
+    /// next shows that time. Arbitrated targets only
+    /// (`action-hold-not-arbitrated`). Without it the target's family
+    /// policy decides. A release carries no value and hands back the
+    /// target's base aspect.
+    pub hold: Option<String>,
+    /// Whether this action may unlock a lock. A remote is easy to press by
+    /// mistake, so unlocking needs saying (`action-unlocks`).
+    #[serde(default)]
+    pub unlocks: bool,
 }
 
 /// One entry in `[aspects]`.

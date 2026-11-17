@@ -1,0 +1,11 @@
+schema = 1
+
+[entity]
+id = "light-1"
+capability = "light"
+features = ["brightness"]
+room = "hall"
+
+[write_policy]
+mode = "shared"
+owner = "reflector"

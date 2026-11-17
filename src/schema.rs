@@ -353,6 +353,25 @@ mod tests {
     }
 
     #[test]
+    fn the_sdk_carries_every_base_aspect() {
+        let sdk = include_str!("../sdk/python/homeostat/keys.py");
+        for c in crate::manifest::VOCABULARY {
+            let entry = format!("    \"{}\": \"", c.name);
+            match c.base {
+                Some(base) => {
+                    let entry = format!("{entry}{base}\",");
+                    assert!(sdk.contains(&entry), "keys.BASE_ASPECTS lacks {entry}");
+                }
+                None => assert!(
+                    !sdk.contains(&entry),
+                    "keys.BASE_ASPECTS names {}, which has no base aspect",
+                    c.name
+                ),
+            }
+        }
+    }
+
+    #[test]
     fn command_options_name_aspects_their_capability_has() {
         for c in crate::manifest::VOCABULARY {
             for o in c.options {

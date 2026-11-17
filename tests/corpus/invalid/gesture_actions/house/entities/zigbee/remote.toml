@@ -1,0 +1,22 @@
+schema = 1
+
+[entity]
+id = "0x10"
+capability = "button"
+room = "hallway"
+
+[write_policy]
+owner = "zigbee"
+
+# Fine: a toggle, a set and a release.
+[actions.single]
+lamp = { toggle = "on" }
+
+[actions.double]
+door = { hold = "release" }
+
+# Not fine, one each.
+[actions.long]
+nobody = { toggle = "on" }
+lamp = { toggle = "colour" }
+door = { set = { locked = false }, hold = "07:00" }

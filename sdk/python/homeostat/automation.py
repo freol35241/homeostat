@@ -590,8 +590,9 @@ class Context:
             The time a state value describes, timezone-aware and not in the
             future.
         hold : str or None, optional
-            "none", "report", "release", or an RFC3339 instant with an
-            offset to hold until.
+            "none", "report", "release", an RFC3339 instant with an offset
+            to hold until, or "HH:MM" to hold until the house clock next
+            shows it.
 
         Raises
         ------

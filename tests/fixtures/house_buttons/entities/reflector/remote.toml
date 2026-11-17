@@ -1,0 +1,15 @@
+schema = 1
+
+[entity]
+id = "remote-1"
+capability = "button"
+room = "hall"
+
+[write_policy]
+owner = "reflector"
+
+[actions.single]
+hall_light = { toggle = "on" }
+
+[actions.double]
+hall_light = { set = { on = true, brightness = 120 } }

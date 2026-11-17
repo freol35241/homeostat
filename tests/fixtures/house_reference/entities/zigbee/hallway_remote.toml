@@ -1,0 +1,22 @@
+schema = 1
+
+[entity]
+id = "0x00158d0007bb1234"
+capability = "button"
+features = []
+room = "hallway"
+
+[naming]
+sv = "hallens fjärrkontroll"
+en = "hallway remote"
+aliases = []
+
+[write_policy]
+owner = "zigbee"
+
+# The buttons service sends these on a press (docs/design.md#gesture-actions).
+[actions.single]
+kitchen_ceiling = { toggle = "on" }
+
+[actions.double]
+front_door_lock = { hold = "release" }

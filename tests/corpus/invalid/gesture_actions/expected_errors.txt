@@ -1,0 +1,7 @@
+error[action-aspect] remote.long.lamp: capability "light" has no aspect "colour" (entities/zigbee/remote.toml)
+error[action-hold-not-arbitrated] porch.single.lamp: target "lamp" is not arbitrated, so the action takes no hold (entities/zigbee/porch.toml)
+error[action-shape] sensor.single.lamp: an action takes one of toggle and set, or hold = "release" alone, and a hold of "none", "release" or "HH:MM" (entities/zigbee/sensor.toml)
+error[action-unknown-target] remote.long.nobody: target entity "nobody" does not exist (entities/zigbee/remote.toml)
+error[action-unlocks] remote.long.door: the action can unlock "door"; say unlocks = true (entities/zigbee/remote.toml)
+error[actions-not-button] sensor: [actions] needs capability "button", not "sensor" (entities/zigbee/sensor.toml)
+error[time-of-day-no-clock] remote.long.door: hold "07:00" is a time of day, and no unit publishes home/clock/minute (entities/zigbee/remote.toml)
