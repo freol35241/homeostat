@@ -283,7 +283,7 @@ A forecast key requires a `source`, and a state key has none
 | `home/forecast/{room}/{entity}/{aspect}/{source}` | the source's unit | one issue of a series' future |
 | `home/config/{unit}/{param}` | the core only | a live parameter value |
 | `home/meta/{unit}/manifest_hash`, `files_hash`, `manifest`, `log` | the core | the unit as applied; its captured output |
-| `home/meta/system/grants`, `grants_pending`, `applied_commit`, `about`, `apply` | the core | the grant table, the tables of applies started since the last that completed, the applied commit, the running version; the apply queryable |
+| `home/meta/system/grants`, `grants_pending`, `applied_commit`, `about`, `replay`, `apply` | the core | the grant table, the tables of applies started since the last that completed, the applied commit, the running version, where the replay after its start stands; the apply queryable |
 | `home/health/{unit}` | the supervisor | the unit's supervision status |
 | `home/health/{unit}/alive` | the unit | its liveliness token |
 | `home/health/{unit}/event` | the unit | its health events |
@@ -964,8 +964,9 @@ turned away.
   so a reader sees only holds in force.
 - The family's holds outlive the arbiter process. A restarted arbiter
   reads its records back from the mirror, keeps those whose `until` is
-  still ahead, and deletes the rest. A core restart empties the mirror,
-  and with it every hold.
+  still ahead, and deletes the rest. They outlive a core restart too:
+  the recorder keeps them and the core replays them
+  ([Replay after a core restart](#replay-after-a-core-restart)).
 - Enforcement runs on the monotonic clock. `since` and `until` are
   wall-clock, fixed when the hold is placed. A clock step cannot shorten
   or stretch a running hold, though one restored after a step is off by
@@ -1018,8 +1019,10 @@ forward.
 
 A hold stands until it ends, is released, its holder loses the grant,
 or its holder is gone ([When a holder stops](#when-a-holder-stops)).
-Holds are kept in the core's mirror, so a core restart empties them,
-and each holder asserts its holds again as it starts.
+Holds are kept in the core's mirror. A core restart empties it, and
+each holder asserts its holds again as it starts; the family's come
+back from the recorder
+([Replay after a core restart](#replay-after-a-core-restart)).
 
 #### Which hold wins
 
@@ -1738,10 +1741,13 @@ command as its envelope's `value`) and `home/forecast/**` into
 `forecasts`. Into `events` it takes the raw payloads of
 `home/health/**`, `home/config/**` (only accepted writes are put there)
 and every command envelope
-([Logs and the audit trail](#logs-and-the-audit-trail)). It does not
-record `home/clock/**` (a derivable row every minute, forever),
-`home/meta/**`, `home/discovery/*`, `home/hold/**`,
-`home/arbitration/*`, liveliness tokens or
+([Logs and the audit trail](#logs-and-the-audit-trail)). Into
+`standing` it takes the latest record at each `home/hold/**` and
+`home/arbitration/*` key, and a delete removes the row, so the table
+holds what is in force rather than its history
+([Replay after a core restart](#replay-after-a-core-restart)). It does
+not record `home/clock/**` (a derivable row every minute, forever),
+`home/meta/**`, `home/discovery/*`, liveliness tokens or
 `home/history/**`. The schema is defined by `init_store()`, versioned
 by `PRAGMA user_version` and migrated in place.
 
@@ -2001,8 +2007,39 @@ state key (`src/supervisor/replay.rs`).
 - It runs once per core start. A failed read is logged and not retried,
   and the house then starts with an empty mirror, as it would without a
   recorder.
-- Only state is replayed. A forecast is a document rebuilt from rows,
-  not one row, and its source publishes again on its own schedule.
+- State and the arbiters' holds are replayed. A forecast is a document
+  rebuilt from rows, not one row, and its source publishes again on its
+  own schedule.
+
+The family's holds and the arbitration document come back the same
+way, after the state. The core reads `home/history/holds`, the
+recorder's `standing` table, and replays each arbiter's arbitration
+document and the holds under that arbiter's name, which are the
+family's, under the replay ID. A unit's own holds are not replayed: the
+unit restarts with the core and asserts its holds again before it is
+ready ([Holds](#holds)), and its `ready` would not release a hold the
+replay brought back after it started.
+
+The core says where the replay stands at `home/meta/system/replay`:
+`"pending"` until the arbiters' holds are back, `"done"` after, and
+`"none"` in a house without a recorder. An arbiter waits for it before
+it takes its holds back. Taking them back before the replay finds
+nothing, and the units' holds would be sent and then the family's.
+
+- The replay is the holds first, then state, and `"done"` comes between
+  the two, so the arbiters wait only for the short table.
+- `"done"` comes within 20 s of the core's start. A recorder that is not
+  running by then, or whose breaker opens, means no holds are replayed:
+  holds replayed after an arbiter stopped waiting would stand in the
+  mirror with nobody enforcing them. State is still replayed once the
+  recorder runs.
+- An arbiter waits 30 s, under the supervisor's deadline for `ready`;
+  past it the arbiter starts without the replay and reports
+  `replay-late`.
+- The recorder keeps `standing` true to the house: at its start it
+  rebuilds the table from the mirror, unless a replay is pending, so a
+  change it missed while it was down does not come back at the next
+  restart.
 
 The core publishes the replay rather than the recorder. Only an
 entity's binding unit publishes its state

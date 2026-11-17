@@ -75,6 +75,10 @@ forecast = "home/forecast/**"
 cmd = "home/cmd/**"
 health = "home/health/**"
 config = "home/config/**"
+# The latest hold and arbitration records, which the core gives back to the
+# arbiter after a restart (docs/design.md#replay-after-a-core-restart).
+holds = "home/hold/**"
+arbitration = "home/arbitration/*"
 
 [bus.publishes]
 history = { key = "home/history/**" }

@@ -61,6 +61,9 @@ pub struct WorldMeta {
     /// apply that completed ([`bus::GRANTS_PENDING_KEY`]).
     pub pending_grants: Vec<Grant>,
     pub applied_commit: Option<String>,
+    /// Where the replay after this start stands ([`bus::REPLAY_KEY`]):
+    /// `none`, `pending` or `done`.
+    pub replay: &'static str,
 }
 
 struct UnitHandle {
@@ -126,13 +129,19 @@ pub async fn run(check: &CheckResult, root: &Path, listen: &str) -> Result<(), S
     // reason. A browser opening during a hold must see it, the arbiter
     // republishes only on change, and a restarted arbiter reads its holds
     // back from here (docs/design.md#arbitrated-mode).
-    mirror(&session, "home/hold/**").await?;
+    let holds = mirror(&session, "home/hold/**").await?;
     // What the arbiter resolved, so a restarted arbiter does not send an
     // applied hold again (docs/design.md#which-hold-wins).
-    mirror(&session, "home/arbitration/*").await?;
+    let arbitration = mirror(&session, "home/arbitration/*").await?;
 
+    let recorder = recorder_unit(check);
     let mut world = WorldMeta {
         grants: check.grants.clone(),
+        replay: if recorder.is_some() {
+            "pending"
+        } else {
+            "none"
+        },
         ..WorldMeta::default()
     };
     for unit in &check.house.units {
@@ -161,8 +170,17 @@ pub async fn run(check: &CheckResult, root: &Path, listen: &str) -> Result<(), S
     for unit in &check.house.units {
         core.launch(UnitSpec::from_loaded(unit, root, listen)).await;
     }
-    if let Some(recorder) = recorder_unit(check) {
-        tokio::spawn(replay::replay_when_running(core.clone(), recorder, state));
+    if let Some(recorder) = recorder {
+        tokio::spawn(replay::replay_when_running(
+            core.clone(),
+            recorder,
+            replay::Mirrors {
+                state,
+                holds,
+                arbitration,
+            },
+            arbiters(check),
+        ));
     }
 
     stop.await;
@@ -349,6 +367,12 @@ impl Core {
         let _ = self.session.put(bus::GRANTS_PENDING_KEY, payload).await;
     }
 
+    /// Marks the replay after this start done and says so on the bus.
+    pub async fn replay_done(&self) {
+        self.world.lock().expect("world meta lock").replay = "done";
+        let _ = self.session.put(bus::REPLAY_KEY, "\"done\"").await;
+    }
+
     /// Empties the pending table once an apply has completed and every unit
     /// runs on the applied table.
     async fn clear_pending_grants(&self) {
@@ -397,6 +421,14 @@ impl Core {
         let _ = self.session.put(bus::GRANTS_KEY, payload).await;
         let payload = serde_json::to_string(&pending).expect("grants serialize");
         let _ = self.session.put(bus::GRANTS_PENDING_KEY, payload).await;
+        let replay = self.world.lock().expect("world meta lock").replay;
+        let _ = self
+            .session
+            .put(
+                bus::REPLAY_KEY,
+                serde_json::to_string(replay).expect("a string"),
+            )
+            .await;
     }
 }
 
@@ -446,6 +478,10 @@ async fn serve_meta(core: Arc<Core>) -> Result<(), String> {
                 entries.push((
                     bus::GRANTS_PENDING_KEY.to_string(),
                     serde_json::to_vec(&world.pending_grants).expect("grants serialize"),
+                ));
+                entries.push((
+                    bus::REPLAY_KEY.to_string(),
+                    serde_json::to_vec(world.replay).expect("a string"),
                 ));
                 if let Some(commit) = &world.applied_commit {
                     entries.push((
@@ -586,6 +622,20 @@ async fn serve_health(session: &Session, health: HealthMap) -> Result<(), String
 
 /// The unit that publishes under `home/history/`: the house's recorder, of
 /// which validation allows one (docs/design.md#reserved-classes).
+/// The units that publish `home/arbitration/{unit}`: the arbiters whose
+/// holds a replay gives back.
+fn arbiters(check: &CheckResult) -> std::collections::BTreeSet<String> {
+    check
+        .expanded
+        .iter()
+        .filter(|k| {
+            k.direction == crate::expand::Direction::Publishes
+                && k.source.starts_with("home/arbitration/")
+        })
+        .map(|k| k.unit.clone())
+        .collect()
+}
+
 fn recorder_unit(check: &CheckResult) -> Option<String> {
     check
         .expanded

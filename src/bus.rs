@@ -92,6 +92,21 @@ pub fn about(applied_commit: Option<&str>) -> serde_json::Value {
 /// (docs/design.md#replay-after-a-core-restart).
 pub const HISTORY_LATEST_KEY: &str = "home/history/latest";
 
+/// The recorder's latest record at every `home/hold/**` and
+/// `home/arbitration/*` key, as one JSON array of `{key, value, ts}`. The
+/// core reads it once after a restart, after [`HISTORY_LATEST_KEY`], to give
+/// each arbiter its holds back (docs/design.md#replay-after-a-core-restart).
+pub const HISTORY_HOLDS_KEY: &str = "home/history/holds";
+
+/// Where the replay after this core's start stands, as a JSON string:
+/// `"none"` with no recorder in the house, `"pending"` until the arbiters'
+/// holds are back, `"done"` after. It is also `"done"` when the read failed,
+/// or when the recorder did not run within 20 s, and then no holds are
+/// replayed. An arbiter waits for it before it resolves, so it does not send
+/// a unit's hold and then the family's
+/// (docs/design.md#replay-after-a-core-restart).
+pub const REPLAY_KEY: &str = "home/meta/system/replay";
+
 /// The apply control queryable: a GET with payload is an apply request
 /// (the same query-as-command pattern as config writes).
 pub const APPLY_KEY: &str = "home/meta/system/apply";

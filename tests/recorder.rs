@@ -509,7 +509,7 @@ async fn stats_describe_the_store() {
     assert_eq!(replies.len(), 1);
     assert_eq!(replies[0].0, "home/history/stats");
     let stats = &replies[0].1;
-    assert_eq!(stats["store_version"], json!(6));
+    assert_eq!(stats["store_version"], json!(7));
     assert_eq!(stats["archives"], json!([]), "nothing sealed: {stats}");
     let file_bytes = stats["file_bytes"].as_i64().expect("file size");
     assert!(file_bytes >= 4096, "page_count * page_size: {stats}");
@@ -1149,7 +1149,7 @@ async fn v0_store_migrates_in_place() {
     );
     assert_eq!(
         read_rows(&db, "PRAGMA user_version"),
-        vec![vec![SqlValue::Integer(6)]],
+        vec![vec![SqlValue::Integer(7)]],
         "a v0 store arrives at the current layout in one start"
     );
     assert_eq!(
@@ -1216,7 +1216,7 @@ async fn v1_store_backfills_its_tally() {
 
     assert_eq!(
         read_rows(&db, "PRAGMA user_version"),
-        vec![vec![SqlValue::Integer(6)]]
+        vec![vec![SqlValue::Integer(7)]]
     );
     // The bounds come from the rows. The oldest row of the first series
     // was inserted last, so a tally that took each series' first or last
@@ -1557,7 +1557,7 @@ async fn v4_store_names_the_sources_it_left_empty() {
 
     assert_eq!(
         read_rows(&db, "PRAGMA user_version"),
-        vec![vec![SqlValue::Integer(6)]],
+        vec![vec![SqlValue::Integer(7)]],
         "the store reports the layout it now has"
     );
     // Only forecast series are named: every other class has an empty
@@ -1632,7 +1632,7 @@ async fn v2_store_gains_the_forecast_table() {
 
     assert_eq!(
         read_rows(&db, "PRAGMA user_version"),
-        vec![vec![SqlValue::Integer(6)]],
+        vec![vec![SqlValue::Integer(7)]],
         "the store reports the layout it now has"
     );
     // The existing series is untouched, and it carries the empty source

@@ -403,3 +403,93 @@ async fn a_moved_entity_is_not_replayed() {
     sup.shutdown();
     let _ = std::fs::remove_file(&db);
 }
+
+const HOLDS_FIXTURE: &str = "tests/fixtures/house_replay_holds";
+const FAMILY_HOLD: &str = "home/hold/arbiter/hallway/front_door/locked";
+const LOCK_CMD: &str = "home/cmd/hallway/front_door/locked";
+
+/// Waits until the recorder holds a record at `key`, read from
+/// home/history/holds.
+async fn await_standing(session: &zenoh::Session, key: &str) -> Value {
+    for _ in 0..100 {
+        if let Some(Value::Array(rows)) = cache_read(session, "home/history/holds").await {
+            if let Some(row) = rows.iter().find(|r| r["key"] == json!(key)) {
+                return row["value"].clone();
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    panic!("the recorder never kept {key}");
+}
+
+/// The family's hold outlives a core restart
+/// (docs/design.md#replay-after-a-core-restart): the recorder keeps it and
+/// the arbitration document, the core gives both back once the recorder
+/// runs and says the replay is done, and the restarted arbiter, which waits
+/// for that, goes on refusing what the hold refused.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_familys_hold_comes_back_after_a_core_restart() {
+    let db = store_path("holds");
+    let units = ["recorder", "reflector", "arbiter"];
+    let (mut sup, observer) = setup(HOLDS_FIXTURE, &db, &units).await;
+    observer
+        .put(
+            LOCK_CMD,
+            json!({"value": true, "priority": "manual", "actor": "owner", "id": "fa111111"})
+                .to_string(),
+        )
+        .await
+        .expect("cmd put");
+    let kept = await_standing(&observer, FAMILY_HOLD).await;
+    assert_eq!(kept["actor"], json!("owner"));
+    await_standing(&observer, "home/arbitration/arbiter").await;
+
+    sup.shutdown();
+    drop(observer);
+    let (mut sup, observer) = setup(HOLDS_FIXTURE, &db, &units).await;
+
+    let mut done = false;
+    for _ in 0..100 {
+        if cache_read(&observer, "home/meta/system/replay").await == Some(json!("done")) {
+            done = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    assert!(done, "the core says the replay is done");
+    let back = cache_read(&observer, FAMILY_HOLD)
+        .await
+        .expect("the family's hold is back in the mirror");
+    assert_eq!(
+        (back["actor"].clone(), back["id"].clone()),
+        (json!("owner"), json!("fa111111"))
+    );
+
+    let events = observer
+        .declare_subscriber("home/health/arbiter/event")
+        .await
+        .expect("event subscriber");
+    observer
+        .put(
+            LOCK_CMD,
+            json!({"value": false, "priority": "automation", "actor": "scheduler", "id": "5c4ed001"})
+                .to_string(),
+        )
+        .await
+        .expect("cmd put");
+    let mut refused = None;
+    while let Ok(Ok(sample)) =
+        tokio::time::timeout(Duration::from_secs(10), events.recv_async()).await
+    {
+        let event: Value = serde_json::from_slice(&sample.payload().to_bytes()).expect("json");
+        if event["kind"] == json!("refuse") {
+            refused = Some(event);
+            break;
+        }
+    }
+    let refused = refused.expect("the restarted arbiter refuses below the family's hold");
+    assert_eq!(refused["holder_actor"], json!("owner"));
+
+    sup.shutdown();
+    let _ = std::fs::remove_file(&db);
+}

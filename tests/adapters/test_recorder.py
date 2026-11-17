@@ -16,6 +16,7 @@ from recorder import (
     MAX_QUERY_LIMIT,
     SEED_TOLERANCE_US,
     Recorder,
+    Writer,
     archive_boundary_us,
     as_issues,
     bucketed,
@@ -31,6 +32,7 @@ from recorder import (
     parse_params,
     rows_per_day,
     split_selector,
+    standing,
     typed,
 )
 
@@ -372,3 +374,70 @@ class CommandRecordTest(unittest.TestCase):
         rec = self.recorder()
         self.record(rec, b'{"value": "heat", "priority": "manual", "hold": "none"}')
         self.assertEqual([table for table, _ in rec.queued], ["samples", "events"])
+
+
+class StandingTest(StoreTest):
+    """The latest hold and arbitration record per key, for the core's replay
+    after a restart (docs/design.md#replay-after-a-core-restart)."""
+
+    def flush(self, rows):
+        writer = Writer.__new__(Writer)
+        writer.db_path = self.db
+        writer._flush([("standing", row) for row in rows])
+
+    def test_a_put_replaces_and_a_delete_removes_in_bus_order(self):
+        key = "home/hold/arbiter/hall/door/locked"
+        self.flush([
+            (key, 1, '{"value": true}'),
+            (key, 2, '{"value": false}'),
+            ("home/arbitration/arbiter", 2, '{"schema": 1}'),
+            ("home/hold/arbiter/hall/door/other", 3, '{"value": 1}'),
+            ("home/hold/arbiter/hall/door/other", 4, None),
+        ])
+        self.assertEqual(
+            standing(self.conn),
+            [
+                {"key": "home/arbitration/arbiter", "value": {"schema": 1}, "ts": 2},
+                {"key": key, "value": {"value": False}, "ts": 2},
+            ],
+        )
+
+    def test_a_record_that_is_not_json_is_left_out(self):
+        self.flush([("home/hold/arbiter/hall/door/locked", 1, "not json")])
+        self.assertEqual(standing(self.conn), [])
+
+
+class ReconcileStandingTest(StoreTest):
+    """At start, `standing` is rebuilt from the mirror unless a replay is
+    pending, so a change the recorder missed does not come back."""
+
+    def recorder(self, status, mirror):
+        rec = Recorder.__new__(Recorder)
+        rec.db_path = self.db
+        rec.sess = types.SimpleNamespace(
+            get_json=lambda expr: [(expr, status)] if status is not None else [],
+            get_json_aged=lambda expr: [(k, v, 1.0) for k, v in mirror if k.startswith(expr.rstrip("*"))],
+        )
+        return rec
+
+    def stale(self):
+        writer = Writer.__new__(Writer)
+        writer.db_path = self.db
+        writer._flush([
+            ("standing", ("home/hold/arbiter/hall/door/locked", 1, '{"value": true}')),
+            ("standing", ("home/arbitration/arbiter", 1, '{"schema": 1, "aspects": []}')),
+        ])
+
+    def test_after_a_missed_release_the_mirror_wins(self):
+        self.stale()
+        self.recorder("done", [("home/arbitration/arbiter", {"schema": 1, "aspects": [1]})]).reconcile_standing()
+        self.assertEqual(
+            [(r["key"], r["value"]) for r in standing(self.conn)],
+            [("home/arbitration/arbiter", {"schema": 1, "aspects": [1]})],
+        )
+
+    def test_a_pending_replay_or_a_silent_core_leaves_the_table(self):
+        for status in ("pending", None):
+            self.stale()
+            self.recorder(status, []).reconcile_standing()
+            self.assertEqual(len(standing(self.conn)), 2, status)
