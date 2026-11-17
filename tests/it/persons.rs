@@ -29,23 +29,16 @@ async fn put(publisher: &Publisher, value: Value) {
 /// Waits for a `decision` event on the person's rule whose outcome starts
 /// with `prefix`.
 async fn expect_decision(sub: &common::StateSub, prefix: &str) {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
-    loop {
-        let sample = tokio::time::timeout_at(deadline, sub.recv_async())
-            .await
-            .unwrap_or_else(|_| panic!("no decision \"{prefix}…\" within 20s"))
-            .expect("event stream open");
-        let event: Value =
-            serde_json::from_slice(&sample.payload().to_bytes()).expect("health event is JSON");
-        if event["kind"] == "decision"
+    let what = format!("decision \"{prefix}…\"");
+    common::await_sample(sub, Duration::from_secs(20), &what, |msg| {
+        let event = msg.value();
+        event["kind"] == "decision"
             && event["rule"] == "fredrik"
             && event["outcome"]
                 .as_str()
                 .is_some_and(|o| o.starts_with(prefix))
-        {
-            return;
-        }
-    }
+    })
+    .await;
 }
 
 /// A geofence and a router sighting make one person: home on either, away

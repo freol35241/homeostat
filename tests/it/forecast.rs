@@ -16,32 +16,10 @@
 
 use std::time::Duration;
 
-use serde_json::Value;
-
-use crate::common::{matched_publisher, up, Supervisor};
+use crate::common::{cache_read, eventually, matched_publisher, up, Supervisor};
 
 const FIXTURE: &str = "tests/fixtures/house_forecast";
 const FORECAST_KEY: &str = "home/forecast/global/spot_price/price/nordpool";
-
-/// Queries a key and returns the first ok reply's payload, retrying until
-/// one arrives, because the mirror answers only once it has seen the put.
-async fn mirror_read_eventually(session: &zenoh::Session, key: &str) -> Value {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
-    loop {
-        let replies = session.get(key).await.expect("mirror query");
-        while let Ok(reply) = replies.recv_async().await {
-            if let Ok(sample) = reply.result() {
-                return serde_json::from_slice(&sample.payload().to_bytes())
-                    .expect("mirror reply is JSON");
-            }
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "mirror never answered for {key}"
-        );
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-}
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_forecast_is_published_and_mirrored_for_a_late_joiner() {
@@ -52,7 +30,10 @@ async fn a_forecast_is_published_and_mirrored_for_a_late_joiner() {
     // day, so without this a consumer restarting mid-horizon would run
     // blind until the next issue.
     let late_joiner = sup.observer().await;
-    let payload = mirror_read_eventually(&late_joiner, FORECAST_KEY).await;
+    let payload = eventually(Duration::from_secs(15), "mirrored forecast", || {
+        cache_read(&late_joiner, FORECAST_KEY)
+    })
+    .await;
 
     assert_eq!(payload["schema"], 1, "{payload}");
     assert!(
@@ -129,7 +110,10 @@ async fn a_core_restart_empties_the_mirror_and_only_a_producer_refills_it() {
             .put(issue.to_string())
             .await
             .expect("publish forecast");
-        let seen = mirror_read_eventually(&observer, KEY).await;
+        let seen = eventually(Duration::from_secs(15), "mirrored forecast", || {
+            cache_read(&observer, KEY)
+        })
+        .await;
         assert_eq!(seen["points"][0]["v"], serde_json::json!(3.5), "{seen}");
     }
     sup.shutdown();
@@ -138,9 +122,12 @@ async fn a_core_restart_empties_the_mirror_and_only_a_producer_refills_it() {
     let (mut restarted, observer) = up(|| Supervisor::spawn(FIXTURE), &["seer"]).await;
     // `seer` is up and has re-issued its own key, so the mirror is
     // serving forecasts again. This one is not among them.
-    mirror_read_eventually(&observer, FORECAST_KEY).await;
+    eventually(Duration::from_secs(15), "mirrored forecast", || {
+        cache_read(&observer, FORECAST_KEY)
+    })
+    .await;
     assert!(
-        query_once(&observer, KEY).await.is_none(),
+        cache_read(&observer, KEY).await.is_none(),
         "a forecast nobody republished must not survive the core that held it"
     );
 
@@ -150,21 +137,13 @@ async fn a_core_restart_empties_the_mirror_and_only_a_producer_refills_it() {
         .put(issue.to_string())
         .await
         .expect("republish forecast");
-    let again = mirror_read_eventually(&observer, KEY).await;
+    let again = eventually(Duration::from_secs(15), "mirrored forecast", || {
+        cache_read(&observer, KEY)
+    })
+    .await;
     assert_eq!(again["points"][0]["v"], serde_json::json!(3.5), "{again}");
 
     restarted.shutdown();
-}
-
-/// One query, one pass: whether the mirror holds this key right now.
-async fn query_once(session: &zenoh::Session, key: &str) -> Option<Value> {
-    let replies = session.get(key).await.expect("mirror query");
-    while let Ok(reply) = replies.recv_async().await {
-        if let Ok(sample) = reply.result() {
-            return serde_json::from_slice(&sample.payload().to_bytes()).ok();
-        }
-    }
-    None
 }
 
 /// Epoch seconds from an RFC3339 instant with a UTC offset, without adding

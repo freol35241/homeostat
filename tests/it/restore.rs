@@ -15,9 +15,9 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use serde_json::{json, Value};
+use serde_json::json;
 
-use crate::common::{await_mirror, matched_publisher, up, Supervisor};
+use crate::common::{await_mirror, cache_read, eventually, matched_publisher, up, Supervisor};
 
 const FIXTURE: &str = "tests/fixtures/house_restore";
 const LATCH: &str = "home/state/global/night_mode/on";
@@ -45,37 +45,6 @@ async fn setup(db: &Path) -> (Supervisor, zenoh::Session) {
     .await
 }
 
-/// Polls the recorder until the latch's history holds `expected` as its
-/// newest row. That is the row `restore` reads after the restart.
-async fn await_recorded(session: &zenoh::Session, expected: &Value) {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-    loop {
-        let replies = session
-            .get("home/history/state/night_mode/on?limit=1")
-            .await
-            .expect("history query");
-        while let Ok(reply) = replies.recv_async().await {
-            if let Ok(sample) = reply.result() {
-                let rows: Value =
-                    serde_json::from_slice(&sample.payload().to_bytes()).expect("rows are JSON");
-                if rows
-                    .as_array()
-                    .and_then(|r| r.last())
-                    .map(|row| &row["value"])
-                    == Some(expected)
-                {
-                    return;
-                }
-            }
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "recorder never held {expected} for the latch"
-        );
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
-}
-
 /// A latch commanded on, the core restarted, and the decision still
 /// standing afterwards rather than falling to the code default.
 #[tokio::test(flavor = "multi_thread")]
@@ -95,7 +64,13 @@ async fn a_latch_restores_its_decision_across_a_core_restart() {
         .await
         .expect("command put");
     await_mirror(&observer, LATCH, &json!(true)).await;
-    await_recorded(&observer, &json!(true)).await;
+    // The newest row of the latch's history is the one `restore` reads
+    // after the restart.
+    eventually(Duration::from_secs(30), "recorded latch row", || async {
+        let rows = cache_read(&observer, "home/history/state/night_mode/on?limit=1").await?;
+        (rows.as_array()?.last()?["value"] == json!(true)).then_some(())
+    })
+    .await;
 
     // The core goes down and comes back: the mirror is empty, the store is
     // not. Everything the latch knows now comes from `restore`.

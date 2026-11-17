@@ -11,8 +11,8 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 
 use crate::common::{
-    await_mirror, cache_read, expect_event_kind, expect_state, fixture_command, free_port,
-    next_event, up, StateSub, Supervisor,
+    await_mirror, cache_read, expect_event_kind, expect_silence, expect_state, fixture_command,
+    free_port, next_event, next_sample, up, StateSub, Supervisor, SILENCE,
 };
 
 const FIXTURE: &str = "tests/fixtures/house_onvif";
@@ -450,15 +450,7 @@ async fn repeated_notifications_publish_one_transition() {
     for _ in 0..10 {
         camera.control("/control/trigger?value=true");
     }
-    let repeat = tokio::time::timeout(Duration::from_secs(5), state_sub.recv_async()).await;
-    assert!(
-        repeat.is_err(),
-        "motion republished with no transition: {:?}",
-        repeat.map(|s| s.map(|s| s
-            .payload()
-            .try_to_string()
-            .map(std::borrow::Cow::into_owned)))
-    );
+    expect_silence(&state_sub, SILENCE, "motion republished with no transition").await;
 
     // ...and a real edge still gets through. The test asserts on the next
     // sample's value instead of retrying until false, so a duplicate
@@ -466,12 +458,9 @@ async fn repeated_notifications_publish_one_transition() {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
         camera.control("/control/trigger?value=false");
-        let recv = tokio::time::timeout(Duration::from_secs(1), state_sub.recv_async()).await;
-        if let Ok(Ok(sample)) = recv {
-            let value: Value = serde_json::from_slice(&sample.payload().to_bytes())
-                .expect("state payload is JSON");
+        if let Some(sample) = next_sample(&state_sub, Duration::from_secs(1)).await {
             assert_eq!(
-                value,
+                *sample.value(),
                 json!(false),
                 "the next sample after a rise must be the fall"
             );

@@ -13,12 +13,10 @@
 use std::time::Duration;
 
 use serde_json::{json, Value};
-use zenoh::handlers::FifoChannelHandler;
-use zenoh::pubsub::Subscriber;
-use zenoh::sample::Sample;
 
 use crate::common::{
-    await_matching, config_write, matched_publisher, restart_unit, up, Supervisor,
+    await_matching, await_mirror, config_write, matched_publisher, next_sample, restart_unit, up,
+    StateSub, Supervisor,
 };
 
 const FIXTURE: &str = "tests/fixtures/house_virtual";
@@ -26,37 +24,10 @@ const FUSED_STATE: &str = "home/state/global/downstairs_temperature/temperature"
 const LIVINGROOM_STATE: &str = "home/state/livingroom/thermo/temperature";
 const OFFICE_STATE: &str = "home/state/office/thermo/temperature";
 
-type Sub = Subscriber<FifoChannelHandler<Sample>>;
-
-async fn next_sample(sub: &Sub, timeout: Duration) -> Value {
-    let sample = tokio::time::timeout(timeout, sub.recv_async())
-        .await
-        .expect("fused sample within timeout")
-        .expect("state stream open");
-    serde_json::from_slice(&sample.payload().to_bytes()).expect("state payload is JSON")
-}
-
-/// Reads a concrete key from the core's last-value state mirror, retrying
-/// until it holds the expected value.
-async fn mirror_read_eventually(session: &zenoh::Session, key: &str, expected: &Value) {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    loop {
-        let replies = session.get(key).await.expect("mirror query");
-        while let Ok(reply) = replies.recv_async().await {
-            if let Ok(sample) = reply.result() {
-                let value: Value = serde_json::from_slice(&sample.payload().to_bytes())
-                    .expect("mirror reply is JSON");
-                if &value == expected {
-                    return;
-                }
-            }
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "mirror never held {expected} at {key}"
-        );
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
+/// The next fused reading.
+async fn next_fused(sub: &StateSub) -> Value {
+    let msg = next_sample(sub, Duration::from_secs(10)).await;
+    msg.expect("fused sample within 10s").value().clone()
 }
 
 /// The fused downstairs temperature: derived state lands on the virtual
@@ -75,11 +46,8 @@ async fn virtual_sensor_publishes_fused_state() {
 
     // One source: the fusion is that reading.
     livingroom.put(json!(20.0).to_string()).await.expect("put");
-    assert_eq!(
-        next_sample(&fused_sub, Duration::from_secs(10)).await,
-        json!(20.0)
-    );
-    mirror_read_eventually(&observer, FUSED_STATE, &json!(20.0)).await;
+    assert_eq!(next_fused(&fused_sub).await, json!(20.0));
+    await_mirror(&observer, FUSED_STATE, &json!(20.0)).await;
 
     // A second source at the same value does not move the mean, so nothing
     // publishes. Then a real move publishes once. One session's samples
@@ -87,11 +55,8 @@ async fn virtual_sensor_publishes_fused_state() {
     // 20.0 was published in between.
     office.put(json!(20.0).to_string()).await.expect("put");
     office.put(json!(22.0).to_string()).await.expect("put");
-    assert_eq!(
-        next_sample(&fused_sub, Duration::from_secs(10)).await,
-        json!(21.0)
-    );
-    mirror_read_eventually(&observer, FUSED_STATE, &json!(21.0)).await;
+    assert_eq!(next_fused(&fused_sub).await, json!(21.0));
+    await_mirror(&observer, FUSED_STATE, &json!(21.0)).await;
 
     sup.shutdown();
 }
@@ -116,17 +81,11 @@ async fn restarted_automation_catches_up_from_the_mirror() {
     // One put at a time: the unit reads the two sources through two
     // subscribers, and zenoh orders samples within one, not across them.
     livingroom.put(json!(20.0).to_string()).await.expect("put");
-    assert_eq!(
-        next_sample(&fused_sub, Duration::from_secs(10)).await,
-        json!(20.0)
-    );
+    assert_eq!(next_fused(&fused_sub).await, json!(20.0));
     office.put(json!(22.0).to_string()).await.expect("put");
-    assert_eq!(
-        next_sample(&fused_sub, Duration::from_secs(10)).await,
-        json!(21.0)
-    );
-    mirror_read_eventually(&observer, LIVINGROOM_STATE, &json!(20.0)).await;
-    mirror_read_eventually(&observer, OFFICE_STATE, &json!(22.0)).await;
+    assert_eq!(next_fused(&fused_sub).await, json!(21.0));
+    await_mirror(&observer, LIVINGROOM_STATE, &json!(20.0)).await;
+    await_mirror(&observer, OFFICE_STATE, &json!(22.0)).await;
 
     // The mirror serves each value with its age.
     let replies = observer.get(OFFICE_STATE).await.expect("mirror query");
@@ -149,14 +108,8 @@ async fn restarted_automation_catches_up_from_the_mirror() {
     // from the catch-up alone, with no source publishing. Catch-up arrives one
     // key at a time and the unit recomputes on each, as on first start.
     restart_unit(&observer, "fused_temperature").await;
-    assert_eq!(
-        next_sample(&fused_sub, Duration::from_secs(10)).await,
-        json!(20.0)
-    );
-    assert_eq!(
-        next_sample(&fused_sub, Duration::from_secs(10)).await,
-        json!(21.0)
-    );
+    assert_eq!(next_fused(&fused_sub).await, json!(20.0));
+    assert_eq!(next_fused(&fused_sub).await, json!(21.0));
 
     // Tighten the policy so both mirrored values are stale by the next
     // restart. The catch-up then publishes nothing, and the first live
@@ -169,10 +122,7 @@ async fn restarted_automation_catches_up_from_the_mirror() {
     restart_unit(&observer, "fused_temperature").await;
     await_matching(&office).await;
     office.put(json!(30.0).to_string()).await.expect("put");
-    assert_eq!(
-        next_sample(&fused_sub, Duration::from_secs(10)).await,
-        json!(30.0)
-    );
+    assert_eq!(next_fused(&fused_sub).await, json!(30.0));
 
     sup.shutdown();
 }

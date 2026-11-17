@@ -8,7 +8,7 @@ use std::time::Duration;
 use serde_json::{json, Value};
 
 use crate::common::{
-    assert_unit_contract, await_discovery, await_states, cache_read, expect_drop_event,
+    assert_unit_contract, await_discovery, await_states, cache_read, eventually, expect_drop_event,
     expect_states, matched_publisher, next_event, up, Mosquitto, Mqtt, StateSub, Supervisor,
 };
 
@@ -48,24 +48,6 @@ fn wish(text: Value, actor: &str) -> Value {
 
 fn body(payload: &[u8]) -> Value {
     serde_json::from_slice(payload).expect("the phone's payload is JSON")
-}
-
-/// Polls the core mirror until `key` carries a number, and returns it —
-/// the shape for a timestamp no test can predict.
-async fn await_number(observer: &zenoh::Session, key: &str) -> f64 {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
-    loop {
-        if let Some(value) = cache_read(observer, key).await {
-            if let Some(number) = value.as_f64() {
-                return number;
-            }
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "{key} never carried a number"
-        );
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
 }
 
 /// (a) The phone's two upward channels: a geofence transition becomes
@@ -177,8 +159,14 @@ async fn notifications_reach_the_phone_and_publish_delivered() {
     assert_eq!(body(&payload)["text"], "Motion in the hall and nobody home");
 
     // delivered is the broker's ack, so it lands without the phone ever
-    // saying anything back.
-    let delivered = await_number(&observer, "home/state/person/alice_phone/delivered").await;
+    // saying anything back. It is a timestamp, so the test waits for any
+    // number.
+    let delivered = eventually(Duration::from_secs(20), "number at delivered", || async {
+        cache_read(&observer, "home/state/person/alice_phone/delivered")
+            .await?
+            .as_f64()
+    })
+    .await;
     assert!(delivered > 0.0, "delivered is an epoch: {delivered}");
 
     assert_unit_contract(&mut sup, &observer, "companion").await;

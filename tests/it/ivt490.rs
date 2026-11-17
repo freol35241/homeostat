@@ -7,8 +7,8 @@ use std::time::Duration;
 use serde_json::json;
 
 use crate::common::{
-    assert_unit_contract, expect_drop_event, expect_event_kind, expect_states, up, Mosquitto, Mqtt,
-    Supervisor,
+    assert_unit_contract, expect_drop_event, expect_event_kind, expect_silence, expect_states, up,
+    Mosquitto, Mqtt, Supervisor, SILENCE,
 };
 
 const FIXTURE: &str = "tests/fixtures/house_ivt490";
@@ -133,11 +133,7 @@ async fn ivt490_state_translates_to_bus_state() {
     )
     .await;
 
-    let no_event = tokio::time::timeout(Duration::from_millis(1500), event_sub.recv_async()).await;
-    assert!(
-        no_event.is_err(),
-        "unexpected health event for blob/raw topics"
-    );
+    expect_silence(&event_sub, SILENCE, "health event for blob/raw topics").await;
 
     // The discovery record carries the entity's aspect descriptor
     // (docs/design.md#aspect-descriptors): the dashboard's vocabulary for
@@ -254,8 +250,7 @@ async fn a_null_controller_value_is_absent_not_a_sample() {
 
     // The value key never saw the null: by the time the flag and the event
     // are through, a publish of it would have arrived.
-    let extra = tokio::time::timeout(Duration::from_millis(1500), value_sub.recv_async()).await;
-    assert!(extra.is_err(), "null reached the value key: {extra:?}");
+    expect_silence(&value_sub, SILENCE, "null on the value key").await;
 
     sup.shutdown();
 }
@@ -323,11 +318,8 @@ async fn manual_setpoint_reaches_mqtt_via_arbiter_then_automation_refused() {
         .put(SETPOINT_CMD_KEY, auto_wish.to_string())
         .await
         .expect("cmd put");
-    let silence = mqtt.next_message(Duration::from_millis(1500)).await;
-    assert!(
-        silence.is_none(),
-        "refused automation wish reached MQTT: {silence:?}"
-    );
+    mqtt.expect_silence(SILENCE, "refused automation wish on MQTT")
+        .await;
 
     sup.shutdown();
 }
@@ -369,7 +361,7 @@ async fn setpoint_is_retained_and_the_expiring_offset_is_not() {
     late.subscribe(&format!("{BASE}/controller/set/+")).await;
 
     let mut seen: Vec<(String, Vec<u8>)> = Vec::new();
-    while let Some(message) = late.next_message(Duration::from_millis(1500)).await {
+    while let Some(message) = late.next_message(SILENCE).await {
         seen.push(message);
     }
 
@@ -423,11 +415,7 @@ async fn fed_input_follows_its_source_and_stops_on_loss() {
     // Not retained: a fresh subscriber sees nothing.
     let mut late = Mqtt::connect(mosquitto.port, "test-feed-late").await;
     late.subscribe(FEED_SET_TOPIC).await;
-    let retained = late.next_message(Duration::from_secs(1)).await;
-    assert!(
-        retained.is_none(),
-        "a fed value must not be retained: {retained:?}"
-    );
+    late.expect_silence(SILENCE, "retained fed value").await;
 
     // Source goes unavailable: the retained slot is cleared once (an empty
     // retained publish) and a following sample is not forwarded.
@@ -448,11 +436,11 @@ async fn fed_input_follows_its_source_and_stops_on_loss() {
         .put(FEED_SOURCE_KEY, "22.0")
         .await
         .expect("state put");
-    let silence = mqtt.next_message(Duration::from_millis(1500)).await;
-    assert!(
-        silence.is_none(),
-        "sample forwarded while source unavailable: {silence:?}"
-    );
+    mqtt.expect_silence(
+        SILENCE,
+        "forward of a sample while the source is unavailable",
+    )
+    .await;
 
     // Source returns: forwarding resumes.
     observer
@@ -485,11 +473,8 @@ async fn fed_input_follows_its_source_and_stops_on_loss() {
         .await
         .expect("arbiter put");
     expect_drop_event(&event_sub, "invalid-command").await;
-    let silence = mqtt.next_message(Duration::from_secs(1)).await;
-    assert!(
-        silence.is_none(),
-        "command on a fed input reached MQTT: {silence:?}"
-    );
+    mqtt.expect_silence(SILENCE, "MQTT publish for a command on a fed input")
+        .await;
 
     sup.shutdown();
 }
@@ -518,11 +503,8 @@ async fn out_of_range_setpoint_drops_with_invalid_command_event() {
     assert_eq!(event["aspect"], json!("setpoint"));
     assert_eq!(event["value"], json!(35.0));
 
-    let silence = mqtt.next_message(Duration::from_millis(1500)).await;
-    assert!(
-        silence.is_none(),
-        "out-of-range setpoint reached MQTT: {silence:?}"
-    );
+    mqtt.expect_silence(SILENCE, "out-of-range setpoint on MQTT")
+        .await;
 
     sup.shutdown();
 }
@@ -573,11 +555,8 @@ async fn offset_bound_admits_the_flow_and_refuses_nonsense() {
     assert_eq!(event["aspect"], json!("outdoor_temperature_offset"));
     assert_eq!(event["value"], json!(60.0));
 
-    let silence = mqtt.next_message(Duration::from_millis(1500)).await;
-    assert!(
-        silence.is_none(),
-        "out-of-range offset reached MQTT: {silence:?}"
-    );
+    mqtt.expect_silence(SILENCE, "out-of-range offset on MQTT")
+        .await;
 
     sup.shutdown();
 }
@@ -622,11 +601,8 @@ async fn operating_mode_enum_enforced() {
     let event = expect_drop_event(&event_sub, "invalid-command").await;
     assert_eq!(event["aspect"], json!("operating_mode"));
     assert_eq!(event["value"], json!(4));
-    let silence = mqtt.next_message(Duration::from_millis(1500)).await;
-    assert!(
-        silence.is_none(),
-        "out-of-enum operating_mode reached MQTT: {silence:?}"
-    );
+    mqtt.expect_silence(SILENCE, "out-of-enum operating_mode on MQTT")
+        .await;
 
     // A non-integer drops the same way.
     let wish = json!({"value": 2.5, "priority": "manual", "actor": "test"});
@@ -637,11 +613,8 @@ async fn operating_mode_enum_enforced() {
     let event = expect_drop_event(&event_sub, "invalid-command").await;
     assert_eq!(event["aspect"], json!("operating_mode"));
     assert_eq!(event["value"], json!(2.5));
-    let silence = mqtt.next_message(Duration::from_millis(1500)).await;
-    assert!(
-        silence.is_none(),
-        "non-integer operating_mode reached MQTT: {silence:?}"
-    );
+    mqtt.expect_silence(SILENCE, "non-integer operating_mode on MQTT")
+        .await;
 
     sup.shutdown();
 }
@@ -667,11 +640,8 @@ async fn envelope_less_command_drops_with_health_event() {
         .await
         .expect("cmd put");
     expect_drop_event(&event_sub, "invalid-command").await;
-    let silence = mqtt.next_message(Duration::from_millis(1500)).await;
-    assert!(
-        silence.is_none(),
-        "envelope-less command reached MQTT: {silence:?}"
-    );
+    mqtt.expect_silence(SILENCE, "envelope-less command on MQTT")
+        .await;
 
     let envelope = json!({"value": 21.0, "priority": "manual", "actor": "test"});
     observer

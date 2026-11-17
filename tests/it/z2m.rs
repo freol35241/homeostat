@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 
 use crate::common::{
     assert_unit_contract, await_running, expect_drop_event, expect_event_kind, expect_states,
-    next_event, startup_permit, temp_house, up, Mosquitto, Mqtt, Supervisor,
+    next_event, next_sample, startup_permit, temp_house, up, Mosquitto, Mqtt, Supervisor, SILENCE,
 };
 
 const FIXTURE: &str = "tests/fixtures/house_z2m";
@@ -87,11 +87,10 @@ async fn a_button_publishes_every_press() {
     }
     let mut presses = Vec::new();
     for _ in 0..3 {
-        let sample = tokio::time::timeout(Duration::from_secs(10), action_sub.recv_async())
+        let press = next_sample(&action_sub, Duration::from_secs(10))
             .await
-            .expect("a press within 10s")
-            .expect("stream open");
-        presses.push(serde_json::from_slice::<Value>(&sample.payload().to_bytes()).expect("JSON"));
+            .expect("a press within 10s");
+        presses.push(press.value().clone());
     }
     assert_eq!(presses, [json!("single"), json!("single"), json!("double")]);
 
@@ -299,12 +298,10 @@ async fn malformed_inventory_entries_do_not_kill_the_translator() {
     )
     .await;
 
-    let sample = tokio::time::timeout(Duration::from_secs(10), discovery_sub.recv_async())
+    let sample = next_sample(&discovery_sub, Duration::from_secs(10))
         .await
-        .expect("discovery document within 10s")
-        .expect("discovery sample");
-    let doc: Value =
-        serde_json::from_slice(&sample.payload().to_bytes()).expect("discovery is JSON");
+        .expect("discovery document within 10s");
+    let doc = sample.value();
     let records = doc.as_array().expect("discovery is an array");
     let ids: Vec<&str> = records.iter().filter_map(|r| r["id"].as_str()).collect();
     assert!(
@@ -575,11 +572,8 @@ async fn envelope_less_command_drops_with_health_event() {
         .await
         .expect("cmd put");
     expect_drop_event(&event_sub, "invalid-command").await;
-    let silence = mqtt.next_message(Duration::from_millis(1500)).await;
-    assert!(
-        silence.is_none(),
-        "envelope-less command reached MQTT: {silence:?}"
-    );
+    mqtt.expect_silence(SILENCE, "envelope-less command on MQTT")
+        .await;
 
     // A properly enveloped command still works.
     observer
@@ -637,11 +631,8 @@ async fn manual_lock_command_reaches_mqtt_via_arbiter() {
         .put(LOCK_CMD_KEY, auto_wish.to_string())
         .await
         .expect("cmd put");
-    let silence = mqtt.next_message(Duration::from_millis(1500)).await;
-    assert!(
-        silence.is_none(),
-        "refused automation wish reached MQTT: {silence:?}"
-    );
+    mqtt.expect_silence(SILENCE, "refused automation wish on MQTT")
+        .await;
 
     sup.shutdown();
 }
@@ -738,12 +729,10 @@ async fn a_non_default_base_topic_translates_both_directions() {
         r#"[{"ieee_address":"0x1","friendly_name":"lamp_kitchen_1","definition":null}]"#,
     )
     .await;
-    let sample = tokio::time::timeout(Duration::from_secs(10), discovery_sub.recv_async())
+    let sample = next_sample(&discovery_sub, Duration::from_secs(10))
         .await
-        .expect("discovery document within 10s")
-        .expect("discovery sample");
-    let discovery: Value =
-        serde_json::from_slice(&sample.payload().to_bytes()).expect("discovery is JSON");
+        .expect("discovery document within 10s");
+    let discovery = sample.value();
     assert!(
         discovery.to_string().contains("lamp_kitchen_1"),
         "inventory republished under the moved prefix: {discovery}"
@@ -894,10 +883,9 @@ async fn a_known_but_unbound_device_does_not_report_every_message() {
         r#"[{"ieee_address":"0x1","friendly_name":"snzb_03_01","definition":null}]"#,
     )
     .await;
-    tokio::time::timeout(Duration::from_secs(10), discovery_sub.recv_async())
+    next_sample(&discovery_sub, Duration::from_secs(10))
         .await
-        .expect("inventory processed within 10s")
-        .expect("discovery sample");
+        .expect("inventory processed within 10s");
 
     for _ in 0..3 {
         mqtt.publish("zigbee2mqtt/snzb_03_01", r#"{"occupancy":true}"#)

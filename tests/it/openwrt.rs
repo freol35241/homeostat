@@ -15,8 +15,8 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 
 use crate::common::{
-    config_write, expect_event_kind, expect_state, fixture_command, free_port, restart_unit, up,
-    Supervisor,
+    await_sample, config_write, expect_event_kind, expect_state, fixture_command, free_port,
+    next_sample, restart_unit, up, Supervisor,
 };
 
 const FIXTURE: &str = "tests/fixtures/house_openwrt";
@@ -168,39 +168,38 @@ async fn wifi_association_drives_sighted() {
 
     // The station's appearance changes the periphery: one JSON array,
     // the phone's record bound to its entity.
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
-    loop {
-        let sample = tokio::time::timeout_at(deadline, discovery_sub.recv_async())
-            .await
-            .expect("discovery publish within 20s")
-            .expect("discovery stream open");
-        let records: Value = serde_json::from_slice(&sample.payload().to_bytes())
-            .expect("discovery payload is JSON");
-        let phone = records
+    let phone = |records: &Value| {
+        records
             .as_array()
             .expect("discovery payload is an array")
             .iter()
-            .find(|r| r["id"] == PHONE_MAC);
-        if let Some(record) = phone {
-            assert_eq!(record["configured"], json!(true), "phone record: {record}");
-            assert_eq!(
-                record["entity"],
-                json!("dads_phone"),
-                "phone record: {record}"
-            );
-            // and its aspect descriptor: the one boolean this capability speaks
-            assert_eq!(
-                record["aspects"]["fields"]["sighted"]["kind"],
-                json!("boolean"),
-                "{record}"
-            );
-            assert_eq!(
-                record["aspects"]["fields"]["sighted"]["values"][1]["label"],
-                json!("not seen")
-            );
-            break;
-        }
-    }
+            .find(|r| r["id"] == PHONE_MAC)
+            .cloned()
+    };
+    let doc = await_sample(
+        &discovery_sub,
+        Duration::from_secs(20),
+        "discovery publish naming the phone",
+        |msg| phone(msg.value()).is_some(),
+    )
+    .await;
+    let record = phone(doc.value()).expect("the phone's record");
+    assert_eq!(record["configured"], json!(true), "phone record: {record}");
+    assert_eq!(
+        record["entity"],
+        json!("dads_phone"),
+        "phone record: {record}"
+    );
+    // and its aspect descriptor: the one boolean this capability speaks
+    assert_eq!(
+        record["aspects"]["fields"]["sighted"]["kind"],
+        json!("boolean"),
+        "{record}"
+    );
+    assert_eq!(
+        record["aspects"]["fields"]["sighted"]["values"][1]["label"],
+        json!("not seen")
+    );
 
     router.control(&format!("/control/station?mac={PHONE_MAC}&present=false"));
     expect_state(&sighted_sub, json!(false)).await;
@@ -318,12 +317,14 @@ async fn a_silent_router_cannot_assert_absence() {
 
     // Several poll cycles past the 2s away delay: nothing may say away.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
-    while let Ok(sample) = tokio::time::timeout_at(deadline, sighted_sub.recv_async()).await {
-        let value: Value =
-            serde_json::from_slice(&sample.expect("state stream open").payload().to_bytes())
-                .expect("state payload is JSON");
+    while let Some(sample) = next_sample(
+        &sighted_sub,
+        deadline.saturating_duration_since(tokio::time::Instant::now()),
+    )
+    .await
+    {
         assert_ne!(
-            value,
+            *sample.value(),
             json!(false),
             "sighted asserted false while the AP that sees the phone was silent"
         );
@@ -340,39 +341,29 @@ async fn a_silent_router_cannot_assert_absence() {
 
 /// The phone's state samples, in arrival order, until its `fixed_at`.
 async fn until_fix(sub: &common::StateSub) -> Vec<(String, Value)> {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
     let mut seen = Vec::new();
-    loop {
-        let sample = tokio::time::timeout_at(deadline, sub.recv_async())
-            .await
-            .unwrap_or_else(|_| panic!("no fixed_at within 20s; saw {seen:?}"))
-            .expect("state stream open");
-        let key = sample
-            .key_expr()
-            .as_str()
-            .rsplit('/')
-            .next()
-            .unwrap()
-            .to_string();
-        let value: Value =
-            serde_json::from_slice(&sample.payload().to_bytes()).expect("state payload is JSON");
-        let done = key == "fixed_at";
-        seen.push((key, value));
-        if done {
-            return seen;
-        }
-    }
+    await_sample(sub, Duration::from_secs(20), "fixed_at", |msg| {
+        let aspect = msg.key.rsplit('/').next().unwrap().to_string();
+        let done = aspect == "fixed_at";
+        seen.push((aspect, msg.value().clone()));
+        done
+    })
+    .await;
+    seen
 }
 
 /// Fails if the phone publishes a `fixed_at` within `secs`.
 async fn no_fix_for(sub: &common::StateSub, secs: u64) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(secs);
-    while let Ok(sample) = tokio::time::timeout_at(deadline, sub.recv_async()).await {
-        let sample = sample.expect("state stream open");
+    while let Some(sample) = next_sample(
+        sub,
+        deadline.saturating_duration_since(tokio::time::Instant::now()),
+    )
+    .await
+    {
         assert!(
-            !sample.key_expr().as_str().ends_with("/fixed_at"),
-            "unexpected fix: {}",
-            String::from_utf8_lossy(&sample.payload().to_bytes())
+            !sample.key.ends_with("/fixed_at"),
+            "unexpected fix: {sample:?}"
         );
     }
 }
@@ -509,21 +500,19 @@ async fn a_return_within_the_hold_is_a_fix_and_a_restart_is_not() {
     restart_unit(&observer, "openwrt").await;
     // The new process's first cycle republishes `sighted`, and a fix would
     // come just before it.
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
-    loop {
-        let sample = tokio::time::timeout_at(deadline, phone_sub.recv_async())
-            .await
-            .expect("sighted republished within 20s")
-            .expect("state stream open");
-        let key = sample.key_expr().as_str();
-        assert!(
-            !key.ends_with("/fixed_at"),
-            "a restart fixed the phone again"
-        );
-        if key.ends_with("/sighted") {
-            break;
-        }
-    }
+    await_sample(
+        &phone_sub,
+        Duration::from_secs(20),
+        "republished sighted",
+        |msg| {
+            assert!(
+                !msg.key.ends_with("/fixed_at"),
+                "a restart fixed the phone again"
+            );
+            msg.key.ends_with("/sighted")
+        },
+    )
+    .await;
     no_fix_for(&phone_sub, 3).await;
 
     sup.shutdown();

@@ -43,7 +43,10 @@ use std::time::{Duration, Instant};
 use homeostat::bus;
 use serde_json::{json, Value};
 
-use crate::common::{await_running, up, Supervisor, FIRST_RUN};
+use crate::common::{
+    await_running, await_sample, cache_read, eventually, expect_silence, next_sample, up,
+    Supervisor, FIRST_RUN, SILENCE,
+};
 
 const FIXTURE: &str = "tests/fixtures/house_dashboard";
 const LAMP_CMD: &str = "home/cmd/livingroom/lamp/on";
@@ -195,18 +198,6 @@ fn ws_read_message(stream: &mut TcpStream) -> Value {
     let mut payload = vec![0u8; len as usize];
     stream.read_exact(&mut payload).expect("frame payload");
     serde_json::from_slice(&payload).expect("frame is JSON")
-}
-
-/// Reads a concrete key from a core queryable (last-value cache).
-async fn cache_read(session: &zenoh::Session, key: &str) -> Option<Value> {
-    let replies = session.get(key).await.expect("cache read query");
-    let mut value = None;
-    while let Ok(reply) = replies.recv_async().await {
-        if let Ok(sample) = reply.result() {
-            value = serde_json::from_slice(&sample.payload().to_bytes()).ok();
-        }
-    }
-    value
 }
 
 /// The browser suite (tests/browser) runs the real page against canned
@@ -526,11 +517,11 @@ async fn dashboard_serves_the_family_surface() {
         Some(&json!({"room": "livingroom", "entity": "lamp", "aspect": "on", "value": true})),
     );
     assert_eq!(status, 200, "{reply}");
-    let cmd_sample = tokio::time::timeout(Duration::from_secs(30), cmd_sub.recv_async())
+    let envelope = next_sample(&cmd_sub, Duration::from_secs(30))
         .await
         .expect("cmd envelope observed within 10s")
-        .expect("sample");
-    let envelope: Value = serde_json::from_slice(&cmd_sample.payload().to_bytes()).expect("json");
+        .value()
+        .clone();
     let cmd_id = envelope["id"]
         .as_str()
         .expect("envelope carries a correlation id");
@@ -546,12 +537,10 @@ async fn dashboard_serves_the_family_surface() {
         json!({"ok": true, "id": cmd_id, "heard": true}),
         "the id the caller is handed is the id that went on the bus"
     );
-    let sample = tokio::time::timeout(Duration::from_secs(30), echo.recv_async())
+    let echoed = next_sample(&echo, Duration::from_secs(30))
         .await
-        .expect("reflector echoed the command")
-        .expect("sample");
-    let value: Value = serde_json::from_slice(&sample.payload().to_bytes()).expect("json");
-    assert_eq!(value, json!(true));
+        .expect("reflector echoed the command");
+    assert_eq!(echoed.value(), &json!(true));
 
     // A fresh WebSocket snapshot now carries the lamp state. The echo we
     // observed above proves the reflector published it, but router fan-out
@@ -657,12 +646,8 @@ async fn dashboard_serves_the_family_surface() {
         Some(&json!([1])),
     );
     assert_eq!(status, 400, "a JSON array body: {reply}");
-    assert!(
-        tokio::time::timeout(Duration::from_secs(2), lock_cmd_sub.recv_async())
-            .await
-            .is_err(),
-        "a mistyped or oversized command must never reach the bus"
-    );
+    // A mistyped or oversized command does not reach the bus.
+    expect_silence(&lock_cmd_sub, SILENCE, "lock command").await;
 
     // A lock command is accepted: COMMANDABLE maps lock -> {"locked"}.
     // The wish goes to home/cmd at manual band, stamped like any other
@@ -679,11 +664,11 @@ async fn dashboard_serves_the_family_surface() {
         ),
     );
     assert_eq!(status, 200, "{reply}");
-    let cmd_sample = tokio::time::timeout(Duration::from_secs(30), lock_cmd_sub.recv_async())
+    let envelope = next_sample(&lock_cmd_sub, Duration::from_secs(30))
         .await
         .expect("lock cmd envelope observed within 10s")
-        .expect("sample");
-    let envelope: Value = serde_json::from_slice(&cmd_sample.payload().to_bytes()).expect("json");
+        .value()
+        .clone();
     let cmd_id = envelope["id"]
         .as_str()
         .expect("envelope carries a correlation id");
@@ -712,12 +697,8 @@ async fn dashboard_serves_the_family_surface() {
         );
         assert_eq!(status, 400, "{body}: {reply}");
     }
-    assert!(
-        tokio::time::timeout(Duration::from_secs(2), lock_cmd_sub.recv_async())
-            .await
-            .is_err(),
-        "a refused hold must never reach the bus"
-    );
+    // A refused hold does not reach the bus.
+    expect_silence(&lock_cmd_sub, SILENCE, "lock command").await;
 
     // On the arbitrated garage door the dashboard sends a release with no
     // value, and a value held until an instant. It still never reports.
@@ -745,12 +726,11 @@ async fn dashboard_serves_the_family_surface() {
             Some(&body),
         );
         assert_eq!(status, 200, "{body}: {reply}");
-        let sample = tokio::time::timeout(Duration::from_secs(10), garage_sub.recv_async())
+        let mut envelope = next_sample(&garage_sub, Duration::from_secs(10))
             .await
             .expect("garage envelope observed")
-            .expect("sample");
-        let mut envelope: Value =
-            serde_json::from_slice(&sample.payload().to_bytes()).expect("json");
+            .value()
+            .clone();
         assert_eq!(envelope["id"], reply["id"], "{reply}");
         envelope.as_object_mut().expect("an object").remove("id");
         assert_eq!(envelope, expected);
@@ -821,12 +801,8 @@ async fn dashboard_serves_the_family_surface() {
         Some(&json!({"room": "livingroom", "entity": "relay", "aspect": "on", "value": true})),
     );
     assert_eq!(status, 400, "ungranted capability must be refused: {reply}");
-    assert!(
-        tokio::time::timeout(Duration::from_secs(3), switch_cmd_sub.recv_async())
-            .await
-            .is_err(),
-        "an ungranted command must never reach the bus"
-    );
+    // An ungranted command does not reach the bus.
+    expect_silence(&switch_cmd_sub, SILENCE, "switch command").await;
 
     // A climate command is accepted: COMMANDABLE maps climate ->
     // {"setpoint"}, the family-facing base aspect
@@ -842,11 +818,11 @@ async fn dashboard_serves_the_family_surface() {
         ),
     );
     assert_eq!(status, 200, "{reply}");
-    let cmd_sample = tokio::time::timeout(Duration::from_secs(30), climate_cmd_sub.recv_async())
+    let envelope = next_sample(&climate_cmd_sub, Duration::from_secs(30))
         .await
         .expect("climate cmd envelope observed within 10s")
-        .expect("sample");
-    let envelope: Value = serde_json::from_slice(&cmd_sample.payload().to_bytes()).expect("json");
+        .value()
+        .clone();
     let cmd_id = envelope["id"]
         .as_str()
         .expect("envelope carries a correlation id");
@@ -886,22 +862,16 @@ async fn dashboard_serves_the_family_surface() {
             ),
         );
         assert_eq!(status, 200, "{aspect}: {reply}");
-        let cmd_sample = tokio::time::timeout(Duration::from_secs(30), notify_cmd_sub.recv_async())
+        let cmd = next_sample(&notify_cmd_sub, Duration::from_secs(30))
             .await
-            .expect("notifier cmd envelope observed")
-            .expect("sample");
+            .expect("notifier cmd envelope observed");
+        assert_eq!(cmd.key, format!("home/cmd/person/phone/{aspect}"));
         assert_eq!(
-            cmd_sample.key_expr().as_str(),
-            format!("home/cmd/person/phone/{aspect}")
-        );
-        let envelope: Value =
-            serde_json::from_slice(&cmd_sample.payload().to_bytes()).expect("json");
-        assert_eq!(
-            envelope,
-            json!({"value": "Dinner is ready", "priority": "manual", "actor": "dashboard", "id": reply["id"]}),
+            cmd.value(),
+            &json!({"value": "Dinner is ready", "priority": "manual", "actor": "dashboard", "id": reply["id"]}),
         );
     }
-    // Text that is blank, too long or not a string never reaches the bus.
+    // Text that is blank, too long or not a string does not reach the bus.
     for value in [json!("  "), json!("x".repeat(1001)), json!(42)] {
         let (status, reply) = http_request(
             &addr,
@@ -914,12 +884,8 @@ async fn dashboard_serves_the_family_surface() {
         );
         assert_eq!(status, 400, "{value}: {reply}");
     }
-    assert!(
-        tokio::time::timeout(Duration::from_secs(2), notify_cmd_sub.recv_async())
-            .await
-            .is_err(),
-        "refused text must never reach the bus"
-    );
+    // Refused text does not reach the bus.
+    expect_silence(&notify_cmd_sub, SILENCE, "notifier command").await;
 
     // 2b. Aspect descriptors (docs/design.md#aspect-descriptors): the
     // owning adapter's discovery record may describe an entity's aspects
@@ -982,16 +948,14 @@ async fn dashboard_serves_the_family_surface() {
     assert_eq!(status, 200, "descriptor-declared family command: {reply}");
     // The wildcard subscriber also saw the earlier setpoint command; the
     // descriptor command is the next envelope on a different key.
-    let cmd_sample = loop {
-        let sample = tokio::time::timeout(Duration::from_secs(30), mode_cmd_sub.recv_async())
-            .await
-            .expect("descriptor command envelope observed")
-            .expect("sample");
-        if sample.key_expr().as_str() == "home/cmd/livingroom/heat_pump/operating_mode" {
-            break sample;
-        }
-    };
-    let envelope: Value = serde_json::from_slice(&cmd_sample.payload().to_bytes()).expect("json");
+    let cmd = await_sample(
+        &mode_cmd_sub,
+        Duration::from_secs(30),
+        "descriptor command envelope",
+        |msg| msg.key == "home/cmd/livingroom/heat_pump/operating_mode",
+    )
+    .await;
+    let envelope = cmd.value().clone();
     let cmd_id = envelope["id"]
         .as_str()
         .expect("envelope carries a correlation id");
@@ -1025,12 +989,8 @@ async fn dashboard_serves_the_family_surface() {
         status, 400,
         "an owner-tier descriptor command stays refused: {reply}"
     );
-    assert!(
-        tokio::time::timeout(Duration::from_secs(2), mode_cmd_sub.recv_async())
-            .await
-            .is_err(),
-        "refused descriptor commands never reach the bus"
-    );
+    // Refused descriptor commands never reach the bus.
+    expect_silence(&mode_cmd_sub, SILENCE, "heat pump command").await;
 
     // 3. Parameter path: in-constraint persists, out-of-constraint refused.
     let (status, reply) = http_request(
@@ -1213,21 +1173,11 @@ async fn dashboard_serves_unit_logs() {
     .await;
 
     // Wait for the logger's known startup lines to land in its ring buffer.
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        let n = cache_read(&observer, &bus::log_key("logger"))
-            .await
-            .and_then(|v| v.as_array().map(std::vec::Vec::len))
-            .unwrap_or(0);
-        if n >= 8 {
-            break;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "logger never captured its startup lines"
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    eventually(Duration::from_secs(10), "logger startup lines", || async {
+        let lines = cache_read(&observer, &bus::log_key("logger")).await?;
+        (lines.as_array()?.len() >= 8).then_some(())
+    })
+    .await;
 
     let (status, entries) = http_request(&addr, "GET", "/api/logs?unit=logger", &[], None);
     assert_eq!(status, 200, "{entries}");
@@ -1675,12 +1625,11 @@ async fn dashboard_darkens_the_house() {
         "the fixture binds exactly one light"
     );
 
-    let sample = tokio::time::timeout(Duration::from_secs(30), cmd_sub.recv_async())
+    let cmd = next_sample(&cmd_sub, Duration::from_secs(30))
         .await
-        .expect("light cmd within 10s")
-        .expect("sample");
-    assert_eq!(sample.key_expr().as_str(), LAMP_CMD);
-    let envelope: Value = serde_json::from_slice(&sample.payload().to_bytes()).expect("json");
+        .expect("light cmd within 10s");
+    assert_eq!(cmd.key, LAMP_CMD);
+    let envelope = cmd.value().clone();
     let cmd_id = envelope["id"]
         .as_str()
         .expect("envelope carries a correlation id");
@@ -1693,14 +1642,7 @@ async fn dashboard_darkens_the_house() {
     // Only lights: the switch, lock, climate and camera entities get
     // nothing. The session delivers in order, so anything else the fan-out
     // had published would arrive before this window closes.
-    if let Ok(Ok(extra)) = tokio::time::timeout(Duration::from_secs(2), cmd_sub.recv_async()).await
-    {
-        panic!(
-            "unexpected command {} = {}",
-            extra.key_expr(),
-            String::from_utf8_lossy(&extra.payload().to_bytes())
-        );
-    }
+    expect_silence(&cmd_sub, SILENCE, "other command").await;
 
     sup.shutdown();
 }

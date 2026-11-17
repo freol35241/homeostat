@@ -4,30 +4,21 @@
 
 use std::time::Duration;
 
-use serde_json::{json, Value};
-use zenoh::handlers::FifoChannelHandler;
-use zenoh::pubsub::Subscriber;
+use serde_json::json;
 
-use crate::common::{restart_unit, up, Supervisor};
+use crate::common::{
+    await_mirror, eventually, expect_silence, next_sample, restart_unit, up, Msg, StateSub,
+    Supervisor, SILENCE,
+};
 
 const FIXTURE: &str = "tests/fixtures/house_buttons";
 const PRESS_KEY: &str = "home/state/hall/remote/action";
 const LIGHT_STATE: &str = "home/state/hall/hall_light/on";
 const LIGHT_CMDS: &str = "home/cmd/hall/hall_light/*";
 
-type Sub = Subscriber<FifoChannelHandler<zenoh::sample::Sample>>;
-
-/// The next command within the timeout, as (aspect, envelope).
-async fn next_cmd(sub: &Sub, timeout: Duration) -> Option<(String, Value)> {
-    let sample = tokio::time::timeout(timeout, sub.recv_async())
-        .await
-        .ok()?
-        .ok()?;
-    let aspect = sample.key_expr().as_str().rsplit('/').next()?.to_string();
-    Some((
-        aspect,
-        serde_json::from_slice(&sample.payload().to_bytes()).ok()?,
-    ))
+/// The aspect a command is for, the last segment of its key.
+fn aspect(cmd: &Msg) -> &str {
+    cmd.key.rsplit('/').next().expect("a cmd key has segments")
 }
 
 async fn press(session: &zenoh::Session, gesture: &str) {
@@ -35,6 +26,23 @@ async fn press(session: &zenoh::Session, gesture: &str) {
         .put(PRESS_KEY, json!(gesture).to_string())
         .await
         .expect("press put");
+}
+
+/// Presses `gesture` until the light gets a command for `value`, and
+/// returns that command. The service reads the light's state off its own
+/// subscription, which can lag the mirror. A press it handles first finds
+/// the state unknown and sends nothing, or finds the old state and sends
+/// the old toggle, which the reflector turns back into the same state.
+async fn press_until(session: &zenoh::Session, cmds: &StateSub, gesture: &str, value: bool) -> Msg {
+    let what = format!("command for {value} on a {gesture} press");
+    eventually(Duration::from_secs(20), &what, || async {
+        press(session, gesture).await;
+        // Long enough that a slow command is not left queued behind the
+        // next press, where a later read would take it.
+        let cmd = next_sample(cmds, Duration::from_secs(5)).await?;
+        (cmd.value()["value"] == json!(value)).then_some(cmd)
+    })
+    .await
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -48,12 +56,10 @@ async fn a_press_sends_the_commands_its_gesture_names_and_only_those() {
     // The light reports off, so a single press turns it on, at the manual
     // band, from the service.
     observer.put(LIGHT_STATE, "false").await.expect("state put");
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    press(&observer, "single").await;
-    let (aspect, envelope) = next_cmd(&cmds, Duration::from_secs(10))
-        .await
-        .expect("a command for the single press");
-    assert_eq!(aspect, "on");
+    await_mirror(&observer, LIGHT_STATE, &json!(false)).await;
+    let cmd = press_until(&observer, &cmds, "single", true).await;
+    assert_eq!(aspect(&cmd), "on");
+    let envelope = cmd.value();
     assert_eq!(
         (
             &envelope["value"],
@@ -64,22 +70,18 @@ async fn a_press_sends_the_commands_its_gesture_names_and_only_those() {
     );
     assert!(envelope.get("hold").is_none(), "no hold named, none sent");
 
-    // The reflector turned it into state, so the next one turns it off.
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    press(&observer, "single").await;
-    let (_, envelope) = next_cmd(&cmds, Duration::from_secs(10))
-        .await
-        .expect("a command for the second press");
-    assert_eq!(envelope["value"], json!(false), "a toggle flips the state");
+    // The reflector turns it into state, so the next one turns it off.
+    await_mirror(&observer, LIGHT_STATE, &json!(true)).await;
+    press_until(&observer, &cmds, "single", false).await;
 
     // A set sends one command per aspect.
     press(&observer, "double").await;
     let mut sent = Vec::new();
     for _ in 0..2 {
-        let (aspect, envelope) = next_cmd(&cmds, Duration::from_secs(10))
+        let cmd = next_sample(&cmds, Duration::from_secs(10))
             .await
             .expect("a command per aspect");
-        sent.push((aspect, envelope["value"].clone()));
+        sent.push((aspect(&cmd).to_string(), cmd.value()["value"].clone()));
     }
     sent.sort_by(|a, b| a.0.cmp(&b.0));
     assert_eq!(
@@ -92,19 +94,13 @@ async fn a_press_sends_the_commands_its_gesture_names_and_only_those() {
 
     // An unmapped gesture sends nothing.
     press(&observer, "triple").await;
-    assert!(
-        next_cmd(&cmds, Duration::from_secs(1)).await.is_none(),
-        "an unmapped gesture sends nothing"
-    );
+    expect_silence(&cmds, SILENCE, "command for an unmapped gesture").await;
 
     // A restart does not act on the last press, which the mirror still holds.
     press(&observer, "single").await;
-    assert!(next_cmd(&cmds, Duration::from_secs(10)).await.is_some());
+    assert!(next_sample(&cmds, Duration::from_secs(10)).await.is_some());
     restart_unit(&observer, "buttons").await;
-    assert!(
-        next_cmd(&cmds, Duration::from_secs(2)).await.is_none(),
-        "a restart replays no press"
-    );
+    expect_silence(&cmds, SILENCE, "command from a replayed press").await;
 
     sup.shutdown();
 }

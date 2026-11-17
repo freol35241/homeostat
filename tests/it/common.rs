@@ -14,7 +14,7 @@ use rumqttc::{AsyncClient, Event, Incoming, MqttOptions, QoS};
 use serde_json::{json, Value};
 use zenoh::handlers::FifoChannelHandler;
 use zenoh::pubsub::Subscriber;
-use zenoh::sample::Sample;
+use zenoh::sample::{Sample, SampleKind};
 
 pub struct Supervisor {
     child: Child,
@@ -550,9 +550,110 @@ impl Mqtt {
             }
         }
     }
+
+    /// Asserts that no message arrives for `window`; `what` names the
+    /// message the test rules out.
+    pub async fn expect_silence(&mut self, window: Duration, what: &str) {
+        if let Some((topic, payload)) = self.next_message(window).await {
+            panic!(
+                "expected no {what}, got {topic}: {}",
+                String::from_utf8_lossy(&payload)
+            );
+        }
+    }
 }
 
 pub type StateSub = Subscriber<FifoChannelHandler<Sample>>;
+
+/// How long a test listens to show that something was not sent. A
+/// negative wait cannot end on a signal, so it is a fixed window. A test
+/// whose window must span one of the unit's own intervals, such as a poll
+/// cycle, uses that interval instead.
+pub const SILENCE: Duration = Duration::from_millis(1500);
+
+/// A sample off a subscription.
+#[derive(Debug)]
+pub struct Msg {
+    pub key: String,
+    /// The payload as JSON; None for a delete.
+    pub json: Option<Value>,
+}
+
+impl Msg {
+    /// The payload of a put; panics on a delete.
+    pub fn value(&self) -> &Value {
+        self.json
+            .as_ref()
+            .unwrap_or_else(|| panic!("{} was deleted, not put", self.key))
+    }
+}
+
+/// The next sample within `timeout`, or None. Panics on a put whose
+/// payload is not JSON: every key the suites subscribe to carries JSON.
+pub async fn next_sample(sub: &StateSub, timeout: Duration) -> Option<Msg> {
+    let sample = tokio::time::timeout(timeout, sub.recv_async())
+        .await
+        .ok()?
+        .expect("subscription open");
+    let key = sample.key_expr().as_str().to_string();
+    let json = match sample.kind() {
+        SampleKind::Delete => None,
+        SampleKind::Put => Some(
+            serde_json::from_slice(&sample.payload().to_bytes())
+                .unwrap_or_else(|err| panic!("{key} payload is not JSON: {err}")),
+        ),
+    };
+    Some(Msg { key, json })
+}
+
+/// Reads samples until `pred` accepts one and returns it. Panics after
+/// `timeout`, naming `what` and the last sample it turned down.
+pub async fn await_sample<F>(sub: &StateSub, timeout: Duration, what: &str, mut pred: F) -> Msg
+where
+    F: FnMut(&Msg) -> bool,
+{
+    let deadline = tokio::time::Instant::now() + timeout;
+    let mut last = None;
+    loop {
+        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let Some(msg) = next_sample(sub, left).await else {
+            panic!("no {what} within {timeout:?}; last sample {last:?}");
+        };
+        if pred(&msg) {
+            return msg;
+        }
+        last = Some(msg);
+    }
+}
+
+/// Asserts that `sub` delivers nothing for `window`; `what` names the
+/// sample the test rules out.
+pub async fn expect_silence(sub: &StateSub, window: Duration, what: &str) {
+    if let Some(msg) = next_sample(sub, window).await {
+        panic!("expected no {what}, got {msg:?}");
+    }
+}
+
+/// Calls `probe` every 200 ms until it returns Some, and returns that.
+/// Panics after `timeout`, naming `what`. This is how a test waits on
+/// something it can only poll, such as the core mirror.
+pub async fn eventually<T, F, Fut>(timeout: Duration, what: &str, mut probe: F) -> T
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Option<T>>,
+{
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        if let Some(found) = probe().await {
+            return found;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "no {what} within {timeout:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
 
 /// Collects state samples until every `expected` (key, value) has appeared.
 pub async fn expect_states(sub: &StateSub, expected: &[(&str, Value)]) {
@@ -562,102 +663,68 @@ pub async fn expect_states(sub: &StateSub, expected: &[(&str, Value)]) {
         .iter()
         .any(|(key, value)| seen.get(*key) != Some(value))
     {
-        let sample = tokio::time::timeout_at(deadline, sub.recv_async())
+        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let msg = next_sample(sub, left)
             .await
-            .unwrap_or_else(|_| panic!("missing state keys; saw {seen:?}"))
-            .expect("state stream open");
-        let value: Value =
-            serde_json::from_slice(&sample.payload().to_bytes()).expect("state payload is JSON");
-        seen.insert(sample.key_expr().as_str().to_string(), value);
+            .unwrap_or_else(|| panic!("missing state keys; saw {seen:?}"));
+        if let Some(value) = msg.json {
+            seen.insert(msg.key, value);
+        }
     }
 }
 
 /// Waits for a key to carry `expected`.
 pub async fn expect_state(sub: &StateSub, expected: Value) {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
-    loop {
-        let sample = tokio::time::timeout_at(deadline, sub.recv_async())
-            .await
-            .unwrap_or_else(|_| panic!("no value {expected} within 20s"))
-            .expect("state stream open");
-        let value: Value =
-            serde_json::from_slice(&sample.payload().to_bytes()).expect("state payload is JSON");
-        if value == expected {
-            return;
-        }
-    }
+    let what = format!("value {expected}");
+    await_sample(sub, Duration::from_secs(20), &what, |msg| {
+        msg.json.as_ref() == Some(&expected)
+    })
+    .await;
 }
 
 /// Polls the core state mirror until `key` holds `expected`. This is the
 /// late-joiner read path. Publishes that predate a test's subscriber
 /// (connect-time availability, first states) are only observable here.
-pub async fn await_mirror(observer: &zenoh::Session, key: &str, expected: &serde_json::Value) {
-    let deadline = tokio::time::Instant::now() + Duration::from_mins(1);
-    loop {
-        let replies = observer.get(key).await.expect("mirror get");
-        while let Ok(reply) = replies.recv_async().await {
-            if let Ok(sample) = reply.result() {
-                if let Ok(value) =
-                    serde_json::from_slice::<serde_json::Value>(&sample.payload().to_bytes())
-                {
-                    if &value == expected {
-                        return;
-                    }
-                }
-            }
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "mirror never held {key} = {expected}"
-        );
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
+pub async fn await_mirror(observer: &zenoh::Session, key: &str, expected: &Value) {
+    let what = format!("mirror value {key} = {expected}");
+    eventually(Duration::from_mins(1), &what, || async {
+        (cache_read(observer, key).await.as_ref() == Some(expected)).then_some(())
+    })
+    .await;
 }
 
 /// The next health event, whatever it is. Unlike `expect_drop_event` this
 /// does not scan past events that do not match, which is what a test needs
 /// when it asserts that some event was not emitted.
 pub async fn next_event(sub: &StateSub) -> Value {
-    let sample = tokio::time::timeout(Duration::from_secs(20), sub.recv_async())
+    next_sample(sub, Duration::from_secs(20))
         .await
         .expect("a health event within 20s")
-        .expect("event stream open");
-    serde_json::from_slice(&sample.payload().to_bytes()).expect("health event is JSON")
+        .value()
+        .clone()
 }
 
 /// Reads health events until one matches the expected drop reason.
 pub async fn expect_drop_event(sub: &StateSub, reason: &str) -> Value {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
-    loop {
-        let sample = tokio::time::timeout_at(deadline, sub.recv_async())
-            .await
-            .unwrap_or_else(|_| panic!("no \"{reason}\" health event within 20s"))
-            .expect("event stream open");
-        let event: Value =
-            serde_json::from_slice(&sample.payload().to_bytes()).expect("health event is JSON");
+    let what = format!("\"{reason}\" health event");
+    let msg = await_sample(sub, Duration::from_secs(20), &what, |msg| {
+        let event = msg.value();
         assert_eq!(event["kind"], "drop", "unexpected event kind: {event}");
-        if event["reason"] == reason {
-            return event;
-        }
-    }
+        event["reason"] == reason
+    })
+    .await;
+    msg.value().clone()
 }
 
 /// Reads health events until one matches the expected kind. Degraded
 /// conditions (a recorder backend outage, say) publish kind = condition,
 /// unlike dropped-input events.
 pub async fn expect_event_kind(sub: &StateSub, kind: &str) {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
-    loop {
-        let sample = tokio::time::timeout_at(deadline, sub.recv_async())
-            .await
-            .unwrap_or_else(|_| panic!("no \"{kind}\" health event within 20s"))
-            .expect("event stream open");
-        let event: Value =
-            serde_json::from_slice(&sample.payload().to_bytes()).expect("health event is JSON");
-        if event["kind"] == kind {
-            return;
-        }
-    }
+    let what = format!("\"{kind}\" health event");
+    await_sample(sub, Duration::from_secs(20), &what, |msg| {
+        msg.value()["kind"] == kind
+    })
+    .await;
 }
 
 pub type Publisher = zenoh::pubsub::Publisher<'static>;
@@ -791,21 +858,11 @@ where
     F: Fn(&Value) -> bool,
 {
     let key = format!("home/discovery/{unit}");
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-    let mut last = None;
-    loop {
-        if let Some(doc) = cache_read(observer, &key).await {
-            if ready(&doc) {
-                return doc;
-            }
-            last = Some(doc);
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "no acceptable discovery document at {key} within 30s; last {last:?}"
-        );
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
+    let what = format!("acceptable discovery document at {key}");
+    eventually(Duration::from_secs(30), &what, || async {
+        cache_read(observer, &key).await.filter(|doc| ready(doc))
+    })
+    .await
 }
 
 /// Reads a concrete key from a core queryable, decoding JSON.
