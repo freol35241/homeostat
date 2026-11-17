@@ -340,7 +340,7 @@ where
 }
 
 /// A mosquitto broker on a free port, killed on drop. Dropping it also
-/// removes the files it wrote.
+/// removes its config and password files.
 pub struct Mosquitto {
     child: Child,
     pub port: u16,
@@ -367,9 +367,11 @@ impl Mosquitto {
     /// A broker that requires the given credentials, with no anonymous
     /// fallback, so a unit that cannot present a password does not connect.
     pub fn spawn_with_auth(username: &str, password: &str) -> Self {
+        static MADE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let passwd = mosquitto_dir().join(format!(
-            "homeostat-mqtt-passwd-{}-{username}",
-            std::process::id()
+            "homeostat-mqtt-passwd-{}-{}",
+            std::process::id(),
+            MADE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
         std::fs::write(&passwd, format!("{username}:{password}\n")).expect("write passwd");
         // mosquitto refuses a plaintext password file: hash it in place.
@@ -917,8 +919,7 @@ pub async fn running_pid(session: &zenoh::Session, unit: &str) -> u64 {
 }
 
 /// A temp directory that one test owns. Dropping the guard removes it and
-/// everything in it, so a test that fails leaves nothing behind either.
-/// It derefs to its path.
+/// everything in it, also when the test fails. It derefs to its path.
 pub struct Scratch {
     dir: PathBuf,
 }
@@ -945,7 +946,9 @@ impl Scratch {
     }
 
     /// The path of a recorder store in the directory. The store's `-wal`
-    /// and `-shm` files sit beside it, so they go with the guard too.
+    /// and `-shm` files sit beside it, and the recorder seals old months
+    /// into `archive/` beside it, so all of them go with the guard, and no
+    /// two tests' archives mix.
     pub fn store(&self) -> PathBuf {
         self.dir.join("history.db")
     }
