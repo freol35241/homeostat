@@ -522,7 +522,15 @@ mod tests {
     #[test]
     fn time_rejects_non_times() {
         let p = time_spec("20:00", "02:00");
-        for bad in [json!("not-a-time"), json!("25:00"), json!(22), json!(true)] {
+        // "7:30" and "+7:30" too: the SDK reads a time with `fromisoformat`.
+        for bad in [
+            json!("not-a-time"),
+            json!("25:00"),
+            json!("7:30"),
+            json!("+7:30"),
+            json!(22),
+            json!(true),
+        ] {
             assert!(check_param(&p, bad.clone()).is_err(), "{bad} accepted");
         }
     }

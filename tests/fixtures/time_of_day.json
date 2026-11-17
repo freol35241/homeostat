@@ -1,0 +1,29 @@
+{
+  "comment": "The one grammar for a time of day, \"HH:MM\" on a 24-hour clock with two digits each side: a `time` parameter's default, constraint and live value, a family policy's `until`, a gesture action's `hold`, and the \"HH:MM\" hold intent. Read by src/validate.rs (unit test), sdk/python/tests/test_keys.py, tests/adapters/test_arbiter.py and tests/js/dashboard-logic.test.js, so the core, the SDK, the arbiter and the page accept and refuse the same strings.",
+  "valid": [
+    "00:00",
+    "06:00",
+    "07:30",
+    "12:59",
+    "23:59"
+  ],
+  "invalid": [
+    "7:30",
+    "07:5",
+    "+7:30",
+    "07:+5",
+    "24:00",
+    "23:60",
+    "06:00:00",
+    "0600",
+    "06:0a",
+    " 06:00",
+    "06:00 ",
+    "",
+    ":",
+    "06-00",
+    "٠٦:٠٠",
+    "1٠:00",
+    "06:00\n"
+  ]
+}

@@ -474,14 +474,9 @@ fn has_clock(house: &House) -> bool {
     })
 }
 
-/// Whether `s` is a 24-hour `"HH:MM"`, as a time-of-day hold is written:
-/// two digits each side, so `+2:00` is not one.
+/// Whether `s` is a time of day, `"HH:MM"` (`parse_time`).
 fn is_time_of_day(s: &str) -> bool {
-    let b = s.as_bytes();
-    b.len() == 5
-        && b[2] == b':'
-        && [0, 1, 3, 4].iter().all(|&i| b[i].is_ascii_digit())
-        && parse_time(s).is_some()
+    parse_time(s).is_some()
 }
 
 /// An entity's `[causes]` (docs/design.md#device-reported-causes): on an
@@ -929,10 +924,18 @@ pub fn display_value(value: &toml::Value) -> String {
     }
 }
 
+/// Parses a time of day: `"HH:MM"` on a 24-hour clock, two ASCII digits
+/// each side. It is the form every reader accepts: the SDK reads a `time`
+/// parameter with Python's `time.fromisoformat`, which refuses `7:30`, and
+/// the page and the arbiter read `HH:MM` only. `tests/fixtures/time_of_day.json`
+/// holds the cases every reader is tested against.
 pub(crate) fn parse_time(s: &str) -> Option<(u8, u8)> {
-    let (hh, mm) = s.split_once(':')?;
-    let hh: u8 = hh.parse().ok()?;
-    let mm: u8 = mm.parse().ok()?;
+    let b = s.as_bytes();
+    if b.len() != 5 || b[2] != b':' || ![0, 1, 3, 4].iter().all(|&i| b[i].is_ascii_digit()) {
+        return None;
+    }
+    let hh = (b[0] - b'0') * 10 + (b[1] - b'0');
+    let mm = (b[3] - b'0') * 10 + (b[4] - b'0');
     (hh < 24 && mm < 60).then_some((hh, mm))
 }
 
@@ -1248,4 +1251,27 @@ fn hex_color(color: &str) -> bool {
     color
         .strip_prefix('#')
         .is_some_and(|hex| matches!(hex.len(), 3 | 6) && hex.chars().all(|c| c.is_ascii_hexdigit()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_time;
+
+    /// The core reads a time of day as every other reader does
+    /// (`tests/fixtures/time_of_day.json`).
+    #[test]
+    fn the_time_of_day_grammar_is_the_shared_one() {
+        let cases: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/time_of_day.json")).unwrap();
+        for s in cases["valid"].as_array().unwrap() {
+            let s = s.as_str().unwrap();
+            let (hh, mm) = parse_time(s).unwrap_or_else(|| panic!("{s:?} is a time of day"));
+            assert_eq!(format!("{hh:02}:{mm:02}"), s);
+        }
+        for s in cases["invalid"].as_array().unwrap() {
+            let s = s.as_str().unwrap();
+            assert!(parse_time(s).is_none(), "{s:?} is not a time of day");
+        }
+        assert_eq!(parse_time("07:30"), Some((7, 30)));
+    }
 }

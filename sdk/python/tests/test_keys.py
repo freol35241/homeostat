@@ -4,9 +4,12 @@ Run: uv run --no-project --with-editable sdk/python python -m unittest discover 
 """
 
 import datetime
+import json
 import unittest
+from pathlib import Path
 
 from homeostat import keys
+from homeostat.automation import _typed
 
 
 class SegmentTest(unittest.TestCase):
@@ -134,6 +137,16 @@ class HoldTest(unittest.TestCase):
         for hold in (far, "2400-01-01T00:00:00Z", "9999-12-31T23:59:59+00:00"):
             with self.assertRaises(ValueError, msg=hold):
                 keys.parse_cmd_envelope({"value": 1, "priority": "manual", "hold": hold})
+
+    def test_the_time_of_day_grammar_is_the_cores(self):
+        # tests/fixtures/time_of_day.json: what the core accepts, the SDK
+        # reads, both as a hold intent and as a `time` parameter.
+        cases = json.loads((Path(__file__).resolve().parents[3] / "tests/fixtures/time_of_day.json").read_text())
+        for s in cases["valid"]:
+            self.assertTrue(keys.is_time_of_day(s), s)
+            self.assertEqual(_typed("time", s).strftime("%H:%M"), s, "a `time` parameter reads it")
+        for s in cases["invalid"]:
+            self.assertFalse(keys.is_time_of_day(s), repr(s))
 
     def test_a_time_of_day_is_a_hold_intent_and_no_instant(self):
         for hold in ("00:00", "06:00", "23:59"):

@@ -283,6 +283,14 @@ test('a hold until a time of day is the next time the clock shows it', () => {
   assert.equal(logic.holdUntil('25:00', at(14, 0)), null);
 });
 
+test('the page reads a time of day as the core does', () => {
+  // tests/fixtures/time_of_day.json, which the core and the SDK read too.
+  const cases = JSON.parse(require('node:fs').readFileSync(path.join(__dirname, '../fixtures/time_of_day.json'), 'utf8'));
+  const now = new Date(2026, 10, 16, 14, 0).getTime();
+  cases.valid.forEach((s) => assert.notEqual(logic.holdUntil(s, now), null, s));
+  cases.invalid.forEach((s) => assert.equal(logic.holdUntil(s, now), null, JSON.stringify(s)));
+});
+
 test('deviations render in a stable order: supervision, state, setpoints', () => {
   const devs = deviations(
     {
