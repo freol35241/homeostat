@@ -318,6 +318,44 @@ class FamilyPolicyTest(Base):
         after.put_hold(STOVE, "heating", {"value": False, "id": "h2"}, WALL, [])
         self.assertEqual(list(after.family_records()), [LAMP])
 
+    def test_a_restart_before_the_grants_are_read_keeps_a_next_change_hold(self):
+        # The arbiter restores the holds before it reads the grant table,
+        # when no unit hold counts yet.
+        self.hold("heating", True, "h1")
+        self.command("manual", "dashboard", False, cmd_id="c1", policy={"until": "next change"})
+        records = list(self.resolver.family_records().values())
+        read = []
+        after = Resolver(
+            grant_of=lambda unit, target: (BANDS[unit], LOSS.get(unit)) if read and unit in BANDS else None,
+            rest_of=lambda target: None, clock=Clock(), wall=lambda: WALL, offset=CET,
+            grants_read=lambda: bool(read),
+        )
+        after.restore(records, self.resolver.document())
+        after.put_hold(STOVE, "heating", {"value": True, "id": "h1"}, WALL, [])
+        read.append(True)
+        after.resolve_all(effects := [])
+        self.assertEqual(effects, [])
+        self.assertIn(STOVE, after.family_records())
+
+    def test_a_refused_command_that_ends_the_hold_sends_the_new_winner(self):
+        self.hold("flue_guard", 18, "g1", target=LAMP, seen=1.0)
+        self.hold("heating", 20, "h1", target=LAMP, seen=2.0)
+        self.command("manual", "dashboard", 22, target=LAMP, policy={"until": "next change"})
+        # heating's command releases its hold, which ends the family's, and
+        # the guard's hold refuses the command.
+        forwarded, effects = self.command("automation", "heating", 19, target=LAMP)
+        self.assertFalse(forwarded)
+        self.assertEqual(self.forwards(effects), [(18, "flue_guard", "g1")])
+        self.assertEqual(self.resolver.family_records(), {})
+
+    def test_a_time_of_day_before_the_house_clock_is_known_says_so(self):
+        resolver = Resolver(lambda u, t: None, lambda t: None, clock=Clock(), wall=lambda: WALL)
+        resolver.command(STOVE, "manual", "dashboard", HOLD_S, effects := [], value=False, policy=STOP)
+        self.assertEqual(self.events(effects), ["clock-unknown"])
+        resolver.set_offset(CET, [])
+        resolver.command(STOVE, "manual", "dashboard", HOLD_S, effects := [], value=False, policy=STOP)
+        self.assertEqual(self.events(effects), [])
+
 
 class CommandAgreesTest(Base):
     def test_a_command_that_agrees_with_a_higher_hold_goes_through(self):

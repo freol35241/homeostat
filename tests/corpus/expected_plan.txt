@@ -22,7 +22,7 @@ Units to create (13):
 + adapter zigbee (units/zigbee.toml)
     command: uv run units/zigbee.py
     entities (6):
-      front_door_lock  lock       room=hallway     write=arbitrated  family.locked: false=until 23:00, true=none
+      front_door_lock  lock       room=hallway     write=arbitrated  family.locked: false=until next change, true=none
       hallway_motion   occupancy  room=hallway     write=shared
       kitchen_ceiling  light      room=kitchen     write=shared
       kitchen_temp     sensor     room=kitchen     write=shared

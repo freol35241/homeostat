@@ -961,8 +961,8 @@ what the device reported. `refused` counts the commands the hold has
 turned away. A hold the family policy placed also carries `at` or
 `next_change` and `beneath`.
 
-- A record is put when the hold is placed or its count changes, and its
-  key is deleted when the hold ends. The mirror forgets a deleted key,
+- A record is put when the hold is placed, its count changes or its end
+  moves with the house clock, and its key is deleted when the hold ends. The mirror forgets a deleted key,
   so a reader sees only holds in force.
 - The family's holds outlive the arbiter process. A restarted arbiter
   reads its records back from the mirror, keeps those whose `until` is
@@ -1159,7 +1159,10 @@ any = { until = "next change" }
   The arbiter reads the house's UTC offset from `home/clock/minute` and
   moves the end when the offset changes, so a stop placed before a DST
   change still ends at 06:00 local time. The record's `at` is that
-  local time.
+  local time. Plan refuses a time of day in a house where no unit
+  publishes the minute (`family-policy-no-clock`). A hold placed before
+  the first minute arrives is read in the host's offset, and the
+  arbiter reports `clock-unknown`.
 - `until = "next change"` holds until the unit hold beneath it changes:
   another hold wins below it, the hold is released, or one comes where
   there was none. A command from the unit beneath releases that unit's
@@ -2927,8 +2930,8 @@ empty page. The `deviations` feed draws from:
   ([Pausing an automation](#pausing-an-automation));
 - arbiter holds that displaced somebody.
 
-The family holds every aspect it taps, so most holds are the family
-using the house. A hold is listed as a deviation when it displaced
+Most taps hold the aspect, so most holds are the family using the
+house. A hold is listed as a deviation when it displaced
 somebody: when it stands at a band above the lowest band at which
 anything is granted to command that aspect (`driven` in `/api/model`).
 Two other rules were rejected. "Once it has refused something" depends

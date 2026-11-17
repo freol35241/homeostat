@@ -98,7 +98,7 @@ fn the_family_policy_rides_the_owners_binding_row() {
         .collect();
     assert_eq!(
         policies,
-        [&serde_json::json!({"locked": {"false": {"until": "23:00"}, "true": "none"}})]
+        [&serde_json::json!({"locked": {"false": {"until": "next change"}, "true": "none"}})]
     );
     let owner_row = rows
         .iter()
