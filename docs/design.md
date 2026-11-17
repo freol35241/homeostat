@@ -468,8 +468,8 @@ and where it sorts among ties in the [apply walk](#the-apply-walk).
   ([Virtual sensors](#virtual-sensors),
   [Commandable virtual entities](#commandable-virtual-entities)).
 - A `service` is infrastructure with no entities: the recorder, the
-  dashboard, the arbiter, the clock, the buttons service. It may carry `[discovery]` (the
-  recorder's store is its endpoint). It may not use `{room}`/`{entity}`
+  dashboard, the arbiter, the clock, the buttons service. It may carry
+  `[discovery]` (the recorder's store is its endpoint). It may not use `{room}`/`{entity}`
   templates. Only a service may publish under `home/arbiter/`,
   `home/clock/` or `home/history/` ([Reserved classes](#reserved-classes)).
 
@@ -752,40 +752,43 @@ garden_lights = { set = { on = false } }
 The shipped `buttons` service (`adapters/buttons.py`) sends them. It
 commands at the `manual` band, as the dashboard does, so its cmd
 publishes are writer rows in the grant table, one per capability it may
-target. Executing actions in the button's adapter was the alternative.
-It was rejected for three reasons:
-
-- An adapter embodies entities and is granted no commands.
-- Grants order the apply walk, so a Zigbee remote driving an ESPHome
-  light while an ESPHome button drives a Zigbee light would be a cycle.
-- Every adapter with buttons would carry its own toggle and hold
-  handling.
-
-A service owns no entities, so it adds no cycle. The cost is one more
-process and one more hop on the bus.
+target. The button's own adapter does not act on its presses, because an
+adapter embodies entities and is granted no commands. Grants also order
+the apply walk, so a Zigbee remote driving an ESPHome light while an
+ESPHome button drives a Zigbee light would be a cycle. A service owns no
+entities and adds none. The cost is one more process and one more hop on
+the bus.
 
 - Each target takes `toggle`, an aspect to flip, or `set`, the values to
   send, one command per aspect. `hold` rides each command as its
   [hold intent](#hold-intents): `"none"`, `"release"` or `"HH:MM"`.
   `hold = "release"` alone sends no value and hands back the target's
-  base aspect. Without `hold`, the target's
+  base aspect only, so a hold a `set` placed on another aspect ends at
+  its own time. Without `hold`, the target's
   [family policy](#family-policy) decides.
 - A toggle reads the target's state from the core's mirror. When the
   state is not a known boolean, the press sends nothing and the service
-  reports `drop` with reason `unknown-state`.
+  reports `drop` with reason `unknown-state`. A second press before the
+  device reports the first one's result sends the same value again.
 - Only presses made while the service runs count, as for any
   `ctx.subscribe` ([Buttons](#buttons)), so a restart sends nothing. A
   gesture with no table sends nothing either.
 - The service reads the actions from the house's files at start. Its
   manifest watches the house, so an edit restarts it.
 - Plan checks each action and prints it under its button
-  (`double → porch_light: release`). A target must exist
-  (`action-unknown-target`). It must have the aspects named
-  (`action-aspect`). The action must say one thing to send
-  (`action-shape`). A `hold` must go to an arbitrated target
-  (`action-hold-not-arbitrated`). An action that can unlock a lock must
-  say `unlocks = true` (`action-unlocks`), because a remote is easy to
-  press by mistake.
+  (`double → porch_light: release`). Only a button has actions
+  (`actions-not-button`). A target must exist (`action-unknown-target`)
+  and take commands on the aspects named: its base aspect or a declared
+  feature, and for a toggle `on` or `locked` (`action-aspect`). The
+  action must say one thing to send, in scalars (`action-shape`). A
+  `hold` must go to an arbitrated target (`action-hold-not-arbitrated`),
+  and a time of day needs the clock (`time-of-day-no-clock`). An action
+  that can unlock a lock must say `unlocks = true` (`action-unlocks`),
+  because a remote is easy to press by mistake. A release of a lock
+  counts, because the hold beneath it may be an unlock.
+- The service sends a command only through a cmd publish of the
+  target's capability whose key covers it. Otherwise it reports `drop`
+  with reason `ungranted`.
 - A device whose button also acts on its own, such as a light with a
   switch on it, would act twice on one press. Map only the gestures its
   firmware does not act on.
@@ -1194,7 +1197,9 @@ where it is, because nothing took it over. An adapter receives
 there is no hold to keep, and the SDK's command prologue drops both
 without an event. The dashboard sends no `hold` on a tap, `"release"`
 from "Resume automatic", and an instant from "Hold until"
-([Controls and the overlay](#controls-and-the-overlay)).
+([Controls and the overlay](#controls-and-the-overlay)). The buttons
+service sends what a gesture action names
+([Gesture actions](#gesture-actions)).
 
 #### Family policy
 

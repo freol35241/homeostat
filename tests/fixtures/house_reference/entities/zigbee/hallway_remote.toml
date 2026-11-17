@@ -19,4 +19,4 @@ owner = "zigbee"
 kitchen_ceiling = { toggle = "on" }
 
 [actions.double]
-front_door_lock = { hold = "release" }
+front_door_lock = { hold = "release", unlocks = true }

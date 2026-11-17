@@ -629,16 +629,18 @@ pub struct EntityFile {
 
 /// One target of a gesture: what the buttons service sends it. Exactly one
 /// of `toggle` and `set`, or `hold = "release"` alone (`action-shape`).
-/// Each aspect named is the target capability's base aspect or one of its
-/// aspects (`action-aspect`).
+/// The target's capability takes commands, and each aspect set is its base
+/// aspect or a feature its entity file declares (`action-aspect`).
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Action {
-    /// A boolean aspect to flip: the command sends the opposite of the
-    /// target's current state, read from the core's mirror. With no state
-    /// known, the press sends nothing.
+    /// The base aspect to flip, `on` or `locked` (`action-aspect`): the
+    /// command sends the opposite of the target's current state, read from
+    /// the core's mirror. With no state known, the press sends nothing.
     pub toggle: Option<String>,
-    /// The values to send, one command per aspect.
+    /// The values to send, one command per aspect: booleans, finite
+    /// numbers or strings, and a boolean for `on` and `locked`
+    /// (`action-shape`).
     #[schemars(with = "Option<BTreeMap<String, serde_json::Value>>")]
     pub set: Option<BTreeMap<String, toml::Value>>,
     /// The hold intent the commands carry (docs/design.md#hold-intents):
@@ -646,10 +648,11 @@ pub struct Action {
     /// next shows that time. Arbitrated targets only
     /// (`action-hold-not-arbitrated`). Without it the target's family
     /// policy decides. A release carries no value and hands back the
-    /// target's base aspect.
+    /// target's base aspect only.
     pub hold: Option<String>,
     /// Whether this action may unlock a lock. A remote is easy to press by
-    /// mistake, so unlocking needs saying (`action-unlocks`).
+    /// mistake, so unlocking needs saying (`action-unlocks`). A release of
+    /// a lock counts, because the hold beneath it may be an unlock.
     #[serde(default)]
     pub unlocks: bool,
 }

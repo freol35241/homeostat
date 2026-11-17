@@ -25,7 +25,7 @@ Units to create (14):
       front_door_lock  lock       room=hallway     write=arbitrated  family.locked: false=until next change, true=none
       hallway_motion   occupancy  room=hallway     write=shared
       hallway_remote   button     room=hallway     write=shared
-        double → front_door_lock: release
+        double → front_door_lock: release, unlocks
         single → kitchen_ceiling: toggle on
       kitchen_ceiling  light      room=kitchen     write=shared
       kitchen_temp     sensor     room=kitchen     write=shared

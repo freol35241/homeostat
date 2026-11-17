@@ -473,10 +473,18 @@ fn has_clock(house: &House) -> bool {
     })
 }
 
-/// Whether `s` is a 24-hour `"HH:MM"`, as a time-of-day hold is written.
+/// Whether `s` is a 24-hour `"HH:MM"`, as a time-of-day hold is written:
+/// two digits each side, so `+2:00` is not one.
 fn is_time_of_day(s: &str) -> bool {
-    s.len() == 5 && parse_time(s).is_some()
+    let b = s.as_bytes();
+    b.len() == 5
+        && b[2] == b':'
+        && [0, 1, 3, 4].iter().all(|&i| b[i].is_ascii_digit())
+        && parse_time(s).is_some()
 }
+
+/// The base aspects that are booleans, which a gesture action may toggle.
+const TOGGLED: &[&str] = &["on", "locked"];
 
 /// A button's `[actions]` (docs/design.md#gesture-actions): each target
 /// exists, each aspect is the target's, each action says one thing to
@@ -532,21 +540,49 @@ fn check_actions(
                 ));
                 continue;
             }
-            let mut aspects: Vec<&str> = action.toggle.iter().map(String::as_str).collect();
-            aspects.extend(action.set.iter().flat_map(|s| s.keys().map(String::as_str)));
+            // A command goes to the base aspect or to a feature the entity
+            // declares, as the dashboard's controls do. A toggle needs a
+            // boolean, and a set sends scalars.
             let base = vocabulary.and_then(|c| c.base);
-            if release && base.is_none() {
+            if base.is_none() {
                 errors.push(err(
                     Code::ActionAspect,
-                    format!("capability \"{target_capability}\" has no base aspect to release"),
+                    format!("capability \"{target_capability}\" takes no commands"),
                 ));
+                continue;
             }
-            for aspect in &aspects {
-                if !vocabulary.is_some_and(|c| c.base == Some(aspect) || c.aspects.contains(aspect))
-                {
+            let commandable = |aspect: &str| {
+                base == Some(aspect) || target.file.entity.features.iter().any(|f| f == aspect)
+            };
+            if let Some(aspect) = &action.toggle {
+                if !(base == Some(aspect.as_str()) && TOGGLED.contains(&aspect.as_str())) {
                     errors.push(err(
                         Code::ActionAspect,
-                        format!("capability \"{target_capability}\" has no aspect \"{aspect}\""),
+                        format!(
+                            "\"{aspect}\" of \"{name}\" is not a boolean base aspect to toggle"
+                        ),
+                    ));
+                }
+            }
+            for (aspect, value) in action.set.iter().flatten() {
+                if !commandable(aspect) {
+                    errors.push(err(
+                        Code::ActionAspect,
+                        format!("\"{name}\" has no commandable aspect \"{aspect}\": its base aspect or a declared feature"),
+                    ));
+                }
+                let scalar = match value {
+                    toml::Value::Boolean(_) | toml::Value::Integer(_) | toml::Value::String(_) => {
+                        true
+                    }
+                    toml::Value::Float(f) => f.is_finite(),
+                    _ => false,
+                };
+                let typed = !TOGGLED.contains(&aspect.as_str()) || value.is_bool();
+                if !scalar || !typed {
+                    errors.push(err(
+                        Code::ActionShape,
+                        format!("set {aspect} = {value} is not a value to send"),
                     ));
                 }
             }
@@ -565,8 +601,10 @@ fn check_actions(
                     ),
                 ));
             }
+            // A release sends the hold beneath at once, which may be an unlock.
             let unlocks = target_capability == "lock"
-                && (action.toggle.as_deref() == Some("locked")
+                && (release
+                    || action.toggle.as_deref() == Some("locked")
                     || action
                         .set
                         .as_ref()

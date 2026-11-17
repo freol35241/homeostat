@@ -25,14 +25,20 @@ service runs count: the SDK's subscribe hands over no mirrored or replayed
 press (docs/design.md#buttons), so a restart sends nothing.
 
 The actions are read from the house's files at start. The manifest
-watches the house, so an edit restarts the service. Its cmd publishes,
-one per capability, say which targets it may command.
+watches the house, so an edit restarts the service. Its cmd publishes say
+which targets it may command: one whose capability is the target's and
+whose key covers the command's.
+
+A toggle reads the state the device last reported, so a second press
+before the first one's state comes back sends the same value again.
 
 Health events at home/health/{unit}/event: `drop` with reason
-`ungranted` for a target whose capability no cmd publish covers, and
-`unknown-state` for a toggle whose target state is not a known boolean.
+`ungranted` for a target no cmd publish covers, `unknown-state` for a
+toggle whose target state is not a known boolean, and `invalid-action`
+for a command the SDK refuses to send.
 """
 
+import zenoh
 from homeostat import automation, house, keys
 
 
@@ -68,12 +74,20 @@ def main():
     model = house.load_house(".")
     entities = {e.name: e for e in model.entities}
     own = next(u for u in model.units if u.name == ctx.unit)
-    # Target capability -> the cmd publish that may command it.
-    bindings = {
-        spec["capability"]: name
+    # (capability, key expression, binding) per cmd publish.
+    publishes = [
+        (spec["capability"], zenoh.KeyExpr(spec["key"]), name)
         for name, spec in own.publishes.items()
         if spec.get("key", "").startswith("home/cmd/") and "capability" in spec
-    }
+    ]
+
+    def binding_for(target, aspect: str) -> str | None:
+        key = zenoh.KeyExpr(f"home/cmd/{target.room}/{target.name}/{aspect}")
+        return next(
+            (name for capability, expr, name in publishes if capability == target.capability and expr.includes(key)),
+            None,
+        )
+
     # (room, button) -> gesture -> target -> action.
     actions = {(e.room, e.name): e.actions for e in model.entities if e.capability == "button" and e.actions}
     states: dict[str, object] = {}
@@ -82,14 +96,12 @@ def main():
         states[key] = value
 
     def on_press(key, gesture):
+        if not isinstance(gesture, str):
+            return
         _, _, room, button, _ = key.split("/")
         for name, action in actions.get((room, button), {}).get(gesture, {}).items():
             target = entities.get(name)
             if target is None:
-                continue
-            binding = bindings.get(target.capability)
-            if binding is None:
-                ctx.health_event("drop", reason="ungranted", button=button, gesture=gesture, target=name)
                 continue
             prefix = f"home/state/{target.room}/{target.name}/"
             try:
@@ -101,7 +113,19 @@ def main():
                 )
                 continue
             for aspect, value, hold in sends:
-                ctx.publish(binding, value, room=target.room, entity=target.name, aspect=aspect, hold=hold)
+                binding = binding_for(target, aspect)
+                if binding is None:
+                    ctx.health_event(
+                        "drop", reason="ungranted", button=button, gesture=gesture, target=name, aspect=aspect
+                    )
+                    continue
+                try:
+                    ctx.publish(binding, value, room=target.room, entity=target.name, aspect=aspect, hold=hold)
+                except (TypeError, ValueError) as err:
+                    ctx.health_event(
+                        "drop", reason="invalid-action", button=button, gesture=gesture,
+                        target=name, aspect=aspect, error=str(err),
+                    )
 
     ctx.subscribe("state", on_state)
     ctx.subscribe("presses", on_press)

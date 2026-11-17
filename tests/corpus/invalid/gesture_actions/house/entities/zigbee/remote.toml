@@ -13,7 +13,7 @@ owner = "zigbee"
 lamp = { toggle = "on" }
 
 [actions.double]
-door = { hold = "release" }
+door = { hold = "release", unlocks = true }
 
 # Not fine, one each.
 [actions.long]

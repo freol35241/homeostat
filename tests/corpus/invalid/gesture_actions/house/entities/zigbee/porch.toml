@@ -10,3 +10,16 @@ owner = "zigbee"
 
 [actions.single]
 lamp = { set = { on = true }, hold = "none" }
+
+# Not fine: a toggle of a non-boolean, an undeclared feature, a non-scalar,
+# a release of a lock without unlocks, a loose time and a button target.
+[actions.double]
+lamp = { toggle = "brightness" }
+
+[actions.long]
+lamp = { set = { brightness = [1, 2], color_temp = 300 } }
+door = { hold = "release" }
+remote = { toggle = "on" }
+
+[actions.triple]
+door = { set = { locked = true }, hold = "+6:00" }

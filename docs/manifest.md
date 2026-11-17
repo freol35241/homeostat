@@ -199,15 +199,15 @@ a key segment (`invalid-name`).
 
 One target of a gesture: what the buttons service sends it. Exactly one
 of `toggle` and `set`, or `hold = "release"` alone (`action-shape`).
-Each aspect named is the target capability's base aspect or one of its
-aspects (`action-aspect`).
+The target's capability takes commands, and each aspect set is its base
+aspect or a feature its entity file declares (`action-aspect`).
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `hold` | string | no | The hold intent the commands carry (docs/design.md#hold-intents): `"none"`, `"release"`, or `"HH:MM"` to hold until the house clock next shows that time. Arbitrated targets only (`action-hold-not-arbitrated`). Without it the target's family policy decides. A release carries no value and hands back the target's base aspect. |
-| `set` | table | no | The values to send, one command per aspect. |
-| `toggle` | string | no | A boolean aspect to flip: the command sends the opposite of the target's current state, read from the core's mirror. With no state known, the press sends nothing. |
-| `unlocks` | boolean | no | Whether this action may unlock a lock. A remote is easy to press by mistake, so unlocking needs saying (`action-unlocks`). |
+| `hold` | string | no | The hold intent the commands carry (docs/design.md#hold-intents): `"none"`, `"release"`, or `"HH:MM"` to hold until the house clock next shows that time. Arbitrated targets only (`action-hold-not-arbitrated`). Without it the target's family policy decides. A release carries no value and hands back the target's base aspect only. |
+| `set` | table | no | The values to send, one command per aspect: booleans, finite numbers or strings, and a boolean for `on` and `locked` (`action-shape`). |
+| `toggle` | string | no | The base aspect to flip, `on` or `locked` (`action-aspect`): the command sends the opposite of the target's current state, read from the core's mirror. With no state known, the press sends nothing. |
+| `unlocks` | boolean | no | Whether this action may unlock a lock. A remote is easy to press by mistake, so unlocking needs saying (`action-unlocks`). A release of a lock counts, because the hold beneath it may be an unlock. |
 
 ### AspectDecl
 
