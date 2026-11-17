@@ -31,8 +31,14 @@ or refreshed for hold_minutes. The manual band is highest, so the family
 wins over automations. Expiry reopens the aspect, so a forgotten override
 clears itself.
 
-The leases in force are published as one document at home/hold/{unit}
-(`Leases.document`), mirrored by the core.
+A manual-band wish may carry a `hold` intent (docs/design.md#hold-intents):
+"none" forwards without holding, an RFC3339 instant holds until then,
+"report" holds without forwarding because the device already did it, and
+"release" hands the aspect back without forwarding anything.
+
+Each lease in force is published at home/hold/{unit}/{room}/{entity}/{aspect}
+(`Leases.records`), mirrored by the core, and the key is deleted when the
+lease ends. A restart takes back the leases the mirror still has.
 
 Configuration: the live parameter hold_minutes (family-editable), seeded
 from the manifest default.
@@ -115,8 +121,8 @@ class Bindings:
 
     `on_change` is called with the new arbitrated set on each live table,
     under the lock, so two tables arriving together cannot apply their sets
-    in the wrong order. The seed does not call it, because nothing is held
-    before the first wish.
+    in the wrong order. The seed calls it once, after both reads, so holds
+    restored from the mirror are checked against the tables.
     """
 
     def __init__(self, session, on_change):
@@ -130,12 +136,17 @@ class Bindings:
         self._subs = [
             session.subscribe(key, partial(self._on_table, key)) for key in (GRANTS_KEY, PENDING_KEY)
         ]
+        seeded = False
         for key in (GRANTS_KEY, PENDING_KEY):
             for _key, value in session.get_json(key):
                 with self._lock:
                     if key not in self._live:
                         self._tables[key] = value
                         self._sets = bindings(self._tables[GRANTS_KEY] + self._tables[PENDING_KEY])
+                        seeded = True
+        if seeded:
+            with self._lock:
+                self._on_change(self._sets[0])
 
     def _on_table(self, key: str, sample) -> None:
         with self._lock:
@@ -172,37 +183,56 @@ class Leases:
     heat pump, the family's setpoint must not freeze an automation's
     outdoor_temperature_offset.
 
+    The manual band's lease is the family hold. A manual command's `hold`
+    intent decides what happens to it (docs/design.md#hold-intents). Lower
+    bands take a lease for the hold time on every forward.
+
     Enforcement uses time.monotonic(), which a clock step cannot shorten
-    or stretch. The published `until` is its wall-clock equivalent,
-    because another process can only use a wall-clock deadline. If the
-    clock is stepped the two disagree, and only the displayed countdown
-    is off.
+    or stretch. The published `since` and `until` are wall-clock, fixed
+    when the lease is taken, because another process, and this one after
+    a restart, can only use a wall-clock deadline. If the clock is stepped
+    the two disagree, and only the displayed countdown is off.
 
     Pure bookkeeping: no bus, no threads. The caller serialises access and
-    does the publishing; `clock` is time.monotonic in the unit and a fake
-    in tests.
+    does the publishing; `clock` and `wall` are time.monotonic and
+    time.time in the unit and fakes in tests.
     """
 
-    def __init__(self, clock=time.monotonic):
+    def __init__(self, clock=time.monotonic, wall=time.time):
         self._clock = clock
+        self._wall = wall
         self._held: dict[tuple[str, str, str], dict] = {}
 
-    def wish(self, target: tuple[str, str, str], priority: str, actor: str, hold_s: float):
+    def wish(
+        self,
+        target: tuple[str, str, str],
+        priority: str,
+        actor: str,
+        hold_s: float,
+        *,
+        value=None,
+        hold: str | None = None,
+    ):
         """Arbitrate one wish for `target` at `priority` from `actor`.
 
         With no lease in force, or an incoming priority at or above the
-        holder's band (in keys.CMD_PRIORITIES order), the wish is forwarded
-        and takes the lease at its own band and actor. Taking over from a
-        strictly lower holder is a preempt. A priority strictly below the
-        holder's is refused and not forwarded.
+        holder's band (in keys.CMD_PRIORITIES order), the wish wins. A
+        priority strictly below the holder's is refused and counted against
+        the holder.
+
+        A winning wish takes the lease at its own band and actor for
+        `hold_s` seconds, or until the instant `hold` names, and taking
+        over from a strictly lower holder is a preempt. `hold` = "report"
+        takes it the same way. "none" and "release" clear the family hold
+        and take nothing, so a lower band's lease stays where it is. An
+        instant already past clears it too. Whether the wish is forwarded
+        is the caller's decision: "report" and "release" are not.
 
         Returns
         -------
         tuple of (str, dict or None)
             The action, "forward", "preempt" or "refuse", and the lease that
-            was in force when the wish arrived (None if none was). Forward
-            and preempt take or refresh the lease for `hold_s` seconds; a
-            refusal counts against the holder instead.
+            was in force when the wish arrived (None if none was).
         """
         now = self._clock()
         lease = self._held.get(target)
@@ -214,17 +244,60 @@ class Leases:
             # replaying the event log.
             self._held[target]["refused"] += 1
             return "refuse", holder
+        seconds = hold_s
+        instant = hold not in (None, "none", "report", "release")
+        if instant:
+            seconds = keys.hold_instant(hold).timestamp() - self._wall()
+        if hold in ("none", "release") or (instant and seconds <= 0):
+            if holder is not None and holder["priority"] == "manual":
+                del self._held[target]
+            return "forward", holder
         preempts = holder is not None and incoming > keys.CMD_PRIORITIES.index(holder["priority"])
+        wall = self._wall()
         self._held[target] = {
             "priority": priority,
             "actor": actor,
-            "deadline": now + hold_s,
-            "taken": now,
+            "value": value,
+            "deadline": now + seconds,
+            "since": iso(wall),
+            "until": iso(wall + seconds),
             # A refreshed hold starts its count again, because the count
             # belongs to the hold in force.
             "refused": 0,
         }
         return ("preempt" if preempts else "forward"), holder
+
+    def restore(self, records: list) -> None:
+        """Take back the holds a previous run published and the mirror kept.
+
+        A record whose `until` has passed, or that does not read as a hold,
+        is skipped. The caller deletes what was not restored.
+
+        Parameters
+        ----------
+        records : list of dict
+            Hold records as `records` returns them.
+        """
+        now, wall = self._clock(), self._wall()
+        for record in records:
+            try:
+                target = (record["room"], record["entity"], record["aspect"])
+                until = datetime.datetime.fromisoformat(record["until"]).timestamp()
+                if record["priority"] not in keys.CMD_PRIORITIES:
+                    continue
+                lease = {
+                    "priority": record["priority"],
+                    "actor": str(record["actor"]),
+                    "value": record.get("value"),
+                    "deadline": now + (until - wall),
+                    "since": str(record["since"]),
+                    "until": record["until"],
+                    "refused": int(record.get("refused", 0)),
+                }
+            except (TypeError, KeyError, ValueError):
+                continue
+            if until > wall:
+                self._held[target] = lease
 
     def prune(self) -> bool:
         """Drop expired leases; True when something went."""
@@ -249,40 +322,35 @@ class Leases:
         """Return the earliest deadline in force, or None with no leases."""
         return min((lease["deadline"] for lease in self._held.values()), default=None)
 
-    def document(self, wall: float) -> dict:
-        """Return the holds document, ordered by room, entity and aspect.
+    def records(self) -> dict:
+        """Return the hold record of each lease in force, by target.
 
-        The document answers "is this aspect held right now?". The
-        preempt and refuse events cannot: they are an audit trail, and a
-        consumer that joins during a hold has missed them. It is one
-        document per arbiter, shaped like home/discovery/{unit}, and not a
-        key per lease. A restart then publishes one empty list, expiry
-        needs one timer, and a reader always sees a consistent set.
-
-        `wall` is time.time() at the same moment the clock is read, so the
-        published `since` and `until` are the monotonic lease in wall time.
+        A record answers "is this aspect held right now?". The preempt and
+        refuse events cannot: they are an audit trail, and a consumer that
+        joins during a hold has missed them.
         """
         now = self._clock()
-        holds = []
-        for (room, entity, aspect), lease in sorted(self._held.items()):
+        out = {}
+        for (room, entity, aspect), lease in self._held.items():
             if lease["deadline"] <= now:
                 continue
-            holds.append(
-                {
-                    "room": room,
-                    "entity": entity,
-                    "aspect": aspect,
-                    "priority": lease["priority"],
-                    "actor": lease["actor"],
-                    "since": iso(wall - (now - lease["taken"])),
-                    # Arbitration enforces the monotonic deadline; a
-                    # countdown is drawn from this.
-                    "until": iso(wall + (lease["deadline"] - now)),
-                    # How many wishes this hold has refused.
-                    "refused": lease["refused"],
-                }
-            )
-        return {"schema": 1, "holds": holds}
+            out[(room, entity, aspect)] = {
+                "schema": 1,
+                "room": room,
+                "entity": entity,
+                "aspect": aspect,
+                "priority": lease["priority"],
+                "actor": lease["actor"],
+                # What the holder asked for, or what the device reported.
+                "value": lease["value"],
+                "since": lease["since"],
+                # Arbitration enforces the monotonic deadline; a countdown
+                # is drawn from this.
+                "until": lease["until"],
+                # How many wishes this hold has refused.
+                "refused": lease["refused"],
+            }
+        return out
 
 
 def main():
@@ -292,16 +360,40 @@ def main():
     session = homeostat.connect()
     params = Params(session, {PARAM: float(own.params[PARAM]["default"])})
     leases = Leases()
-    hold_key = keys.hold_key(unit)
-    # Guards `leases`, and wakes the expiry thread when the earliest
-    # deadline moves (a new lease, or one pruned) so it does not sleep past
-    # a hold's end.
+    # Guards `leases` and `published`, and wakes the expiry thread when the
+    # earliest deadline moves (a new lease, or one pruned) so it does not
+    # sleep past a hold's end.
     changed = threading.Condition(threading.Lock())
+    # hold key -> the record last put there.
+    published: dict[str, dict] = {}
 
     def publish_holds_locked() -> None:
-        # Each document replaces the previous one, so a consumer does not
-        # merge two.
-        session.put_json(hold_key, leases.document(time.time()))
+        # One key per held aspect. A record that changed is put again, and
+        # the key of a hold that ended is deleted, so the mirror and every
+        # subscriber forget it.
+        current = {
+            keys.hold_key(unit, *target): record for target, record in leases.records().items()
+        }
+        for key in published.keys() - current.keys():
+            session.delete(key)
+        for key, record in current.items():
+            if published.get(key) != record:
+                session.put_json(key, record)
+        published.clear()
+        published.update(current)
+
+    # The family's holds outlive this process: the mirror kept what the
+    # last run published. Those still in force are taken back, and the
+    # first publish deletes the rest. This runs before Bindings, whose seed
+    # drops a restored hold on an entity no longer arbitrated.
+    try:
+        kept = session.get_json(keys.hold_keyexpr(unit), timeout_s=5)
+    except (homeostat.QueryTimeout, homeostat.QueryError):
+        kept = []
+    with changed:
+        published.update((key, record) for key, record in kept)
+        leases.restore([record for _key, record in kept])
+        publish_holds_locked()
 
     def on_arbitrated(arbitrated: frozenset) -> None:
         with changed:
@@ -315,15 +407,18 @@ def main():
         """One thread for every lease, waiting on the earliest deadline.
 
         Expiry is otherwise lazy, evaluated on the next wish for that key.
-        That is enough for arbitration, but the published document would
-        go on showing a hold that had ended.
+        That is enough for arbitration, but the published record would go
+        on showing a hold that had ended.
         """
         while not stop.is_set():
             with changed:
                 if leases.prune():
                     publish_holds_locked()
                 deadline = leases.next_deadline()
-                timeout = None if deadline is None else max(0.05, deadline - time.monotonic())
+                # Capped, because a wait beyond threading.TIMEOUT_MAX raises
+                # and would end this thread. A long hold costs a wake-up an
+                # hour.
+                timeout = None if deadline is None else min(3600.0, max(0.05, deadline - time.monotonic()))
                 changed.wait(timeout=timeout)
 
     def cmd_handler(sample):
@@ -362,10 +457,16 @@ def main():
             )
             return
         cmd_id = keys.cmd_envelope_id(envelope)
+        hold = keys.cmd_envelope_hold(envelope)
 
         with changed:
             action, holder = leases.wish(
-                (room, entity, aspect), priority, actor, params.hold_minutes * 60
+                (room, entity, aspect),
+                priority,
+                actor,
+                params.hold_minutes * 60,
+                value=envelope.get("value"),
+                hold=hold,
             )
             publish_holds_locked()
             # The earliest deadline may have moved, and the expiry thread
@@ -399,16 +500,13 @@ def main():
                 to_priority=priority,
                 to_actor=actor,
             )
+        if hold in ("report", "release"):
+            # The device already did it, or there is nothing to do: either
+            # way only the hold changes.
+            return
         session.put_json(keys.arbiter_key(room, entity, aspect), envelope)
 
     cmd_sub = session.subscribe("home/cmd/**", cmd_handler)
-
-    # Leases are in memory, so a restart holds nothing, while the mirror
-    # still has what the last process published. One empty document
-    # replaces it; with one key per hold there would be a set to find and
-    # clear.
-    with changed:
-        publish_holds_locked()
 
     session.ready()
 

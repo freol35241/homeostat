@@ -253,7 +253,10 @@ class UnitSession:
         The result is the aspect, the envelope's value and its correlation
         id. It is None after a drop event: "malformed-payload" for a payload
         that is not JSON, and "invalid-command" for one that is not an
-        envelope. An adapter that honours command options calls
+        envelope. It is also None, with no event, for a hold intent of
+        "report" or "release", which asks the device for nothing
+        (docs/design.md#hold-intents). An adapter that honours command
+        options calls
         `parse_command_with_options` instead.
 
         The id is returned because the adapter's own later validation (out
@@ -304,7 +307,26 @@ class UnitSession:
         except ValueError:
             self.health_event("drop", reason="invalid-command", key=key, cmd_id=cmd_id)
             return None
+        if keys.cmd_envelope_hold(payload) in ("report", "release"):
+            # Both speak to the arbiter about the family hold, and neither
+            # asks the device for anything. An adapter receives one only for
+            # an aspect nothing arbitrates, where there is no hold to keep.
+            return None
         return aspect, value, cmd_id, keys.cmd_envelope_options(payload)
+
+    def delete(self, key: str) -> None:
+        """Delete a key, so the core's mirror forgets it.
+
+        A unit that publishes one key per item, such as one hold per held
+        aspect, deletes the key when the item ends. Subscribers see a sample
+        of kind DELETE.
+
+        Parameters
+        ----------
+        key : str
+            The concrete key to delete.
+        """
+        self._session.delete(key)
 
     def has_subscriber(self, key: str, *, wait_s: float = 0.5) -> bool:
         """Return whether anything on the bus subscribes to `key`.

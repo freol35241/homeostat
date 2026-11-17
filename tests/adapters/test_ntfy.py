@@ -43,6 +43,9 @@ class GateTest(unittest.TestCase):
             (MESSAGE, wish(42), "invalid-command"),
             (MESSAGE, wish("   "), "invalid-command"),
             ("home/cmd/person/alice_phone/ring", wish("hi"), "invalid-command"),
+            # A report is for the arbiter, which never holds a notifier.
+            (MESSAGE, json.dumps({"value": "hi", "priority": "manual", "hold": "report"}).encode(),
+             "invalid-command"),
         ]
         for key, raw, reason in cases:
             with self.subTest(raw=raw, key=key):

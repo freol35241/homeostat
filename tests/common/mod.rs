@@ -1005,3 +1005,32 @@ pub async fn startup_permit() -> tokio::sync::SemaphorePermit<'static> {
         .await
         .expect("startup semaphore never closes")
 }
+
+/// The RFC3339 UTC instant `secs` seconds from now, to the whole second.
+/// A hold may name an end at most a year ahead, so a test cannot use a
+/// fixed far-future date.
+#[allow(dead_code)] // each test binary uses its own subset of the harness
+pub fn rfc3339_in(secs: u64) -> String {
+    let at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock after 1970")
+        .as_secs()
+        + secs;
+    let (days, rem) = (at / 86_400, at % 86_400);
+    // Howard Hinnant's civil_from_days, as src/pending.rs uses it.
+    let z = i64::try_from(days).expect("days fit i64") + 719_468;
+    let era = z / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        rem / 3600,
+        (rem % 3600) / 60,
+        rem % 60
+    )
+}

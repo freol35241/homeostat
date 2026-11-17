@@ -245,7 +245,9 @@
       return 'state';
     }
     if (msg.type === 'hold') {
-      store.holds[msg.key] = msg.value;
+      // null: the hold ended and the arbiter deleted its key
+      if (msg.value === null || msg.value === undefined) delete store.holds[msg.key];
+      else store.holds[msg.key] = msg.value;
       return 'hold';
     }
     if (msg.type === 'forecast') {
@@ -421,25 +423,24 @@
     return isNaN(d.getTime()) ? '' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   }
 
-  // Every live hold across every arbiter, with expired ones dropped. The
-  // document states `until` and the reader applies it, as with a
-  // forecast's `issued`. The arbiter also republishes at the deadline, so
-  // this check is a second guard.
+  // Every live hold across every arbiter, with expired ones dropped. Each
+  // is one record, keyed home/hold/{arbiter}/{room}/{entity}/{aspect}. The
+  // record states `until` and the reader applies it, as with a forecast's
+  // `issued`. The arbiter also deletes the key at the deadline, so this
+  // check is a second guard.
   function liveHolds(holds, now) {
     var out = [];
     Object.keys(holds || {}).forEach(function (key) {
-      var doc = holds[key];
-      if (!doc || !Array.isArray(doc.holds)) return;
-      doc.holds.forEach(function (h) {
-        if (!h || typeof h.entity !== 'string' || typeof h.aspect !== 'string') return;
-        var until = Date.parse(h.until);
-        if (isNaN(until) || until <= now) return;
-        out.push({
-          room: h.room, entity: h.entity, aspect: h.aspect,
-          priority: h.priority, actor: h.actor,
-          refused: typeof h.refused === 'number' ? h.refused : 0,
-          until: until
-        });
+      var h = holds[key];
+      if (!h || typeof h.entity !== 'string' || typeof h.aspect !== 'string') return;
+      var until = Date.parse(h.until);
+      if (isNaN(until) || until <= now) return;
+      out.push({
+        key: key,
+        room: h.room, entity: h.entity, aspect: h.aspect,
+        priority: h.priority, actor: h.actor, value: h.value,
+        refused: typeof h.refused === 'number' ? h.refused : 0,
+        until: until
       });
     });
     return out.sort(function (a, b) { return a.until - b.until; });
@@ -451,6 +452,20 @@
     return liveHolds(holds, now).filter(function (h) {
       return h.room === room && h.entity === entity && h.aspect === aspect;
     })[0] || null;
+  }
+
+  // The instant "hold until HH:MM" means: the next time the local clock
+  // shows it, later today or else tomorrow. It goes to the arbiter as UTC,
+  // so the arbiter needs no time zone. The browser's zone stands in for the
+  // house's, so a phone in another zone picks a time in its own. null for
+  // anything that is not a time of day.
+  function holdUntil(hhmm, now) {
+    var m = /^(\d{2}):(\d{2})$/.exec(hhmm || '');
+    if (!m || +m[1] > 23 || +m[2] > 59) return null;
+    var d = new Date(now);
+    d.setHours(+m[1], +m[2], 0, 0);
+    if (d.getTime() <= now) d.setDate(d.getDate() + 1);
+    return d.toISOString();
   }
 
   /* Whether a hold displaced somebody. That is the case when the hold's
@@ -1841,6 +1856,7 @@
    *   and a matching state from before it says the aspect already had the
    *   value. Else nothing answered. A command older than what a capped
    *   query kept is not judged: its answer may have been cut.
+     A release or a report reaches no device, so nothing judges it.
    * - `taken-over`: another actor's command displaced its hold.
    * - `decision`: why one of its rules acted or did not (ctx.decision).
    * - `event`: one of its other health events. */
@@ -1874,6 +1890,8 @@
           entry.by = unitNameFromHealthKey(answer.key);
           entry.reason = answer.value.reason || null;
         }
+      } else if (envelope.hold === 'release' || envelope.hold === 'report') {
+        entry.outcome = envelope.hold === 'release' ? 'released' : 'reported';
       } else if (cut(c.ts, raw.answers_from) || cut(c.ts, series.from)) {
         entry.outcome = 'unknown';
       } else {
@@ -2088,6 +2106,7 @@
     computeDeviations: computeDeviations,
     liveHolds: liveHolds,
     holdOn: holdOn,
+    holdUntil: holdUntil,
     displaces: displaces,
     forecastFor: forecastFor,
     forecastSourcesFor: forecastSourcesFor,

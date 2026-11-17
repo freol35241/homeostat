@@ -249,6 +249,43 @@ class PublishOptionsTest(unittest.TestCase):
         self.assertEqual(ctx.puts, [])
 
 
+class PublishHoldTest(unittest.TestCase):
+    """A manual-band command may say what to do with the family hold
+    (docs/design.md#hold-intents)."""
+
+    def context(self):
+        ctx = bare_context(
+            {
+                "lamp": {"key": "home/cmd/hall/lamp/on", "priority": "manual"},
+                "auto": {"key": "home/cmd/hall/lamp/brightness", "priority": "automation"},
+                "level": {"key": "home/state/hall/dimmer/level"},
+            }
+        )
+        ctx.unit = "remote"
+        ctx._lock = threading.Lock()
+        ctx._param_specs = {}
+        ctx.puts = []
+        ctx._session = types.SimpleNamespace(put_json=lambda key, value, at=None: ctx.puts.append((key, value)))
+        return ctx
+
+    def test_a_manual_command_carries_its_hold(self):
+        ctx = self.context()
+        ctx.publish("lamp", True, hold="none")
+        ctx.publish("lamp", None, hold="release")
+        [(_, nudge), (_, release)] = ctx.puts
+        self.assertEqual((nudge["value"], nudge["hold"]), (True, "none"))
+        self.assertEqual(release["hold"], "release")
+        self.assertNotIn("value", release)
+
+    def test_a_hold_below_the_manual_band_or_off_a_command_is_refused(self):
+        ctx = self.context()
+        with self.assertRaises(ValueError):
+            ctx.publish("auto", 10, hold="none")
+        with self.assertRaises(ValueError):
+            ctx.publish("level", 3, hold="none")
+        self.assertEqual(ctx.puts, [])
+
+
 class RecorderPresenceTest(unittest.TestCase):
     """What `restore` asks before it waits for anything: a recorder-less
     house must start on its defaults at once, not after the timeout."""

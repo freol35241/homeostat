@@ -130,7 +130,7 @@ Expanded keys:
   weather publishes curve: home/forecast/global/outdoor_temp/temperature/smhi
   weather_alt publishes curve: home/forecast/global/outdoor_temp/temperature/yr
   arbiter publishes arbiter: home/arbiter/**
-  arbiter publishes holds: home/hold/arbiter
+  arbiter publishes holds: home/hold/arbiter/**
   arbiter subscribes cmd: home/cmd/**
   arbiter subscribes grants: home/meta/system/grants
   arbiter subscribes grants_pending: home/meta/system/grants_pending

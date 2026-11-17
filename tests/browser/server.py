@@ -189,16 +189,10 @@ class FakeHouse:
                 ],
             )
         fresh["forecasts"] = forecasts
-        holds = {}
-        for key, doc in (snapshot.get("holds") or {}).items():
-            holds[key] = dict(
-                doc,
-                holds=[
-                    dict(h, since=iso(now - 300), until=iso(now + 1500))
-                    for h in (doc.get("holds") or [])
-                ],
-            )
-        fresh["holds"] = holds
+        fresh["holds"] = {
+            key: dict(record, since=iso(now - 300), until=iso(now + 1500))
+            for key, record in (snapshot.get("holds") or {}).items()
+        }
         return fresh
 
     async def api_history(self, request: web.Request) -> web.Response:

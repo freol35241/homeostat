@@ -185,7 +185,10 @@ class Gate:
             value = keys.parse_cmd_envelope(payload)
         except ValueError:
             return {"reason": "invalid-command", "key": key, "cmd_id": cmd_id}
-        if aspect not in PRIORITIES or not isinstance(value, str) or not value.strip():
+        # A report or a release is for the arbiter, and nothing arbitrates
+        # a notifier, so one reaching here was sent in error.
+        stray = keys.cmd_envelope_hold(payload) in ("report", "release")
+        if stray or aspect not in PRIORITIES or not isinstance(value, str) or not value.strip():
             return {
                 "reason": "invalid-command",
                 "key": key,

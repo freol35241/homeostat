@@ -25,13 +25,19 @@ class Clock:
         return self.now
 
 
+WALL = 1_700_000_000.0  # 2023-11-14T22:13:20Z
+
+
 class LeasesTest(unittest.TestCase):
     def setUp(self):
         self.clock = Clock()
-        self.leases = Leases(self.clock)
+        self.leases = Leases(self.clock, lambda: WALL + self.clock.now - 1000.0)
 
-    def wish(self, priority, actor="someone", target=LAMP):
-        return self.leases.wish(target, priority, actor, HOLD_S)
+    def wish(self, priority, actor="someone", target=LAMP, **kw):
+        return self.leases.wish(target, priority, actor, HOLD_S, **kw)
+
+    def held(self):
+        return list(self.leases.records().values())
 
     def test_an_unheld_aspect_forwards_and_is_then_held(self):
         self.assertEqual(self.wish("automation"), ("forward", None))
@@ -43,7 +49,7 @@ class LeasesTest(unittest.TestCase):
         self.assertEqual(action, "refuse")
         self.assertEqual((holder["priority"], holder["actor"]), ("manual", "family"))
         self.wish("automation", "scheduler")
-        [hold] = self.leases.document(wall=0.0)["holds"]
+        [hold] = self.held()
         self.assertEqual(hold["refused"], 2)
         self.assertEqual(hold["actor"], "family", "a refusal leaves the hold as it was")
 
@@ -52,7 +58,7 @@ class LeasesTest(unittest.TestCase):
         action, holder = self.wish("manual", "family")
         self.assertEqual(action, "preempt")
         self.assertEqual(holder["actor"], "scheduler")
-        [hold] = self.leases.document(wall=0.0)["holds"]
+        [hold] = self.held()
         self.assertEqual((hold["priority"], hold["actor"]), ("manual", "family"))
 
     def test_the_same_band_refreshes_the_hold_and_its_tally(self):
@@ -60,7 +66,7 @@ class LeasesTest(unittest.TestCase):
         self.wish("automation")  # refused: one against the hold
         self.clock.now += 30
         self.assertEqual(self.wish("agent", "b")[0], "forward")
-        [hold] = self.leases.document(wall=0.0)["holds"]
+        [hold] = self.held()
         self.assertEqual((hold["actor"], hold["refused"]), ("b", 0))
         self.assertEqual(self.leases.next_deadline(), 1030.0 + HOLD_S)
 
@@ -83,16 +89,15 @@ class LeasesTest(unittest.TestCase):
         self.assertTrue(self.leases.prune())
         self.assertEqual(self.leases.next_deadline(), 1010.0 + HOLD_S)
 
-    def test_the_document_is_ordered_and_in_wall_time(self):
-        self.wish("manual", target=("b", "y", "on"))
-        self.wish("agent", target=("a", "x", "on"))
+    def test_a_record_is_in_wall_time_and_fixed_when_taken(self):
+        self.wish("manual", value=True)
         self.clock.now += 15
-        doc = self.leases.document(wall=1_700_000_000.0)
-        self.assertEqual(doc["schema"], 1)
-        self.assertEqual([h["room"] for h in doc["holds"]], ["a", "b"])
-        # Taken 15 s ago, 45 s left.
-        self.assertEqual(doc["holds"][0]["since"], "2023-11-14T22:13:05Z")
-        self.assertEqual(doc["holds"][0]["until"], "2023-11-14T22:14:05Z")
+        [hold] = self.held()
+        self.assertEqual(hold["schema"], 1)
+        self.assertEqual((hold["room"], hold["entity"], hold["aspect"]), LAMP)
+        self.assertEqual(hold["value"], True)
+        self.assertEqual(hold["since"], "2023-11-14T22:13:20Z")
+        self.assertEqual(hold["until"], "2023-11-14T22:14:20Z")
 
     def test_retain_drops_holds_on_entities_no_longer_arbitrated(self):
         self.wish("manual", target=("a", "x", "on"))
@@ -100,13 +105,109 @@ class LeasesTest(unittest.TestCase):
         self.wish("manual", target=("b", "y", "on"))
         self.assertFalse(self.leases.retain(frozenset({("a", "x"), ("b", "y")})))
         self.assertTrue(self.leases.retain(frozenset({("b", "y")})))
-        doc = self.leases.document(wall=0.0)
-        self.assertEqual([(h["room"], h["entity"]) for h in doc["holds"]], [("b", "y")])
+        self.assertEqual(list(self.leases.records()), [("b", "y", "on")])
 
-    def test_the_document_leaves_out_an_ended_hold_before_it_is_pruned(self):
+    def test_the_records_leave_out_an_ended_hold_before_it_is_pruned(self):
         self.wish("manual")
         self.clock.now += HOLD_S
-        self.assertEqual(self.leases.document(wall=0.0)["holds"], [])
+        self.assertEqual(self.held(), [])
+
+
+class HoldIntentTest(unittest.TestCase):
+    """What a manual command's `hold` does to the family hold
+    (docs/design.md#hold-intents)."""
+
+    def setUp(self):
+        self.clock = Clock()
+        self.leases = Leases(self.clock, lambda: WALL + self.clock.now - 1000.0)
+
+    def wish(self, priority, actor="family", **kw):
+        return self.leases.wish(LAMP, priority, actor, HOLD_S, **kw)
+
+    def held(self):
+        return list(self.leases.records().values())
+
+    def test_none_acts_without_taking_over(self):
+        self.assertEqual(self.wish("manual", value=True, hold="none"), ("forward", None))
+        self.assertEqual(self.held(), [])
+        self.assertEqual(self.wish("automation", "scheduler")[0], "forward")
+
+    def test_none_clears_a_family_hold_but_leaves_a_lower_lease(self):
+        self.wish("manual", value=True)
+        self.wish("manual", value=False, hold="none")
+        self.assertEqual(self.held(), [])
+        self.wish("agent", "planner")
+        self.wish("manual", value=True, hold="none")
+        [hold] = self.held()
+        self.assertEqual(hold["actor"], "planner", "nothing took the agent's lease over")
+
+    def test_an_instant_holds_until_then(self):
+        until = "2023-11-14T23:13:20+00:00"  # an hour after WALL
+        self.assertEqual(self.wish("manual", value=True, hold=until)[0], "forward")
+        [hold] = self.held()
+        self.assertEqual(hold["until"], "2023-11-14T23:13:20Z")
+        self.assertEqual(self.leases.next_deadline(), 1000.0 + 3600)
+        self.assertEqual(self.wish("automation", "scheduler")[0], "refuse")
+
+    def test_a_zero_hold_time_still_takes_over(self):
+        # hold_minutes = 0: the wish wins and is reported as a takeover,
+        # and the hold it takes has already ended.
+        self.leases.wish(LAMP, "automation", "scheduler", HOLD_S)
+        self.assertEqual(self.leases.wish(LAMP, "manual", "family", 0.0, value=True)[0], "preempt")
+        self.assertEqual(self.held(), [])
+
+    def test_an_instant_already_past_holds_nothing(self):
+        self.wish("manual", value=True)
+        self.wish("manual", value=False, hold="2023-11-14T22:00:00Z")
+        self.assertEqual(self.held(), [])
+
+    def test_report_holds_what_the_device_did(self):
+        self.wish("automation", "scheduler")
+        self.assertEqual(self.wish("manual", "esphome", value=False, hold="report")[0], "preempt")
+        [hold] = self.held()
+        self.assertEqual((hold["priority"], hold["actor"], hold["value"]), ("manual", "esphome", False))
+
+    def test_release_clears_a_hold_another_surface_placed(self):
+        self.wish("manual", "esphome", value=False, hold="report")
+        self.wish("manual", "dashboard", hold="release")
+        self.assertEqual(self.held(), [])
+        self.assertEqual(self.wish("automation", "scheduler"), ("forward", None))
+
+    def test_release_leaves_a_lower_lease(self):
+        self.wish("automation", "scheduler")
+        self.wish("manual", "dashboard", hold="release")
+        self.assertEqual([h["actor"] for h in self.held()], ["scheduler"])
+
+
+class RestoreTest(unittest.TestCase):
+    """A restarted arbiter takes back the holds the mirror kept."""
+
+    def test_a_hold_still_in_force_comes_back_with_its_deadline(self):
+        clock = Clock()
+        before = Leases(clock, lambda: WALL)
+        before.wish(LAMP, "manual", "dashboard", HOLD_S, value=True)
+        before.wish(LAMP, "automation", "scheduler", HOLD_S)  # refused
+        records = list(before.records().values())
+
+        later = Clock()
+        later.now = 50.0
+        after = Leases(later, lambda: WALL + 20)
+        after.restore(records)
+        self.assertEqual(list(after.records().values()), records)
+        self.assertEqual(after.next_deadline(), 50.0 + HOLD_S - 20)
+
+    def test_an_ended_or_unreadable_record_is_skipped(self):
+        clock = Clock()
+        before = Leases(clock, lambda: WALL)
+        before.wish(LAMP, "manual", "dashboard", HOLD_S, value=True)
+        [record] = before.records().values()
+        ended = Leases(Clock(), lambda: WALL + HOLD_S)
+        ended.restore([record])
+        self.assertEqual(ended.records(), {})
+        live = Leases(Clock(), lambda: WALL + 1)
+        live.restore([{"schema": 1, "holds": []}, "junk", dict(record, priority="boss"),
+                      dict(record, until="soon")])
+        self.assertEqual(live.records(), {})
 
 
 def entity(room, name, write):
@@ -203,9 +304,11 @@ class RoutingDuringAnApplyTest(unittest.TestCase):
             GRANTS_KEY: [owner_row(entity("hall", "door", "shared"))],
             PENDING_KEY: [owner_row(entity("hall", "door", "arbitrated"))],
         })
-        routes = Bindings(session, self.changes.append)
+        changes = []
+        routes = Bindings(session, changes.append)
         self.assertEqual(routes.route(("hall", "door")), "arbitrated")
-        self.assertEqual(self.changes, [], "a seed calls nothing")
+        # Once, with both tables, so restored holds are checked against them.
+        self.assertEqual(changes, [{("hall", "door")}])
 
 
 if __name__ == "__main__":

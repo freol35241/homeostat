@@ -87,7 +87,7 @@ function show(value) {
   return typeof value === 'string' ? value : JSON.stringify(value);
 }
 
-var OUTCOME_TEXT = { already: 'already so', unknown: 'outcome unknown' };
+var OUTCOME_TEXT = { already: 'already so', unknown: 'outcome unknown', reported: 'reported, not sent' };
 
 // The newest rows a timeline shows. The overlay re-renders on every bus
 // message, and a day of a chatty sensor would make that slow.
@@ -109,7 +109,9 @@ function renderTimelineRow(entry) {
       outcome = 'refused, held by ' + (entry.by || 'a higher band') + (entry.priority ? ' (' + entry.priority + ')' : '');
     }
     if (entry.outcome === 'dropped') outcome = 'dropped by ' + (entry.by || 'its adapter') + (entry.reason ? ': ' + entry.reason : '');
-    text = fieldLabel(entry.entity, entry.aspect) + ' = ' + show(entry.value) + ' (' + outcome + ')';
+    text = entry.outcome === 'released'
+      ? fieldLabel(entry.entity, entry.aspect) + ' handed back to the house'
+      : fieldLabel(entry.entity, entry.aspect) + ' = ' + show(entry.value) + ' (' + outcome + ')';
   } else if (entry.type === 'decision') {
     tag = 'why';
     text = entry.rule + ': ' + entry.outcome;

@@ -11,9 +11,10 @@ use homeostat::bus::HealthStatus;
 use serde_json::{json, Value};
 use zenoh::handlers::FifoChannelHandler;
 use zenoh::pubsub::Subscriber;
+use zenoh::sample::SampleKind;
 
 use common::{
-    assert_cli_ok, assert_unit_contract, await_health, cli, config_write, health_watch,
+    assert_cli_ok, assert_unit_contract, await_health, cli, config_write, health_watch, rfc3339_in,
     running_pid, stdout, temp_house, Supervisor,
 };
 
@@ -22,7 +23,8 @@ const CMD_KEY: &str = "home/cmd/hallway/front_door/locked";
 const ARBITER_KEY: &str = "home/arbiter/hallway/front_door/locked";
 const EVENT_KEY: &str = "home/health/arbiter/event";
 const HOLD_MINUTES_KEY: &str = "home/config/arbiter/hold_minutes";
-const HOLD_KEY: &str = "home/hold/arbiter";
+const HOLDS: &str = "home/hold/arbiter/**";
+const HOLD_KEY: &str = "home/hold/arbiter/hallway/front_door/locked";
 
 type Sub = Subscriber<FifoChannelHandler<zenoh::sample::Sample>>;
 
@@ -60,6 +62,33 @@ async fn next_json(sub: &Sub, timeout: Duration) -> Option<Value> {
     Some(serde_json::from_slice(&sample.payload().to_bytes()).expect("payload is JSON"))
 }
 
+/// The next hold sample within the timeout, as its key and the record put
+/// there, or None for a delete: the hold ended and the key is gone.
+async fn next_hold(sub: &Sub, timeout: Duration) -> Option<(String, Option<Value>)> {
+    let sample = tokio::time::timeout(timeout, sub.recv_async())
+        .await
+        .ok()?
+        .expect("stream open");
+    let key = sample.key_expr().to_string();
+    let record = match sample.kind() {
+        SampleKind::Delete => None,
+        SampleKind::Put => {
+            Some(serde_json::from_slice(&sample.payload().to_bytes()).expect("record is JSON"))
+        }
+    };
+    Some((key, record))
+}
+
+/// Waits for the hold on `key` to end, its key deleted.
+async fn await_hold_deleted(sub: &Sub, key: &str) -> bool {
+    while let Some((at, record)) = next_hold(sub, Duration::from_secs(10)).await {
+        if at == key && record.is_none() {
+            return true;
+        }
+    }
+    false
+}
+
 /// Asserts no message arrives within the window.
 async fn expect_silence(sub: &Sub, window: Duration, what: &str) {
     if let Ok(Ok(sample)) = tokio::time::timeout(window, sub.recv_async()).await {
@@ -71,55 +100,48 @@ async fn expect_silence(sub: &Sub, window: Duration, what: &str) {
 }
 
 /// What the arbiter is holding, as state rather than as an event stream:
-/// the document answers "is this aspect held right now?" for a consumer
-/// that was not listening when the hold was taken
-/// (docs/design.md#arbitrated-mode). Asserts it is published empty at
-/// startup, carries the holder with a wall-clock deadline once a wish
-/// lands, counts what it refuses, and empties itself when the hold expires
-/// with no further command to prompt it. Lazy expiry cannot do that last
-/// part.
+/// one record per held aspect answers "is this aspect held right now?" for
+/// a consumer that was not listening when the hold was taken
+/// (docs/design.md#arbitrated-mode). Asserts the record carries the holder,
+/// the value and a wall-clock deadline once a wish lands, and that the key
+/// is deleted when the hold expires with no further command to prompt it.
+/// Lazy expiry cannot do that last part.
 #[tokio::test(flavor = "multi_thread")]
 async fn holds_are_published_as_state() {
     let (mut sup, observer) = setup().await;
     let hold_sub = observer
-        .declare_subscriber(HOLD_KEY)
+        .declare_subscriber(HOLDS)
         .await
         .expect("hold subscriber");
 
-    // A restart holds nothing, and says so: the leases were memory, and
-    // the mirror is carrying whatever the last process left.
     config_write(&observer, HOLD_MINUTES_KEY, json!(0.05))
         .await
         .expect("hold_minutes write");
     // The core accepts the write; the arbiter applies it when its config
     // subscription delivers, which can be after a wish sent now. A hold
     // taken at the old value runs 30 minutes, so wish again (a same-band
-    // wish retakes the hold at the current value) until one is short. The
-    // startup document may also arrive first, carrying no hold.
+    // wish retakes the hold at the current value) until one is short.
     let mut held: Option<Value> = None;
     'wish: for _ in 0..10 {
         put_cmd(&observer, &envelope(json!(true), "manual", "owner")).await;
-        for _ in 0..5 {
-            let Some(doc) = next_json(&hold_sub, Duration::from_secs(10)).await else {
-                break 'wish;
-            };
-            assert_eq!(doc["schema"], json!(1));
-            let Some(hold) = doc["holds"].get(0) else {
+        while let Some((key, record)) = next_hold(&hold_sub, Duration::from_secs(10)).await {
+            let Some(record) = record.filter(|_| key == HOLD_KEY) else {
                 continue;
             };
-            if hold_seconds(hold) <= 10 {
-                held = Some(doc);
+            if hold_seconds(&record) <= 10 {
+                held = Some(record);
                 break 'wish;
             }
             break;
         }
     }
-    let doc = held.expect("a hold document naming the manual holder");
-    let hold = &doc["holds"][0];
+    let hold = held.expect("a hold record naming the manual holder");
+    assert_eq!(hold["schema"], json!(1));
     assert_eq!(hold["entity"], json!("front_door"));
     assert_eq!(hold["aspect"], json!("locked"));
     assert_eq!(hold["priority"], json!("manual"));
     assert_eq!(hold["actor"], json!("owner"));
+    assert_eq!(hold["value"], json!(true));
     assert_eq!(hold["refused"], json!(0));
     // Wall clock, because a monotonic deadline means nothing off-process.
     let until = hold["until"].as_str().expect("until is a string");
@@ -128,20 +150,13 @@ async fn holds_are_published_as_state() {
         "until should be RFC3339 UTC, got {until:?}"
     );
 
-    // The hold empties itself at the deadline. Nothing commands the
-    // arbiter here: lazy expiry would leave the document claiming a hold
-    // that had ended, which is the failure this test exists for.
-    let mut emptied = false;
-    for _ in 0..5 {
-        let Some(doc) = next_json(&hold_sub, Duration::from_secs(10)).await else {
-            break;
-        };
-        if doc["holds"].as_array().is_some_and(std::vec::Vec::is_empty) {
-            emptied = true;
-            break;
-        }
-    }
-    assert!(emptied, "the hold document should empty itself at expiry");
+    // The key goes at the deadline. Nothing commands the arbiter here:
+    // lazy expiry would leave the record claiming a hold that had ended,
+    // which is the failure this test exists for.
+    assert!(
+        await_hold_deleted(&hold_sub, HOLD_KEY).await,
+        "the hold record should be deleted at expiry"
+    );
 
     assert_unit_contract(&mut sup, &observer, "arbiter").await;
     sup.shutdown();
@@ -169,7 +184,7 @@ fn hold_seconds(hold: &Value) -> i64 {
 async fn await_hold_minutes_applied(observer: &zenoh::Session, max_s: i64) {
     const PROBE: &str = "home/cmd/hallway/front_door/auto_relock_delay";
     let hold_sub = observer
-        .declare_subscriber(HOLD_KEY)
+        .declare_subscriber(HOLDS)
         .await
         .expect("hold subscriber");
     for _ in 0..20 {
@@ -177,12 +192,9 @@ async fn await_hold_minutes_applied(observer: &zenoh::Session, max_s: i64) {
             .put(PROBE, envelope(json!(1), "manual", "probe").to_string())
             .await
             .expect("probe put");
-        while let Some(doc) = next_json(&hold_sub, Duration::from_secs(2)).await {
-            let probe = doc["holds"]
-                .as_array()
-                .and_then(|holds| holds.iter().find(|h| h["actor"] == json!("probe")));
-            if let Some(hold) = probe {
-                if hold_seconds(hold) <= max_s {
+        while let Some((_key, record)) = next_hold(&hold_sub, Duration::from_secs(2)).await {
+            if let Some(hold) = record.filter(|h| h["actor"] == json!("probe")) {
+                if hold_seconds(&hold) <= max_s {
                     return;
                 }
                 break;
@@ -198,7 +210,7 @@ async fn await_hold_minutes_applied(observer: &zenoh::Session, max_s: i64) {
 async fn a_hold_counts_what_it_refuses() {
     let (mut sup, observer) = setup().await;
     let hold_sub = observer
-        .declare_subscriber(HOLD_KEY)
+        .declare_subscriber(HOLDS)
         .await
         .expect("hold subscriber");
 
@@ -211,10 +223,10 @@ async fn a_hold_counts_what_it_refuses() {
 
     let mut refused = None;
     for _ in 0..6 {
-        let Some(doc) = next_json(&hold_sub, Duration::from_secs(10)).await else {
+        let Some((_key, record)) = next_hold(&hold_sub, Duration::from_secs(10)).await else {
             break;
         };
-        let count = doc["holds"][0]["refused"].clone();
+        let count = record.map_or(Value::Null, |r| r["refused"].clone());
         if count == json!(1) {
             refused = Some(count);
             break;
@@ -227,6 +239,200 @@ async fn a_hold_counts_what_it_refuses() {
     );
 
     assert_unit_contract(&mut sup, &observer, "arbiter").await;
+    sup.shutdown();
+}
+
+/// A manual command's `hold` decides what happens to the family hold
+/// (docs/design.md#hold-intents): "none" forwards and holds nothing,
+/// "report" holds without forwarding, "release" hands the aspect back
+/// without forwarding, and an instant holds until then. A hold on a lower
+/// band's command is malformed.
+#[tokio::test(flavor = "multi_thread")]
+async fn hold_intents_steer_the_family_hold() {
+    let (mut sup, observer) = setup().await;
+    let arbiter_sub = observer
+        .declare_subscriber(ARBITER_KEY)
+        .await
+        .expect("arbiter subscriber");
+    let hold_sub = observer
+        .declare_subscriber(HOLDS)
+        .await
+        .expect("hold subscriber");
+    let event_sub = observer
+        .declare_subscriber(EVENT_KEY)
+        .await
+        .expect("event subscriber");
+    let with_hold = |value: Value, hold: &str| {
+        let mut wish = envelope(value, "manual", "owner");
+        wish["hold"] = json!(hold);
+        wish
+    };
+    let auto_wish = envelope(json!(true), "automation", "scheduler");
+
+    // "none": the device is asked, and nothing is held at the manual band,
+    // so an automation's next wish goes through.
+    let nudge = with_hold(json!(false), "none");
+    put_cmd(&observer, &nudge).await;
+    let forwarded = next_json(&arbiter_sub, Duration::from_secs(10)).await;
+    assert_eq!(forwarded, Some(nudge), "a nudge is forwarded unchanged");
+    put_cmd(&observer, &auto_wish).await;
+    let forwarded = next_json(&arbiter_sub, Duration::from_secs(10)).await;
+    assert_eq!(
+        forwarded,
+        Some(auto_wish.clone()),
+        "nothing held the aspect"
+    );
+
+    // "report": the device already did it. The family hold is taken over
+    // the automation's lease, and nothing is forwarded.
+    put_cmd(&observer, &with_hold(json!(false), "report")).await;
+    let event = next_json(&event_sub, Duration::from_secs(10))
+        .await
+        .expect("preempt event");
+    assert_eq!(event["kind"], json!("preempt"));
+    let mut record = None;
+    while let Some((key, put)) = next_hold(&hold_sub, Duration::from_secs(10)).await {
+        if key == HOLD_KEY
+            && put
+                .as_ref()
+                .is_some_and(|r| r["priority"] == json!("manual"))
+        {
+            record = put;
+            break;
+        }
+    }
+    let record = record.expect("a family hold record");
+    assert_eq!(
+        record["value"],
+        json!(false),
+        "the hold records what the device did"
+    );
+    expect_silence(
+        &arbiter_sub,
+        Duration::from_millis(500),
+        "forward of a report",
+    )
+    .await;
+    put_cmd(&observer, &auto_wish).await;
+    let event = next_json(&event_sub, Duration::from_secs(10))
+        .await
+        .expect("refuse event");
+    assert_eq!(event["kind"], json!("refuse"));
+
+    // "release": no value, nothing forwarded, the hold is gone, and the
+    // automation is heard again.
+    let mut release = json!({"priority": "manual", "actor": "owner", "hold": "release"});
+    release["id"] = json!("c0ffee02");
+    put_cmd(&observer, &release).await;
+    assert!(
+        await_hold_deleted(&hold_sub, HOLD_KEY).await,
+        "a release deletes the hold"
+    );
+    expect_silence(
+        &arbiter_sub,
+        Duration::from_millis(500),
+        "forward of a release",
+    )
+    .await;
+    put_cmd(&observer, &auto_wish).await;
+    let forwarded = next_json(&arbiter_sub, Duration::from_secs(10)).await;
+    assert_eq!(
+        forwarded,
+        Some(auto_wish),
+        "a released aspect is open again"
+    );
+
+    // An instant: forwarded, and held until then.
+    let instant = rfc3339_in(86_400);
+    let until = with_hold(json!(true), &instant);
+    put_cmd(&observer, &until).await;
+    let forwarded = next_json(&arbiter_sub, Duration::from_secs(10)).await;
+    assert_eq!(forwarded, Some(until));
+    let mut held_until = None;
+    while let Some((key, put)) = next_hold(&hold_sub, Duration::from_secs(10)).await {
+        if let Some(r) = put.filter(|r| key == HOLD_KEY && r["priority"] == json!("manual")) {
+            held_until = Some(r["until"].clone());
+            break;
+        }
+    }
+    assert_eq!(held_until, Some(json!(instant)));
+
+    // A hold below the manual band is a bug in its publisher.
+    let mut bad = envelope(json!(true), "automation", "scheduler");
+    bad["hold"] = json!("none");
+    put_cmd(&observer, &bad).await;
+    // The instant above preempted the automation's lease; that event is
+    // still queued.
+    let mut dropped = None;
+    while let Some(event) = next_json(&event_sub, Duration::from_secs(10)).await {
+        if event["kind"] == json!("drop") {
+            dropped = Some(event);
+            break;
+        }
+    }
+    let dropped = dropped.expect("drop event");
+    assert_eq!(dropped["reason"], json!("invalid-command"));
+
+    sup.shutdown();
+}
+
+/// The family's holds outlive the arbiter process: a restarted arbiter
+/// reads them back from the core's mirror and goes on refusing what they
+/// refused.
+#[tokio::test(flavor = "multi_thread")]
+async fn holds_survive_an_arbiter_restart() {
+    let (mut sup, observer) = setup().await;
+    let hold_sub = observer
+        .declare_subscriber(HOLDS)
+        .await
+        .expect("hold subscriber");
+    let event_sub = observer
+        .declare_subscriber(EVENT_KEY)
+        .await
+        .expect("event subscriber");
+
+    put_cmd(&observer, &envelope(json!(true), "manual", "owner")).await;
+    let mut taken = false;
+    while let Some((key, put)) = next_hold(&hold_sub, Duration::from_secs(10)).await {
+        if key == HOLD_KEY && put.is_some() {
+            taken = true;
+            break;
+        }
+    }
+    assert!(taken, "the manual wish takes a hold");
+
+    let pid = running_pid(&observer, "arbiter").await;
+    let mut watch = health_watch(&observer, "arbiter").await;
+    unsafe {
+        libc::kill(i32::try_from(pid).expect("a pid fits i32"), libc::SIGKILL);
+    }
+    await_health(&mut watch, Duration::from_mins(1), |h| {
+        h.status == HealthStatus::Running && h.pid != Some(u32::try_from(pid).expect("pid fits"))
+    })
+    .await;
+
+    put_cmd(
+        &observer,
+        &envelope(json!(false), "automation", "scheduler"),
+    )
+    .await;
+    let mut refusal = None;
+    while let Some(event) = next_json(&event_sub, Duration::from_secs(10)).await {
+        if event["kind"] == json!("refuse") {
+            refusal = Some(event);
+            break;
+        }
+    }
+    let refusal = refusal.expect("the restored hold refuses the automation");
+    assert_eq!(refusal["holder_actor"], json!("owner"));
+    // The restart put nothing back and deleted nothing: the first sample
+    // since is the refusal's count on the record that was kept.
+    let (key, record) = next_hold(&hold_sub, Duration::from_secs(10))
+        .await
+        .expect("the refusal is counted on the hold");
+    assert_eq!(key, HOLD_KEY);
+    assert_eq!(record.expect("a put, not a delete")["refused"], json!(1));
+
     sup.shutdown();
 }
 
@@ -576,7 +782,7 @@ async fn an_entity_made_arbitrated_by_apply_forwards_without_a_restart() {
     // The forwarded wish took a 30-minute hold. Once the entity is shared
     // again its adapter takes commands directly, so the hold must go.
     let hold_sub = observer
-        .declare_subscriber(HOLD_KEY)
+        .declare_subscriber(HOLDS)
         .await
         .expect("hold subscriber");
     edit(
@@ -587,13 +793,7 @@ async fn an_entity_made_arbitrated_by_apply_forwards_without_a_restart() {
     );
     let apply = cli(&["apply", house_arg, "--bus", &sup.endpoint]);
     assert_cli_ok(&apply);
-    let mut released = false;
-    while let Some(doc) = next_json(&hold_sub, Duration::from_secs(10)).await {
-        if doc["holds"].as_array().is_some_and(std::vec::Vec::is_empty) {
-            released = true;
-            break;
-        }
-    }
+    let released = await_hold_deleted(&hold_sub, HOLD_KEY).await;
     assert!(
         released,
         "the hold should be released when the entity is shared"

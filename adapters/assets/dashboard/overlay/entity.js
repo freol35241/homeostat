@@ -62,6 +62,38 @@ function renderTrackers(person) {
   return rows.length ? html`<div class="card-label" style="margin-top:20px;">Trackers</div>${rows}` : '';
 }
 
+// The family's holds on this entity. A hold at the manual band is the
+// family's; a lower band's lease is the house driving the aspect and shows
+// only as `held` on its row. Each hold can be given a new end, which sends
+// the held value again with that end, or be handed back to the house
+// (docs/design.md#hold-intents). The end picked so far is kept in
+// localState, because every state delta replaces this markup.
+function renderHolds(entity) {
+  if (entity.write_mode !== 'arbitrated' || controlDisabled(entity)) return '';
+  var held = logic.liveHolds(store.holds, Date.now()).filter(function (h) {
+    return h.room === entity.room && h.entity === entity.name && h.priority === 'manual';
+  });
+  if (!held.length) return '';
+  var rows = held.map(function (h) {
+    var attrs = html` data-room="${h.room}" data-entity="${h.entity}" data-aspect="${h.aspect}" data-key="${h.key}"`;
+    var end = new Date(h.until);
+    var clock = String(end.getHours()).padStart(2, '0') + ':' + String(end.getMinutes()).padStart(2, '0');
+    // A hold ending on another day names the day.
+    var ends = end.toDateString() === new Date().toDateString()
+      ? clock : end.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' }) + ' ' + clock;
+    // A record without a value has nothing to send again.
+    var extend = h.value === undefined || h.value === null ? '' : html`
+      <input type="time" id="hold-time-${h.entity}-${h.aspect}" value="${localState.holdTimes[h.key] || clock}"
+        aria-label="Hold until" data-action="hold-time"${attrs}>
+      <button data-action="hold-until"${attrs}>Hold until</button>`;
+    return html`<div class="aspect-row hold-row">
+      <span class="aspect-label">${titleCase(h.aspect)}</span>
+      <span class="muted">by ${unitLabel(h.actor)} until ${ends}</span>
+      <div class="seg">${extend}<button data-action="hold-release"${attrs}>Resume automatic</button></div></div>`;
+  });
+  return html`<div class="card-label" style="margin-top:20px;">Held</div>${rows}`;
+}
+
 // A box to send a notifier its text, so a phone can be checked by hand
 // after it is set up. The text typed so far is kept in localState,
 // because every state delta replaces this markup. `delivered` answers the
@@ -126,7 +158,7 @@ export function renderEntityDetailBody() {
       ${entity.capability === 'climate' ? widgetForClimate(entity, true) : widgetForEntity(entity)}`;
   }
   var head = html`<div class="muted" style="margin-top:2px;">${meta}</div>
-    <div class="muted" style="margin-top:6px;">${ownerLine}</div>${middle}`;
+    <div class="muted" style="margin-top:6px;">${ownerLine}</div>${middle}${renderHolds(entity)}`;
   // Without a camera everything goes in one half, and the mount stays
   // empty.
   return camera

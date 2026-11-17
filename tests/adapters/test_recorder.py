@@ -340,3 +340,35 @@ class StampedRecordTest(StoreTest):
         self.assertEqual(table, "samples")
         self.assertGreaterEqual(row[0], before)
         self.assertEqual(rec._live, {self.KEY})
+
+
+class CommandRecordTest(unittest.TestCase):
+    """A command is stored as its value, beside the envelope that says who
+    sent it."""
+
+    def recorder(self):
+        rec = Recorder.__new__(Recorder)
+        rec.events = []
+        rec.sess = types.SimpleNamespace(health_event=lambda kind, **f: rec.events.append((kind, f)))
+        rec.queued = []
+        rec.writer = types.SimpleNamespace(enqueue=lambda table, row: rec.queued.append((table, row)))
+        return rec
+
+    def record(self, rec, payload: bytes):
+        key = "home/cmd/livingroom/heat_pump/mode"
+        sample = types.SimpleNamespace(payload=types.SimpleNamespace(to_bytes=lambda: payload))
+        rec._record_sample(5 * S, key, key.split("/"), sample)
+
+    def test_a_release_has_no_value_and_keeps_its_envelope(self):
+        rec = self.recorder()
+        payload = b'{"priority": "manual", "actor": "dashboard", "hold": "release"}'
+        self.record(rec, payload)
+        self.assertEqual(rec.events, [], "a release is not a malformed command")
+        self.assertEqual(
+            rec.queued, [("events", (5 * S, "home/cmd/livingroom/heat_pump/mode", payload.decode()))]
+        )
+
+    def test_a_command_with_a_hold_is_stored_as_its_value(self):
+        rec = self.recorder()
+        self.record(rec, b'{"value": "heat", "priority": "manual", "hold": "none"}')
+        self.assertEqual([table for table, _ in rec.queued], ["samples", "events"])
