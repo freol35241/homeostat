@@ -1,0 +1,9 @@
+schema = 1
+
+[entity]
+id = "shed/button"
+capability = "button"
+room = "shed"
+
+[write_policy]
+owner = "esphome"

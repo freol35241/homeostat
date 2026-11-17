@@ -220,7 +220,10 @@ home/state/{room}/{entity}/{aspect}
   question each cycle: forward a value only when it differs from the
   last one put, and once after start (late joiners read the core's
   mirror). The recorder stores every put, so forwarding each poll
-  records unchanged values at the poll's rate.
+  records unchanged values at the poll's rate. A button's `action` is
+  the exception: it is an event, so every press is put, a repeat
+  included, and nothing is put between presses or at start
+  (docs/design.md#buttons).
 - **Do not invent values.** On loss the last values stand. The adapter
   publishes no nulls or zeros and clears no keys. Unknown is not false.
 - **Validity travels beside the value.** A reading the device itself

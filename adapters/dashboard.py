@@ -650,6 +650,10 @@ class Hub:
         # restart is older than a live one for the same key and must not
         # replace it on the page, whichever arrives first.
         self.state_stamps = Newest()
+        # State key ending in /action -> the epoch second of its last value.
+        # A button's action is a press, and how long ago it was is what says
+        # whether it is news (docs/design.md#buttons).
+        self.action_at: dict[str, float] = {}
         self._about: dict = {}
         self._about_at = -MODEL_TTL_S
 
@@ -665,10 +669,12 @@ class Hub:
             self.session.subscribe("home/config/*/*", self._on_config),
             self.session.subscribe("home/discovery/*", self._on_discovery),
         ]
-        for key, value, _age, stamp in self.session.get_json_stamped("home/state/**"):
+        for key, value, age, stamp in self.session.get_json_stamped("home/state/**"):
             with self.lock:
                 if self.state_stamps.admit(key, stamp, catch_up=True):
                     self.state[key] = value
+                    if key.endswith("/action"):
+                        self.action_at[key] = time.time() - age
         for key, value in self.session.get_json("home/forecast/**"):
             with self.lock:
                 self.forecasts.setdefault(key, value)
@@ -736,6 +742,7 @@ class Hub:
                 "health": dict(self.health),
                 "config": dict(self.config),
                 "aspects": dict(self.aspects),
+                "action_at": dict(self.action_at),
             }
 
     def _decode(self, sample):
@@ -756,7 +763,16 @@ class Hub:
             if not self.state_stamps.admit(key, getattr(sample, "timestamp", None)):
                 return
             self.state[key] = value
-        self._emit({"type": "state", "key": key, "value": value})
+            at = None
+            if key.endswith("/action"):
+                # By the sample's own age, so a press the core replays after
+                # a restart keeps its time.
+                at = time.time() - self.session.sample_age(sample)
+                self.action_at[key] = at
+        message = {"type": "state", "key": key, "value": value}
+        if at is not None:
+            message["at"] = at
+        self._emit(message)
 
     def _on_hold(self, sample) -> None:
         if sample.kind == zenoh.SampleKind.DELETE:
@@ -1010,9 +1026,10 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
     async def ws_handler(request: web.Request) -> web.WebSocketResponse:
         """GET /ws: a snapshot, then live deltas.
 
-        The snapshot holds state, forecasts, holds, health, config and every
+        The snapshot holds state, forecasts, holds, health, config, every
         aspect descriptor adapters publish in their discovery records
-        (docs/design.md#aspect-descriptors).
+        (docs/design.md#aspect-descriptors), and when each `action` was last
+        published, which is a button's last press (docs/design.md#buttons).
         """
         ws = web.WebSocketResponse(heartbeat=30)
         await ws.prepare(request)

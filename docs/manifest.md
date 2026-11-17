@@ -200,7 +200,7 @@ One entry in `[aspects]`.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `capability` | string | yes | One of: `binary_sensor`, `burner`, `camera`, `climate`, `cover`, `light`, `lock`, `notifier`, `occupancy`, `person`, `router`, `sensor`, `switch`, `tracker` (`unknown-capability`). Decides the base aspect, the dashboard widget and which cmd grants apply. |
+| `capability` | string | yes | One of: `binary_sensor`, `burner`, `button`, `camera`, `climate`, `cover`, `light`, `lock`, `notifier`, `occupancy`, `person`, `router`, `sensor`, `switch`, `tracker` (`unknown-capability`). Decides the base aspect, the dashboard widget and which cmd grants apply. |
 | `features` | list of string | no | Optional aspects beyond the capability's base, as the adapter names them (`brightness`, `color_temp` on a light). For a sensor it is descriptive only; its widgets come from the numeric aspects it publishes. |
 | `id` | string | no | The adapter-native address (a zigbee2mqtt friendly name, an ESPHome node, a camera's go2rtc stream). Unique per adapter (`duplicate-entity-id`). Required on an adapter-owned entity, where it addresses something (`entity-id-required`); optional on an automation-owned one, which has no periphery to address and would otherwise have to invent a name for a device that does not exist. |
 | `room` | string | yes | Where the entity is. No other file places it. A key segment; not `home` or a key class (`reserved-room-name`). The pseudo-rooms `global` and `person` are for entities with no place. |
@@ -372,6 +372,7 @@ What an entity of each capability publishes under which names (docs/adapters.md,
 |---|---|---|---|---|
 | `binary_sensor` | — | — | — | A boolean under its native name. |
 | `burner` | `on` | `power_level`, `flue_temperature`, `boiler_temperature` | — | `on` is the family lever, read back from the device's run state, never echoed from the command. `power_level` is the output setting as the device enumerates it (a constraint the adapter describes); the two temperatures in °C are what an interlock reads. Run-phase codes pass through raw until a second burner adapter exists to generalise against. |
+| `button` | — | `action` | — | A thing a person presses: a remote, a wall button, a device's own button. `action` (string) is one press in the device's own words (`single`, `1_double`, `brightness_up_click`), not normalised. Every press is published, a repeat included, so an action is an event, not a state: a unit catching up after a restart is not handed the last one (docs/design.md#buttons). No commands. |
 | `camera` | — | `motion` | — | `motion` (bool). Media rides the go2rtc plane, never the bus. |
 | `climate` | `setpoint` | `indoor_temperature`, `feed_temperature` | — | `setpoint` in °C is the family lever; the two readings are normalized when the device has them. |
 | `cover` | — | — | — | Reserved; no adapter binds it yet. |

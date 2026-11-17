@@ -189,6 +189,8 @@ class FakeHouse:
                 ],
             )
         fresh["forecasts"] = forecasts
+        # Two minutes ago, so a card can say how long since the press.
+        fresh["action_at"] = {key: now - 120 for key in snapshot.get("action_at") or {}}
         fresh["holds"] = {
             key: dict(record, since=iso(now - 300), until=iso(now + 1500))
             for key, record in (snapshot.get("holds") or {}).items()
@@ -205,6 +207,13 @@ class FakeHouse:
         interval = self.interval(entity, aspect)
         if aspect in POSITION_ASPECTS:
             points = self.route(entity, aspect, hours, now)
+        elif aspect == "action":
+            # A button's presses, a repeat among them, as raw rows. Nothing
+            # commands a button.
+            points = [] if request.query.get("class") == "cmd" else [
+                {"ts": iso(now - ago), "room": "hallway", "value": value}
+                for ago, value in ((900, "single"), (600, "single"), (120, "double"))
+            ]
         elif interval:
             # A reading nobody commands has no cmd series.
             points = [] if request.query.get("class") == "cmd" else self.amounts(interval, hours, now)

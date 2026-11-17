@@ -1,0 +1,9 @@
+schema = 1
+
+[entity]
+id = "remote_hallway_1"
+capability = "button"
+room = "hallway"
+
+[write_policy]
+owner = "zigbee"

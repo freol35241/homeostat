@@ -268,6 +268,79 @@ async fn cmd_envelope_reaches_fake_device_and_echoes_back() {
     sup.shutdown();
 }
 
+/// An ESPHome `event` entity binds as a `button` (docs/design.md#buttons):
+/// each event it fires is published as `action`, the same event twice
+/// included, nothing is published for it on connect, and discovery lists
+/// the event types it can fire.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_event_entity_publishes_every_press() {
+    const ACTION_KEY: &str = "home/state/shed/shed_button/action";
+    let (_device, _devices_path, mut sup, observer) = setup_with(&["--button"]).await;
+    let doc = await_discovery(&observer, "esphome", |doc| {
+        doc.as_array().is_some_and(|r| r.len() == 4)
+    })
+    .await;
+    let button = doc
+        .as_array()
+        .expect("discovery is an array")
+        .iter()
+        .find(|r| r["id"] == json!("shed/button"))
+        .expect("button record")
+        .clone();
+    assert_eq!(button["suggested"]["capability"], json!("button"));
+    assert_eq!(
+        button["description"]["event_types"],
+        json!(["single", "double", "long"])
+    );
+    assert_eq!(
+        button["aspects"]["fields"]["action"]["values"][1],
+        json!({"value": "double", "label": "double"})
+    );
+
+    let state_sub = observer
+        .declare_subscriber(RELAY_STATE_KEY)
+        .await
+        .expect("relay subscriber");
+    await_states(&observer, &state_sub, &[(RELAY_STATE_KEY, json!(false))]).await;
+    assert_eq!(
+        common::cache_read(&observer, ACTION_KEY).await,
+        None,
+        "a connect is not a press"
+    );
+
+    let action_sub = observer
+        .declare_subscriber(ACTION_KEY)
+        .await
+        .expect("action subscriber");
+    for value in [true, false] {
+        observer
+            .put(
+                RELAY_CMD_KEY,
+                json!({"value": value, "priority": "manual", "actor": "test"}).to_string(),
+            )
+            .await
+            .expect("cmd put");
+    }
+    let mut presses = Vec::new();
+    for _ in 0..2 {
+        let sample = tokio::time::timeout(Duration::from_secs(20), action_sub.recv_async())
+            .await
+            .expect("a press within 20s")
+            .expect("stream open");
+        presses.push(
+            serde_json::from_slice::<serde_json::Value>(&sample.payload().to_bytes())
+                .expect("JSON"),
+        );
+    }
+    assert_eq!(
+        presses,
+        [json!("single"), json!("single")],
+        "a repeat is a press"
+    );
+
+    sup.shutdown();
+}
+
 /// (c) The cmd contract: a bare value with no envelope drops with an
 /// "invalid-command" health event instead of reaching the device, and a
 /// properly enveloped command afterwards still works.

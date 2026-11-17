@@ -2119,3 +2119,16 @@ test('a release or a report reaches no device, so nothing judges it', () => {
   const outcomes = t.filter((e) => e.type === 'command').map((e) => e.outcome);
   assert.deepEqual(outcomes, ['reported', 'released']);
 });
+
+test('a press is timed when it arrives, and a snapshot carries the times the dashboard knows', () => {
+  const key = 'home/state/hall/remote/action';
+  const store = { state: {}, actionAt: {} };
+  logic.applyMessage(store, { type: 'snapshot', state: { [key]: 'single' }, action_at: { [key]: 100 } }, 500);
+  assert.equal(store.actionAt[key], 100, 'the snapshot says when, not the page');
+  logic.applyMessage(store, { type: 'state', key, value: 'single', at: 590 }, 600);
+  assert.equal(store.actionAt[key], 590, 'a repeat is a new press, timed by the dashboard');
+  logic.applyMessage(store, { type: 'state', key, value: 'single' }, 650);
+  assert.equal(store.actionAt[key], 650, 'without a time, on arrival');
+  logic.applyMessage(store, { type: 'state', key: 'home/state/hall/lamp/on', value: true, at: 700 }, 700);
+  assert.deepEqual(Object.keys(store.actionAt), [key]);
+});

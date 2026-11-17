@@ -57,6 +57,20 @@ function widgetForOccupancy(entity) {
     </div>`;
 }
 
+// A button's last press and how long ago it was. A press is an event, so
+// the age is what says whether it is news (docs/design.md#buttons). In
+// its own overlay the row opens nothing.
+export function widgetForButton(entity, inOverlay) {
+  var action = stateValue(entity.room, entity.name, 'action');
+  var at = store.actionAt['home/state/' + entity.room + '/' + entity.name + '/action'];
+  var age = at ? html`<span class="faint" title="${new Date(at * 1000).toLocaleString()}"> &middot; ${relTime(at * 1000)}</span>` : '';
+  var row = html`<span class="entity-name" title="${entity.label}">${entity.label}</span>
+    <span>${action === undefined ? html`<span class="faint">no press yet</span>` : String(action)}${age}</span>`;
+  return inOverlay
+    ? html`<div class="entity-row">${row}</div>`
+    : html`<div class="entity-row row-clickable" data-action="entity-detail" data-room="${entity.room}" data-entity="${entity.name}">${row}</div>`;
+}
+
 function widgetForLock(entity) {
   var locked = !!stateValue(entity.room, entity.name, 'locked');
   var badge = entity.write_mode === 'arbitrated' ? html`<span class="badge-arbitrated">ARBITRATED</span>` : '';
@@ -203,18 +217,19 @@ export function widgetForEntity(entity) {
   if (entity.capability === 'climate') return widgetForClimate(entity);
   if (entity.capability === 'sensor') return widgetForSensor(entity);
   if (entity.capability === 'camera') return widgetForCamera(entity);
+  if (entity.capability === 'button') return widgetForButton(entity);
   return widgetGeneric(entity);
 }
 
-var CAP_ORDER = { light: 0, lock: 1, occupancy: 2, climate: 3, sensor: 4, camera: 5 };
+var CAP_ORDER = { light: 0, lock: 1, occupancy: 2, climate: 3, sensor: 4, button: 5, camera: 6 };
 
 // Capabilities whose card widget is the capability's own (a toggle, a
 // sparkline, a poster) rather than the descriptor-driven row.
-export var BESPOKE_WIDGET = { light: true, switch: true, occupancy: true, lock: true, sensor: true, camera: true };
+export var BESPOKE_WIDGET = { light: true, switch: true, occupancy: true, lock: true, sensor: true, button: true, camera: true };
 
 function capRank(entity) {
   var r = CAP_ORDER[entity.capability];
-  return r === undefined ? 6 : r;
+  return r === undefined ? 7 : r;
 }
 
 export function relTime(ms) {

@@ -80,10 +80,24 @@
    "intervals": {}
   },
   {
+   "name": "hallway_remote",
+   "label": "hallway remote",
+   "capability": "button",
+   "features": [],
+   "room": "hallway",
+   "write_mode": "shared",
+   "owner": "stage",
+   "commandable": false,
+   "sources": {},
+   "intervals": {}
+  },
+  {
    "name": "family_phone",
    "label": "family phone",
    "capability": "notifier",
-   "features": ["alert"],
+   "features": [
+    "alert"
+   ],
    "room": "person",
    "write_mode": "shared",
    "owner": "stage",

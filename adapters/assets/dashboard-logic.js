@@ -232,6 +232,7 @@
       store.health = msg.health || {};
       store.config = msg.config || {};
       store.aspects = msg.aspects || {};
+      store.actionAt = msg.action_at || {};
       return 'snapshot';
     }
     if (msg.type === 'aspects') {
@@ -242,6 +243,12 @@
     }
     if (msg.type === 'state') {
       store.state[msg.key] = msg.value;
+      // When a button was last pressed (docs/design.md#buttons), on the
+      // dashboard's clock as the snapshot's times are.
+      if (/\/action$/.test(msg.key)) {
+        if (!store.actionAt) store.actionAt = {};
+        store.actionAt[msg.key] = typeof msg.at === 'number' ? msg.at : nowSeconds;
+      }
       return 'state';
     }
     if (msg.type === 'hold') {

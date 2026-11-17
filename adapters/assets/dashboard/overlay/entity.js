@@ -4,7 +4,7 @@ import logic, { titleCase } from '../logic.js';
 import { showOverlay } from './panel.js';
 import { controlDisabled, findEntity, houseControls, localState, overlay, store, unitLabel } from '../store.js';
 import { aspectValueSpan, renderAspectControl } from '../widgets/controls.js';
-import { BESPOKE_WIDGET, relTime, widgetForClimate, widgetForEntity, widgetForSensor } from '../widgets/entity.js';
+import { BESPOKE_WIDGET, relTime, widgetForButton, widgetForClimate, widgetForEntity, widgetForSensor } from '../widgets/entity.js';
 
 export function openEntityDetail(room, entityName) {
   var entity = findEntity(room, entityName);
@@ -144,6 +144,8 @@ export function renderEntityDetailBody() {
   } else if (entity.capability === 'camera') {
     camera = entity.name;
     middle = html`<div class="card-label" style="margin-top:20px;">Live</div>`;
+  } else if (entity.capability === 'button') {
+    middle = html`<div class="card-label" style="margin-top:20px;">Last press</div>${widgetForButton(entity, true)}`;
   } else if (entity.capability === 'sensor') {
     // A described sensor's readings are its sections, and tapping each
     // opens its history. An undescribed sensor keeps the sparkline rows
