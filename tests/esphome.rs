@@ -379,6 +379,19 @@ async fn envelope_less_command_drops_with_health_event() {
     observer.put(RELAY_CMD_KEY, "true").await.expect("cmd put");
     expect_drop_event(&event_sub, "invalid-command").await;
 
+    // A value the switch does not take ends its command by id, so the
+    // sender is not left waiting.
+    observer
+        .put(
+            RELAY_CMD_KEY,
+            json!({"value": "on", "priority": "manual", "actor": "test", "id": "c0ffee02"})
+                .to_string(),
+        )
+        .await
+        .expect("cmd put");
+    let event = expect_drop_event(&event_sub, "invalid-command").await;
+    assert_eq!(event["cmd_id"], json!("c0ffee02"));
+
     observer
         .put(
             RELAY_CMD_KEY,

@@ -351,6 +351,7 @@ def main():
         endpoint,
         lambda _client, _userdata, msg: radio.on_message(msg.topic, msg.payload),
         [(f"{base}/{EVENTS_SUFFIX}", 0), (f"{base}/{LWT_SUFFIX}", 0)],
+        health=session.health_event,
     )
 
     radio.start()

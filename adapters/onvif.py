@@ -189,6 +189,9 @@ async def soap_call(
             data=envelope(body, username, password).encode(),
             headers={"Content-Type": "application/soap+xml; charset=utf-8"},
             timeout=aiohttp.ClientTimeout(total=HTTP_TIMEOUT_S),
+            # The body carries the credentials, so a redirect is answered
+            # as an error and not followed to another host.
+            allow_redirects=False,
         ) as response:
             # Read until EOF. `content.read(n)` returns whatever is
             # buffered, up to n, which for a chunked reply is the first

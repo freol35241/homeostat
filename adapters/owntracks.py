@@ -160,6 +160,7 @@ def main():
         endpoint,
         lambda _client, _userdata, msg: tracker.on_message(msg.topic, msg.payload),
         f"{BASE_TOPIC}/+/+",
+        health=session.health_event,
     )
 
     # Persons are read-only, so there is no command subscription.

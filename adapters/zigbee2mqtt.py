@@ -387,6 +387,9 @@ class Bridge:
         self.by_id = by_id
         self.inventory_seen = threading.Event()
         self.known: set[str] = set()
+        # The devices missing from the inventory already reported, so each
+        # is reported once until the inventory changes.
+        self.reported: set[str] = set()
         # Unknown at boot, so a bridge already offline reports on its first
         # state message.
         self.online: bool | None = None
@@ -399,9 +402,10 @@ class Bridge:
         discovery already reports it with configured=false, and every
         device is in that state between pairing and binding. An event per
         publish would flood the recorder for as long as it stays unbound.
-        Only a device missing from the inventory gets an event.
+        Only a device missing from the inventory gets an event, once.
         """
-        if dev_id not in self.known:
+        if dev_id not in self.known and dev_id not in self.reported:
+            self.reported.add(dev_id)
             self.session.health_event("drop", reason="unknown-device", topic=topic)
 
     def on_message(self, topic: str, raw: bytes, retained: bool = False) -> None:
@@ -433,6 +437,7 @@ class Bridge:
                 return
             records = inventory(devices, self.by_id)
             self.known = {record["id"] for record in records}
+            self.reported.clear()
             for record in records:
                 if record["configured"]:
                     fields = record.get("aspects", {}).get("fields", {})
