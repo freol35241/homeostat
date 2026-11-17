@@ -839,7 +839,10 @@ fn render_unit(check: &CheckResult, unit: &LoadedUnit, out: &mut String) {
             if let Some(causes) = &entity.file.causes {
                 // How its adapter attributes a change it did not command
                 // (docs/design.md#device-reported-causes).
-                out.push_str(&format!("  causes: person={}", causes.person.join(",")));
+                out.push_str("  causes:");
+                if !causes.person.is_empty() {
+                    out.push_str(&format!(" person={}", causes.person.join(",")));
+                }
                 if let Some(event) = &causes.event {
                     out.push_str(&format!(" event={event}"));
                 }

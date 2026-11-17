@@ -22,10 +22,12 @@ class Attribution:
     """Why each tracked entity's boolean base aspect changed.
 
     The first value after a connect is the device's state, not a change.
-    A change to the value the adapter last commanded, within
-    `ECHO_WINDOW_S`, is that command's echo. Otherwise a cause reported
-    within `CAUSE_WINDOW_S` before the change says why it happened. With
-    none, a change is a person's for an entity whose firmware reports no
+    A cause reported within `CAUSE_WINDOW_S` before a change says why it
+    happened, because the device reports none for a command it was sent.
+    Otherwise a change to a value the adapter commanded within
+    `ECHO_WINDOW_S` is that command's echo; each command is matched once,
+    so two sent before the first echo explain two changes. With neither,
+    a change is a person's for an entity whose firmware reports no
     causes, and unattributed for the rest.
 
     An adapter calls this from its device side and its command handlers
@@ -54,7 +56,9 @@ class Attribution:
         self._clock = clock
         self._lock = threading.Lock()
         self._last: dict[str, bool] = {}
-        self._commanded: dict[str, tuple[bool, float]] = {}
+        # Per entity, the values commanded and when each stops explaining
+        # a change.
+        self._commanded: dict[str, list[tuple[bool, float]]] = {}
         self._causes: dict[str, tuple[str, float]] = {}
 
     @classmethod
@@ -111,7 +115,7 @@ class Attribution:
             The value sent.
         """
         with self._lock:
-            self._commanded[entity] = (value, self._clock() + ECHO_WINDOW_S)
+            self._commanded.setdefault(entity, []).append((value, self._clock() + ECHO_WINDOW_S))
 
     def cause(self, entity: str, cause: str) -> None:
         """Note a cause the device reported for `entity`'s next change.
@@ -152,12 +156,17 @@ class Attribution:
             self._last[entity] = value
             if before is None or before == value:
                 return None
-            commanded = self._commanded.pop(entity, None)
+            pending = [c for c in self._commanded.pop(entity, []) if now <= c[1]]
             cause = self._causes.pop(entity, None)
-            if commanded is not None and commanded[0] == value and now <= commanded[1]:
-                return None
+            echo = next((i for i, c in enumerate(pending) if c[0] == value), None)
+            if echo is not None:
+                del pending[echo]
+            if pending:
+                self._commanded[entity] = pending
             if cause is not None and now <= cause[1]:
                 return ("person" if cause[0] in self._person[entity] else "rule", cause[0])
+            if echo is not None:
+                return None
             if entity in self._uncommanded:
                 return ("person", None)
             return ("unattributed", None)

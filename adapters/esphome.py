@@ -66,12 +66,13 @@ why each change the adapter did not command happened:
   file says `uncommanded = "person"`.
 
 The adapter's own commands' echoes and the states sent on a connect are
-not attributed. Firmware that reports no causes needs no change: an
-entity without `[causes]` behaves as before.
+not attributed. An entity without `[causes]` is not attributed at all,
+so firmware that reports no causes works unchanged.
 
 Health events: `drop` (malformed-payload, invalid-command,
 device-unavailable, reserved-aspect, list-entities-failed,
-mdns-record-error), mdns-unavailable, device-rule and unattributed.
+mdns-record-error, cause-unusable for a cause entity that is bound or
+named by two entities), mdns-unavailable, device-rule and unattributed.
 """
 
 import asyncio
@@ -115,6 +116,8 @@ OCCUPANCY_DEVICE_CLASSES = {"motion", "occupancy", "presence"}
 # `b / 254`), so brightness is rescaled both ways to match it. color_temp
 # is mireds on both sides and is only rounded to an int.
 BRIGHTNESS_SCALE = 254
+
+
 class Causes:
     """What the adapter does with an attribution (docs/design.md#device-reported-causes).
 
@@ -132,6 +135,8 @@ class Causes:
 
     def held(self, key: str, record) -> None:
         """Note a hold record, or its deletion with None."""
+        if key.count("/") != 5:
+            return
         with self._lock:
             if isinstance(record, dict) and record.get("priority") == "manual":
                 self._family.add(key)
@@ -139,9 +144,8 @@ class Causes:
                 self._family.discard(key)
 
     def on_hold(self, sample) -> None:
+        """Take one sample from home/hold/**."""
         key = str(sample.key_expr)
-        if key.count("/") != 5:
-            return
         if sample.kind == zenoh.SampleKind.DELETE:
             self.held(key, None)
             return
@@ -395,7 +399,19 @@ async def run_device(
     key_map: dict[int, tuple] = {}
     # The cause event entity's key -> the entity whose causes it reports.
     cause_map: dict[int, house.Entity] = {}
-    by_cause = {cause_object_id(e): e for e in bound.values() if e.causes is not None}
+    # A cause entity is an event entity no entity file binds, so a cause
+    # cannot hide a bound entity's state. One named by two entities says
+    # nothing about either.
+    by_cause: dict[str, house.Entity] = {}
+    for e in bound.values():
+        if e.causes is None:
+            continue
+        name = cause_object_id(e)
+        if name in bound or name in by_cause:
+            session.health_event("drop", reason="cause-unusable", device=device, object_id=name, entity=e.name)
+            by_cause.pop(name, None)
+            continue
+        by_cause[name] = e
 
     async def on_connect() -> None:
         try:
@@ -429,7 +445,11 @@ async def run_device(
         key_map.clear()
         key_map.update(new_key_map)
         cause_map.clear()
-        cause_map.update({info.key: by_cause[info.object_id] for info in infos if info.object_id in by_cause})
+        cause_map.update({
+            info.key: by_cause[info.object_id]
+            for info in infos
+            if isinstance(info, EventInfo) and info.object_id in by_cause
+        })
         # The states sent on this connect are the device's state, not changes.
         causes.attribution.connected(e.name for e, _info in new_key_map.values())
         with entity_lock:
@@ -586,6 +606,9 @@ def cmd_handler(entity, entity_runtime, entity_lock, loop, session, attribution)
                 and isinstance(value, (int, float))
             ):
                 frac = max(0.0, min(1.0, value / BRIGHTNESS_SCALE))
+                # A brightness of 0 turns the light off and any other may
+                # turn it on, so either change of `on` is this command's.
+                attribution.commanded(entity.name, frac > 0)
                 loop.call_soon_threadsafe(partial(client.light_command, esp_key, brightness=frac))
             elif (
                 aspect == "color_temp"

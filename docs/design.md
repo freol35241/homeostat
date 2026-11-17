@@ -1291,7 +1291,9 @@ uncommanded = "person"               # optional: firmware that reports no causes
   entity file says `uncommanded = "person"`. That is the fallback for
   firmware that reports nothing, and it is off by default.
 - The echo of the adapter's own command, and the states sent when it
-  connects, are never attributed. A cause fired while the adapter was
+  connects, are not attributed. A cause reported before a change wins
+  over a command for the same value, because the device reports no
+  cause for a command it was sent. A cause fired while the adapter was
   disconnected is lost, and the state it left is read on the next
   connect.
 - Only the base aspect `on` is attributed. Plan refuses `[causes]` on an
@@ -1300,9 +1302,10 @@ uncommanded = "person"               # optional: firmware that reports no causes
   entity's line.
 
 `homeostat.causes.Attribution` holds the bookkeeping for any adapter.
-Of the shipped adapters, esphome uses it. A device that reports no
-causes needs no new firmware: an entity without `[causes]` behaves as
-before.
+Of the shipped adapters only esphome reads `[causes]`; on an entity of
+another adapter the table attributes nothing. An entity without
+`[causes]` is not attributed, so a device that reports no causes needs
+no new firmware.
 
 ### Aspect descriptors
 

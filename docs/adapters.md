@@ -462,6 +462,8 @@ trace: one JSON object at `home/health/{unit}/event` via
 | `drop` | `reason = "feed-source-unavailable"`, `input`, `key` | a fed value arriving while its source is unavailable (once per outage) |
 | `device-silent` / `bridge-silent` | `topic` or `base_topic`, `timeout_s` | a loss transition (once per transition) |
 | `feed-source-lost` | `input`, `key` | a fed input's source went unavailable |
+| `device-rule` | `entity`, `rule`, `aspect`, `value` | a change the device reports as its own rule ([Changes made at the device](#changes-made-at-the-device)) |
+| `unattributed` | `entity`, `aspect`, `value` | a change of an entity with `[causes]` that the device gave no cause for |
 
 New kinds and reasons are fine (`mdns-unavailable`, `camera-misconfigured`
 exist). Keep them to transitions and drops, not one per message, and list

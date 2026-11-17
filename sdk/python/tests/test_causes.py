@@ -52,6 +52,18 @@ class AttributionTest(unittest.TestCase):
         self.clock.now += ECHO_WINDOW_S + 1
         self.assertEqual(self.a.changed("relay", False), ("unattributed", None), "a late change is not an echo")
 
+    def test_two_commands_before_the_first_echo_are_two_echoes(self):
+        self.a.commanded("sonoff", True)
+        self.a.commanded("sonoff", False)
+        self.assertIsNone(self.a.changed("sonoff", True))
+        self.assertIsNone(self.a.changed("sonoff", False))
+        self.assertEqual(self.a.changed("sonoff", True), ("person", None), "each command explains one change")
+
+    def test_a_cause_wins_over_a_command_the_device_ignored(self):
+        self.a.commanded("relay", True)
+        self.a.cause("relay", "button")
+        self.assertEqual(self.a.changed("relay", True), ("person", "button"))
+
     def test_a_connect_sets_a_new_baseline(self):
         self.a.cause("relay", "button")
         self.a.connected(["relay"])
