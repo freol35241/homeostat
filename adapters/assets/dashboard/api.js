@@ -8,7 +8,7 @@ import logic from './logic.js';
 import { localState, scheduleRender, store } from './store.js';
 
 export function loadModel() {
-  fetch('/api/model').then(function (r) { return r.json(); }).then(function (m) {
+  getJson('/api/model').then(function (m) {
     store.model = m || store.model;
     scheduleRender();
   }).catch(function () { /* keep defaults; page still renders */ });
@@ -89,6 +89,18 @@ function appendSparklinePoint(key, value) {
   if (s.points.length > 500) s.points.shift();
 }
 
+/* GET a JSON endpoint of this unit. An error status rejects, with the
+ * reply's `error` text when it has one, so no caller reads an error reply
+ * as data. */
+export function getJson(url) {
+  return fetch(url).then(function (r) {
+    if (r.ok) return r.json();
+    return r.json().catch(function () { return {}; }).then(function (body) {
+      throw new Error((body && body.error) || 'HTTP ' + r.status);
+    });
+  });
+}
+
 export function errText(e) {
   var msg = e && e.message ? e.message : String(e);
   try {
@@ -135,8 +147,7 @@ export function fetchHistory(entity, aspect, hours, shape, cls, intervalS) {
   }
   var url = '/api/history?entity=' + encodeURIComponent(entity) + '&aspect=' + encodeURIComponent(aspect) + query +
     (cls ? '&class=' + encodeURIComponent(cls) : '');
-  return fetch(url)
-    .then(function (r) { return r.json(); })
+  return getJson(url)
     .then(function (data) {
       var pts = [];
       (data.series || []).forEach(function (series) {

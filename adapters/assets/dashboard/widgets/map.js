@@ -10,6 +10,7 @@
  * every state-delta render. Its container is therefore a detached DOM node
  * kept in mapState and moved into a new slot on each render, instead of
  * being rebuilt from an HTML string like the rest of the view. */
+import { getJson } from '../api.js';
 import { byId, html } from '../html.js';
 import logic from '../logic.js';
 import { stateValue, store } from '../store.js';
@@ -322,9 +323,8 @@ function updateTrack(key, entity, hours, color) {
 // One series over the last `hours`, as changes. Changes, not buckets:
 // averaging lat and lon apart would cut the corners off a route.
 function readChanges(entity, aspect, hours) {
-  return fetch('/api/history?entity=' + encodeURIComponent(entity.name) + '&aspect=' + aspect +
-               '&hours=' + hours + '&changes=1&limit=' + TRACK_LIMIT)
-    .then(function (r) { return r.json(); })
+  return getJson('/api/history?entity=' + encodeURIComponent(entity.name) + '&aspect=' + aspect +
+                 '&hours=' + hours + '&changes=1&limit=' + TRACK_LIMIT)
     .then(function (data) {
       var points = [];
       (data.series || []).forEach(function (s) { points = points.concat(s.points || []); });

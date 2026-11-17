@@ -59,6 +59,9 @@ class FakeHouse:
         # What /api/cmd says about the bus: False is a key nobody
         # subscribes to (the owning adapter is down).
         self.heard = True
+        # What /api/logs answers with: 200 and the log, or an error status
+        # such as the unit's 404 for a unit it does not know.
+        self.logs_status = 200
         # Whether the house has a tile extract. The one served is
         # fixtures/empty.pmtiles, a valid archive with a single empty tile:
         # enough for the page to load the basemap style, its icons and the
@@ -355,6 +358,8 @@ class FakeHouse:
         )
 
     async def api_logs(self, request: web.Request) -> web.Response:
+        if self.logs_status != 200:
+            return web.json_response({"error": "unknown unit"}, status=self.logs_status)
         # The unit's shape: a list of the core's log entries.
         return web.json_response([{"ts_us": 1_700_000_000_000_000, "stream": "stdout", "line": "staged"}])
 

@@ -1518,9 +1518,12 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
             except ValueError:
                 return json_error("lines must be an integer")
             selector += f"?lines={max(1, min(lines, 500))}"
-        replies = await asyncio.get_running_loop().run_in_executor(
-            None, hub.session.get_json, selector
-        )
+        try:
+            replies = await asyncio.get_running_loop().run_in_executor(
+                None, hub.session.get_json, selector
+            )
+        except QueryError as error:
+            return json_error(f"supervisor: {error}", status=502)
         # A unit with no captured output yet sends no reply; return an
         # empty list.
         entries = replies[0][1] if replies else []

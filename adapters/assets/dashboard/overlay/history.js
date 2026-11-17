@@ -2,7 +2,7 @@
  * shows the current forecast, one layer beside the record (the sources
  * the value is derived from, the entity's related readings, or every
  * forecast the recorder kept), and the commands sent to the aspect. */
-import { PRESSES_READ, fetchHistory } from '../api.js';
+import { PRESSES_READ, fetchHistory, getJson } from '../api.js';
 import { buildBars, buildChart, buildTimeline, fmtDuration, formatChartClock, formatChartTime, formatChartValue, horizonCaption, issuedCaption } from '../charts.js';
 import { html } from '../html.js';
 import logic, { titleCase } from '../logic.js';
@@ -90,9 +90,8 @@ export function fetchSourceEvents(entity, aspect, hours) {
   var cached = overlay.sourceEvents[ck];
   if (cached && (cached.loaded || cached.loading)) return;
   overlay.sourceEvents[ck] = { events: [], loaded: false, loading: true };
-  fetch('/api/source-events?entity=' + encodeURIComponent(entity.name) +
-        '&aspect=' + encodeURIComponent(aspect) + '&hours=' + hours)
-    .then(function (r) { return r.json(); })
+  getJson('/api/source-events?entity=' + encodeURIComponent(entity.name) +
+          '&aspect=' + encodeURIComponent(aspect) + '&hours=' + hours)
     .then(function (data) {
       overlay.sourceEvents[ck] = {
         events: (data && data.events) || [], loaded: true, loading: false
@@ -150,19 +149,25 @@ function drawnLines(entity, aspect, hours) {
  * recorder has no stored issues but can still draw its current
  * forecast. */
 export function fetchIssues(entityName, aspect, hours) {
+  // Only the newest read may land: a slower one for another range or
+  // aspect would overwrite it, with data or with a failure.
+  var read = overlay.issuesRead = (overlay.issuesRead || 0) + 1;
   overlay.issuesLoading = true;
+  overlay.issuesError = null;
   var url = '/api/forecasts?entity=' + encodeURIComponent(entityName) +
     '&aspect=' + encodeURIComponent(aspect) + '&hours=' + hours + '&limit=' + BRAID_ISSUES;
-  fetch(url)
-    .then(function (r) { return r.json(); })
+  getJson(url)
     .then(function (data) {
+      if (read !== overlay.issuesRead) return;
       overlay.issuesLoading = false;
       if (!overlay.open || overlay.aspect !== aspect) return;
       overlay.issues = logic.decodeIssues(data.issues);
       renderOverlayContent();
     })
-    .catch(function () {
+    .catch(function (e) {
+      if (read !== overlay.issuesRead) return;
       overlay.issuesLoading = false;
+      overlay.issuesError = e.message;
       overlay.issues = [];
       if (overlay.open) renderOverlayContent();
     });
@@ -217,6 +222,10 @@ export function openHistoryDetail(room, entityName, aspect) {
   overlay.cmdData = {};
   overlay.layer = '';
   overlay.issues = [];
+  // A read still running for the previous overlay lands on nothing.
+  overlay.issuesRead = (overlay.issuesRead || 0) + 1;
+  overlay.issuesLoading = false;
+  overlay.issuesError = null;
   overlay.pinned = null;
   overlay.sourcePinned = null;
   overlay.lastPoints = null;
@@ -427,7 +436,9 @@ export function renderHistoryDetailBody() {
               })() +
               ' kept for this window' + (overlay.issues.length >= BRAID_ISSUES ? ' (newest ' + BRAID_ISSUES + ')' : '') +
               (overlay.pinned ? ' \u00b7 one pinned \u2014 tap it again to release' : ' \u00b7 tap a line to pin it')
-            : 'nothing kept for this window \u2014 the recorder may not subscribe home/forecast/**'
+            : overlay.issuesError
+              ? 'the forecasts could not be read: ' + overlay.issuesError
+              : 'nothing kept for this window \u2014 the recorder may not subscribe home/forecast/**'
       }</div>`;
   }
   // The legend is also the scrub readout. With no cursor it names the

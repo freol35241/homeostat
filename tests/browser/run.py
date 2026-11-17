@@ -289,6 +289,15 @@ class RulesAboutControls(PageTest):
         await self.page.wait_for_timeout(400)
         self.assertEqual(await self.page.locator(".cmd-pending").count(), 0)
 
+    async def test_a_view_switch_keeps_a_commands_mark(self):
+        await self.view("downstairs")
+        await self.page.locator('[data-action="toggle-light"][data-entity="livingroom_lamp"]').first.click()
+        await self.page.wait_for_timeout(300)
+        await self.view("health")
+        await self.view("downstairs")
+        self.assertGreater(
+            await self.page.locator(".cmd-pending").count(), 0, "still pending after the redraw"
+        )
 
     async def test_steps_add_up_to_one_command_for_where_they_end(self):
         await self.view("downstairs")
@@ -891,6 +900,18 @@ class UnitOverlay(PageTest):
         lines = self.page.locator("#overlay-panel .log-feed .log-line")
         self.assertEqual(await lines.count(), 1)
         self.assertIn("staged", await lines.first.inner_text())
+
+    async def test_an_error_reply_is_said_and_not_drawn(self):
+        # A 404 from /api/logs is an error object, not a list of lines.
+        self.house.logs_status = 404
+        await self.view("health")
+        await self.page.locator('[data-action="unit-detail"]:visible').first.click()
+        await self.page.wait_for_timeout(400)
+        self.assertIn(
+            "The log could not be read: unknown unit", await self.page.locator("#overlay-panel").inner_text()
+        )
+        # The browser logs the failed request itself; that is not a fault.
+        self.faults = [f for f in self.faults if "Failed to load resource" not in f]
 
     async def test_an_automation_shows_its_timeline(self):
         await self.view("health")
