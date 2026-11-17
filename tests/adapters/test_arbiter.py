@@ -266,6 +266,18 @@ class FamilyPolicyTest(Base):
         [record] = self.resolver.family_records().values()
         self.assertEqual((record["until"], record["at"]), ("2023-11-15T05:00:00Z", "2023-11-15T06:00"))
 
+    def test_a_report_takes_the_policy_and_sends_nothing(self):
+        self.hold("heating", True, "h1")
+        forwarded, _ = self.command("manual", "esphome", False, hold="report", policy=STOP)
+        self.assertFalse(forwarded)
+        [record] = self.resolver.family_records().values()
+        self.assertEqual(record["until"], "2023-11-15T05:00:00Z")
+        # A start at the device under "none" holds nothing, and the hold
+        # beneath is not sent to undo it.
+        forwarded, effects = self.command("manual", "esphome", True, hold="report", policy="none")
+        self.assertFalse(forwarded)
+        self.assertEqual((self.resolver.family_records(), self.forwards(effects)), ({}, []))
+
     def test_an_explicit_hold_wins_over_the_policy(self):
         self.command("manual", "dashboard", True, hold="2023-11-14T23:13:20Z", policy="none")
         self.assertEqual(self.resolver.next_deadline(), 1000.0 + 3600)

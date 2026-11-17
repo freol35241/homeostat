@@ -1,0 +1,15 @@
+schema = 1
+
+[entity]
+id = "shed/relay"
+capability = "switch"
+room = "shed"
+
+[write_policy]
+mode = "arbitrated"
+owner = "esphome"
+
+# The firmware's relay_cause event fires "button" for the button on the
+# board and "valve_timeout" for its own timer.
+[causes]
+person = ["button"]

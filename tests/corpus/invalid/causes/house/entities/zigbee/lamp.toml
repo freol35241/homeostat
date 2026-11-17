@@ -1,0 +1,13 @@
+schema = 1
+
+[entity]
+id = "0x20"
+capability = "light"
+room = "hallway"
+
+[write_policy]
+mode = "shared"
+owner = "zigbee"
+
+[causes]
+person = ["button"]

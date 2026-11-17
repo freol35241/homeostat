@@ -305,6 +305,15 @@ codes! {
         (docs/design.md#family-policy, docs/design.md#hold-intents), so \
         without the clock service it would end the hold in the host's \
         time zone.",
+    CausesNotArbitrated => "causes-not-arbitrated":
+        "An entity that is not arbitrated declares `[causes]`. A change a \
+        person makes at the device is reported to the arbiter as the \
+        family's (docs/design.md#device-reported-causes), and only an \
+        arbitrated entity's commands reach the arbiter.",
+    CausesCapability => "causes-capability":
+        "An entity declares `[causes]` on a capability whose base aspect is \
+        not `on`. Attribution covers the base aspect of a light, a switch \
+        or a burner (docs/design.md#device-reported-causes).",
     ActionsNotButton => "actions-not-button":
         "An entity file declares `[actions]` on a capability other than \
         `button`. Only a button reports gestures \

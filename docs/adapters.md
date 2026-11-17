@@ -331,6 +331,35 @@ notices. Read-only consumers can coexist. When the dialect's ecosystem
 commonly wires such writers, say so as an operational note in the module
 docstring.
 
+### Changes made at the device
+
+A device that a person can switch by hand, or that runs rules of its
+own, changes without a command. When the device reports why, the
+adapter attributes the change (docs/design.md#device-reported-causes).
+The entity file's `[causes]` says which causes are a person's input,
+and `homeostat.causes.Attribution` does the bookkeeping:
+
+1. Build it with `Attribution.of(entities)`. It tracks the entities that
+   declare `[causes]`.
+2. Call `connected(names)` when a device's states are about to be sent
+   again after a connect, so they are taken as a baseline.
+3. Call `commanded(name, value)` when you send the base aspect, so its
+   echo is not attributed.
+4. Call `cause(name, cause)` when the device reports a cause.
+5. Call `changed(name, value)` on each value of the base aspect, and
+   act on the answer:
+   - for a person's change, put a manual-band envelope with
+     `hold="report"` on the entity's `home/cmd/` key, under your unit's
+     name;
+   - for a rule's, publish a `device-rule` health event, and send a
+     `"none"` command with the new value if the family holds the aspect;
+   - for an unattributed one, publish an `unattributed` health event.
+
+Declare the report publish in the manifest
+(`reports = { key = "home/cmd/**", priority = "manual" }`). Subscribe
+`home/hold/**` to know which aspects the family holds. A report forms
+no grant row, because the adapter already embodies the entity.
+
 An adapter with nothing to command declares no command subscription.
 Add a command surface when a command is needed, not because the protocol
 could carry one.

@@ -546,6 +546,11 @@ class Resolver:
         if keys.is_time_of_day(hold):
             # A time of day is held as the policy's is, in the house's time.
             hold, policy = None, {"until": hold}
+        # A report says the device already did it, so nothing is sent. What
+        # it holds is the policy's to say, as for a tap.
+        report = hold == "report"
+        if report:
+            hold = None
         seconds = hold_s
         at = None
         next_change = False
@@ -563,7 +568,7 @@ class Resolver:
                     # the host's offset until one comes.
                     room, entity, aspect = target
                     effects.append(("event", "clock-unknown", {"room": room, "entity": entity, "aspect": aspect}))
-        instant = hold not in (None, "none", "report", "release")
+        instant = hold not in (None, "none", "release")
         if instant:
             seconds = keys.hold_instant(hold).timestamp() - self._wall()
         if hold in ("none", "release") or (instant and seconds <= 0):
@@ -581,7 +586,7 @@ class Resolver:
                 self._winner.pop(target, None)
             else:
                 self._winner[target] = won
-            return True
+            return not report
         wall = self._wall()
         family = {
             "id": cmd_id or secrets.token_hex(4),
@@ -604,8 +609,7 @@ class Resolver:
         self._family[target] = family
         self._applied[target] = {"id": family["id"], "unit": actor, "priority": "manual", "value": value}
         self._note_winner(target, self.winner(target), effects)
-        # A report says the device already did it, so nothing is sent.
-        return hold != "report"
+        return not report
 
     # ---- the house clock
 

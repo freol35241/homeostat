@@ -49,13 +49,34 @@ device, bound or not, with an aspect descriptor on the bound ones
 (`aspect_descriptor`), plus unbound device names from a best-effort mDNS
 browse (`mdns_browse`).
 
+Causes (docs/design.md#device-reported-causes): an entity file's
+`[causes]` names the device's `event` entity whose event types are the
+causes of the entity's `on` changes (`{object_id}_cause` by default),
+and which of them are a person's input. The firmware fires the cause
+just before the change it makes. `homeostat.causes.Attribution` decides
+why each change the adapter did not command happened:
+
+- After a person's cause, it is the family's. The adapter sends a
+  manual-band command with hold intent "report", so the arbiter holds
+  it and sends nothing.
+- After any other cause, it is the device's rule, recorded as a
+  `device-rule` health event. If the family holds the aspect, a "none"
+  command clears the family's hold, because the device left its value.
+- With no cause, it is reported as `unattributed`, unless the entity
+  file says `uncommanded = "person"`.
+
+The adapter's own commands' echoes and the states sent on a connect are
+not attributed. Firmware that reports no causes needs no change: an
+entity without `[causes]` behaves as before.
+
 Health events: `drop` (malformed-payload, invalid-command,
 device-unavailable, reserved-aspect, list-entities-failed,
-mdns-record-error) and mdns-unavailable.
+mdns-record-error), mdns-unavailable, device-rule and unattributed.
 """
 
 import asyncio
 import contextlib
+import json
 import os
 import signal
 import threading
@@ -64,6 +85,7 @@ from pathlib import Path
 
 import homeostat
 import tomllib
+import zenoh
 from aioesphomeapi import (
     APIClient,
     BinarySensorInfo,
@@ -79,6 +101,7 @@ from aioesphomeapi import (
     SwitchInfo,
     SwitchState,
 )
+from homeostat import causes as causes_mod
 from homeostat import house, keys
 from zeroconf import ServiceStateChange
 from zeroconf.asyncio import AsyncServiceBrowser, AsyncServiceInfo, AsyncZeroconf
@@ -92,6 +115,67 @@ OCCUPANCY_DEVICE_CLASSES = {"motion", "occupancy", "presence"}
 # `b / 254`), so brightness is rescaled both ways to match it. color_temp
 # is mireds on both sides and is only rounded to an int.
 BRIGHTNESS_SCALE = 254
+class Causes:
+    """What the adapter does with an attribution (docs/design.md#device-reported-causes).
+
+    It follows the family's holds at home/hold/**, the records at the
+    manual band, to know which aspects the family holds.
+    """
+
+    def __init__(self, unit: str, session, attribution: causes_mod.Attribution):
+        self.unit = unit
+        self.session = session
+        self.attribution = attribution
+        # The keys of the family's hold records.
+        self._family: set[str] = set()
+        self._lock = threading.Lock()
+
+    def held(self, key: str, record) -> None:
+        """Note a hold record, or its deletion with None."""
+        with self._lock:
+            if isinstance(record, dict) and record.get("priority") == "manual":
+                self._family.add(key)
+            else:
+                self._family.discard(key)
+
+    def on_hold(self, sample) -> None:
+        key = str(sample.key_expr)
+        if key.count("/") != 5:
+            return
+        if sample.kind == zenoh.SampleKind.DELETE:
+            self.held(key, None)
+            return
+        try:
+            self.held(key, json.loads(sample.payload.to_bytes()))
+        except ValueError:
+            return
+
+    def changed(self, entity, value: bool) -> None:
+        """Attribute a change of `entity`'s `on` to `value`, and act on it."""
+        verdict = self.attribution.changed(entity.name, value)
+        if verdict is None:
+            return
+        why, cause = verdict
+        key = keys.cmd_key(entity.room, entity.name, "on")
+        if why == "person":
+            self.session.put_json(key, keys.cmd_envelope(value, "manual", self.unit, hold="report"))
+            return
+        if why == "unattributed":
+            self.session.health_event("unattributed", entity=entity.name, aspect="on", value=value)
+            return
+        self.session.health_event("device-rule", entity=entity.name, rule=cause, aspect="on", value=value)
+        aspect = f"/{entity.room}/{entity.name}/on"
+        with self._lock:
+            family = any(k.endswith(aspect) for k in self._family)
+        if family:
+            # The device left the value the family holds, so the hold is
+            # cleared. The command sends the value the device already has.
+            self.session.put_json(key, keys.cmd_envelope(value, "manual", self.unit, hold="none"))
+
+
+def cause_object_id(entity) -> str:
+    """Return the object_id of the event entity that reports `entity`'s causes."""
+    return entity.causes.get("event") or f"{entity.id.partition('/')[2]}_cause"
 
 
 def load_devices(path: str | None) -> dict:
@@ -290,7 +374,9 @@ def state_values(entity, info, state):
         yield "action", state.event_type
 
 
-async def run_device(device, bound, devices_conf, session, entity_runtime, entity_lock, bound_discovery, publish_discovery):
+async def run_device(
+    device, bound, devices_conf, session, entity_runtime, entity_lock, bound_discovery, publish_discovery, causes
+):
     """Start one APIClient + ReconnectLogic for one bound device.
 
     On every (re)connect, it re-enumerates entities (device_info +
@@ -300,12 +386,16 @@ async def run_device(device, bound, devices_conf, session, entity_runtime, entit
     `list-entities-failed` and is disconnected, so ReconnectLogic retries
     it. A state whose aspect would be `available` drops with
     `reserved-aspect`, and one that is not a valid key segment with
-    `malformed-payload`.
+    `malformed-payload`. `causes` attributes each change of `on` it did
+    not command (`Causes`).
     """
     host, port = resolve_host_port(device, devices_conf)
     noise_psk = (devices_conf.get(device) or {}).get("key")
     client = APIClient(host, port, None, client_info="homeostat-esphome", noise_psk=noise_psk)
     key_map: dict[int, tuple] = {}
+    # The cause event entity's key -> the entity whose causes it reports.
+    cause_map: dict[int, house.Entity] = {}
+    by_cause = {cause_object_id(e): e for e in bound.values() if e.causes is not None}
 
     async def on_connect() -> None:
         try:
@@ -338,6 +428,10 @@ async def run_device(device, bound, devices_conf, session, entity_runtime, entit
                 new_key_map[info.key] = (entity, info)
         key_map.clear()
         key_map.update(new_key_map)
+        cause_map.clear()
+        cause_map.update({info.key: by_cause[info.object_id] for info in infos if info.object_id in by_cause})
+        # The states sent on this connect are the device's state, not changes.
+        causes.attribution.connected(e.name for e, _info in new_key_map.values())
         with entity_lock:
             for entity, info in new_key_map.values():
                 entity_runtime[entity.name] = {"client": client, "key": info.key}
@@ -347,6 +441,11 @@ async def run_device(device, bound, devices_conf, session, entity_runtime, entit
             session.put_json(keys.state_key(entity.room, entity.name, "available"), True)
 
         def on_state(state) -> None:
+            owner = cause_map.get(state.key)
+            if owner is not None:
+                if isinstance(state, Event) and state.event_type:
+                    causes.attribution.cause(owner.name, state.event_type)
+                return
             hit = key_map.get(state.key)
             if hit is None:
                 return
@@ -367,6 +466,8 @@ async def run_device(device, bound, devices_conf, session, entity_runtime, entit
                     )
                     continue
                 session.put_json(key, value)
+                if aspect == "on":
+                    causes.changed(entity, value)
 
         client.subscribe_states(on_state)
 
@@ -446,7 +547,7 @@ async def mdns_browse(unit, session, by_device, unbound_discovery, publish_disco
         await aiozc.async_close()
 
 
-def cmd_handler(entity, entity_runtime, entity_lock, loop, session):
+def cmd_handler(entity, entity_runtime, entity_lock, loop, session, attribution):
     """Return the command handler for one entity.
 
     A switch takes `on` (a bool). A light takes `on` (a bool), and
@@ -473,9 +574,11 @@ def cmd_handler(entity, entity_runtime, entity_lock, loop, session):
             if aspect != "on" or not isinstance(value, bool):
                 session.health_event("drop", reason="invalid-command", key=key)
                 return
+            attribution.commanded(entity.name, value)
             loop.call_soon_threadsafe(client.switch_command, esp_key, value)
         elif entity.capability == "light":
             if aspect == "on" and isinstance(value, bool):
+                attribution.commanded(entity.name, value)
                 loop.call_soon_threadsafe(partial(client.light_command, esp_key, state=value))
             elif (
                 aspect == "brightness"
@@ -517,15 +620,21 @@ async def serve(unit, session, config, devices_conf) -> None:
         device, _, object_id = entity.id.partition("/")
         by_device.setdefault(device, {})[object_id] = entity
 
+    causes = Causes(unit, session, causes_mod.Attribution.of(config.entities))
     subscribers = [
-        session.subscribe(expr, cmd_handler(e, entity_runtime, entity_lock, loop, session))
+        session.subscribe(expr, cmd_handler(e, entity_runtime, entity_lock, loop, session, causes.attribution))
         for e in config.entities
         for expr in keys.command_keyexprs(e)
     ]
+    if causes.attribution.tracks_any():
+        subscribers.append(session.subscribe("home/hold/**", causes.on_hold))
+        for key, record in session.get_json("home/hold/**"):
+            causes.held(key, record)
 
     devices = [
         await run_device(
-            device, bound, devices_conf, session, entity_runtime, entity_lock, bound_discovery, publish_discovery
+            device, bound, devices_conf, session, entity_runtime, entity_lock, bound_discovery, publish_discovery,
+            causes,
         )
         for device, bound in by_device.items()
     ]

@@ -188,6 +188,7 @@ a key segment (`invalid-name`).
 |---|---|---|---|
 | `actions` | table of name → table of name → [Action](#action) | no | `[actions.<gesture>]`, on a `button` entity only (`actions-not-button`): what the buttons service commands when the button reports that gesture, keyed by the target entity's name (`action-unknown-target`). The gesture is the button's `action` in the device's own words (`single`, `double`, `long`). A gesture without a table sends nothing (docs/design.md#gesture-actions). |
 | `aspects` | table of name → [AspectDecl](#aspectdecl) | no | `[aspects]`: what the house declares about one of this entity's aspects, keyed by the aspect's name. It is for a fact the reading itself cannot carry and its publisher may have no way to describe, as an automation publishes no aspect descriptor. Each aspect must be one the owner publishes (`aspect-unpublished`). |
+| `causes` | [Causes](#causes) | no | `[causes]`: what the device reports about why its base aspect `on` changed, so its adapter can tell a person at the device from a rule on the device (docs/design.md#device-reported-causes). Arbitrated entities only (`causes-not-arbitrated`), of a capability whose base aspect is `on` (`causes-capability`). |
 | `entity` | [EntitySection](#entitysection) | yes |  |
 | `inputs` | table of name → [InputSource](#inputsource) | no | `[inputs]`: device inputs fed from one source each, keyed by the adapter's own input name (e.g. `indoor_temperature_actual`). A fed input is a continuous signal with one source, not a command. It stops being a command aspect for this entity and does not go through the arbiter. The device's own validity window decides when it is stale. Only a device entity can be fed (`virtual-entity-fed`). The adapter decides which input names exist. |
 | `naming` | [EntityNaming](#entitynaming) | no |  |
@@ -216,6 +217,16 @@ One entry in `[aspects]`.
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `interval_s` | integer | yes | Each sample is a total over the `interval_s` seconds that start at its stamp, as hourly rainfall in mm is with `interval_s = 3600`. Totals over a window count each sample by how much of its interval falls inside, and the dashboard draws the aspect as bars. A sample is stamped with the start of its interval, which a unit sets with `at=` when it publishes after the interval ends (docs/design.md#totals-over-intervals). At least 1 (`aspect-interval`). |
+
+### Causes
+
+`[causes]`: how an adapter attributes a change it did not command.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `event` | string | no | The device entity that reports the causes, in the adapter's own addressing. For ESPHome it is the `event` entity's `object_id` on the same device, `{object_id}_cause` when absent. Its event types are the causes. |
+| `person` | list of string | no | The causes that are a person's input at the device, such as `button` or `wall_switch`. A change after one of these counts as the family's. Any other cause is a rule on the device. |
+| `uncommanded` | [Uncommanded](#uncommanded) | no | What a change with no cause reported counts as. `person` treats it as the family's, for firmware that reports no causes. Without it such a change is reported as unattributed. |
 
 ### EntitySection
 
@@ -272,6 +283,12 @@ identity layer between a unit and a bus key is the same one
 | `family` | table of name → table of name → [FamilyHold](#familyhold) | no | `[write_policy.family.<aspect>]`, arbitrated entities only (`family-policy-not-arbitrated`): what a family command means, per value, when it carries no hold intent (docs/design.md#family-policy). Each key is a value of the aspect, spelled as in TOML (`true`, `false`, `21`, `high`), or `any` for every value not listed. The aspect is the capability's base aspect or one of its aspects (`family-policy-aspect`). A value without an entry holds for the arbiter's `hold_minutes`. |
 | `mode` | [WriteMode](#writemode) | no | How commands are governed. Required on a capability that takes commands, which is one with a base aspect such as `light` or `lock` (`write-mode-required`). A commandable entity's policy is then always written in its own file. Optional elsewhere (`sensor`, `camera`, `router`, …), where a mode governs nothing. When absent it reads as `shared`. |
 | `owner` | string | yes | The one unit that binds this entity: an adapter, or an automation for a virtual entity. Must exist (`missing-owner-unit`) and be the unit whose entities dir holds this file (`owner-mismatch`). |
+
+### Uncommanded
+
+What a change with no cause counts as.
+
+- `person` — A person at the device.
 
 ### FamilyHold
 

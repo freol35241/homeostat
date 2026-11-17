@@ -319,6 +319,7 @@ fn check_entities(house: &House, errors: &mut Vec<ValidationError>) {
 
         check_family_policy(house, entity, capability, file.as_ref(), errors);
         check_actions(house, entity, capability, file.as_ref(), errors);
+        check_causes(entity, capability, file.as_ref(), errors);
 
         // An adapter binds devices, so its entity files address them. An
         // automation's do not: a computed value has no device behind it, and
@@ -481,6 +482,42 @@ fn is_time_of_day(s: &str) -> bool {
         && b[2] == b':'
         && [0, 1, 3, 4].iter().all(|&i| b[i].is_ascii_digit())
         && parse_time(s).is_some()
+}
+
+/// An entity's `[causes]` (docs/design.md#device-reported-causes): on an
+/// arbitrated entity whose base aspect is `on`.
+fn check_causes(
+    entity: &LoadedEntity,
+    capability: &str,
+    file: Option<&String>,
+    errors: &mut Vec<ValidationError>,
+) {
+    if entity.file.causes.is_none() {
+        return;
+    }
+    if entity.file.write_policy.mode() != WriteMode::Arbitrated {
+        errors.push(ValidationError::new(
+            Code::CausesNotArbitrated,
+            &entity.name,
+            format!(
+                "[causes] needs mode \"arbitrated\", not \"{}\"",
+                entity.file.write_policy.mode()
+            ),
+            file.cloned(),
+        ));
+    }
+    let base = VOCABULARY
+        .iter()
+        .find(|c| c.name == capability)
+        .and_then(|c| c.base);
+    if base != Some("on") {
+        errors.push(ValidationError::new(
+            Code::CausesCapability,
+            &entity.name,
+            format!("capability \"{capability}\" has no base aspect \"on\" to attribute"),
+            file.cloned(),
+        ));
+    }
 }
 
 /// The base aspects that are booleans, which a gesture action may toggle.

@@ -836,6 +836,17 @@ fn render_unit(check: &CheckResult, unit: &LoadedUnit, out: &mut String) {
                 let entries: Vec<String> = values.iter().map(|(v, h)| format!("{v}={h}")).collect();
                 out.push_str(&format!("  family.{aspect}: {}", entries.join(", ")));
             }
+            if let Some(causes) = &entity.file.causes {
+                // How its adapter attributes a change it did not command
+                // (docs/design.md#device-reported-causes).
+                out.push_str(&format!("  causes: person={}", causes.person.join(",")));
+                if let Some(event) = &causes.event {
+                    out.push_str(&format!(" event={event}"));
+                }
+                if causes.uncommanded.is_some() {
+                    out.push_str(" uncommanded=person");
+                }
+            }
             out.push('\n');
             // A button's gesture actions (docs/design.md#gesture-actions).
             for (gesture, targets) in entity.file.actions.iter().flatten() {
