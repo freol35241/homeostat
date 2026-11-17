@@ -99,17 +99,24 @@ class UnitSession:
     unit : str
         The unit's name.
     endpoint : str
-        The router's zenoh endpoint, as HOMEOSTAT_BUS gives it.
+        The router's zenoh endpoint, as HOMEOSTAT_BUS gives it. Unused when
+        `transport` is given.
+    transport : zenoh.Session or None, optional
+        The zenoh session to talk through. None opens a client session
+        against `endpoint`. `homeostat.testing.FakeSession` passes a fake
+        one, so tests run this class's own code without a bus.
     """
 
-    def __init__(self, unit: str, endpoint: str):
+    def __init__(self, unit: str, endpoint: str, *, transport: Any = None):
         self.unit = unit
-        config = zenoh.Config()
-        config.insert_json5("mode", '"client"')
-        config.insert_json5("connect/endpoints", json.dumps([endpoint]))
-        config.insert_json5("scouting/multicast/enabled", "false")
-        config.insert_json5("scouting/gossip/enabled", "false")
-        self._session = zenoh.open(config)
+        if transport is None:
+            config = zenoh.Config()
+            config.insert_json5("mode", '"client"')
+            config.insert_json5("connect/endpoints", json.dumps([endpoint]))
+            config.insert_json5("scouting/multicast/enabled", "false")
+            config.insert_json5("scouting/gossip/enabled", "false")
+            transport = zenoh.open(config)
+        self._session: zenoh.Session = transport
         _open_sessions.add(self)
         self._token = None
         # key -> publisher, for has_subscriber. Matching status belongs to a

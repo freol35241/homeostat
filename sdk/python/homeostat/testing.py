@@ -1,31 +1,38 @@
 """Test doubles for a unit's bus session, for unit tests without a bus.
 
-`FakeSession` stands in for a `UnitSession`. Pass it to an adapter's
-translation code where the session goes, or to `Context(unit, root,
-session=...)` to run an automation's Context over a house directory. It
-records what the unit publishes and serves the gets it makes from values
-the test sets. `FakeSample` is what the test hands to the unit's
-subscribers.
+`FakeSession` is a `UnitSession` over a fake zenoh session. Every method
+is the real one, so a put is checked, encoded and stamped as on the bus,
+and a sample's age follows the real rule. Only the transport underneath
+is fake: it records what reaches it and answers gets from values the test
+serves.
 
-Only the part of `UnitSession` that unit tests use is here. A test that
-needs a reply served values cannot express, such as an error reply or a
-slow one, overrides `get_json_stamped` on its own session.
+Pass a `FakeSession` to an adapter's translation code where the session
+goes, or to `Context(unit, root, session=...)` to run an automation's
+Context over a house directory. `FakeSample` is what the test hands to
+the unit's subscribers with `FakeSession.deliver`.
+
+A test that needs a reply served values cannot express, such as an error
+reply or a slow one, overrides `get_json_stamped` on its own session.
 """
 
 import datetime
 import json
-import time
 from collections.abc import Callable, Iterable
 from typing import Any
 
 import zenoh
 
-from .stamps import stamp_us
+from . import keys
+from .session import UnitSession
 
 __all__ = ["FakeSample", "FakeSession"]
 
+# The ID in the stamps this session sets with `put_json(..., at=)`. It is
+# not a router's, so a consumer takes such a value as stamped.
+_SESSION_ID = zenoh.TimestampId(b"\xfa")
 
-class _Payload:
+
+class _Bytes:
     def __init__(self, raw: bytes):
         self._raw = raw
 
@@ -34,7 +41,7 @@ class _Payload:
 
 
 class FakeSample:
-    """A received sample, as a subscriber reads it.
+    """A received sample, as a subscriber or a get reads it.
 
     Parameters
     ----------
@@ -48,6 +55,8 @@ class FakeSample:
         do.
     kind : zenoh.SampleKind, optional
         PUT, or DELETE for a deleted key.
+    attachment : bytes or None, optional
+        The sample's attachment, which carries a mirror reply's age.
     """
 
     def __init__(
@@ -57,34 +66,138 @@ class FakeSample:
         *,
         timestamp: Any = None,
         kind: zenoh.SampleKind = zenoh.SampleKind.PUT,
+        attachment: bytes | None = None,
     ):
         raw = payload if isinstance(payload, bytes) else json.dumps(payload).encode()
         self.key_expr = key
-        self.payload = _Payload(raw)
+        self.payload = _Bytes(raw)
         self.timestamp = timestamp
         self.kind = kind
+        self.attachment = None if attachment is None else _Bytes(attachment)
 
 
-class _Subscriber:
-    def __init__(self, session: "FakeSession", entry: tuple):
-        self._session = session
+class _Handle:
+    def __init__(self, entries: list, entry: Any = None):
+        self._entries = entries
         self._entry = entry
 
     def undeclare(self) -> None:
-        if self._entry in self._session._subscribers:
-            self._session._subscribers.remove(self._entry)
+        if self._entry in self._entries:
+            self._entries.remove(self._entry)
 
 
-class FakeSession:
-    """A unit's session that records what it sends and serves what it asks.
+class _Reply:
+    def __init__(self, ok: FakeSample):
+        self.ok = ok
+        self.err = None
 
-    Puts, deletes and health events are recorded in the order they are
-    made. A health event goes to `events` and not to `puts`. Gets are
-    answered from the values set with `served` or `serve`, by key
-    expression. A put or a delete does not change what is served.
 
-    A sample is live when it has no stamp, when no router is known, or
-    when its stamp carries a router's ID, as on the real session.
+class _Publisher:
+    def __init__(self, fake: "FakeSession", key: str):
+        self._fake = fake
+        self._key = zenoh.KeyExpr(key)
+
+    @property
+    def matching_status(self) -> Any:
+        matching = any(
+            zenoh.KeyExpr(expr).includes(self._key) for expr in self._fake.subscribed_elsewhere
+        )
+        return type("MatchingStatus", (), {"matching": matching})()
+
+
+class _Liveliness:
+    def __init__(self, fake: "FakeSession"):
+        self._fake = fake
+
+    def declare_token(self, key: str) -> "_Token":
+        unit = key.split("/")[2]
+        self._fake.alive.add(unit)
+        return _Token(self._fake.alive, unit)
+
+    def get(self, key: str, timeout: float | None = None) -> list:
+        alive = {keys.liveliness_key(unit) for unit in self._fake.alive}
+        return [_Reply(FakeSample(key, b""))] if key in alive else []
+
+
+class _Token:
+    def __init__(self, alive: set[str], unit: str):
+        self._alive = alive
+        self._unit = unit
+
+    def undeclare(self) -> None:
+        self._alive.discard(self._unit)
+
+
+class _Info:
+    def __init__(self, fake: "FakeSession"):
+        self._fake = fake
+
+    def routers_zid(self) -> list[str]:
+        return list(self._fake.routers)
+
+
+class _Transport:
+    """The zenoh session a FakeSession's own code talks to."""
+
+    def __init__(self, fake: "FakeSession"):
+        self._fake = fake
+        self.info = _Info(fake)
+
+    def put(self, key: str, payload: Any, **options: Any) -> None:
+        value = json.loads(payload)
+        if key == keys.health_event_key(self._fake.unit):
+            self._fake.events.append(value)
+            return
+        self._fake.puts.append((key, value))
+        self._fake.put_options.append(options)
+
+    def delete(self, key: str) -> None:
+        self._fake.deletes.append(key)
+
+    def get(self, selector: str, timeout: float | None = None, payload: Any = None) -> list:
+        self._fake.gets.append(selector)
+        if payload is not None:
+            # A config write. The core would validate it; the fake stores
+            # it as given and replies with it.
+            value = json.loads(payload)
+            self._fake.serve(selector, value)
+            return [_Reply(FakeSample(selector, value))]
+        expr = zenoh.KeyExpr(selector.split("?", 1)[0])
+        return [
+            _Reply(FakeSample(key, value, timestamp=stamp, attachment=str(age_s).encode()))
+            for key, (value, age_s, stamp) in self._fake._served.items()
+            if expr.includes(zenoh.KeyExpr(key))
+        ]
+
+    def declare_subscriber(self, keyexpr: str, callback: Callable[[Any], None]) -> _Handle:
+        entry = (zenoh.KeyExpr(keyexpr), callback)
+        self._fake._subscribers.append(entry)
+        return _Handle(self._fake._subscribers, entry)
+
+    def declare_publisher(self, key: str) -> _Publisher:
+        return _Publisher(self._fake, key)
+
+    def declare_queryable(self, keyexpr: str, callback: Callable[[Any], None]) -> _Handle:
+        return _Handle([])
+
+    def liveliness(self) -> _Liveliness:
+        return _Liveliness(self._fake)
+
+    def new_timestamp(self) -> zenoh.Timestamp:
+        return zenoh.Timestamp(datetime.datetime.now(datetime.timezone.utc), _SESSION_ID)
+
+    def close(self) -> None:
+        pass
+
+
+class FakeSession(UnitSession):
+    """A `UnitSession` whose zenoh session is a fake that records and serves.
+
+    What reaches the fake transport is recorded in order. A health event
+    goes to `events` and not to `puts`. A put that the session refuses,
+    such as a non-finite value, is not recorded, as it never reaches the
+    bus. Gets are answered from the values set with `served` or `serve`,
+    by key expression. A put or a delete does not change what is served.
 
     Parameters
     ----------
@@ -93,22 +206,29 @@ class FakeSession:
     served : dict or None, optional
         Key to value, served with age zero and no stamp.
     routers : iterable of str, optional
-        The router IDs whose stamps mark a sample as live.
+        The router IDs whose stamps mark a sample as live. With none, every
+        sample is live, as on a real session that knows no router.
 
     Attributes
     ----------
-    unit : str
-        The unit's name.
     puts : list of tuple of (str, Any)
-        ``(key, value)`` per `put_json`.
+        ``(key, value)`` per put, the value decoded from the JSON sent.
+    put_options : list of dict
+        The zenoh options each of `puts` was sent with, such as its stamp
+        or a command's priority.
     deletes : list of str
-        The key of each `delete`.
+        The key of each delete.
     events : list of dict
-        Each health event, as ``{"kind": kind, **fields}``.
+        Each health event, as sent: ``{"kind": kind, **fields}``.
     gets : list of str
         The selector of each get, in order.
-    is_ready : bool
-        Whether `ready` was called.
+    alive : set of str
+        The units whose liveliness token is declared. `ready` adds this
+        unit, and a test adds others for `is_alive`.
+    subscribed_elsewhere : set of str
+        Key expressions other units subscribe to, for `has_subscriber`.
+    routers : list of str
+        The router IDs, as given.
     """
 
     def __init__(
@@ -118,17 +238,24 @@ class FakeSession:
         served: dict[str, Any] | None = None,
         routers: Iterable[str] = (),
     ):
-        self.unit = unit
         self.puts: list[tuple[str, Any]] = []
+        self.put_options: list[dict] = []
         self.deletes: list[str] = []
         self.events: list[dict] = []
         self.gets: list[str] = []
-        self.is_ready = False
-        self._routers = set(routers)
+        self.alive: set[str] = set()
+        self.subscribed_elsewhere: set[str] = set()
+        self.routers = list(routers)
         self._served: dict[str, tuple[Any, float, Any]] = {}
         self._subscribers: list[tuple[zenoh.KeyExpr, Callable[[Any], None]]] = []
+        super().__init__(unit, "", transport=_Transport(self))
         for key, value in (served or {}).items():
             self.serve(key, value)
+
+    @property
+    def is_ready(self) -> bool:
+        """Whether this unit's liveliness token is declared."""
+        return self.unit in self.alive
 
     def serve(self, key: str, value: Any, *, age_s: float = 0.0, stamp: Any = None) -> None:
         """Serve `value` at `key` to every later get that matches it.
@@ -140,11 +267,11 @@ class FakeSession:
         key : str
             The concrete key.
         value : Any
-            The decoded JSON value a get returns.
+            The value, JSON-encodable.
         age_s : float, optional
-            The age a get reports, in seconds.
+            The age the reply carries, in seconds.
         stamp : zenoh.Timestamp or None, optional
-            The stamp a get reports.
+            The stamp the reply carries.
         """
         self._served[key] = (value, age_s, stamp)
 
@@ -155,191 +282,16 @@ class FakeSession:
         ----------
         sample : FakeSample
             The sample to deliver.
+
+        Raises
+        ------
+        AssertionError
+            If no subscriber matches, so a test cannot pass on a sample
+            nobody received.
         """
         key = zenoh.KeyExpr(str(sample.key_expr))
-        for expr, callback in list(self._subscribers):
-            if expr.includes(key):
-                callback(sample)
-
-    def ready(self) -> None:
-        """Record that the unit declared itself ready."""
-        self.is_ready = True
-
-    def put_json(self, key: str, value: Any, *, at: datetime.datetime | None = None) -> None:
-        """Record a put as ``(key, value)``.
-
-        Parameters
-        ----------
-        key : str
-            The concrete key.
-        value : Any
-            The value.
-        at : datetime.datetime or None, optional
-            Accepted as `UnitSession.put_json` accepts it, and not recorded.
-        """
-        self.puts.append((key, value))
-
-    def delete(self, key: str) -> None:
-        """Record a delete.
-
-        Parameters
-        ----------
-        key : str
-            The concrete key.
-        """
-        self.deletes.append(key)
-
-    def health_event(self, kind: str, **fields: Any) -> None:
-        """Record a health event as ``{"kind": kind, **fields}``.
-
-        Parameters
-        ----------
-        kind : str
-            The event's `kind`.
-        **fields : Any
-            Further fields of the event.
-        """
-        self.events.append({"kind": kind, **fields})
-
-    def subscribe(self, keyexpr: str, callback: Callable[[Any], None]) -> _Subscriber:
-        """Keep `callback` for the samples `deliver` hands over on `keyexpr`.
-
-        Parameters
-        ----------
-        keyexpr : str
-            The key expression to subscribe to.
-        callback : Callable
-            Called with each matching sample.
-
-        Returns
-        -------
-        object
-            A subscriber whose `undeclare()` stops the deliveries.
-        """
-        entry = (zenoh.KeyExpr(keyexpr), callback)
-        self._subscribers.append(entry)
-        return _Subscriber(self, entry)
-
-    def get_json(self, selector: str, *, timeout_s: float | None = None) -> list[tuple[str, Any]]:
-        """Return ``(key, value)`` per served key the selector matches.
-
-        As `get_json_stamped`, without the ages and stamps.
-
-        Parameters
-        ----------
-        selector : str
-            The key expression, optionally with parameters, which are
-            ignored.
-        timeout_s : float or None, optional
-            Accepted and ignored.
-
-        Returns
-        -------
-        list of tuple of (str, Any)
-            ``(key, value)`` per match.
-        """
-        return [(key, value) for key, value, _, _ in self.get_json_stamped(selector, timeout_s=timeout_s)]
-
-    def get_json_aged(
-        self, selector: str, *, timeout_s: float | None = None
-    ) -> list[tuple[str, Any, float]]:
-        """Return ``(key, value, age_s)`` per served key the selector matches.
-
-        As `get_json_stamped`, without the stamps.
-
-        Parameters
-        ----------
-        selector : str
-            The key expression, optionally with parameters, which are
-            ignored.
-        timeout_s : float or None, optional
-            Accepted and ignored.
-
-        Returns
-        -------
-        list of tuple of (str, Any, float)
-            ``(key, value, age_s)`` per match.
-        """
-        return [
-            (key, value, age_s)
-            for key, value, age_s, _ in self.get_json_stamped(selector, timeout_s=timeout_s)
-        ]
-
-    def get_json_stamped(
-        self, selector: str, *, timeout_s: float | None = None
-    ) -> list[tuple[str, Any, float, Any]]:
-        """Record the get and return what is served under it.
-
-        `get_json` and `get_json_aged` answer through this method, so a
-        test that overrides it changes all three.
-
-        Parameters
-        ----------
-        selector : str
-            The key expression, optionally with parameters, which are
-            ignored.
-        timeout_s : float or None, optional
-            Accepted and ignored.
-
-        Returns
-        -------
-        list of tuple of (str, Any, float, Any)
-            ``(key, value, age_s, stamp)`` per match, in the order served.
-        """
-        self.gets.append(selector)
-        expr = zenoh.KeyExpr(selector.split("?", 1)[0])
-        return [
-            (key, value, age_s, stamp)
-            for key, (value, age_s, stamp) in self._served.items()
-            if expr.includes(zenoh.KeyExpr(key))
-        ]
-
-    def is_live(self, sample: Any) -> bool:
-        """Return whether a sample is live, as `UnitSession.is_live` does.
-
-        Parameters
-        ----------
-        sample : FakeSample
-            A received sample.
-
-        Returns
-        -------
-        bool
-            True for a live sample.
-        """
-        return self.is_live_stamp(getattr(sample, "timestamp", None))
-
-    def is_live_stamp(self, stamp: Any) -> bool:
-        """Return whether a stamp marks a live value.
-
-        Parameters
-        ----------
-        stamp : zenoh.Timestamp or None
-            The stamp.
-
-        Returns
-        -------
-        bool
-            True for no stamp, no known router, or a router's stamp.
-        """
-        if stamp is None or not self._routers:
-            return True
-        return str(stamp.get_id()) in self._routers
-
-    def sample_age(self, sample: Any) -> float:
-        """Return how old a sample's value is, as `UnitSession.sample_age` does.
-
-        Parameters
-        ----------
-        sample : FakeSample
-            A received sample.
-
-        Returns
-        -------
-        float
-            Zero for a live sample, else the seconds since its stamp.
-        """
-        stamped = None if self.is_live(sample) else stamp_us(sample.timestamp)
-        if stamped is None:
-            return 0.0
-        return max(0.0, (time.time_ns() // 1000 - stamped) / 1e6)
+        matching = [callback for expr, callback in self._subscribers if expr.includes(key)]
+        if not matching:
+            raise AssertionError(f"no subscriber matches {key}")
+        for callback in matching:
+            callback(sample)

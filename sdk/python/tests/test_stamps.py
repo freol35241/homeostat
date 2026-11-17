@@ -6,11 +6,9 @@ Run: uv run --no-project --with-editable sdk/python python -m unittest discover 
 import datetime
 import functools
 import time
-import types
 import unittest
 
 from homeostat.automation import Context
-from homeostat.session import UnitSession
 from homeostat.stamps import Newest, stamp_us
 from homeostat.testing import FakeSample, FakeSession
 from houses import automation, house
@@ -46,15 +44,6 @@ class FakeStamp:
 def at(seconds_ago: float, publisher: str = ROUTER) -> FakeStamp:
     now = datetime.datetime.now(datetime.UTC)
     return FakeStamp(now - datetime.timedelta(seconds=seconds_ago), publisher)
-
-
-def session_with_router(routers=(ROUTER,)) -> UnitSession:
-    sess = UnitSession.__new__(UnitSession)
-    sess._router_ids = set()
-    sess._session = types.SimpleNamespace(
-        info=types.SimpleNamespace(routers_zid=lambda: list(routers))
-    )
-    return sess
 
 
 class StampUsTest(unittest.TestCase):
@@ -111,7 +100,7 @@ class NewestTest(unittest.TestCase):
 
 class LiveOrReplayTest(unittest.TestCase):
     def test_no_stamp_is_live(self):
-        sess = session_with_router()
+        sess = FakeSession(routers=[ROUTER])
         sample = FakeSample("k", b"1")
         self.assertTrue(sess.is_live(sample))
         self.assertEqual(sess.sample_age(sample), 0.0)
@@ -119,29 +108,29 @@ class LiveOrReplayTest(unittest.TestCase):
     def test_the_routers_stamp_is_live_even_when_it_is_old(self):
         # A live sample is stamped on arrival, so its age is not read from
         # the stamp: a clock difference between hosts must not age it.
-        sess = session_with_router()
+        sess = FakeSession(routers=[ROUTER])
         sample = FakeSample("k", b"1", timestamp=at(30, ROUTER))
         self.assertTrue(sess.is_live(sample))
         self.assertEqual(sess.sample_age(sample), 0.0)
 
     def test_a_publishers_stamp_is_a_replay_aged_from_the_stamp(self):
-        sess = session_with_router()
+        sess = FakeSession(routers=[ROUTER])
         sample = FakeSample("k", b"1", timestamp=at(600, REPLAY))
         self.assertFalse(sess.is_live(sample))
         self.assertAlmostEqual(sess.sample_age(sample), 600, delta=2)
 
     def test_a_replay_stamped_in_the_future_is_age_zero(self):
-        sess = session_with_router()
+        sess = FakeSession(routers=[ROUTER])
         sample = FakeSample("k", b"1", timestamp=at(-60, REPLAY))
         self.assertEqual(sess.sample_age(sample), 0.0)
 
     def test_with_no_router_known_every_sample_is_live(self):
-        sess = session_with_router(routers=())
+        sess = FakeSession()
         self.assertTrue(sess.is_live(FakeSample("k", b"1", timestamp=at(600, REPLAY))))
 
     def test_the_router_is_looked_up_once(self):
         calls = []
-        sess = session_with_router()
+        sess = FakeSession(routers=[ROUTER])
         sess._session.info.routers_zid = lambda: calls.append(1) or [ROUTER]
         for _ in range(3):
             sess.is_live(FakeSample("k", b"1", timestamp=at(1, ROUTER)))
@@ -231,7 +220,7 @@ class SubscribeMergeTest(unittest.TestCase):
 
 class AgeClockTest(unittest.TestCase):
     def test_age_uses_the_wall_clock_in_microseconds(self):
-        sess = session_with_router()
+        sess = FakeSession(routers=[ROUTER])
         sample = FakeSample("k", b"1", timestamp=at(2.5, REPLAY))
         before = time.time()
         age = sess.sample_age(sample)
