@@ -40,10 +40,10 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::{Duration, Instant};
 
-use homeostat::bus::{self, HealthStatus};
+use homeostat::bus;
 use serde_json::{json, Value};
 
-use crate::common::{await_health, health_watch, startup_permit, Supervisor};
+use crate::common::{await_running, up, Supervisor, FIRST_RUN};
 
 const FIXTURE: &str = "tests/fixtures/house_dashboard";
 const LAMP_CMD: &str = "home/cmd/livingroom/lamp/on";
@@ -222,16 +222,11 @@ async fn cache_read(session: &zenoh::Session, key: &str) -> Option<Value> {
 async fn browser_fixtures_still_look_like_the_real_model() {
     let port = common::free_port();
     let addr = format!("127.0.0.1:{port}");
-    let permit = startup_permit().await;
-    let mut sup =
-        Supervisor::spawn_with_env(FIXTURE, &[("HOMEOSTAT_DASHBOARD_PORT", &port.to_string())]);
-    let observer = sup.observer().await;
-    let mut dash = health_watch(&observer, "dashboard").await;
-    await_health(&mut dash, Duration::from_mins(3), |h| {
-        h.status == HealthStatus::Running
-    })
+    let (mut sup, _observer) = up(
+        || Supervisor::spawn_with_env(FIXTURE, &[("HOMEOSTAT_DASHBOARD_PORT", &port.to_string())]),
+        &["dashboard"],
+    )
     .await;
-    drop(permit);
 
     let (status, model) = http_request(&addr, "GET", "/api/model", &[], None);
     assert_eq!(status, 200);
@@ -263,7 +258,7 @@ async fn browser_fixtures_still_look_like_the_real_model() {
 async fn dashboard_serves_the_family_surface() {
     let port = common::free_port();
     let addr = format!("127.0.0.1:{port}");
-    let permit = startup_permit().await;
+    let permit = common::startup_permit().await;
     let mut sup =
         Supervisor::spawn_with_env(FIXTURE, &[("HOMEOSTAT_DASHBOARD_PORT", &port.to_string())]);
     let observer = sup.observer().await;
@@ -304,16 +299,8 @@ async fn dashboard_serves_the_family_surface() {
         .expect("notifier cmd subscriber");
 
     // First run resolves the dashboard's uv environment (aiohttp): generous.
-    let mut dash = health_watch(&observer, "dashboard").await;
-    await_health(&mut dash, Duration::from_mins(3), |h| {
-        h.status == HealthStatus::Running
-    })
-    .await;
-    let mut reflector = health_watch(&observer, "reflector").await;
-    await_health(&mut reflector, Duration::from_secs(10), |h| {
-        h.status == HealthStatus::Running
-    })
-    .await;
+    await_running(&observer, "dashboard", FIRST_RUN).await;
+    await_running(&observer, "reflector", Duration::from_secs(10)).await;
     drop(permit);
 
     // 1. The model is the manifests, rendered.
@@ -1165,24 +1152,22 @@ async fn dashboard_serves_configured_tiles() {
     let contents = b"fake-pmtiles-bytes-0123456789";
     std::fs::write(&tiles_path, contents).expect("write fixture tiles file");
 
-    let permit = startup_permit().await;
-    let mut sup = Supervisor::spawn_with_env(
-        FIXTURE,
-        &[
-            ("HOMEOSTAT_DASHBOARD_PORT", &port.to_string()),
-            (
-                "HOMEOSTAT_DASHBOARD_TILES",
-                tiles_path.to_str().expect("utf-8 path"),
-            ),
-        ],
-    );
-    let observer = sup.observer().await;
-    let mut dash = health_watch(&observer, "dashboard").await;
-    await_health(&mut dash, Duration::from_mins(3), |h| {
-        h.status == HealthStatus::Running
-    })
+    let (mut sup, _observer) = up(
+        || {
+            Supervisor::spawn_with_env(
+                FIXTURE,
+                &[
+                    ("HOMEOSTAT_DASHBOARD_PORT", &port.to_string()),
+                    (
+                        "HOMEOSTAT_DASHBOARD_TILES",
+                        tiles_path.to_str().expect("utf-8 path"),
+                    ),
+                ],
+            )
+        },
+        &["dashboard"],
+    )
     .await;
-    drop(permit);
 
     let (status, model) = http_request(&addr, "GET", "/api/model", &[], None);
     assert_eq!(status, 200, "{model}");
@@ -1221,22 +1206,11 @@ async fn dashboard_serves_configured_tiles() {
 async fn dashboard_serves_unit_logs() {
     let port = common::free_port();
     let addr = format!("127.0.0.1:{port}");
-    let permit = startup_permit().await;
-    let mut sup =
-        Supervisor::spawn_with_env(FIXTURE, &[("HOMEOSTAT_DASHBOARD_PORT", &port.to_string())]);
-    let observer = sup.observer().await;
-
-    let mut dash = health_watch(&observer, "dashboard").await;
-    await_health(&mut dash, Duration::from_mins(3), |h| {
-        h.status == HealthStatus::Running
-    })
+    let (mut sup, observer) = up(
+        || Supervisor::spawn_with_env(FIXTURE, &[("HOMEOSTAT_DASHBOARD_PORT", &port.to_string())]),
+        &["dashboard", "logger"],
+    )
     .await;
-    let mut logger = health_watch(&observer, "logger").await;
-    await_health(&mut logger, Duration::from_secs(10), |h| {
-        h.status == HealthStatus::Running
-    })
-    .await;
-    drop(permit);
 
     // Wait for the logger's known startup lines to land in its ring buffer.
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -1293,16 +1267,11 @@ async fn dashboard_serves_unit_logs() {
 async fn dashboard_serves_a_units_recorded_events() {
     let port = common::free_port();
     let addr = format!("127.0.0.1:{port}");
-    let permit = startup_permit().await;
-    let mut sup =
-        Supervisor::spawn_with_env(FIXTURE, &[("HOMEOSTAT_DASHBOARD_PORT", &port.to_string())]);
-    let observer = sup.observer().await;
-    let mut dash = health_watch(&observer, "dashboard").await;
-    await_health(&mut dash, Duration::from_mins(3), |h| {
-        h.status == HealthStatus::Running
-    })
+    let (mut sup, observer) = up(
+        || Supervisor::spawn_with_env(FIXTURE, &[("HOMEOSTAT_DASHBOARD_PORT", &port.to_string())]),
+        &["dashboard"],
+    )
     .await;
-    drop(permit);
 
     let queryable = observer
         .declare_queryable("home/history/events")
@@ -1386,16 +1355,11 @@ async fn dashboard_gathers_an_automations_timeline() {
     const T: u64 = 1_700_000_000_000_000;
     let port = common::free_port();
     let addr = format!("127.0.0.1:{port}");
-    let permit = startup_permit().await;
-    let mut sup =
-        Supervisor::spawn_with_env(FIXTURE, &[("HOMEOSTAT_DASHBOARD_PORT", &port.to_string())]);
-    let observer = sup.observer().await;
-    let mut dash = health_watch(&observer, "dashboard").await;
-    await_health(&mut dash, Duration::from_mins(3), |h| {
-        h.status == HealthStatus::Running
-    })
+    let (mut sup, observer) = up(
+        || Supervisor::spawn_with_env(FIXTURE, &[("HOMEOSTAT_DASHBOARD_PORT", &port.to_string())]),
+        &["dashboard"],
+    )
     .await;
-    drop(permit);
 
     let events = observer
         .declare_queryable("home/history/events")
@@ -1610,21 +1574,19 @@ async fn dashboard_proxies_camera_media() {
     let port = common::free_port();
     let addr = format!("127.0.0.1:{port}");
     let go2rtc_url = format!("http://127.0.0.1:{}", go2rtc.port);
-    let permit = startup_permit().await;
-    let mut sup = Supervisor::spawn_with_env(
-        FIXTURE,
-        &[
-            ("HOMEOSTAT_DASHBOARD_PORT", &port.to_string()),
-            ("HOMEOSTAT_GO2RTC", &go2rtc_url),
-        ],
-    );
-    let observer = sup.observer().await;
-    let mut dash = health_watch(&observer, "dashboard").await;
-    await_health(&mut dash, Duration::from_mins(3), |h| {
-        h.status == HealthStatus::Running
-    })
+    let (mut sup, _observer) = up(
+        || {
+            Supervisor::spawn_with_env(
+                FIXTURE,
+                &[
+                    ("HOMEOSTAT_DASHBOARD_PORT", &port.to_string()),
+                    ("HOMEOSTAT_GO2RTC", &go2rtc_url),
+                ],
+            )
+        },
+        &["dashboard"],
+    )
     .await;
-    drop(permit);
 
     // The camera renders in the model like any entity.
     let (status, model) = http_request(&addr, "GET", "/api/model", &[], None);
@@ -1679,7 +1641,7 @@ async fn dashboard_proxies_camera_media() {
 async fn dashboard_darkens_the_house() {
     let port = common::free_port();
     let addr = format!("127.0.0.1:{port}");
-    let permit = startup_permit().await;
+    let permit = common::startup_permit().await;
     let mut sup =
         Supervisor::spawn_with_env(FIXTURE, &[("HOMEOSTAT_DASHBOARD_PORT", &port.to_string())]);
     let observer = sup.observer().await;
@@ -1692,11 +1654,7 @@ async fn dashboard_darkens_the_house() {
         .await
         .expect("cmd subscriber");
 
-    let mut dash = health_watch(&observer, "dashboard").await;
-    await_health(&mut dash, Duration::from_mins(3), |h| {
-        h.status == HealthStatus::Running
-    })
-    .await;
+    await_running(&observer, "dashboard", FIRST_RUN).await;
     drop(permit);
 
     // The write gate holds for the fan-out like any other write.

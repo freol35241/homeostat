@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 use zenoh::sample::SampleKind;
 
-use crate::common::{free_port, Supervisor};
+use crate::common::{free_port, startup_permit, Supervisor};
 
 const FIXTURE: &str = "tests/fixtures/house_go2rtc";
 const CAMERAS_ENV: &str = "HOMEOSTAT_CAMERAS";
@@ -95,6 +95,7 @@ async fn shim_owns_the_token_for_the_foreign_binary() {
         std::env::var("PATH").expect("PATH set")
     );
 
+    let permit = startup_permit().await;
     let mut sup = Supervisor::spawn_with_env(
         FIXTURE,
         &[
@@ -115,6 +116,7 @@ async fn shim_owns_the_token_for_the_foreign_binary() {
         .expect("shim liveliness token within 90s")
         .expect("liveliness stream open");
     assert_eq!(token.kind(), SampleKind::Put);
+    drop(permit);
 
     // The token implies the API answered; the rendered config carries one
     // stream per camera, named by entity id, on the RTSP default.

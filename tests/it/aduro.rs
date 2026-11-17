@@ -4,13 +4,11 @@
 
 use std::time::Duration;
 
-use homeostat::bus::HealthStatus;
 use serde_json::json;
-use zenoh::sample::SampleKind;
 
 use crate::common::{
-    assert_unit_contract, await_health, expect_drop_event, expect_event_kind, expect_states,
-    health_watch, Mosquitto, Mqtt, Supervisor,
+    assert_unit_contract, expect_drop_event, expect_event_kind, expect_states, up, Mosquitto, Mqtt,
+    Supervisor,
 };
 
 const FIXTURE: &str = "tests/fixtures/house_aduro";
@@ -40,33 +38,18 @@ fn status(smoke_temp: f64) -> String {
     .to_string()
 }
 
-async fn setup() -> (Mosquitto, Supervisor, zenoh::Session) {
+/// Spawns a broker and the fixture and waits for `units` to run. Command
+/// tests also wait for the arbiter: commands to the arbitrated burner only
+/// reach the adapter through it.
+async fn setup(units: &[&str]) -> (Mosquitto, Supervisor, zenoh::Session) {
     let mosquitto = Mosquitto::spawn();
     let port = mosquitto.port.to_string();
-    let sup = Supervisor::spawn_with_env(FIXTURE, &[(PORT_ENV, &port)]);
-    let observer = sup.observer().await;
-    let token_sub = observer
-        .liveliness()
-        .declare_subscriber("home/health/aduro/alive")
-        .history(true)
-        .await
-        .expect("liveliness subscriber");
-    let token = tokio::time::timeout(Duration::from_mins(1), token_sub.recv_async())
-        .await
-        .expect("adapter liveliness token within 60s")
-        .expect("liveliness stream open");
-    assert_eq!(token.kind(), SampleKind::Put);
-    (mosquitto, sup, observer)
-}
-
-/// Waits for the arbiter to be running: commands to the arbitrated burner
-/// only reach the adapter through it.
-async fn await_arbiter(observer: &zenoh::Session) {
-    let mut watch = health_watch(observer, "arbiter").await;
-    await_health(&mut watch, Duration::from_mins(1), |h| {
-        h.status == HealthStatus::Running
-    })
+    let (sup, observer) = up(
+        || Supervisor::spawn_with_env(FIXTURE, &[(PORT_ENV, &port)]),
+        units,
+    )
     .await;
+    (mosquitto, sup, observer)
 }
 
 /// (a) One status document fans out to the burner vocabulary (`on` derived
@@ -78,7 +61,7 @@ async fn await_arbiter(observer: &zenoh::Session) {
 /// record carries the descriptor.
 #[tokio::test(flavor = "multi_thread")]
 async fn status_translates_on_change_only() {
-    let (mosquitto, mut sup, observer) = setup().await;
+    let (mosquitto, mut sup, observer) = setup(&["aduro"]).await;
     let state_sub = observer
         .declare_subscriber("home/state/livingroom/burner/*")
         .await
@@ -227,7 +210,7 @@ async fn status_translates_on_change_only() {
 /// back.
 #[tokio::test(flavor = "multi_thread")]
 async fn silence_flips_available() {
-    let (mosquitto, mut sup, observer) = setup().await;
+    let (mosquitto, mut sup, observer) = setup(&["aduro"]).await;
     let state_sub = observer
         .declare_subscriber(AVAILABLE_KEY)
         .await
@@ -256,8 +239,7 @@ async fn silence_flips_available() {
 /// automation's `power_level` still passes, because leases are per aspect.
 #[tokio::test(flavor = "multi_thread")]
 async fn commands_reach_set_topic_via_arbiter_per_aspect() {
-    let (mosquitto, mut sup, observer) = setup().await;
-    await_arbiter(&observer).await;
+    let (mosquitto, mut sup, observer) = setup(&["aduro", "arbiter"]).await;
     let mut mqtt = Mqtt::connect(mosquitto.port, "test-cmd").await;
     mqtt.subscribe(SET_TOPIC).await;
 
@@ -326,8 +308,7 @@ async fn commands_reach_set_topic_via_arbiter_per_aspect() {
 /// with the right event and nothing reaches {base}/set.
 #[tokio::test(flavor = "multi_thread")]
 async fn invalid_commands_drop_with_events() {
-    let (mosquitto, mut sup, observer) = setup().await;
-    await_arbiter(&observer).await;
+    let (mosquitto, mut sup, observer) = setup(&["aduro", "arbiter"]).await;
     let event_sub = observer
         .declare_subscriber(EVENT_KEY)
         .await
@@ -379,6 +360,6 @@ async fn invalid_commands_drop_with_events() {
 /// clean SIGTERM shutdown within the grace, no orphans.
 #[tokio::test(flavor = "multi_thread")]
 async fn adapter_honors_unit_contract() {
-    let (_mosquitto, mut sup, observer) = setup().await;
+    let (_mosquitto, mut sup, observer) = setup(&["aduro"]).await;
     assert_unit_contract(&mut sup, &observer, "aduro").await;
 }

@@ -14,8 +14,8 @@ use zenoh::pubsub::Subscriber;
 use zenoh::sample::SampleKind;
 
 use crate::common::{
-    assert_cli_ok, assert_unit_contract, await_health, cli, config_write, health_watch, rfc3339_in,
-    running_pid, stdout, temp_house, Supervisor,
+    assert_cli_ok, assert_unit_contract, await_health, cli, config_write, edit, health_watch,
+    restart_unit, rfc3339_in, running_pid, stdout, temp_house, up, Supervisor,
 };
 
 const FIXTURE: &str = "tests/fixtures/house_arbiter";
@@ -29,16 +29,9 @@ const SETBACK_HOLD: &str = "home/hold/setback/hallway/front_door/locked";
 
 type Sub = Subscriber<FifoChannelHandler<zenoh::sample::Sample>>;
 
-/// Spawns the fixture and waits for the arbiter's liveliness token.
+/// Spawns the fixture and waits for the arbiter to run.
 async fn setup() -> (Supervisor, zenoh::Session) {
-    let sup = Supervisor::spawn(FIXTURE);
-    let observer = sup.observer().await;
-    let mut watch = health_watch(&observer, "arbiter").await;
-    await_health(&mut watch, Duration::from_mins(1), |h| {
-        h.status == HealthStatus::Running
-    })
-    .await;
-    (sup, observer)
+    up(|| Supervisor::spawn(FIXTURE), &["arbiter"]).await
 }
 
 /// The id is the publisher's correlation handle: the arbiter echoes it on
@@ -281,15 +274,7 @@ async fn a_restarted_arbiter_sends_nothing_already_applied() {
         "the arbitration document names the applied hold"
     );
 
-    let pid = running_pid(&observer, "arbiter").await;
-    let mut watch = health_watch(&observer, "arbiter").await;
-    unsafe {
-        libc::kill(i32::try_from(pid).expect("a pid fits i32"), libc::SIGKILL);
-    }
-    await_health(&mut watch, Duration::from_mins(1), |h| {
-        h.status == HealthStatus::Running && h.pid != Some(u32::try_from(pid).expect("pid fits"))
-    })
-    .await;
+    restart_unit(&observer, "arbiter").await;
     expect_silence(
         &arbiter_sub,
         Duration::from_secs(2),
@@ -320,13 +305,6 @@ async fn a_restarted_arbiter_sends_nothing_already_applied() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_gone_holders_hold_ends_and_the_one_beneath_is_sent() {
     let house = temp_house(FIXTURE, "arbiter-gone");
-    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("adapters/arbiter.py");
-    edit(
-        &house,
-        "units/arbiter.toml",
-        "uv run ../../../adapters/arbiter.py",
-        &format!("uv run {}", script.display()),
-    );
     // A second holder at agent, which exits whenever the test asks it to.
     std::fs::write(
         house.join("units/curfew.toml"),
@@ -337,18 +315,9 @@ async fn a_gone_holders_hold_ends_and_the_one_beneath_is_sent() {
          capability = \"lock\", priority = \"agent\" }\n",
     )
     .expect("write the curfew unit");
-    let mut sup = Supervisor::spawn_at(&house, &[]);
-    let observer = sup.observer().await;
-    let mut watch = health_watch(&observer, "arbiter").await;
-    await_health(&mut watch, Duration::from_mins(1), |h| {
-        h.status == HealthStatus::Running
-    })
-    .await;
+    let (mut sup, observer) =
+        up(|| Supervisor::spawn_at(&house, &[]), &["arbiter", "curfew"]).await;
     let mut curfew = health_watch(&observer, "curfew").await;
-    await_health(&mut curfew, Duration::from_mins(1), |h| {
-        h.status == HealthStatus::Running
-    })
-    .await;
     let arbiter_sub = observer
         .declare_subscriber(ARBITER_KEY)
         .await
@@ -653,15 +622,7 @@ async fn holds_survive_an_arbiter_restart() {
     }
     assert!(taken, "the manual wish takes a hold");
 
-    let pid = running_pid(&observer, "arbiter").await;
-    let mut watch = health_watch(&observer, "arbiter").await;
-    unsafe {
-        libc::kill(i32::try_from(pid).expect("a pid fits i32"), libc::SIGKILL);
-    }
-    await_health(&mut watch, Duration::from_mins(1), |h| {
-        h.status == HealthStatus::Running && h.pid != Some(u32::try_from(pid).expect("pid fits"))
-    })
-    .await;
+    restart_unit(&observer, "arbiter").await;
 
     put_cmd(
         &observer,
@@ -978,26 +939,13 @@ async fn an_entity_made_arbitrated_by_apply_forwards_without_a_restart() {
     let house = temp_house(FIXTURE, "arbiter-flip");
     // A hold grant on a shared lock is a plan error, so the holder goes.
     std::fs::remove_file(house.join("units/setback.toml")).expect("remove the holder");
-    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("adapters/arbiter.py");
-    edit(
-        &house,
-        "units/arbiter.toml",
-        "uv run ../../../adapters/arbiter.py",
-        &format!("uv run {}", script.display()),
-    );
     edit(
         &house,
         "entities/reflector/front_door.toml",
         "mode = \"arbitrated\"",
         "mode = \"shared\"",
     );
-    let mut sup = Supervisor::spawn_at(&house, &[]);
-    let observer = sup.observer().await;
-    let mut watch = health_watch(&observer, "arbiter").await;
-    await_health(&mut watch, Duration::from_mins(1), |h| {
-        h.status == HealthStatus::Running
-    })
-    .await;
+    let (mut sup, observer) = up(|| Supervisor::spawn_at(&house, &[]), &["arbiter"]).await;
     let arbiter_pid = running_pid(&observer, "arbiter").await;
     let arbiter_sub = observer
         .declare_subscriber(ARBITER_KEY)
@@ -1086,26 +1034,13 @@ async fn a_wish_during_the_apply_that_arbitrates_an_entity_forwards() {
     let house = temp_house(FIXTURE, "arbiter-walk");
     // A hold grant on a shared lock is a plan error, so the holder goes.
     std::fs::remove_file(house.join("units/setback.toml")).expect("remove the holder");
-    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("adapters/arbiter.py");
-    edit(
-        &house,
-        "units/arbiter.toml",
-        "uv run ../../../adapters/arbiter.py",
-        &format!("uv run {}", script.display()),
-    );
     edit(
         &house,
         "entities/reflector/front_door.toml",
         "mode = \"arbitrated\"",
         "mode = \"shared\"",
     );
-    let mut sup = Supervisor::spawn_at(&house, &[]);
-    let observer = sup.observer().await;
-    let mut watch = health_watch(&observer, "arbiter").await;
-    await_health(&mut watch, Duration::from_mins(1), |h| {
-        h.status == HealthStatus::Running
-    })
-    .await;
+    let (mut sup, observer) = up(|| Supervisor::spawn_at(&house, &[]), &["arbiter"]).await;
     let reflector_pid = running_pid(&observer, "reflector").await;
     let arbiter_sub = observer
         .declare_subscriber(ARBITER_KEY)
@@ -1192,7 +1127,6 @@ async fn a_wish_during_the_apply_that_arbitrates_an_entity_forwards() {
     let _ = std::fs::remove_dir_all(&house);
 }
 
-/// Replaces `from` with `to` in a house file; the pattern must be present.
 /// docs/design.md#family-policy: a family command without a `hold` takes the
 /// entity's policy for its value, which reaches the arbiter in the grant
 /// table. An unlock holds until the unit hold beneath changes, and a lock
@@ -1200,26 +1134,13 @@ async fn a_wish_during_the_apply_that_arbitrates_an_entity_forwards() {
 #[tokio::test(flavor = "multi_thread")]
 async fn the_family_policy_decides_what_a_tap_holds() {
     let house = temp_house(FIXTURE, "arbiter-policy");
-    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("adapters/arbiter.py");
-    edit(
-        &house,
-        "units/arbiter.toml",
-        "uv run ../../../adapters/arbiter.py",
-        &format!("uv run {}", script.display()),
-    );
     let entity = house.join("entities/reflector/front_door.toml");
     let mut text = std::fs::read_to_string(&entity).expect("read the entity");
     text.push_str(
         "\n[write_policy.family.locked]\nfalse = { until = \"next change\" }\ntrue = \"none\"\n",
     );
     std::fs::write(&entity, text).expect("write the entity");
-    let mut sup = Supervisor::spawn_at(&house, &[]);
-    let observer = sup.observer().await;
-    let mut watch = health_watch(&observer, "arbiter").await;
-    await_health(&mut watch, Duration::from_mins(1), |h| {
-        h.status == HealthStatus::Running
-    })
-    .await;
+    let (mut sup, observer) = up(|| Supervisor::spawn_at(&house, &[]), &["arbiter"]).await;
     let arbiter_sub = observer
         .declare_subscriber(ARBITER_KEY)
         .await
@@ -1289,13 +1210,6 @@ async fn the_family_policy_decides_what_a_tap_holds() {
     )
     .await;
     sup.shutdown();
-}
-
-fn edit(house: &std::path::Path, rel: &str, from: &str, to: &str) {
-    let path = house.join(rel);
-    let text = std::fs::read_to_string(&path).expect("read house file");
-    assert!(text.contains(from), "{rel} does not contain {from:?}");
-    std::fs::write(&path, text.replace(from, to)).expect("write house file");
 }
 
 /// (e) The arbiter honors the unit contract: liveliness token when

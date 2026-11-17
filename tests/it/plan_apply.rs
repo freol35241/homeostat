@@ -14,19 +14,11 @@ use std::time::Duration;
 use serde_json::{json, Value};
 
 use crate::common::{
-    assert_cli_ok, await_base_units, cache_read, cli, config_write, git_commit_all,
-    git_init_commit, meta_read, running_pid, stderr, stdout, temp_house, Supervisor,
+    assert_cli_ok, cache_read, cli, config_write, edit, git_commit_all, git_init_commit, meta_read,
+    running_pid, stderr, stdout, temp_house, up, Supervisor,
 };
 
 const FIXTURE: &str = "tests/fixtures/house_apply";
-
-/// Replaces `from` with `to` in a house file; the pattern must be present.
-fn edit(house: &Path, rel: &str, from: &str, to: &str) {
-    let path = house.join(rel);
-    let text = std::fs::read_to_string(&path).expect("read house file");
-    assert!(text.contains(from), "{rel} does not contain {from:?}");
-    std::fs::write(&path, text.replace(from, to)).expect("write house file");
-}
 
 /// (a) A behavioral change (the automation's code edited) plans as
 /// behavioral and apply restarts only that unit: the adapter's pid
@@ -35,9 +27,13 @@ fn edit(house: &Path, rel: &str, from: &str, to: &str) {
 async fn behavioral_change_restarts_exactly_that_unit() {
     let house = temp_house(FIXTURE, "apply-behavioral");
     git_init_commit(&house);
-    let mut sup = Supervisor::spawn_at(&house, &[]);
-    let observer = sup.observer().await;
-    let (probe_pid, reflector_pid) = await_base_units(&observer).await;
+    let (mut sup, observer) = up(
+        || Supervisor::spawn_at(&house, &[]),
+        &["probe", "reflector"],
+    )
+    .await;
+    let probe_pid = running_pid(&observer, "probe").await;
+    let reflector_pid = running_pid(&observer, "reflector").await;
 
     edit(&house, "units/probe.py", "MARKER v1", "MARKER v2");
     let head = git_commit_all(&house, "probe v2");
@@ -99,9 +95,11 @@ async fn behavioral_change_restarts_exactly_that_unit() {
 #[tokio::test(flavor = "multi_thread")]
 async fn manifest_edit_adding_a_publish_renders_the_new_key() {
     let house = temp_house(FIXTURE, "apply-new-key");
-    let mut sup = Supervisor::spawn_at(&house, &[]);
-    let observer = sup.observer().await;
-    await_base_units(&observer).await;
+    let (mut sup, _observer) = up(
+        || Supervisor::spawn_at(&house, &[]),
+        &["probe", "reflector"],
+    )
+    .await;
 
     edit(
         &house,
@@ -136,13 +134,17 @@ async fn manifest_edit_adding_a_publish_renders_the_new_key() {
 #[tokio::test(flavor = "multi_thread")]
 async fn parameter_default_change_applies_with_zero_restarts() {
     let house = temp_house(FIXTURE, "apply-parameter");
-    let mut sup = Supervisor::spawn_at(&house, &[]);
-    let observer = sup.observer().await;
+    let (mut sup, observer) = up(
+        || Supervisor::spawn_at(&house, &[]),
+        &["probe", "reflector"],
+    )
+    .await;
     let echo_sub = observer
         .declare_subscriber("home/state/den/probe_echo/level")
         .await
         .expect("echo subscriber");
-    let (probe_pid, reflector_pid) = await_base_units(&observer).await;
+    let probe_pid = running_pid(&observer, "probe").await;
+    let reflector_pid = running_pid(&observer, "reflector").await;
 
     edit(&house, "units/probe.toml", "default = 1", "default = 5");
 
@@ -200,9 +202,13 @@ async fn parameter_default_change_applies_with_zero_restarts() {
 #[tokio::test(flavor = "multi_thread")]
 async fn constraint_only_change_refreshes_without_restart() {
     let house = temp_house(FIXTURE, "apply-constraint");
-    let mut sup = Supervisor::spawn_at(&house, &[]);
-    let observer = sup.observer().await;
-    let (probe_pid, reflector_pid) = await_base_units(&observer).await;
+    let (mut sup, observer) = up(
+        || Supervisor::spawn_at(&house, &[]),
+        &["probe", "reflector"],
+    )
+    .await;
+    let probe_pid = running_pid(&observer, "probe").await;
+    let reflector_pid = running_pid(&observer, "reflector").await;
 
     // 7 is inside the fixture's {min = 0, max = 10}.
     config_write(&observer, "home/config/probe/level", json!(7))
@@ -279,13 +285,16 @@ async fn constraint_only_change_refreshes_without_restart() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_live_edit_survives_an_apply_that_keeps_its_default() {
     let house = temp_house(FIXTURE, "apply-keep-edit");
-    let mut sup = Supervisor::spawn_at(&house, &[]);
-    let observer = sup.observer().await;
+    let (mut sup, observer) = up(
+        || Supervisor::spawn_at(&house, &[]),
+        &["probe", "reflector"],
+    )
+    .await;
     let echo_sub = observer
         .declare_subscriber("home/state/den/probe_echo/level")
         .await
         .expect("echo subscriber");
-    let (probe_pid, _) = await_base_units(&observer).await;
+    let probe_pid = running_pid(&observer, "probe").await;
     let house_arg = house.to_str().expect("utf-8 path");
 
     config_write(&observer, "home/config/probe/level", json!(7))
@@ -387,9 +396,11 @@ async fn a_live_edit_survives_a_supervisor_restart() {
     let saved = house.join("data/live-edits.json");
     let house_arg = house.to_str().expect("utf-8 path");
 
-    let mut sup = Supervisor::spawn_at(&house, &[]);
-    let observer = sup.observer().await;
-    await_base_units(&observer).await;
+    let (mut sup, observer) = up(
+        || Supervisor::spawn_at(&house, &[]),
+        &["probe", "reflector"],
+    )
+    .await;
     config_write(&observer, "home/config/probe/level", json!(7))
         .await
         .expect("write inside the constraint");
@@ -397,9 +408,11 @@ async fn a_live_edit_survives_a_supervisor_restart() {
     drop(observer);
     sup.shutdown();
 
-    let mut sup = Supervisor::spawn_at(&house, &[]);
-    let observer = sup.observer().await;
-    await_base_units(&observer).await;
+    let (mut sup, observer) = up(
+        || Supervisor::spawn_at(&house, &[]),
+        &["probe", "reflector"],
+    )
+    .await;
     assert_eq!(
         cache_read(&observer, "home/config/probe/level").await,
         Some(json!(7)),
@@ -414,9 +427,11 @@ async fn a_live_edit_survives_a_supervisor_restart() {
 
     // The owner changes the default while the supervisor is down.
     edit(&house, "units/probe.toml", "default = 1", "default = 3");
-    let mut sup = Supervisor::spawn_at(&house, &[]);
-    let observer = sup.observer().await;
-    await_base_units(&observer).await;
+    let (mut sup, observer) = up(
+        || Supervisor::spawn_at(&house, &[]),
+        &["probe", "reflector"],
+    )
+    .await;
     assert_eq!(
         cache_read(&observer, "home/config/probe/level").await,
         Some(json!(3)),
@@ -487,9 +502,13 @@ fn add_watcher_pair(house: &Path, adapter: &str, room: &str, entity: &str, autom
 #[tokio::test(flavor = "multi_thread")]
 async fn structural_change_starts_units_in_grant_order() {
     let house = temp_house(FIXTURE, "apply-structural");
-    let mut sup = Supervisor::spawn_at(&house, &[]);
-    let observer = sup.observer().await;
-    let (probe_pid, reflector_pid) = await_base_units(&observer).await;
+    let (mut sup, observer) = up(
+        || Supervisor::spawn_at(&house, &[]),
+        &["probe", "reflector"],
+    )
+    .await;
+    let probe_pid = running_pid(&observer, "probe").await;
+    let reflector_pid = running_pid(&observer, "reflector").await;
 
     add_watcher_pair(&house, "beacon", "den", "beacon_lamp", "watcher");
     // The beacon must come up for the walk to proceed.
@@ -548,9 +567,11 @@ async fn structural_change_starts_units_in_grant_order() {
 #[tokio::test(flavor = "multi_thread")]
 async fn entity_move_plans_as_structural() {
     let house = temp_house(FIXTURE, "apply-move");
-    let mut sup = Supervisor::spawn_at(&house, &[]);
-    let observer = sup.observer().await;
-    await_base_units(&observer).await;
+    let (mut sup, _observer) = up(
+        || Supervisor::spawn_at(&house, &[]),
+        &["probe", "reflector"],
+    )
+    .await;
 
     add_watcher_pair(&house, "beacon", "den", "beacon_lamp", "watcher");
     edit(
@@ -591,9 +612,11 @@ async fn entity_move_plans_as_structural() {
 #[tokio::test(flavor = "multi_thread")]
 async fn ungranted_entity_move_plans_as_structural() {
     let house = temp_house(FIXTURE, "apply-move-ungranted");
-    let mut sup = Supervisor::spawn_at(&house, &[]);
-    let observer = sup.observer().await;
-    await_base_units(&observer).await;
+    let (mut sup, _observer) = up(
+        || Supervisor::spawn_at(&house, &[]),
+        &["probe", "reflector"],
+    )
+    .await;
 
     edit(
         &house,
@@ -631,9 +654,13 @@ async fn ungranted_entity_move_plans_as_structural() {
 #[tokio::test(flavor = "multi_thread")]
 async fn failing_unit_halts_walk_in_place() {
     let house = temp_house(FIXTURE, "apply-halt");
-    let mut sup = Supervisor::spawn_at(&house, &[]);
-    let observer = sup.observer().await;
-    let (probe_pid, reflector_pid) = await_base_units(&observer).await;
+    let (mut sup, observer) = up(
+        || Supervisor::spawn_at(&house, &[]),
+        &["probe", "reflector"],
+    )
+    .await;
+    let probe_pid = running_pid(&observer, "probe").await;
+    let reflector_pid = running_pid(&observer, "reflector").await;
 
     // The broken adapter crashes on spawn until its breaker opens; the
     // waiter automation is granted onto its entity, so it walks second.
@@ -702,9 +729,11 @@ async fn failing_unit_halts_walk_in_place() {
 async fn stale_pending_plan_refuses_to_apply() {
     let house = temp_house(FIXTURE, "apply-stale");
     git_init_commit(&house);
-    let mut sup = Supervisor::spawn_at(&house, &[]);
-    let observer = sup.observer().await;
-    await_base_units(&observer).await;
+    let (mut sup, observer) = up(
+        || Supervisor::spawn_at(&house, &[]),
+        &["probe", "reflector"],
+    )
+    .await;
 
     edit(&house, "units/probe.toml", "default = 1", "default = 7");
     git_commit_all(&house, "raise level default");
@@ -752,9 +781,11 @@ async fn stale_pending_plan_refuses_to_apply() {
 async fn a_pending_reset_plan_applies_its_reset() {
     let house = temp_house(FIXTURE, "apply-pending-reset");
     git_init_commit(&house);
-    let mut sup = Supervisor::spawn_at(&house, &[]);
-    let observer = sup.observer().await;
-    await_base_units(&observer).await;
+    let (mut sup, observer) = up(
+        || Supervisor::spawn_at(&house, &[]),
+        &["probe", "reflector"],
+    )
+    .await;
 
     config_write(&observer, "home/config/probe/level", json!(7))
         .await

@@ -13,13 +13,10 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
-use zenoh::sample::SampleKind;
-
-use homeostat::bus::HealthStatus;
 
 use crate::common::{
-    await_health, config_write, expect_event_kind, expect_state, fixture_command, free_port,
-    health_watch, Supervisor,
+    config_write, expect_event_kind, expect_state, fixture_command, free_port, restart_unit, up,
+    Supervisor,
 };
 
 const FIXTURE: &str = "tests/fixtures/house_openwrt";
@@ -128,8 +125,7 @@ fn routers_file_with(routers: &[(&str, u16, &str)]) -> PathBuf {
 }
 
 /// Spawns the fake router + supervisor on the fixture and waits for the
-/// adapter's liveliness token (generous timeout: first run resolves the
-/// uv env for aiohttp too).
+/// adapter to run.
 async fn setup() -> (FakeOpenwrt, PathBuf, Supervisor, zenoh::Session) {
     let router = FakeOpenwrt::spawn().await;
     let routers_path = routers_file(&[("gw", router.port)]);
@@ -138,25 +134,18 @@ async fn setup() -> (FakeOpenwrt, PathBuf, Supervisor, zenoh::Session) {
 }
 
 /// The supervisor on the fixture against a written routers file, up to the
-/// adapter's liveliness token.
+/// adapter running.
 async fn start(routers_path: &std::path::Path) -> (Supervisor, zenoh::Session) {
-    let sup = Supervisor::spawn_with_env(
-        FIXTURE,
-        &[(ROUTERS_ENV, routers_path.to_str().expect("utf-8 path"))],
-    );
-    let observer = sup.observer().await;
-    let token_sub = observer
-        .liveliness()
-        .declare_subscriber("home/health/openwrt/alive")
-        .history(true)
-        .await
-        .expect("liveliness subscriber");
-    let token = tokio::time::timeout(Duration::from_secs(90), token_sub.recv_async())
-        .await
-        .expect("adapter liveliness token within 90s")
-        .expect("liveliness stream open");
-    assert_eq!(token.kind(), SampleKind::Put);
-    (sup, observer)
+    up(
+        || {
+            Supervisor::spawn_with_env(
+                FIXTURE,
+                &[(ROUTERS_ENV, routers_path.to_str().expect("utf-8 path"))],
+            )
+        },
+        &["openwrt"],
+    )
+    .await
 }
 
 /// (a) A phone associating to an AP becomes `sighted = true` on the bus;
@@ -517,19 +506,7 @@ async fn a_return_within_the_hold_is_a_fix_and_a_restart_is_not() {
     );
 
     // The adapter restarted while the phone stays in range: no fix.
-    let mut watch = health_watch(&observer, "openwrt").await;
-    let running = await_health(&mut watch, Duration::from_secs(10), |h| {
-        h.status == HealthStatus::Running && h.pid.is_some()
-    })
-    .await;
-    let pid = running.pid.expect("pid");
-    unsafe {
-        libc::kill(i32::try_from(pid).expect("a pid fits i32"), libc::SIGKILL);
-    }
-    await_health(&mut watch, Duration::from_mins(1), |h| {
-        h.status == HealthStatus::Running && h.pid.is_some_and(|p| p != pid)
-    })
-    .await;
+    restart_unit(&observer, "openwrt").await;
     // The new process's first cycle republishes `sighted`, and a fix would
     // come just before it.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);

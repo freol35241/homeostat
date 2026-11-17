@@ -846,35 +846,36 @@ pub async fn running_pid(session: &zenoh::Session, unit: &str) -> u64 {
     health["pid"].as_u64().expect("running unit has a pid")
 }
 
-/// Waits until both fixture units are running and returns (probe pid,
-/// reflector pid). Generous timeout: the first run resolves probe's uv env.
-pub async fn await_base_units(session: &zenoh::Session) -> (u64, u64) {
-    let mut probe = health_watch(session, "probe").await;
-    await_health(&mut probe, Duration::from_mins(2), |h| {
-        h.status == HealthStatus::Running
-    })
-    .await;
-    let mut reflector = health_watch(session, "reflector").await;
-    await_health(&mut reflector, Duration::from_secs(30), |h| {
-        h.status == HealthStatus::Running
-    })
-    .await;
-    (
-        running_pid(session, "probe").await,
-        running_pid(session, "reflector").await,
-    )
-}
-
 /// A fresh editable copy of the `fixture` house (repo-relative path) in a
 /// temp dir named after `tag`.
+///
+/// Unit commands name their scripts relative to the fixture, as
+/// `uv run ../../../adapters/x.py`, which resolves to nothing from the temp
+/// dir. The copy's commands name them from the fixture's own directory.
 pub fn temp_house(fixture: &str, tag: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("homeostat-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
-    copy_dir(
-        &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(fixture),
-        &dir,
-    );
+    let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(fixture);
+    copy_dir(&src, &dir);
+    let units = std::fs::read_dir(dir.join("units")).expect("read the copy's units");
+    for entry in units {
+        let path = entry.expect("dir entry").path();
+        if path.extension().is_some_and(|ext| ext == "toml") {
+            let text = std::fs::read_to_string(&path).expect("read unit manifest");
+            let text = text.replace("uv run ../", &format!("uv run {}/../", src.display()));
+            std::fs::write(&path, text).expect("write unit manifest");
+        }
+    }
     dir
+}
+
+/// Replaces `from` with `to` in the house file at `rel`; panics if the
+/// file does not contain `from`.
+pub fn edit(house: &Path, rel: &str, from: &str, to: &str) {
+    let path = house.join(rel);
+    let text = std::fs::read_to_string(&path).expect("read house file");
+    assert!(text.contains(from), "{rel} does not contain {from:?}");
+    std::fs::write(&path, text.replace(from, to)).expect("write house file");
 }
 
 fn copy_dir(src: &Path, dst: &Path) {
@@ -943,28 +944,79 @@ pub fn assert_cli_ok(output: &Output) {
     );
 }
 
-/// Caps how many of the dashboard suite's houses start at the same moment.
+/// Caps how many houses start at the same moment.
 ///
 /// Every test spawns its own supervisor, and cargo runs the tests in
-/// parallel, so the dashboard suite's four-unit houses resolve and start
-/// together. On a two-core runner the slowest starves past its health
-/// deadline and fails a test that nothing about it broke. Parallelism pays
-/// for very little there. Measured when the suite had five tests, they
-/// took 23.3 s run serially and 12.9 s in parallel on sixteen cores, but
-/// 23.5 s versus 20.7 s on two, because the tests mostly wait on fixed
-/// delays. Two at a time keeps most of the gain on a developer's machine.
-/// The other suites' houses start uncapped beside these.
+/// parallel. Started all at once, the houses' units resolve and import
+/// together, and on a two-core runner the slowest starves past its health
+/// deadline and fails a test that nothing about it broke. One start per
+/// core keeps the machine busy without starving any of them.
 ///
-/// The permit covers startup only. Hold it until the units under test
-/// report healthy, then drop it: the body of a test costs nothing to
-/// overlap, and holding it longer would serialize the whole suite.
-static STARTUP: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
+/// The permit covers start-up only. `up` holds it until the units under
+/// test run, then drops it: the body of a test costs nothing to overlap,
+/// and holding it longer would serialize the suite.
+static STARTUP: std::sync::LazyLock<tokio::sync::Semaphore> = std::sync::LazyLock::new(|| {
+    tokio::sync::Semaphore::new(std::thread::available_parallelism().map_or(2, usize::from))
+});
 
+/// A start-up permit, for a test that starts its house without `up`
+/// because it must subscribe before the units run.
 pub async fn startup_permit() -> tokio::sync::SemaphorePermit<'static> {
     STARTUP
         .acquire()
         .await
         .expect("startup semaphore never closes")
+}
+
+/// How long `up` waits for a unit to run. The first run of a unit resolves
+/// its uv environment, which can take minutes on a cold cache.
+pub const FIRST_RUN: Duration = Duration::from_mins(3);
+
+/// Starts a house with `spawn` under a start-up permit and waits until each
+/// of `units` runs. Returns the supervisor and an observer session on its
+/// bus. A unit that does not run in time fails the test with the
+/// supervisor's output, which says why.
+pub async fn up(
+    spawn: impl FnOnce() -> Supervisor,
+    units: &[&str],
+) -> (Supervisor, zenoh::Session) {
+    let permit = startup_permit().await;
+    let sup = spawn();
+    let observer = sup.observer().await;
+    for unit in units {
+        let mut watch = health_watch(&observer, unit).await;
+        if scan_health(&mut watch, FIRST_RUN, |h| h.status == HealthStatus::Running)
+            .await
+            .is_none()
+        {
+            panic!(
+                "{unit} did not run within {FIRST_RUN:?}; the supervisor said:\n{}",
+                sup.output_tail(80)
+            );
+        }
+    }
+    drop(permit);
+    (sup, observer)
+}
+
+/// Waits until `unit` runs and returns its health; panics on timeout.
+pub async fn await_running(observer: &zenoh::Session, unit: &str, timeout: Duration) -> Health {
+    let mut watch = health_watch(observer, unit).await;
+    await_health(&mut watch, timeout, |h| h.status == HealthStatus::Running).await
+}
+
+/// SIGKILLs the running `unit` and waits until the supervisor has it
+/// running again under a new pid. Returns the new health.
+pub async fn restart_unit(observer: &zenoh::Session, unit: &str) -> Health {
+    let pid = u32::try_from(running_pid(observer, unit).await).expect("a pid fits u32");
+    let mut watch = health_watch(observer, unit).await;
+    unsafe {
+        libc::kill(i32::try_from(pid).expect("a pid fits i32"), libc::SIGKILL);
+    }
+    await_health(&mut watch, Duration::from_mins(1), |h| {
+        h.status == HealthStatus::Running && h.pid.is_some_and(|p| p != pid)
+    })
+    .await
 }
 
 /// The RFC3339 UTC instant `secs` seconds from now, to the whole second.

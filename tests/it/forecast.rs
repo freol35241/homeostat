@@ -16,10 +16,9 @@
 
 use std::time::Duration;
 
-use homeostat::bus::HealthStatus;
 use serde_json::Value;
 
-use crate::common::{await_health, health_watch, matched_publisher, Supervisor};
+use crate::common::{matched_publisher, up, Supervisor};
 
 const FIXTURE: &str = "tests/fixtures/house_forecast";
 const FORECAST_KEY: &str = "home/forecast/global/spot_price/price/nordpool";
@@ -46,14 +45,7 @@ async fn mirror_read_eventually(session: &zenoh::Session, key: &str) -> Value {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_forecast_is_published_and_mirrored_for_a_late_joiner() {
-    let mut sup = Supervisor::spawn(FIXTURE);
-    let observer = sup.observer().await;
-
-    let mut seer = health_watch(&observer, "seer").await;
-    await_health(&mut seer, Duration::from_mins(2), |h| {
-        h.status == HealthStatus::Running
-    })
-    .await;
+    let (mut sup, _observer) = up(|| Supervisor::spawn(FIXTURE), &["seer"]).await;
 
     // A session opened after the unit published: the only way it can see
     // the forecast is the core's mirror. A day-ahead curve arrives once a
@@ -143,13 +135,7 @@ async fn a_core_restart_empties_the_mirror_and_only_a_producer_refills_it() {
     sup.shutdown();
 
     // A new core, the same house, nothing republishing this key.
-    let mut restarted = Supervisor::spawn(FIXTURE);
-    let observer = restarted.observer().await;
-    let mut seer = health_watch(&observer, "seer").await;
-    await_health(&mut seer, Duration::from_mins(2), |h| {
-        h.status == HealthStatus::Running
-    })
-    .await;
+    let (mut restarted, observer) = up(|| Supervisor::spawn(FIXTURE), &["seer"]).await;
     // `seer` is up and has re-issued its own key, so the mirror is
     // serving forecasts again. This one is not among them.
     mirror_read_eventually(&observer, FORECAST_KEY).await;

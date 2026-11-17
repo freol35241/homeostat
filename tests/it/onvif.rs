@@ -9,11 +9,10 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
-use zenoh::sample::SampleKind;
 
 use crate::common::{
     await_mirror, cache_read, expect_event_kind, expect_state, fixture_command, free_port,
-    next_event, StateSub, Supervisor,
+    next_event, up, StateSub, Supervisor,
 };
 
 const FIXTURE: &str = "tests/fixtures/house_onvif";
@@ -126,27 +125,20 @@ fn cameras_file(port: u16) -> PathBuf {
 }
 
 /// Spawns the fake camera + supervisor on the fixture and waits for the
-/// adapter's liveliness token (generous timeout: first run resolves the
-/// uv env for aiohttp too).
+/// adapter to run.
 async fn setup() -> (FakeOnvif, PathBuf, Supervisor, zenoh::Session) {
     let camera = FakeOnvif::spawn().await;
     let cameras_path = cameras_file(camera.port);
-    let sup = Supervisor::spawn_with_env(
-        FIXTURE,
-        &[(CAMERAS_ENV, cameras_path.to_str().expect("utf-8 path"))],
-    );
-    let observer = sup.observer().await;
-    let token_sub = observer
-        .liveliness()
-        .declare_subscriber("home/health/onvif/alive")
-        .history(true)
-        .await
-        .expect("liveliness subscriber");
-    let token = tokio::time::timeout(Duration::from_secs(90), token_sub.recv_async())
-        .await
-        .expect("adapter liveliness token within 90s")
-        .expect("liveliness stream open");
-    assert_eq!(token.kind(), SampleKind::Put);
+    let (sup, observer) = up(
+        || {
+            Supervisor::spawn_with_env(
+                FIXTURE,
+                &[(CAMERAS_ENV, cameras_path.to_str().expect("utf-8 path"))],
+            )
+        },
+        &["onvif"],
+    )
+    .await;
     // Ready fires while the subscription attempt is still in flight; a trigger
     // before the pull-point subscription exists lands in zero queues and is
     // lost (a real camera's events during an outage are too). available =

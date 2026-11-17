@@ -24,7 +24,7 @@ use zenoh::pubsub::Subscriber;
 use zenoh::sample::Sample;
 
 use crate::common::{
-    await_health, await_mirror, config_write, health_watch, matched_publisher, Publisher,
+    await_health, await_mirror, config_write, health_watch, matched_publisher, up, Publisher,
     Supervisor,
 };
 
@@ -46,17 +46,16 @@ fn store_path(test: &str) -> PathBuf {
 
 /// Spawns the fixture with its store at `db` and waits for the recorder.
 async fn setup(db: &Path) -> (Supervisor, zenoh::Session) {
-    let sup = Supervisor::spawn_with_env(
-        FIXTURE,
-        &[("RECORDER_DB", db.to_str().expect("utf-8 path"))],
-    );
-    let observer = sup.observer().await;
-    let mut recorder = health_watch(&observer, "recorder").await;
-    await_health(&mut recorder, Duration::from_mins(1), |h| {
-        h.status == HealthStatus::Running
-    })
-    .await;
-    (sup, observer)
+    up(
+        || {
+            Supervisor::spawn_with_env(
+                FIXTURE,
+                &[("RECORDER_DB", db.to_str().expect("utf-8 path"))],
+            )
+        },
+        &["recorder"],
+    )
+    .await
 }
 
 async fn put(publisher: &Publisher, value: Value) {

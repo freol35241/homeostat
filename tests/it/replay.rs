@@ -13,14 +13,12 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use homeostat::bus::HealthStatus;
 use serde_json::{json, Value};
 use zenoh::time::{Timestamp, TimestampId, NTP64};
 
-use crate::common::{await_health, await_mirror, cache_read, health_watch, Supervisor};
+use crate::common::{await_mirror, await_running, cache_read, edit, temp_house, up, Supervisor};
 
 const FIXTURE: &str = "tests/fixtures/house_replay";
-const MOVED: &str = "tests/fixtures/house_replay_moved";
 const LAMP: &str = "home/state/livingroom/lamp/on";
 const FAN: &str = "home/state/bedroom/fan/on";
 /// The ID the core's replays carry (`homeostat::supervisor::replay`).
@@ -35,19 +33,16 @@ fn store_path(test: &str) -> PathBuf {
 
 /// Spawns `fixture` against `db` and waits for `units` to run.
 async fn setup(fixture: &str, db: &Path, units: &[&str]) -> (Supervisor, zenoh::Session) {
-    let sup = Supervisor::spawn_with_env(
-        fixture,
-        &[("RECORDER_DB", db.to_str().expect("utf-8 path"))],
-    );
-    let observer = sup.observer().await;
-    for unit in units {
-        let mut health = health_watch(&observer, unit).await;
-        await_health(&mut health, Duration::from_mins(2), |h| {
-            h.status == HealthStatus::Running
-        })
-        .await;
-    }
-    (sup, observer)
+    up(
+        || {
+            Supervisor::spawn_with_env(
+                fixture,
+                &[("RECORDER_DB", db.to_str().expect("utf-8 path"))],
+            )
+        },
+        units,
+    )
+    .await
 }
 
 /// Commands `key`'s entity, which the reflector echoes back as state.
@@ -349,11 +344,7 @@ async fn a_live_value_is_not_overwritten_by_the_replay() {
     command(&observer, LAMP, json!(false)).await;
     await_mirror(&observer, LAMP, &json!(false)).await;
     for unit in ["recorder", "probe"] {
-        let mut health = health_watch(&observer, unit).await;
-        await_health(&mut health, Duration::from_mins(2), |h| {
-            h.status == HealthStatus::Running
-        })
-        .await;
+        await_running(&observer, unit, Duration::from_mins(2)).await;
     }
     // Long enough for the replay to have been published, had it been.
     tokio::time::sleep(Duration::from_secs(3)).await;
@@ -384,7 +375,28 @@ async fn a_moved_entity_is_not_replayed() {
     drop(observer);
 
     // The same store, a house where the lamp is in the kitchen.
-    let (mut sup, observer) = setup(MOVED, &db, &["recorder", "reflector"]).await;
+    let house = temp_house(FIXTURE, "replay-moved");
+    let lamp = "entities/reflector/lamp.toml";
+    edit(
+        &house,
+        lamp,
+        r#"room = "livingroom""#,
+        r#"room = "kitchen""#,
+    );
+    edit(
+        &house,
+        lamp,
+        r#"en = "living room lamp""#,
+        r#"en = "kitchen lamp""#,
+    );
+    for file in ["probe.py", "probe.py.lock", "probe.toml"] {
+        std::fs::remove_file(house.join("units").join(file)).expect("remove probe file");
+    }
+    let (mut sup, observer) = up(
+        || Supervisor::spawn_at(&house, &[("RECORDER_DB", db.to_str().expect("utf-8 path"))]),
+        &["recorder", "reflector"],
+    )
+    .await;
     // The fan did not move, so its replay shows the replay has run.
     await_mirror(&observer, FAN, &json!(true)).await;
     assert_eq!(
@@ -400,6 +412,7 @@ async fn a_moved_entity_is_not_replayed() {
 
     sup.shutdown();
     let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&house);
 }
 
 const HOLDS_FIXTURE: &str = "tests/fixtures/house_replay_holds";

@@ -4,13 +4,11 @@
 
 use std::time::Duration;
 
-use homeostat::bus::HealthStatus;
 use serde_json::{json, Value};
-use zenoh::sample::SampleKind;
 
 use crate::common::{
-    assert_unit_contract, await_health, expect_drop_event, expect_event_kind, expect_states,
-    health_watch, next_event, temp_house, Mosquitto, Mqtt, Supervisor,
+    assert_unit_contract, await_running, expect_drop_event, expect_event_kind, expect_states,
+    next_event, temp_house, up, Mosquitto, Mqtt, Supervisor,
 };
 
 const FIXTURE: &str = "tests/fixtures/house_z2m";
@@ -18,31 +16,23 @@ const PORT_ENV: &str = "HOMEOSTAT_TEST_MQTT_PORT";
 const EVENT_KEY: &str = "home/health/zigbee/event";
 const LOCK_CMD_KEY: &str = "home/cmd/hallway/front_door/locked";
 
-/// Spawns broker + supervisor on the fixture and waits for the adapter's
-/// liveliness token (generous timeout: first run resolves the uv env).
-async fn setup() -> (Mosquitto, Supervisor, zenoh::Session) {
+/// Spawns broker + supervisor on the fixture and waits until each of
+/// `units` runs.
+async fn setup(units: &[&str]) -> (Mosquitto, Supervisor, zenoh::Session) {
     let mosquitto = Mosquitto::spawn();
     let port = mosquitto.port.to_string();
-    let sup = Supervisor::spawn_with_env(FIXTURE, &[(PORT_ENV, &port)]);
-    let observer = sup.observer().await;
-    let token_sub = observer
-        .liveliness()
-        .declare_subscriber("home/health/zigbee/alive")
-        .history(true)
-        .await
-        .expect("liveliness subscriber");
-    let token = tokio::time::timeout(Duration::from_mins(1), token_sub.recv_async())
-        .await
-        .expect("adapter liveliness token within 60s")
-        .expect("liveliness stream open");
-    assert_eq!(token.kind(), SampleKind::Put);
+    let (sup, observer) = up(
+        || Supervisor::spawn_with_env(FIXTURE, &[(PORT_ENV, &port)]),
+        units,
+    )
+    .await;
     (mosquitto, sup, observer)
 }
 
 /// (a) Scripted z2m state publishes translate to per-aspect state keys.
 #[tokio::test(flavor = "multi_thread")]
 async fn z2m_state_translates_to_bus_state() {
-    let (mosquitto, mut sup, observer) = setup().await;
+    let (mosquitto, mut sup, observer) = setup(&["zigbee"]).await;
     let state_sub = observer
         .declare_subscriber("home/state/**")
         .await
@@ -81,7 +71,7 @@ async fn z2m_state_translates_to_bus_state() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_button_publishes_every_press() {
     const ACTION_KEY: &str = "home/state/hallway/hallway_remote/action";
-    let (mosquitto, mut sup, observer) = setup().await;
+    let (mosquitto, mut sup, observer) = setup(&["zigbee"]).await;
     let action_sub = observer
         .declare_subscriber(ACTION_KEY)
         .await
@@ -113,7 +103,7 @@ async fn a_button_publishes_every_press() {
 /// covered separately below, in `manual_lock_command_reaches_mqtt_via_arbiter`.
 #[tokio::test(flavor = "multi_thread")]
 async fn bus_commands_translate_to_z2m_set() {
-    let (mosquitto, mut sup, observer) = setup().await;
+    let (mosquitto, mut sup, observer) = setup(&["zigbee"]).await;
     let mut mqtt = Mqtt::connect(mosquitto.port, "test-cmd").await;
     mqtt.subscribe("zigbee2mqtt/+/set").await;
 
@@ -175,7 +165,7 @@ async fn bus_commands_translate_to_z2m_set() {
 /// each with a health event, and translation keeps working afterwards.
 #[tokio::test(flavor = "multi_thread")]
 async fn bad_input_drops_with_health_event() {
-    let (mosquitto, mut sup, observer) = setup().await;
+    let (mosquitto, mut sup, observer) = setup(&["zigbee"]).await;
     let event_sub = observer
         .declare_subscriber(EVENT_KEY)
         .await
@@ -213,7 +203,7 @@ async fn bad_input_drops_with_health_event() {
 /// message.
 #[tokio::test(flavor = "multi_thread")]
 async fn non_finite_field_drops_without_publishing_or_killing_the_message() {
-    let (mosquitto, mut sup, observer) = setup().await;
+    let (mosquitto, mut sup, observer) = setup(&["zigbee"]).await;
     let event_sub = observer
         .declare_subscriber(EVENT_KEY)
         .await
@@ -250,7 +240,7 @@ async fn non_finite_field_drops_without_publishing_or_killing_the_message() {
 /// the same payload still publishes.
 #[tokio::test(flavor = "multi_thread")]
 async fn malformed_field_name_drops_without_killing_the_message() {
-    let (mosquitto, mut sup, observer) = setup().await;
+    let (mosquitto, mut sup, observer) = setup(&["zigbee"]).await;
     let event_sub = observer
         .declare_subscriber(EVENT_KEY)
         .await
@@ -288,7 +278,7 @@ async fn malformed_field_name_drops_without_killing_the_message() {
 /// still publish and translation keeps working afterwards.
 #[tokio::test(flavor = "multi_thread")]
 async fn malformed_inventory_entries_do_not_kill_the_translator() {
-    let (mosquitto, mut sup, observer) = setup().await;
+    let (mosquitto, mut sup, observer) = setup(&["zigbee"]).await;
     let discovery_sub = observer
         .declare_subscriber("home/discovery/zigbee")
         .await
@@ -345,7 +335,7 @@ async fn malformed_inventory_entries_do_not_kill_the_translator() {
 /// with a health event while its siblings still translate.
 #[tokio::test(flavor = "multi_thread")]
 async fn availability_maps_to_reserved_aspect() {
-    let (mosquitto, mut sup, observer) = setup().await;
+    let (mosquitto, mut sup, observer) = setup(&["zigbee"]).await;
     let event_sub = observer
         .declare_subscriber(EVENT_KEY)
         .await
@@ -394,7 +384,7 @@ async fn availability_maps_to_reserved_aspect() {
 /// ready, clean SIGTERM shutdown within the grace, no orphans.
 #[tokio::test(flavor = "multi_thread")]
 async fn adapter_honors_unit_contract() {
-    let (_mosquitto, mut sup, observer) = setup().await;
+    let (_mosquitto, mut sup, observer) = setup(&["zigbee"]).await;
     assert_unit_contract(&mut sup, &observer, "zigbee").await;
 }
 
@@ -406,7 +396,7 @@ async fn adapter_honors_unit_contract() {
 /// does not.
 #[tokio::test(flavor = "multi_thread")]
 async fn bridge_inventory_published_as_discovery() {
-    let (mosquitto, mut sup, observer) = setup().await;
+    let (mosquitto, mut sup, observer) = setup(&["zigbee"]).await;
     let mut mqtt = Mqtt::connect(mosquitto.port, "inventory-test").await;
     let sub = observer
         .declare_subscriber("home/discovery/zigbee")
@@ -571,7 +561,7 @@ async fn bridge_inventory_published_as_discovery() {
 /// reaching MQTT, and the adapter keeps translating afterwards.
 #[tokio::test(flavor = "multi_thread")]
 async fn envelope_less_command_drops_with_health_event() {
-    let (mosquitto, mut sup, observer) = setup().await;
+    let (mosquitto, mut sup, observer) = setup(&["zigbee"]).await;
     let event_sub = observer
         .declare_subscriber(EVENT_KEY)
         .await
@@ -622,12 +612,7 @@ async fn envelope_less_command_drops_with_health_event() {
 /// arbiter's decision.
 #[tokio::test(flavor = "multi_thread")]
 async fn manual_lock_command_reaches_mqtt_via_arbiter() {
-    let (mosquitto, mut sup, observer) = setup().await;
-    let mut arbiter_watch = health_watch(&observer, "arbiter").await;
-    await_health(&mut arbiter_watch, Duration::from_mins(1), |h| {
-        h.status == HealthStatus::Running
-    })
-    .await;
+    let (mosquitto, mut sup, observer) = setup(&["zigbee", "arbiter"]).await;
 
     let mut mqtt = Mqtt::connect(mosquitto.port, "test-lock-cmd").await;
     mqtt.subscribe("zigbee2mqtt/+/set").await;
@@ -663,21 +648,14 @@ async fn manual_lock_command_reaches_mqtt_via_arbiter() {
 
 /// Copies the fixture with the adapter's base topic moved onto the
 /// endpoint path (and optionally a short inventory timeout), so one
-/// fixture serves the default and non-default prefixes alike. The
-/// fixture's relative command has to become absolute: the copy lives in
-/// a temp dir, not three levels under the repo.
+/// fixture serves the default and non-default prefixes alike.
 fn house_with_base(tag: &str, base: &str, inventory_timeout_s: Option<f64>) -> std::path::PathBuf {
     let house = temp_house(FIXTURE, tag);
     let path = house.join("units/zigbee.toml");
-    let repo = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let mut manifest = std::fs::read_to_string(&path).expect("read manifest");
     manifest = manifest.replace(
         "${HOMEOSTAT_TEST_MQTT_PORT}\"",
         &format!("${{HOMEOSTAT_TEST_MQTT_PORT}}/{base}\""),
-    );
-    manifest = manifest.replace(
-        "uv run ../../../adapters/",
-        &format!("uv run {}/adapters/", repo.display()),
     );
     if let Some(timeout) = inventory_timeout_s {
         manifest.push_str(&format!(
@@ -691,8 +669,13 @@ fn house_with_base(tag: &str, base: &str, inventory_timeout_s: Option<f64>) -> s
 
 /// Spawns broker + supervisor on a base-topic variant of the fixture.
 async fn setup_at(house: &std::path::Path) -> (Mosquitto, Supervisor, zenoh::Session) {
-    let (mosquitto, sup, observer) = start_at(house).await;
-    await_alive(&observer).await;
+    let mosquitto = Mosquitto::spawn();
+    let port = mosquitto.port.to_string();
+    let (sup, observer) = up(
+        || Supervisor::spawn_at(house, &[(PORT_ENV, &port)]),
+        &["zigbee"],
+    )
+    .await;
     (mosquitto, sup, observer)
 }
 
@@ -703,21 +686,6 @@ async fn start_at(house: &std::path::Path) -> (Mosquitto, Supervisor, zenoh::Ses
     let sup = Supervisor::spawn_at(house, &[(PORT_ENV, &mosquitto.port.to_string())]);
     let observer = sup.observer().await;
     (mosquitto, sup, observer)
-}
-
-/// Waits for the adapter's liveliness token.
-async fn await_alive(observer: &zenoh::Session) {
-    let token_sub = observer
-        .liveliness()
-        .declare_subscriber("home/health/zigbee/alive")
-        .history(true)
-        .await
-        .expect("liveliness subscriber");
-    let token = tokio::time::timeout(Duration::from_mins(1), token_sub.recv_async())
-        .await
-        .expect("adapter liveliness token within 60s")
-        .expect("liveliness stream open");
-    assert_eq!(token.kind(), SampleKind::Put);
 }
 
 /// (h) A non-default, multi-segment base topic works in every direction.
@@ -819,7 +787,7 @@ async fn a_base_topic_that_matches_nothing_reports_bridge_silent() {
         .declare_subscriber(EVENT_KEY)
         .await
         .expect("event subscriber");
-    await_alive(&observer).await;
+    await_running(&observer, "zigbee", Duration::from_mins(1)).await;
 
     // The estate is alive under the real prefix; the adapter is listening
     // somewhere else entirely.
@@ -831,11 +799,7 @@ async fn a_base_topic_that_matches_nothing_reports_bridge_silent() {
     .await;
 
     expect_event_kind(&event_sub, "bridge-silent").await;
-    let mut watch = health_watch(&observer, "zigbee").await;
-    await_health(&mut watch, Duration::from_secs(10), |h| {
-        h.status == HealthStatus::Running
-    })
-    .await;
+    await_running(&observer, "zigbee", Duration::from_secs(10)).await;
 
     sup.shutdown();
     let _ = std::fs::remove_dir_all(&house);
@@ -860,25 +824,20 @@ async fn broker_credentials_come_from_a_file_outside_the_repo() {
     )
     .expect("write credentials");
 
-    let sup = Supervisor::spawn_with_env(
-        FIXTURE,
-        &[
-            (PORT_ENV, &mosquitto.port.to_string()),
-            ("HOMEOSTAT_MQTT_CREDENTIALS", creds.to_str().expect("utf-8")),
-        ],
-    );
-    let observer = sup.observer().await;
-    let token_sub = observer
-        .liveliness()
-        .declare_subscriber("home/health/zigbee/alive")
-        .history(true)
-        .await
-        .expect("liveliness subscriber");
-    let token = tokio::time::timeout(Duration::from_mins(1), token_sub.recv_async())
-        .await
-        .expect("adapter connects to the authenticated broker within 60s")
-        .expect("liveliness stream open");
-    assert_eq!(token.kind(), SampleKind::Put);
+    let port = mosquitto.port.to_string();
+    let (sup, observer) = up(
+        || {
+            Supervisor::spawn_with_env(
+                FIXTURE,
+                &[
+                    (PORT_ENV, &port),
+                    ("HOMEOSTAT_MQTT_CREDENTIALS", creds.to_str().expect("utf-8")),
+                ],
+            )
+        },
+        &["zigbee"],
+    )
+    .await;
 
     // This shows it is talking to the broker and not only alive.
     let state_sub = observer
@@ -916,7 +875,7 @@ async fn broker_credentials_come_from_a_file_outside_the_repo() {
 /// and the events would not stop on a house mid-configuration.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_known_but_unbound_device_does_not_report_every_message() {
-    let (mosquitto, mut sup, observer) = setup().await;
+    let (mosquitto, mut sup, observer) = setup(&["zigbee"]).await;
     let event_sub = observer
         .declare_subscriber(EVENT_KEY)
         .await
@@ -971,7 +930,7 @@ async fn a_known_but_unbound_device_does_not_report_every_message() {
 /// silence does not tell a dead bridge from a stable estate.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_bridge_going_offline_mid_run_reports_once_per_transition() {
-    let (mosquitto, mut sup, observer) = setup().await;
+    let (mosquitto, mut sup, observer) = setup(&["zigbee"]).await;
     let event_sub = observer
         .declare_subscriber(EVENT_KEY)
         .await
