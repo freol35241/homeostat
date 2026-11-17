@@ -42,10 +42,12 @@ class LiveParams:
         except ValueError:
             return
         name = str(sample.key_expr).rsplit("/", 1)[-1]
-        self._live.add(name)
-        self._store(name, value)
+        # Only a value that is kept counts as live, so an invalid one does
+        # not make the seed skip the value the core serves.
+        if self._store(name, value):
+            self._live.add(name)
 
-    def _store(self, name: str, value) -> None:
+    def _store(self, name: str, value) -> bool:
         if (
             name in self._values
             and isinstance(value, (int, float))
@@ -53,6 +55,8 @@ class LiveParams:
             and math.isfinite(value)
         ):
             self._values[name] = value
+            return True
+        return False
 
     def get(self, name: str):
         """Return the current value of parameter `name`.

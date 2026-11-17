@@ -275,6 +275,9 @@ class Context:
         self._sources_used: dict[tuple[str, str, str], bool] = {}
         # rule -> last reported outcome, so `decision` emits on change.
         self._decisions: dict[str, str] = {}
+        # Both are checked and set from handler threads, so a change is
+        # reported once.
+        self._reports_lock = threading.Lock()
 
         if self._param_specs:
             # Subscribe, then get, then merge. The get covers everything
@@ -1468,9 +1471,10 @@ class Context:
             Whether the source contributed to this computation.
         """
         triple = (entity, aspect, source)
-        if self._sources_used.get(triple) == used:
-            return
-        self._sources_used[triple] = used
+        with self._reports_lock:
+            if self._sources_used.get(triple) == used:
+                return
+            self._sources_used[triple] = used
         self._session.health_event(
             "source-restored" if used else "source-dropped",
             entity=entity,
@@ -1500,9 +1504,10 @@ class Context:
         """
         if self.paused:
             outcome = f"{outcome} (paused)"
-        if self._decisions.get(rule) == outcome:
-            return
-        self._decisions[rule] = outcome
+        with self._reports_lock:
+            if self._decisions.get(rule) == outcome:
+                return
+            self._decisions[rule] = outcome
         self._session.health_event("decision", rule=rule, outcome=outcome)
 
     def ready(self) -> None:
