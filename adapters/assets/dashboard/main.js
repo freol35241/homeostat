@@ -28,7 +28,6 @@ function render() {
   renderShell();
   renderView();
   if (overlay.open) renderOverlayContent();
-  markPendingControls();
 }
 
 document.addEventListener('click', function (e) {

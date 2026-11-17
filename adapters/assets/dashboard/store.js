@@ -52,6 +52,7 @@ export var overlay = {
   layer: '',
   issues: [],              // decoded stored issues for the current window
   issuesLoading: false,
+  issuesFailed: false,
   sourceData: {},          // "<hours>|<entity>|<aspect>" -> fetched history of a sources or related line
   sourceEvents: {},        // same key -> when each source went in or out
   pinned: null,            // the issue time a reader pinned out of the braid

@@ -6,19 +6,19 @@ import { renderOverlayContent, showOverlay } from './panel.js';
 import { findEntityByName, overlay, store, unitsByName } from '../store.js';
 import { renderEventRow } from '../views/health.js';
 import { renderParamRow, renderPauseSwitch } from '../widgets/params.js';
+import { getJson } from '../api.js';
 
 function fetchUnitLog(unitName) {
-  overlay.log = { lines: [], loaded: false, loading: true };
-  fetch('/api/logs?unit=' + encodeURIComponent(unitName) + '&lines=100')
-    .then(function (r) { return r.json(); })
+  overlay.log = { lines: [], loaded: false, loading: true, failed: false };
+  getJson('/api/logs?unit=' + encodeURIComponent(unitName) + '&lines=100')
     .then(function (data) {
       if (overlay.unit !== unitName) return; // the overlay moved on to another unit
-      overlay.log = { lines: data || [], loaded: true, loading: false };
+      overlay.log = { lines: Array.isArray(data) ? data : [], loaded: true, loading: false, failed: false };
       if (overlay.open && overlay.type === 'unit') renderOverlayContent();
     })
     .catch(function () {
       if (overlay.unit !== unitName) return;
-      overlay.log = { lines: [], loaded: true, loading: false };
+      overlay.log = { lines: [], loaded: true, loading: false, failed: true };
       if (overlay.open && overlay.type === 'unit') renderOverlayContent();
     });
 }
@@ -41,11 +41,7 @@ function fetchUnitEvents(unitName) {
     overlay.unitEvents = { rows: rows, loaded: true, loading: false, failed: failed };
     if (overlay.open && overlay.type === 'unit') renderOverlayContent();
   };
-  fetch('/api/unit-events?unit=' + encodeURIComponent(unitName))
-    .then(function (r) {
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      return r.json();
-    })
+  getJson('/api/unit-events?unit=' + encodeURIComponent(unitName))
     .then(function (data) { done((data && data.events) || [], false); })
     .catch(function () { done([], true); });
 }
@@ -59,11 +55,7 @@ function fetchUnitTimeline(unitName) {
     overlay.timeline = { raw: raw, loaded: true, loading: false, failed: failed };
     if (overlay.open && overlay.type === 'unit') renderOverlayContent();
   };
-  fetch('/api/unit-timeline?unit=' + encodeURIComponent(unitName))
-    .then(function (r) {
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      return r.json();
-    })
+  getJson('/api/unit-timeline?unit=' + encodeURIComponent(unitName))
     .then(function (raw) { done(raw, false); })
     .catch(function () { done(null, true); });
 }
@@ -189,6 +181,7 @@ export function renderUnitDetailBody() {
   var log = overlay.log || { lines: [], loaded: false, loading: false };
   var logRows = log.lines.map(renderLogLine);
   var logHtml = log.loading ? html`<div class="empty-hint">Loading&hellip;</div>` :
+    log.failed ? html`<div class="empty-hint">The supervisor did not answer.</div>` :
     (logRows.length ? logRows : html`<div class="empty-hint">No output captured.</div>`);
 
   var body = html`<div class="muted">${titleCase(unit.kind || '')}</div>
