@@ -829,15 +829,19 @@ class Resolver:
     def document(self) -> dict:
         """Return the arbitration document: per aspect, the applied hold and what stands.
 
-        `holds` lists the holds in force, the winner first.
+        `holds` lists the holds in force, the winner first. The applied
+        entries are copies, because the caller compares this document with
+        the last one it published, and `undelivered` and `available`
+        change an entry in place.
         """
         aspects = []
         for target in sorted(self.targets()):
             room, entity, aspect = target
             holds = [{k: v for k, v in c.items() if k != "seen"} for c in self.candidates(target)]
+            applied = self._applied.get(target)
             aspects.append({
                 "room": room, "entity": entity, "aspect": aspect,
-                "applied": self._applied.get(target),
+                "applied": None if applied is None else dict(applied),
                 "holds": holds,
                 "refused": self._refused.get(target, 0),
             })
@@ -883,7 +887,9 @@ class Resolver:
             except (TypeError, KeyError):
                 continue
             if isinstance(applied, dict) and "id" in applied:
-                self._applied[target] = applied
+                # A copy: the caller keeps `document` as the one last
+                # published, and the entry changes in place.
+                self._applied[target] = dict(applied)
                 if applied.get("undelivered"):
                     self._undelivered.add(target)
             if isinstance(entry.get("refused"), int) and entry["refused"]:
