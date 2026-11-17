@@ -523,6 +523,20 @@ class DeliveryTest(Base):
         self.resolver.available("utility", "stove", [])
         self.assertNotEqual(self.resolver.document(), undelivered)
 
+    def test_after_a_restart_the_flag_still_changes_the_document(self):
+        # The restarted unit keeps the restored document as the one last
+        # published.
+        self.hold("heating", True, "h1")
+        published = self.resolver.document()
+        after = Resolver(
+            grant_of=lambda unit, target: (BANDS[unit], None) if unit in BANDS else None,
+            rest_of=lambda target: None, clock=Clock(), wall=lambda: WALL,
+        )
+        after.restore([], published)
+        after.put_hold(STOVE, "heating", {"value": True, "id": "h1"}, WALL, [])
+        after.undelivered("h1")
+        self.assertNotEqual(after.document(), published)
+
     def test_a_delivered_hold_is_not_sent_again(self):
         self.hold("heating", True, "h1")
         self.resolver.available("utility", "stove", effects := [])

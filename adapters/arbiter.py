@@ -831,8 +831,8 @@ class Resolver:
 
         `holds` lists the holds in force, the winner first. The applied
         entries are copies, because the caller compares this document with
-        the last one it published, and `undelivered` changes an entry in
-        place.
+        the last one it published, and `undelivered` and `available`
+        change an entry in place.
         """
         aspects = []
         for target in sorted(self.targets()):
@@ -887,7 +887,9 @@ class Resolver:
             except (TypeError, KeyError):
                 continue
             if isinstance(applied, dict) and "id" in applied:
-                self._applied[target] = applied
+                # A copy: the caller keeps `document` as the one last
+                # published, and the entry changes in place.
+                self._applied[target] = dict(applied)
                 if applied.get("undelivered"):
                     self._undelivered.add(target)
             if isinstance(entry.get("refused"), int) and entry["refused"]:

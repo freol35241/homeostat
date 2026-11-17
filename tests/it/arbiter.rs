@@ -417,9 +417,8 @@ async fn an_undelivered_hold_is_sent_when_the_device_is_back() {
         "arbitration document without the undelivered mark",
         || async {
             let doc = cache_read(&observer, "home/arbitration/arbiter").await?;
-            doc["aspects"][0]["applied"]
-                .get("undelivered")
-                .is_none()
+            let applied = &doc["aspects"][0]["applied"];
+            (applied["id"] == json!("5e7bac05") && applied.get("undelivered").is_none())
                 .then_some(())
         },
     )
