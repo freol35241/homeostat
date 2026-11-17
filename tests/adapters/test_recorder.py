@@ -9,6 +9,9 @@ import types
 import unittest
 from pathlib import Path
 
+import zenoh
+from homeostat.testing import FakeSample, FakeSession
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "adapters"))
 
 from recorder import (
@@ -267,53 +270,49 @@ class StampedRecordTest(StoreTest):
     replay, or a unit's `at=`."""
 
     KEY = "home/state/livingroom/lamp/on"
+    # The router's ID, which a live sample's stamp carries, and a replaying
+    # publisher's.
+    ROUTER = zenoh.TimestampId(b"\x01")
+    REPLAY = zenoh.TimestampId(b"\x02")
 
-    def recorder(self, live):
+    def recorder(self):
         rec = Recorder.__new__(Recorder)
         rec.db_path = self.db
-        rec.events = []
-        rec.sess = types.SimpleNamespace(
-            is_live=lambda sample: live,
-            is_live_stamp=lambda stamp: live,
-            health_event=lambda kind, **f: rec.events.append((kind, f)),
-        )
+        rec.sess = FakeSession(routers=[str(self.ROUTER)])
         rec.queued = []
         rec.writer = types.SimpleNamespace(enqueue=lambda table, row: rec.queued.append((table, row)))
         rec._live = set()
         rec._live_lock = threading.Lock()
         return rec
 
-    def sample(self, payload: bytes, ts_us: int):
+    def sample(self, payload: bytes, ts_us: int, live=False):
         when = datetime.datetime(1970, 1, 1, tzinfo=datetime.UTC) + datetime.timedelta(
             microseconds=ts_us
         )
-        return types.SimpleNamespace(
-            key_expr=self.KEY,
-            payload=types.SimpleNamespace(to_bytes=lambda: payload),
-            timestamp=types.SimpleNamespace(get_time=lambda: when),
-        )
+        stamp = zenoh.Timestamp(when, self.ROUTER if live else self.REPLAY)
+        return FakeSample(self.KEY, payload, timestamp=stamp)
 
     def test_the_replay_of_a_recorded_row_is_not_recorded_again(self):
         self.row("state", "livingroom", "lamp", "on", 10 * S, True)
-        rec = self.recorder(live=False)
+        rec = self.recorder()
         rec.record(self.sample(b"true", 10 * S))
-        self.assertEqual((rec.queued, rec.events), ([], []))
+        self.assertEqual((rec.queued, rec.sess.events), ([], []))
 
     def test_a_stamped_value_older_than_the_store_is_dropped_with_an_event(self):
         # A unit that once published the key unstamped loses every stamped
         # value older than that row, and the loss shows.
         self.row("state", "livingroom", "lamp", "on", 20 * S, True)
-        rec = self.recorder(live=False)
+        rec = self.recorder()
         rec.record(self.sample(b"false", 10 * S))
         self.assertEqual(rec.queued, [])
-        self.assertEqual(rec.events, [("drop", {"reason": "older-than-held", "key": self.KEY})])
+        self.assertEqual(rec.sess.events, [{"kind": "drop", "reason": "older-than-held", "key": self.KEY}])
 
     def test_a_stamped_mirror_value_is_seeded_at_its_stamp(self):
         # Now less the mirror's age lands a few milliseconds off the stamp,
         # and an hour stamped at 12:00 must stay at 12:00.
-        rec = self.recorder(live=False)
+        rec = self.recorder()
         stamp = self.sample(b"", 20 * S).timestamp
-        rec.sess.get_json_stamped = lambda expr: [(self.KEY, True, 3.0, stamp)]
+        rec.sess.serve(self.KEY, True, age_s=3.0, stamp=stamp)
         rec.seed(["home/state/**"])
         self.assertEqual(
             rec.queued,
@@ -322,7 +321,7 @@ class StampedRecordTest(StoreTest):
 
     def test_a_stamped_value_newer_than_the_store_is_recorded_at_its_stamp(self):
         self.row("state", "livingroom", "lamp", "on", 10 * S, True)
-        rec = self.recorder(live=False)
+        rec = self.recorder()
         rec.record(self.sample(b"false", 20 * S))
         self.assertEqual(
             rec.queued,
@@ -330,14 +329,14 @@ class StampedRecordTest(StoreTest):
         )
 
     def test_a_replay_does_not_count_as_live_for_the_seed(self):
-        rec = self.recorder(live=False)
+        rec = self.recorder()
         rec.record(self.sample(b"true", 20 * S))
         self.assertEqual(rec._live, set())
 
     def test_a_live_sample_is_stamped_on_receipt(self):
-        rec = self.recorder(live=True)
+        rec = self.recorder()
         before = datetime.datetime.now(datetime.UTC).timestamp() * S
-        rec.record(self.sample(b"true", 1 * S))
+        rec.record(self.sample(b"true", 1 * S, live=True))
         (table, row), = rec.queued
         self.assertEqual(table, "samples")
         self.assertGreaterEqual(row[0], before)
@@ -350,22 +349,21 @@ class CommandRecordTest(unittest.TestCase):
 
     def recorder(self):
         rec = Recorder.__new__(Recorder)
-        rec.events = []
-        rec.sess = types.SimpleNamespace(health_event=lambda kind, **f: rec.events.append((kind, f)))
+        rec.sess = FakeSession()
         rec.queued = []
         rec.writer = types.SimpleNamespace(enqueue=lambda table, row: rec.queued.append((table, row)))
         return rec
 
     def record(self, rec, payload: bytes):
         key = "home/cmd/livingroom/heat_pump/mode"
-        sample = types.SimpleNamespace(payload=types.SimpleNamespace(to_bytes=lambda: payload))
+        sample = FakeSample(key, payload)
         rec._record_sample(5 * S, key, key.split("/"), sample)
 
     def test_a_release_has_no_value_and_keeps_its_envelope(self):
         rec = self.recorder()
         payload = b'{"priority": "manual", "actor": "dashboard", "hold": "release"}'
         self.record(rec, payload)
-        self.assertEqual(rec.events, [], "a release is not a malformed command")
+        self.assertEqual(rec.sess.events, [], "a release is not a malformed command")
         self.assertEqual(
             rec.queued, [("events", (5 * S, "home/cmd/livingroom/heat_pump/mode", payload.decode()))]
         )
@@ -414,10 +412,11 @@ class ReconcileStandingTest(StoreTest):
     def recorder(self, status, mirror):
         rec = Recorder.__new__(Recorder)
         rec.db_path = self.db
-        rec.sess = types.SimpleNamespace(
-            get_json=lambda expr: [(expr, status)] if status is not None else [],
-            get_json_aged=lambda expr: [(k, v, 1.0) for k, v in mirror if k.startswith(expr.rstrip("*"))],
-        )
+        rec.sess = FakeSession()
+        if status is not None:
+            rec.sess.serve("home/meta/system/replay", status)
+        for key, value in mirror:
+            rec.sess.serve(key, value, age_s=1.0)
         return rec
 
     def stale(self):

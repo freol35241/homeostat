@@ -5,6 +5,8 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
+from homeostat.testing import FakeSession
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "adapters"))
 
 from rf433 import EVENTS_SUFFIX, LWT_SUFFIX, MAX_UNBOUND, Radio, aspect_for, code_from
@@ -17,18 +19,6 @@ def entity(name, code, capability="binary_sensor", features=("contact",)):
     return SimpleNamespace(
         name=name, room="hall", id=code, capability=capability, features=list(features)
     )
-
-
-class FakeSession:
-    def __init__(self):
-        self.puts = []
-        self.events = []
-
-    def put_json(self, key, value):
-        self.puts.append((key, value))
-
-    def health_event(self, kind, **fields):
-        self.events.append({"kind": kind, **fields})
 
 
 class DialectTest(unittest.TestCase):

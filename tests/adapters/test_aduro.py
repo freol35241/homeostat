@@ -6,24 +6,14 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
+from homeostat.testing import FakeSession
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "adapters"))
 
 from aduro import ASPECT_DESCRIPTOR, Stoves, command_body, route, status_aspects
 
 STOVE = SimpleNamespace(name="stove", room="living", id="aduro/stove1")
 KEY = "home/state/living/stove/"
-
-
-class FakeSession:
-    def __init__(self):
-        self.puts = []
-        self.events = []
-
-    def put_json(self, key, value):
-        self.puts.append((key, value))
-
-    def health_event(self, kind, **fields):
-        self.events.append({"kind": kind, **fields})
 
 
 class DialectTest(unittest.TestCase):

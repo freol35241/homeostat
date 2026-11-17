@@ -12,6 +12,7 @@ import unittest
 import zenoh
 from homeostat.session import UnitSession
 from homeostat.stamps import stamp_us
+from homeostat.testing import FakeSample
 
 
 class FakeZenoh:
@@ -51,16 +52,6 @@ class FakePublisher:
     @property
     def matching_status(self):
         return type("Status", (), {"matching": self._key in self._zenoh.subscribed})()
-
-
-class FakeSample:
-    def __init__(self, key, raw: bytes):
-        self.key_expr = key
-        self.payload = self
-        self._raw = raw
-
-    def to_bytes(self):
-        return self._raw
 
 
 def stub_session():
