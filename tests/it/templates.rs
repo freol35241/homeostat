@@ -19,25 +19,15 @@
 //! are read both live and from the core mirror, so a publish that beats
 //! the subscriber is not lost.
 
-use std::time::Duration;
-
-use homeostat::bus::HealthStatus;
 use serde_json::json;
 
-use crate::common::{await_health, await_states, health_watch, matched_publisher, Supervisor};
+use crate::common::{await_states, matched_publisher, up, Supervisor};
 
 const FIXTURE: &str = "tests/fixtures/house_templates";
 
 #[tokio::test(flavor = "multi_thread")]
 async fn templated_binding_reaches_every_bound_entity() {
-    let mut sup = Supervisor::spawn(FIXTURE);
-    let observer = sup.observer().await;
-
-    let mut latches = health_watch(&observer, "latches").await;
-    await_health(&mut latches, Duration::from_mins(2), |h| {
-        h.status == HealthStatus::Running
-    })
-    .await;
+    let (mut sup, observer) = up(|| Supervisor::spawn(FIXTURE), &["latches"]).await;
 
     let states = observer
         .declare_subscriber("home/state/**")

@@ -6,11 +6,10 @@
 use std::time::Duration;
 
 use serde_json::{json, Value};
-use zenoh::sample::SampleKind;
 
 use crate::common::{
     assert_unit_contract, await_discovery, await_states, cache_read, expect_drop_event,
-    expect_states, matched_publisher, next_event, Mosquitto, Mqtt, StateSub, Supervisor,
+    expect_states, matched_publisher, next_event, up, Mosquitto, Mqtt, StateSub, Supervisor,
 };
 
 const FIXTURE: &str = "tests/fixtures/house_companion";
@@ -19,8 +18,8 @@ const EVENT_KEY: &str = "home/health/companion/event";
 const ALICE_MESSAGE: &str = "home/cmd/person/alice_phone/message";
 const ALICE_ALERT: &str = "home/cmd/person/alice_phone/alert";
 
-/// Spawns broker + supervisor on the fixture and waits for the adapter's
-/// liveliness token (generous timeout: first run resolves the uv env).
+/// Spawns broker + supervisor on the fixture and waits for the adapter to
+/// run.
 async fn setup() -> (Mosquitto, Supervisor, zenoh::Session) {
     start(Mosquitto::spawn()).await
 }
@@ -28,19 +27,11 @@ async fn setup() -> (Mosquitto, Supervisor, zenoh::Session) {
 /// Like `setup`, on a broker the test has already published to.
 async fn start(mosquitto: Mosquitto) -> (Mosquitto, Supervisor, zenoh::Session) {
     let port = mosquitto.port.to_string();
-    let sup = Supervisor::spawn_with_env(FIXTURE, &[(PORT_ENV, &port)]);
-    let observer = sup.observer().await;
-    let token_sub = observer
-        .liveliness()
-        .declare_subscriber("home/health/companion/alive")
-        .history(true)
-        .await
-        .expect("liveliness subscriber");
-    let token = tokio::time::timeout(Duration::from_mins(1), token_sub.recv_async())
-        .await
-        .expect("adapter liveliness token within 60s")
-        .expect("liveliness stream open");
-    assert_eq!(token.kind(), SampleKind::Put);
+    let (sup, observer) = up(
+        || Supervisor::spawn_with_env(FIXTURE, &[(PORT_ENV, &port)]),
+        &["companion"],
+    )
+    .await;
     (mosquitto, sup, observer)
 }
 

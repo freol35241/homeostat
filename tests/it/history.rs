@@ -12,12 +12,10 @@
 //! to the microsecond.
 
 use std::path::PathBuf;
-use std::time::Duration;
 
-use homeostat::bus::HealthStatus;
 use serde_json::json;
 
-use crate::common::{await_health, await_mirror, health_watch, Supervisor};
+use crate::common::{await_mirror, up, Supervisor};
 
 /// The newest amount is stamped at the start of the previous hour, so the
 /// mirror must report it as between one and two of these old.
@@ -39,15 +37,15 @@ fn store_path() -> PathBuf {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_unit_reads_back_what_the_recorder_holds() {
     let db = store_path();
-    let mut sup = Supervisor::spawn_with_env(
-        FIXTURE,
-        &[("RECORDER_DB", db.to_str().expect("utf-8 path"))],
-    );
-    let observer = sup.observer().await;
-    let mut health = health_watch(&observer, "rain").await;
-    await_health(&mut health, Duration::from_mins(2), |h| {
-        h.status == HealthStatus::Running
-    })
+    let (mut sup, observer) = up(
+        || {
+            Supervisor::spawn_with_env(
+                FIXTURE,
+                &[("RECORDER_DB", db.to_str().expect("utf-8 path"))],
+            )
+        },
+        &["rain"],
+    )
     .await;
 
     await_mirror(&observer, &format!("{GAUGE}/rows"), &json!(3)).await;

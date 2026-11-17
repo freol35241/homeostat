@@ -12,12 +12,9 @@ use crate::common;
 
 use std::time::Duration;
 
-use homeostat::bus::HealthStatus;
 use serde_json::{json, Value};
 
-use crate::common::{
-    await_health, expect_state, health_watch, matched_publisher, Publisher, Supervisor,
-};
+use crate::common::{expect_state, matched_publisher, up, Publisher, Supervisor};
 
 const FIXTURE: &str = "tests/fixtures/house_persons";
 const PERSON: &str = "home/state/person/fredrik";
@@ -56,13 +53,7 @@ async fn expect_decision(sub: &common::StateSub, prefix: &str) {
 /// positioned from the phone's fix.
 #[tokio::test(flavor = "multi_thread")]
 async fn trackers_make_one_person() {
-    let mut sup = Supervisor::spawn(FIXTURE);
-    let observer = sup.observer().await;
-    let mut persons = health_watch(&observer, "persons").await;
-    await_health(&mut persons, Duration::from_mins(2), |h| {
-        h.status == HealthStatus::Running
-    })
-    .await;
+    let (mut sup, observer) = up(|| Supervisor::spawn(FIXTURE), &["persons"]).await;
 
     let presence = observer
         .declare_subscriber(format!("{PERSON}/presence"))

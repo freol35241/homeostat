@@ -15,10 +15,9 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use homeostat::bus::HealthStatus;
 use serde_json::{json, Value};
 
-use crate::common::{await_health, await_mirror, health_watch, matched_publisher, Supervisor};
+use crate::common::{await_mirror, matched_publisher, up, Supervisor};
 
 const FIXTURE: &str = "tests/fixtures/house_restore";
 const LATCH: &str = "home/state/global/night_mode/on";
@@ -34,19 +33,16 @@ fn store_path(test: &str) -> PathBuf {
 
 /// Spawns the fixture against `db` and waits for both units.
 async fn setup(db: &Path) -> (Supervisor, zenoh::Session) {
-    let sup = Supervisor::spawn_with_env(
-        FIXTURE,
-        &[("RECORDER_DB", db.to_str().expect("utf-8 path"))],
-    );
-    let observer = sup.observer().await;
-    for unit in ["recorder", "latches"] {
-        let mut health = health_watch(&observer, unit).await;
-        await_health(&mut health, Duration::from_mins(2), |h| {
-            h.status == HealthStatus::Running
-        })
-        .await;
-    }
-    (sup, observer)
+    up(
+        || {
+            Supervisor::spawn_with_env(
+                FIXTURE,
+                &[("RECORDER_DB", db.to_str().expect("utf-8 path"))],
+            )
+        },
+        &["recorder", "latches"],
+    )
+    .await
 }
 
 /// Polls the recorder until the latch's history holds `expected` as its

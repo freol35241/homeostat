@@ -4,13 +4,11 @@
 
 use std::time::Duration;
 
-use homeostat::bus::HealthStatus;
 use serde_json::json;
-use zenoh::sample::SampleKind;
 
 use crate::common::{
-    assert_unit_contract, await_health, expect_drop_event, expect_event_kind, expect_states,
-    health_watch, Mosquitto, Mqtt, Supervisor,
+    assert_unit_contract, expect_drop_event, expect_event_kind, expect_states, up, Mosquitto, Mqtt,
+    Supervisor,
 };
 
 const FIXTURE: &str = "tests/fixtures/house_ivt490";
@@ -29,24 +27,16 @@ const FEED_SET_TOPIC: &str = "ivt490_1/controller/set/indoor_temperature_actual"
 const OFFSET_CMD_KEY: &str = "home/cmd/utility/heatpump/outdoor_temperature_offset";
 const OFFSET_SET_TOPIC: &str = "ivt490_1/controller/set/outdoor_temperature_offset";
 
-/// Spawns broker + supervisor on the fixture and waits for the adapter's
-/// liveliness token (generous timeout: first run resolves the uv env).
-async fn setup() -> (Mosquitto, Supervisor, zenoh::Session) {
+/// Spawns broker + supervisor on the fixture and waits until each of
+/// `units` runs.
+async fn setup(units: &[&str]) -> (Mosquitto, Supervisor, zenoh::Session) {
     let mosquitto = Mosquitto::spawn();
     let port = mosquitto.port.to_string();
-    let sup = Supervisor::spawn_with_env(FIXTURE, &[(PORT_ENV, &port)]);
-    let observer = sup.observer().await;
-    let token_sub = observer
-        .liveliness()
-        .declare_subscriber("home/health/ivt490/alive")
-        .history(true)
-        .await
-        .expect("liveliness subscriber");
-    let token = tokio::time::timeout(Duration::from_mins(1), token_sub.recv_async())
-        .await
-        .expect("adapter liveliness token within 60s")
-        .expect("liveliness stream open");
-    assert_eq!(token.kind(), SampleKind::Put);
+    let (sup, observer) = up(
+        || Supervisor::spawn_with_env(FIXTURE, &[(PORT_ENV, &port)]),
+        units,
+    )
+    .await;
     (mosquitto, sup, observer)
 }
 
@@ -58,7 +48,7 @@ async fn setup() -> (Mosquitto, Supervisor, zenoh::Session) {
 /// health event.
 #[tokio::test(flavor = "multi_thread")]
 async fn ivt490_state_translates_to_bus_state() {
-    let (mosquitto, mut sup, observer) = setup().await;
+    let (mosquitto, mut sup, observer) = setup(&["ivt490"]).await;
     let state_sub = observer
         .declare_subscriber("home/state/**")
         .await
@@ -234,7 +224,7 @@ async fn ivt490_state_translates_to_bus_state() {
 /// its tracked fields this way for a minute or two after its daily reboot.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_null_controller_value_is_absent_not_a_sample() {
-    let (mosquitto, mut sup, observer) = setup().await;
+    let (mosquitto, mut sup, observer) = setup(&["ivt490"]).await;
     let value_sub = observer
         .declare_subscriber(INDOOR_KEY)
         .await
@@ -276,7 +266,7 @@ async fn a_null_controller_value_is_absent_not_a_sample() {
 /// next message flips it back.
 #[tokio::test(flavor = "multi_thread")]
 async fn silence_flips_available() {
-    let (mosquitto, mut sup, observer) = setup().await;
+    let (mosquitto, mut sup, observer) = setup(&["ivt490"]).await;
     let state_sub = observer
         .declare_subscriber(AVAILABLE_KEY)
         .await
@@ -309,12 +299,7 @@ async fn silence_flips_available() {
 /// this adapter has no home/cmd path of its own.
 #[tokio::test(flavor = "multi_thread")]
 async fn manual_setpoint_reaches_mqtt_via_arbiter_then_automation_refused() {
-    let (mosquitto, mut sup, observer) = setup().await;
-    let mut arbiter_watch = health_watch(&observer, "arbiter").await;
-    await_health(&mut arbiter_watch, Duration::from_mins(1), |h| {
-        h.status == HealthStatus::Running
-    })
-    .await;
+    let (mosquitto, mut sup, observer) = setup(&["ivt490", "arbiter"]).await;
 
     let mut mqtt = Mqtt::connect(mosquitto.port, "test-setpoint-cmd").await;
     mqtt.subscribe(&format!("{BASE}/controller/set/+")).await;
@@ -362,12 +347,7 @@ async fn manual_setpoint_reaches_mqtt_via_arbiter_then_automation_refused() {
 /// late subscriber must see nothing for it.
 #[tokio::test(flavor = "multi_thread")]
 async fn setpoint_is_retained_and_the_expiring_offset_is_not() {
-    let (mosquitto, mut sup, observer) = setup().await;
-    let mut arbiter_watch = health_watch(&observer, "arbiter").await;
-    await_health(&mut arbiter_watch, Duration::from_mins(1), |h| {
-        h.status == HealthStatus::Running
-    })
-    .await;
+    let (mosquitto, mut sup, observer) = setup(&["ivt490", "arbiter"]).await;
 
     let mut mqtt = Mqtt::connect(mosquitto.port, "test-retain").await;
     mqtt.subscribe(&format!("{BASE}/controller/set/+")).await;
@@ -420,7 +400,7 @@ async fn setpoint_is_retained_and_the_expiring_offset_is_not() {
 /// input is refused, since a fed input has one master.
 #[tokio::test(flavor = "multi_thread")]
 async fn fed_input_follows_its_source_and_stops_on_loss() {
-    let (mosquitto, mut sup, observer) = setup().await;
+    let (mosquitto, mut sup, observer) = setup(&["ivt490"]).await;
     let mut mqtt = Mqtt::connect(mosquitto.port, "test-feed").await;
     mqtt.subscribe(&format!("{BASE}/controller/set/+")).await;
     let event_sub = observer
@@ -518,12 +498,7 @@ async fn fed_input_follows_its_source_and_stops_on_loss() {
 /// carrying the offending aspect and value, and nothing reaches MQTT.
 #[tokio::test(flavor = "multi_thread")]
 async fn out_of_range_setpoint_drops_with_invalid_command_event() {
-    let (mosquitto, mut sup, observer) = setup().await;
-    let mut arbiter_watch = health_watch(&observer, "arbiter").await;
-    await_health(&mut arbiter_watch, Duration::from_mins(1), |h| {
-        h.status == HealthStatus::Running
-    })
-    .await;
+    let (mosquitto, mut sup, observer) = setup(&["ivt490", "arbiter"]).await;
 
     let event_sub = observer
         .declare_subscriber(EVENT_KEY)
@@ -565,12 +540,7 @@ async fn out_of_range_setpoint_drops_with_invalid_command_event() {
 /// that +60.0 is refused, or the refusal proves nothing.
 #[tokio::test(flavor = "multi_thread")]
 async fn offset_bound_admits_the_flow_and_refuses_nonsense() {
-    let (mosquitto, mut sup, observer) = setup().await;
-    let mut arbiter_watch = health_watch(&observer, "arbiter").await;
-    await_health(&mut arbiter_watch, Duration::from_mins(1), |h| {
-        h.status == HealthStatus::Running
-    })
-    .await;
+    let (mosquitto, mut sup, observer) = setup(&["ivt490", "arbiter"]).await;
 
     let event_sub = observer
         .declare_subscriber(EVENT_KEY)
@@ -619,12 +589,7 @@ async fn offset_bound_admits_the_flow_and_refuses_nonsense() {
 /// the drops observed are the adapter's own validation, not refusals.)
 #[tokio::test(flavor = "multi_thread")]
 async fn operating_mode_enum_enforced() {
-    let (mosquitto, mut sup, observer) = setup().await;
-    let mut arbiter_watch = health_watch(&observer, "arbiter").await;
-    await_health(&mut arbiter_watch, Duration::from_mins(1), |h| {
-        h.status == HealthStatus::Running
-    })
-    .await;
+    let (mosquitto, mut sup, observer) = setup(&["ivt490", "arbiter"]).await;
 
     let event_sub = observer
         .declare_subscriber(EVENT_KEY)
@@ -689,7 +654,7 @@ async fn operating_mode_enum_enforced() {
 /// enveloped command on the same key still works afterwards.
 #[tokio::test(flavor = "multi_thread")]
 async fn envelope_less_command_drops_with_health_event() {
-    let (mosquitto, mut sup, observer) = setup().await;
+    let (mosquitto, mut sup, observer) = setup(&["ivt490"]).await;
     let event_sub = observer
         .declare_subscriber(EVENT_KEY)
         .await
@@ -727,6 +692,6 @@ async fn envelope_less_command_drops_with_health_event() {
 /// ready, clean SIGTERM shutdown within the grace, no orphans.
 #[tokio::test(flavor = "multi_thread")]
 async fn adapter_honors_unit_contract() {
-    let (_mosquitto, mut sup, observer) = setup().await;
+    let (_mosquitto, mut sup, observer) = setup(&["ivt490"]).await;
     assert_unit_contract(&mut sup, &observer, "ivt490").await;
 }

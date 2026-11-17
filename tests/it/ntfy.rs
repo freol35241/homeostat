@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 use crate::common::{
     assert_cli_ok, assert_unit_contract, await_health, await_mirror, await_states, cli,
     expect_drop_event, fixture_command, free_port, health_watch, matched_publisher, stdout,
-    temp_house, StateSub, Supervisor,
+    temp_house, up, StateSub, Supervisor,
 };
 
 const FIXTURE: &str = "tests/fixtures/house_ntfy";
@@ -123,12 +123,10 @@ fn wish(text: Value, actor: &str) -> Value {
 async fn setup() -> (FakeNtfy, Supervisor, zenoh::Session) {
     let server = FakeNtfy::spawn().await;
     let port = server.port.to_string();
-    let sup = Supervisor::spawn_with_env(FIXTURE, &[(PORT_ENV, &port), (TOKEN_ENV, TOKEN)]);
-    let observer = sup.observer().await;
-    let mut watch = health_watch(&observer, "ntfy").await;
-    await_health(&mut watch, Duration::from_mins(2), |h| {
-        h.status == HealthStatus::Running
-    })
+    let (sup, observer) = up(
+        || Supervisor::spawn_with_env(FIXTURE, &[(PORT_ENV, &port), (TOKEN_ENV, TOKEN)]),
+        &["ntfy"],
+    )
     .await;
     (server, sup, observer)
 }
@@ -308,12 +306,10 @@ async fn failed_delivery_is_loud_and_recovers() {
 async fn bad_credentials_and_dead_server_are_visible() {
     let server = FakeNtfy::spawn().await;
     let port = server.port.to_string();
-    let sup = Supervisor::spawn_with_env(FIXTURE, &[(PORT_ENV, &port), (TOKEN_ENV, "tk_wrong")]);
-    let observer = sup.observer().await;
-    let mut watch = health_watch(&observer, "ntfy").await;
-    await_health(&mut watch, Duration::from_mins(2), |h| {
-        h.status == HealthStatus::Running
-    })
+    let (sup, observer) = up(
+        || Supervisor::spawn_with_env(FIXTURE, &[(PORT_ENV, &port), (TOKEN_ENV, "tk_wrong")]),
+        &["ntfy"],
+    )
     .await;
     let events = event_sub(&observer).await;
     let alert = matched_publisher(&observer, ALICE_ALERT).await;

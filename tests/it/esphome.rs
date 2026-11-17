@@ -15,10 +15,9 @@ use serde_json::{json, Value};
 use zenoh::sample::SampleKind;
 
 use crate::common::{
-    assert_unit_contract, await_discovery, await_health, await_mirror, await_states,
-    expect_drop_event, expect_states, free_port, health_watch, Supervisor,
+    assert_unit_contract, await_discovery, await_mirror, await_states, expect_drop_event,
+    expect_states, free_port, up, Supervisor,
 };
-use homeostat::bus::HealthStatus;
 
 const FIXTURE: &str = "tests/fixtures/house_esphome";
 /// The same device with its relay arbitrated and reporting its causes.
@@ -104,47 +103,30 @@ fn devices_file(port: u16) -> PathBuf {
 }
 
 /// Spawns the fake device + supervisor on the fixture and waits for the
-/// adapter's liveliness token (generous timeout: first run resolves the uv
-/// env for aioesphomeapi/zeroconf too).
-async fn setup() -> (FakeEsphome, PathBuf, Supervisor, zenoh::Session) {
-    setup_with(&[]).await
+/// adapter to run.
+async fn setup(device_args: &[&str]) -> (FakeEsphome, PathBuf, Supervisor, zenoh::Session) {
+    let house = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(FIXTURE);
+    setup_in(&house, device_args, &["esphome"]).await
 }
 
-async fn setup_with(device_args: &[&str]) -> (FakeEsphome, PathBuf, Supervisor, zenoh::Session) {
-    setup_at(FIXTURE, device_args).await
-}
-
-async fn setup_at(
-    fixture: &str,
-    device_args: &[&str],
-) -> (FakeEsphome, PathBuf, Supervisor, zenoh::Session) {
-    let house = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(fixture);
-    setup_in(&house, device_args).await
-}
-
-/// As `setup_at`, on a house at any path.
+/// As `setup`, on a house at any path, waiting for `units` to run.
 async fn setup_in(
     house: &std::path::Path,
     device_args: &[&str],
+    units: &[&str],
 ) -> (FakeEsphome, PathBuf, Supervisor, zenoh::Session) {
     let device = FakeEsphome::spawn_with_args(device_args);
     let devices_path = devices_file(device.port);
-    let sup = Supervisor::spawn_at(
-        house,
-        &[(DEVICES_ENV, devices_path.to_str().expect("utf-8 path"))],
-    );
-    let observer = sup.observer().await;
-    let token_sub = observer
-        .liveliness()
-        .declare_subscriber("home/health/esphome/alive")
-        .history(true)
-        .await
-        .expect("liveliness subscriber");
-    let token = tokio::time::timeout(Duration::from_secs(90), token_sub.recv_async())
-        .await
-        .expect("adapter liveliness token within 90s")
-        .expect("liveliness stream open");
-    assert_eq!(token.kind(), SampleKind::Put);
+    let (sup, observer) = up(
+        || {
+            Supervisor::spawn_at(
+                house,
+                &[(DEVICES_ENV, devices_path.to_str().expect("utf-8 path"))],
+            )
+        },
+        units,
+    )
+    .await;
     (device, devices_path, sup, observer)
 }
 
@@ -153,7 +135,7 @@ async fn setup_in(
 /// `binary_sensor` -> the occupancy capability's "motion" aspect.
 #[tokio::test(flavor = "multi_thread")]
 async fn device_state_translates_to_bus_state() {
-    let (_device, _devices_path, mut sup, observer) = setup().await;
+    let (_device, _devices_path, mut sup, observer) = setup(&[]).await;
     let state_sub = observer
         .declare_subscriber("home/state/**")
         .await
@@ -181,7 +163,7 @@ async fn device_state_translates_to_bus_state() {
 /// available = false when the device drops.
 #[tokio::test(flavor = "multi_thread")]
 async fn device_dropout_flips_available() {
-    let (mut device, _devices_path, mut sup, observer) = setup().await;
+    let (mut device, _devices_path, mut sup, observer) = setup(&[]).await;
     let state_sub = observer
         .declare_subscriber("home/state/**")
         .await
@@ -236,7 +218,7 @@ async fn device_dropout_flips_available() {
 /// translate. z2m.rs tests the same rule for Zigbee.
 #[tokio::test(flavor = "multi_thread")]
 async fn reserved_aspect_field_drops_with_health_event() {
-    let (_device, _devices_path, mut sup, observer) = setup_with(&["--reserved-sensor"]).await;
+    let (_device, _devices_path, mut sup, observer) = setup(&["--reserved-sensor"]).await;
     let event_sub = observer
         .declare_subscriber(EVENT_KEY)
         .await
@@ -268,7 +250,7 @@ async fn reserved_aspect_field_drops_with_health_event() {
 /// lands on the bus as the same translated state key.
 #[tokio::test(flavor = "multi_thread")]
 async fn cmd_envelope_reaches_fake_device_and_echoes_back() {
-    let (_device, _devices_path, mut sup, observer) = setup().await;
+    let (_device, _devices_path, mut sup, observer) = setup(&[]).await;
     let state_sub = observer
         .declare_subscriber(RELAY_STATE_KEY)
         .await
@@ -294,7 +276,7 @@ async fn cmd_envelope_reaches_fake_device_and_echoes_back() {
 #[tokio::test(flavor = "multi_thread")]
 async fn an_event_entity_publishes_every_press() {
     const ACTION_KEY: &str = "home/state/shed/shed_button/action";
-    let (_device, _devices_path, mut sup, observer) = setup_with(&["--button"]).await;
+    let (_device, _devices_path, mut sup, observer) = setup(&["--button"]).await;
     let doc = await_discovery(&observer, "esphome", |doc| {
         doc.as_array().is_some_and(|r| r.len() == 4)
     })
@@ -365,7 +347,7 @@ async fn an_event_entity_publishes_every_press() {
 /// properly enveloped command afterwards still works.
 #[tokio::test(flavor = "multi_thread")]
 async fn envelope_less_command_drops_with_health_event() {
-    let (_device, _devices_path, mut sup, observer) = setup().await;
+    let (_device, _devices_path, mut sup, observer) = setup(&[]).await;
     let event_sub = observer
         .declare_subscriber(EVENT_KEY)
         .await
@@ -409,9 +391,9 @@ async fn envelope_less_command_drops_with_health_event() {
 /// capability/features stanza and the raw ESPHome descriptor.
 #[tokio::test(flavor = "multi_thread")]
 async fn bound_device_entities_published_as_discovery() {
-    let (_device, _devices_path, mut sup, observer) = setup().await;
-    // Published on connect, which races the liveliness token setup waited
-    // for: read it the way every late joiner does, from the core mirror.
+    let (_device, _devices_path, mut sup, observer) = setup(&[]).await;
+    // Published on connect, which races the start-up wait in setup: read it
+    // the way every late joiner does, from the core mirror.
     let doc = await_discovery(&observer, "esphome", |doc| {
         doc.as_array().is_some_and(|r| r.len() == 3)
     })
@@ -470,7 +452,7 @@ async fn bound_device_entities_published_as_discovery() {
 /// ready, clean SIGTERM shutdown within the grace, no orphans.
 #[tokio::test(flavor = "multi_thread")]
 async fn adapter_honors_unit_contract() {
-    let (_device, _devices_path, mut sup, observer) = setup().await;
+    let (_device, _devices_path, mut sup, observer) = setup(&[]).await;
     assert_unit_contract(&mut sup, &observer, "esphome").await;
 }
 
@@ -485,15 +467,11 @@ async fn a_cause_the_device_reports_decides_who_changed_the_relay() {
         std::process::id()
     ));
     std::fs::write(&trigger, "").expect("trigger file");
-    let (_device, _devices_path, mut sup, observer) = setup_at(
-        CAUSES_FIXTURE,
+    let (_device, _devices_path, mut sup, observer) = setup_in(
+        &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(CAUSES_FIXTURE),
         &["--causes", trigger.to_str().expect("utf-8 path")],
+        &["esphome", "arbiter"],
     )
-    .await;
-    let mut watch = health_watch(&observer, "arbiter").await;
-    await_health(&mut watch, Duration::from_mins(1), |h| {
-        h.status == HealthStatus::Running
-    })
     .await;
     let hold_sub = observer
         .declare_subscriber(HOLD_KEY)
@@ -566,17 +544,6 @@ async fn a_cause_the_device_reports_decides_who_changed_the_relay() {
 async fn a_switch_runtime_is_the_devices_number() {
     const RUNTIME_KEY: &str = "home/state/shed/relay/runtime_s";
     let house = common::temp_house(FIXTURE, "esphome-runtime");
-    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("adapters/esphome.py");
-    let manifest = house.join("units/esphome.toml");
-    let text = std::fs::read_to_string(&manifest).expect("manifest");
-    std::fs::write(
-        &manifest,
-        text.replace(
-            "uv run ../../../adapters/esphome.py",
-            &format!("uv run {}", script.display()),
-        ),
-    )
-    .expect("manifest");
     let relay = house.join("entities/esphome/relay.toml");
     let text = std::fs::read_to_string(&relay).expect("relay");
     std::fs::write(
@@ -587,7 +554,8 @@ async fn a_switch_runtime_is_the_devices_number() {
         ),
     )
     .expect("relay");
-    let (_device, _devices_path, mut sup, observer) = setup_in(&house, &["--runtime"]).await;
+    let (_device, _devices_path, mut sup, observer) =
+        setup_in(&house, &["--runtime"], &["esphome"]).await;
 
     let state_sub = observer
         .declare_subscriber(RUNTIME_KEY)

@@ -17,15 +17,14 @@
 
 use std::time::Duration;
 
-use homeostat::bus::HealthStatus;
 use serde_json::{json, Value};
 use zenoh::handlers::FifoChannelHandler;
 use zenoh::pubsub::Subscriber;
 use zenoh::sample::Sample;
 
 use crate::common::{
-    await_health, await_matching, cache_read, config_write, health_watch, matched_publisher,
-    Publisher, Supervisor,
+    await_matching, cache_read, config_write, matched_publisher, restart_unit, up, Publisher,
+    Supervisor,
 };
 
 const SIM_FIXTURE: &str = "tests/fixtures/house_evening_sim";
@@ -37,21 +36,13 @@ const PRESENCE_STATE: &str = "home/state/livingroom/presence_sensor/occupied";
 
 type Sub = Subscriber<FifoChannelHandler<Sample>>;
 
-/// Spawns the sim fixture, waits for the automation and the reflector
-/// (generous timeout: first run resolves the automation's uv env), and
-/// returns matched publishers for the lamp and presence state keys.
+/// Spawns the sim fixture, waits for the automation and the reflector to
+/// run, and returns matched publishers for the lamp and presence state keys.
 async fn setup_sim() -> (Supervisor, zenoh::Session, Publisher, Publisher) {
-    let sup = Supervisor::spawn(SIM_FIXTURE);
-    let observer = sup.observer().await;
-    let mut automation = health_watch(&observer, "evening_lights").await;
-    await_health(&mut automation, Duration::from_mins(1), |h| {
-        h.status == HealthStatus::Running
-    })
-    .await;
-    let mut reflector = health_watch(&observer, "reflector").await;
-    await_health(&mut reflector, Duration::from_secs(10), |h| {
-        h.status == HealthStatus::Running
-    })
+    let (sup, observer) = up(
+        || Supervisor::spawn(SIM_FIXTURE),
+        &["evening_lights", "reflector"],
+    )
     .await;
     let lamp = matched_publisher(&observer, LAMP_STATE).await;
     let presence = matched_publisher(&observer, PRESENCE_STATE).await;
@@ -355,14 +346,7 @@ async fn off_time_edit_applies_live_and_survives_restart() {
     // Kill the automation; the supervisor sweeps its process group,
     // restarts it, and the edited value still governs: the last value wins
     // over the manifest default.
-    let mut watch = health_watch(&observer, "evening_lights").await;
-    unsafe {
-        libc::kill(pid_before as i32, libc::SIGKILL);
-    }
-    let restarted = await_health(&mut watch, Duration::from_mins(1), |h| {
-        h.status == HealthStatus::Running && h.pid != Some(pid_before as u32)
-    })
-    .await;
+    let restarted = restart_unit(&observer, "evening_lights").await;
     assert!(restarted.pid.is_some());
 
     // The fresh incarnation caught up from the core mirror: it

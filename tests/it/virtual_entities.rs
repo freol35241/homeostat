@@ -12,14 +12,13 @@
 
 use std::time::Duration;
 
-use homeostat::bus::{Health, HealthStatus};
 use serde_json::{json, Value};
 use zenoh::handlers::FifoChannelHandler;
 use zenoh::pubsub::Subscriber;
 use zenoh::sample::Sample;
 
 use crate::common::{
-    await_health, await_matching, config_write, health_watch, matched_publisher, Supervisor,
+    await_matching, config_write, matched_publisher, restart_unit, up, Supervisor,
 };
 
 const FIXTURE: &str = "tests/fixtures/house_virtual";
@@ -65,14 +64,7 @@ async fn mirror_read_eventually(session: &zenoh::Session, key: &str, expected: &
 /// republished only when the fusion moves.
 #[tokio::test(flavor = "multi_thread")]
 async fn virtual_sensor_publishes_fused_state() {
-    let mut sup = Supervisor::spawn(FIXTURE);
-    let observer = sup.observer().await;
-
-    let mut automation = health_watch(&observer, "fused_temperature").await;
-    await_health(&mut automation, Duration::from_mins(2), |h| {
-        h.status == HealthStatus::Running
-    })
-    .await;
+    let (mut sup, observer) = up(|| Supervisor::spawn(FIXTURE), &["fused_temperature"]).await;
 
     let fused_sub = observer
         .declare_subscriber(FUSED_STATE)
@@ -106,19 +98,6 @@ async fn virtual_sensor_publishes_fused_state() {
 
 const MAX_AGE_KEY: &str = "home/config/fused_temperature/source_max_age_s";
 
-/// Kills the automation's process and waits for the supervisor's fresh
-/// incarnation to report running under a new pid.
-async fn restart_automation(observer: &zenoh::Session, pid: u32) -> Health {
-    let mut watch = health_watch(observer, "fused_temperature").await;
-    unsafe {
-        libc::kill(i32::try_from(pid).expect("a pid fits i32"), libc::SIGKILL);
-    }
-    await_health(&mut watch, Duration::from_mins(1), |h| {
-        h.status == HealthStatus::Running && h.pid != Some(pid)
-    })
-    .await
-}
-
 /// A restarted automation is not blind until its sources publish again:
 /// `ctx.subscribe` reads each source's current value from the core
 /// mirror, so the fusion is published at once. The catch-up carries the
@@ -126,14 +105,7 @@ async fn restart_automation(observer: &zenoh::Session, pid: u32) -> Health {
 /// left out of that first mean rather than passed off as fresh.
 #[tokio::test(flavor = "multi_thread")]
 async fn restarted_automation_catches_up_from_the_mirror() {
-    let mut sup = Supervisor::spawn(FIXTURE);
-    let observer = sup.observer().await;
-
-    let mut automation = health_watch(&observer, "fused_temperature").await;
-    let running = await_health(&mut automation, Duration::from_mins(2), |h| {
-        h.status == HealthStatus::Running
-    })
-    .await;
+    let (mut sup, observer) = up(|| Supervisor::spawn(FIXTURE), &["fused_temperature"]).await;
 
     let fused_sub = observer
         .declare_subscriber(FUSED_STATE)
@@ -176,7 +148,7 @@ async fn restarted_automation_catches_up_from_the_mirror() {
     // Restart with both sources within policy: the fusion is republished
     // from the catch-up alone, with no source publishing. Catch-up arrives one
     // key at a time and the unit recomputes on each, as on first start.
-    let restarted = restart_automation(&observer, running.pid.expect("pid")).await;
+    restart_unit(&observer, "fused_temperature").await;
     assert_eq!(
         next_sample(&fused_sub, Duration::from_secs(10)).await,
         json!(20.0)
@@ -194,7 +166,7 @@ async fn restarted_automation_catches_up_from_the_mirror() {
         .await
         .expect("policy write");
     tokio::time::sleep(Duration::from_millis(1500)).await;
-    restart_automation(&observer, restarted.pid.expect("pid")).await;
+    restart_unit(&observer, "fused_temperature").await;
     await_matching(&office).await;
     office.put(json!(30.0).to_string()).await.expect("put");
     assert_eq!(

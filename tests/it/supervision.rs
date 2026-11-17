@@ -6,7 +6,10 @@ use std::time::{Duration, Instant};
 use homeostat::bus::{Health, HealthStatus, LogEntry};
 use zenoh::sample::SampleKind;
 
-use crate::common::{await_health, health_watch, process_alive, scan_health, Supervisor};
+use crate::common::{
+    await_health, await_running, health_watch, process_alive, running_pid, scan_health, up,
+    Supervisor,
+};
 
 const STATE_KEY: &str = "home/state/testroom/fake_sensor/value";
 const CRASH_KEY: &str = "home/cmd/testroom/fake_sensor/crash";
@@ -89,8 +92,7 @@ async fn spawn_shows_liveliness_and_state_flows() {
             .expect("state stream open");
     }
 
-    let mut watch = health_watch(&observer, "fake").await;
-    let health = await_health(&mut watch, Duration::from_secs(10), running).await;
+    let health = await_running(&observer, "fake", Duration::from_secs(10)).await;
     assert!(health.pid.is_some());
 
     sup.shutdown();
@@ -175,11 +177,8 @@ async fn crash_loop_opens_circuit_breaker() {
 /// (d) SIGTERM: graceful shutdown within grace, leaving no orphans.
 #[tokio::test(flavor = "multi_thread")]
 async fn sigterm_shuts_down_gracefully_without_orphans() {
-    let mut sup = Supervisor::spawn("tests/fixtures/house");
-    let observer = sup.observer().await;
-    let mut watch = health_watch(&observer, "fake").await;
-    let health = await_health(&mut watch, Duration::from_secs(10), running).await;
-    let adapter_pid = health.pid.expect("running unit has a pid");
+    let (mut sup, observer) = up(|| Supervisor::spawn("tests/fixtures/house"), &["fake"]).await;
+    let adapter_pid = u32::try_from(running_pid(&observer, "fake").await).expect("a pid fits u32");
     assert!(process_alive(adapter_pid), "adapter alive before shutdown");
 
     sup.signal(libc::SIGTERM);
@@ -209,11 +208,8 @@ async fn sigterm_during_startup_still_shuts_down_gracefully() {
 /// SIGKILL on the supervisor must still not leak the unit (pdeathsig).
 #[tokio::test(flavor = "multi_thread")]
 async fn sigkill_leaves_no_orphans() {
-    let mut sup = Supervisor::spawn("tests/fixtures/house");
-    let observer = sup.observer().await;
-    let mut watch = health_watch(&observer, "fake").await;
-    let health = await_health(&mut watch, Duration::from_secs(10), running).await;
-    let adapter_pid = health.pid.expect("running unit has a pid");
+    let (mut sup, observer) = up(|| Supervisor::spawn("tests/fixtures/house"), &["fake"]).await;
+    let adapter_pid = u32::try_from(running_pid(&observer, "fake").await).expect("a pid fits u32");
 
     sup.signal(libc::SIGKILL);
     sup.wait_exit(Duration::from_secs(5));
@@ -231,10 +227,11 @@ async fn sigkill_leaves_no_orphans() {
 /// within each stream, and truncatable from the tail via `?lines=N`.
 #[tokio::test(flavor = "multi_thread")]
 async fn log_capture_tags_and_orders_by_stream() {
-    let mut sup = Supervisor::spawn("tests/fixtures/house_logs");
-    let observer = sup.observer().await;
-    let mut watch = health_watch(&observer, "logger").await;
-    await_health(&mut watch, Duration::from_secs(10), running).await;
+    let (mut sup, observer) = up(
+        || Supervisor::spawn("tests/fixtures/house_logs"),
+        &["logger"],
+    )
+    .await;
 
     let entries = await_log(&observer, "logger", Duration::from_secs(10), |e| {
         e.len() >= 8
@@ -293,10 +290,11 @@ async fn log_capture_tags_and_orders_by_stream() {
 /// oldest lines, keeping the most recent 500.
 #[tokio::test(flavor = "multi_thread")]
 async fn log_capture_evicts_oldest_past_capacity() {
-    let mut sup = Supervisor::spawn("tests/fixtures/house_logs");
-    let observer = sup.observer().await;
-    let mut watch = health_watch(&observer, "flooder").await;
-    await_health(&mut watch, Duration::from_secs(10), running).await;
+    let (mut sup, observer) = up(
+        || Supervisor::spawn("tests/fixtures/house_logs"),
+        &["flooder"],
+    )
+    .await;
 
     let entries = await_log(&observer, "flooder", Duration::from_secs(10), |e| {
         e.len() >= 500

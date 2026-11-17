@@ -4,12 +4,11 @@
 
 use std::time::Duration;
 
-use homeostat::bus::HealthStatus;
 use serde_json::{json, Value};
 use zenoh::handlers::FifoChannelHandler;
 use zenoh::pubsub::Subscriber;
 
-use crate::common::{await_health, health_watch, running_pid, Supervisor};
+use crate::common::{restart_unit, up, Supervisor};
 
 const FIXTURE: &str = "tests/fixtures/house_buttons";
 const PRESS_KEY: &str = "home/state/hall/remote/action";
@@ -40,13 +39,7 @@ async fn press(session: &zenoh::Session, gesture: &str) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_press_sends_the_commands_its_gesture_names_and_only_those() {
-    let mut sup = Supervisor::spawn(FIXTURE);
-    let observer = sup.observer().await;
-    let mut watch = health_watch(&observer, "buttons").await;
-    await_health(&mut watch, Duration::from_mins(1), |h| {
-        h.status == HealthStatus::Running
-    })
-    .await;
+    let (mut sup, observer) = up(|| Supervisor::spawn(FIXTURE), &["buttons"]).await;
     let cmds = observer
         .declare_subscriber(LIGHT_CMDS)
         .await
@@ -107,14 +100,7 @@ async fn a_press_sends_the_commands_its_gesture_names_and_only_those() {
     // A restart does not act on the last press, which the mirror still holds.
     press(&observer, "single").await;
     assert!(next_cmd(&cmds, Duration::from_secs(10)).await.is_some());
-    let pid = running_pid(&observer, "buttons").await;
-    unsafe {
-        libc::kill(i32::try_from(pid).expect("a pid fits i32"), libc::SIGKILL);
-    }
-    await_health(&mut watch, Duration::from_mins(1), |h| {
-        h.status == HealthStatus::Running && h.pid != Some(u32::try_from(pid).expect("pid fits"))
-    })
-    .await;
+    restart_unit(&observer, "buttons").await;
     assert!(
         next_cmd(&cmds, Duration::from_secs(2)).await.is_none(),
         "a restart replays no press"

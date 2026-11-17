@@ -13,12 +13,10 @@ use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use homeostat::bus::HealthStatus;
 use serde_json::{json, Value};
 
 use crate::common::{
-    await_base_units, await_health, cache_read, free_port, health_watch, matched_publisher,
-    running_pid, temp_house, Supervisor,
+    cache_read, free_port, matched_publisher, running_pid, temp_house, up, Supervisor,
 };
 
 const FIXTURE: &str = "tests/fixtures/house_apply";
@@ -104,15 +102,15 @@ impl Drop for Mcp {
 async fn reads_serve_live_state_and_history() {
     let db = std::env::temp_dir().join(format!("homeostat-mcp-history-{}.db", std::process::id()));
     let _ = std::fs::remove_file(&db);
-    let sup = Supervisor::spawn_with_env(
-        "tests/fixtures/house_recorder",
-        &[("RECORDER_DB", db.to_str().expect("utf-8 path"))],
-    );
-    let observer = sup.observer().await;
-    let mut recorder = health_watch(&observer, "recorder").await;
-    await_health(&mut recorder, Duration::from_mins(2), |h| {
-        h.status == HealthStatus::Running
-    })
+    let (sup, observer) = up(
+        || {
+            Supervisor::spawn_with_env(
+                "tests/fixtures/house_recorder",
+                &[("RECORDER_DB", db.to_str().expect("utf-8 path"))],
+            )
+        },
+        &["recorder"],
+    )
     .await;
 
     // Publish once a subscriber (the core state mirror, the recorder)
@@ -237,12 +235,10 @@ async fn reads_serve_live_state_and_history() {
 /// `home/history/events`.
 #[tokio::test(flavor = "multi_thread")]
 async fn read_logs_and_events_over_mcp() {
-    let sup = Supervisor::spawn("tests/fixtures/house_logs");
-    let observer = sup.observer().await;
-    let mut watch = health_watch(&observer, "logger").await;
-    await_health(&mut watch, Duration::from_secs(10), |h| {
-        h.status == HealthStatus::Running
-    })
+    let (sup, observer) = up(
+        || Supervisor::spawn("tests/fixtures/house_logs"),
+        &["logger"],
+    )
     .await;
 
     // Wait for the logger's known startup lines to land in its ring buffer.
@@ -441,13 +437,10 @@ async fn http_transport_runs_as_supervised_unit() {
     )
     .expect("write mcp manifest");
 
-    let mut sup = Supervisor::spawn_at(&house, &[]);
-    let observer = sup.observer().await;
-    await_base_units(&observer).await;
-    let mut mcp_health = health_watch(&observer, "mcp").await;
-    await_health(&mut mcp_health, Duration::from_mins(1), |h| {
-        h.status == HealthStatus::Running
-    })
+    let (mut sup, _observer) = up(
+        || Supervisor::spawn_at(&house, &[]),
+        &["probe", "reflector", "mcp"],
+    )
     .await;
 
     let addr = format!("127.0.0.1:{port}");
@@ -509,9 +502,11 @@ async fn the_http_surface_refuses_what_a_browser_can_send() {
         ),
     )
     .expect("write mcp manifest");
-    let mut sup = Supervisor::spawn_at(&house, &[]);
-    let observer = sup.observer().await;
-    await_base_units(&observer).await;
+    let (mut sup, _observer) = up(
+        || Supervisor::spawn_at(&house, &[]),
+        &["probe", "reflector"],
+    )
+    .await;
 
     let call = json!({
         "jsonrpc": "2.0", "id": 1, "method": "tools/call",
@@ -582,9 +577,11 @@ async fn the_http_surface_bounds_what_a_peer_can_make_it_read() {
         ),
     )
     .expect("write mcp manifest");
-    let mut sup = Supervisor::spawn_at(&house, &[]);
-    let observer = sup.observer().await;
-    await_base_units(&observer).await;
+    let (mut sup, observer) = up(
+        || Supervisor::spawn_at(&house, &[]),
+        &["probe", "reflector"],
+    )
+    .await;
 
     let ping = json!({"jsonrpc": "2.0", "id": 0, "method": "tools/list"});
     let (status, _) = http_post_retry(&addr, &ping, Duration::from_mins(1));

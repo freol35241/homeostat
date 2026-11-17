@@ -9,9 +9,10 @@
 use std::time::Duration;
 
 use serde_json::json;
-use zenoh::sample::SampleKind;
 
-use crate::common::{await_mirror, expect_drop_event, expect_states, Mosquitto, Mqtt, Supervisor};
+use crate::common::{
+    await_mirror, expect_drop_event, expect_states, up, Mosquitto, Mqtt, Supervisor,
+};
 
 const FIXTURE: &str = "tests/fixtures/house_rf433";
 const PORT_ENV: &str = "HOMEOSTAT_TEST_MQTT_PORT";
@@ -28,28 +29,16 @@ const PIR_KEY: &str = "home/state/hallway/hallway_motion/motion";
 const DOOR_KEY: &str = "home/state/hallway/front_door/contact";
 const SMOKE_KEY: &str = "home/state/landing/smoke_upstairs/smoke";
 
-/// Spawns broker + supervisor on the fixture and waits for the adapter's
-/// liveliness token (generous timeout: first run resolves the uv env).
+/// Spawns broker + supervisor on the fixture and waits for the adapter to
+/// run.
 async fn setup() -> (Mosquitto, Supervisor, zenoh::Session) {
     let mosquitto = Mosquitto::spawn();
     let port = mosquitto.port.to_string();
-    let sup = Supervisor::spawn_with_env(FIXTURE, &[(PORT_ENV, &port)]);
-    let observer = sup.observer().await;
-    let token_sub = observer
-        .liveliness()
-        .declare_subscriber("home/health/rf433/alive")
-        .history(true)
-        .await
-        .expect("liveliness subscriber");
-    let Ok(token) = tokio::time::timeout(Duration::from_mins(1), token_sub.recv_async()).await
-    else {
-        panic!(
-            "no adapter liveliness token within 60s; the supervisor said:\n{}",
-            sup.output_tail(80)
-        );
-    };
-    let token = token.expect("liveliness stream open");
-    assert_eq!(token.kind(), SampleKind::Put);
+    let (sup, observer) = up(
+        || Supervisor::spawn_with_env(FIXTURE, &[(PORT_ENV, &port)]),
+        &["rf433"],
+    )
+    .await;
     (mosquitto, sup, observer)
 }
 
