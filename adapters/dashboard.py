@@ -1090,7 +1090,7 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         reach its device (see `reachable`).
 
         `hold` is for an arbitrated entity only (docs/design.md#hold-intents):
-        an RFC3339 instant to hold until, "none" to act without holding, or
+        an RFC3339 instant or "HH:MM" to hold until, "none" to act without holding, or
         "release" with no value to hand the aspect back. The page never saw
         the device act, so it does not send "report".
         """

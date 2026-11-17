@@ -45,7 +45,7 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 UNITS="$REPO/examples/starter-house/units"
 
 # adapters/ source -> starter unit name. Adapters the starter has no unit
-# for (go2rtc, onvif, openwrt) are left out. evening_lights.py is the
+# for (buttons, go2rtc, onvif, openwrt) are left out. evening_lights.py is the
 # starter's own example automation. It has no adapters/ source, so it only
 # gets the SDK pin.
 FILES="

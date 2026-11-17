@@ -301,6 +301,19 @@ REST_VALUES = {
     "burner": ("on", False),
 }
 
+# The aspect each commandable capability's commands target by default
+# (VOCABULARY's `base` in src/manifest.rs, which a test there checks this
+# against). A gesture action that releases a target hands back this one
+# (docs/design.md#gesture-actions).
+BASE_ASPECTS = {
+    "burner": "on",
+    "climate": "setpoint",
+    "light": "on",
+    "lock": "locked",
+    "notifier": "message",
+    "switch": "on",
+}
+
 # The furthest a hold may name. A family hold is for tonight or a holiday,
 # and an end years out is a typo or a hold nobody will remember.
 HOLD_HORIZON = datetime.timedelta(days=366)
@@ -344,8 +357,9 @@ def cmd_envelope(
         ``{"transition": 1.0}``. Left out of the envelope when empty.
     hold : str or None, optional
         What the arbiter does with the family hold on the aspect
-        (docs/design.md#hold-intents): one of `HOLD_WORDS`, or an RFC3339
-        instant with an offset to hold until, at most `HOLD_HORIZON` ahead.
+        (docs/design.md#hold-intents): one of `HOLD_WORDS`, an RFC3339
+        instant with an offset to hold until, at most `HOLD_HORIZON` ahead,
+        or `"HH:MM"` to hold until the house clock next shows it.
         Only a manual-band command takes one. Left out of the envelope
         when None.
 
@@ -456,13 +470,33 @@ def cmd_envelope_hold(payload: Any) -> str | None:
     Returns
     -------
     str or None
-        The envelope's `hold`: one of `HOLD_WORDS` or an RFC3339 instant.
+        The envelope's `hold`: one of `HOLD_WORDS`, an RFC3339 instant or
+        `"HH:MM"`.
     """
     return payload.get("hold")
 
 
+def is_time_of_day(hold: Any) -> bool:
+    """Return whether a hold intent is a time of day, `"HH:MM"` on a 24-hour clock.
+
+    The arbiter holds until the house clock next shows that time
+    (docs/design.md#hold-intents), so the sender needs no time zone.
+
+    Parameters
+    ----------
+    hold : Any
+        A hold intent, or anything else.
+
+    Returns
+    -------
+    bool
+        True for `"00:00"` to `"23:59"`.
+    """
+    return isinstance(hold, str) and re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", hold) is not None
+
+
 def hold_instant(hold: str) -> datetime.datetime | None:
-    """Return the instant a hold intent holds until, or None for a word.
+    """Return the instant a hold intent holds until, or None for a word or a time of day.
 
     Parameters
     ----------
@@ -472,9 +506,10 @@ def hold_instant(hold: str) -> datetime.datetime | None:
     Returns
     -------
     datetime.datetime or None
-        The instant, timezone-aware, or None for one of `HOLD_WORDS`.
+        The instant, timezone-aware, or None for one of `HOLD_WORDS` or a
+        time of day.
     """
-    if hold in HOLD_WORDS:
+    if hold in HOLD_WORDS or is_time_of_day(hold):
         return None
     return datetime.datetime.fromisoformat(hold)
 
@@ -509,7 +544,7 @@ def _check_hold(hold: Any, priority: Any) -> None:
     # its publisher, so it is refused rather than ignored.
     if priority != "manual":
         raise ValueError(f"a {priority} command takes no hold")
-    if hold in HOLD_WORDS:
+    if hold in HOLD_WORDS or is_time_of_day(hold):
         return
     if not isinstance(hold, str):
         raise ValueError(f"hold {hold!r} is not a hold intent")

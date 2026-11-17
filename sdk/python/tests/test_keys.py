@@ -122,7 +122,7 @@ class HoldTest(unittest.TestCase):
                 keys.parse_cmd_envelope({"value": 1, "priority": priority, "hold": "none"})
 
     def test_a_hold_is_a_word_or_an_instant_with_an_offset(self):
-        for hold in ("forever", "06:00", "2026-11-17T06:00:00", "", 30, None, ["none"]):
+        for hold in ("forever", "24:00", "6:00", "06:00:00", "2026-11-17T06:00:00", "", 30, None, ["none"]):
             with self.assertRaises(ValueError, msg=repr(hold)):
                 keys.parse_cmd_envelope({"value": 1, "priority": "manual", "hold": hold})
 
@@ -134,6 +134,13 @@ class HoldTest(unittest.TestCase):
         for hold in (far, "2400-01-01T00:00:00Z", "9999-12-31T23:59:59+00:00"):
             with self.assertRaises(ValueError, msg=hold):
                 keys.parse_cmd_envelope({"value": 1, "priority": "manual", "hold": hold})
+
+    def test_a_time_of_day_is_a_hold_intent_and_no_instant(self):
+        for hold in ("00:00", "06:00", "23:59"):
+            self.assertEqual(keys.parse_cmd_envelope({"value": 1, "priority": "manual", "hold": hold}), 1)
+            self.assertIsNone(keys.hold_instant(hold))
+        with self.assertRaises(ValueError):
+            keys.cmd_envelope(1, "automation", "x", hold="06:00")
 
     def test_an_instant_reads_back_timezone_aware(self):
         instant = keys.hold_instant("2026-11-17T06:00:00+01:00")

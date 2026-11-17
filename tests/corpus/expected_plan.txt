@@ -2,7 +2,7 @@ Homeostat plan
   repo:  tests/fixtures/house_reference
   world: empty
 
-Units to create (13):
+Units to create (14):
 
 + adapter esphome (units/esphome.toml)
     command: uv run units/esphome.py
@@ -21,9 +21,12 @@ Units to create (13):
       alice_gps  tracker  room=person  write=shared
 + adapter zigbee (units/zigbee.toml)
     command: uv run units/zigbee.py
-    entities (6):
+    entities (7):
       front_door_lock  lock       room=hallway     write=arbitrated  family.locked: false=until next change, true=none
       hallway_motion   occupancy  room=hallway     write=shared
+      hallway_remote   button     room=hallway     write=shared
+        double → front_door_lock: release, unlocks
+        single → kitchen_ceiling: toggle on
       kitchen_ceiling  light      room=kitchen     write=shared
       kitchen_temp     sensor     room=kitchen     write=shared
       livingroom_lamp  light      room=livingroom  write=exclusive
@@ -63,6 +66,8 @@ Units to create (13):
     command: uv run units/arbiter.py
     params:
       hold_minutes  type=float  default=30  editable_by=family
++ service buttons (units/buttons.toml)
+    command: uv run units/buttons.py
 + service dashboard (units/dashboard.toml)
     command: uv run units/dashboard.py --port 8600
 + service recorder (units/recorder.toml)
@@ -95,6 +100,7 @@ Expanded keys:
   zigbee publishes state: home/state/{room}/{entity}/**
     -> home/state/hallway/front_door_lock/**
     -> home/state/hallway/hallway_motion/**
+    -> home/state/hallway/hallway_remote/**
     -> home/state/kitchen/kitchen_ceiling/**
     -> home/state/kitchen/kitchen_temp/**
     -> home/state/livingroom/livingroom_lamp/**
@@ -103,6 +109,7 @@ Expanded keys:
     -> home/arbiter/hallway/front_door_lock/**
   zigbee subscribes commands: home/cmd/{room}/{entity}/**
     -> home/cmd/hallway/hallway_motion/**
+    -> home/cmd/hallway/hallway_remote/**
     -> home/cmd/kitchen/kitchen_ceiling/**
     -> home/cmd/kitchen/kitchen_temp/**
     -> home/cmd/livingroom/livingroom_lamp/**
@@ -141,6 +148,10 @@ Expanded keys:
   arbiter subscribes health: home/health/*
   arbiter subscribes holds: home/hold/**
   arbiter subscribes replay: home/meta/system/replay
+  buttons publishes lights: home/cmd/**
+  buttons publishes locks: home/cmd/**
+  buttons subscribes presses: home/state/*/*/action
+  buttons subscribes state: home/state/**
   dashboard publishes lights: home/cmd/**
   dashboard publishes locks: home/cmd/**
   dashboard subscribes config: home/config/*/*
@@ -160,6 +171,13 @@ Expanded keys:
 
 Grant table:
 
+  buttons.lights  capability=light  priority=manual
+    key: home/cmd/**
+    -> kitchen_ceiling  (room=kitchen, capability=light, write=shared, owner=zigbee)
+    -> livingroom_lamp  (room=livingroom, capability=light, write=exclusive, owner=zigbee)
+  buttons.locks  capability=lock  priority=manual
+    key: home/cmd/**
+    -> front_door_lock  (room=hallway, capability=lock, write=arbitrated, owner=zigbee)
   dashboard.lights  capability=light  priority=manual
     key: home/cmd/**
     -> kitchen_ceiling  (room=kitchen, capability=light, write=shared, owner=zigbee)
@@ -200,12 +218,14 @@ Grant table:
   zigbee.state  binds
     key: home/state/hallway/front_door_lock/**
     key: home/state/hallway/hallway_motion/**
+    key: home/state/hallway/hallway_remote/**
     key: home/state/kitchen/kitchen_ceiling/**
     key: home/state/kitchen/kitchen_temp/**
     key: home/state/livingroom/livingroom_lamp/**
     key: home/state/livingroom/livingroom_temp/**
     -> front_door_lock  (room=hallway, capability=lock, write=arbitrated, owner=zigbee)
     -> hallway_motion   (room=hallway, capability=occupancy, write=shared, owner=zigbee)
+    -> hallway_remote   (room=hallway, capability=button, write=shared, owner=zigbee)
     -> kitchen_ceiling  (room=kitchen, capability=light, write=shared, owner=zigbee)
     -> kitchen_temp     (room=kitchen, capability=sensor, write=shared, owner=zigbee)
     -> livingroom_lamp  (room=livingroom, capability=light, write=exclusive, owner=zigbee)
@@ -218,4 +238,4 @@ Sources:
   downstairs_temperature.livingroom  <-  livingroom_temp.temperature  (home/state/livingroom/livingroom_temp/temperature, owner=zigbee)
   alice.gps  <-  alice_gps.lat  (home/state/person/alice_gps/lat, owner=owntracks)
 
-Plan tier: structural (13 units created, 12 grants added)
+Plan tier: structural (14 units created, 14 grants added)
