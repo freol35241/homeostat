@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 
 use crate::common::{
     await_mirror, cache_read, expect_event_kind, expect_silence, expect_state, fixture_command,
-    free_port, next_event, next_sample, up, StateSub, Supervisor, SILENCE,
+    free_port, next_event, next_sample, up, Scratch, StateSub, Supervisor, SILENCE,
 };
 
 const FIXTURE: &str = "tests/fixtures/house_onvif";
@@ -109,26 +109,24 @@ impl Drop for FakeOnvif {
     }
 }
 
-/// Writes a `HOMEOSTAT_CAMERAS` file (outside the repo: it holds credentials)
-/// giving the fixture's `hallway_cam` the fake camera's host and the
-/// camera-account credentials.
-fn cameras_file(port: u16) -> PathBuf {
-    let path = std::env::temp_dir().join(format!("homeostat-cameras-{port}.toml"));
-    std::fs::write(
-        &path,
-        format!(
+/// Writes a `HOMEOSTAT_CAMERAS` file in `scratch` (outside the repo: it
+/// holds credentials) giving the fixture's `hallway_cam` the fake camera's
+/// host and the camera-account credentials.
+fn cameras_file(scratch: &Scratch, port: u16) -> PathBuf {
+    scratch.file(
+        "cameras.toml",
+        &format!(
             "[hallway_cam]\nhost = \"127.0.0.1:{port}\"\nusername = \"{USERNAME}\"\npassword = \"{PASSWORD}\"\n"
         ),
     )
-    .expect("write cameras file");
-    path
 }
 
 /// Spawns the fake camera + supervisor on the fixture and waits for the
 /// adapter to run.
-async fn setup() -> (FakeOnvif, PathBuf, Supervisor, zenoh::Session) {
+async fn setup() -> (FakeOnvif, Scratch, Supervisor, zenoh::Session) {
     let camera = FakeOnvif::spawn().await;
-    let cameras_path = cameras_file(camera.port);
+    let cameras = Scratch::new("onvif-cameras");
+    let cameras_path = cameras_file(&cameras, camera.port);
     let (sup, observer) = up(
         || {
             Supervisor::spawn_with_env(
@@ -144,7 +142,7 @@ async fn setup() -> (FakeOnvif, PathBuf, Supervisor, zenoh::Session) {
     // lost (a real camera's events during an outage are too). available =
     // true is the adapter's own signal that the subscription is up.
     await_mirror(&observer, AVAILABLE_KEY, &json!(true)).await;
-    (camera, cameras_path, sup, observer)
+    (camera, cameras, sup, observer)
 }
 
 /// Triggers repeatedly until the motion key carries `expected`. Triggers
@@ -214,7 +212,7 @@ async fn trigger_until_event(camera: &FakeOnvif, sub: &StateSub, value: &str, re
 /// bus, and detections ride it as ordinary scalar state.
 #[tokio::test(flavor = "multi_thread")]
 async fn motion_events_translate_to_bus_state() {
-    let (camera, _cameras_path, mut sup, observer) = setup().await;
+    let (camera, _cameras, mut sup, observer) = setup().await;
     let state_sub = observer
         .declare_subscriber(MOTION_KEY)
         .await
@@ -231,7 +229,7 @@ async fn motion_events_translate_to_bus_state() {
 /// resubscribes from scratch, so events flow again without a restart.
 #[tokio::test(flavor = "multi_thread")]
 async fn broken_subscription_resubscribes() {
-    let (camera, _cameras_path, mut sup, observer) = setup().await;
+    let (camera, _cameras, mut sup, observer) = setup().await;
     let state_sub = observer
         .declare_subscriber(MOTION_KEY)
         .await
@@ -256,7 +254,7 @@ async fn broken_subscription_resubscribes() {
 /// untouched through the outage: stale, but not false.
 #[tokio::test(flavor = "multi_thread")]
 async fn subscription_loss_flips_available() {
-    let (camera, _cameras_path, mut sup, observer) = setup().await;
+    let (camera, _cameras, mut sup, observer) = setup().await;
     let avail_sub = observer
         .declare_subscriber(AVAILABLE_KEY)
         .await
@@ -279,7 +277,7 @@ async fn subscription_loss_flips_available() {
 /// with a "malformed-payload" health event, and the stream survives it.
 #[tokio::test(flavor = "multi_thread")]
 async fn malformed_motion_value_drops_with_health_event() {
-    let (camera, _cameras_path, mut sup, observer) = setup().await;
+    let (camera, _cameras, mut sup, observer) = setup().await;
     let state_sub = observer
         .declare_subscriber(MOTION_KEY)
         .await
@@ -304,7 +302,7 @@ async fn malformed_motion_value_drops_with_health_event() {
 /// live camera.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_camera_without_a_subscription_manager_keeps_streaming() {
-    let (camera, _cameras_path, mut sup, observer) = setup().await;
+    let (camera, _cameras, mut sup, observer) = setup().await;
     let state_sub = observer
         .declare_subscriber(MOTION_KEY)
         .await
@@ -356,7 +354,7 @@ async fn a_camera_without_a_subscription_manager_keeps_streaming() {
 /// rotation is a real wall-clock interval.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_camera_without_a_subscription_manager_rotates_its_subscription() {
-    let (camera, _cameras_path, mut sup, observer) = setup().await;
+    let (camera, _cameras, mut sup, observer) = setup().await;
     let state_sub = observer
         .declare_subscriber(MOTION_KEY)
         .await
@@ -404,7 +402,7 @@ async fn a_camera_without_a_subscription_manager_rotates_its_subscription() {
 /// apart. Here it fails, so this is an ordinary loss.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_renew_fault_from_a_lost_subscription_is_still_a_loss() {
-    let (camera, _cameras_path, mut sup, observer) = setup().await;
+    let (camera, _cameras, mut sup, observer) = setup().await;
     let state_sub = observer
         .declare_subscriber(MOTION_KEY)
         .await
@@ -436,7 +434,7 @@ async fn a_renew_fault_from_a_lost_subscription_is_still_a_loss() {
 /// change, and the next sample on the key is the next edge.
 #[tokio::test(flavor = "multi_thread")]
 async fn repeated_notifications_publish_one_transition() {
-    let (camera, _cameras_path, mut sup, observer) = setup().await;
+    let (camera, _cameras, mut sup, observer) = setup().await;
     let state_sub = observer
         .declare_subscriber(MOTION_KEY)
         .await
@@ -487,7 +485,7 @@ async fn repeated_notifications_publish_one_transition() {
 /// proved to work, so the assertion is about the framing and nothing else.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_chunked_soap_reply_is_read_whole() {
-    let (camera, _cameras_path, mut sup, observer) = setup().await;
+    let (camera, _cameras, mut sup, observer) = setup().await;
     let state_sub = observer
         .declare_subscriber(MOTION_KEY)
         .await

@@ -10,7 +10,7 @@
 //! The store outlives the supervisor because it is a file named by
 //! `RECORDER_DB`, as in restore.rs.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
@@ -18,7 +18,7 @@ use zenoh::time::{Timestamp, TimestampId, NTP64};
 
 use crate::common::{
     await_mirror, await_running, await_sample, cache_read, edit, eventually, temp_house, up,
-    Supervisor,
+    Scratch, Supervisor,
 };
 
 const FIXTURE: &str = "tests/fixtures/house_replay";
@@ -26,13 +26,6 @@ const LAMP: &str = "home/state/livingroom/lamp/on";
 const FAN: &str = "home/state/bedroom/fan/on";
 /// The ID the core's replays carry (`homeostat::supervisor::replay`).
 const REPLAY_ID: u8 = 1;
-
-fn store_path(test: &str) -> PathBuf {
-    let path =
-        std::env::temp_dir().join(format!("homeostat-replay-{test}-{}.db", std::process::id()));
-    let _ = std::fs::remove_file(&path);
-    path
-}
 
 /// Spawns `fixture` against `db` and waits for `units` to run.
 async fn setup(fixture: &str, db: &Path, units: &[&str]) -> (Supervisor, zenoh::Session) {
@@ -155,7 +148,8 @@ where
 /// sees that stamp, and the mirror serves it with the value.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_core_stamps_samples_and_the_mirror_serves_the_stamp() {
-    let db = store_path("stamps");
+    let scratch = Scratch::new("replay-stamps");
+    let db = scratch.store();
     let (mut sup, observer) = setup(FIXTURE, &db, &["reflector"]).await;
     let writer = sup.observer().await;
     let key = "home/state/test/probe/level";
@@ -198,14 +192,14 @@ async fn the_core_stamps_samples_and_the_mirror_serves_the_stamp() {
     assert!(mirrored.age_s < 5.0, "age {}", mirrored.age_s);
 
     sup.shutdown();
-    let _ = std::fs::remove_file(&db);
 }
 
 /// An older stamp never replaces a newer value in the mirror, and a value
 /// stamped in the past is served with the age its stamp gives it.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_mirror_keeps_the_newest_stamp_and_ages_a_past_one() {
-    let db = store_path("newest");
+    let scratch = Scratch::new("replay-newest");
+    let db = scratch.store();
     let (mut sup, observer) = setup(FIXTURE, &db, &["reflector"]).await;
     let writer = sup.observer().await;
     let ten_minutes = Duration::from_mins(10);
@@ -252,7 +246,6 @@ async fn the_mirror_keeps_the_newest_stamp_and_ages_a_past_one() {
     assert!(mirrored.age_s < 5.0, "age {}", mirrored.age_s);
 
     sup.shutdown();
-    let _ = std::fs::remove_file(&db);
 }
 
 /// The scenario #204 is about. A value is recorded, the core goes down and
@@ -261,7 +254,8 @@ async fn the_mirror_keeps_the_newest_stamp_and_ages_a_past_one() {
 /// second row in the store. A live value afterwards replaces it.
 #[tokio::test(flavor = "multi_thread")]
 async fn state_comes_back_after_a_core_restart_with_its_age() {
-    let db = store_path("restart");
+    let scratch = Scratch::new("replay-restart");
+    let db = scratch.store();
     let units = ["recorder", "reflector", "probe"];
     let (mut sup, observer) = setup(FIXTURE, &db, &units).await;
 
@@ -326,7 +320,6 @@ async fn state_comes_back_after_a_core_restart_with_its_age() {
     );
 
     sup.shutdown();
-    let _ = std::fs::remove_file(&db);
 }
 
 /// A value published after the restart, before the recorder is up, is not
@@ -334,7 +327,8 @@ async fn state_comes_back_after_a_core_restart_with_its_age() {
 /// first.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_live_value_is_not_overwritten_by_the_replay() {
-    let db = store_path("live-wins");
+    let scratch = Scratch::new("replay-live-wins");
+    let db = scratch.store();
     let units = ["recorder", "reflector", "probe"];
     let (mut sup, observer) = setup(FIXTURE, &db, &units).await;
     command(&observer, LAMP, json!(true)).await;
@@ -359,7 +353,6 @@ async fn a_live_value_is_not_overwritten_by_the_replay() {
     );
 
     sup.shutdown();
-    let _ = std::fs::remove_file(&db);
 }
 
 /// An entity that moved room while the core was down is not replayed under
@@ -367,7 +360,8 @@ async fn a_live_value_is_not_overwritten_by_the_replay() {
 /// somewhere it no longer is.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_moved_entity_is_not_replayed() {
-    let db = store_path("moved");
+    let scratch = Scratch::new("replay-moved");
+    let db = scratch.store();
     let (mut sup, observer) = setup(FIXTURE, &db, &["recorder", "reflector"]).await;
     command(&observer, LAMP, json!(true)).await;
     command(&observer, FAN, json!(true)).await;
@@ -413,8 +407,6 @@ async fn a_moved_entity_is_not_replayed() {
     );
 
     sup.shutdown();
-    let _ = std::fs::remove_file(&db);
-    let _ = std::fs::remove_dir_all(&house);
 }
 
 const HOLDS_FIXTURE: &str = "tests/fixtures/house_replay_holds";
@@ -440,7 +432,8 @@ async fn await_standing(session: &zenoh::Session, key: &str) -> Value {
 /// for that, goes on refusing what the hold refused.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_familys_hold_comes_back_after_a_core_restart() {
-    let db = store_path("holds");
+    let scratch = Scratch::new("replay-holds");
+    let db = scratch.store();
     let units = ["recorder", "reflector", "arbiter"];
     let (mut sup, observer) = setup(HOLDS_FIXTURE, &db, &units).await;
     observer
@@ -498,5 +491,4 @@ async fn the_familys_hold_comes_back_after_a_core_restart() {
     assert_eq!(refused.value()["holder_actor"], json!("owner"));
 
     sup.shutdown();
-    let _ = std::fs::remove_file(&db);
 }

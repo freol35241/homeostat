@@ -11,11 +11,9 @@
 //! writes it fails here, and so does a stamp that does not reach the store
 //! to the microsecond.
 
-use std::path::PathBuf;
-
 use serde_json::json;
 
-use crate::common::{await_mirror, up, Supervisor};
+use crate::common::{await_mirror, up, Scratch, Supervisor};
 
 /// The newest amount is stamped at the start of the previous hour, so the
 /// mirror must report it as between one and two of these old.
@@ -24,19 +22,14 @@ const AN_HOUR_S: f64 = 3600.0;
 const FIXTURE: &str = "tests/fixtures/house_history";
 const GAUGE: &str = "home/state/garden/rain_gauge";
 
-fn store_path() -> PathBuf {
-    let path = std::env::temp_dir().join(format!("homeostat-history-{}.db", std::process::id()));
-    let _ = std::fs::remove_file(&path);
-    path
-}
-
 /// The three amounts come back as three rows at their hours' starts, the
 /// buckets' sums and counts add up to what was published, a window total
 /// counts a straddling hour in proportion and refuses a window the hours
 /// do not reach, and the mirror ages the newest amount from its stamp.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_unit_reads_back_what_the_recorder_holds() {
-    let db = store_path();
+    let scratch = Scratch::new("history");
+    let db = scratch.store();
     let (mut sup, observer) = up(
         || {
             Supervisor::spawn_with_env(
@@ -88,5 +81,4 @@ async fn a_unit_reads_back_what_the_recorder_holds() {
     );
 
     sup.shutdown();
-    let _ = std::fs::remove_file(&db);
 }

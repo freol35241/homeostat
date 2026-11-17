@@ -339,11 +339,14 @@ where
     }
 }
 
-/// A mosquitto broker on a free port, killed on drop.
+/// A mosquitto broker on a free port, killed on drop. Dropping it also
+/// removes its config and password files.
 pub struct Mosquitto {
     child: Child,
     pub port: u16,
     conf: PathBuf,
+    /// The password file of a broker that requires auth.
+    passwd: Option<PathBuf>,
 }
 
 /// Where a test broker's files go: Cargo's temporary directory for
@@ -364,9 +367,11 @@ impl Mosquitto {
     /// A broker that requires the given credentials, with no anonymous
     /// fallback, so a unit that cannot present a password does not connect.
     pub fn spawn_with_auth(username: &str, password: &str) -> Self {
+        static MADE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let passwd = mosquitto_dir().join(format!(
-            "homeostat-mqtt-passwd-{}-{username}",
-            std::process::id()
+            "homeostat-mqtt-passwd-{}-{}",
+            std::process::id(),
+            MADE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
         std::fs::write(&passwd, format!("{username}:{password}\n")).expect("write passwd");
         // mosquitto refuses a plaintext password file: hash it in place.
@@ -377,11 +382,13 @@ impl Mosquitto {
             .success();
         assert!(hashed, "mosquitto_passwd failed");
         let passwd_arg = passwd.to_str().expect("utf-8 passwd path").to_string();
-        Self::spawn_conf(move |port, _| {
+        let mut broker = Self::spawn_conf(move |port, _| {
             format!(
                 "listener {port} 127.0.0.1\nallow_anonymous false\npassword_file {passwd_arg}\n"
             )
-        })
+        });
+        broker.passwd = Some(passwd);
+        broker
     }
 
     /// Starts a broker on a free port and waits until it says it is
@@ -421,7 +428,12 @@ impl Mosquitto {
                 let exited = child.try_wait().expect("poll mosquitto");
                 if exited.is_none() && said.contains(" running") {
                     let _ = std::fs::remove_file(&log);
-                    return Self { child, port, conf };
+                    return Self {
+                        child,
+                        port,
+                        conf,
+                        passwd: None,
+                    };
                 }
                 if exited.is_some() && said.contains("Address already in use") {
                     let _ = std::fs::remove_file(&log);
@@ -447,6 +459,9 @@ impl Drop for Mosquitto {
         let _ = self.child.kill();
         let _ = self.child.wait();
         let _ = std::fs::remove_file(&self.conf);
+        if let Some(passwd) = &self.passwd {
+            let _ = std::fs::remove_file(passwd);
+        }
     }
 }
 
@@ -903,15 +918,64 @@ pub async fn running_pid(session: &zenoh::Session, unit: &str) -> u64 {
     health["pid"].as_u64().expect("running unit has a pid")
 }
 
+/// A temp directory that one test owns. Dropping the guard removes it and
+/// everything in it, also when the test fails. It derefs to its path.
+pub struct Scratch {
+    dir: PathBuf,
+}
+
+impl Scratch {
+    /// A fresh empty directory named after `tag`, unique within this run.
+    pub fn new(tag: &str) -> Self {
+        static MADE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "homeostat-{tag}-{}-{}",
+            std::process::id(),
+            MADE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create scratch dir");
+        Self { dir }
+    }
+
+    /// Writes `contents` to `name` in the directory and returns its path.
+    pub fn file(&self, name: &str, contents: &str) -> PathBuf {
+        let path = self.dir.join(name);
+        std::fs::write(&path, contents).expect("write scratch file");
+        path
+    }
+
+    /// The path of a recorder store in the directory. The store's `-wal`
+    /// and `-shm` files sit beside it, and the recorder seals old months
+    /// into `archive/` beside it, so all of them go with the guard, and no
+    /// two tests' archives mix.
+    pub fn store(&self) -> PathBuf {
+        self.dir.join("history.db")
+    }
+}
+
+impl std::ops::Deref for Scratch {
+    type Target = Path;
+
+    fn deref(&self) -> &Path {
+        &self.dir
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
 /// A fresh editable copy of the `fixture` house (repo-relative path) in a
-/// temp dir named after `tag`.
+/// scratch directory named after `tag`.
 ///
 /// Unit commands name their scripts relative to the fixture, as
 /// `uv run ../../../adapters/x.py`, which resolves to nothing from the temp
 /// dir. The copy's commands name them from the fixture's own directory.
-pub fn temp_house(fixture: &str, tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("homeostat-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+pub fn temp_house(fixture: &str, tag: &str) -> Scratch {
+    let dir = Scratch::new(tag);
     let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(fixture);
     copy_dir(&src, &dir);
     let units = std::fs::read_dir(dir.join("units")).expect("read the copy's units");

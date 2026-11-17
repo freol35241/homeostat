@@ -8,7 +8,8 @@ use serde_json::{json, Value};
 
 use crate::common::{
     assert_unit_contract, await_running, expect_drop_event, expect_event_kind, expect_states,
-    next_event, next_sample, startup_permit, temp_house, up, Mosquitto, Mqtt, Supervisor, SILENCE,
+    next_event, next_sample, startup_permit, temp_house, up, Mosquitto, Mqtt, Scratch, Supervisor,
+    SILENCE,
 };
 
 const FIXTURE: &str = "tests/fixtures/house_z2m";
@@ -640,7 +641,7 @@ async fn manual_lock_command_reaches_mqtt_via_arbiter() {
 /// Copies the fixture with the adapter's base topic moved onto the
 /// endpoint path (and optionally a short inventory timeout), so one
 /// fixture serves the default and non-default prefixes alike.
-fn house_with_base(tag: &str, base: &str, inventory_timeout_s: Option<f64>) -> std::path::PathBuf {
+fn house_with_base(tag: &str, base: &str, inventory_timeout_s: Option<f64>) -> Scratch {
     let house = temp_house(FIXTURE, tag);
     let path = house.join("units/zigbee.toml");
     let mut manifest = std::fs::read_to_string(&path).expect("read manifest");
@@ -759,7 +760,6 @@ async fn a_non_default_base_topic_translates_both_directions() {
     );
 
     sup.shutdown();
-    let _ = std::fs::remove_dir_all(&house);
 }
 
 /// (i) A base topic that matches nothing subscribes successfully and then
@@ -793,7 +793,6 @@ async fn a_base_topic_that_matches_nothing_reports_bridge_silent() {
     await_running(&observer, "zigbee", Duration::from_secs(10)).await;
 
     sup.shutdown();
-    let _ = std::fs::remove_dir_all(&house);
 }
 
 /// (j) A broker that requires auth: the password reaches the adapter from
@@ -807,13 +806,11 @@ async fn broker_credentials_come_from_a_file_outside_the_repo() {
     const PASSWORD: &str = "p@ss/w0rd#1";
 
     let mosquitto = Mosquitto::spawn_with_auth(USER, PASSWORD);
-    let creds =
-        std::env::temp_dir().join(format!("homeostat-mqtt-creds-{}.toml", std::process::id()));
-    std::fs::write(
-        &creds,
-        format!("[\"127.0.0.1\"]\nusername = \"{USER}\"\npassword = \"{PASSWORD}\"\n"),
-    )
-    .expect("write credentials");
+    let scratch = Scratch::new("mqtt-creds");
+    let creds = scratch.file(
+        "creds.toml",
+        &format!("[\"127.0.0.1\"]\nusername = \"{USER}\"\npassword = \"{PASSWORD}\"\n"),
+    );
 
     let port = mosquitto.port.to_string();
     let (sup, observer) = up(
@@ -857,7 +854,6 @@ async fn broker_credentials_come_from_a_file_outside_the_repo() {
 
     let mut sup = sup;
     sup.shutdown();
-    let _ = std::fs::remove_file(&creds);
 }
 
 /// (k) A device the bridge knows but no entity file binds is a steady

@@ -1108,7 +1108,8 @@ async fn dashboard_serves_the_family_surface() {
 async fn dashboard_serves_configured_tiles() {
     let port = common::free_port();
     let addr = format!("127.0.0.1:{port}");
-    let tiles_path = std::env::temp_dir().join(format!("homeostat-dashboard-tiles-{port}.pmtiles"));
+    let scratch = common::Scratch::new("dashboard-tiles");
+    let tiles_path = scratch.join("tiles.pmtiles");
     let contents = b"fake-pmtiles-bytes-0123456789";
     std::fs::write(&tiles_path, contents).expect("write fixture tiles file");
 
@@ -1155,7 +1156,6 @@ async fn dashboard_serves_configured_tiles() {
     );
 
     sup.shutdown();
-    let _ = std::fs::remove_file(&tiles_path);
 }
 
 /// 6. `/api/logs` proxies the supervisor's `home/meta/{unit}/log` queryable:

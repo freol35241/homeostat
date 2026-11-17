@@ -12,7 +12,7 @@
 //! clock does not react to them.
 
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, SystemTime};
 
 use homeostat::bus::HealthStatus;
@@ -22,22 +22,10 @@ use serde_json::{json, Value};
 
 use crate::common::{
     await_health, await_mirror, await_sample, config_write, health_watch, matched_publisher, up,
-    Publisher, StateSub, Supervisor,
+    Publisher, Scratch, StateSub, Supervisor,
 };
 
 const FIXTURE: &str = "tests/fixtures/house_recorder";
-
-/// A per-test store path: unique like the harness's per-test bus port.
-/// Each store gets a directory of its own, because the recorder seals
-/// months into `archive/` beside its store, and a shared one would let
-/// one test's cleanup remove the directory another recorder is writing.
-fn store_path(test: &str) -> PathBuf {
-    let dir =
-        std::env::temp_dir().join(format!("homeostat-recorder-{test}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).expect("store dir");
-    dir.join("history.db")
-}
 
 /// Spawns the fixture with its store at `db` and waits for the recorder.
 async fn setup(db: &Path) -> (Supervisor, zenoh::Session) {
@@ -154,7 +142,8 @@ fn now_us() -> i64 {
 /// and no row.
 #[tokio::test(flavor = "multi_thread")]
 async fn state_lands_typed_in_store() {
-    let db = store_path("typed");
+    let scratch = Scratch::new("recorder-typed");
+    let db = scratch.store();
     let (mut sup, observer) = setup(&db).await;
 
     let on = matched_publisher(&observer, "home/state/attic/probe/on").await;
@@ -319,7 +308,8 @@ async fn state_lands_typed_in_store() {
 /// bus.
 #[tokio::test(flavor = "multi_thread")]
 async fn entity_move_is_a_tag_transition() {
-    let db = store_path("move");
+    let scratch = Scratch::new("recorder-move");
+    let db = scratch.store();
     let (mut sup, observer) = setup(&db).await;
 
     let attic = matched_publisher(&observer, "home/state/attic/rover/on").await;
@@ -379,7 +369,8 @@ async fn entity_move_is_a_tag_transition() {
 /// recovery, and nothing is lost.
 #[tokio::test(flavor = "multi_thread")]
 async fn backend_outage_buffers_and_flushes() {
-    let db = store_path("outage");
+    let scratch = Scratch::new("recorder-outage");
+    let db = scratch.store();
     let (mut sup, observer) = setup(&db).await;
     let events = observer
         .declare_subscriber("home/health/recorder/event")
@@ -477,7 +468,8 @@ async fn backend_outage_buffers_and_flushes() {
 /// binary.
 #[tokio::test(flavor = "multi_thread")]
 async fn stats_describe_the_store() {
-    let db = store_path("stats");
+    let scratch = Scratch::new("recorder-stats");
+    let db = scratch.store();
     let (mut sup, observer) = setup(&db).await;
 
     let before = now_us();
@@ -557,7 +549,8 @@ async fn stats_describe_the_store() {
 /// stays at its own (unset) window. A window change applies at once.
 #[tokio::test(flavor = "multi_thread")]
 async fn retention_purges_old_rows() {
-    let db = store_path("retention");
+    let scratch = Scratch::new("recorder-retention");
+    let db = scratch.store();
     let (mut sup, observer) = setup(&db).await;
     let events = observer
         .declare_subscriber("home/health/recorder/event")
@@ -634,7 +627,8 @@ async fn retention_purges_old_rows() {
 /// that failure on its own. The schedule is a parameter and applies live.
 #[tokio::test(flavor = "multi_thread")]
 async fn integrity_check_reports_corruption() {
-    let db = store_path("integrity");
+    let scratch = Scratch::new("recorder-integrity");
+    let db = scratch.store();
     let (mut sup, observer) = setup(&db).await;
     let events = observer
         .declare_subscriber("home/health/recorder/event")
@@ -721,7 +715,8 @@ async fn integrity_check_reports_corruption() {
 /// actor into the payload.
 #[tokio::test(flavor = "multi_thread")]
 async fn read_path_returns_history() {
-    let db = store_path("read");
+    let scratch = Scratch::new("recorder-read");
+    let db = scratch.store();
     let (mut sup, observer) = setup(&db).await;
 
     let power = matched_publisher(&observer, "home/state/attic/meter/power").await;
@@ -962,7 +957,8 @@ async fn read_path_returns_history() {
 /// last hour.
 #[tokio::test(flavor = "multi_thread")]
 async fn read_path_folds_buckets_and_changes() {
-    let db = store_path("fold");
+    let scratch = Scratch::new("recorder-fold");
+    let db = scratch.store();
     let (mut sup, observer) = setup(&db).await;
 
     let power = matched_publisher(&observer, "home/state/attic/meter/power").await;
@@ -1075,7 +1071,8 @@ async fn read_path_folds_buckets_and_changes() {
 /// writing into it.
 #[tokio::test(flavor = "multi_thread")]
 async fn v0_store_migrates_in_place() {
-    let db = store_path("migrate");
+    let scratch = Scratch::new("recorder-migrate");
+    let db = scratch.store();
     {
         let conn = Connection::open(&db).expect("create v0 store");
         conn.execute_batch(
@@ -1173,7 +1170,8 @@ async fn v0_store_migrates_in_place() {
 /// query is waiting on a timeout.
 #[tokio::test(flavor = "multi_thread")]
 async fn v1_store_backfills_its_tally() {
-    let db = store_path("migrate-v1");
+    let scratch = Scratch::new("recorder-migrate-v1");
+    let db = scratch.store();
     {
         let conn = Connection::open(&db).expect("create v1 store");
         conn.execute_batch(
@@ -1251,7 +1249,8 @@ async fn v1_store_backfills_its_tally() {
 /// takes longer to come up than the put takes to land.
 #[tokio::test(flavor = "multi_thread")]
 async fn restart_seeds_missed_state_from_the_mirror() {
-    let db = store_path("seed");
+    let scratch = Scratch::new("recorder-seed");
+    let db = scratch.store();
     let (mut sup, observer) = setup(&db).await;
     let mut recorder = health_watch(&observer, "recorder").await;
     let running = await_health(&mut recorder, Duration::from_secs(10), |h| {
@@ -1331,7 +1330,8 @@ async fn restart_seeds_missed_state_from_the_mirror() {
 /// verification read shapes answer in issues.
 #[tokio::test(flavor = "multi_thread")]
 async fn forecasts_keep_every_issue_and_answer_in_issues() {
-    let db = store_path("forecast");
+    let scratch = Scratch::new("recorder-forecast");
+    let db = scratch.store();
     let (mut sup, observer) = setup(&db).await;
 
     // Fixed instants in the past: verification reads forecasts whose
@@ -1505,7 +1505,8 @@ async fn forecasts_keep_every_issue_and_answer_in_issues() {
 /// series in the store, including correctly-sourced ones with rows.
 #[tokio::test(flavor = "multi_thread")]
 async fn v4_store_names_the_sources_it_left_empty() {
-    let db = store_path("migrate-v4");
+    let scratch = Scratch::new("recorder-migrate-v4");
+    let db = scratch.store();
     {
         let conn = Connection::open(&db).expect("create v4 store");
         conn.execute_batch(
@@ -1590,7 +1591,8 @@ async fn v4_store_names_the_sources_it_left_empty() {
 /// but unreachable would not show up until a producer published.
 #[tokio::test(flavor = "multi_thread")]
 async fn v2_store_gains_the_forecast_table() {
-    let db = store_path("migrate-v2");
+    let scratch = Scratch::new("recorder-migrate-v2");
+    let db = scratch.store();
     {
         let conn = Connection::open(&db).expect("create v2 store");
         conn.execute_batch(
@@ -1725,39 +1727,6 @@ fn assert_tally_matches_rows(db: &Path) {
     assert_eq!(tally, truth, "series tally drifted from the rows it counts");
 }
 
-/// The archive directory beside a test's store, removed when the test ends
-/// however it ends: its files are read-only and would otherwise outlive a
-/// failed run.
-struct ArchiveFiles {
-    dir: PathBuf,
-    stem: String,
-}
-
-impl ArchiveFiles {
-    fn of(db: &Path) -> Self {
-        let files = Self {
-            dir: db.parent().expect("dir").join("archive"),
-            stem: db.file_stem().expect("stem").to_string_lossy().to_string(),
-        };
-        files.remove();
-        files
-    }
-
-    fn path(&self, label: &str) -> PathBuf {
-        self.dir.join(format!("{}-{label}.db", self.stem))
-    }
-
-    fn remove(&self) {
-        let _ = std::fs::remove_dir_all(&self.dir);
-    }
-}
-
-impl Drop for ArchiveFiles {
-    fn drop(&mut self) {
-        self.remove();
-    }
-}
-
 fn count(db: &Path, sql: &str) -> i64 {
     match read_rows(db, sql).first().and_then(|row| row.first()) {
         Some(SqlValue::Integer(n)) => *n,
@@ -1775,11 +1744,13 @@ fn count(db: &Path, sql: &str) -> i64 {
 /// interrupted is undone rather than trusted.
 #[tokio::test(flavor = "multi_thread")]
 async fn closed_months_move_to_archives_and_the_last_word_stays() {
-    let db = store_path("archive");
-    let files = ArchiveFiles::of(&db);
-    let stem = files.stem.clone();
-    let archive_dir = files.dir.clone();
-    let archive = |label: &str| files.path(label);
+    let scratch = Scratch::new("recorder-archive");
+    let db = scratch.store();
+    // The recorder seals months into `archive/` beside the store, named
+    // after the store's stem.
+    let stem = "history";
+    let archive_dir = scratch.join("archive");
+    let archive = |label: &str| archive_dir.join(format!("{stem}-{label}.db"));
     let (mut sup, observer) = setup(&db).await;
     let events = observer
         .declare_subscriber("home/health/recorder/event")
@@ -2051,8 +2022,8 @@ async fn closed_months_move_to_archives_and_the_last_word_stays() {
 /// writer thread while the unit still reported running.
 #[tokio::test(flavor = "multi_thread")]
 async fn an_impossible_archive_window_fails_without_stopping_the_writer() {
-    let db = store_path("archive-absurd");
-    let _files = ArchiveFiles::of(&db);
+    let scratch = Scratch::new("recorder-archive-absurd");
+    let db = scratch.store();
     let (mut sup, observer) = setup(&db).await;
     let events = observer
         .declare_subscriber("home/health/recorder/event")
@@ -2091,8 +2062,9 @@ async fn an_impossible_archive_window_fails_without_stopping_the_writer() {
 /// they are old enough to archive is allowed, but not silent.
 #[tokio::test(flavor = "multi_thread")]
 async fn old_archives_are_dropped_when_asked_and_bad_settings_are_named() {
-    let db = store_path("archive-retention");
-    let files = ArchiveFiles::of(&db);
+    let scratch = Scratch::new("recorder-archive-retention");
+    let db = scratch.store();
+    let archive = |label: &str| scratch.join(format!("archive/history-{label}.db"));
     let (mut sup, observer) = setup(&db).await;
     let events = observer
         .declare_subscriber("home/health/recorder/event")
@@ -2124,7 +2096,7 @@ async fn old_archives_are_dropped_when_asked_and_bad_settings_are_named() {
     .expect("in-constraint write accepted");
     let sealed = await_event(&events, Duration::from_secs(30), |e| e["kind"] == "archive").await;
     assert_eq!(sealed["month"], json!("2026-01"), "{sealed}");
-    assert!(files.path("2026-01").exists());
+    assert!(archive("2026-01").exists());
 
     // A month's first rows are up to two months old by the time a window
     // of one month archives them; thirty days of retention deletes them
@@ -2157,12 +2129,8 @@ async fn old_archives_are_dropped_when_asked_and_bad_settings_are_named() {
         e["kind"] == "archive-dropped"
     })
     .await;
-    assert_eq!(
-        dropped["files"],
-        json!([format!("{}-2026-01.db", files.stem)]),
-        "{dropped}"
-    );
-    assert!(!files.path("2026-01").exists(), "the file is gone");
+    assert_eq!(dropped["files"], json!(["history-2026-01.db"]), "{dropped}");
+    assert!(!archive("2026-01").exists(), "the file is gone");
     assert_eq!(
         count(&db, "SELECT COUNT(*) FROM archives"),
         0,
