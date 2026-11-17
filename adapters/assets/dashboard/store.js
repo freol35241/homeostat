@@ -14,6 +14,7 @@ export var store = {
   events: [],
   lastSeen: {},
   actionAt: {},     // state key ending in /action -> epoch second of its last value
+  arbitration: {},  // home/arbitration/{arbiter} -> per aspect, the applied hold and the holds in force
   connected: false,
   view: 'now',
   roomsFilter: 'all'

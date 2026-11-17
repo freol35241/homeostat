@@ -620,7 +620,7 @@ offers the surface the manifest declares and nothing more:
 - `ctx.params` ([Live parameters](#live-parameters));
 - `ctx.publish`;
 - `ctx.publish_forecast` ([Forecasts](#forecasts));
-- `ctx.hold` and `ctx.release` ([Holds](#holds));
+- `ctx.hold`, `ctx.hold_while` and `ctx.release` ([Holds](#holds));
 - `ctx.restore`
   ([Restoring a unit's own last value](#restoring-a-units-own-last-value));
 - `ctx.source_used`
@@ -1009,9 +1009,17 @@ releases that unit's own hold on the aspect, so its hold does not
 refuse its own command. A paused automation releases its holds, and
 its rules hold again from the redelivery when it resumes.
 
-A hold stands until it ends, is released, or its holder loses the
-grant. Holds are kept in the core's mirror, so a core restart empties
-them, and each holder asserts its holds again as it starts.
+`ctx.hold_while` carries the pattern a guard needs: hold once one
+condition is true and release once another is, such as holding a burner
+off above a flue temperature of 200 °C and releasing it below 180 °C.
+Between the two the hold stays as it is, so a reading near a threshold
+does not toggle it, and every toggle would be a new winner and a
+forward.
+
+A hold stands until it ends, is released, its holder loses the grant,
+or its holder is gone ([When a holder stops](#when-a-holder-stops)).
+Holds are kept in the core's mirror, so a core restart empties them,
+and each holder asserts its holds again as it starts.
 
 #### Which hold wins
 
@@ -1039,6 +1047,38 @@ that goes through records the hold in force as applied, so the hold
 beneath it is sent again only once it changes. A family nudge
 (`"none"`) is a command in this sense: the hold beneath does not undo
 it.
+
+#### When a holder stops
+
+Units restart during every apply, one at a time, and a device must not
+move because one holder was briefly away. The arbiter follows each
+unit's supervision status at `home/health/{unit}`:
+
+- While the supervisor brings a holder back, its holds count as before.
+  Its `ready` then releases any it does not assert again. A holder
+  stopped for an apply's restart, or with the whole house at a shutdown,
+  is reported `stopped`, and its holds count too: the supervisor reports
+  the same status for a unit coming straight back.
+- Once the holder is gone, its breaker `open`, the hold publish's
+  `on_loss` decides. `keep` keeps its holds standing.
+  `release` lets the holds beneath win. Without it, a hold for the
+  aspect's rest value is kept and any other ends: a dead flue guard
+  keeps the burner off, and a dead start rule just stops asking.
+- A holder removed by an apply loses its grant, so its holds stop
+  counting.
+
+The arbiter cannot delete another unit's key, so a hold that ends this
+way stays in the mirror until its unit starts again and its `ready`
+releases it.
+
+A forward is also a delivery. When an adapter drops one because the
+device is away (`device-unavailable`, naming the forward's id), the
+arbiter sends that hold again once the device's `available` returns.
+Nothing else is sent then: a device changed by hand while it was away
+is not changed back, and a dropped command is not sent again, because
+a command is a one-off push. The applied entry carries `undelivered`
+meanwhile, so an arbiter restart keeps it. Of the shipped adapters,
+esphome reports `device-unavailable`.
 
 What the arbiter resolved is one document at `home/arbitration/{arbiter}`,
 mirrored by the core: per aspect, the `applied` hold, the `holds` in

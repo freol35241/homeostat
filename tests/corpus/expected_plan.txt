@@ -132,9 +132,12 @@ Expanded keys:
   arbiter publishes arbiter: home/arbiter/**
   arbiter publishes arbitration: home/arbitration/arbiter
   arbiter publishes holds: home/hold/arbiter/**
+  arbiter subscribes available: home/state/*/*/available
   arbiter subscribes cmd: home/cmd/**
+  arbiter subscribes events: home/health/*/event
   arbiter subscribes grants: home/meta/system/grants
   arbiter subscribes grants_pending: home/meta/system/grants_pending
+  arbiter subscribes health: home/health/*
   arbiter subscribes holds: home/hold/**
   dashboard publishes lights: home/cmd/**
   dashboard publishes locks: home/cmd/**

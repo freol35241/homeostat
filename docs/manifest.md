@@ -106,6 +106,7 @@ One publish the unit is allowed.
 |---|---|---|---|
 | `capability` | string | no | Required under `home/cmd/` and, except on a service, `home/hold/` (`publish-missing-capability`): the grant resolves onto entities of this capability that the key covers. Must be a known capability (`unknown-capability`). |
 | `key` | string | yes | Key expression. Under `home/state/` it must name a bound entity's room and entity literally or by template (`state-publish-unbound`). Under `home/forecast/` the entity must exist but need not be one this unit binds (`forecast-publish-unbound`). The key carries a sixth segment naming the forecast's source. Several sources can then forecast one series without overwriting each other (`forecast-publish-conflict`). Under `home/hold/` it is `home/hold/{this unit}/{room}/{entity}/{aspect}`, and every entity it reaches must be arbitrated (`hold-not-arbitrated`). |
+| `on_loss` | [OnLoss](#onloss) | no | Under `home/hold/` only (`on-loss-not-hold`): what happens to this unit's holds when it is gone, its breaker open or stopped for good. `keep` keeps them standing, `release` lets the holds beneath win. Without it, a hold for the aspect's rest value is kept and any other is released (docs/design.md#when-a-holder-stops). |
 | `priority` | [Priority](#priority) | no | The band commands or holds leave at. Required where `capability` is (`publish-missing-priority`). Automations publish at `automation`; the family's surfaces (dashboard, voice) at `manual`, which always wins in arbitration. A hold is at `automation` or `agent` (`hold-band`). |
 
 ### DiscoveryMode
@@ -160,6 +161,13 @@ reports success and leaves the unit running on stale files.
 
 - `own` — The unit's own files: its command, its entity files, its zone.
 - `house` — Every manifest and entity file in the house.
+
+### OnLoss
+
+What a gone holder's holds do (docs/design.md#when-a-holder-stops).
+
+- `keep` — The holds stand, as a dead flue guard keeps a burner off.
+- `release` — The holds stop counting, as a dead start rule stops asking.
 
 ### Priority
 

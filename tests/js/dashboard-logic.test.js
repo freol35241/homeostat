@@ -237,7 +237,7 @@ test('holds come back soonest-first, and a malformed entry is dropped rather tha
       { room: 'livingroom', entity: 'heatpump', aspect: 'mode', priority: 'manual', actor: 'b', until: '2026-09-25T20:30:00Z' },
     'home/hold/arbiter/livingroom/heatpump/setpoint':
       { room: 'livingroom', entity: 'heatpump', aspect: 'setpoint', priority: 'manual', actor: 'b', until: 'soon' },
-    'home/hold/arbiter/livingroom/heatpump/x': { entity: 'heatpump', until: '2026-09-25T21:00:00Z' },
+    'home/hold/arbiter/broken': { entity: 'heatpump', until: '2026-09-25T21:00:00Z' },
     'home/hold/arbiter/livingroom/heatpump/y': null,
   };
   const live = logic.liveHolds(docs, NOW);
@@ -2131,4 +2131,30 @@ test('a press is timed when it arrives, and a snapshot carries the times the das
   assert.equal(store.actionAt[key], 650, 'without a time, on arrival');
   logic.applyMessage(store, { type: 'state', key: 'home/state/hall/lamp/on', value: true, at: 700 }, 700);
   assert.deepEqual(Object.keys(store.actionAt), [key]);
+});
+
+test("the units' holds are the arbitration document's, and the family's hold is the one in force", () => {
+  const arbitration = {
+    'home/arbitration/arbiter': {
+      schema: 1,
+      aspects: [
+        {
+          room: 'hallway', entity: 'front_door', aspect: 'locked', refused: 0, applied: { id: 'p1' },
+          holds: [
+            { unit: 'planner', priority: 'agent', value: true, reason: 'away', id: 'p1', family: false },
+            { unit: 'heating', priority: 'automation', value: false, id: 'h1', until: '2026-09-25T20:00:00Z', family: false },
+          ],
+        },
+      ],
+    },
+  };
+  const holds = logic.unitHolds(arbitration, NOW);
+  assert.deepEqual(holds.map((h) => [h.actor, h.winner, h.until]), [['planner', true, Infinity]],
+    'the ended one is dropped');
+  assert.equal(logic.holdOn({}, 'hallway', 'front_door', 'locked', NOW, arbitration).actor, 'planner');
+  assert.equal(logic.holdOn(holdDoc(), 'hallway', 'front_door', 'locked', NOW, arbitration).actor, 'dashboard',
+    "the family's hold outranks every unit's");
+  const store = { arbitration: {} };
+  logic.applyMessage(store, { type: 'arbitration', key: 'home/arbitration/arbiter', value: arbitration['home/arbitration/arbiter'] }, 0);
+  assert.equal(logic.unitHolds(store.arbitration, NOW).length, 1);
 });

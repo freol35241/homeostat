@@ -280,6 +280,11 @@ codes! {
         The family's hold on an aspect is the arbiter's, placed by a \
         manual-band command (docs/design.md#hold-intents), so a unit holds \
         below it (docs/design.md#holds).",
+    OnLossNotHold => "on-loss-not-hold":
+        "A `[bus.publishes]` entry outside `home/hold/` declares `on_loss`. \
+        It says what a unit's holds do once the unit is gone \
+        (docs/design.md#when-a-holder-stops), and a command or a reading \
+        stands for nothing after it is sent.",
     VirtualEntityFed => "virtual-entity-fed":
         "An `[inputs]` block sits on an entity bound by an automation. A fed \
         input is a device's control input (docs/design.md#device-feeds); a \

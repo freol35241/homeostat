@@ -30,6 +30,8 @@ class Clock:
 
 
 BANDS = {"heating": "automation", "flue_guard": "automation", "planner": "agent"}
+# Declared on_loss per holder; the others take the default.
+LOSS = {"planner": "keep"}
 
 
 class Base(unittest.TestCase):
@@ -39,7 +41,7 @@ class Base(unittest.TestCase):
     def setUp(self):
         self.clock = Clock()
         self.resolver = Resolver(
-            band_of=lambda unit, target: BANDS.get(unit),
+            grant_of=lambda unit, target: (BANDS[unit], LOSS.get(unit)) if unit in BANDS else None,
             rest_of=lambda target: False if target == STOVE else None,
             clock=self.clock,
             wall=lambda: WALL + self.clock.now - 1000.0,
@@ -243,7 +245,7 @@ class LifecycleTest(Base):
         later = Clock()
         later.now = 50.0
         after = Resolver(
-            band_of=lambda unit, target: BANDS.get(unit), rest_of=lambda target: None,
+            grant_of=lambda unit, target: (BANDS[unit], LOSS.get(unit)) if unit in BANDS else None, rest_of=lambda target: None,
             clock=later, wall=lambda: WALL + 20,
         )
         after.restore(records, document)
@@ -270,6 +272,87 @@ class LifecycleTest(Base):
         self.assertEqual(entry["applied"]["id"], "p1")
 
 
+class WhenAHolderStopsTest(Base):
+    """docs/design.md#when-a-holder-stops."""
+
+    def test_a_gone_holders_rest_value_hold_stands_and_any_other_ends(self):
+        self.hold("heating", True, "h1", seen=1.0)
+        self.hold("flue_guard", False, "f1", seen=2.0)
+        effects = []
+        self.resolver.holder("flue_guard", True, effects)
+        self.assertEqual(self.forwards(effects), [], "a dead flue guard keeps the burner off")
+        self.resolver.holder("flue_guard", False, [])
+        self.drop("flue_guard")
+        self.hold("heating", True, "h2")
+        self.resolver.holder("heating", True, [])
+        self.assertIsNone(self.resolver.winner(STOVE), "a dead start rule stops asking")
+
+    def test_a_declared_release_ends_even_a_rest_value_hold(self):
+        LOSS["flue_guard"] = "release"
+        self.addCleanup(LOSS.pop, "flue_guard")
+        self.hold("flue_guard", False, "f1")
+        self.resolver.holder("flue_guard", True, [])
+        self.assertIsNone(self.resolver.winner(STOVE))
+
+    def test_a_holder_away_but_not_gone_moves_nothing(self):
+        # What an apply's restart looks like: the holder is briefly away,
+        # and nobody marks it gone.
+        self.hold("heating", 19, "h1", target=LAMP)
+        self.hold("planner", 23, "p1", target=LAMP)
+        self.resolver.holder("planner", False, effects := [])
+        self.assertEqual(effects, [])
+        self.assertEqual(self.resolver.winner(LAMP)["unit"], "planner")
+
+    def test_a_declared_keep_keeps_any_hold(self):
+        self.hold("heating", 19, "h1", target=LAMP)
+        self.hold("planner", 23, "p1", target=LAMP)
+        self.resolver.holder("planner", True, effects := [])
+        self.assertEqual(self.forwards(effects), [])
+        self.assertEqual(self.resolver.winner(LAMP)["unit"], "planner")
+
+    def test_a_holder_coming_back_counts_again(self):
+        self.hold("heating", 19, "h1", target=LAMP)
+        self.resolver.holder("heating", True, [])
+        self.assertIsNone(self.resolver.winner(LAMP))
+        self.resolver.holder("heating", False, effects := [])
+        self.assertEqual(self.forwards(effects), [], "the applied hold is not sent again")
+        self.assertEqual(self.resolver.winner(LAMP)["id"], "h1")
+
+
+class DeliveryTest(Base):
+    def test_a_hold_the_adapter_could_not_deliver_is_sent_when_the_device_is_back(self):
+        self.hold("heating", True, "h1")
+        self.resolver.undelivered("h1")
+        self.resolver.available("utility", "stove", effects := [])
+        self.assertEqual(self.forwards(effects), [(True, "heating", "h1")])
+        self.resolver.available("utility", "stove", effects := [])
+        self.assertEqual(effects, [], "once")
+
+    def test_an_undelivered_hold_survives_an_arbiter_restart(self):
+        self.hold("heating", True, "h1")
+        self.resolver.undelivered("h1")
+        document = self.resolver.document()
+        after = Resolver(
+            grant_of=lambda unit, target: (BANDS[unit], None) if unit in BANDS else None,
+            rest_of=lambda target: None, clock=Clock(), wall=lambda: WALL,
+        )
+        after.restore([], document)
+        after.put_hold(STOVE, "heating", {"value": True, "id": "h1"}, WALL, [])
+        after.available("utility", "stove", effects := [])
+        self.assertEqual([e[2]["id"] for e in effects if e[0] == "forward"], ["h1"])
+
+    def test_a_delivered_hold_is_not_sent_again(self):
+        self.hold("heating", True, "h1")
+        self.resolver.available("utility", "stove", effects := [])
+        self.assertEqual(effects, [], "a device changed by hand while away is not changed back")
+
+    def test_a_dropped_command_is_not_sent_again(self):
+        self.command("automation", "evening", True, cmd_id="c1")
+        self.resolver.undelivered("c1")
+        self.resolver.available("utility", "stove", effects := [])
+        self.assertEqual(effects, [])
+
+
 def hold_row(unit, band, keys, *entities):
     return {"unit": unit, "publish": "hold", "capability": "burner", "priority": band,
             "keys": keys, "entities": list(entities), "hold": True}
@@ -283,9 +366,9 @@ class HoldersTest(unittest.TestCase):
             {"unit": "aduro", "publish": "state", "entities": [stove]},
         ]})
         routes = Bindings(session, lambda arbitrated: None)
-        self.assertEqual(routes.band_of("heating", STOVE), "automation")
-        self.assertIsNone(routes.band_of("heating", ("utility", "stove", "power_level")))
-        self.assertIsNone(routes.band_of("flue_guard", STOVE))
+        self.assertEqual(routes.grant_of("heating", STOVE), ("automation", None))
+        self.assertIsNone(routes.grant_of("heating", ("utility", "stove", "power_level")))
+        self.assertIsNone(routes.grant_of("flue_guard", STOVE))
         self.assertIs(routes.rest_of(STOVE), False)
         self.assertEqual(set(holders(session.seeds[GRANTS_KEY])), {("utility", "stove")})
 

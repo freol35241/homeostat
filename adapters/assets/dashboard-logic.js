@@ -233,6 +233,7 @@
       store.config = msg.config || {};
       store.aspects = msg.aspects || {};
       store.actionAt = msg.action_at || {};
+      store.arbitration = msg.arbitration || {};
       return 'snapshot';
     }
     if (msg.type === 'aspects') {
@@ -250,6 +251,12 @@
         store.actionAt[msg.key] = typeof msg.at === 'number' ? msg.at : nowSeconds;
       }
       return 'state';
+    }
+    if (msg.type === 'arbitration') {
+      if (!store.arbitration) store.arbitration = {};
+      if (msg.value === null || msg.value === undefined) delete store.arbitration[msg.key];
+      else store.arbitration[msg.key] = msg.value;
+      return 'hold';
     }
     if (msg.type === 'hold') {
       // null: the hold ended and the arbiter deleted its key
@@ -429,11 +436,11 @@
     return isNaN(d.getTime()) ? '' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   }
 
-  // Every live hold across every arbiter, with expired ones dropped. Each
-  // is one record, keyed home/hold/{arbiter}/{room}/{entity}/{aspect}. The
-  // record states `until` and the reader applies it, as with a forecast's
-  // `issued`. The arbiter also deletes the key at the deadline, so this
-  // check is a second guard.
+  // The family's holds across every arbiter, with expired ones dropped.
+  // Each is one record, keyed home/hold/{arbiter}/{room}/{entity}/{aspect}.
+  // The record states `until` and the reader applies it, as with a
+  // forecast's `issued`. The arbiter also deletes the key at the deadline,
+  // so this check is a second guard.
   function liveHolds(holds, now) {
     var out = [];
     Object.keys(holds || {}).forEach(function (key) {
@@ -452,12 +459,42 @@
     return out.sort(function (a, b) { return a.until - b.until; });
   }
 
-  // The hold in force over one aspect, or null. A control shows it as
-  // "held" whether or not it displaced anyone.
-  function holdOn(holds, room, entity, aspect, now) {
-    return liveHolds(holds, now).filter(function (h) {
-      return h.room === room && h.entity === entity && h.aspect === aspect;
-    })[0] || null;
+  // The units' holds that count, from each arbiter's arbitration document
+  // (home/arbitration/{arbiter}), which lists the holds in force on an
+  // aspect with the winner first (docs/design.md#which-hold-wins). A hold
+  // its unit published but the arbiter does not count, because the unit is
+  // gone or lost its grant, is not there. Without an `until` a hold stands
+  // until it is released.
+  function unitHolds(arbitration, now) {
+    var out = [];
+    Object.keys(arbitration || {}).forEach(function (docKey) {
+      var doc = arbitration[docKey];
+      ((doc && doc.aspects) || []).forEach(function (entry) {
+        if (!entry || typeof entry.entity !== 'string' || typeof entry.aspect !== 'string') return;
+        (entry.holds || []).forEach(function (h, i) {
+          if (!h || h.family) return;
+          var until = h.until === undefined || h.until === null ? Infinity : Date.parse(h.until);
+          if (isNaN(until) || until <= now) return;
+          out.push({
+            key: docKey + '/' + entry.room + '/' + entry.entity + '/' + entry.aspect + '/' + h.unit,
+            room: entry.room, entity: entry.entity, aspect: entry.aspect,
+            priority: h.priority, actor: h.unit, value: h.value,
+            reason: typeof h.reason === 'string' ? h.reason : null,
+            winner: i === 0, until: until
+          });
+        });
+      });
+    });
+    return out;
+  }
+
+  // The hold in force over one aspect, or null: the family's, else the
+  // unit hold that wins it. A control shows it as "held" whether or not it
+  // displaced anyone.
+  function holdOn(holds, room, entity, aspect, now, arbitration) {
+    var on = function (h) { return h.room === room && h.entity === entity && h.aspect === aspect; };
+    return liveHolds(holds, now).filter(on)[0] ||
+      unitHolds(arbitration, now).filter(function (h) { return h.winner && on(h); })[0] || null;
   }
 
   // The instant "hold until HH:MM" means: the next time the local clock
@@ -2112,6 +2149,7 @@
     computeDeviations: computeDeviations,
     liveHolds: liveHolds,
     holdOn: holdOn,
+    unitHolds: unitHolds,
     holdUntil: holdUntil,
     displaces: displaces,
     forecastFor: forecastFor,

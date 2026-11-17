@@ -758,8 +758,14 @@ fn render_grant(grant: &Grant, mark: char, out: &mut String) {
     };
     match (&grant.capability, grant.priority) {
         (Some(capability), Some(priority)) if grant.hold => out.push_str(&format!(
-            "{prefix}{}.{}  holds  capability={capability}  priority={priority}\n",
-            grant.unit, grant.publish
+            "{prefix}{}.{}  holds  capability={capability}  priority={priority}{}\n",
+            grant.unit,
+            grant.publish,
+            match grant.on_loss {
+                Some(crate::manifest::OnLoss::Keep) => "  on_loss=keep",
+                Some(crate::manifest::OnLoss::Release) => "  on_loss=release",
+                None => "",
+            }
         )),
         (Some(capability), Some(priority)) => out.push_str(&format!(
             "{prefix}{}.{}  capability={capability}  priority={priority}\n",
