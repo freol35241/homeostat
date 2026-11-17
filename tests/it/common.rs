@@ -943,17 +943,17 @@ pub fn assert_cli_ok(output: &Output) {
     );
 }
 
-/// Caps how many houses the tests that take it bring up at the same moment.
+/// Caps how many of the dashboard suite's houses start at the same moment.
 ///
 /// Every test spawns its own supervisor, and cargo runs the tests in
-/// parallel, so five four-unit houses resolve and start together.
-/// On a two-core runner the slowest starves past its health deadline and
-/// fails a test that nothing about it broke. Parallelism pays for very
-/// little. Measured on the dashboard suite, the five tests take 23.3 s
-/// run serially and 12.9 s in parallel on sixteen cores, but 23.5 s versus
-/// 20.7 s on two, because the tests mostly wait on fixed delays. Two at a
-/// time keeps most of the gain on a developer's machine and removes the
-/// herd from the runner.
+/// parallel, so the dashboard suite's four-unit houses resolve and start
+/// together. On a two-core runner the slowest starves past its health
+/// deadline and fails a test that nothing about it broke. Parallelism pays
+/// for very little there. Measured when the suite had five tests, they
+/// took 23.3 s run serially and 12.9 s in parallel on sixteen cores, but
+/// 23.5 s versus 20.7 s on two, because the tests mostly wait on fixed
+/// delays. Two at a time keeps most of the gain on a developer's machine.
+/// The other suites' houses start uncapped beside these.
 ///
 /// The permit covers startup only. Hold it until the units under test
 /// report healthy, then drop it: the body of a test costs nothing to

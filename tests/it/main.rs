@@ -1,7 +1,8 @@
 //! The integration suites, in one test binary. Each suite runs real
 //! processes: a supervisor on a fixture house, a broker, fake devices. The
-//! crate is linked once, and every suite's tests share one pool. Run one
-//! suite with `cargo test --test it <suite>::`.
+//! crate is linked once, and every suite's tests share one pool. A suite
+//! is a file here with a `mod` line below; a file without one is never
+//! compiled. Run one suite with `cargo test --test it <suite>::`.
 
 mod common;
 

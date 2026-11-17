@@ -557,6 +557,10 @@ Adapters are tested end to end against the real supervisor and a real
 protocol endpoint, without mocking the bus. The pattern, from
 `tests/it/ivt490.rs`:
 
+- A **suite** at `tests/it/<adapter>.rs`, declared with
+  `mod <adapter>;` in `tests/it/main.rs`. The suites are modules of one
+  test binary, so a file without that line is never compiled or run.
+  `cargo test --test it <adapter>::` runs it alone.
 - A **fixture house** under `tests/fixtures/house_<adapter>/` with the
   manifest pointing at `../../adapters/<adapter>.py`, an endpoint that
   reads a port from `${VAR}`, and one or two entity files.
