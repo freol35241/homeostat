@@ -78,3 +78,35 @@ fn read_lines(path: &Path) -> Vec<String> {
         .filter(|l| !l.is_empty())
         .collect()
 }
+
+/// The family policy reaches the arbiter in the owner's binding row of the
+/// grant table, as the JSON the arbiter reads, and in no cmd row.
+#[test]
+fn the_family_policy_rides_the_owners_binding_row() {
+    let result = homeostat::check(&manifest_dir().join(REFERENCE));
+    let rows: Vec<serde_json::Value> = result
+        .grants
+        .iter()
+        .filter(|g| g.entities.iter().any(|e| e.name == "front_door_lock"))
+        .map(|g| serde_json::to_value(g).unwrap())
+        .collect();
+    let policies: Vec<&serde_json::Value> = rows
+        .iter()
+        .flat_map(|g| g["entities"].as_array().unwrap())
+        .filter(|e| e["name"] == "front_door_lock")
+        .filter_map(|e| e.get("family"))
+        .collect();
+    assert_eq!(
+        policies,
+        [&serde_json::json!({"locked": {"false": {"until": "next change"}, "true": "none"}})]
+    );
+    let owner_row = rows
+        .iter()
+        .find(|g| g["unit"] == "zigbee" && g["capability"].is_null())
+        .unwrap();
+    assert!(owner_row["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|e| e["name"] == "front_door_lock" && e.get("family").is_some()));
+}

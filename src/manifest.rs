@@ -741,6 +741,57 @@ pub struct WritePolicy {
     /// for a virtual entity. Must exist (`missing-owner-unit`) and be the
     /// unit whose entities dir holds this file (`owner-mismatch`).
     pub owner: String,
+    /// `[write_policy.family.<aspect>]`, arbitrated entities only
+    /// (`family-policy-not-arbitrated`): what a family command means, per
+    /// value, when it carries no hold intent (docs/design.md#family-policy).
+    /// Each key is a value of the aspect, spelled as in TOML (`true`,
+    /// `false`, `21`, `high`), or `any` for every value not listed. The
+    /// aspect is the capability's base aspect or one of its aspects
+    /// (`family-policy-aspect`). A value without an entry holds for the
+    /// arbiter's `hold_minutes`.
+    #[serde(default)]
+    pub family: BTreeMap<String, BTreeMap<String, FamilyHold>>,
+}
+
+/// What a family command for one value holds (docs/design.md#family-policy):
+/// `"none"` acts and holds nothing, so the automations carry on from there.
+/// `{ until = "HH:MM" }` holds until the house clock next shows that time.
+/// `{ until = "next change" }` holds until the unit hold beneath it changes,
+/// and at most 24 hours.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum FamilyHold {
+    /// `"none"`.
+    Word(FamilyWord),
+    /// `{ until = ... }`: the command holds until then.
+    Until(FamilyUntil),
+}
+
+/// The one word a family policy entry may be.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum FamilyWord {
+    /// Act and hold nothing.
+    None,
+}
+
+/// A family policy entry that holds.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FamilyUntil {
+    /// `"HH:MM"`, the next time the house clock shows it, or `"next
+    /// change"`, until the unit hold beneath it changes and at most 24
+    /// hours (`family-policy-until`).
+    pub until: String,
+}
+
+impl fmt::Display for FamilyHold {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            FamilyHold::Word(FamilyWord::None) => f.write_str("none"),
+            FamilyHold::Until(u) => write!(f, "until {}", u.until),
+        }
+    }
 }
 
 impl WritePolicy {

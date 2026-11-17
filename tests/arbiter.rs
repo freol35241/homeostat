@@ -1193,6 +1193,104 @@ async fn a_wish_during_the_apply_that_arbitrates_an_entity_forwards() {
 }
 
 /// Replaces `from` with `to` in a house file; the pattern must be present.
+/// docs/design.md#family-policy: a family command without a `hold` takes the
+/// entity's policy for its value, which reaches the arbiter in the grant
+/// table. An unlock holds until the unit hold beneath changes, and a lock
+/// holds nothing.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_family_policy_decides_what_a_tap_holds() {
+    let house = temp_house(FIXTURE, "arbiter-policy");
+    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("adapters/arbiter.py");
+    edit(
+        &house,
+        "units/arbiter.toml",
+        "uv run ../../../adapters/arbiter.py",
+        &format!("uv run {}", script.display()),
+    );
+    let entity = house.join("entities/reflector/front_door.toml");
+    let mut text = std::fs::read_to_string(&entity).expect("read the entity");
+    text.push_str(
+        "\n[write_policy.family.locked]\nfalse = { until = \"next change\" }\ntrue = \"none\"\n",
+    );
+    std::fs::write(&entity, text).expect("write the entity");
+    let mut sup = Supervisor::spawn_at(&house, &[]);
+    let observer = sup.observer().await;
+    let mut watch = health_watch(&observer, "arbiter").await;
+    await_health(&mut watch, Duration::from_mins(1), |h| {
+        h.status == HealthStatus::Running
+    })
+    .await;
+    let arbiter_sub = observer
+        .declare_subscriber(ARBITER_KEY)
+        .await
+        .expect("arbiter subscriber");
+    let hold_sub = observer
+        .declare_subscriber(HOLDS)
+        .await
+        .expect("hold subscriber");
+    let setback = |value: bool, id: &str| {
+        json!({"value": value, "priority": "automation", "id": id}).to_string()
+    };
+
+    observer
+        .put(SETBACK_HOLD, setback(true, "5e7bac01"))
+        .await
+        .expect("hold put");
+    let forwarded = next_json(&arbiter_sub, Duration::from_secs(10)).await;
+    assert_eq!(forwarded.map(|f| f["id"].clone()), Some(json!("5e7bac01")));
+
+    // An unlock holds over the unit's hold, until it changes.
+    let unlock = envelope(json!(false), "manual", "owner");
+    put_cmd(&observer, &unlock).await;
+    assert_eq!(
+        next_json(&arbiter_sub, Duration::from_secs(10)).await,
+        Some(unlock)
+    );
+    let (key, record) = next_hold(&hold_sub, Duration::from_secs(10))
+        .await
+        .expect("a family hold record");
+    let record = record.expect("put, not deleted");
+    assert_eq!(key, HOLD_KEY);
+    assert_eq!(
+        (&record["next_change"], &record["beneath"]),
+        (&json!(true), &json!("5e7bac01"))
+    );
+    // Capped at a day: the same time of day, on the next date.
+    assert_eq!(hold_seconds(&record), 0);
+    assert_ne!(
+        record["until"].as_str().map(|u| &u[..10]),
+        record["since"].as_str().map(|s| &s[..10])
+    );
+
+    // The unit changes its mind, so the family's hold ends and its new
+    // hold is sent.
+    observer
+        .put(SETBACK_HOLD, setback(true, "5e7bac02"))
+        .await
+        .expect("hold put");
+    assert!(
+        await_hold_deleted(&hold_sub, HOLD_KEY).await,
+        "the family's hold ends"
+    );
+    let forwarded = next_json(&arbiter_sub, Duration::from_secs(10)).await;
+    assert_eq!(forwarded.map(|f| f["id"].clone()), Some(json!("5e7bac02")));
+
+    // A lock holds nothing.
+    let lock = envelope(json!(true), "manual", "owner");
+    put_cmd(&observer, &lock).await;
+    assert_eq!(
+        next_json(&arbiter_sub, Duration::from_secs(10)).await,
+        Some(lock)
+    );
+    expect_silence(
+        &hold_sub,
+        Duration::from_secs(1),
+        "a family hold for \"none\"",
+    )
+    .await;
+    sup.shutdown();
+}
+
 fn edit(house: &std::path::Path, rel: &str, from: &str, to: &str) {
     let path = house.join(rel);
     let text = std::fs::read_to_string(&path).expect("read house file");

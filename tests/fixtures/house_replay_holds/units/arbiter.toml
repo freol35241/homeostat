@@ -17,6 +17,9 @@ grants = "home/meta/system/grants"
 grants_pending = "home/meta/system/grants_pending"
 # Whether the core's replay after a restart is in, which it waits for.
 replay = "home/meta/system/replay"
+# The house clock's minute, whose offset a family policy's time of
+# day is read in (docs/design.md#family-policy).
+clock = "home/clock/minute"
 # Every unit's holds, which it resolves (docs/design.md#holds).
 holds = "home/hold/**"
 # Each holder's supervision status, the adapters' drops, and the devices'

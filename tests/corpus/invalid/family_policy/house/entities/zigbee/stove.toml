@@ -1,0 +1,17 @@
+schema = 1
+
+[entity]
+id = "0x01"
+capability = "burner"
+room = "utility"
+
+[write_policy]
+mode = "arbitrated"
+owner = "zigbee"
+
+[write_policy.family.on]
+false = { until = "6:00" }
+true = { until = "tomorrow" }
+
+[write_policy.family.colour]
+any = "none"

@@ -8,10 +8,10 @@ use std::collections::BTreeMap;
 use crate::error::{Code, ValidationError};
 use crate::keyspace::{is_reserved_word, PSEUDO_ROOMS};
 use crate::manifest::{
-    ControlSpec, DiscoveryMode, ParamSpec, ParamType, UnitKind, WidgetKind, WidgetSpec, WriteMode,
-    CAPABILITIES, ENABLED_PARAM, VOCABULARY,
+    ControlSpec, DiscoveryMode, FamilyHold, FamilyUntil, ParamSpec, ParamType, UnitKind,
+    WidgetKind, WidgetSpec, WriteMode, CAPABILITIES, ENABLED_PARAM, VOCABULARY,
 };
-use crate::repo::House;
+use crate::repo::{House, LoadedEntity};
 
 /// Structural validation that does not involve key expansion or grants:
 /// uniqueness, capabilities, reserved rooms, ownership, zones, params.
@@ -317,6 +317,8 @@ fn check_entities(house: &House, errors: &mut Vec<ValidationError>) {
             ));
         }
 
+        check_family_policy(house, entity, capability, file.as_ref(), errors);
+
         // An adapter binds devices, so its entity files address them. An
         // automation's do not: a computed value has no device behind it, and
         // requiring an `id` would only make units invent one.
@@ -390,6 +392,80 @@ fn check_entities(house: &House, errors: &mut Vec<ValidationError>) {
         }
     }
 }
+
+/// An entity's `[write_policy.family]` (docs/design.md#family-policy): on an
+/// arbitrated entity, for aspects its capability has, with an `until` the
+/// arbiter can read. A time of day needs the house clock, whose minute
+/// gives the arbiter the house's UTC offset.
+fn check_family_policy(
+    house: &House,
+    entity: &LoadedEntity,
+    capability: &str,
+    file: Option<&String>,
+    errors: &mut Vec<ValidationError>,
+) {
+    let policy = &entity.file.write_policy;
+    if policy.family.is_empty() {
+        return;
+    }
+    if policy.mode() != WriteMode::Arbitrated {
+        errors.push(ValidationError::new(
+            Code::FamilyPolicyNotArbitrated,
+            &entity.name,
+            format!(
+                "[write_policy.family] needs mode \"arbitrated\", not \"{}\"",
+                policy.mode()
+            ),
+            file.cloned(),
+        ));
+    }
+    let clock = house.units.iter().any(|u| {
+        u.manifest
+            .bus
+            .iter()
+            .flat_map(|b| b.publishes.values())
+            .any(|p| p.key == CLOCK_MINUTE)
+    });
+    let vocabulary = VOCABULARY.iter().find(|c| c.name == capability);
+    for (aspect, values) in &policy.family {
+        let known = vocabulary.is_some_and(|c| {
+            c.base == Some(aspect.as_str()) || c.aspects.contains(&aspect.as_str())
+        });
+        if !known {
+            errors.push(ValidationError::new(
+                Code::FamilyPolicyAspect,
+                format!("{}.{aspect}", entity.name),
+                format!("capability \"{capability}\" has no aspect \"{aspect}\""),
+                file.cloned(),
+            ));
+        }
+        for (value, hold) in values {
+            if let FamilyHold::Until(FamilyUntil { until }) = hold {
+                if until == "next change" {
+                    continue;
+                }
+                if until.len() != 5 || parse_time(until).is_none() {
+                    errors.push(ValidationError::new(
+                        Code::FamilyPolicyUntil,
+                        format!("{}.{aspect}.{value}", entity.name),
+                        format!("until \"{until}\" is neither \"HH:MM\" nor \"next change\""),
+                        file.cloned(),
+                    ));
+                } else if !clock {
+                    errors.push(ValidationError::new(
+                        Code::FamilyPolicyNoClock,
+                        format!("{}.{aspect}.{value}", entity.name),
+                        format!("until \"{until}\" is a time of day, and no unit publishes {CLOCK_MINUTE}"),
+                        file.cloned(),
+                    ));
+                }
+            }
+        }
+    }
+}
+
+/// The key whose payload carries the house's local time and UTC offset.
+const CLOCK_MINUTE: &str = "home/clock/minute";
 
 /// The aspects a person's source may name: presence evidence (`home`,
 /// `sighted`) or a position fix (`lat`, read with its `lon`, `accuracy` and

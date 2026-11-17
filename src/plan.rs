@@ -825,12 +825,18 @@ fn render_unit(check: &CheckResult, unit: &LoadedUnit, out: &mut String) {
             .unwrap_or(0);
         for entity in entities {
             out.push_str(&format!(
-                "      {:name_w$}  {:cap_w$}  {:room_w$}  write={}\n",
+                "      {:name_w$}  {:cap_w$}  {:room_w$}  write={}",
                 entity.name,
                 entity.file.entity.capability,
                 format!("room={}", entity.file.entity.room),
                 entity.file.write_policy.mode(),
             ));
+            // The family policy, per aspect (docs/design.md#family-policy).
+            for (aspect, values) in &entity.file.write_policy.family {
+                let entries: Vec<String> = values.iter().map(|(v, h)| format!("{v}={h}")).collect();
+                out.push_str(&format!("  family.{aspect}: {}", entries.join(", ")));
+            }
+            out.push('\n');
         }
     }
 

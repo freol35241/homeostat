@@ -254,8 +254,17 @@ identity layer between a unit and a bus key is the same one
 
 | Field | Type | Required | Description |
 |---|---|---|---|
+| `family` | table of name → table of name → [FamilyHold](#familyhold) | no | `[write_policy.family.<aspect>]`, arbitrated entities only (`family-policy-not-arbitrated`): what a family command means, per value, when it carries no hold intent (docs/design.md#family-policy). Each key is a value of the aspect, spelled as in TOML (`true`, `false`, `21`, `high`), or `any` for every value not listed. The aspect is the capability's base aspect or one of its aspects (`family-policy-aspect`). A value without an entry holds for the arbiter's `hold_minutes`. |
 | `mode` | [WriteMode](#writemode) | no | How commands are governed. Required on a capability that takes commands, which is one with a base aspect such as `light` or `lock` (`write-mode-required`). A commandable entity's policy is then always written in its own file. Optional elsewhere (`sensor`, `camera`, `router`, …), where a mode governs nothing. When absent it reads as `shared`. |
 | `owner` | string | yes | The one unit that binds this entity: an adapter, or an automation for a virtual entity. Must exist (`missing-owner-unit`) and be the unit whose entities dir holds this file (`owner-mismatch`). |
+
+### FamilyHold
+
+What a family command for one value holds (docs/design.md#family-policy):
+`"none"` acts and holds nothing, so the automations carry on from there.
+`{ until = "HH:MM" }` holds until the house clock next shows that time.
+`{ until = "next change" }` holds until the unit hold beneath it changes,
+and at most 24 hours.
 
 ### WriteMode
 

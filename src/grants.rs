@@ -12,7 +12,9 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Code, ValidationError};
 use crate::expand::{Direction, ExpandedKey};
 use crate::keyspace::{KeyExpr, Segment};
-use crate::manifest::{OnLoss, Priority, UnitKind, WriteMode, CAPABILITIES, VOCABULARY};
+use crate::manifest::{
+    FamilyHold, OnLoss, Priority, UnitKind, WriteMode, CAPABILITIES, VOCABULARY,
+};
 use crate::repo::House;
 
 /// One resolved grant: a publish expression resolved against the concrete
@@ -71,6 +73,11 @@ pub struct GrantEntity {
     /// The binding unit, which is the source of the walk-order edge. An
     /// adapter, or an automation for a commandable virtual entity.
     pub owner: String,
+    /// The entity's family policy (docs/design.md#family-policy), in its
+    /// owner's binding row only. The arbiter reads it from there live, so
+    /// an edit needs no arbiter restart. Left out when empty.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub family: BTreeMap<String, BTreeMap<String, FamilyHold>>,
 }
 
 /// One resolved feed: a device input wired to a source aspect
@@ -396,6 +403,7 @@ fn build_grants(
                     capability: e.file.entity.capability.clone(),
                     write: e.file.write_policy.mode(),
                     owner: e.owner.clone(),
+                    family: e.file.write_policy.family.clone(),
                 })
                 .collect();
             bound.sort_by(|a, b| a.name.cmp(&b.name));
@@ -482,6 +490,7 @@ fn build_grants(
                 capability: capability.clone(),
                 write: e.file.write_policy.mode(),
                 owner: e.owner.clone(),
+                family: BTreeMap::new(),
             })
             .collect();
         granted.sort_by(|a, b| a.name.cmp(&b.name));
@@ -1099,6 +1108,7 @@ mod tests {
                 write_policy: WritePolicy {
                     mode: Some(mode),
                     owner: adapter.to_string(),
+                    family: BTreeMap::new(),
                 },
                 inputs: None,
                 sources: None,
@@ -1213,6 +1223,7 @@ mod tests {
                 capability: "lock".to_string(),
                 write: WriteMode::Arbitrated,
                 owner: "zigbee".to_string(),
+                family: BTreeMap::new(),
             }]
         );
     }
@@ -1343,6 +1354,7 @@ mod tests {
                 capability: "switch".to_string(),
                 write: WriteMode::Shared,
                 owner: "modes".to_string(),
+                family: BTreeMap::new(),
             }]
         );
     }

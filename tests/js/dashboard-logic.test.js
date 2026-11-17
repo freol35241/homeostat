@@ -246,6 +246,15 @@ test('holds come back soonest-first, and a malformed entry is dropped rather tha
   assert.equal(live[0].key, 'home/hold/arbiter/livingroom/heatpump/mode');
 });
 
+test('a hold the family policy placed until the next change says so, not its cap', () => {
+  const m = model({ driven: { 'hallway/front_door/locked': 'automation' } });
+  const doc = holdDoc({ next_change: true, beneath: 'h1' });
+  assert.equal(logic.liveHolds(doc, NOW)[0].nextChange, true);
+  assert.equal(logic.liveHolds(holdDoc(), NOW)[0].nextChange, false);
+  const devs = logic.computeDeviations(m, {}, {}, {}, {}, doc, NOW);
+  assert.match(devs[0].detail, /held by dashboard until the next change/);
+});
+
 test('holdOn answers for one aspect, which is what a control asks', () => {
   assert.equal(logic.holdOn(holdDoc(), 'hallway', 'front_door', 'locked', NOW).actor, 'dashboard');
   assert.equal(logic.holdOn(holdDoc(), 'hallway', 'front_door', 'on', NOW), null);

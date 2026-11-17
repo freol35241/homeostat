@@ -285,6 +285,24 @@ codes! {
         It says what a unit's holds do once the unit is gone \
         (docs/design.md#when-a-holder-stops), and a command or a reading \
         stands for nothing after it is sent.",
+    FamilyPolicyNotArbitrated => "family-policy-not-arbitrated":
+        "An entity that is not arbitrated declares `[write_policy.family]`. \
+        The policy says what the arbiter holds for a family command \
+        (docs/design.md#family-policy), and only an arbitrated entity's \
+        commands reach the arbiter.",
+    FamilyPolicyAspect => "family-policy-aspect":
+        "A `[write_policy.family.<aspect>]` table names an aspect that is \
+        neither the capability's base aspect nor one of its aspects \
+        (docs/design.md#the-capability-vocabulary). No family command \
+        reaches it, so the policy would never apply.",
+    FamilyPolicyUntil => "family-policy-until":
+        "A family policy entry's `until` is neither a time of day `\"HH:MM\"` \
+        nor `\"next change\"` (docs/design.md#family-policy).",
+    FamilyPolicyNoClock => "family-policy-no-clock":
+        "A family policy entry holds until a time of day, and no unit \
+        publishes `home/clock/minute`. The arbiter reads the house's UTC \
+        offset from that minute (docs/design.md#family-policy), so without \
+        the clock service it would end the hold in the host's time zone.",
     VirtualEntityFed => "virtual-entity-fed":
         "An `[inputs]` block sits on an entity bound by an automation. A fed \
         input is a device's control input (docs/design.md#device-feeds); a \

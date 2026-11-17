@@ -44,8 +44,15 @@ family's holds and the applied holds back from the mirror, so it sends
 nothing that was already sent. After a core restart it waits for the
 core's replay (home/meta/system/replay) to put them back first.
 
+A manual-band command without a `hold` takes the entity's family policy
+for its value (docs/design.md#family-policy): "none", until a local time
+of day, or until the next change of the hold beneath it. It follows
+home/clock/minute for the house's UTC offset, so a time of day ends when
+the house clock shows it.
+
 Configuration: the live parameter hold_minutes (family-editable), seeded
-from the manifest default.
+from the manifest default. A value the policy does not name holds that
+long.
 
 It also follows each unit's health, so a gone holder's holds end as its
 `on_loss` says, and its adapters' drops and the devices' `available`, so
@@ -55,8 +62,10 @@ back.
 Health events at home/health/{unit}/event: `drop` (off-schema-key,
 invalid-command, unbound, malformed-hold), `refuse` when a command loses
 to a hold, `preempt` when a higher hold takes over, `resume` when a
-lower one takes over after it, and `replay-late` when the core's replay
-after a restart did not come in time and the arbiter starts without it.
+lower one takes over after it, `replay-late` when the core's replay
+after a restart did not come in time and the arbiter starts without it,
+and `clock-unknown` when a family policy's time of day is placed before
+any minute from the house clock came, so it is read in the host's offset.
 """
 
 import datetime
@@ -82,6 +91,11 @@ REPLAY_KEY = "home/meta/system/replay"
 # and this stays well under the supervisor's one-minute deadline for `ready`.
 REPLAY_WAIT_S = 30.0
 RANKS = keys.CMD_PRIORITIES
+CLOCK_KEY = "home/clock/minute"
+# A family policy's `until = "next change"` ends the family's hold when the
+# unit hold beneath changes, or after this long.
+NEXT_CHANGE = "next change"
+NEXT_CHANGE_CAP_S = 24 * 3600.0
 
 
 class Params(LiveParams):
@@ -133,6 +147,51 @@ def holders(grants: list) -> dict:
     return out
 
 
+def policies(grants: list) -> dict:
+    """Return each entity's family policy, keyed (room, entity).
+
+    The policy rides the entity in its owner's binding row
+    (docs/design.md#family-policy), as {aspect: {value key: entry}}. A
+    later row wins, so the newest apply's table decides.
+    """
+    out: dict = {}
+    for grant in grants:
+        if grant.get("capability") is not None or grant.get("hold"):
+            continue
+        for e in grant["entities"]:
+            if e.get("owner") == grant["unit"]:
+                out[(e["room"], e["name"])] = e.get("family") or {}
+    return out
+
+
+def kind(value) -> str:
+    """Name the JSON type of `value`, so that 1 and true do not compare equal."""
+    if isinstance(value, bool):
+        return "bool"
+    return "number" if isinstance(value, (int, float)) else type(value).__name__
+
+
+def policy_entry(values: dict, value):
+    """Return the entry of a policy's aspect table for `value`, or None.
+
+    A key is a value spelled as in TOML: `true` and `false` are booleans,
+    a number is a number and anything else a string. It matches by type
+    too, so `1` is not `true`. `any` covers every value not listed.
+    """
+    for key, entry in values.items():
+        if key == "any":
+            continue
+        try:
+            wanted = json.loads(key)
+        except ValueError:
+            wanted = key
+        if not isinstance(wanted, (bool, int, float)):
+            wanted = key
+        if kind(wanted) == kind(value) and wanted == value:
+            return entry
+    return values.get("any")
+
+
 class Bindings:
     """The arbitrated and bound entities and the hold grants, live from the grant tables.
 
@@ -172,7 +231,7 @@ class Bindings:
         # Everything read from one pair of tables, in one attribute,
         # replaced in one assignment, so a reader never pairs sets from
         # different tables.
-        self._sets: tuple = (frozenset(), frozenset(), {})
+        self._sets: tuple = (frozenset(), frozenset(), {}, {})
         self._on_change = on_change
         self._lock = threading.Lock()
         self._subs = [
@@ -192,7 +251,7 @@ class Bindings:
 
     def _read(self) -> tuple:
         tables = self._tables[GRANTS_KEY] + self._tables[PENDING_KEY]
-        return (*bindings(tables), holders(tables))
+        return (*bindings(tables), holders(tables), policies(tables))
 
     def _on_table(self, key: str, sample) -> None:
         with self._lock:
@@ -203,7 +262,7 @@ class Bindings:
 
     def route(self, target: tuple[str, str]) -> str:
         """Return "arbitrated", "bound" or "unbound" for a (room, entity)."""
-        arbitrated, bound, _ = self._sets
+        arbitrated, bound, _, _ = self._sets
         if target in arbitrated:
             return "arbitrated"
         return "bound" if target in bound else "unbound"
@@ -217,6 +276,12 @@ class Bindings:
             if holder == unit and any(expr.includes(key) for expr in exprs):
                 return band, on_loss
         return None
+
+    def policy_of(self, target: tuple[str, str, str], value):
+        """Return the family policy's entry for `value` on `target`, or None."""
+        room, entity, aspect = target
+        values = self._sets[3].get((room, entity), {}).get(aspect)
+        return policy_entry(values, value) if isinstance(values, dict) else None
 
     def rest_of(self, target: tuple[str, str, str]):
         """Return the value `target` is safe at, or None (keys.REST_VALUES)."""
@@ -273,11 +338,20 @@ class Resolver:
     are time.monotonic and time.time in the unit and fakes in tests.
     """
 
-    def __init__(self, grant_of, rest_of, clock=time.monotonic, wall=time.time):
+    def __init__(
+        self, grant_of, rest_of, clock=time.monotonic, wall=time.time, offset=None, grants_read=lambda: True
+    ):
         self._grant_of = grant_of
         self._rest_of = rest_of
+        # Whether the grant table is read. Before that no unit hold counts,
+        # so the hold beneath a family hold cannot be told.
+        self._grants_read = grants_read
         self._clock = clock
         self._wall = wall
+        # The house's UTC offset, from the clock service's minute. The
+        # host's stands in until the first one arrives.
+        self._offset_known = offset is not None
+        self._offset = offset if offset is not None else datetime.datetime.now().astimezone().utcoffset()
         self._family: dict[tuple, dict] = {}
         self._holds: dict[tuple, dict[str, dict]] = {}
         self._applied: dict[tuple, dict] = {}
@@ -342,6 +416,7 @@ class Resolver:
 
     def resolve(self, target, effects: list) -> None:
         """Forward the winner of `target` if it is not the hold last applied."""
+        self._end_on_change(target)
         won = self.winner(target)
         self._note_winner(target, won, effects)
         if won is None:
@@ -356,6 +431,27 @@ class Resolver:
             "forward", target,
             {"value": won["value"], "priority": won["priority"], "actor": won["unit"], "id": won["id"]},
         ))
+
+    def _beneath(self, target):
+        """Return the id of the unit hold that wins under the family's, or None."""
+        held = [c for c in self.candidates(target) if not c["family"]]
+        return held[0]["id"] if held else None
+
+    def _end_on_change(self, target) -> bool:
+        """End a family hold placed "until next change" once the hold beneath changed.
+
+        Returns whether it ended.
+        """
+        family = self._family.get(target)
+        if (
+            family is None
+            or not family["next_change"]
+            or not self._grants_read()
+            or self._beneath(target) == family["beneath"]
+        ):
+            return False
+        del self._family[target]
+        return True
 
     def resolve_all(self, effects: list) -> None:
         for target in sorted(self.targets()):
@@ -385,17 +481,23 @@ class Resolver:
 
     # ---- commands
 
-    def command(self, target, priority, actor, hold_s, effects, *, value=None, hold=None, cmd_id=None) -> bool:
+    def command(
+        self, target, priority, actor, hold_s, effects, *, value=None, hold=None, cmd_id=None, policy=None
+    ) -> bool:
         """Arbitrate one command, and return whether its envelope is forwarded.
 
         A manual-band command places, clears or reports the family's hold
-        as its `hold` intent says (docs/design.md#hold-intents). A
-        lower-band command first releases its sender's own hold. It is
-        refused when a hold above its band is in force, or one at its band
-        holds another value. A forwarded command holds nothing.
+        as its `hold` intent says (docs/design.md#hold-intents). Without
+        one, `policy`, the entity's family policy entry for the value,
+        decides (docs/design.md#family-policy), and without that it holds
+        for `hold_s`.
+
+        A lower-band command first releases its sender's own hold. It is
+        refused when a hold at or above its band holds another value. A
+        forwarded command holds nothing.
         """
         if priority == "manual":
-            return self._family_command(target, actor, hold_s, effects, value, hold, cmd_id)
+            return self._family_command(target, actor, hold_s, effects, value, hold, cmd_id, policy)
         # A command from a unit first releases that unit's own hold. It goes
         # here, with the command, and not when the SDK's delete of the key
         # arrives: that comes on another subscriber, in either order, and
@@ -404,11 +506,16 @@ class Resolver:
         held = self._holds.get(target)
         if held is not None and held.pop(actor, None) is not None and not held:
             del self._holds[target]
+        ended = self._end_on_change(target)
         won = self.winner(target, without=actor)
-        if won is not None and (
-            RANKS.index(won["priority"]) > RANKS.index(priority)
-            or (won["priority"] == priority and won["value"] != value)
-        ):
+        # A command that agrees with the hold in force goes through, so a
+        # stop rule still stops a burner the family stopped.
+        agrees = won is not None and kind(won["value"]) == kind(value) and won["value"] == value
+        if won is not None and not agrees and RANKS.index(won["priority"]) >= RANKS.index(priority):
+            if ended:
+                # The family's hold is gone, and the hold that wins now is
+                # sent, as when any other change ends it.
+                self.resolve(target, effects)
             self._refused[target] = self._refused.get(target, 0) + 1
             if won["family"]:
                 self._family[target]["refused"] += 1
@@ -434,8 +541,24 @@ class Resolver:
             "priority": priority, "value": value,
         }
 
-    def _family_command(self, target, actor, hold_s, effects, value, hold, cmd_id) -> bool:
+    def _family_command(self, target, actor, hold_s, effects, value, hold, cmd_id, policy) -> bool:
         seconds = hold_s
+        at = None
+        next_change = False
+        if hold is None and policy == "none":
+            hold = "none"
+        elif hold is None and isinstance(policy, dict) and policy.get("until") == NEXT_CHANGE:
+            next_change = True
+            seconds = NEXT_CHANGE_CAP_S
+        elif hold is None and isinstance(policy, dict):
+            at = self._next_time_of_day(policy.get("until"))
+            if at is not None:
+                seconds = self._local_epoch(at) - self._wall()
+                if not self._offset_known:
+                    # No minute from the house clock yet, so the end is in
+                    # the host's offset until one comes.
+                    room, entity, aspect = target
+                    effects.append(("event", "clock-unknown", {"room": room, "entity": entity, "aspect": aspect}))
         instant = hold not in (None, "none", "report", "release")
         if instant:
             seconds = keys.hold_instant(hold).timestamp() - self._wall()
@@ -467,12 +590,50 @@ class Resolver:
             # A new family hold starts its count again, because the count
             # belongs to the hold in force.
             "refused": 0,
+            # The local time of day it ends at, as the policy said, so the
+            # end follows the house clock across a DST change.
+            "at": at,
+            # Placed "until next change": the hold beneath it then.
+            "next_change": next_change,
+            "beneath": self._beneath(target) if next_change else None,
         }
         self._family[target] = family
         self._applied[target] = {"id": family["id"], "unit": actor, "priority": "manual", "value": value}
         self._note_winner(target, self.winner(target), effects)
         # A report says the device already did it, so nothing is sent.
         return hold != "report"
+
+    # ---- the house clock
+
+    def _next_time_of_day(self, hhmm) -> datetime.datetime | None:
+        """Return the next local `HH:MM` as a naive local time, or None if it is not one."""
+        try:
+            hour, minute = (int(part) for part in str(hhmm).split(":"))
+            now = datetime.datetime.fromtimestamp(self._wall(), datetime.timezone(self._offset))
+            at = now.replace(hour=hour, minute=minute, second=0, microsecond=0, tzinfo=None)
+        except ValueError:
+            return None
+        return at if at > now.replace(tzinfo=None) else at + datetime.timedelta(days=1)
+
+    def _local_epoch(self, at: datetime.datetime) -> float:
+        return at.replace(tzinfo=datetime.timezone(self._offset)).timestamp()
+
+    def set_offset(self, offset: datetime.timedelta, effects: list) -> None:
+        """Take the house's UTC offset, and move the ends that follow it.
+
+        A family hold until a time of day ends when the house clock shows
+        it, so a DST change between placing it and its end moves the end.
+        """
+        self._offset = offset
+        self._offset_known = True
+        wall, now = self._wall(), self._clock()
+        for family in self._family.values():
+            if family["at"] is None:
+                continue
+            until = self._local_epoch(family["at"])
+            family["deadline"] = now + (until - wall)
+            family["until"] = iso(until)
+        self.expire(effects)
 
     # ---- units' holds
 
@@ -607,7 +768,7 @@ class Resolver:
         for (room, entity, aspect), family in self._family.items():
             if family["deadline"] <= now:
                 continue
-            out[(room, entity, aspect)] = {
+            record = out[(room, entity, aspect)] = {
                 "schema": 1,
                 "room": room,
                 "entity": entity,
@@ -624,6 +785,14 @@ class Resolver:
                 # How many commands this hold has refused.
                 "refused": family["refused"],
             }
+            # How the family policy placed it (docs/design.md#family-policy):
+            # until a local time of day, or until the hold beneath changes,
+            # with `until` as the cap.
+            if family["at"] is not None:
+                record["at"] = family["at"].isoformat(timespec="minutes")
+            if family["next_change"]:
+                record["next_change"] = True
+                record["beneath"] = family["beneath"]
         return out
 
     def document(self) -> dict:
@@ -665,7 +834,12 @@ class Resolver:
                     "since": str(record["since"]),
                     "until": record["until"],
                     "refused": int(record.get("refused", 0)),
+                    "at": datetime.datetime.fromisoformat(record["at"]) if record.get("at") else None,
+                    "next_change": record.get("next_change") is True,
+                    "beneath": record.get("beneath"),
                 }
+                if family["at"] is not None and family["at"].tzinfo is not None:
+                    raise ValueError("at is a local time")
             except (TypeError, KeyError, ValueError):
                 continue
             if until > wall:
@@ -703,6 +877,7 @@ def main():
     resolver = Resolver(
         grant_of=lambda u, t: routes_box[0].grant_of(u, t) if routes_box else None,
         rest_of=lambda t: routes_box[0].rest_of(t) if routes_box else None,
+        grants_read=lambda: bool(routes_box),
     )
     # hold key -> the family record last put there, and the document.
     published: dict[str, dict] = {}
@@ -885,6 +1060,30 @@ def main():
         resolver.resolve_all(effects)
         carry_out_locked(effects)
 
+    # The house's UTC offset, for a family policy's time of day. The clock
+    # service owns the zone and its DST, and its minute carries the offset.
+    def on_clock(minute) -> None:
+        try:
+            offset = datetime.datetime.fromisoformat(minute).utcoffset()
+        except (TypeError, ValueError):
+            return
+        if offset is None:
+            return
+        with changed:
+            effects: list = []
+            resolver.set_offset(offset, effects)
+            carry_out_locked(effects)
+
+    def on_minute(sample) -> None:
+        try:
+            on_clock(json.loads(sample.payload.to_bytes()))
+        except ValueError:
+            return
+
+    clock_sub = session.subscribe(CLOCK_KEY, on_minute)
+    for _key, minute in session.get_json(CLOCK_KEY):
+        on_clock(minute)
+
     def expiry_loop(stop: threading.Event) -> None:
         """One thread for every hold with an end, waiting on the earliest.
 
@@ -952,6 +1151,7 @@ def main():
                 value=envelope.get("value"),
                 hold=keys.cmd_envelope_hold(envelope),
                 cmd_id=cmd_id,
+                policy=routes.policy_of((room, entity, aspect), envelope.get("value")),
             )
             if forward:
                 effects.insert(0, ("forward", (room, entity, aspect), envelope))
@@ -972,6 +1172,7 @@ def main():
         changed.notify_all()  # let the expiry thread see the stop flag
     expiry.join(timeout=2)
     cmd_sub.undeclare()
+    clock_sub.undeclare()
     hold_sub.undeclare()
     for sub in health_subs:
         sub.undeclare()

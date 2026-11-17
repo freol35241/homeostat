@@ -14,3 +14,9 @@ aliases = []
 [write_policy]
 mode = "arbitrated"
 owner = "zigbee"
+
+# An unlock by the family holds until the automation beneath changes its
+# hold; a lock holds nothing.
+[write_policy.family.locked]
+false = { until = "next change" }
+true = "none"

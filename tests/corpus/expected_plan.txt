@@ -22,7 +22,7 @@ Units to create (13):
 + adapter zigbee (units/zigbee.toml)
     command: uv run units/zigbee.py
     entities (6):
-      front_door_lock  lock       room=hallway     write=arbitrated
+      front_door_lock  lock       room=hallway     write=arbitrated  family.locked: false=until next change, true=none
       hallway_motion   occupancy  room=hallway     write=shared
       kitchen_ceiling  light      room=kitchen     write=shared
       kitchen_temp     sensor     room=kitchen     write=shared
@@ -133,6 +133,7 @@ Expanded keys:
   arbiter publishes arbitration: home/arbitration/arbiter
   arbiter publishes holds: home/hold/arbiter/**
   arbiter subscribes available: home/state/*/*/available
+  arbiter subscribes clock: home/clock/minute
   arbiter subscribes cmd: home/cmd/**
   arbiter subscribes events: home/health/*/event
   arbiter subscribes grants: home/meta/system/grants

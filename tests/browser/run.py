@@ -823,6 +823,17 @@ class FamilyHolds(PageTest):
         self.assertEqual(len(setback), 1, texts)
         self.assertNotIn("Resume automatic", setback[0], "a unit releases its own hold")
 
+    async def test_a_hold_until_the_next_change_says_so(self):
+        # docs/design.md#family-policy: its `until` is only the cap.
+        key = "home/hold/arbiter/livingroom/heat_pump/mode"
+        await self.open_heat_pump()
+        until = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 86400))
+        held = dict(self.house.snapshot["holds"][key], until=until, next_change=True, beneath="s1")
+        await self.house.push({"type": "hold", "key": key, "value": held})
+        await self.page.wait_for_timeout(300)
+        overlay = await self.page.locator("#overlay-panel").inner_text()
+        self.assertRegex(overlay, r"(?i)held\s+mode\s+by .+ until the next change")
+
     async def test_an_ended_hold_leaves_the_list(self):
         await self.open_heat_pump()
         await self.house.push(
