@@ -98,29 +98,10 @@ pub fn load(root: &Path) -> (House, Vec<ValidationError>) {
     }
     for file in toml_files(&units_dir) {
         let rel = format!("units/{file}");
-        let Some(mut manifest) =
-            read_toml::<UnitManifest>(&units_dir.join(&file), &rel, &mut errors)
-        else {
+        let Some(text) = read_text(&units_dir.join(&file), &rel, &mut errors) else {
             continue;
         };
-        manifest.add_implicit_params();
-        check_schema_version(manifest.schema, &manifest.unit.name, &rel, &mut errors);
-        let stem = file.strip_suffix(".toml").unwrap_or(&file);
-        if stem != manifest.unit.name {
-            errors.push(ValidationError::new(
-                Code::UnitNameMismatch,
-                &manifest.unit.name,
-                format!(
-                    "manifest file is {rel} but [unit] name is \"{}\"; the SDK reads units/{}.toml",
-                    manifest.unit.name, manifest.unit.name
-                ),
-                Some(rel.clone()),
-            ));
-        }
-        house.units.push(LoadedUnit {
-            manifest,
-            path: rel,
-        });
+        house.units.extend(parse_unit(rel, &text, &mut errors));
     }
 
     let mut entity_dirs: Vec<(String, String)> = Vec::new(); // (owner, dir)
@@ -149,22 +130,93 @@ pub fn load(root: &Path) -> (House, Vec<ValidationError>) {
         }
         for file in toml_files(&dir_abs) {
             let rel = format!("{dir_rel}/{file}");
-            let Some(entity) = read_toml::<EntityFile>(&dir_abs.join(&file), &rel, &mut errors)
-            else {
+            let Some(text) = read_text(&dir_abs.join(&file), &rel, &mut errors) else {
                 continue;
             };
-            let name = file.strip_suffix(".toml").unwrap_or(&file).to_string();
-            check_schema_version(entity.schema, &name, &rel, &mut errors);
-            house.entities.push(LoadedEntity {
-                name,
-                file: entity,
-                path: rel,
-                owner: owner.clone(),
-            });
+            house
+                .entities
+                .extend(parse_entity(rel, &owner, &text, &mut errors));
         }
     }
 
     (house, errors)
+}
+
+/// Parses the unit manifest at house-relative `path`, adds the params every
+/// unit of its kind has, and checks what one file can show: its schema
+/// version, and that its file stem is its unit name.
+fn parse_unit(path: String, text: &str, errors: &mut Vec<ValidationError>) -> Option<LoadedUnit> {
+    let mut manifest = parse_toml::<UnitManifest>(text, &path, errors)?;
+    manifest.add_implicit_params();
+    check_schema_version(manifest.schema, &manifest.unit.name, &path, errors);
+    if file_stem(&path) != manifest.unit.name {
+        errors.push(ValidationError::new(
+            Code::UnitNameMismatch,
+            &manifest.unit.name,
+            format!(
+                "manifest file is {path} but [unit] name is \"{}\"; the SDK reads units/{}.toml",
+                manifest.unit.name, manifest.unit.name
+            ),
+            Some(path.clone()),
+        ));
+    }
+    Some(LoadedUnit { manifest, path })
+}
+
+/// Parses the entity file at house-relative `path`, bound by unit `owner`.
+/// The file stem is the entity's name.
+fn parse_entity(
+    path: String,
+    owner: &str,
+    text: &str,
+    errors: &mut Vec<ValidationError>,
+) -> Option<LoadedEntity> {
+    let file = parse_toml::<EntityFile>(text, &path, errors)?;
+    let name = file_stem(&path).to_string();
+    check_schema_version(file.schema, &name, &path, errors);
+    Some(LoadedEntity {
+        name,
+        file,
+        path,
+        owner: owner.to_string(),
+    })
+}
+
+/// The file name in `path` without its `.toml` suffix.
+fn file_stem(path: &str) -> &str {
+    let file = path.rsplit_once('/').map_or(path, |(_, file)| file);
+    file.strip_suffix(".toml").unwrap_or(file)
+}
+
+#[cfg(test)]
+impl House {
+    /// Builds a house from file contents, parsed and checked as [`load`]
+    /// parses and checks each file it reads. `units` are (file stem,
+    /// manifest) pairs, read as `units/{stem}.toml`. `entities` are (owner,
+    /// name, entity file) triples, read as `entities/{owner}/{name}.toml`.
+    /// Files keep the order given, where `load` sorts units by file name and
+    /// entities by owner, then file name. An entity's owner is taken as
+    /// given: unlike `load`, this does not read it from the owner's
+    /// `[entities]` table.
+    ///
+    /// Panics on any error `load` would report for these files.
+    pub(crate) fn from_toml(units: &[(&str, &str)], entities: &[(&str, &str, &str)]) -> House {
+        let mut house = House::default();
+        let mut errors = Vec::new();
+        for (stem, text) in units {
+            house
+                .units
+                .extend(parse_unit(format!("units/{stem}.toml"), text, &mut errors));
+        }
+        for (owner, name, text) in entities {
+            let path = format!("entities/{owner}/{name}.toml");
+            house
+                .entities
+                .extend(parse_entity(path, owner, text, &mut errors));
+        }
+        assert!(errors.is_empty(), "{errors:?}");
+        house
+    }
 }
 
 fn toml_files(dir: &Path) -> Vec<String> {
@@ -185,8 +237,13 @@ fn read_toml<T: serde::de::DeserializeOwned>(
     rel: &str,
     errors: &mut Vec<ValidationError>,
 ) -> Option<T> {
-    let text = match fs::read_to_string(path) {
-        Ok(text) => text,
+    let text = read_text(path, rel, errors)?;
+    parse_toml(&text, rel, errors)
+}
+
+fn read_text(path: &Path, rel: &str, errors: &mut Vec<ValidationError>) -> Option<String> {
+    match fs::read_to_string(path) {
+        Ok(text) => Some(text),
         Err(err) => {
             errors.push(ValidationError::new(
                 Code::ParseError,
@@ -194,10 +251,17 @@ fn read_toml<T: serde::de::DeserializeOwned>(
                 err.to_string(),
                 None,
             ));
-            return None;
+            None
         }
-    };
-    match toml::from_str(&text) {
+    }
+}
+
+fn parse_toml<T: serde::de::DeserializeOwned>(
+    text: &str,
+    rel: &str,
+    errors: &mut Vec<ValidationError>,
+) -> Option<T> {
+    match toml::from_str(text) {
         Ok(value) => Some(value),
         Err(err) => {
             errors.push(ValidationError::new(
