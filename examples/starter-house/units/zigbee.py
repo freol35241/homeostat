@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "homeostat==0.22.1",
+#     "homeostat==0.23.0",
 #     "paho-mqtt>=2,<3",
 # ]
 # ///
@@ -16,8 +16,11 @@ State: JSON on {base}/{id} fans out to home/state/{room}/{entity}/{aspect}.
 z2m's `state` field becomes `on` (lights, switches) or `locked` (locks).
 On a room sensor (`occupancy`), z2m's `occupancy` becomes `motion`, since
 on most devices it is a PIR, and `presence` becomes `occupied`, which is
-what z2m calls an mmWave radar's reading. Other scalar fields keep their
-z2m names. When availability is enabled in
+what z2m calls an mmWave radar's reading. On a `button`, z2m's `action`
+is published on every press, a repeat included. Neither the empty action
+that z2m's legacy action sensor sends after a press nor the action in a
+retained message (a device with `retain: true`) is a press. Other
+scalar fields keep their z2m names. When availability is enabled in
 the z2m config, {base}/{id}/availability becomes the reserved `available`
 aspect. Without it the aspect does not appear. `Bridge.on_message` has the
 details.
@@ -129,6 +132,8 @@ def suggest(exposes):
             return {"capability": "lock", "features": []}
         if exp.get("type") == "binary" and exp.get("property") in OCCUPANCY_ASPECTS:
             return {"capability": "occupancy", "features": []}
+        if exp.get("type") == "enum" and exp.get("property") == "action":
+            return {"capability": "button", "features": []}
     return None
 
 
@@ -396,7 +401,7 @@ class Bridge:
         if dev_id not in self.known:
             self.session.health_event("drop", reason="unknown-device", topic=topic)
 
-    def on_message(self, topic: str, raw: bytes) -> None:
+    def on_message(self, topic: str, raw: bytes, retained: bool = False) -> None:
         """Translate one message under the base topic onto the bus.
 
         bridge/devices updates the inventory and republishes discovery.
@@ -405,7 +410,9 @@ class Bridge:
         published as its own aspect. A field that would publish as
         `available` drops with `reserved-aspect`, and a field name that is
         not a valid key segment drops with `malformed-payload`; the other
-        fields still publish.
+        fields still publish. On a button, the action in a `retained`
+        message is not published: the broker hands the last message to
+        every new subscription, so it is a past press.
         """
         session = self.session
         # Everything routed here matched a {base}/... subscription, so the
@@ -474,6 +481,8 @@ class Bridge:
         for z2m_field, value in payload.items():
             if isinstance(value, (dict, list)):
                 continue  # composite fields (color, ...) deferred
+            if entity.capability == "button" and z2m_field == "action" and (retained or value in ("", None)):
+                continue  # a retained past press, or the legacy action sensor clearing itself
             aspect, value = state_aspect(entity.capability, z2m_field, value)
             if aspect == "available":
                 # Reserved for the adapter's own liveness signal.
@@ -524,7 +533,7 @@ def main():
 
     client = mqtt.connect(
         endpoint,
-        lambda _client, _userdata, msg: bridge.on_message(msg.topic, msg.payload),
+        lambda _client, _userdata, msg: bridge.on_message(msg.topic, msg.payload, msg.retain),
         [
             (f"{base}/+", 0),
             (f"{base}/+/availability", 0),

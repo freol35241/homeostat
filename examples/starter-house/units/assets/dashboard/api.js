@@ -107,6 +107,9 @@ export function errText(e) {
 // adapters/dashboard.py).
 var HISTORY_LIMIT = 5000;
 
+// The most presses of a button one history read asks for.
+export var PRESSES_READ = 500;
+
 // `cls` is the recorder's series class: 'state' (the default) is what the
 // house did, and 'cmd' is what was asked of it.
 //
@@ -119,9 +122,11 @@ var HISTORY_LIMIT = 5000;
 // the rows do, so the axis does not show a stretch that was not read.
 export function fetchHistory(entity, aspect, hours, shape, cls, intervalS) {
   var win = { from: Date.now() - hours * 3600e3, to: Date.now() };
+  // A button's presses are read raw, each its own row, so a repeat stays.
   var query = shape === 'timeline' ? '&hours=' + hours + '&changes=1'
-    : shape !== 'bars' ? '&hours=' + hours + '&bucket=' + logic.bucketSeconds(hours, CHART_VBW)
-      : null;
+    : shape === 'presses' ? '&hours=' + hours + '&limit=' + PRESSES_READ
+      : shape !== 'bars' ? '&hours=' + hours + '&bucket=' + logic.bucketSeconds(hours, CHART_VBW)
+        : null;
   var limit = 0;
   if (query === null) {
     var extra = intervalS / 3600 + (logic.barsByDay(hours * 3600e3, intervalS) ? 24 : 0);

@@ -232,6 +232,8 @@
       store.health = msg.health || {};
       store.config = msg.config || {};
       store.aspects = msg.aspects || {};
+      store.actionAt = msg.action_at || {};
+      store.arbitration = msg.arbitration || {};
       return 'snapshot';
     }
     if (msg.type === 'aspects') {
@@ -242,10 +244,24 @@
     }
     if (msg.type === 'state') {
       store.state[msg.key] = msg.value;
+      // When a button was last pressed (docs/design.md#buttons), on the
+      // dashboard's clock as the snapshot's times are.
+      if (/\/action$/.test(msg.key)) {
+        if (!store.actionAt) store.actionAt = {};
+        store.actionAt[msg.key] = typeof msg.at === 'number' ? msg.at : nowSeconds;
+      }
       return 'state';
     }
+    if (msg.type === 'arbitration') {
+      if (!store.arbitration) store.arbitration = {};
+      if (msg.value === null || msg.value === undefined) delete store.arbitration[msg.key];
+      else store.arbitration[msg.key] = msg.value;
+      return 'hold';
+    }
     if (msg.type === 'hold') {
-      store.holds[msg.key] = msg.value;
+      // null: the hold ended and the arbiter deleted its key
+      if (msg.value === null || msg.value === undefined) delete store.holds[msg.key];
+      else store.holds[msg.key] = msg.value;
       return 'hold';
     }
     if (msg.type === 'forecast') {
@@ -404,12 +420,11 @@
     return geo;
   }
 
-  /* ---- arbiter holds (docs/design.md#arbitrated-mode) ----
+  /* ---- the family's holds (docs/design.md#arbitrated-mode) ----
    *
-   * Each arbiter publishes one document of what it is holding. Every
-   * forwarded command takes a lease, not only a preemption, so most holds
-   * are the house working normally. A hold is only worth reporting when it
-   * displaced somebody.
+   * Each arbiter publishes one record per aspect the family holds. Every
+   * tap places one, so most holds are the family using the house. A hold is
+   * only worth reporting when it displaced somebody.
    */
   var CMD_BANDS = ['automation', 'agent', 'family', 'manual'];
 
@@ -421,36 +436,83 @@
     return isNaN(d.getTime()) ? '' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   }
 
-  // Every live hold across every arbiter, with expired ones dropped. The
-  // document states `until` and the reader applies it, as with a
-  // forecast's `issued`. The arbiter also republishes at the deadline, so
-  // this check is a second guard.
+  // The family's holds across every arbiter, with expired ones dropped.
+  // Each is one record, keyed home/hold/{arbiter}/{room}/{entity}/{aspect}.
+  // The record states `until` and the reader applies it, as with a
+  // forecast's `issued`. The arbiter also deletes the key at the deadline,
+  // so this check is a second guard.
   function liveHolds(holds, now) {
     var out = [];
     Object.keys(holds || {}).forEach(function (key) {
-      var doc = holds[key];
-      if (!doc || !Array.isArray(doc.holds)) return;
-      doc.holds.forEach(function (h) {
-        if (!h || typeof h.entity !== 'string' || typeof h.aspect !== 'string') return;
-        var until = Date.parse(h.until);
-        if (isNaN(until) || until <= now) return;
-        out.push({
-          room: h.room, entity: h.entity, aspect: h.aspect,
-          priority: h.priority, actor: h.actor,
-          refused: typeof h.refused === 'number' ? h.refused : 0,
-          until: until
-        });
+      var h = holds[key];
+      if (!h || typeof h.entity !== 'string' || typeof h.aspect !== 'string') return;
+      var until = Date.parse(h.until);
+      if (isNaN(until) || until <= now) return;
+      out.push({
+        key: key,
+        room: h.room, entity: h.entity, aspect: h.aspect,
+        priority: h.priority, actor: h.actor, value: h.value,
+        refused: typeof h.refused === 'number' ? h.refused : 0,
+        until: until,
+        // Placed by the family policy "until next change": it ends when
+        // the unit hold beneath changes, and `until` is only its cap
+        // (docs/design.md#family-policy).
+        nextChange: h.next_change === true
       });
     });
     return out.sort(function (a, b) { return a.until - b.until; });
   }
 
-  // The hold in force over one aspect, or null. A control shows it as
-  // "held" whether or not it displaced anyone.
-  function holdOn(holds, room, entity, aspect, now) {
-    return liveHolds(holds, now).filter(function (h) {
-      return h.room === room && h.entity === entity && h.aspect === aspect;
-    })[0] || null;
+  // The units' holds that count, from each arbiter's arbitration document
+  // (home/arbitration/{arbiter}), which lists the holds in force on an
+  // aspect with the winner first (docs/design.md#which-hold-wins). A hold
+  // its unit published but the arbiter does not count, because the unit is
+  // gone or lost its grant, is not there. Without an `until` a hold stands
+  // until it is released.
+  function unitHolds(arbitration, now) {
+    var out = [];
+    Object.keys(arbitration || {}).forEach(function (docKey) {
+      var doc = arbitration[docKey];
+      ((doc && doc.aspects) || []).forEach(function (entry) {
+        if (!entry || typeof entry.entity !== 'string' || typeof entry.aspect !== 'string') return;
+        (entry.holds || []).forEach(function (h, i) {
+          if (!h || h.family) return;
+          var until = h.until === undefined || h.until === null ? Infinity : Date.parse(h.until);
+          if (isNaN(until) || until <= now) return;
+          out.push({
+            key: docKey + '/' + entry.room + '/' + entry.entity + '/' + entry.aspect + '/' + h.unit,
+            room: entry.room, entity: entry.entity, aspect: entry.aspect,
+            priority: h.priority, actor: h.unit, value: h.value,
+            reason: typeof h.reason === 'string' ? h.reason : null,
+            winner: i === 0, until: until
+          });
+        });
+      });
+    });
+    return out;
+  }
+
+  // The hold in force over one aspect, or null: the family's, else the
+  // unit hold that wins it. A control shows it as "held" whether or not it
+  // displaced anyone.
+  function holdOn(holds, room, entity, aspect, now, arbitration) {
+    var on = function (h) { return h.room === room && h.entity === entity && h.aspect === aspect; };
+    return liveHolds(holds, now).filter(on)[0] ||
+      unitHolds(arbitration, now).filter(function (h) { return h.winner && on(h); })[0] || null;
+  }
+
+  // The instant "hold until HH:MM" means: the next time the local clock
+  // shows it, later today or else tomorrow. It goes to the arbiter as UTC,
+  // so the arbiter needs no time zone. The browser's zone stands in for the
+  // house's, so a phone in another zone picks a time in its own. null for
+  // anything that is not a time of day.
+  function holdUntil(hhmm, now) {
+    var m = /^(\d{2}):(\d{2})$/.exec(hhmm || '');
+    if (!m || +m[1] > 23 || +m[2] > 59) return null;
+    var d = new Date(now);
+    d.setHours(+m[1], +m[2], 0, 0);
+    if (d.getTime() <= now) d.setDate(d.getDate() + 1);
+    return d.toISOString();
   }
 
   /* Whether a hold displaced somebody. That is the case when the hold's
@@ -615,7 +677,7 @@
       if (!displaces(hold, model.driven)) return;
       var e = entityByName[hold.entity];
       var label = e ? e.label || titleCase(hold.entity) : titleCase(hold.entity);
-      var detail = 'held by ' + hold.actor + ' until ' + clockOf(hold.until);
+      var detail = 'held by ' + hold.actor + (hold.nextChange ? ' until the next change' : ' until ' + clockOf(hold.until));
       if (hold.refused) {
         detail += ' \u00b7 ' + hold.refused + (hold.refused === 1 ? ' wish' : ' wishes') + ' refused';
       }
@@ -1841,6 +1903,7 @@
    *   and a matching state from before it says the aspect already had the
    *   value. Else nothing answered. A command older than what a capped
    *   query kept is not judged: its answer may have been cut.
+     A release or a report reaches no device, so nothing judges it.
    * - `taken-over`: another actor's command displaced its hold.
    * - `decision`: why one of its rules acted or did not (ctx.decision).
    * - `event`: one of its other health events. */
@@ -1874,6 +1937,8 @@
           entry.by = unitNameFromHealthKey(answer.key);
           entry.reason = answer.value.reason || null;
         }
+      } else if (envelope.hold === 'release' || envelope.hold === 'report') {
+        entry.outcome = envelope.hold === 'release' ? 'released' : 'reported';
       } else if (cut(c.ts, raw.answers_from) || cut(c.ts, series.from)) {
         entry.outcome = 'unknown';
       } else {
@@ -2088,6 +2153,8 @@
     computeDeviations: computeDeviations,
     liveHolds: liveHolds,
     holdOn: holdOn,
+    unitHolds: unitHolds,
+    holdUntil: holdUntil,
     displaces: displaces,
     forecastFor: forecastFor,
     forecastSourcesFor: forecastSourcesFor,

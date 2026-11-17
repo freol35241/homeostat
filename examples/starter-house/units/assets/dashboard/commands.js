@@ -159,8 +159,9 @@ function outcomeStatus(done, fmt, room, entity, aspect) {
     return { tone: 'warn', text: 'The device settled on ' + fmt(done.seen) + ' (asked ' + fmt(done.value) + ')' };
   }
   if (done.outcome === 'held') {
-    var hold = logic.holdOn(store.holds, room, entity, aspect, Date.now());
-    var until = hold && hold.until ? ' until ' + new Date(hold.until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+    var hold = logic.holdOn(store.holds, room, entity, aspect, Date.now(), store.arbitration);
+    var until = hold && hold.nextChange ? ' until the next change'
+      : hold && isFinite(hold.until) ? ' until ' + new Date(hold.until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
     return { tone: 'warn', text: 'Held by ' + done.by + (done.actor ? ' (' + done.actor + ')' : '') + until + ' · ' + fmt(done.value) + ' not sent' };
   }
   if (done.outcome === 'rejected') {
@@ -194,6 +195,29 @@ export function announceOutcome(outcome) {
 
 function cssEscape(text) {
   return window.CSS && CSS.escape ? CSS.escape(text) : String(text).replace(/["\\]/g, '\\$&');
+}
+
+/* Change a family hold (docs/design.md#hold-intents): "release" hands
+ * the aspect back, and an instant holds `value` until then. Neither is
+ * tracked as a command. A release reaches no device, and a new end sends
+ * the value the device already holds, so no readback answers it. The
+ * hold's record changing is the answer, and the page redraws when it
+ * does. Resolves to whether the dashboard took it. */
+export function sendHold(room, entity, aspect, value, hold) {
+  var body = hold === 'release'
+    ? { room: room, entity: entity, aspect: aspect, hold: hold }
+    : { room: room, entity: entity, aspect: aspect, value: value, hold: hold };
+  return fetch('/api/cmd', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Homeostat': 'family' },
+    body: JSON.stringify(body)
+  }).then(function (r) {
+    if (!r.ok) return r.text().then(function (t) { throw new Error(t || ('HTTP ' + r.status)); });
+    return true;
+  }).catch(function (e) {
+    toast(errText(e));
+    return false;
+  });
 }
 
 export function sendLightsOff() {
