@@ -17,6 +17,11 @@ grants = "home/meta/system/grants"
 grants_pending = "home/meta/system/grants_pending"
 # Every unit's holds, which it resolves (docs/design.md#holds).
 holds = "home/hold/**"
+# Each holder's supervision status, the adapters' drops, and the devices'
+# availability (docs/design.md#when-a-holder-stops).
+health = "home/health/*"
+events = "home/health/*/event"
+available = "home/state/*/*/available"
 
 [bus.publishes]
 arbiter = { key = "home/arbiter/**" }

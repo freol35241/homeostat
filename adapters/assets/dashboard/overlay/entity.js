@@ -2,7 +2,7 @@
 import { html } from '../html.js';
 import logic, { titleCase } from '../logic.js';
 import { showOverlay } from './panel.js';
-import { controlDisabled, findEntity, houseControls, localState, overlay, store, unitLabel } from '../store.js';
+import { controlDisabled, descriptorField, findEntity, houseControls, localState, overlay, store, unitLabel } from '../store.js';
 import { aspectValueSpan, renderAspectControl } from '../widgets/controls.js';
 import { BESPOKE_WIDGET, relTime, widgetForButton, widgetForClimate, widgetForEntity, widgetForSensor } from '../widgets/entity.js';
 
@@ -62,19 +62,22 @@ function renderTrackers(person) {
   return rows.length ? html`<div class="card-label" style="margin-top:20px;">Trackers</div>${rows}` : '';
 }
 
-// The family's holds on this entity. A hold at the manual band is the
-// family's; a lower band's lease is the house driving the aspect and shows
-// only as `held` on its row. Each hold can be given a new end, which sends
-// the held value again with that end, or be handed back to the house
+// What holds this entity's aspects (docs/design.md#holds). The family's
+// holds come first, each with a new end, which sends the held value again
+// with that end, or a hand-back to the house
 // (docs/design.md#hold-intents). The end picked so far is kept in
-// localState, because every state delta replaces this markup.
+// localState, because every state delta replaces this markup. A unit's
+// hold is listed with its reason and nothing to press: its unit releases
+// it.
 function renderHolds(entity) {
-  if (entity.write_mode !== 'arbitrated' || controlDisabled(entity)) return '';
+  if (entity.write_mode !== 'arbitrated') return '';
   var held = logic.liveHolds(store.holds, Date.now()).filter(function (h) {
-    return h.room === entity.room && h.entity === entity.name && h.priority === 'manual';
+    return h.room === entity.room && h.entity === entity.name;
   });
   if (!held.length) return '';
-  var rows = held.map(function (h) {
+  var family = held.filter(function (h) { return h.priority === 'manual'; });
+  var units = held.filter(function (h) { return h.priority !== 'manual'; });
+  var rows = controlDisabled(entity) ? [] : family.map(function (h) {
     var attrs = html` data-room="${h.room}" data-entity="${h.entity}" data-aspect="${h.aspect}" data-key="${h.key}"`;
     var end = new Date(h.until);
     var clock = String(end.getHours()).padStart(2, '0') + ':' + String(end.getMinutes()).padStart(2, '0');
@@ -91,7 +94,14 @@ function renderHolds(entity) {
       <span class="muted">by ${unitLabel(h.actor)} until ${ends}</span>
       <div class="seg">${extend}<button data-action="hold-release"${attrs}>Resume automatic</button></div></div>`;
   });
-  return html`<div class="card-label" style="margin-top:20px;">Held</div>${rows}`;
+  units.forEach(function (h) {
+    var value = logic.formatAspect(h.aspect, descriptorField(entity, h.aspect), h.value);
+    var ends = isFinite(h.until) ? ' until ' + new Date(h.until).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' }) : '';
+    rows.push(html`<div class="aspect-row hold-row">
+      <span class="aspect-label">${titleCase(h.aspect)}</span>
+      <span class="muted">${value} · ${unitLabel(h.actor)}${h.reason ? ' · ' + h.reason : ''}${ends}</span></div>`);
+  });
+  return rows.length ? html`<div class="card-label" style="margin-top:20px;">Held</div>${rows}` : '';
 }
 
 // A box to send a notifier its text, so a phone can be checked by hand

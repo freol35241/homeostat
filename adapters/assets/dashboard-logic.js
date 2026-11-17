@@ -434,17 +434,25 @@
   // record states `until` and the reader applies it, as with a forecast's
   // `issued`. The arbiter also deletes the key at the deadline, so this
   // check is a second guard.
+  // A unit's own hold (docs/design.md#holds) names only its wish, so its
+  // holder, room, entity and aspect are read from the key, and without an
+  // `until` it stands until released.
   function liveHolds(holds, now) {
     var out = [];
     Object.keys(holds || {}).forEach(function (key) {
       var h = holds[key];
-      if (!h || typeof h.entity !== 'string' || typeof h.aspect !== 'string') return;
-      var until = Date.parse(h.until);
+      if (!h || typeof h !== 'object') return;
+      var parts = key.split('/'); // home/hold/{unit}/{room}/{entity}/{aspect}
+      var entity = typeof h.entity === 'string' ? h.entity : parts[4];
+      var aspect = typeof h.aspect === 'string' ? h.aspect : parts[5];
+      if (typeof entity !== 'string' || typeof aspect !== 'string') return;
+      var until = h.until === undefined || h.until === null ? Infinity : Date.parse(h.until);
       if (isNaN(until) || until <= now) return;
       out.push({
         key: key,
-        room: h.room, entity: h.entity, aspect: h.aspect,
-        priority: h.priority, actor: h.actor, value: h.value,
+        room: typeof h.room === 'string' ? h.room : parts[3], entity: entity, aspect: aspect,
+        priority: h.priority, actor: typeof h.actor === 'string' ? h.actor : parts[2], value: h.value,
+        reason: typeof h.reason === 'string' ? h.reason : null,
         refused: typeof h.refused === 'number' ? h.refused : 0,
         until: until
       });

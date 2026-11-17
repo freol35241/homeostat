@@ -237,7 +237,7 @@ test('holds come back soonest-first, and a malformed entry is dropped rather tha
       { room: 'livingroom', entity: 'heatpump', aspect: 'mode', priority: 'manual', actor: 'b', until: '2026-09-25T20:30:00Z' },
     'home/hold/arbiter/livingroom/heatpump/setpoint':
       { room: 'livingroom', entity: 'heatpump', aspect: 'setpoint', priority: 'manual', actor: 'b', until: 'soon' },
-    'home/hold/arbiter/livingroom/heatpump/x': { entity: 'heatpump', until: '2026-09-25T21:00:00Z' },
+    'home/hold/arbiter/broken': { entity: 'heatpump', until: '2026-09-25T21:00:00Z' },
     'home/hold/arbiter/livingroom/heatpump/y': null,
   };
   const live = logic.liveHolds(docs, NOW);
@@ -2132,3 +2132,16 @@ test('a press is timed when it arrives, and a snapshot carries the times the das
   logic.applyMessage(store, { type: 'state', key: 'home/state/hall/lamp/on', value: true, at: 700 }, 700);
   assert.deepEqual(Object.keys(store.actionAt), [key]);
 });
+
+test("a unit's hold is read from its key and stands without an until", () => {
+  const holds = {
+    'home/hold/heating/utility/stove/on': { value: false, priority: 'automation', reason: 'flue hot', id: 'f1' },
+    'home/hold/heating/utility/stove/power_level': { value: 3, priority: 'automation', until: '2026-09-25T20:00:00Z', id: 'p1' },
+  };
+  const [hold] = logic.liveHolds(holds, NOW);
+  assert.deepEqual(
+    { room: hold.room, entity: hold.entity, aspect: hold.aspect, actor: hold.actor, reason: hold.reason, until: hold.until },
+    { room: 'utility', entity: 'stove', aspect: 'on', actor: 'heating', reason: 'flue hot', until: Infinity });
+  assert.equal(logic.liveHolds(holds, NOW).length, 1, 'the ended one is dropped');
+});
+

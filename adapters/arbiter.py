@@ -45,6 +45,11 @@ holds back from the mirror, so it sends nothing that was already sent.
 Configuration: the live parameter hold_minutes (family-editable), seeded
 from the manifest default.
 
+It also follows each unit's health, so a gone holder's holds end as its
+`on_loss` says, and its adapters' drops and the devices' `available`, so
+a hold an adapter could not deliver is sent again when the device is
+back.
+
 Health events at home/health/{unit}/event: `drop` (off-schema-key,
 invalid-command, unbound, malformed-hold), `refuse` when a command loses
 to a hold, `preempt` when a higher hold takes over, and `resume` when a
@@ -105,7 +110,8 @@ def holders(grants: list) -> dict:
     """Return each held (room, entity)'s hold rows and its capability.
 
     The value maps (room, entity) to (capability, [(unit, band, [key
-    expressions])]), from the grant table's hold rows (`"hold": true`).
+    expressions], on_loss)]), from the grant table's hold rows (`"hold":
+    true`).
     """
     out: dict = {}
     for grant in grants:
@@ -115,7 +121,7 @@ def holders(grants: list) -> dict:
         for e in grant["entities"]:
             pair = (e["room"], e["name"])
             _, rows = out.setdefault(pair, (e.get("capability"), []))
-            rows.append((grant["unit"], grant["priority"], exprs))
+            rows.append((grant["unit"], grant["priority"], exprs, grant.get("on_loss")))
     return out
 
 
@@ -194,14 +200,14 @@ class Bindings:
             return "arbitrated"
         return "bound" if target in bound else "unbound"
 
-    def band_of(self, unit: str, target: tuple[str, str, str]) -> str | None:
-        """Return the band `unit` may hold `target` at, or None without a grant."""
+    def grant_of(self, unit: str, target: tuple[str, str, str]) -> tuple[str, str | None] | None:
+        """Return the band and `on_loss` `unit` may hold `target` with, or None without a grant."""
         room, entity, aspect = target
         _, rows = self._sets[2].get((room, entity), (None, []))
         key = zenoh.KeyExpr(keys.hold_key(unit, room, entity, aspect))
-        for holder, band, exprs in rows:
+        for holder, band, exprs, on_loss in rows:
             if holder == unit and any(expr.includes(key) for expr in exprs):
-                return band
+                return band, on_loss
         return None
 
     def rest_of(self, target: tuple[str, str, str]):
@@ -243,15 +249,24 @@ class Resolver:
     wall-clock, fixed when it is placed, because another process, and this
     one after a restart, can only use a wall-clock deadline.
 
+    A holder that is gone, its breaker open or stopped for good, keeps the
+    holds its `on_loss` keeps: by default those for the rest value
+    (docs/design.md#when-a-holder-stops). While the supervisor brings it
+    back, its holds count as before.
+
+    A hold forwarded to a device its adapter found unavailable is sent
+    again when the device's `available` returns, and only then. A device
+    changed by hand while it was away is not changed back.
+
     Pure bookkeeping: no bus, no threads. Each change appends what it
     causes to `effects`, as ("forward", target, envelope) or ("event",
-    kind, fields), for the caller to carry out. `band_of(unit, target)` and
-    `rest_of(target)` come from the grant table; `clock` and `wall` are
-    time.monotonic and time.time in the unit and fakes in tests.
+    kind, fields), for the caller to carry out. `grant_of(unit, target)`
+    and `rest_of(target)` come from the grant table; `clock` and `wall`
+    are time.monotonic and time.time in the unit and fakes in tests.
     """
 
-    def __init__(self, band_of, rest_of, clock=time.monotonic, wall=time.time):
-        self._band_of = band_of
+    def __init__(self, grant_of, rest_of, clock=time.monotonic, wall=time.time):
+        self._grant_of = grant_of
         self._rest_of = rest_of
         self._clock = clock
         self._wall = wall
@@ -260,6 +275,8 @@ class Resolver:
         self._applied: dict[tuple, dict] = {}
         self._winner: dict[tuple, dict] = {}
         self._refused: dict[tuple, int] = {}
+        self._gone: set[str] = set()
+        self._undelivered: set[tuple] = set()
 
     # ---- what stands on an aspect
 
@@ -271,6 +288,11 @@ class Resolver:
         """
         now = self._clock()
         rest = self._rest_of(target)
+
+        def is_rest(value) -> bool:
+            # By type too, so a hold of 0 is not the rest value False.
+            return rest is not None and type(value) is type(rest) and value == rest
+
         out = []
         family = self._family.get(target)
         if family is not None and now < family["deadline"]:
@@ -282,8 +304,11 @@ class Resolver:
         for unit, hold in self._holds.get(target, {}).items():
             if unit == without:
                 continue
-            band = self._band_of(unit, target)
-            if band is None or (hold["deadline"] is not None and hold["deadline"] <= now):
+            grant = self._grant_of(unit, target)
+            if grant is None or (hold["deadline"] is not None and hold["deadline"] <= now):
+                continue
+            band, on_loss = grant
+            if unit in self._gone and not (on_loss == "keep" or (on_loss is None and is_rest(hold["value"]))):
                 continue
             candidate = {
                 "id": hold["id"], "unit": unit, "priority": band, "value": hold["value"],
@@ -293,10 +318,6 @@ class Resolver:
                 if hold.get(field) is not None:
                     candidate[field] = hold[field]
             out.append(candidate)
-        def is_rest(value) -> bool:
-            # By type too, so a hold of 0 is not the rest value False.
-            return rest is not None and type(value) is type(rest) and value == rest
-
         out.sort(key=lambda c: (RANKS.index(c["priority"]), is_rest(c["value"]), c["seen"]), reverse=True)
         return out
 
@@ -487,6 +508,38 @@ class Resolver:
             del self._holds[target]
         self.resolve(target, effects)
 
+    # ---- holders and devices
+
+    def holder(self, unit: str, gone: bool, effects: list) -> None:
+        """Note whether `unit` is gone, and resolve what it holds if that changed."""
+        if (unit in self._gone) == gone:
+            return
+        if gone:
+            self._gone.add(unit)
+        else:
+            self._gone.discard(unit)
+        for target in sorted(t for t, held in self._holds.items() if unit in held):
+            self.resolve(target, effects)
+
+    def undelivered(self, cmd_id: str) -> None:
+        """Note that the adapter dropped the forward `cmd_id` with the device away."""
+        for target, applied in self._applied.items():
+            if applied.get("id") == cmd_id and "command" not in applied:
+                self._undelivered.add(target)
+
+    def available(self, room: str, entity: str, effects: list) -> None:
+        """Send again what an adapter could not deliver while the device was away."""
+        for target in sorted(t for t in self._undelivered if t[:2] == (room, entity)):
+            self._undelivered.discard(target)
+            won = self.winner(target)
+            applied = self._applied.get(target)
+            if won is None or applied is None or won["id"] != applied.get("id"):
+                continue
+            effects.append((
+                "forward", target,
+                {"value": won["value"], "priority": won["priority"], "actor": won["unit"], "id": won["id"]},
+            ))
+
     # ---- time and the grant table
 
     def expire(self, effects: list) -> None:
@@ -520,6 +573,7 @@ class Resolver:
         for target in gone:
             for table in (self._family, self._holds, self._applied, self._winner, self._refused):
                 table.pop(target, None)
+            self._undelivered.discard(target)
         return bool(gone)
 
     # ---- what is published
@@ -628,7 +682,7 @@ def main():
     # stored but not resolved, since its grant is not known.
     routes_box: list = []
     resolver = Resolver(
-        band_of=lambda u, t: routes_box[0].band_of(u, t) if routes_box else None,
+        grant_of=lambda u, t: routes_box[0].grant_of(u, t) if routes_box else None,
         rest_of=lambda t: routes_box[0].rest_of(t) if routes_box else None,
     )
     # hold key -> the family record last put there, and the document.
@@ -694,6 +748,58 @@ def main():
 
     hold_sub = session.subscribe("home/hold/**", on_hold)
 
+    # A holder is gone once its breaker opens or it stops for good. While
+    # the supervisor brings it back (starting, backoff), its holds count.
+    gone_statuses = ("open", "stopped")
+
+    def on_health(sample) -> None:
+        holder = str(sample.key_expr).split("/")[2]
+        try:
+            status = json.loads(sample.payload.to_bytes()).get("status")
+        except (ValueError, AttributeError):
+            return
+        effects: list = []
+        with changed:
+            resolver.holder(holder, status in gone_statuses, effects)
+            if routes_box:
+                carry_out_locked(effects)
+
+    def on_event(sample) -> None:
+        # An adapter's drop of a forward it could not deliver names the
+        # forward's id (docs/design.md#when-a-holder-stops).
+        try:
+            event = json.loads(sample.payload.to_bytes())
+        except ValueError:
+            return
+        if (
+            isinstance(event, dict)
+            and event.get("kind") == "drop"
+            and event.get("reason") == "device-unavailable"
+            and isinstance(event.get("cmd_id"), str)
+        ):
+            with changed:
+                resolver.undelivered(event["cmd_id"])
+
+    def on_available(sample) -> None:
+        parts = str(sample.key_expr).split("/")
+        try:
+            back = json.loads(sample.payload.to_bytes()) is True
+        except ValueError:
+            return
+        if not back or len(parts) != 5:
+            return
+        effects: list = []
+        with changed:
+            resolver.available(parts[2], parts[3], effects)
+            if routes_box:
+                carry_out_locked(effects)
+
+    health_subs = [
+        session.subscribe("home/health/*", on_health),
+        session.subscribe("home/health/*/event", on_event),
+        session.subscribe("home/state/*/*/available", on_available),
+    ]
+
     # The family's holds, the units' holds and the applied holds outlive
     # this process: the mirror kept what was published. This runs before
     # Bindings, whose seed drops what stands on an entity no longer
@@ -715,6 +821,9 @@ def main():
                 continue
             holder, target = parsed
             resolver.put_hold(target, holder, record, time.time() - age, [])
+        for key, health, _age in mirrored("home/health/*"):
+            if isinstance(health, dict):
+                resolver.holder(key.split("/")[2], health.get("status") in gone_statuses, [])
 
     def on_arbitrated(arbitrated: frozenset) -> None:
         effects: list = []
@@ -820,6 +929,8 @@ def main():
     expiry.join(timeout=2)
     cmd_sub.undeclare()
     hold_sub.undeclare()
+    for sub in health_subs:
+        sub.undeclare()
     session.close()
 
 

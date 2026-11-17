@@ -313,6 +313,149 @@ async fn a_restarted_arbiter_sends_nothing_already_applied() {
     sup.shutdown();
 }
 
+/// When a holder is gone for good, its hold ends unless it is for the
+/// rest value or its publish says `keep`, and the hold beneath is sent
+/// (docs/design.md#when-a-holder-stops).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_gone_holders_hold_ends_and_the_one_beneath_is_sent() {
+    let house = temp_house(FIXTURE, "arbiter-gone");
+    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("adapters/arbiter.py");
+    edit(
+        &house,
+        "units/arbiter.toml",
+        "uv run ../../../adapters/arbiter.py",
+        &format!("uv run {}", script.display()),
+    );
+    // A second holder at agent that the supervisor does not restart.
+    std::fs::write(
+        house.join("units/curfew.toml"),
+        "schema = 1\n\n[unit]\nname = \"curfew\"\nkind = \"automation\"\n\n\
+         [runtime]\ncommand = \"fake_adapter\"\nrestart = \"never\"\nshutdown_grace_s = 5\n\n\
+         [bus.publishes]\nlocked = { key = \"home/hold/curfew/hallway/front_door/locked\", \
+         capability = \"lock\", priority = \"agent\" }\n",
+    )
+    .expect("write the curfew unit");
+    let mut sup = Supervisor::spawn_at(&house, &[]);
+    let observer = sup.observer().await;
+    let mut watch = health_watch(&observer, "arbiter").await;
+    await_health(&mut watch, Duration::from_mins(1), |h| {
+        h.status == HealthStatus::Running
+    })
+    .await;
+    let mut curfew = health_watch(&observer, "curfew").await;
+    await_health(&mut curfew, Duration::from_mins(1), |h| {
+        h.status == HealthStatus::Running
+    })
+    .await;
+    let arbiter_sub = observer
+        .declare_subscriber(ARBITER_KEY)
+        .await
+        .expect("arbiter subscriber");
+
+    observer
+        .put(
+            SETBACK_HOLD,
+            json!({"value": false, "priority": "automation", "id": "5e7bac04"}).to_string(),
+        )
+        .await
+        .expect("hold put");
+    assert_eq!(
+        next_json(&arbiter_sub, Duration::from_secs(10))
+            .await
+            .map(|f| f["id"].clone()),
+        Some(json!("5e7bac04"))
+    );
+    observer
+        .put(
+            "home/hold/curfew/hallway/front_door/locked",
+            json!({"value": true, "priority": "agent", "id": "c0f00001"}).to_string(),
+        )
+        .await
+        .expect("hold put");
+    assert_eq!(
+        next_json(&arbiter_sub, Duration::from_secs(10))
+            .await
+            .map(|f| f["id"].clone()),
+        Some(json!("c0f00001")),
+        "the agent's hold wins"
+    );
+
+    let pid = running_pid(&observer, "curfew").await;
+    unsafe {
+        libc::kill(i32::try_from(pid).expect("a pid fits i32"), libc::SIGKILL);
+    }
+    await_health(&mut curfew, Duration::from_mins(1), |h| {
+        h.status == HealthStatus::Stopped
+    })
+    .await;
+    let forwarded = next_json(&arbiter_sub, Duration::from_secs(10))
+        .await
+        .expect("the hold beneath is sent");
+    assert_eq!(
+        forwarded["id"],
+        json!("5e7bac04"),
+        "a lock has no rest value, so the curfew's hold ended"
+    );
+
+    sup.shutdown();
+}
+
+/// A hold the adapter could not deliver, because the device was away, is
+/// sent again when the device's `available` returns, and a delivered one is
+/// not (docs/design.md#when-a-holder-stops).
+#[tokio::test(flavor = "multi_thread")]
+async fn an_undelivered_hold_is_sent_when_the_device_is_back() {
+    let (mut sup, observer) = setup().await;
+    let arbiter_sub = observer
+        .declare_subscriber(ARBITER_KEY)
+        .await
+        .expect("arbiter subscriber");
+    observer
+        .put(
+            SETBACK_HOLD,
+            json!({"value": false, "priority": "automation", "id": "5e7bac05"}).to_string(),
+        )
+        .await
+        .expect("hold put");
+    assert!(next_json(&arbiter_sub, Duration::from_secs(10))
+        .await
+        .is_some());
+
+    // Back without a failed delivery: nothing is sent.
+    let available = "home/state/hallway/front_door/available";
+    observer
+        .put(available, "true")
+        .await
+        .expect("available put");
+    expect_silence(
+        &arbiter_sub,
+        Duration::from_millis(800),
+        "a forward of a delivered hold",
+    )
+    .await;
+
+    // The adapter reports the forward undelivered, then the device returns.
+    observer
+        .put(
+            "home/health/reflector/event",
+            json!({"kind": "drop", "reason": "device-unavailable", "cmd_id": "5e7bac05"})
+                .to_string(),
+        )
+        .await
+        .expect("event put");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    observer
+        .put(available, "true")
+        .await
+        .expect("available put");
+    let forwarded = next_json(&arbiter_sub, Duration::from_secs(10))
+        .await
+        .expect("the undelivered hold is sent again");
+    assert_eq!(forwarded["id"], json!("5e7bac05"));
+
+    sup.shutdown();
+}
+
 /// A manual command's `hold` decides what happens to the family hold
 /// (docs/design.md#hold-intents): "none" forwards and holds nothing,
 /// "report" holds without forwarding, "release" hands the aspect back

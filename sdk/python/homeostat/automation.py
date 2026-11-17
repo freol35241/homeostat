@@ -719,6 +719,71 @@ class Context:
             holds[key] = record
             self._session.put_json(key, record)
 
+    def hold_while(
+        self,
+        binding: str,
+        value: Any,
+        *,
+        hold: bool,
+        release: bool,
+        room: str | None = None,
+        entity: str | None = None,
+        aspect: str | None = None,
+        reason: str | None = None,
+    ) -> bool:
+        """Hold `value` once `hold` is true, and release it once `release` is (docs/design.md#holds).
+
+        A rule that guards a device calls this on every reading, with two
+        conditions apart by a margin, such as holding a burner off above a
+        flue temperature of 200 °C and releasing it below 180 °C. Between
+        the two, the hold stays as it is, so a reading near one threshold
+        does not toggle it. A rule that holds on every evaluation needs no
+        helper; this is for one with a gap.
+
+        Parameters
+        ----------
+        binding : str
+            A `[bus.publishes]` binding under `home/hold/`.
+        value : Any
+            The value to hold, JSON-encodable.
+        hold : bool
+            Whether the condition to hold is true now.
+        release : bool
+            Whether the condition to release is true now. It wins when both
+            are.
+        room : str or None, optional
+            The room slot; required where the expression's is a wildcard.
+        entity : str or None, optional
+            The entity slot; required where the expression's is a wildcard.
+        aspect : str or None, optional
+            The aspect slot; required where the expression's is a wildcard.
+        reason : str or None, optional
+            Why, in a few words, carried by the hold.
+
+        Returns
+        -------
+        bool
+            Whether the unit holds `value` after the call.
+
+        Raises
+        ------
+        KeyError
+            If `binding` is not declared in `[bus.publishes]`.
+        ValueError
+            As for `hold`.
+        """
+        if release:
+            self.release(binding, room=room, entity=entity, aspect=aspect)
+            return False
+        key = self._concrete_key(binding, room=room, entity=entity, aspect=aspect)
+        with self._holds_lock:
+            current = self._own_holds().get(key)
+        holding = current is not None and _as_json(current.get("value")) == _as_json(value)
+        if hold or holding:
+            self.hold(binding, value, room=room, entity=entity, aspect=aspect, reason=reason)
+            return not self.paused
+        return False
+
     def release(
         self,
         binding: str,

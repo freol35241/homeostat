@@ -148,5 +148,27 @@ class ReleaseTest(unittest.TestCase):
         self.assertEqual(len(ctx.puts), 1, "a paused automation holds nothing")
 
 
+
+class HoldWhileTest(unittest.TestCase):
+    """A guard with hysteresis: hold above 200, release below 180."""
+
+    def step(self, ctx, flue):
+        return ctx.hold_while("stove", False, hold=flue > 200, release=flue < 180, reason="flue hot")
+
+    def test_it_holds_across_the_gap_and_releases_below_it(self):
+        ctx = context()
+        held = [self.step(ctx, flue) for flue in (150, 190, 210, 195, 185, 175, 190)]
+        self.assertEqual(held, [False, False, True, True, True, False, False])
+        self.assertEqual(len(ctx.puts), 1, "held once, not on every reading")
+        self.assertEqual(ctx.puts[0][1]["reason"], "flue hot")
+        self.assertEqual(ctx.deletes, [HOLD])
+
+    def test_a_restart_inside_the_gap_keeps_the_hold(self):
+        kept = {"value": False, "priority": "automation", "reason": "flue hot", "id": "c0ffee01"}
+        ctx = context(mirror=[(HOLD, kept)])
+        self.assertTrue(self.step(ctx, 190))
+        self.assertEqual(ctx.puts, [])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Code, ValidationError};
 use crate::expand::{Direction, ExpandedKey};
 use crate::keyspace::{KeyExpr, Segment};
-use crate::manifest::{Priority, UnitKind, WriteMode, CAPABILITIES, VOCABULARY};
+use crate::manifest::{OnLoss, Priority, UnitKind, WriteMode, CAPABILITIES, VOCABULARY};
 use crate::repo::House;
 
 /// One resolved grant: a publish expression resolved against the concrete
@@ -43,6 +43,10 @@ pub struct Grant {
     /// (docs/design.md#holds). Left out of the table when false.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hold: bool,
+    /// A holder row's `on_loss`, when the publish declares one
+    /// (docs/design.md#when-a-holder-stops).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_loss: Option<OnLoss>,
 }
 
 impl Grant {
@@ -358,6 +362,17 @@ fn build_grants(
         let subject = format!("{}.{}", key.unit, key.entry);
         let mut keys: Vec<String> = key.exprs.iter().map(ToString::to_string).collect();
         keys.sort();
+        if spec.on_loss.is_some() && class != "hold" {
+            errors.push(ValidationError::new(
+                Code::OnLossNotHold,
+                subject.clone(),
+                format!(
+                    "publish \"{}\" declares on_loss, which only a hold publish takes",
+                    key.source
+                ),
+                Some(unit.path.clone()),
+            ));
+        }
 
         // A binding unit's state or forecast publish records what it binds, so
         // a change to any bound entity is a grant delta. Forecast counts for
@@ -392,12 +407,13 @@ fn build_grants(
                 keys,
                 entities: bound,
                 hold: false,
+                on_loss: None,
             });
             continue;
         }
+        let hold = class == "hold";
         // A service's hold publish is its own output, as the arbiter's
         // family holds are, and grants nothing.
-        let hold = class == "hold";
         if hold && key.kind == UnitKind::Service {
             continue;
         }
@@ -504,6 +520,7 @@ fn build_grants(
             keys,
             entities: granted,
             hold,
+            on_loss: spec.on_loss,
         });
     }
 
@@ -1118,6 +1135,7 @@ mod tests {
                 key: "home/cmd/hallway/lock/lock".to_string(),
                 capability: Some("lock".to_string()),
                 priority: Some(Priority::Automation),
+                on_loss: None,
             },
         );
         let night_mode_bus = BusSection {
@@ -1155,6 +1173,7 @@ mod tests {
                 key: "home/arbiter/**".to_string(),
                 capability: None,
                 priority: None,
+                on_loss: None,
             },
         );
         let arbiter_bus = BusSection {
@@ -1211,6 +1230,7 @@ mod tests {
                     key: "home/arbiter/**".to_string(),
                     capability: None,
                     priority: None,
+                    on_loss: None,
                 },
             );
             Some(BusSection {
@@ -1264,6 +1284,7 @@ mod tests {
                 key: "home/state/{room}/{entity}/**".to_string(),
                 capability: None,
                 priority: None,
+                on_loss: None,
             },
         );
         let modes_bus = BusSection {
@@ -1278,6 +1299,7 @@ mod tests {
                 key: "home/cmd/global/house_mode/on".to_string(),
                 capability: Some("switch".to_string()),
                 priority: Some(Priority::Automation),
+                on_loss: None,
             },
         );
         let buttons_bus = BusSection {
@@ -1384,6 +1406,7 @@ mod tests {
                 key: "home/forecast/global/spot_price/price/nordpool".to_string(),
                 capability: None,
                 priority: None,
+                on_loss: None,
             },
         );
         let house = House {
@@ -1477,6 +1500,7 @@ mod tests {
                     key: (*key).to_string(),
                     capability: None,
                     priority: None,
+                    on_loss: None,
                 },
             );
             units.push(unit(
@@ -1586,6 +1610,7 @@ mod tests {
                 key: "home/state/global/fused_temp/temperature".to_string(),
                 capability: None,
                 priority: None,
+                on_loss: None,
             },
         );
         let mut subs = BTreeMap::new();
@@ -1729,6 +1754,7 @@ mod tests {
                     key: "home/state/{room}/{entity}/**".to_string(),
                     capability: None,
                     priority: None,
+                    on_loss: None,
                 },
             );
             house
@@ -1780,6 +1806,7 @@ mod tests {
                     key: format!("home/cmd/kitchen/lamp/{aspect}"),
                     capability: Some("light".to_string()),
                     priority: Some(Priority::Automation),
+                    on_loss: None,
                 },
             );
         }
@@ -1835,6 +1862,7 @@ mod tests {
                 key: "home/arbiter/**".to_string(),
                 capability: None,
                 priority: None,
+                on_loss: None,
             },
         );
         arbiter_publishes.insert(
@@ -1843,6 +1871,7 @@ mod tests {
                 key: "home/hold/arbiter/**".to_string(),
                 capability: None,
                 priority: None,
+                on_loss: None,
             },
         );
         let mut units = vec![unit(
@@ -1870,6 +1899,7 @@ mod tests {
                         .to_string(),
                     ),
                     priority: Some(*band),
+                    on_loss: None,
                 },
             );
             units.push(unit(
@@ -2055,6 +2085,41 @@ mod tests {
         )]);
         assert!(
             errors.iter().any(|e| e.code == Code::ReservedClassPublish),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn on_loss_rides_the_holder_row_and_only_a_hold_takes_it() {
+        let mut house = house_holding(&[(
+            "flue_guard",
+            "home/hold/flue_guard/utility/stove/on",
+            Priority::Automation,
+        )]);
+        let guard = house
+            .units
+            .iter_mut()
+            .find(|u| u.manifest.unit.name == "flue_guard")
+            .expect("the holder");
+        let publishes = &mut guard.manifest.bus.as_mut().expect("bus").publishes;
+        publishes.get_mut("hold").expect("hold").on_loss = Some(OnLoss::Keep);
+        publishes.insert(
+            "state".to_string(),
+            PublishSpec {
+                key: "home/state/utility/stove/flue".to_string(),
+                capability: None,
+                priority: None,
+                on_loss: Some(OnLoss::Release),
+            },
+        );
+        let (expanded, _warnings, _expand_errors) = expand(&house);
+        let (grants, _warnings, errors) = resolve(&house, &expanded);
+        let row = grants.iter().find(|g| g.hold).expect("a holder row");
+        assert_eq!(row.on_loss, Some(OnLoss::Keep));
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.code == Code::OnLossNotHold && e.subject == "flue_guard.state"),
             "{errors:?}"
         );
     }

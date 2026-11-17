@@ -445,6 +445,23 @@ pub struct PublishSpec {
     /// wins in arbitration. A hold is at `automation` or `agent`
     /// (`hold-band`).
     pub priority: Option<Priority>,
+    /// Under `home/hold/` only (`on-loss-not-hold`): what happens to this
+    /// unit's holds when it is gone, its breaker open or stopped for good.
+    /// `keep` keeps them standing, `release` lets the holds beneath win.
+    /// Without it, a hold for the aspect's rest value is kept and any other
+    /// is released (docs/design.md#when-a-holder-stops).
+    #[serde(default)]
+    pub on_loss: Option<OnLoss>,
+}
+
+/// What a gone holder's holds do (docs/design.md#when-a-holder-stops).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum OnLoss {
+    /// The holds stand, as a dead flue guard keeps a burner off.
+    Keep,
+    /// The holds stop counting, as a dead start rule stops asking.
+    Release,
 }
 
 /// Command priority bands, lowest to highest.

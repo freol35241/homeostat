@@ -798,6 +798,21 @@ class FamilyHolds(PageTest):
         )
         self.assertEqual(until, [22, 30, True], "the next 22:30 on the local clock")
 
+    async def test_a_units_hold_is_listed_with_its_reason_and_nothing_to_press(self):
+        await self.house.push(
+            {
+                "type": "hold",
+                "key": "home/hold/stage/livingroom/heat_pump/setpoint",
+                "value": {"value": 19.0, "priority": "automation", "reason": "night setback", "id": "s1"},
+            }
+        )
+        await self.open_heat_pump()
+        rows = self.page.locator("#overlay-panel .hold-row")
+        texts = await rows.evaluate_all("els => els.map(e => e.textContent)")
+        setback = [t for t in texts if "night setback" in t]
+        self.assertEqual(len(setback), 1, texts)
+        self.assertNotIn("Resume automatic", setback[0], "a unit releases its own hold")
+
     async def test_an_ended_hold_leaves_the_list(self):
         await self.open_heat_pump()
         await self.house.push(
