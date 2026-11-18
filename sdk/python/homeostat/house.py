@@ -15,7 +15,9 @@ from pathlib import Path
 
 import tomllib
 
-ENABLED_PARAM = "enabled"
+from . import vocabulary
+
+ENABLED_PARAM = vocabulary.ENABLED_PARAM
 """The parameter that pauses an automation (docs/design.md#pausing-an-automation)."""
 
 
@@ -38,10 +40,7 @@ def params_of(manifest: dict) -> dict:
     """
     params = dict(manifest.get("params", {}))
     if manifest["unit"]["kind"] == "automation":
-        params.setdefault(
-            ENABLED_PARAM,
-            {"type": "bool", "default": True, "editable_by": "family"},
-        )
+        params.setdefault(ENABLED_PARAM, dict(vocabulary.IMPLICIT_ENABLED))
     return params
 
 

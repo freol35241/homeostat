@@ -9,6 +9,8 @@ import re
 import secrets
 from typing import Any
 
+from . import vocabulary
+
 ENV_UNIT = "HOMEOSTAT_UNIT"
 ENV_BUS = "HOMEOSTAT_BUS"
 
@@ -286,7 +288,7 @@ def command_keyexprs(entity) -> list[str]:
     return [cmd_keyexpr(entity.room, entity.name)]
 
 
-CMD_PRIORITIES = ("automation", "agent", "family", "manual")
+CMD_PRIORITIES = vocabulary.CMD_PRIORITIES
 
 # The words a manual-band command's `hold` may carry besides an instant
 # (docs/design.md#hold-intents). "report" and "release" are for the
@@ -294,25 +296,14 @@ CMD_PRIORITIES = ("automation", "agent", "family", "manual")
 HOLD_WORDS = ("none", "report", "release")
 
 # The aspect and value each capability's device is safe at, where it has
-# one (VOCABULARY's `rest` in src/manifest.rs, which a test there checks this
-# against). Between two holds at one band, the one for the rest value wins
+# one. Between two holds at one band, the one for the rest value wins
 # (docs/design.md#which-hold-wins).
-REST_VALUES = {
-    "burner": ("on", False),
-}
+REST_VALUES = vocabulary.REST_VALUES
 
-# The aspect each commandable capability's commands target by default
-# (VOCABULARY's `base` in src/manifest.rs, which a test there checks this
-# against). A gesture action that releases a target hands back this one
+# The aspect each commandable capability's commands target by default. A
+# gesture action that releases a target hands back this one
 # (docs/design.md#gesture-actions).
-BASE_ASPECTS = {
-    "burner": "on",
-    "climate": "setpoint",
-    "light": "on",
-    "lock": "locked",
-    "notifier": "message",
-    "switch": "on",
-}
+BASE_ASPECTS = vocabulary.BASE_ASPECTS
 
 # The furthest a hold may name. A family hold is for tonight or a holiday,
 # and an end years out is a typo or a hold nobody will remember.

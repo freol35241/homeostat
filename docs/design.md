@@ -659,7 +659,9 @@ the core (`VOCABULARY` in `src/manifest.rs`): `binary_sensor`,
 `burner`, `button`, `camera`, `climate`, `cover`, `light`, `lock`, `notifier`,
 `occupancy`, `person`, `router`, `sensor`, `switch`, `tracker`. An
 unknown one is `unknown-capability`. Each capability has one row, which
-is rendered into [`docs/manifest.md`](manifest.md). A row gives:
+is rendered into [`docs/manifest.md`](manifest.md). The SDK and the
+adapters read the rows from `homeostat.vocabulary`, a Python module
+generated from them. A row gives:
 
 - The **base aspect**, which commands target and the widget acts on
   (`on` for a light, `locked`, a climate's `setpoint`). A capability

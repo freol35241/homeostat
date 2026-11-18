@@ -1,6 +1,8 @@
 //! The manifest contract as data: JSON Schema derived from the structs in
-//! manifest.rs, and a Markdown rendering of it for docs/manifest.md. A test
-//! pins the checked-in document to the rendering so the two stay in step.
+//! manifest.rs, a Markdown rendering of it for docs/manifest.md, and the
+//! vocabulary tables as a Python module for the SDK
+//! (sdk/python/homeostat/vocabulary.py). Tests pin the checked-in files to
+//! the renderings so they stay in step.
 
 use schemars::schema_for;
 use serde_json::{json, Value};
@@ -167,6 +169,150 @@ fn render_vocabulary(out: &mut String) {
                 o.note.replace('|', "\\|")
             ));
         }
+    }
+}
+
+/// sdk/python/homeostat/vocabulary.py: the core's tables that the SDK and
+/// the adapters read, as Python literals. It carries what a Python
+/// consumer uses and nothing else. Rows follow the Rust tables' order,
+/// which a test keeps in name order for VOCABULARY.
+pub fn sdk_vocabulary() -> String {
+    use crate::manifest::{implicit_enabled, Priority, ENABLED_PARAM, VOCABULARY};
+    let mut out = String::from(
+        "\"\"\"The core's vocabulary tables, as the SDK and the adapters read them.\n\
+         \n\
+         Generated from src/manifest.rs and src/keyspace.rs by `sdk_vocabulary` in\n\
+         src/schema.rs; do not edit (a test refuses a stale copy). Regenerate with\n\
+         `HOMEOSTAT_BLESS=1 cargo test --lib sdk_vocabulary`. docs/manifest.md\n\
+         renders the same vocabulary for people.\n\
+         \"\"\"\n\n",
+    );
+    let priorities = enum_values(&serde_json::to_value(schema_for!(Priority)).expect("serializes"))
+        .expect("Priority is an enum");
+    out.push_str("# Command priority bands, lowest to highest (`Priority`).\n");
+    out.push_str(&format!(
+        "CMD_PRIORITIES = {}\n\n",
+        python_tuple(priorities.iter().map(|(p, _)| p.as_str()))
+    ));
+    out.push_str(
+        "# The classes addressed per entity, as home/{class}/{room}/{entity}/{aspect}\n\
+         # (`ENTITY_ADDRESSED` in src/keyspace.rs).\n",
+    );
+    out.push_str(&format!(
+        "ENTITY_ADDRESSED = {}\n\n",
+        python_tuple(crate::keyspace::ENTITY_ADDRESSED.iter().copied())
+    ));
+    out.push_str("# The aspect each capability's commands target by default (`base`).\n");
+    python_dict(
+        &mut out,
+        "BASE_ASPECTS",
+        VOCABULARY
+            .iter()
+            .filter_map(|c| Some((c.name, format!("\"{}\"", c.base?)))),
+    );
+    out.push_str(
+        "# The aspects that take a command, per capability, with the type of value\n\
+         # each carries: \"bool\", \"number\" or \"text\" (`commands`). A feature takes\n\
+         # commands only on an entity that declares it.\n",
+    );
+    python_dict(
+        &mut out,
+        "COMMANDS",
+        VOCABULARY
+            .iter()
+            .filter(|c| !c.commands.is_empty())
+            .map(|c| {
+                let commands: Vec<String> = c
+                    .commands
+                    .iter()
+                    .map(|(aspect, ty)| format!("\"{aspect}\": \"{ty}\""))
+                    .collect();
+                (c.name, format!("{{{}}}", commands.join(", ")))
+            }),
+    );
+    out.push_str("# The aspect and value each capability's device is safe at (`rest`).\n");
+    python_dict(
+        &mut out,
+        "REST_VALUES",
+        VOCABULARY.iter().filter_map(|c| {
+            let (aspect, value) = c.rest?;
+            Some((c.name, format!("(\"{aspect}\", {})", python_literal(value))))
+        }),
+    );
+    out.push_str(
+        "# The command options per capability, with the aspects whose commands take\n\
+         # each (`options`).\n",
+    );
+    python_dict(
+        &mut out,
+        "OPTIONS",
+        VOCABULARY
+            .iter()
+            .filter(|c| !c.options.is_empty())
+            .map(|c| {
+                let options: Vec<String> = c
+                    .options
+                    .iter()
+                    .map(|o| {
+                        format!(
+                            "\"{}\": {}",
+                            o.name,
+                            python_tuple(o.aspects.iter().copied())
+                        )
+                    })
+                    .collect();
+                (c.name, format!("{{{}}}", options.join(", ")))
+            }),
+    );
+    let enabled = implicit_enabled();
+    assert!(
+        enabled.constraint.is_none(),
+        "implicit_enabled has a constraint: render it here"
+    );
+    let mut spec = vec![
+        format!("\"type\": \"{}\"", enabled.param_type),
+        format!(
+            "\"default\": {}",
+            python_literal(&enabled.default.to_string())
+        ),
+    ];
+    if let Some(editable_by) = enabled.editable_by {
+        spec.push(format!("\"editable_by\": \"{editable_by}\""));
+    }
+    out.push_str(
+        "# The parameter that pauses an automation, and its spec when the manifest\n\
+         # does not declare it (`ENABLED_PARAM`, `implicit_enabled`).\n",
+    );
+    out.push_str(&format!("ENABLED_PARAM = \"{ENABLED_PARAM}\"\n"));
+    out.push_str(&format!("IMPLICIT_ENABLED = {{{}}}\n", spec.join(", ")));
+    out
+}
+
+/// `name = {...}` with one `"key": value,` line per row.
+fn python_dict<'a>(out: &mut String, name: &str, rows: impl Iterator<Item = (&'a str, String)>) {
+    out.push_str(&format!("{name} = {{\n"));
+    for (key, value) in rows {
+        out.push_str(&format!("    \"{key}\": {value},\n"));
+    }
+    out.push_str("}\n\n");
+}
+
+/// A tuple of strings, with the trailing comma a one-element tuple needs.
+fn python_tuple<'a>(items: impl Iterator<Item = &'a str>) -> String {
+    let items: Vec<String> = items.map(|i| format!("\"{i}\"")).collect();
+    match items.len() {
+        1 => format!("({},)", items[0]),
+        _ => format!("({})", items.join(", ")),
+    }
+}
+
+/// A value as the vocabulary writes it (`false`, `30`), spelled as Python
+/// spells it. Only the booleans differ.
+fn python_literal(literal: &str) -> &str {
+    match literal {
+        "true" => "True",
+        "false" => "False",
+        other => other,
     }
 }
 
@@ -375,107 +521,6 @@ mod tests {
         }
     }
 
-    /// The lines of a top-level Python dict literal in `source`, between
-    /// `{name} = {` and its closing `}`.
-    fn python_dict<'a>(source: &'a str, name: &str) -> Vec<&'a str> {
-        let open = format!("\n{name} = {{\n");
-        let start = source.find(&open).unwrap_or_else(|| panic!("no {name}")) + open.len();
-        source[start..].lines().take_while(|l| *l != "}").collect()
-    }
-
-    /// Aspects the dashboard commands through the adapter's descriptor
-    /// rather than its vocabulary tables. A device-timed runtime's bounds
-    /// are the device's own, and only the descriptor carries them
-    /// (docs/design.md#device-timed-runtime).
-    const DASHBOARD_DESCRIBED: &[&str] = &["runtime_s"];
-
-    /// The dashboard's `COMMANDABLE` and `VOCABULARY_COMMANDS` are the
-    /// commands column in Python, one line per capability and per aspect.
-    #[test]
-    fn the_dashboard_carries_the_commands_column() {
-        use crate::manifest::ValueType;
-        use std::collections::{BTreeMap, BTreeSet};
-        let dashboard = include_str!("../adapters/dashboard.py");
-        let commands = || {
-            crate::manifest::VOCABULARY.iter().flat_map(|c| {
-                c.commands
-                    .iter()
-                    .filter(|(a, _)| !DASHBOARD_DESCRIBED.contains(a))
-                    .map(move |command| (c.name, command))
-            })
-        };
-        let mut commandable: BTreeMap<&str, Vec<String>> = BTreeMap::new();
-        for (capability, (aspect, _)) in commands() {
-            commandable
-                .entry(capability)
-                .or_default()
-                .push(format!("\"{aspect}\""));
-        }
-        let expected: BTreeSet<String> = commandable
-            .iter()
-            .map(|(c, aspects)| format!("    \"{c}\": {{{}}},", aspects.join(", ")))
-            .collect();
-        let actual: BTreeSet<String> = python_dict(dashboard, "COMMANDABLE")
-            .into_iter()
-            .map(String::from)
-            .collect();
-        assert_eq!(actual, expected, "dashboard.COMMANDABLE");
-
-        let expected: BTreeSet<String> = commands()
-            .map(|(_, (aspect, ty))| {
-                let python = match ty {
-                    ValueType::Bool => "bool",
-                    ValueType::Number => "float",
-                    ValueType::Text => "text",
-                };
-                format!("    \"{aspect}\": {{\"type\": \"{python}\"}},")
-            })
-            .collect();
-        let actual: BTreeSet<String> = python_dict(dashboard, "VOCABULARY_COMMANDS")
-            .into_iter()
-            .map(String::from)
-            .collect();
-        assert_eq!(actual, expected, "dashboard.VOCABULARY_COMMANDS");
-    }
-
-    /// The arbiter reads rest values from the SDK's copy, so the two must
-    /// agree. The SDK spells each as `"capability": ("aspect", value)` with
-    /// a Python literal.
-    #[test]
-    fn the_sdk_carries_every_rest_value() {
-        let sdk = include_str!("../sdk/python/homeostat/keys.py");
-        for c in crate::manifest::VOCABULARY {
-            if let Some((aspect, value)) = c.rest {
-                let python = match value {
-                    "true" => "True".to_string(),
-                    "false" => "False".to_string(),
-                    other => other.to_string(),
-                };
-                let entry = format!("\"{}\": (\"{aspect}\", {python})", c.name);
-                assert!(sdk.contains(&entry), "keys.REST_VALUES lacks {entry}");
-            }
-        }
-    }
-
-    #[test]
-    fn the_sdk_carries_every_base_aspect() {
-        let sdk = include_str!("../sdk/python/homeostat/keys.py");
-        for c in crate::manifest::VOCABULARY {
-            let entry = format!("    \"{}\": \"", c.name);
-            match c.base {
-                Some(base) => {
-                    let entry = format!("{entry}{base}\",");
-                    assert!(sdk.contains(&entry), "keys.BASE_ASPECTS lacks {entry}");
-                }
-                None => assert!(
-                    !sdk.contains(&entry),
-                    "keys.BASE_ASPECTS names {}, which has no base aspect",
-                    c.name
-                ),
-            }
-        }
-    }
-
     #[test]
     fn command_options_name_aspects_their_capability_has() {
         for c in crate::manifest::VOCABULARY {
@@ -509,6 +554,27 @@ mod tests {
                  `uv run --script scripts/widget_gallery.py`"
             );
         }
+    }
+
+    /// The SDK's vocabulary module is the rendering. With
+    /// `HOMEOSTAT_BLESS=1` the test writes the rendering instead, after a
+    /// change to the tables; review the diff.
+    #[test]
+    fn sdk_vocabulary_py_is_current() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/sdk/python/homeostat/vocabulary.py"
+        );
+        let rendered = sdk_vocabulary();
+        if std::env::var("HOMEOSTAT_BLESS").as_deref() == Ok("1") {
+            std::fs::write(path, &rendered).expect("vocabulary.py is writable");
+        }
+        let checked_in = std::fs::read_to_string(path).unwrap_or_default();
+        assert!(
+            checked_in == rendered,
+            "sdk/python/homeostat/vocabulary.py is stale: run \
+             `HOMEOSTAT_BLESS=1 cargo test --lib sdk_vocabulary`"
+        );
     }
 
     #[test]

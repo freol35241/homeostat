@@ -94,6 +94,7 @@ Edit the source, then regenerate. Tests refuse a stale copy.
 | File | Regenerate with |
 |---|---|
 | `docs/manifest.md` | `cargo run -- schema --markdown > docs/manifest.md` |
+| `sdk/python/homeostat/vocabulary.py` | `HOMEOSTAT_BLESS=1 cargo test --lib sdk_vocabulary` |
 | `docs/widgets.md` and `docs/widgets/*.png` | `uv run --script scripts/widget_gallery.py` |
 | `examples/starter-house/units/` | `scripts/release.sh X.Y.Z`, which runs `scripts/sync_starter.sh` |
 | `*.py.lock` beside a unit script | `uv lock --script <script>` |
