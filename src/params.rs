@@ -1,7 +1,9 @@
-//! What parameter values mean: the `"HH:MM"` time of day, a manifest
-//! constraint read once into the errors validation reports and the
-//! `Constraint` the live store enforces, the check of a value against
-//! type and constraint, and a default as the JSON value the bus carries.
+//! What parameter values mean. A manifest constraint is parsed once here,
+//! for validation and for the live store. This module also checks a value
+//! against its type and constraint, parses the `"HH:MM"` time of day, and
+//! turns a default into the JSON value the bus carries.
+
+use std::collections::BTreeMap;
 
 use serde_json::Value;
 
@@ -21,11 +23,9 @@ pub(crate) struct Constraint {
 }
 
 impl Constraint {
-    /// Reads a parameter's declaration. Returns its constraint and every
-    /// error in the declaration, with its code, in the order validation
-    /// reports them. The constraint holds only the keys that are well formed
-    /// for the type, so a malformed key is not enforced.
-    pub(crate) fn parse(spec: &ParamSpec) -> (Constraint, Vec<(Code, String)>) {
+    /// Reads a parameter's declaration into the constraint the store
+    /// enforces, or every error in the declaration with its code.
+    pub(crate) fn parse(spec: &ParamSpec) -> Result<Constraint, Vec<(Code, String)>> {
         let t = spec.param_type;
         let mut constraint = Constraint::default();
         let mut errors = Vec::new();
@@ -48,9 +48,8 @@ impl Constraint {
             ));
         }
 
-        let Some(table) = &spec.constraint else {
-            return (constraint, errors);
-        };
+        let no_table = BTreeMap::new();
+        let table = spec.constraint.as_ref().unwrap_or(&no_table);
         for (key, value) in table {
             let valid_for_type = match key.as_str() {
                 "min" | "max" => matches!(t, ParamType::Int | ParamType::Float),
@@ -125,13 +124,10 @@ impl Constraint {
             }
         }
 
-        // The default must satisfy its own constraint. The repo-edit parameter
-        // path is enforced here, so an out-of-constraint default does not plan
-        // and cannot reach a running unit (see
-        // docs/design.md#repo-and-live-values). Skipped when the declaration
-        // already has errors, since judging a default against a malformed
-        // constraint only adds noise. No errors also means the default matched
-        // its type.
+        // The default must satisfy its own constraint, so an out-of-constraint
+        // default does not plan (docs/design.md#repo-and-live-values). The
+        // check is skipped when the declaration already has errors, because
+        // judging a default against a malformed constraint only adds noise.
         if errors.is_empty() {
             if let Err(message) = check(t, &constraint, &default_value(spec)) {
                 errors.push((
@@ -140,7 +136,11 @@ impl Constraint {
                 ));
             }
         }
-        (constraint, errors)
+        if errors.is_empty() {
+            Ok(constraint)
+        } else {
+            Err(errors)
+        }
     }
 }
 
@@ -151,7 +151,12 @@ impl Constraint {
 /// `old_default` is the default as of the last apply.
 pub fn keeps_live(old_default: &Value, spec: &ParamSpec, live: &Value) -> bool {
     *old_default == default_value(spec)
-        && check(spec.param_type, &Constraint::parse(spec).0, live).is_ok()
+        && check(
+            spec.param_type,
+            &Constraint::parse(spec).unwrap_or_default(),
+            live,
+        )
+        .is_ok()
 }
 
 /// A parameter's manifest default as the JSON value the bus carries.
@@ -379,6 +384,88 @@ mod tests {
         check(ParamType::String, &c, &json!("low")).unwrap();
         assert!(check(ParamType::String, &c, &json!("medium")).is_err());
         assert!(check(ParamType::String, &c, &json!(3)).is_err());
+    }
+
+    /// The messages the corpus does not pin, one declaration each.
+    #[test]
+    fn a_malformed_declaration_reports_every_error() {
+        let cases = [
+            (
+                r#"type = "int"
+default = 1
+constraint = { step = 2 }"#,
+                vec![(Code::MalformedConstraint, r#"unknown constraint "step""#)],
+            ),
+            (
+                r#"type = "int"
+default = 1
+constraint = { min = "low" }"#,
+                vec![(
+                    Code::MalformedConstraint,
+                    r#"constraint "min" must be a number"#,
+                )],
+            ),
+            (
+                r#"type = "time"
+default = "08:00"
+constraint = { after = "8am" }"#,
+                vec![(
+                    Code::MalformedConstraint,
+                    r#"constraint "after" must be a time (HH:MM)"#,
+                )],
+            ),
+            (
+                r#"type = "string"
+default = "a"
+constraint = { enum = [] }"#,
+                vec![(
+                    Code::MalformedConstraint,
+                    r#"constraint "enum" must be a non-empty array of strings"#,
+                )],
+            ),
+            (
+                r#"type = "int"
+default = "one"
+constraint = { min = 0 }"#,
+                vec![(
+                    Code::InvalidDefault,
+                    r#"default one does not match type "int""#,
+                )],
+            ),
+            (
+                r#"type = "string"
+default = "a"
+constraint = { min = 2, max = 1 }"#,
+                vec![
+                    (
+                        Code::MalformedConstraint,
+                        r#"constraint "max" is not valid for type "string""#,
+                    ),
+                    (
+                        Code::MalformedConstraint,
+                        r#"constraint "min" is not valid for type "string""#,
+                    ),
+                    (Code::MalformedConstraint, "min (2) is greater than max (1)"),
+                ],
+            ),
+        ];
+        for (declaration, expected) in cases {
+            let spec: ParamSpec = toml::from_str(declaration).unwrap();
+            let Err(errors) = Constraint::parse(&spec) else {
+                panic!("{declaration} parsed");
+            };
+            let expected: Vec<(Code, String)> = expected
+                .into_iter()
+                .map(|(c, m)| (c, m.to_string()))
+                .collect();
+            assert_eq!(errors, expected, "{declaration}");
+        }
+    }
+
+    #[test]
+    fn a_declaration_without_a_constraint_parses() {
+        let spec: ParamSpec = toml::from_str("type = \"float\"\ndefault = 1").unwrap();
+        assert!(Constraint::parse(&spec).is_ok());
     }
 
     fn level_spec(default: i64, max: i64) -> ParamSpec {

@@ -754,8 +754,10 @@ fn check_params(house: &House, diags: &mut Diagnostics) {
         let mut diags = diags.in_file(&unit.path);
         for (name, spec) in params {
             let subject = format!("{}.{name}", unit.manifest.unit.name);
-            for (code, message) in Constraint::parse(spec).1 {
-                diags.error(code, &subject, message);
+            if let Err(errors) = Constraint::parse(spec) {
+                for (code, message) in errors {
+                    diags.error(code, &subject, message);
+                }
             }
         }
     }

@@ -98,8 +98,9 @@ impl ConfigStore {
     /// Rebuilds the store from a new house. The params in `replaced` are set
     /// to their repo default, as are new params. Every other param keeps its
     /// live value while it meets the new type and constraint. The plan's diff
-    /// names `replaced` ([`keeps_live`](crate::params::keeps_live)), so plan and apply decide alike. A
-    /// write that lands after the diff was taken is kept the same way.
+    /// names `replaced` ([`keeps_live`](crate::params::keeps_live)), so plan
+    /// and apply decide alike. A write that lands after the diff was taken is
+    /// kept the same way.
     /// Returns the params whose effective value changed, so the caller can
     /// put them on the bus for live subscribers. Params of new units need no
     /// put, because they read their values with a get at startup.
@@ -289,7 +290,7 @@ fn build(house: &House) -> BTreeMap<(String, String), StoredParam> {
                 (unit.manifest.unit.name.clone(), name.clone()),
                 StoredParam {
                     param_type: spec.param_type,
-                    constraint: Constraint::parse(spec).0,
+                    constraint: Constraint::parse(spec).unwrap_or_default(),
                     default: default_value(spec),
                     value: default_value(spec),
                 },
