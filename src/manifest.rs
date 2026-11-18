@@ -9,33 +9,13 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
 
-/// Capabilities known to the core; the list grows with adapters. The
-/// aspect vocabulary of each is `VOCABULARY` below, and a test keeps the
-/// two in step.
-pub const CAPABILITIES: &[&str] = &[
-    "binary_sensor",
-    "burner",
-    "button",
-    "camera",
-    "climate",
-    "cover",
-    "light",
-    "lock",
-    "notifier",
-    "occupancy",
-    "person",
-    "router",
-    "sensor",
-    "switch",
-    "tracker",
-];
-
 /// One capability's aspect vocabulary: the names an adapter binding it
 /// publishes under, and the aspects the family surfaces act on. See
 /// docs/design.md#the-capability-vocabulary. The base aspect is what
 /// commands target and what the dashboard widget renders. The other
-/// aspects are optional ones an entity file may declare. Notable names the
-/// reading that counts as a deviation on `Now`. Rendered into
+/// aspects are optional ones an entity file may declare. Commands names the
+/// aspects that take a command and the value each carries. Notable names
+/// the reading that counts as a deviation on `Now`. Rendered into
 /// docs/manifest.md.
 #[derive(Debug, Clone, Copy)]
 pub struct Capability {
@@ -45,6 +25,11 @@ pub struct Capability {
     /// Optional aspects an entity may declare in `features`, and other
     /// names the vocabulary reserves for this capability.
     pub aspects: &'static [&'static str],
+    /// The aspects that take a command, with the type of value each
+    /// carries: the base aspect and the features that are levers rather
+    /// than readings. A feature takes commands only on an entity that
+    /// declares it. The adapter checks bounds (docs/adapters.md, Commands).
+    pub commands: &'static [(&'static str, ValueType)],
     /// The reading and value that is out of the ordinary, if any.
     pub notable: Option<&'static str>,
     /// The aspect and value a device is safe at, if any. Between two holds
@@ -54,6 +39,26 @@ pub struct Capability {
     /// The command options the vocabulary names for this capability.
     pub options: &'static [CommandOption],
     pub note: &'static str,
+}
+
+/// The type of value a vocabulary command carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ValueType {
+    Bool,
+    /// An integer or a finite float.
+    Number,
+    /// A string, such as a notifier's text.
+    Text,
+}
+
+impl fmt::Display for ValueType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            ValueType::Bool => "bool",
+            ValueType::Number => "number",
+            ValueType::Text => "text",
+        })
+    }
 }
 
 /// A command option: a modifier a command may carry beside its value, in
@@ -68,12 +73,14 @@ pub struct CommandOption {
     pub note: &'static str,
 }
 
-/// The aspect vocabulary: one entry per capability in [`CAPABILITIES`].
+/// The capabilities known to the core, one row each, in name order. The
+/// list grows with adapters.
 pub const VOCABULARY: &[Capability] = &[
     Capability {
         name: "binary_sensor",
         base: None,
         aspects: &[],
+        commands: &[],
         notable: None,
         rest: None,
         options: &[],
@@ -83,6 +90,7 @@ pub const VOCABULARY: &[Capability] = &[
         name: "burner",
         base: Some("on"),
         aspects: &["power_level", "flue_temperature", "boiler_temperature"],
+        commands: &[("on", ValueType::Bool), ("power_level", ValueType::Number)],
         notable: None,
         rest: Some(("on", "false")),
         options: &[],
@@ -92,6 +100,7 @@ pub const VOCABULARY: &[Capability] = &[
         name: "button",
         base: None,
         aspects: &["action"],
+        commands: &[],
         notable: None,
         rest: None,
         options: &[],
@@ -101,6 +110,7 @@ pub const VOCABULARY: &[Capability] = &[
         name: "camera",
         base: None,
         aspects: &["motion"],
+        commands: &[],
         notable: None,
         rest: None,
         options: &[],
@@ -110,6 +120,7 @@ pub const VOCABULARY: &[Capability] = &[
         name: "climate",
         base: Some("setpoint"),
         aspects: &["indoor_temperature", "feed_temperature"],
+        commands: &[("setpoint", ValueType::Number)],
         notable: None,
         rest: None,
         options: &[],
@@ -119,6 +130,7 @@ pub const VOCABULARY: &[Capability] = &[
         name: "cover",
         base: None,
         aspects: &[],
+        commands: &[],
         notable: None,
         rest: None,
         options: &[],
@@ -128,6 +140,11 @@ pub const VOCABULARY: &[Capability] = &[
         name: "light",
         base: Some("on"),
         aspects: &["brightness", "color_temp"],
+        commands: &[
+            ("on", ValueType::Bool),
+            ("brightness", ValueType::Number),
+            ("color_temp", ValueType::Number),
+        ],
         notable: Some("on = true"),
         rest: None,
         options: &[CommandOption {
@@ -141,6 +158,7 @@ pub const VOCABULARY: &[Capability] = &[
         name: "lock",
         base: Some("locked"),
         aspects: &[],
+        commands: &[("locked", ValueType::Bool)],
         notable: Some("locked = false"),
         rest: None,
         options: &[],
@@ -150,6 +168,7 @@ pub const VOCABULARY: &[Capability] = &[
         name: "notifier",
         base: Some("message"),
         aspects: &["alert", "delivered", "acknowledged"],
+        commands: &[("message", ValueType::Text), ("alert", ValueType::Text)],
         notable: None,
         rest: None,
         options: &[],
@@ -159,6 +178,7 @@ pub const VOCABULARY: &[Capability] = &[
         name: "occupancy",
         base: None,
         aspects: &["motion", "occupied"],
+        commands: &[],
         notable: None,
         rest: None,
         options: &[],
@@ -168,6 +188,7 @@ pub const VOCABULARY: &[Capability] = &[
         name: "person",
         base: None,
         aspects: &["presence", "lat", "lon", "accuracy", "fixed_at"],
+        commands: &[],
         notable: None,
         rest: None,
         options: &[],
@@ -177,6 +198,7 @@ pub const VOCABULARY: &[Capability] = &[
         name: "router",
         base: None,
         aspects: &["wan"],
+        commands: &[],
         notable: Some("wan = false"),
         rest: None,
         options: &[],
@@ -186,6 +208,7 @@ pub const VOCABULARY: &[Capability] = &[
         name: "sensor",
         base: None,
         aspects: &[],
+        commands: &[],
         notable: None,
         rest: None,
         options: &[],
@@ -195,6 +218,7 @@ pub const VOCABULARY: &[Capability] = &[
         name: "switch",
         base: Some("on"),
         aspects: &["runtime_s"],
+        commands: &[("on", ValueType::Bool), ("runtime_s", ValueType::Number)],
         notable: None,
         rest: None,
         options: &[],
@@ -204,12 +228,18 @@ pub const VOCABULARY: &[Capability] = &[
         name: "tracker",
         base: None,
         aspects: &["home", "sighted", "lat", "lon", "accuracy", "battery", "fixed_at"],
+        commands: &[],
         notable: None,
         rest: None,
         options: &[],
         note: "A device someone carries: a phone, a tag, a watch. `home` (bool) is inside the home geofence, and its `false` says the device left. `sighted` (bool) is seen on the home network, and its `false` says only that it was not seen within the adapter's delay. Scalar position aspects as on `person`, plus the device's `battery`; `fixed_at` is published after the fix's other aspects and completes it. Room `person` for one person's device. A `person` lists its trackers as sources (docs/design.md#map-and-people).",
     },
 ];
+
+/// The vocabulary row of a capability, or `None` for an unknown one.
+pub fn capability(name: &str) -> Option<&'static Capability> {
+    VOCABULARY.iter().find(|c| c.name == name)
+}
 
 /// Aspects every capability shares: `available` (device liveness, opt-in,
 /// notable when false) and `{aspect}_valid` beside a reading the device
@@ -663,17 +693,19 @@ pub enum Uncommanded {
 
 /// One target of a gesture: what the buttons service sends it. Exactly one
 /// of `toggle` and `set`, or `hold = "release"` alone (`action-shape`).
-/// The target's capability takes commands, and each aspect set is its base
-/// aspect or a feature its entity file declares (`action-aspect`).
+/// The target's capability takes commands, and each aspect set takes a
+/// command on the target (`action-aspect`): it is in the capability's
+/// commands column (docs/manifest.md, Capability vocabulary) and is the
+/// base aspect or a feature the entity file declares.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Action {
-    /// The base aspect to flip, `on` or `locked` (`action-aspect`): the
-    /// command sends the opposite of the target's current state, read from
+    /// The aspect to flip, one whose command is a bool, such as `on` or
+    /// `locked` (`action-aspect`): the command sends the opposite of the target's current state, read from
     /// the core's mirror. With no state known, the press sends nothing.
     pub toggle: Option<String>,
-    /// The values to send, one command per aspect: booleans, finite
-    /// numbers or strings, and a boolean for `on` and `locked`
+    /// The values to send, one command per aspect, each of the type the
+    /// commands column gives it: a boolean, a finite number or a string
     /// (`action-shape`).
     #[schemars(with = "Option<BTreeMap<String, serde_json::Value>>")]
     pub set: Option<BTreeMap<String, toml::Value>>,

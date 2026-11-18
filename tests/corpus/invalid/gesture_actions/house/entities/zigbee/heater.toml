@@ -1,0 +1,11 @@
+schema = 1
+
+[entity]
+id = "0x15"
+capability = "climate"
+features = ["indoor_temperature"]
+room = "hallway"
+
+[write_policy]
+mode = "shared"
+owner = "zigbee"

@@ -12,9 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Code, ValidationError};
 use crate::expand::{Direction, ExpandedKey};
 use crate::keyspace::{KeyExpr, Segment};
-use crate::manifest::{
-    FamilyHold, OnLoss, Priority, UnitKind, WriteMode, CAPABILITIES, VOCABULARY,
-};
+use crate::manifest::{self, FamilyHold, OnLoss, Priority, UnitKind, WriteMode};
 use crate::repo::House;
 
 /// One resolved grant: a publish expression resolved against the concrete
@@ -441,7 +439,7 @@ fn build_grants(
             ));
             continue;
         };
-        if !CAPABILITIES.contains(&capability.as_str()) {
+        if manifest::capability(&capability).is_none() {
             errors.push(ValidationError::new(
                 Code::UnknownCapability,
                 subject,
@@ -585,12 +583,9 @@ fn warn_same_rank_holders(grants: &[Grant], warnings: &mut Vec<String>) {
         }
     }
     for ((entity, priority), rows) in holders {
-        let rest = VOCABULARY
-            .iter()
-            .find(|c| {
-                rows.first()
-                    .is_some_and(|(_, capability, _)| c.name == *capability)
-            })
+        let rest = rows
+            .first()
+            .and_then(|(_, capability, _)| manifest::capability(capability))
             .and_then(|c| c.rest)
             .map(|(aspect, _)| aspect);
         // Two keys share an aspect when both name it, or one is a wildcard.

@@ -8,8 +8,8 @@ use std::collections::BTreeMap;
 use crate::error::{Code, ValidationError};
 use crate::keyspace::{is_reserved_word, PSEUDO_ROOMS};
 use crate::manifest::{
-    ControlSpec, DiscoveryMode, FamilyHold, FamilyUntil, ParamSpec, ParamType, UnitKind,
-    WidgetKind, WidgetSpec, WriteMode, CAPABILITIES, ENABLED_PARAM, VOCABULARY,
+    self, ControlSpec, DiscoveryMode, FamilyHold, FamilyUntil, ParamSpec, ParamType, UnitKind,
+    ValueType, WidgetKind, WidgetSpec, WriteMode, ENABLED_PARAM,
 };
 use crate::repo::{House, LoadedEntity};
 
@@ -290,7 +290,7 @@ fn check_entities(house: &House, errors: &mut Vec<ValidationError>) {
     for entity in &house.entities {
         let file = Some(entity.path.clone());
         let capability = &entity.file.entity.capability;
-        if !CAPABILITIES.contains(&capability.as_str()) {
+        if manifest::capability(capability).is_none() {
             errors.push(ValidationError::new(
                 Code::UnknownCapability,
                 &entity.name,
@@ -303,9 +303,7 @@ fn check_entities(house: &House, errors: &mut Vec<ValidationError>) {
         // without a base aspect. It is required where there is something to
         // govern, so a light or a lock does not silently get a default policy.
         if entity.file.write_policy.mode.is_none()
-            && VOCABULARY
-                .iter()
-                .any(|c| c.name == capability && c.base.is_some())
+            && manifest::capability(capability).is_some_and(|c| c.base.is_some())
         {
             errors.push(ValidationError::new(
                 Code::WriteModeRequired,
@@ -422,7 +420,7 @@ fn check_family_policy(
         ));
     }
     let clock = has_clock(house);
-    let vocabulary = VOCABULARY.iter().find(|c| c.name == capability);
+    let vocabulary = manifest::capability(capability);
     for (aspect, values) in &policy.family {
         let known = vocabulary.is_some_and(|c| {
             c.base == Some(aspect.as_str()) || c.aspects.contains(&aspect.as_str())
@@ -516,10 +514,7 @@ fn check_causes(
             file.cloned(),
         ));
     }
-    let base = VOCABULARY
-        .iter()
-        .find(|c| c.name == capability)
-        .and_then(|c| c.base);
+    let base = manifest::capability(capability).and_then(|c| c.base);
     if base != Some("on") {
         errors.push(ValidationError::new(
             Code::CausesCapability,
@@ -530,13 +525,10 @@ fn check_causes(
     }
 }
 
-/// The base aspects that are booleans, which a gesture action may toggle.
-const TOGGLED: &[&str] = &["on", "locked"];
-
 /// A button's `[actions]` (docs/design.md#gesture-actions): each target
-/// exists, each aspect is the target's, each action says one thing to
-/// send, a hold goes only to an arbitrated target, and an unlock is
-/// declared.
+/// exists, each aspect takes a command on the target with a value of its
+/// type, each action says one thing to send, a hold goes only to an
+/// arbitrated target, and an unlock is declared.
 fn check_actions(
     house: &House,
     entity: &LoadedEntity,
@@ -570,7 +562,7 @@ fn check_actions(
                 continue;
             };
             let target_capability = target.file.entity.capability.as_str();
-            let vocabulary = VOCABULARY.iter().find(|c| c.name == target_capability);
+            let vocabulary = manifest::capability(target_capability);
             let release = action.hold.as_deref() == Some("release");
             let sends = usize::from(action.toggle.is_some()) + usize::from(action.set.is_some());
             let hold_ok = action
@@ -587,49 +579,56 @@ fn check_actions(
                 ));
                 continue;
             }
-            // A command goes to the base aspect or to a feature the entity
-            // declares, as the dashboard's controls do. A toggle needs a
-            // boolean, and a set sends scalars.
-            let base = vocabulary.and_then(|c| c.base);
-            if base.is_none() {
+            // A command goes to an aspect in the capability's commands
+            // column: the base aspect, or a feature the entity declares. A
+            // toggle needs a bool command, and a set sends a value of the
+            // command's type.
+            let Some(vocabulary) = vocabulary.filter(|c| c.base.is_some()) else {
                 errors.push(err(
                     Code::ActionAspect,
                     format!("capability \"{target_capability}\" takes no commands"),
                 ));
                 continue;
-            }
-            let commandable = |aspect: &str| {
-                base == Some(aspect) || target.file.entity.features.iter().any(|f| f == aspect)
+            };
+            let command = |aspect: &str| {
+                let declared = vocabulary.base == Some(aspect)
+                    || target.file.entity.features.iter().any(|f| f == aspect);
+                if !declared {
+                    return None;
+                }
+                vocabulary
+                    .commands
+                    .iter()
+                    .find(|(a, _)| *a == aspect)
+                    .map(|&(_, ty)| ty)
             };
             if let Some(aspect) = &action.toggle {
-                if !(base == Some(aspect.as_str()) && TOGGLED.contains(&aspect.as_str())) {
+                if command(aspect) != Some(ValueType::Bool) {
                     errors.push(err(
                         Code::ActionAspect,
-                        format!(
-                            "\"{aspect}\" of \"{name}\" is not a boolean base aspect to toggle"
-                        ),
+                        format!("\"{aspect}\" of \"{name}\" is not a bool command to toggle"),
                     ));
                 }
             }
             for (aspect, value) in action.set.iter().flatten() {
-                if !commandable(aspect) {
+                let Some(ty) = command(aspect) else {
                     errors.push(err(
                         Code::ActionAspect,
-                        format!("\"{name}\" has no commandable aspect \"{aspect}\": its base aspect or a declared feature"),
+                        format!("\"{name}\" takes no command on \"{aspect}\": its base aspect or a declared feature that takes commands"),
                     ));
-                }
-                let scalar = match value {
-                    toml::Value::Boolean(_) | toml::Value::Integer(_) | toml::Value::String(_) => {
-                        true
-                    }
-                    toml::Value::Float(f) => f.is_finite(),
+                    continue;
+                };
+                let typed = match (ty, value) {
+                    (ValueType::Bool, toml::Value::Boolean(_))
+                    | (ValueType::Number, toml::Value::Integer(_))
+                    | (ValueType::Text, toml::Value::String(_)) => true,
+                    (ValueType::Number, toml::Value::Float(f)) => f.is_finite(),
                     _ => false,
                 };
-                let typed = !TOGGLED.contains(&aspect.as_str()) || value.is_bool();
-                if !scalar || !typed {
+                if !typed {
                     errors.push(err(
                         Code::ActionShape,
-                        format!("set {aspect} = {value} is not a value to send"),
+                        format!("set {aspect} = {value} is not a {ty}"),
                     ));
                 }
             }

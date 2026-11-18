@@ -11,8 +11,8 @@ owner = "zigbee"
 [actions.single]
 lamp = { set = { on = true }, hold = "none" }
 
-# Not fine: a toggle of a non-boolean, an undeclared feature, a non-scalar,
-# a release of a lock without unlocks, a loose time and a button target.
+# Not fine: a toggle of a non-boolean, undeclared features, a release of a
+# lock without unlocks, a loose time and a button target.
 [actions.double]
 lamp = { toggle = "brightness" }
 
@@ -23,3 +23,8 @@ remote = { toggle = "on" }
 
 [actions.triple]
 door = { set = { locked = true }, hold = "+6:00" }
+
+# Not fine: a declared reading, which takes no command, and a value of the
+# wrong type.
+[actions.quadruple]
+heater = { set = { indoor_temperature = 20, setpoint = "warm" } }

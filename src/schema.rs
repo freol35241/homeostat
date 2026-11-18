@@ -92,8 +92,8 @@ pub fn markdown() -> String {
 }
 
 /// The capability vocabulary (manifest.rs, VOCABULARY): the base aspect, the
-/// named optional aspects, and the notable reading per capability, plus the
-/// aspects every capability shares. docs/adapters.md points here instead of
+/// named optional aspects, the commands with their value types, and the
+/// notable reading per capability, plus the aspects every capability shares. docs/adapters.md points here instead of
 /// carrying its own copy.
 fn render_vocabulary(out: &mut String) {
     out.push_str("## Capability vocabulary\n\n");
@@ -101,13 +101,15 @@ fn render_vocabulary(out: &mut String) {
         "What an entity of each capability publishes under which names \
          (docs/adapters.md, State). The base aspect is what commands target \
          and the dashboard widget renders; the other named aspects are what \
-         `features` may declare or the vocabulary reserves; notable is the \
+         `features` may declare or the vocabulary reserves; commands are the \
+         aspects that take a command and the type of value each carries, a \
+         feature only on an entity that declares it; notable is the \
          reading that counts as a deviation on `Now`; rest is the value the \
          device is safe at, which wins between two holds at one band. \
          Anything else an adapter publishes passes through under its native \
          name.\n\n",
     );
-    out.push_str("| Capability | Base aspect | Other named aspects | Notable | Rest | Notes |\n|---|---|---|---|---|---|\n");
+    out.push_str("| Capability | Base aspect | Other named aspects | Commands | Notable | Rest | Notes |\n|---|---|---|---|---|---|---|\n");
     for c in crate::manifest::VOCABULARY {
         let base = c.base.map_or_else(|| "—".into(), |b| format!("`{b}`"));
         let aspects = if c.aspects.is_empty() {
@@ -119,12 +121,21 @@ fn render_vocabulary(out: &mut String) {
                 .collect::<Vec<_>>()
                 .join(", ")
         };
+        let commands = if c.commands.is_empty() {
+            "—".to_string()
+        } else {
+            c.commands
+                .iter()
+                .map(|(a, ty)| format!("`{a}` ({ty})"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
         let notable = c.notable.map_or_else(|| "—".into(), |n| format!("`{n}`"));
         let rest = c
             .rest
             .map_or_else(|| "—".into(), |(a, v)| format!("`{a} = {v}`"));
         out.push_str(&format!(
-            "| `{}` | {base} | {aspects} | {notable} | {rest} | {} |\n",
+            "| `{}` | {base} | {aspects} | {commands} | {notable} | {rest} | {} |\n",
             c.name,
             c.note.replace('|', "\\|")
         ));
@@ -323,14 +334,108 @@ mod tests {
         assert!(param["type"]["$ref"].is_string(), "{param}");
     }
 
+    /// `manifest::capability` returns the first row of a name, so a second
+    /// row would never be read.
     #[test]
-    fn vocabulary_covers_every_capability_once() {
-        use crate::manifest::{CAPABILITIES, VOCABULARY};
-        let names: Vec<&str> = VOCABULARY.iter().map(|c| c.name).collect();
-        assert_eq!(
-            names, CAPABILITIES,
-            "VOCABULARY rows must match CAPABILITIES, in order"
+    fn vocabulary_names_each_capability_once() {
+        let names: Vec<&str> = crate::manifest::VOCABULARY.iter().map(|c| c.name).collect();
+        assert!(
+            names.windows(2).all(|w| w[0] < w[1]),
+            "VOCABULARY rows must be in name order, one per capability: {names:?}"
         );
+    }
+
+    /// The base aspect is what commands target and an option rides a
+    /// command, so both take one. A command goes to an aspect the
+    /// capability has.
+    #[test]
+    fn commands_cover_the_base_and_every_option_aspect() {
+        for c in crate::manifest::VOCABULARY {
+            let commanded = |aspect: &str| c.commands.iter().any(|(a, _)| *a == aspect);
+            if let Some(base) = c.base {
+                assert!(commanded(base), "{}: base {base} takes no command", c.name);
+            }
+            for o in c.options {
+                for aspect in o.aspects {
+                    assert!(
+                        commanded(aspect),
+                        "{}: option {} rides {aspect}, which takes no command",
+                        c.name,
+                        o.name
+                    );
+                }
+            }
+            for (aspect, _) in c.commands {
+                assert!(
+                    c.base == Some(*aspect) || c.aspects.contains(aspect),
+                    "{}: command {aspect} is neither the base nor a named aspect",
+                    c.name
+                );
+            }
+        }
+    }
+
+    /// The lines of a top-level Python dict literal in `source`, between
+    /// `{name} = {` and its closing `}`.
+    fn python_dict<'a>(source: &'a str, name: &str) -> Vec<&'a str> {
+        let open = format!("\n{name} = {{\n");
+        let start = source.find(&open).unwrap_or_else(|| panic!("no {name}")) + open.len();
+        source[start..].lines().take_while(|l| *l != "}").collect()
+    }
+
+    /// Aspects the dashboard commands through the adapter's descriptor
+    /// rather than its vocabulary tables. A device-timed runtime's bounds
+    /// are the device's own, and only the descriptor carries them
+    /// (docs/design.md#device-timed-runtime).
+    const DASHBOARD_DESCRIBED: &[&str] = &["runtime_s"];
+
+    /// The dashboard's `COMMANDABLE` and `VOCABULARY_COMMANDS` are the
+    /// commands column in Python, one line per capability and per aspect.
+    #[test]
+    fn the_dashboard_carries_the_commands_column() {
+        use crate::manifest::ValueType;
+        use std::collections::{BTreeMap, BTreeSet};
+        let dashboard = include_str!("../adapters/dashboard.py");
+        let commands = || {
+            crate::manifest::VOCABULARY.iter().flat_map(|c| {
+                c.commands
+                    .iter()
+                    .filter(|(a, _)| !DASHBOARD_DESCRIBED.contains(a))
+                    .map(move |command| (c.name, command))
+            })
+        };
+        let mut commandable: BTreeMap<&str, Vec<String>> = BTreeMap::new();
+        for (capability, (aspect, _)) in commands() {
+            commandable
+                .entry(capability)
+                .or_default()
+                .push(format!("\"{aspect}\""));
+        }
+        let expected: BTreeSet<String> = commandable
+            .iter()
+            .map(|(c, aspects)| format!("    \"{c}\": {{{}}},", aspects.join(", ")))
+            .collect();
+        let actual: BTreeSet<String> = python_dict(dashboard, "COMMANDABLE")
+            .into_iter()
+            .map(String::from)
+            .collect();
+        assert_eq!(actual, expected, "dashboard.COMMANDABLE");
+
+        let expected: BTreeSet<String> = commands()
+            .map(|(_, (aspect, ty))| {
+                let python = match ty {
+                    ValueType::Bool => "bool",
+                    ValueType::Number => "float",
+                    ValueType::Text => "text",
+                };
+                format!("    \"{aspect}\": {{\"type\": \"{python}\"}},")
+            })
+            .collect();
+        let actual: BTreeSet<String> = python_dict(dashboard, "VOCABULARY_COMMANDS")
+            .into_iter()
+            .map(String::from)
+            .collect();
+        assert_eq!(actual, expected, "dashboard.VOCABULARY_COMMANDS");
     }
 
     /// The arbiter reads rest values from the SDK's copy, so the two must
