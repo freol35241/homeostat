@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::error::{Code, ValidationError};
+use crate::error::{Code, Diagnostics, Scoped};
 use crate::expand::{self, ExpandedKey};
 use crate::keyspace::{is_reserved_word, PSEUDO_ROOMS};
 use crate::manifest::{
@@ -18,20 +18,16 @@ use crate::repo::{House, LoadedEntity};
 /// Structural validation that does not involve grants: uniqueness,
 /// capabilities, reserved rooms, ownership, zones, params. `expanded` is the
 /// house's expanded keys, from which it learns whether the house has a clock.
-pub fn validate(house: &House, expanded: &[ExpandedKey]) -> Vec<ValidationError> {
-    let mut errors = Vec::new();
-
-    check_names(house, &mut errors);
-    check_duplicates(house, &mut errors);
-    check_manifest_shape(house, &mut errors);
-    check_entities(house, has_clock(expanded), &mut errors);
-    check_persons(house, &mut errors);
-    check_aspect_intervals(house, &mut errors);
-    check_zones(house, &mut errors);
-    check_params(house, &mut errors);
-    check_dashboard(house, &mut errors);
-
-    errors
+pub fn validate(house: &House, expanded: &[ExpandedKey], diags: &mut Diagnostics) {
+    check_names(house, diags);
+    check_duplicates(house, diags);
+    check_manifest_shape(house, diags);
+    check_entities(house, has_clock(expanded), diags);
+    check_persons(house, diags);
+    check_aspect_intervals(house, diags);
+    check_zones(house, diags);
+    check_params(house, diags);
+    check_dashboard(house, diags);
 }
 
 /// Whether a name is usable as one bus key segment. Other names break the
@@ -55,7 +51,7 @@ pub(crate) fn valid_segment(name: &str) -> bool {
 /// (`home/state/{room}/{entity}/{aspect}`), and zone names (expanded in
 /// key expressions). The unit name `system` is refused because the core serves
 /// `home/meta/system/**` itself.
-fn check_names(house: &House, errors: &mut Vec<ValidationError>) {
+fn check_names(house: &House, diags: &mut Diagnostics) {
     let segment_message = |what: &str, name: &str| {
         format!(
             "{what} \"{name}\" must be a single key segment (letters, digits, \"_\", \"-\", \".\"; not \".\" or \"..\")"
@@ -63,88 +59,76 @@ fn check_names(house: &House, errors: &mut Vec<ValidationError>) {
     };
     for unit in &house.units {
         let name = &unit.manifest.unit.name;
-        let file = Some(unit.path.clone());
+        let mut diags = diags.in_file(&unit.path);
         if !valid_segment(name) {
-            errors.push(ValidationError::new(
-                Code::InvalidName,
-                name,
-                segment_message("unit name", name),
-                file.clone(),
-            ));
+            diags.error(Code::InvalidName, name, segment_message("unit name", name));
         } else if name == "system" {
-            errors.push(ValidationError::new(
+            diags.error(
                 Code::ReservedUnitName,
                 name,
                 "unit name \"system\" is reserved for the core's meta keys",
-                file.clone(),
-            ));
+            );
         }
         if let Some(params) = &unit.manifest.params {
             for param in params.keys() {
                 if !valid_segment(param) {
-                    errors.push(ValidationError::new(
+                    diags.error(
                         Code::InvalidName,
                         format!("{name}.{param}"),
                         segment_message("parameter name", param),
-                        file.clone(),
-                    ));
+                    );
                 }
             }
         }
     }
     for entity in &house.entities {
-        let file = Some(entity.path.clone());
+        let mut diags = diags.in_file(&entity.path);
         if !valid_segment(&entity.name) {
-            errors.push(ValidationError::new(
+            diags.error(
                 Code::InvalidName,
                 &entity.name,
                 segment_message("entity name", &entity.name),
-                file.clone(),
-            ));
+            );
         }
         for aspect in entity.file.aspects.iter().flat_map(|a| a.keys()) {
             if !valid_segment(aspect) {
-                errors.push(ValidationError::new(
+                diags.error(
                     Code::InvalidName,
                     format!("{}.{aspect}", entity.name),
                     segment_message("aspect name", aspect),
-                    file.clone(),
-                ));
+                );
             }
         }
         let room = &entity.file.entity.room;
         if !valid_segment(room) {
-            errors.push(ValidationError::new(
+            diags.error(
                 Code::InvalidName,
                 &entity.name,
                 segment_message("room", room),
-                file,
-            ));
+            );
         }
     }
     for zone in house.zones.keys() {
         if !valid_segment(zone) {
-            errors.push(ValidationError::new(
+            diags.in_file("zones.toml").error(
                 Code::InvalidName,
                 zone,
                 segment_message("zone name", zone),
-                Some("zones.toml".to_string()),
-            ));
+            );
         }
     }
     for view in house.dashboard.iter().flat_map(|d| &d.view) {
         if !valid_segment(&view.name) {
-            errors.push(ValidationError::new(
+            diags.in_file("dashboard.toml").error(
                 Code::InvalidName,
                 &view.name,
                 segment_message("view name", &view.name),
-                Some("dashboard.toml".to_string()),
-            ));
+            );
         }
     }
 }
 
-fn check_duplicates(house: &House, errors: &mut Vec<ValidationError>) {
+fn check_duplicates(house: &House, diags: &mut Diagnostics) {
     let mut unit_paths: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
     for unit in &house.units {
         unit_paths
@@ -155,12 +139,11 @@ fn check_duplicates(house: &House, errors: &mut Vec<ValidationError>) {
     for (name, mut paths) in unit_paths {
         if paths.len() > 1 {
             paths.sort_unstable();
-            errors.push(ValidationError::new(
+            diags.error(
                 Code::DuplicateUnitName,
                 name,
                 format!("defined in {}", paths.join(" and ")),
-                None,
-            ));
+            );
         }
     }
 
@@ -174,12 +157,11 @@ fn check_duplicates(house: &House, errors: &mut Vec<ValidationError>) {
     for (name, mut paths) in entity_paths {
         if paths.len() > 1 {
             paths.sort_unstable();
-            errors.push(ValidationError::new(
+            diags.error(
                 Code::DuplicateEntityName,
                 name,
                 format!("defined in {}", paths.join(" and ")),
-                None,
-            ));
+            );
         }
     }
 
@@ -199,20 +181,19 @@ fn check_duplicates(house: &House, errors: &mut Vec<ValidationError>) {
     for ((owner, id), mut paths) in entity_ids {
         if paths.len() > 1 {
             paths.sort_unstable();
-            errors.push(ValidationError::new(
+            diags.error(
                 Code::DuplicateEntityId,
                 id,
                 format!("bound to \"{owner}\" by {}", paths.join(" and ")),
-                None,
-            ));
+            );
         }
     }
 }
 
-fn check_manifest_shape(house: &House, errors: &mut Vec<ValidationError>) {
+fn check_manifest_shape(house: &House, diags: &mut Diagnostics) {
     for unit in &house.units {
         let name = &unit.manifest.unit.name;
-        let file = Some(unit.path.clone());
+        let mut diags = diags.in_file(&unit.path);
         if let Some(d) = &unit.manifest.discovery {
             let missing = match d.mode {
                 DiscoveryMode::Static if d.endpoint.is_none() => {
@@ -224,12 +205,7 @@ fn check_manifest_shape(house: &House, errors: &mut Vec<ValidationError>) {
                 _ => None,
             };
             if let Some(message) = missing {
-                errors.push(ValidationError::new(
-                    Code::InvalidManifest,
-                    name,
-                    message,
-                    file.clone(),
-                ));
+                diags.error(Code::InvalidManifest, name, message);
             }
         }
         if unit.manifest.unit.kind == UnitKind::Automation {
@@ -239,68 +215,62 @@ fn check_manifest_shape(house: &House, errors: &mut Vec<ValidationError>) {
                 .as_ref()
                 .and_then(|p| p.get(ENABLED_PARAM));
             if enabled.is_some_and(|spec| spec.param_type != ParamType::Bool) {
-                errors.push(ValidationError::new(
+                diags.error(
                     Code::InvalidManifest,
                     name,
                     "an automation's \"enabled\" parameter pauses it, so it must be a bool",
-                    file.clone(),
-                ));
+                );
             }
         }
         if unit.manifest.unit.kind == UnitKind::Adapter {
             if unit.manifest.entities.is_none() {
-                errors.push(ValidationError::new(
+                diags.error(
                     Code::InvalidManifest,
                     name,
                     "adapter requires an [entities] section",
-                    file.clone(),
-                ));
+                );
             }
             if unit.manifest.discovery.is_none() {
-                errors.push(ValidationError::new(
+                diags.error(
                     Code::InvalidManifest,
                     name,
                     "adapter requires a [discovery] section",
-                    file.clone(),
-                ));
+                );
             }
         } else {
             // Automations may bind entities (virtual sensors). Services have
             // no need to, and are refused until one does.
             if unit.manifest.entities.is_some() && unit.manifest.unit.kind != UnitKind::Automation {
-                errors.push(ValidationError::new(
+                diags.error(
                     Code::InvalidManifest,
                     name,
                     "[entities] is only valid for adapters and automations",
-                    file.clone(),
-                ));
+                );
             }
             // Services may talk to an external backend (e.g. the recorder's
             // store) and use [discovery] the same way adapters do.
             if unit.manifest.discovery.is_some() && unit.manifest.unit.kind != UnitKind::Service {
-                errors.push(ValidationError::new(
+                diags.error(
                     Code::InvalidManifest,
                     name,
                     "[discovery] is only valid for adapters and services",
-                    file.clone(),
-                ));
+                );
             }
         }
     }
 }
 
 /// `clock` says whether some unit publishes the house clock's minute.
-fn check_entities(house: &House, clock: bool, errors: &mut Vec<ValidationError>) {
+fn check_entities(house: &House, clock: bool, diags: &mut Diagnostics) {
     for entity in &house.entities {
-        let file = Some(entity.path.clone());
+        let mut diags = diags.in_file(&entity.path);
         let capability = &entity.file.entity.capability;
         if manifest::capability(capability).is_none() {
-            errors.push(ValidationError::new(
+            diags.error(
                 Code::UnknownCapability,
                 &entity.name,
                 format!("unknown capability \"{capability}\""),
-                file.clone(),
-            ));
+            );
         }
 
         // A write mode governs commands, so it means nothing on a capability
@@ -309,19 +279,18 @@ fn check_entities(house: &House, clock: bool, errors: &mut Vec<ValidationError>)
         if entity.file.write_policy.mode.is_none()
             && manifest::capability(capability).is_some_and(|c| c.base.is_some())
         {
-            errors.push(ValidationError::new(
+            diags.error(
                 Code::WriteModeRequired,
                 &entity.name,
                 format!(
                     "capability \"{capability}\" takes commands, so [write_policy] needs a mode"
                 ),
-                file.clone(),
-            ));
+            );
         }
 
-        check_family_policy(entity, capability, clock, file.as_ref(), errors);
-        check_actions(house, entity, capability, clock, file.as_ref(), errors);
-        check_causes(entity, capability, file.as_ref(), errors);
+        check_family_policy(entity, capability, clock, &mut diags);
+        check_actions(house, entity, capability, clock, &mut diags);
+        check_causes(entity, capability, &mut diags);
 
         // An adapter binds devices, so its entity files address them. An
         // automation's do not: a computed value has no device behind it, and
@@ -330,52 +299,47 @@ fn check_entities(house: &House, clock: bool, errors: &mut Vec<ValidationError>)
             .unit(&entity.file.write_policy.owner)
             .is_some_and(|u| u.manifest.unit.kind == UnitKind::Adapter);
         if owner_is_adapter && entity.file.entity.id.is_none() {
-            errors.push(ValidationError::new(
+            diags.error(
                 Code::EntityIdRequired,
                 &entity.name,
                 "an adapter-owned entity needs an [entity] id: its adapter-native address",
-                file.clone(),
-            ));
+            );
         }
 
         let room = &entity.file.entity.room;
         if is_reserved_word(room) && !PSEUDO_ROOMS.contains(&room.as_str()) {
-            errors.push(ValidationError::new(
+            diags.error(
                 Code::ReservedRoomName,
                 &entity.name,
                 format!("room \"{room}\" is a reserved word"),
-                file.clone(),
-            ));
+            );
         }
 
         let owner = &entity.file.write_policy.owner;
         match house.unit(owner) {
-            None => errors.push(ValidationError::new(
+            None => diags.error(
                 Code::MissingOwnerUnit,
                 &entity.name,
                 format!("owner unit \"{owner}\" does not exist"),
-                file.clone(),
-            )),
+            ),
             Some(unit)
                 if !matches!(
                     unit.manifest.unit.kind,
                     UnitKind::Adapter | UnitKind::Automation
                 ) =>
             {
-                errors.push(ValidationError::new(
+                diags.error(
                     Code::MissingOwnerUnit,
                     &entity.name,
                     format!("owner \"{owner}\" is not an adapter or automation"),
-                    file.clone(),
-                ));
+                );
             }
             Some(_) if owner != &entity.owner => {
-                errors.push(ValidationError::new(
+                diags.error(
                     Code::OwnerMismatch,
                     &entity.name,
                     format!("owner \"{owner}\" but bound by unit \"{}\"", entity.owner),
-                    file.clone(),
-                ));
+                );
             }
             Some(unit)
                 if unit.manifest.unit.kind == UnitKind::Automation
@@ -385,12 +349,11 @@ fn check_entities(house: &House, clock: bool, errors: &mut Vec<ValidationError>)
                 // (docs/design.md#commandable-virtual-entities). There is no
                 // device to contend for and no hold to expire, so arbitration
                 // has nothing to order.
-                errors.push(ValidationError::new(
+                diags.error(
                     Code::VirtualEntityArbitrated,
                     &entity.name,
                     "automation-owned entities are latches and cannot be arbitrated; use shared or exclusive",
-                    file.clone(),
-                ));
+                );
             }
             Some(_) => {}
         }
@@ -405,23 +368,21 @@ fn check_family_policy(
     entity: &LoadedEntity,
     capability: &str,
     clock: bool,
-    file: Option<&String>,
-    errors: &mut Vec<ValidationError>,
+    diags: &mut Scoped<'_>,
 ) {
     let policy = &entity.file.write_policy;
     if policy.family.is_empty() {
         return;
     }
     if policy.mode() != WriteMode::Arbitrated {
-        errors.push(ValidationError::new(
+        diags.error(
             Code::FamilyPolicyNotArbitrated,
             &entity.name,
             format!(
                 "[write_policy.family] needs mode \"arbitrated\", not \"{}\"",
                 policy.mode()
             ),
-            file.cloned(),
-        ));
+        );
     }
     let vocabulary = manifest::capability(capability);
     for (aspect, values) in &policy.family {
@@ -429,12 +390,11 @@ fn check_family_policy(
             c.base == Some(aspect.as_str()) || c.aspects.contains(&aspect.as_str())
         });
         if !known {
-            errors.push(ValidationError::new(
+            diags.error(
                 Code::FamilyPolicyAspect,
                 format!("{}.{aspect}", entity.name),
                 format!("capability \"{capability}\" has no aspect \"{aspect}\""),
-                file.cloned(),
-            ));
+            );
         }
         for (value, hold) in values {
             if let FamilyHold::Until(FamilyUntil { until }) = hold {
@@ -442,19 +402,17 @@ fn check_family_policy(
                     continue;
                 }
                 if !is_time_of_day(until) {
-                    errors.push(ValidationError::new(
+                    diags.error(
                         Code::FamilyPolicyUntil,
                         format!("{}.{aspect}.{value}", entity.name),
                         format!("until \"{until}\" is neither \"HH:MM\" nor \"next change\""),
-                        file.cloned(),
-                    ));
+                    );
                 } else if !clock {
-                    errors.push(ValidationError::new(
+                    diags.error(
                         Code::TimeOfDayNoClock,
                         format!("{}.{aspect}.{value}", entity.name),
                         format!("until \"{until}\" is a time of day, and no unit publishes {CLOCK_MINUTE}"),
-                        file.cloned(),
-                    ));
+                    );
                 }
             }
         }
@@ -482,25 +440,19 @@ fn is_time_of_day(s: &str) -> bool {
 
 /// An entity's `[causes]` (docs/design.md#device-reported-causes): on an
 /// arbitrated entity whose base aspect is `on`.
-fn check_causes(
-    entity: &LoadedEntity,
-    capability: &str,
-    file: Option<&String>,
-    errors: &mut Vec<ValidationError>,
-) {
+fn check_causes(entity: &LoadedEntity, capability: &str, diags: &mut Scoped<'_>) {
     if entity.file.causes.is_none() {
         return;
     }
     if entity.file.write_policy.mode() != WriteMode::Arbitrated {
-        errors.push(ValidationError::new(
+        diags.error(
             Code::CausesNotArbitrated,
             &entity.name,
             format!(
                 "[causes] needs mode \"arbitrated\", not \"{}\"",
                 entity.file.write_policy.mode()
             ),
-            file.cloned(),
-        ));
+        );
     }
     let timed = entity.file.entity.features.iter().any(|f| f == "runtime_s");
     if timed
@@ -510,21 +462,19 @@ fn check_causes(
             .as_ref()
             .is_some_and(|c| c.uncommanded.is_some())
     {
-        errors.push(ValidationError::new(
+        diags.error(
             Code::CausesRuntime,
             &entity.name,
             "the device closes on its own after runtime_s, so uncommanded = \"person\" would make each close the family's",
-            file.cloned(),
-        ));
+        );
     }
     let base = manifest::capability(capability).and_then(|c| c.base);
     if base != Some("on") {
-        errors.push(ValidationError::new(
+        diags.error(
             Code::CausesCapability,
             &entity.name,
             format!("capability \"{capability}\" has no base aspect \"on\" to attribute"),
-            file.cloned(),
-        ));
+        );
     }
 }
 
@@ -537,31 +487,27 @@ fn check_actions(
     entity: &LoadedEntity,
     capability: &str,
     clock: bool,
-    file: Option<&String>,
-    errors: &mut Vec<ValidationError>,
+    diags: &mut Scoped<'_>,
 ) {
     let Some(actions) = &entity.file.actions else {
         return;
     };
     if capability != "button" {
-        errors.push(ValidationError::new(
+        diags.error(
             Code::ActionsNotButton,
             &entity.name,
             format!("[actions] needs capability \"button\", not \"{capability}\""),
-            file.cloned(),
-        ));
+        );
     }
     for (gesture, targets) in actions {
         for (name, action) in targets {
             let subject = format!("{}.{gesture}.{name}", entity.name);
-            let err = |code: Code, message: String| {
-                ValidationError::new(code, subject.clone(), message, file.cloned())
-            };
             let Some(target) = house.entities.iter().find(|e| &e.name == name) else {
-                errors.push(err(
+                diags.error(
                     Code::ActionUnknownTarget,
+                    &subject,
                     format!("target entity \"{name}\" does not exist"),
-                ));
+                );
                 continue;
             };
             let target_capability = target.file.entity.capability.as_str();
@@ -576,10 +522,11 @@ fn check_actions(
                 || action.set.as_ref().is_some_and(BTreeMap::is_empty)
                 || if release { sends != 0 } else { sends != 1 }
             {
-                errors.push(err(
+                diags.error(
                     Code::ActionShape,
+                    &subject,
                     "an action takes one of toggle and set, or hold = \"release\" alone, and a hold of \"none\", \"release\" or \"HH:MM\"".to_string(),
-                ));
+                );
                 continue;
             }
             // A command goes to an aspect in the capability's commands
@@ -590,10 +537,11 @@ fn check_actions(
             // bounds, so plan takes any scalar for it, as the dashboard
             // does. A feature the vocabulary names as a reading takes none.
             let Some(vocabulary) = vocabulary.filter(|c| !c.commands.is_empty()) else {
-                errors.push(err(
+                diags.error(
                     Code::ActionAspect,
+                    &subject,
                     format!("capability \"{target_capability}\" takes no commands"),
-                ));
+                );
                 continue;
             };
             let declared = |aspect: &str| {
@@ -612,18 +560,20 @@ fn check_actions(
             };
             if let Some(aspect) = &action.toggle {
                 if command(aspect) != Some(Some(ValueType::Bool)) {
-                    errors.push(err(
+                    diags.error(
                         Code::ActionAspect,
+                        &subject,
                         format!("\"{aspect}\" of \"{name}\" is not a bool command to toggle"),
-                    ));
+                    );
                 }
             }
             for (aspect, value) in action.set.iter().flatten() {
                 let Some(ty) = command(aspect) else {
-                    errors.push(err(
+                    diags.error(
                         Code::ActionAspect,
+                        &subject,
                         format!("\"{name}\" takes no command on \"{aspect}\", which is not its base aspect or a declared feature that takes commands"),
-                    ));
+                    );
                     continue;
                 };
                 let typed = match (ty, value) {
@@ -635,32 +585,36 @@ fn check_actions(
                 };
                 if !typed {
                     let what = ty.map_or("scalar".to_string(), |ty| ty.to_string());
-                    errors.push(err(
+                    diags.error(
                         Code::ActionShape,
+                        &subject,
                         format!("set {aspect} = {value} is not a {what}"),
-                    ));
+                    );
                 } else if value.as_str().is_some_and(|text| text.trim().is_empty()) {
                     // Notifiers and the dashboard refuse blank text.
-                    errors.push(err(
+                    diags.error(
                         Code::ActionShape,
+                        &subject,
                         format!("set {aspect} is blank text"),
-                    ));
+                    );
                 }
             }
             if action.hold.is_some() && target.file.write_policy.mode() != WriteMode::Arbitrated {
-                errors.push(err(
+                diags.error(
                     Code::ActionHoldNotArbitrated,
+                    &subject,
                     format!("target \"{name}\" is not arbitrated, so the action takes no hold"),
-                ));
+                );
             }
             if action.hold.as_deref().is_some_and(is_time_of_day) && !clock {
-                errors.push(err(
+                diags.error(
                     Code::TimeOfDayNoClock,
+                    &subject,
                     format!(
                         "hold \"{}\" is a time of day, and no unit publishes {CLOCK_MINUTE}",
                         action.hold.as_deref().unwrap_or_default()
                     ),
-                ));
+                );
             }
             // A release sends the hold beneath at once, which may be an unlock.
             let unlocks = target_capability == "lock"
@@ -672,10 +626,11 @@ fn check_actions(
                         .and_then(|s| s.get("locked"))
                         .is_some_and(|v| v.as_bool() != Some(true)));
             if unlocks && !action.unlocks {
-                errors.push(err(
+                diags.error(
                     Code::ActionUnlocks,
+                    &subject,
                     format!("the action can unlock \"{name}\"; say unlocks = true"),
-                ));
+                );
             }
         }
     }
@@ -689,25 +644,24 @@ const PERSON_SOURCE_ASPECTS: &[&str] = &["home", "sighted", "lat"];
 /// A person is a human computed from the trackers it lists, so an adapter
 /// cannot bind one (docs/design.md#map-and-people). An unknown source entity is
 /// `source-unknown-entity`, which `grants::resolve_sources` reports.
-fn check_persons(house: &House, errors: &mut Vec<ValidationError>) {
+fn check_persons(house: &House, diags: &mut Diagnostics) {
     for entity in &house.entities {
         if entity.file.entity.capability != "person" {
             continue;
         }
-        let file = Some(entity.path.clone());
+        let mut diags = diags.in_file(&entity.path);
         let owner_is_adapter = house
             .unit(&entity.file.write_policy.owner)
             .is_some_and(|u| u.manifest.unit.kind == UnitKind::Adapter);
         if owner_is_adapter {
-            errors.push(ValidationError::new(
+            diags.error(
                 Code::PersonBoundByAdapter,
                 &entity.name,
                 format!(
                     "adapter \"{}\" binds a person; bind the device as `tracker` and list it in a person file owned by an automation",
                     entity.file.write_policy.owner
                 ),
-                file.clone(),
-            ));
+            );
         }
         for (name, source) in entity.file.sources.iter().flatten() {
             let subject = format!("{}.{name}", entity.name);
@@ -715,25 +669,23 @@ fn check_persons(house: &House, errors: &mut Vec<ValidationError>) {
                 continue;
             };
             if src.file.entity.capability != "tracker" {
-                errors.push(ValidationError::new(
+                diags.error(
                     Code::PersonSourceNotTracker,
                     subject,
                     format!(
                         "source \"{}\" has capability `{}`; a person's sources are trackers",
                         src.name, src.file.entity.capability
                     ),
-                    file.clone(),
-                ));
+                );
             } else if !PERSON_SOURCE_ASPECTS.contains(&source.aspect.as_str()) {
-                errors.push(ValidationError::new(
+                diags.error(
                     Code::PersonSourceAspect,
                     subject,
                     format!(
                         "aspect \"{}\" is not one of `home`, `sighted` or `lat`",
                         source.aspect
                     ),
-                    file.clone(),
-                ));
+                );
             }
         }
     }
@@ -741,85 +693,73 @@ fn check_persons(house: &House, errors: &mut Vec<ValidationError>) {
 
 /// An interval total weighs each sample by the share of its interval
 /// inside a window, so an interval of no length would divide by zero.
-fn check_aspect_intervals(house: &House, errors: &mut Vec<ValidationError>) {
+fn check_aspect_intervals(house: &House, diags: &mut Diagnostics) {
     for entity in &house.entities {
         for (aspect, decl) in entity.file.aspects.iter().flatten() {
             if decl.interval_s == 0 {
-                errors.push(ValidationError::new(
+                diags.in_file(&entity.path).error(
                     Code::AspectInterval,
                     format!("{}.{aspect}", entity.name),
                     "interval_s is 0; it is the length of each sample's interval in seconds"
                         .to_string(),
-                    Some(entity.path.clone()),
-                ));
+                );
             }
         }
     }
 }
 
-fn check_zones(house: &House, errors: &mut Vec<ValidationError>) {
+fn check_zones(house: &House, diags: &mut Diagnostics) {
     let rooms = house.rooms();
-    let file = Some("zones.toml".to_string());
+    let mut diags = diags.in_file("zones.toml");
     for (zone, members) in &house.zones {
         if is_reserved_word(zone) {
-            errors.push(ValidationError::new(
+            diags.error(
                 Code::ReservedZoneName,
                 zone,
                 format!("zone name \"{zone}\" is a reserved word"),
-                file.clone(),
-            ));
+            );
             continue;
         }
         if rooms.contains(&zone.as_str()) {
-            errors.push(ValidationError::new(
+            diags.error(
                 Code::ZoneRoomCollision,
                 zone,
                 format!("zone name \"{zone}\" collides with a room name"),
-                file.clone(),
-            ));
+            );
         }
         for room in members {
             if PSEUDO_ROOMS.contains(&room.as_str()) {
-                errors.push(ValidationError::new(
+                diags.error(
                     Code::ZonePseudoRoom,
                     zone,
                     format!("zone includes pseudo-room \"{room}\""),
-                    file.clone(),
-                ));
+                );
             } else if !rooms.contains(&room.as_str()) {
-                errors.push(ValidationError::new(
+                diags.error(
                     Code::ZoneUnknownRoom,
                     zone,
                     format!("zone references unknown room \"{room}\""),
-                    file.clone(),
-                ));
+                );
             }
         }
     }
 }
 
-fn check_params(house: &House, errors: &mut Vec<ValidationError>) {
+fn check_params(house: &House, diags: &mut Diagnostics) {
     for unit in &house.units {
         let Some(params) = &unit.manifest.params else {
             continue;
         };
+        let mut diags = diags.in_file(&unit.path);
         for (name, spec) in params {
             let subject = format!("{}.{name}", unit.manifest.unit.name);
-            check_param(&subject, spec, &unit.path, errors);
+            check_param(&subject, spec, &mut diags);
         }
     }
 }
 
-fn check_param(subject: &str, spec: &ParamSpec, path: &str, errors: &mut Vec<ValidationError>) {
-    let before = errors.len();
-    let mut err = |code: Code, message: String| {
-        errors.push(ValidationError::new(
-            code,
-            subject,
-            message,
-            Some(path.to_string()),
-        ));
-    };
+fn check_param(subject: &str, spec: &ParamSpec, diags: &mut Scoped<'_>) {
+    let before = diags.error_count();
     let t = spec.param_type;
 
     let default_ok = match (t, &spec.default) {
@@ -831,8 +771,9 @@ fn check_param(subject: &str, spec: &ParamSpec, path: &str, errors: &mut Vec<Val
         _ => false,
     };
     if !default_ok {
-        err(
+        diags.error(
             Code::InvalidDefault,
+            subject,
             format!(
                 "default {} does not match type \"{t}\"",
                 display_value(&spec.default)
@@ -849,16 +790,18 @@ fn check_param(subject: &str, spec: &ParamSpec, path: &str, errors: &mut Vec<Val
             "after" | "before" => t == ParamType::Time,
             "enum" => t == ParamType::String,
             _ => {
-                err(
+                diags.error(
                     Code::MalformedConstraint,
+                    subject,
                     format!("unknown constraint \"{key}\""),
                 );
                 continue;
             }
         };
         if !valid_for_type {
-            err(
+            diags.error(
                 Code::MalformedConstraint,
+                subject,
                 format!("constraint \"{key}\" is not valid for type \"{t}\""),
             );
             continue;
@@ -881,8 +824,9 @@ fn check_param(subject: &str, spec: &ParamSpec, path: &str, errors: &mut Vec<Val
                 "after" | "before" => "a time (HH:MM)",
                 _ => "a non-empty array of strings",
             };
-            err(
+            diags.error(
                 Code::MalformedConstraint,
+                subject,
                 format!("constraint \"{key}\" must be {expected}"),
             );
         }
@@ -893,8 +837,9 @@ fn check_param(subject: &str, spec: &ParamSpec, path: &str, errors: &mut Vec<Val
         constraint.get("max").and_then(as_number),
     ) {
         if min > max {
-            err(
+            diags.error(
                 Code::MalformedConstraint,
+                subject,
                 format!(
                     "min ({}) is greater than max ({})",
                     display_value(&constraint["min"]),
@@ -908,15 +853,14 @@ fn check_param(subject: &str, spec: &ParamSpec, path: &str, errors: &mut Vec<Val
     // path is enforced here, so an out-of-constraint default does not plan and
     // cannot reach a running unit. Skipped when this param already has errors,
     // since judging a default against a malformed constraint only adds noise.
-    // `errors.len() == before` also implies the default matched its type.
-    if errors.len() == before {
+    // No new errors also implies the default matched its type.
+    if diags.error_count() == before {
         if let Err(message) = crate::config::default_within_constraint(spec) {
-            errors.push(ValidationError::new(
+            diags.error(
                 Code::InvalidDefault,
                 subject,
                 format!("default {}: {message}", display_value(&spec.default)),
-                Some(path.to_string()),
-            ));
+            );
         }
     }
 }
@@ -956,84 +900,68 @@ pub(crate) fn parse_time(s: &str) -> Option<(u8, u8)> {
 /// `dashboard.toml`: each view is either a generated one or a composition.
 /// Each widget carries the fields its kind takes and no others, and every
 /// reference resolves against the house.
-fn check_dashboard(house: &House, errors: &mut Vec<ValidationError>) {
+fn check_dashboard(house: &House, diags: &mut Diagnostics) {
     let Some(dashboard) = &house.dashboard else {
         return;
     };
-    let file = Some("dashboard.toml".to_string());
+    let mut diags = diags.in_file("dashboard.toml");
     let rooms = house.rooms();
     let mut seen: Vec<&str> = Vec::new();
     for view in &dashboard.view {
         if matches!(view.name.as_str(), "health" | "notshown") {
-            errors.push(ValidationError::new(
+            diags.error(
                 Code::DashboardReservedView,
                 &view.name,
                 format!(
                     "view name \"{}\" belongs to the dashboard's fixed chrome",
                     view.name
                 ),
-                file.clone(),
-            ));
+            );
         }
         if seen.contains(&view.name.as_str()) {
-            errors.push(ValidationError::new(
+            diags.error(
                 Code::DashboardDuplicateView,
                 &view.name,
                 format!("view \"{}\" is declared more than once", view.name),
-                file.clone(),
-            ));
+            );
         }
         seen.push(&view.name);
         if view.kind.is_some() == !view.widgets.is_empty() {
-            errors.push(ValidationError::new(
+            diags.error(
                 Code::DashboardViewShape,
                 &view.name,
                 "a view is a generated `kind` or a list of `widgets`, never both or neither",
-                file.clone(),
-            ));
+            );
         }
         for (i, widget) in view.widgets.iter().enumerate() {
             let subject = format!("{}[{i}]", view.name);
-            check_widget(house, &rooms, widget, &subject, file.as_deref(), errors);
+            check_widget(house, &rooms, widget, &subject, &mut diags);
             // A group's members are widgets like any other and get the same
             // checks. Groups go one level deep, because the file is not meant
             // to be a layout language.
             for (j, member) in widget.widgets.iter().enumerate() {
                 let subject = format!("{subject}[{j}]");
                 if member.kind == WidgetKind::Group {
-                    errors.push(ValidationError::new(
+                    diags.error(
                         Code::DashboardNestedGroup,
                         &subject,
                         "a group holds widgets, never another group",
-                        file.clone(),
-                    ));
+                    );
                     continue;
                 }
-                check_widget(house, &rooms, member, &subject, file.as_deref(), errors);
+                check_widget(house, &rooms, member, &subject, &mut diags);
             }
         }
     }
     for (i, control) in dashboard.control.iter().enumerate() {
-        check_control(
-            house,
-            control,
-            &format!("control[{i}]"),
-            file.as_deref(),
-            errors,
-        );
+        check_control(house, control, &format!("control[{i}]"), &mut diags);
     }
 }
 
 /// One `[[control]]`: one target, a reference that resolves, and a positive
 /// finite step. The dashboard reads this wherever it draws that control. The
 /// core only checks that it names something real.
-fn check_control(
-    house: &House,
-    control: &ControlSpec,
-    subject: &str,
-    file: Option<&str>,
-    errors: &mut Vec<ValidationError>,
-) {
+fn check_control(house: &House, control: &ControlSpec, subject: &str, diags: &mut Scoped<'_>) {
     let entity_target = control.entity.is_some() || control.aspect.is_some();
     let param_target = control.unit.is_some() || control.param.is_some();
     let complete = match (entity_target, param_target) {
@@ -1042,48 +970,43 @@ fn check_control(
         _ => false,
     };
     if !complete {
-        errors.push(ValidationError::new(
+        diags.error(
             Code::DashboardControlTarget,
             subject,
             "a control names one target: `entity` with `aspect`, or `unit` with `param`",
-            file.map(str::to_string),
-        ));
+        );
         return;
     }
     if !(control.step.is_finite() && control.step > 0.0) {
-        errors.push(ValidationError::new(
+        diags.error(
             Code::DashboardControlStep,
             subject,
             format!("`step` must be a positive number, not {}", control.step),
-            file.map(str::to_string),
-        ));
+        );
     }
     if let (Some(entity), Some(aspect)) = (&control.entity, &control.aspect) {
         if !house.entities.iter().any(|e| &e.name == entity) {
-            errors.push(ValidationError::new(
+            diags.error(
                 Code::DashboardUnknownEntity,
                 subject,
                 format!("control names unknown entity \"{entity}\""),
-                file.map(str::to_string),
-            ));
+            );
         }
         if !valid_segment(aspect) {
-            errors.push(ValidationError::new(
+            diags.error(
                 Code::DashboardInvalidAspect,
                 subject,
                 format!("aspect \"{aspect}\" must be a single key segment"),
-                file.map(str::to_string),
-            ));
+            );
         }
     }
     if let (Some(unit), Some(param)) = (&control.unit, &control.param) {
         match house.unit(unit) {
-            None => errors.push(ValidationError::new(
+            None => diags.error(
                 Code::DashboardUnknownUnit,
                 subject,
                 format!("control names unknown unit \"{unit}\""),
-                file.map(str::to_string),
-            )),
+            ),
             // A step sets the grain of a control, so it must name a
             // parameter the unit declares.
             Some(u)
@@ -1093,12 +1016,11 @@ fn check_control(
                     .as_ref()
                     .is_some_and(|p| p.contains_key(param)) =>
             {
-                errors.push(ValidationError::new(
+                diags.error(
                     Code::DashboardUnknownParam,
                     subject,
                     format!("control names unknown parameter \"{param}\" on unit \"{unit}\""),
-                    file.map(str::to_string),
-                ));
+                );
             }
             Some(_) => {}
         }
@@ -1112,40 +1034,32 @@ fn check_widget(
     rooms: &[&str],
     widget: &WidgetSpec,
     subject: &str,
-    file: Option<&str>,
-    errors: &mut Vec<ValidationError>,
+    diags: &mut Scoped<'_>,
 ) {
     if let Some(message) = widget_fields_message(widget) {
-        errors.push(ValidationError::new(
-            Code::DashboardWidgetFields,
-            subject,
-            message,
-            file.map(str::to_string),
-        ));
+        diags.error(Code::DashboardWidgetFields, subject, message);
         return;
     }
     if let Some(entity) = &widget.entity {
         match house.entities.iter().find(|e| &e.name == entity) {
-            None => errors.push(ValidationError::new(
+            None => diags.error(
                 Code::DashboardUnknownEntity,
                 subject,
                 format!("widget names unknown entity \"{entity}\""),
-                file.map(str::to_string),
-            )),
+            ),
             // A capability widget draws that capability's vocabulary, so it
             // only makes sense over an entity of that capability.
             Some(e)
                 if widget.kind == WidgetKind::Burner && e.file.entity.capability != "burner" =>
             {
-                errors.push(ValidationError::new(
+                diags.error(
                     Code::DashboardWidgetCapability,
                     subject,
                     format!(
                         "a `burner` widget needs a burner; \"{entity}\" is a {}",
                         e.file.entity.capability
                     ),
-                    file.map(str::to_string),
-                ));
+                );
             }
             Some(_) => {}
         }
@@ -1153,54 +1067,49 @@ fn check_widget(
     // A map colours what it draws: people, and trackers.
     for entity in widget.colors.keys() {
         match house.entities.iter().find(|e| &e.name == entity) {
-            None => errors.push(ValidationError::new(
+            None => diags.error(
                 Code::DashboardUnknownEntity,
                 subject,
                 format!("`colors` names unknown entity \"{entity}\""),
-                file.map(str::to_string),
-            )),
+            ),
             Some(e) if !matches!(e.file.entity.capability.as_str(), "person" | "tracker") => {
-                errors.push(ValidationError::new(
+                diags.error(
                     Code::DashboardWidgetCapability,
                     subject,
                     format!(
                         "a `map` colours a person or a tracker; \"{entity}\" is a {}",
                         e.file.entity.capability
                     ),
-                    file.map(str::to_string),
-                ));
+                );
             }
             Some(_) => {}
         }
     }
     if let Some(aspect) = &widget.aspect {
         if !valid_segment(aspect) {
-            errors.push(ValidationError::new(
+            diags.error(
                 Code::DashboardInvalidAspect,
                 subject,
                 format!("aspect \"{aspect}\" must be a single key segment"),
-                file.map(str::to_string),
-            ));
+            );
         }
     }
     if let Some(room) = &widget.room {
         if !rooms.contains(&room.as_str()) {
-            errors.push(ValidationError::new(
+            diags.error(
                 Code::DashboardUnknownRoom,
                 subject,
                 format!("widget names unknown room \"{room}\""),
-                file.map(str::to_string),
-            ));
+            );
         }
     }
     if let Some(unit) = &widget.unit {
         if house.unit(unit).is_none() {
-            errors.push(ValidationError::new(
+            diags.error(
                 Code::DashboardUnknownUnit,
                 subject,
                 format!("widget names unknown unit \"{unit}\""),
-                file.map(str::to_string),
-            ));
+            );
         }
     }
 }
@@ -1270,7 +1179,7 @@ fn hex_color(color: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{parse_time, valid_segment, validate};
-    use crate::error::Code;
+    use crate::error::{Code, Diagnostics};
     use crate::expand::expand;
     use crate::repo::House;
 
@@ -1341,12 +1250,11 @@ mod tests {
                 &[("zigbee", zigbee), ("clock", &clock)],
                 &[("zigbee", "lamp", lamp)],
             );
-            let (expanded, _warnings, expand_errors) = expand(&house);
-            assert!(expand_errors.is_empty(), "{expand_errors:?}");
-            let codes: Vec<Code> = validate(&house, &expanded)
-                .into_iter()
-                .map(|e| e.code)
-                .collect();
+            let mut diags = Diagnostics::default();
+            let expanded = expand(&house, &mut diags);
+            assert!(diags.errors.is_empty(), "{:?}", diags.errors);
+            validate(&house, &expanded, &mut diags);
+            let codes: Vec<Code> = diags.errors.iter().map(|e| e.code).collect();
             let expected = if has_clock {
                 vec![]
             } else {

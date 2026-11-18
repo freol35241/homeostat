@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
-use crate::error::{Code, ValidationError};
+use crate::error::{Code, Diagnostics};
 use crate::manifest::{
     DashboardFile, EntityFile, UnitKind, UnitManifest, ZonesFile, SUPPORTED_SCHEMA,
 };
@@ -63,15 +63,14 @@ impl House {
 }
 
 /// Reads a house repo. A parse failure does not abort the walk. The result is
-/// a typed model of everything that parsed plus a complete error list.
-pub fn load(root: &Path) -> (House, Vec<ValidationError>) {
+/// a typed model of everything that parsed, and `diags` gets every error.
+pub fn load(root: &Path, diags: &mut Diagnostics) -> House {
     let mut house = House::default();
-    let mut errors = Vec::new();
 
     let zones_path = root.join("zones.toml");
     if zones_path.exists() {
-        if let Some(zones) = read_toml::<ZonesFile>(&zones_path, "zones.toml", &mut errors) {
-            check_schema_version(zones.schema, "zones", "zones.toml", &mut errors);
+        if let Some(zones) = read_toml::<ZonesFile>(&zones_path, "zones.toml", diags) {
+            check_schema_version(zones.schema, "zones", "zones.toml", diags);
             house.zones = zones.zones;
         }
     }
@@ -79,29 +78,24 @@ pub fn load(root: &Path) -> (House, Vec<ValidationError>) {
     let dashboard_path = root.join("dashboard.toml");
     if dashboard_path.exists() {
         if let Some(dashboard) =
-            read_toml::<DashboardFile>(&dashboard_path, "dashboard.toml", &mut errors)
+            read_toml::<DashboardFile>(&dashboard_path, "dashboard.toml", diags)
         {
-            check_schema_version(dashboard.schema, "dashboard", "dashboard.toml", &mut errors);
+            check_schema_version(dashboard.schema, "dashboard", "dashboard.toml", diags);
             house.dashboard = Some(dashboard);
         }
     }
 
     let units_dir = root.join("units");
     if !units_dir.is_dir() {
-        errors.push(ValidationError::new(
-            Code::MissingUnitsDir,
-            "units",
-            "directory not found",
-            None,
-        ));
-        return (house, errors);
+        diags.error(Code::MissingUnitsDir, "units", "directory not found");
+        return house;
     }
     for file in toml_files(&units_dir) {
         let rel = format!("units/{file}");
-        let Some(text) = read_text(&units_dir.join(&file), &rel, &mut errors) else {
+        let Some(text) = read_text(&units_dir.join(&file), &rel, diags) else {
             continue;
         };
-        house.units.extend(parse_unit(rel, &text, &mut errors));
+        house.units.extend(parse_unit(rel, &text, diags));
     }
 
     let mut entity_dirs: Vec<(String, String)> = Vec::new(); // (owner, dir)
@@ -120,45 +114,43 @@ pub fn load(root: &Path) -> (House, Vec<ValidationError>) {
         let dir_rel = dir.trim_end_matches('/').to_string();
         let dir_abs = root.join(&dir_rel);
         if !dir_abs.is_dir() {
-            errors.push(ValidationError::new(
+            diags.error(
                 Code::MissingEntitiesDir,
                 &owner,
                 format!("entities dir \"{dir}\" not found"),
-                None,
-            ));
+            );
             continue;
         }
         for file in toml_files(&dir_abs) {
             let rel = format!("{dir_rel}/{file}");
-            let Some(text) = read_text(&dir_abs.join(&file), &rel, &mut errors) else {
+            let Some(text) = read_text(&dir_abs.join(&file), &rel, diags) else {
                 continue;
             };
             house
                 .entities
-                .extend(parse_entity(rel, &owner, &text, &mut errors));
+                .extend(parse_entity(rel, &owner, &text, diags));
         }
     }
 
-    (house, errors)
+    house
 }
 
 /// Parses the unit manifest at house-relative `path`, adds the params every
 /// unit of its kind has, and checks what one file can show: its schema
 /// version, and that its file stem is its unit name.
-fn parse_unit(path: String, text: &str, errors: &mut Vec<ValidationError>) -> Option<LoadedUnit> {
-    let mut manifest = parse_toml::<UnitManifest>(text, &path, errors)?;
+fn parse_unit(path: String, text: &str, diags: &mut Diagnostics) -> Option<LoadedUnit> {
+    let mut manifest = parse_toml::<UnitManifest>(text, &path, diags)?;
     manifest.add_implicit_params();
-    check_schema_version(manifest.schema, &manifest.unit.name, &path, errors);
+    check_schema_version(manifest.schema, &manifest.unit.name, &path, diags);
     if file_stem(&path) != manifest.unit.name {
-        errors.push(ValidationError::new(
+        diags.in_file(&path).error(
             Code::UnitNameMismatch,
             &manifest.unit.name,
             format!(
                 "manifest file is {path} but [unit] name is \"{}\"; the SDK reads units/{}.toml",
                 manifest.unit.name, manifest.unit.name
             ),
-            Some(path.clone()),
-        ));
+        );
     }
     Some(LoadedUnit { manifest, path })
 }
@@ -169,11 +161,11 @@ fn parse_entity(
     path: String,
     owner: &str,
     text: &str,
-    errors: &mut Vec<ValidationError>,
+    diags: &mut Diagnostics,
 ) -> Option<LoadedEntity> {
-    let file = parse_toml::<EntityFile>(text, &path, errors)?;
+    let file = parse_toml::<EntityFile>(text, &path, diags)?;
     let name = file_stem(&path).to_string();
-    check_schema_version(file.schema, &name, &path, errors);
+    check_schema_version(file.schema, &name, &path, diags);
     Some(LoadedEntity {
         name,
         file,
@@ -202,19 +194,19 @@ impl House {
     /// Panics on any error `load` would report for these files.
     pub(crate) fn from_toml(units: &[(&str, &str)], entities: &[(&str, &str, &str)]) -> House {
         let mut house = House::default();
-        let mut errors = Vec::new();
+        let mut diags = Diagnostics::default();
         for (stem, text) in units {
             house
                 .units
-                .extend(parse_unit(format!("units/{stem}.toml"), text, &mut errors));
+                .extend(parse_unit(format!("units/{stem}.toml"), text, &mut diags));
         }
         for (owner, name, text) in entities {
             let path = format!("entities/{owner}/{name}.toml");
             house
                 .entities
-                .extend(parse_entity(path, owner, text, &mut errors));
+                .extend(parse_entity(path, owner, text, &mut diags));
         }
-        assert!(errors.is_empty(), "{errors:?}");
+        assert!(diags.errors.is_empty(), "{:?}", diags.errors);
         house
     }
 }
@@ -235,22 +227,17 @@ fn toml_files(dir: &Path) -> Vec<String> {
 fn read_toml<T: serde::de::DeserializeOwned>(
     path: &Path,
     rel: &str,
-    errors: &mut Vec<ValidationError>,
+    diags: &mut Diagnostics,
 ) -> Option<T> {
-    let text = read_text(path, rel, errors)?;
-    parse_toml(&text, rel, errors)
+    let text = read_text(path, rel, diags)?;
+    parse_toml(&text, rel, diags)
 }
 
-fn read_text(path: &Path, rel: &str, errors: &mut Vec<ValidationError>) -> Option<String> {
+fn read_text(path: &Path, rel: &str, diags: &mut Diagnostics) -> Option<String> {
     match fs::read_to_string(path) {
         Ok(text) => Some(text),
         Err(err) => {
-            errors.push(ValidationError::new(
-                Code::ParseError,
-                rel,
-                err.to_string(),
-                None,
-            ));
+            diags.error(Code::ParseError, rel, err.to_string());
             None
         }
     }
@@ -259,29 +246,23 @@ fn read_text(path: &Path, rel: &str, errors: &mut Vec<ValidationError>) -> Optio
 fn parse_toml<T: serde::de::DeserializeOwned>(
     text: &str,
     rel: &str,
-    errors: &mut Vec<ValidationError>,
+    diags: &mut Diagnostics,
 ) -> Option<T> {
     match toml::from_str(text) {
         Ok(value) => Some(value),
         Err(err) => {
-            errors.push(ValidationError::new(
-                Code::ParseError,
-                rel,
-                err.message().to_string(),
-                None,
-            ));
+            diags.error(Code::ParseError, rel, err.message());
             None
         }
     }
 }
 
-fn check_schema_version(schema: u32, subject: &str, rel: &str, errors: &mut Vec<ValidationError>) {
+fn check_schema_version(schema: u32, subject: &str, rel: &str, diags: &mut Diagnostics) {
     if schema != SUPPORTED_SCHEMA {
-        errors.push(ValidationError::new(
+        diags.in_file(rel).error(
             Code::UnsupportedSchema,
             subject,
             format!("schema {schema} is not supported (expected {SUPPORTED_SCHEMA})"),
-            Some(rel.to_string()),
-        ));
+        );
     }
 }

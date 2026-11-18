@@ -23,7 +23,12 @@ fn valid_house_produces_no_errors_and_golden_plan() {
     assert!(
         result.warnings.is_empty(),
         "{REFERENCE} should have no warnings, got:\n{}",
-        result.warnings.join("\n")
+        result
+            .warnings
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n")
     );
 
     let world = homeostat::plan::World::empty();
