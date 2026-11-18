@@ -28,18 +28,11 @@ set -euo pipefail
 # Bumped with the starter's compose image at each release.
 SDK_TAG="v0.23.0"
 
-# The tag's version, and the same version as Python spells it. They differ
-# only for a prerelease. Semver puts a hyphen before the label
-# (0.14.0-rc1), and Cargo and the image tag use that form. Canonical PEP 440
-# has no hyphen (0.14.0rc1), and uv uses that form for the wheel and in a
-# lock.
-# The difference matters. A wheel filename uses "-" to separate its fields,
-# so homeostat-0.14.0-rc1-py3-none-any.whl parses as version 0.14.0 with
-# build tag "rc1". uv then refuses the lock, and no unit in the house
-# starts. PEP 440 normalisation drops the separator before a prerelease
-# label. This project's tags use a hyphen as that separator.
+# The tag's version, and the same version as Python spells it (py_version
+# in lib/sdk_pin.sh says why they differ).
+. "$(dirname "$0")/lib/sdk_pin.sh"
 VERSION="${SDK_TAG#v}"
-PY_VERSION="$(printf '%s' "$VERSION" | sed -E 's/-(a|b|rc|alpha|beta)/\1/')"
+PY_VERSION="$(py_version "$VERSION")"
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 UNITS="$REPO/examples/starter-house/units"
@@ -64,27 +57,6 @@ assets/dashboard.css:assets/dashboard.css
 assets/video-rtc.js:assets/video-rtc.js
 assets/homeostat-mark.svg:assets/homeostat-mark.svg
 "
-
-# A shipped unit names `homeostat==VERSION` and has no [tool.uv.sources]
-# block. The image bundles the wheel and points UV_FIND_LINKS at it. The
-# rewrite is idempotent, so --check compares like with like.
-pin_sdk() {
-  # Matches an unpinned "homeostat" and an already-pinned
-  # "homeostat==X.Y.Z". The starter-only units are rewritten in place. A
-  # pattern that only matched the unpinned form would leave them on the
-  # previous release, and --check would not notice, because the check
-  # compares against this same transform.
-  sed -e 's|^\(# *\)"homeostat[^"]*",|\1"homeostat=='"$PY_VERSION"'",|' \
-      -e '/^# \[tool\.uv\.sources\]$/d' \
-      -e '/^# homeostat = /d' \
-    | awk '
-      # Drop the empty "#" separator that preceded the sources block, but
-      # only when the next line closes the PEP 723 header.
-      /^#$/ { held = 1; next }
-      held && !/^# \/\/\/$/ { print "#" }
-      { held = 0; print }
-    '
-}
 
 # Rewrites the lock's SDK entry from the path source the dev tree locks
 # against to the wheel the image bundles. The output matches what `uv lock
@@ -173,7 +145,7 @@ for pair in $FILES; do
   have_at_tag "$src" || continue
   case "$src" in
     # Only a unit script has an SDK source line. Assets are copied as-is.
-    *.py) source_at_tag "$src" | pin_sdk > "$tmp" ;;
+    *.py) source_at_tag "$src" | pin_sdk "$PY_VERSION" > "$tmp" ;;
     *) source_at_tag "$src" > "$tmp" ;;
   esac
   place "$tmp" "$dst" "${pair##*:}"
@@ -218,7 +190,7 @@ fi
 # Starter-only units (evening_lights.py) get the pin and nothing else.
 for unit in "$UNITS"/*.py; do
   grep -q '^# *"homeostat' "$unit" || continue
-  pin_sdk < "$unit" > "$tmp"
+  pin_sdk "$PY_VERSION" < "$unit" > "$tmp"
   if [ "$check" = 1 ]; then
     cmp -s "$tmp" "$unit" || stale="$stale $(basename "$unit"):sdk-pin"
   else

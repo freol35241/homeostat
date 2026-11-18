@@ -1,15 +1,11 @@
 """The IVT490 translation, without a broker: firmware topics in and out."""
 
 import json
-import sys
 import unittest
-from pathlib import Path
 from types import SimpleNamespace
 
+import _adapters_path  # noqa: F401
 from homeostat.testing import FakeSession
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "adapters"))
-
 from ivt490 import (
     Feed,
     Pumps,

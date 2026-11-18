@@ -16,6 +16,7 @@
 
 use std::time::Duration;
 
+use crate::civil::utc_epoch_seconds;
 use crate::common::{cache_read, eventually, matched_publisher, up, Supervisor};
 
 const FIXTURE: &str = "tests/fixtures/house_forecast";
@@ -56,7 +57,7 @@ async fn a_forecast_is_published_and_mirrored_for_a_late_joiner() {
 
     let parsed: Vec<i64> = times
         .iter()
-        .map(|t| chrono_free_epoch_seconds(t).expect("point time parses as RFC3339 with an offset"))
+        .map(|t| utc_epoch_seconds(t).expect("point time parses as RFC3339 with an offset"))
         .collect();
     let gaps: Vec<i64> = parsed.windows(2).map(|w| w[1] - w[0]).collect();
     assert_eq!(
@@ -144,33 +145,4 @@ async fn a_core_restart_empties_the_mirror_and_only_a_producer_refills_it() {
     assert_eq!(again["points"][0]["v"], serde_json::json!(3.5), "{again}");
 
     restarted.shutdown();
-}
-
-/// Epoch seconds from an RFC3339 instant with a UTC offset, without adding
-/// a date dependency for one assertion: the fixture publishes `Z`-less
-/// ISO with a `+00:00` offset, which is all this needs to handle.
-fn chrono_free_epoch_seconds(ts: &str) -> Option<i64> {
-    let (date, rest) = ts.split_once('T')?;
-    let time = rest.split(['+', 'Z']).next()?;
-    let mut d = date.split('-');
-    let (y, m, day): (i64, i64, i64) = (
-        d.next()?.parse().ok()?,
-        d.next()?.parse().ok()?,
-        d.next()?.parse().ok()?,
-    );
-    let mut t = time.split(':');
-    let (hh, mm, ss): (i64, i64, i64) = (
-        t.next()?.parse().ok()?,
-        t.next()?.parse().ok()?,
-        t.next().unwrap_or("0").split('.').next()?.parse().ok()?,
-    );
-    // Days from civil (Howard Hinnant's algorithm), good for any Gregorian date.
-    let y = if m <= 2 { y - 1 } else { y };
-    let era = if y >= 0 { y } else { y - 399 } / 400;
-    let yoe = y - era * 400;
-    let mp = (m + 9) % 12;
-    let doy = (153 * mp + 2) / 5 + day - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let days = era * 146_097 + doe - 719_468;
-    Some(days * 86_400 + hh * 3600 + mm * 60 + ss)
 }

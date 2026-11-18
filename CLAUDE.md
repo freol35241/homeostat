@@ -76,18 +76,7 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 ### Running what CI runs
 
-```
-cargo fmt --check
-cargo clippy --all-targets -- -D warnings
-cargo test
-uv run --no-project --with-editable sdk/python --with 'paho-mqtt>=2,<3' python -m unittest discover sdk/python/tests
-uv run --no-project --with-editable sdk/python --with 'paho-mqtt>=2,<3' --with pyright==1.1.414 pyright sdk/python/homeostat
-uv run --no-project --with-editable sdk/python --with 'paho-mqtt>=2,<3' --with 'aiohttp>=3.12.14,<4' --with 'aioesphomeapi>=45,<46' --with 'zeroconf>=0.130,<1' python -m unittest discover tests/adapters
-uvx ruff@0.16.7 check adapters sdk scripts tests/adapters tests/browser
-node --test tests/js/*.test.js
-scripts/sync_starter.sh --check
-uv run --script tests/browser/run.py
-```
+`scripts/check.sh` runs every check in CI's order, after `scripts/prewarm.sh` resolves the units' Python environments. It holds the commands and the pinned tool versions, and `.github/workflows/ci.yml` calls it once per check. Name checks to run only those, as in `scripts/check.sh adapters ruff`. The names are `fmt`, `clippy`, `cargo-test`, `sdk`, `pyright`, `adapters`, `ruff`, `js`, `starter`, `smoke-bare` and `browser`.
 
 The integration tests need `mosquitto`, `uv` and `node`; the browser suite needs `scripts/install_browser.sh`.
 
@@ -108,6 +97,7 @@ Edit the source, then regenerate. Tests refuse a stale copy.
 | `docs/widgets.md` and `docs/widgets/*.png` | `uv run --script scripts/widget_gallery.py` |
 | `examples/starter-house/units/` | `scripts/release.sh X.Y.Z`, which runs `scripts/sync_starter.sh` |
 | `*.py.lock` beside a unit script | `uv lock --script <script>` |
+| `tests/corpus/expected_plan.txt` and `tests/corpus/invalid/*/expected_errors.txt` | `HOMEOSTAT_BLESS=1 cargo test --test corpus` |
 
 ### Writing comments and docs
 

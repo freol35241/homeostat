@@ -3,7 +3,7 @@ schema = 1
 [unit]
 name = "recorder"
 kind = "service"
-description = "A recorder that is up but holds every query for a while before answering (#102)"
+description = "A recorder that is up but holds every query for a while before answering"
 
 [runtime]
 command = "uv run units/recorder.py"

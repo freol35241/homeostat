@@ -1,13 +1,9 @@
 """The persons rule, without a bus: trackers in, a person out."""
 
-import sys
 import unittest
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "adapters"))
-
 from types import SimpleNamespace
 
+import _adapters_path  # noqa: F401
 from homeostat.house import Entity, SourceRef
 from persons import Persons, Unit
 

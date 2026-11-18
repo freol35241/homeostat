@@ -1,7 +1,7 @@
 //! The reflector adapter: mirrors every command back as the corresponding
-//! state (`home/cmd/...` -> `home/state/...`, the envelope's value). Used by
-//! the evening-lights fixture houses as the world the automation acts on:
-//! a light that instantly obeys. Envelope-less commands are dropped, like
+//! state (`home/cmd/...` -> `home/state/...`, the envelope's value). Fixture
+//! houses run it as a stand-in for devices that obey at once, so a test can
+//! see a command land as state. Envelope-less commands are dropped, like
 //! any real adapter drops invalid commands.
 
 use std::env;

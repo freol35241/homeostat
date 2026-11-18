@@ -1,17 +1,11 @@
 """The ESPHome translation, without a device: descriptors, states and commands."""
 
-import sys
 import threading
 import unittest
-from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from homeostat import keys
-from homeostat.testing import FakeSample, FakeSession
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "adapters"))
-
+import _adapters_path  # noqa: F401
 from aioesphomeapi import (
     BinarySensorInfo,
     BinarySensorState,
@@ -27,6 +21,8 @@ from aioesphomeapi import (
     SwitchState,
 )
 from esphome import aspect_descriptor, cmd_handler, state_values
+from homeostat import keys
+from homeostat.testing import FakeSample, FakeSession
 
 
 def entity(name, capability, features=(), room="hall"):

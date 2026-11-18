@@ -1,13 +1,10 @@
 """The dashboard's model and command checks, without a bus or a browser."""
 
 import os
-import sys
 import unittest
-from pathlib import Path
 from unittest import mock
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "adapters"))
-
+import _adapters_path  # noqa: F401
 from dashboard import (
     ENV_HOSTS,
     MAX_TEXT_CHARS,

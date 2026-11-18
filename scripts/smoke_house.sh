@@ -6,8 +6,8 @@
 # The unit's SDK dependency is rewritten from the in-repo path source to
 # `homeostat==VERSION` with no sources block. A deployed unit has that form
 # (docs/design.md#sdk-distribution), so the smoke test resolves the SDK
-# from the bundled wheel as a real house does. The rewrite mirrors pin_sdk
-# in scripts/sync_starter.sh.
+# from the bundled wheel as a real house does. pin_sdk in
+# scripts/lib/sdk_pin.sh does the rewrite, as it does for the starter house.
 #
 # Usage: scripts/smoke_house.sh <dir> <sdk-version>
 set -euo pipefail
@@ -15,17 +15,10 @@ set -euo pipefail
 HOUSE="${1:?usage: scripts/smoke_house.sh <dir> <sdk-version>}"
 SDK_VERSION="${2:?usage: scripts/smoke_house.sh <dir> <sdk-version>}"
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
+. "$REPO/scripts/lib/sdk_pin.sh"
 
 mkdir -p "$HOUSE/units"
-sed -e 's|^\(# *\)"homeostat[^"]*",|\1"homeostat=='"$SDK_VERSION"'",|' \
-    -e '/^# \[tool\.uv\.sources\]$/d' \
-    -e '/^# homeostat = /d' \
-    "$REPO/adapters/clock.py" \
-  | awk '
-    /^#$/ { held = 1; next }
-    held && !/^# \/\/\/$/ { print "#" }
-    { held = 0; print }
-  ' > "$HOUSE/units/clock.py"
+pin_sdk "$SDK_VERSION" < "$REPO/adapters/clock.py" > "$HOUSE/units/clock.py"
 grep -q "\"homeostat==$SDK_VERSION\"" "$HOUSE/units/clock.py" \
   && ! grep -q 'tool.uv.sources' "$HOUSE/units/clock.py" \
   || { echo "SMOKE FAIL: clock.py SDK dependency line drifted; rewrite missed" >&2; exit 1; }

@@ -1,15 +1,11 @@
 """OwnTracks translation, without a broker: fixes in, a person's aspects out."""
 
 import json
-import sys
 import unittest
-from pathlib import Path
 from types import SimpleNamespace
 
+import _adapters_path  # noqa: F401
 from homeostat.testing import FakeSession
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "adapters"))
-
 from owntracks import MAX_UNBOUND, Tracker
 
 ALICE = SimpleNamespace(name="alice", room="person", id="alice/phone")

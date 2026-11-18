@@ -1,12 +1,9 @@
 """The ONVIF event parsing, without a camera: pull-point replies in, motion out."""
 
-import sys
 import unittest
-from pathlib import Path
 from xml.etree import ElementTree
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "adapters"))
-
+import _adapters_path  # noqa: F401
 from onvif import SoapError, motion_values, subscription_url
 
 

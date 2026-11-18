@@ -13,13 +13,14 @@
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use homeostat::bus::HealthStatus;
 use rusqlite::types::Value as SqlValue;
 use rusqlite::{Connection, OpenFlags};
 use serde_json::{json, Value};
 
+use crate::civil::{days_from_civil, since_epoch};
 use crate::common::{
     await_health, await_mirror, await_sample, config_write, health_watch, matched_publisher, up,
     Publisher, Scratch, StateSub, Supervisor,
@@ -130,10 +131,7 @@ async fn history_get(session: &zenoh::Session, selector: &str) -> Vec<(String, V
 }
 
 fn now_us() -> i64 {
-    SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .expect("epoch")
-        .as_micros() as i64
+    since_epoch().as_micros() as i64
 }
 
 /// (a) State published on the bus lands in the store with entity, room,
@@ -1695,15 +1693,10 @@ async fn v2_store_gains_the_forecast_table() {
     sup.shutdown();
 }
 
-/// Microseconds since the epoch at midnight UTC on a civil date (Howard
-/// Hinnant's days-from-civil), for rows the archive tests date by hand.
+/// Microseconds since the epoch at midnight UTC on a civil date, for rows
+/// the archive tests date by hand.
 fn utc_us(year: i64, month: i64, day: i64) -> i64 {
-    let y = if month <= 2 { year - 1 } else { year };
-    let era = if y >= 0 { y } else { y - 399 } / 400;
-    let yoe = y - era * 400;
-    let doy = (153 * ((month + 9) % 12) + 2) / 5 + day - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    (era * 146_097 + doe - 719_468) * 86_400 * 1_000_000
+    days_from_civil(year, month, day) * 86_400 * 1_000_000
 }
 
 /// The tally against both tables it describes: samples for state and cmd
