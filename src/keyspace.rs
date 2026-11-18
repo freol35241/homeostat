@@ -36,7 +36,7 @@ pub const CLASSES: &[&str] = &[
 /// The classes addressed per entity, as
 /// `home/{class}/{room}/{entity}/{aspect}`. `forecast` is one of them and
 /// takes a sixth segment, its source; see `check_schema`.
-const ENTITY_ADDRESSED: &[&str] = &["state", "cmd", "arbiter", "forecast"];
+pub const ENTITY_ADDRESSED: &[&str] = &["state", "cmd", "arbiter", "forecast"];
 
 /// Reserved pseudo-rooms for non-spatial entities.
 pub const PSEUDO_ROOMS: &[&str] = &["global", "person"];

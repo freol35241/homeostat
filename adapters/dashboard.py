@@ -69,7 +69,7 @@ from pathlib import Path
 import aiohttp
 import zenoh
 from aiohttp import WSMsgType, web
-from homeostat import ConfigWriteError, Newest, connect, house, keys
+from homeostat import ConfigWriteError, Newest, connect, house, keys, vocabulary
 from homeostat.session import QueryError
 
 ENV_HOSTS = "HOMEOSTAT_DASHBOARD_HOSTS"
@@ -156,38 +156,36 @@ MAP_TYPES = {
 }
 
 # Commandable aspects per capability: the capability's base aspect plus
-# the features the entity declares. They are VOCABULARY's commands column
-# in src/manifest.rs, which a test there checks this against, less
-# `runtime_s`: its bounds are the device's own, so the dashboard takes it
-# only through the adapter's descriptor. A lock command goes to home/cmd
-# at the manual band like any other. For an arbitrated entity it is the
-# arbiter that makes the family win over automations.
-COMMANDABLE = {
-    "light": {"on", "brightness", "color_temp"},
-    "lock": {"locked"},
-    "switch": {"on"},
-    "climate": {"setpoint"},
-    "burner": {"on", "power_level"},
-    "notifier": {"message", "alert"},
-}
+# the features the entity declares. They are the vocabulary's commands
+# (homeostat.vocabulary), less DESCRIPTOR_ONLY: a device-timed runtime's bounds
+# are the device's own, so the dashboard takes `runtime_s` only through
+# the adapter's descriptor (docs/design.md#device-timed-runtime). A lock
+# command goes to home/cmd at the manual band like any other. For an
+# arbitrated entity it is the arbiter that makes the family win over
+# automations.
+DESCRIPTOR_ONLY = {"runtime_s"}
+COMMANDABLE = {c: set(commands) - DESCRIPTOR_ONLY for c, commands in vocabulary.COMMANDS.items()}
 # The vocabulary's value types, in the descriptor-command shape so one
-# check serves both. The same test keeps them in step with the commands
-# column. `on`/`locked` are bools (z2m, esphome, the lock
-# adapters), `brightness`/`color_temp` numbers (z2m, esphome), `setpoint`
-# a float (ivt490), `power_level` a number (aduro's 10/50/100), and a
-# notifier's `message` and `alert` the text itself. The adapter checks
-# bounds (docs/adapters.md, Commands). The type is checked here so a JSON
-# object cannot reach the bus in a manual-band envelope.
+# check serves both. A vocabulary number is a descriptor "float", which
+# admits an integer too, as aduro's power levels 10/50/100 are. The
+# adapter checks bounds (docs/adapters.md, Commands). The type is checked
+# here so a JSON object cannot reach the bus in a manual-band envelope.
+# An unknown vocabulary type fails here, at import, rather than as a
+# command the page cannot send.
+DESCRIPTOR_TYPE = {"bool": "bool", "number": "float", "text": "text"}
 VOCABULARY_COMMANDS = {
-    "on": {"type": "bool"},
-    "locked": {"type": "bool"},
-    "brightness": {"type": "float"},
-    "color_temp": {"type": "float"},
-    "setpoint": {"type": "float"},
-    "power_level": {"type": "float"},
-    "message": {"type": "text"},
-    "alert": {"type": "text"},
+    aspect: {"type": DESCRIPTOR_TYPE[kind]}
+    for commands in vocabulary.COMMANDS.values()
+    for aspect, kind in commands.items()
+    if aspect not in DESCRIPTOR_ONLY
 }
+# The table is keyed by aspect, so two capabilities must agree on one.
+assert all(
+    VOCABULARY_COMMANDS[a]["type"] == DESCRIPTOR_TYPE[k]
+    for commands in vocabulary.COMMANDS.values()
+    for a, k in commands.items()
+    if a not in DESCRIPTOR_ONLY
+)
 # The longest text a person may send from the page. A notification is a
 # line or two, and a phone shows little more.
 MAX_TEXT_CHARS = 1000

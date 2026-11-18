@@ -659,7 +659,10 @@ the core (`VOCABULARY` in `src/manifest.rs`): `binary_sensor`,
 `burner`, `button`, `camera`, `climate`, `cover`, `light`, `lock`, `notifier`,
 `occupancy`, `person`, `router`, `sensor`, `switch`, `tracker`. An
 unknown one is `unknown-capability`. Each capability has one row, which
-is rendered into [`docs/manifest.md`](manifest.md). A row gives:
+is rendered into [`docs/manifest.md`](manifest.md). The parts a Python
+unit reads (base aspects, commands, rest values and options) are also
+generated into `homeostat.vocabulary`, which the SDK and the adapters
+import. A row gives:
 
 - The **base aspect**, which commands target and the widget acts on
   (`on` for a light, `locked`, a climate's `setpoint`). A capability
@@ -3785,8 +3788,8 @@ a uv lockfile beside it (`{script}.py.lock`), so a unit resolves the
 dependency versions its release was tested against.
 
 An adapter and the SDK must come from the same commit. An adapter from
-`main` fails against an older SDK with `AttributeError`, so a house
-copies an adapter from the release it pins.
+`main` fails against an older SDK with an `AttributeError` or an
+`ImportError`, so a house copies an adapter from the release it pins.
 
 ### The starter house
 

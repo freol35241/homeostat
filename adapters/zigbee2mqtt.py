@@ -56,7 +56,7 @@ import threading
 import time
 
 import homeostat
-from homeostat import house, keys, mqtt
+from homeostat import house, keys, mqtt, vocabulary
 from homeostat.params import LiveParams
 
 DEFAULT_BASE_TOPIC = "zigbee2mqtt"
@@ -151,15 +151,21 @@ KIND_BY_UNIT = {"°C": "temperature", "%": "percent"}
 # diagnostic only as a battery voltage (mV); a plug's mains voltage (V) is
 # a reading.
 DIAGNOSTIC_PROPERTIES = frozenset({"linkquality"})
-# The capability vocabulary, which the dashboard's own widgets command.
-# These are described as readings and get no descriptor command.
-VOCABULARY_ASPECTS = frozenset({"on", "locked", "brightness", "color_temp"})
+# The capabilities whose vocabulary commands this adapter translates.
+COMMANDED = ("light", "lock", "switch")
+# The vocabulary commands this adapter translates, which the dashboard's
+# own widgets command. These are described as readings and get no
+# descriptor command. The list is the adapter's own, because a new
+# vocabulary command needs its translation written here first; a
+# switch's `runtime_s` is not translated (docs/design.md#device-timed-runtime).
+VOCABULARY_ASPECTS = frozenset({"on", "brightness", "color_temp", "locked"})
+assert VOCABULARY_ASPECTS.issubset(a for c in COMMANDED for a in vocabulary.COMMANDS[c])
 # The capability's base aspect (docs/manifest.md, Capability vocabulary):
 # the one command every entity of that capability takes.
-BASE_ASPECT = {"light": "on", "switch": "on", "lock": "locked"}
+BASE_ASPECT = {c: vocabulary.BASE_ASPECTS[c] for c in COMMANDED}
 # The light aspects the vocabulary's `transition` option applies to
 # (docs/manifest.md, Command options).
-TRANSITION_ASPECTS = frozenset({"on", "brightness", "color_temp"})
+TRANSITION_ASPECTS = frozenset(vocabulary.OPTIONS["light"]["transition"])
 ACCESS_SET = 2  # z2m access bitmask: 1 published, 2 settable, 4 gettable
 SPECIFIC_TYPES = ("light", "switch", "lock", "cover", "climate", "fan")
 

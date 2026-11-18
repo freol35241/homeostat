@@ -39,7 +39,7 @@ from typing import Any
 import tomllib
 import zenoh
 
-from . import house, intervals, keys
+from . import house, intervals, keys, vocabulary
 from .forecast import Forecast, Point
 from .forecast import decode as decode_forecast
 from .session import QueryError, QueryTimeout, UnitSession
@@ -71,12 +71,9 @@ def context(root: str | Path = ".") -> "Context":
 
 # The classes addressed per entity, as home/{class}/{room}/{entity}/{aspect}.
 # These are the classes with slots to fill and the ones that expand.
-# Mirrors ENTITY_ADDRESSED in src/keyspace.rs. `arbiter` is left out
-# because only adapters use it, and adapters use UnitSession directly
-# instead of a Context. If the core adds a class and this tuple does not,
-# `plan` accepts that class's templated publishes but `ctx` cannot address
-# them.
-_ENTITY_ADDRESSED = ("state", "cmd", "forecast")
+# `arbiter` is left out because only adapters use it, and adapters use
+# UnitSession directly instead of a Context.
+_ENTITY_ADDRESSED = tuple(c for c in vocabulary.ENTITY_ADDRESSED if c != "arbiter")
 
 
 def _as_json(value: Any) -> Any:
