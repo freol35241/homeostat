@@ -308,9 +308,12 @@ Per command:
    `"report"` or a `"release"`, and an adapter that parses envelopes
    itself must not act on either.
 3. Check the aspect is one the entity takes: the capability's base
-   aspect, its declared `features`, or a dialect knob this adapter
-   documents. Anything else drops with `invalid-command`.
-4. Check the value's type and bounds. **Bounds are adapter constants**,
+   aspect, a declared feature that the commands column of
+   [manifest.md, Capability vocabulary](manifest.md#capability-vocabulary)
+   lists, or a dialect knob this adapter documents. Anything else drops
+   with `invalid-command`.
+4. Check the value's type and bounds. The commands column gives the type
+   of each vocabulary command. **Bounds are adapter constants**,
    because device physics is dialect knowledge, not house config. An
    out-of-range value drops with `invalid-command`; do not clamp it.
    Check each option the adapter honours the same way. Ignore any other

@@ -655,12 +655,11 @@ reviews and the dependency graph the apply walk follows.
 ### The capability vocabulary
 
 A capability says what kind of thing an entity is. The list is fixed in
-the core (`CAPABILITIES` in `src/manifest.rs`): `binary_sensor`,
+the core (`VOCABULARY` in `src/manifest.rs`): `binary_sensor`,
 `burner`, `button`, `camera`, `climate`, `cover`, `light`, `lock`, `notifier`,
 `occupancy`, `person`, `router`, `sensor`, `switch`, `tracker`. An
-unknown one is `unknown-capability`. Each capability has a row in
-`VOCABULARY`, which a test keeps in step and which is rendered into
-[`docs/manifest.md`](manifest.md). A row gives:
+unknown one is `unknown-capability`. Each capability has one row, which
+is rendered into [`docs/manifest.md`](manifest.md). A row gives:
 
 - The **base aspect**, which commands target and the widget acts on
   (`on` for a light, `locked`, a climate's `setpoint`). A capability
@@ -668,6 +667,14 @@ unknown one is `unknown-capability`. Each capability has a row in
 - Features and reserved aspects: optional aspects an entity file may
   declare (`brightness`), and normalized readings the vocabulary names
   (`indoor_temperature` on `climate`).
+- The **commands**: the aspects that take a command, and the type of
+  value each carries (bool, number or text). They are the base aspect
+  and the features that are levers (`brightness`, a switch's
+  `runtime_s`). A feature takes commands only on an entity that declares
+  it, and a reading takes none. Plan checks
+  [gesture actions](#gesture-actions) against this column, and the
+  dashboard's vocabulary commands follow it ([Commanding](#commanding)).
+  The adapter still checks bounds.
 - The **notable** reading, which is a deviation on the dashboard's
   `Now` (a light on, a lock unlocked, a router's `wan = false`).
 - The [command options](#command-options) its commands may carry
@@ -778,9 +785,17 @@ the bus.
 - Plan checks each action and prints it under its button
   (`double → porch_light: release`). Only a button has actions
   (`actions-not-button`). A target must exist (`action-unknown-target`)
-  and take commands on the aspects named: its base aspect or a declared
-  feature, and for a toggle `on` or `locked` (`action-aspect`). The
-  action must say one thing to send, in scalars (`action-shape`). A
+  and take a command on each aspect named (`action-aspect`). That is an
+  aspect in its capability's
+  [commands](#the-capability-vocabulary), the base aspect or a feature
+  the target declares, so a climate's `indoor_temperature` is refused
+  even where it is declared. A declared feature the vocabulary does not
+  name is an adapter's own knob, such as ivt490's `operating_mode`; the
+  adapter's descriptor types and bounds it, so plan takes any scalar
+  for it, as the dashboard does. A toggle needs a bool command. The
+  action must say one thing to send, and each value must have its
+  command's type, so `setpoint = "warm"` is refused (`action-shape`),
+  as is blank text. A
   `hold` must go to an arbitrated target (`action-hold-not-arbitrated`),
   and a time of day needs the clock (`time-of-day-no-clock`). An action
   that can unlock a lock must say `unlocks = true` (`action-unlocks`),
@@ -2872,11 +2887,14 @@ capability the dashboard may command.
   without a grant render inert. This is the unit keeping to its
   declaration. It is not a security boundary
   ([Local-only access](#local-only-access)).
-- The dashboard may command a capability's base aspect or a declared
-  feature. These are type-checked, so a JSON object never travels in an
-  envelope. It may also command an aspect whose descriptor declares a
-  family-editable command, checked against the descriptor's constraint.
-  Otherwise bounds are left to the adapter.
+- The dashboard may command an aspect in its capability's
+  [commands](#the-capability-vocabulary): the base aspect, or a feature
+  the entity declares. These are checked against the command's type, so
+  a JSON object never travels in an envelope. It may also command an
+  aspect whose descriptor declares a family-editable command, checked
+  against the descriptor's constraint. A switch's `runtime_s` goes that
+  way, because its bounds are the device's own. Otherwise bounds are
+  left to the adapter.
 - Group actions fan out at the manual edge. `POST /api/lights/off`
   sends one manual-band off per commandable light, whether it is lit or
   not. A commandable "scene" entity was rejected. Its owner would

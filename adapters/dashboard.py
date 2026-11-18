@@ -156,9 +156,12 @@ MAP_TYPES = {
 }
 
 # Commandable aspects per capability: the capability's base aspect plus
-# the features the entity declares. A lock command goes to home/cmd at the
-# manual band like any other. For an arbitrated entity it is the arbiter
-# that makes the family win over automations.
+# the features the entity declares. They are VOCABULARY's commands column
+# in src/manifest.rs, which a test there checks this against, less
+# `runtime_s`: its bounds are the device's own, so the dashboard takes it
+# only through the adapter's descriptor. A lock command goes to home/cmd
+# at the manual band like any other. For an arbitrated entity it is the
+# arbiter that makes the family win over automations.
 COMMANDABLE = {
     "light": {"on", "brightness", "color_temp"},
     "lock": {"locked"},
@@ -167,16 +170,9 @@ COMMANDABLE = {
     "burner": {"on", "power_level"},
     "notifier": {"message", "alert"},
 }
-BASE_ASPECT = {
-    "light": "on",
-    "lock": "locked",
-    "switch": "on",
-    "climate": "setpoint",
-    "burner": "on",
-    "notifier": "message",
-}
 # The vocabulary's value types, in the descriptor-command shape so one
-# check serves both: `on`/`locked` are bools (z2m, esphome, the lock
+# check serves both. The same test keeps them in step with the commands
+# column. `on`/`locked` are bools (z2m, esphome, the lock
 # adapters), `brightness`/`color_temp` numbers (z2m, esphome), `setpoint`
 # a float (ivt490), `power_level` a number (aduro's 10/50/100), and a
 # notifier's `message` and `alert` the text itself. The adapter checks
@@ -310,7 +306,7 @@ def commandable_aspects(entity: dict, descriptor: dict | None) -> set[str]:
     page would refuse.
     """
     allowed = COMMANDABLE.get(entity["capability"], set())
-    base = BASE_ASPECT.get(entity["capability"])
+    base = keys.BASE_ASPECTS.get(entity["capability"])
     aspects = {a for a in allowed if a == base or a in entity["features"]}
     fields = (descriptor or {}).get("fields")
     if isinstance(fields, dict):
@@ -1123,10 +1119,7 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
                 return json_error(f"{entity} is not arbitrated, so nothing holds it")
             if hold == "report":
                 return json_error("the dashboard cannot report what a device did")
-        allowed = COMMANDABLE.get(spec["capability"], set())
-        base = BASE_ASPECT.get(spec["capability"])
-        vocabulary = aspect in allowed and (aspect == base or aspect in spec["features"])
-        if vocabulary:
+        if aspect in commandable_aspects(spec, None):
             kind = VOCABULARY_COMMANDS[aspect]["type"]
             if hold == "release":
                 pass
