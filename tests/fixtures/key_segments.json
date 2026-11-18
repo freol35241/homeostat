@@ -1,5 +1,5 @@
 {
-  "comment": "The names usable as one bus key segment: unit, parameter, entity, aspect, room and zone names, and every segment the SDK builds a key from. ASCII letters and digits, \"_\", \"-\" and \".\", except \".\" and \"..\". \"/\" breaks the key schema, \"*\", \"$\", \"?\" and \"#\" mean something to the bus, and \"**\" would reach every aspect subscriber. Read by src/validate.rs (unit test) and sdk/python/tests/test_keys.py, so the core and the SDK accept and refuse the same names.",
+  "comment": "The names usable as one bus key segment, as src/validate.rs and homeostat.keys check them (tests/fixtures/README.md).",
   "accepted": [
     "a",
     "Z",
@@ -67,6 +67,12 @@
     "１",
     "٣",
     "lamp٣",
-    "²"
+    "²",
+    "\r",
+    "\u007f",
+    "{room}",
+    "%",
+    "=",
+    ";"
   ]
 }

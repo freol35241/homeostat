@@ -290,8 +290,8 @@ def command_keyexprs(entity) -> list[str]:
 
 CMD_PRIORITIES = vocabulary.CMD_PRIORITIES
 
-# The words a manual-band command's `hold` may carry besides an instant
-# (docs/design.md#hold-intents). "report" and "release" are for the
+# The words a manual-band command's `hold` may carry besides an instant or
+# "HH:MM" (docs/design.md#hold-intents). "report" and "release" are for the
 # arbiter alone: neither is forwarded to the device.
 HOLD_WORDS = vocabulary.HOLD_WORDS
 

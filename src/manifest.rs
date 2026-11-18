@@ -709,7 +709,8 @@ pub enum Uncommanded {
 /// The words a manual-band command's `hold` may carry besides an RFC3339
 /// instant or `"HH:MM"` (docs/design.md#hold-intents). `"report"` and
 /// `"release"` are for the arbiter alone: neither is forwarded to the
-/// device.
+/// device. A gesture action's hold takes `"none"` and `"release"` only
+/// (`check_actions`).
 pub const HOLD_WORDS: [&str; 3] = ["none", "report", "release"];
 
 /// One target of a gesture: what the buttons service sends it. Exactly one

@@ -16,7 +16,7 @@ class SegmentTest(unittest.TestCase):
     def test_the_key_segment_rule_is_the_cores(self):
         # tests/fixtures/key_segments.json: what the core accepts as a key
         # segment, the SDK builds keys from.
-        cases = json.loads((Path(__file__).resolve().parents[3] / "tests/fixtures/key_segments.json").read_text())
+        cases = json.loads((Path(__file__).resolve().parents[3] / "tests/fixtures/key_segments.json").read_text(encoding="utf-8"))
         for name in cases["accepted"]:
             self.assertTrue(keys.valid_segment(name), repr(name))
         for name in cases["refused"]:
