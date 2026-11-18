@@ -254,11 +254,20 @@ async fn a_gone_holders_hold_ends_and_the_one_beneath_is_sent() {
     // A second holder at agent, which exits whenever the test asks it to.
     std::fs::write(
         house.join("units/curfew.toml"),
-        "schema = 1\n\n[unit]\nname = \"curfew\"\nkind = \"automation\"\n\n\
-         [runtime]\ncommand = \"fake_adapter --crash-key home/cmd/test/curfew/crash\"\n\
-         restart = \"always\"\nshutdown_grace_s = 5\n\n\
-         [bus.publishes]\nlocked = { key = \"home/hold/curfew/hallway/front_door/locked\", \
-         capability = \"lock\", priority = \"agent\" }\n",
+        r#"schema = 1
+
+[unit]
+name = "curfew"
+kind = "automation"
+
+[runtime]
+command = "fake_adapter --crash-key home/cmd/test/curfew/crash"
+restart = "always"
+shutdown_grace_s = 5
+
+[bus.publishes]
+locked = { key = "home/hold/curfew/hallway/front_door/locked", capability = "lock", priority = "agent" }
+"#,
     )
     .expect("write the curfew unit");
     let (mut sup, observer) =
@@ -972,11 +981,18 @@ async fn a_wish_during_the_apply_that_arbitrates_an_entity_forwards() {
     );
     std::fs::write(
         house.join("units/slow.toml"),
-        "schema = 1\n\n[unit]\nname = \"slow\"\nkind = \"service\"\n\
-         description = \"Holds the walk open after the adapter\"\n\n[runtime]\n\
-         command = \"fake_adapter --ready-after-ms 8000 \
-         --state-key home/state/testroom/slow/value --crash-key home/cmd/testroom/slow/crash\"\n\
-         restart = \"always\"\nshutdown_grace_s = 5\n",
+        r#"schema = 1
+
+[unit]
+name = "slow"
+kind = "service"
+description = "Holds the walk open after the adapter"
+
+[runtime]
+command = "fake_adapter --ready-after-ms 8000 --state-key home/state/testroom/slow/value --crash-key home/cmd/testroom/slow/crash"
+restart = "always"
+shutdown_grace_s = 5
+"#,
     )
     .expect("write the slow unit");
     let house_arg = house.to_str().expect("utf-8 path").to_string();
@@ -1035,7 +1051,11 @@ async fn the_family_policy_decides_what_a_tap_holds() {
     let entity = house.join("entities/reflector/front_door.toml");
     let mut text = std::fs::read_to_string(&entity).expect("read the entity");
     text.push_str(
-        "\n[write_policy.family.locked]\nfalse = { until = \"next change\" }\ntrue = \"none\"\n",
+        r#"
+[write_policy.family.locked]
+false = { until = "next change" }
+true = "none"
+"#,
     );
     std::fs::write(&entity, text).expect("write the entity");
     let (mut sup, observer) = up(|| Supervisor::spawn_at(&house, &[]), &["arbiter"]).await;

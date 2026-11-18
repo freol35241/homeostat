@@ -439,10 +439,23 @@ fn add_watcher_pair(house: &Path, adapter: &str, room: &str, entity: &str, autom
     std::fs::write(
         house.join(format!("units/{adapter}.toml")),
         format!(
-            "schema = 1\n\n[unit]\nname = \"{adapter}\"\nkind = \"adapter\"\n\n\
-             [runtime]\ncommand = \"fake_adapter --crash-after-ms 0\"\nrestart = \"on-failure\"\n\n\
-             [discovery]\nmode = \"static\"\nendpoint = \"fake://local\"\n\n\
-             [entities]\ndir = \"entities/{adapter}/\"\n"
+            r#"schema = 1
+
+[unit]
+name = "{adapter}"
+kind = "adapter"
+
+[runtime]
+command = "fake_adapter --crash-after-ms 0"
+restart = "on-failure"
+
+[discovery]
+mode = "static"
+endpoint = "fake://local"
+
+[entities]
+dir = "entities/{adapter}/"
+"#
         ),
     )
     .expect("write adapter manifest");
@@ -450,17 +463,36 @@ fn add_watcher_pair(house: &Path, adapter: &str, room: &str, entity: &str, autom
     std::fs::write(
         house.join(format!("entities/{adapter}/{entity}.toml")),
         format!(
-            "schema = 1\n\n[entity]\nid = \"{entity}-1\"\ncapability = \"light\"\nroom = \"{room}\"\n\n\
-             [write_policy]\nmode = \"shared\"\nowner = \"{adapter}\"\n"
+            r#"schema = 1
+
+[entity]
+id = "{entity}-1"
+capability = "light"
+room = "{room}"
+
+[write_policy]
+mode = "shared"
+owner = "{adapter}"
+"#
         ),
     )
     .expect("write entity file");
     std::fs::write(
         house.join(format!("units/{automation}.toml")),
         format!(
-            "schema = 1\n\n[unit]\nname = \"{automation}\"\nkind = \"automation\"\n\n\
-             [runtime]\ncommand = \"reflector\"\nrestart = \"on-failure\"\n\n\
-             [bus.publishes]\nlights = {{ key = \"home/cmd/{room}/{entity}/on\", capability = \"light\", priority = \"automation\" }}\n"
+            r#"schema = 1
+
+[unit]
+name = "{automation}"
+kind = "automation"
+
+[runtime]
+command = "reflector"
+restart = "on-failure"
+
+[bus.publishes]
+lights = {{ key = "home/cmd/{room}/{entity}/on", capability = "light", priority = "automation" }}
+"#
         ),
     )
     .expect("write automation manifest");

@@ -11,11 +11,12 @@
 //! `RECORDER_DB`, as in restore.rs.
 
 use std::path::Path;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use serde_json::{json, Value};
 use zenoh::time::{Timestamp, TimestampId, NTP64};
 
+use crate::civil::since_epoch;
 use crate::common::{
     await_mirror, await_running, await_sample, cache_read, edit, eventually, temp_house, up,
     Scratch, Supervisor,
@@ -104,12 +105,6 @@ async fn mirror_read(session: &zenoh::Session, key: &str) -> Option<Mirrored> {
         }
     }
     None
-}
-
-fn since_epoch() -> Duration {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("clock after the epoch")
 }
 
 /// A stamp `ago` in the past, set by a publisher with ID `id`.
@@ -248,10 +243,10 @@ async fn the_mirror_keeps_the_newest_stamp_and_ages_a_past_one() {
     sup.shutdown();
 }
 
-/// The scenario #204 is about. A value is recorded, the core goes down and
-/// comes back on the same store, and the value is back on the bus with the
-/// age it really has: in the mirror, to a unit's `subscribe`, and without a
-/// second row in the store. A live value afterwards replaces it.
+/// A value is recorded, the core goes down and comes back on the same
+/// store, and the value is back on the bus with the age it really has: in
+/// the mirror, to a unit's `subscribe`, and without a second row in the
+/// store. A live value afterwards replaces it.
 #[tokio::test(flavor = "multi_thread")]
 async fn state_comes_back_after_a_core_restart_with_its_age() {
     let scratch = Scratch::new("replay-restart");

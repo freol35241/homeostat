@@ -4,6 +4,7 @@
 //! is a file here with a `mod` line below; a file without one is never
 //! compiled. Run one suite with `cargo test --test it <suite>::`.
 
+mod civil;
 mod common;
 
 mod aduro;

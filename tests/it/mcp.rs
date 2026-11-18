@@ -418,10 +418,18 @@ async fn http_transport_runs_as_supervised_unit() {
     std::fs::write(
         house.join("units/mcp.toml"),
         format!(
-            "schema = 1\n\n[unit]\nname = \"mcp\"\nkind = \"service\"\n\
-             description = \"Agent surface\"\n\n\
-             [runtime]\ncommand = \"homeostat mcp --http 127.0.0.1:{port}\"\n\
-             restart = \"on-failure\"\nshutdown_grace_s = 5\n"
+            r#"schema = 1
+
+[unit]
+name = "mcp"
+kind = "service"
+description = "Agent surface"
+
+[runtime]
+command = "homeostat mcp --http 127.0.0.1:{port}"
+restart = "on-failure"
+shutdown_grace_s = 5
+"#
         ),
     )
     .expect("write mcp manifest");
@@ -484,9 +492,17 @@ async fn the_http_surface_refuses_what_a_browser_can_send() {
     std::fs::write(
         house.join("units/mcp.toml"),
         format!(
-            "schema = 1\n\n[unit]\nname = \"mcp\"\nkind = \"service\"\n\n\
-             [runtime]\ncommand = \"homeostat mcp --http {addr}\"\n\
-             restart = \"always\"\nshutdown_grace_s = 5\n"
+            r#"schema = 1
+
+[unit]
+name = "mcp"
+kind = "service"
+
+[runtime]
+command = "homeostat mcp --http {addr}"
+restart = "always"
+shutdown_grace_s = 5
+"#
         ),
     )
     .expect("write mcp manifest");
@@ -558,9 +574,17 @@ async fn the_http_surface_bounds_what_a_peer_can_make_it_read() {
     std::fs::write(
         house.join("units/mcp.toml"),
         format!(
-            "schema = 1\n\n[unit]\nname = \"mcp\"\nkind = \"service\"\n\n\
-             [runtime]\ncommand = \"homeostat mcp --http {addr}\"\n\
-             restart = \"always\"\nshutdown_grace_s = 5\n"
+            r#"schema = 1
+
+[unit]
+name = "mcp"
+kind = "service"
+
+[runtime]
+command = "homeostat mcp --http {addr}"
+restart = "always"
+shutdown_grace_s = 5
+"#
         ),
     )
     .expect("write mcp manifest");

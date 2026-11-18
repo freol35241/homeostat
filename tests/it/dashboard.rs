@@ -45,7 +45,7 @@ use serde_json::{json, Value};
 
 use crate::common::{
     await_running, await_sample, cache_read, eventually, expect_silence, http, next_sample, up,
-    FakeServer, HttpResponse, Supervisor, FIRST_RUN, SILENCE,
+    FakeServer, HttpResponse, StateSub, Supervisor, FIRST_RUN, SILENCE,
 };
 
 const FIXTURE: &str = "tests/fixtures/house_dashboard";
@@ -171,6 +171,22 @@ async fn browser_fixtures_still_look_like_the_real_model() {
     sup.shutdown();
 }
 
+/// What the sections of `dashboard_serves_the_family_surface` share: the
+/// dashboard's address, the observer session and the bus subscribers
+/// declared before the units start.
+struct Ctx {
+    addr: String,
+    observer: zenoh::Session,
+    cmd_sub: StateSub,
+    echo: StateSub,
+    lock_cmd_sub: StateSub,
+    garage_sub: StateSub,
+    switch_cmd_sub: StateSub,
+    climate_cmd_sub: StateSub,
+    mode_cmd_sub: StateSub,
+    notify_cmd_sub: StateSub,
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn dashboard_serves_the_family_surface() {
     let port = common::free_port();
@@ -224,8 +240,39 @@ async fn dashboard_serves_the_family_surface() {
     await_running(&observer, "reflector", Duration::from_secs(10)).await;
     drop(permit);
 
-    // 1. The model is the manifests, rendered.
-    let (status, model) = http_request(&addr, "GET", "/api/model", &[], None);
+    let ctx = Ctx {
+        addr,
+        observer,
+        cmd_sub,
+        echo,
+        lock_cmd_sub,
+        garage_sub,
+        switch_cmd_sub,
+        climate_cmd_sub,
+        mode_cmd_sub,
+        notify_cmd_sub,
+    };
+    let model = model_renders_the_manifests(&ctx);
+    model_carries_views_and_relations(&ctx, &model).await;
+    page_and_assets_are_served(&ctx);
+    let mut ws = command_reaches_the_bus_and_the_socket(&ctx).await;
+    malformed_commands_stay_off_the_bus(&ctx).await;
+    lock_command_is_stamped_at_manual_band(&ctx).await;
+    holds_reach_the_bus_and_the_page(&ctx, &mut ws).await;
+    let model = grants_decide_what_is_commandable(&ctx).await;
+    climate_takes_only_its_setpoint(&ctx).await;
+    notifier_takes_its_text(&ctx, &model).await;
+    aspect_descriptors_admit_family_commands(&ctx).await;
+    params_persist_within_constraints(&ctx).await;
+    local_only_gate_holds(&ctx);
+    history_checks_its_selector(&ctx);
+
+    sup.shutdown();
+}
+
+/// 1. The model is the manifests, rendered.
+fn model_renders_the_manifests(ctx: &Ctx) -> Value {
+    let (status, model) = http_request(&ctx.addr, "GET", "/api/model", &[], None);
     assert_eq!(status, 200, "{model}");
     // Where the page is served from: the core's version off the bus, and
     // the SDK this unit runs against (the release its page came from).
@@ -280,12 +327,21 @@ async fn dashboard_serves_the_family_surface() {
 
     // No HOMEOSTAT_DASHBOARD_TILES in this fixture: tiles are unavailable.
     assert_eq!(model["tiles"], json!(false), "{model}");
+    model
+}
 
-    // 1b. dashboard.toml rides the model as written (the core validated
-    // it), and each unit carries the relations its card draws: what it
-    // drives, from the grant table, and what it reads, from its
-    // subscriptions resolved against live state keys
-    // (docs/design.md#views-are-text).
+/// 1b. dashboard.toml rides the model as written (the core validated
+/// it), and each unit carries the relations its card draws: what it
+/// drives, from the grant table, and what it reads, from its
+/// subscriptions resolved against live state keys
+/// (docs/design.md#views-are-text).
+async fn model_carries_views_and_relations(ctx: &Ctx, model: &Value) {
+    let evening = model["units"]
+        .as_array()
+        .expect("units")
+        .iter()
+        .find(|u| u["name"] == "evening_lights")
+        .expect("evening_lights in model");
     assert_eq!(model["views"][0]["name"], "downstairs", "{model}");
     assert_eq!(model["views"][0]["widgets"][0]["kind"], "unit");
     assert_eq!(model["views"][1]["kind"], "rooms");
@@ -298,7 +354,7 @@ async fn dashboard_serves_the_family_surface() {
         evening["subscribes"]["presence"],
         "home/state/downstairs/*/occupied"
     );
-    observer
+    ctx.observer
         .put(
             "home/state/livingroom/presence_sensor/occupied",
             json!(true).to_string(),
@@ -307,7 +363,7 @@ async fn dashboard_serves_the_family_surface() {
         .expect("presence publish");
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        let (_, model) = http_request(&addr, "GET", "/api/model", &[], None);
+        let (_, model) = http_request(&ctx.addr, "GET", "/api/model", &[], None);
         let evening = model["units"]
             .as_array()
             .expect("units")
@@ -329,9 +385,13 @@ async fn dashboard_serves_the_family_surface() {
         );
         std::thread::sleep(Duration::from_millis(200));
     }
+}
 
+/// The page and the assets it loads are served. Paths outside the
+/// asset allowlist 404, and so do tiles this fixture does not configure.
+fn page_and_assets_are_served(ctx: &Ctx) {
     // The page itself is served.
-    let (status, _) = http_request(&addr, "GET", "/", &[], None);
+    let (status, _) = http_request(&ctx.addr, "GET", "/", &[], None);
     assert_eq!(status, 200);
 
     // ...and tells the browser to revalidate it. The page and its logic
@@ -342,7 +402,7 @@ async fn dashboard_serves_the_family_surface() {
     let revalidates = |path: &str| {
         let HttpResponse {
             status, headers, ..
-        } = http(&addr, "GET", path, &[], None);
+        } = http(&ctx.addr, "GET", path, &[], None);
         assert_eq!(status, 200, "{path}");
         let cache_control = headers
             .iter()
@@ -362,10 +422,10 @@ async fn dashboard_serves_the_family_surface() {
     // The page's own logic and stylesheet are served, allowlisted by
     // filename.
     for name in ["dashboard-logic.js", "dashboard.css", "homeostat-mark.svg"] {
-        let (status, _) = http_request(&addr, "GET", &format!("/assets/{name}"), &[], None);
+        let (status, _) = http_request(&ctx.addr, "GET", &format!("/assets/{name}"), &[], None);
         assert_eq!(status, 200, "asset {name}");
     }
-    let (status, _) = http_request(&addr, "GET", "/assets/dashboard.py", &[], None);
+    let (status, _) = http_request(&ctx.addr, "GET", "/assets/dashboard.py", &[], None);
     assert_eq!(status, 404, "unlisted asset must 404");
 
     // The page's modules are served from assets/dashboard/, nested too, as
@@ -376,7 +436,7 @@ async fn dashboard_serves_the_family_surface() {
         "/assets/dashboard/widgets/entity.js",
     ] {
         revalidates(path);
-        let HttpResponse { headers, .. } = http(&addr, "GET", path, &[], None);
+        let HttpResponse { headers, .. } = http(&ctx.addr, "GET", path, &[], None);
         let content_type = headers
             .iter()
             .find(|(name, _)| name.eq_ignore_ascii_case("content-type"))
@@ -391,7 +451,7 @@ async fn dashboard_serves_the_family_surface() {
         "/assets/dashboard/nope.js",
         "/assets/dashboard/%00.js",
     ] {
-        let HttpResponse { status, .. } = http(&addr, "GET", path, &[], None);
+        let HttpResponse { status, .. } = http(&ctx.addr, "GET", path, &[], None);
         assert_eq!(status, 404, "{path} must 404");
     }
 
@@ -414,7 +474,7 @@ async fn dashboard_serves_the_family_surface() {
     ] {
         let HttpResponse {
             status, headers, ..
-        } = http(&addr, "GET", path, &[], None);
+        } = http(&ctx.addr, "GET", path, &[], None);
         assert_eq!(status, 200, "{path}");
         let content_type = headers
             .iter()
@@ -430,28 +490,32 @@ async fn dashboard_serves_the_family_surface() {
         "/assets/map/../README.md",
         "/assets/map/nope.png",
     ] {
-        let HttpResponse { status, .. } = http(&addr, "GET", path, &[], None);
+        let HttpResponse { status, .. } = http(&ctx.addr, "GET", path, &[], None);
         assert_eq!(status, 404, "{path} must 404");
     }
 
     // No tiles configured: the endpoint 404s.
-    let (status, _) = http_request(&addr, "GET", "/tiles.pmtiles", &[], None);
+    let (status, _) = http_request(&ctx.addr, "GET", "/tiles.pmtiles", &[], None);
     assert_eq!(
         status, 404,
         "tiles.pmtiles without HOMEOSTAT_DASHBOARD_TILES"
     );
+}
 
-    // 2. Command path: POST -> a manual-band envelope on home/cmd (priority
-    // and actor stamped server-side) -> reflector echoes the value as state.
+/// 2. Command path: POST -> a manual-band envelope on home/cmd (priority
+///    and actor stamped server-side) -> reflector echoes the value as state.
+///
+/// Returns the open WebSocket, which later sections read deltas from.
+async fn command_reaches_the_bus_and_the_socket(ctx: &Ctx) -> TcpStream {
     let (status, reply) = http_request(
-        &addr,
+        &ctx.addr,
         "POST",
         "/api/cmd",
         &[("X-Homeostat", "family")],
         Some(&json!({"room": "livingroom", "entity": "lamp", "aspect": "on", "value": true})),
     );
     assert_eq!(status, 200, "{reply}");
-    let envelope = next_sample(&cmd_sub, Duration::from_secs(30))
+    let envelope = next_sample(&ctx.cmd_sub, Duration::from_secs(30))
         .await
         .expect("cmd envelope observed within 10s")
         .value()
@@ -471,7 +535,7 @@ async fn dashboard_serves_the_family_surface() {
         json!({"ok": true, "id": cmd_id, "heard": true}),
         "the id the caller is handed is the id that went on the bus"
     );
-    let echoed = next_sample(&echo, Duration::from_secs(30))
+    let echoed = next_sample(&ctx.echo, Duration::from_secs(30))
         .await
         .expect("reflector echoed the command");
     assert_eq!(echoed.value(), &json!(true));
@@ -482,7 +546,7 @@ async fn dashboard_serves_the_family_surface() {
     // The test reconnects until the dashboard's cache has caught up.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     let (mut ws, snapshot) = loop {
-        let mut ws = ws_connect(&addr, "/ws");
+        let mut ws = ws_connect(&ctx.addr, "/ws");
         let snapshot = ws_read_message(&mut ws);
         assert_eq!(snapshot["type"], "snapshot");
         if snapshot["state"][LAMP_STATE] == json!(true) {
@@ -502,7 +566,7 @@ async fn dashboard_serves_the_family_surface() {
     // ...and live deltas follow: another command's state echo reaches the
     // open socket (health deltas may interleave; scan a few frames).
     let (status, reply) = http_request(
-        &addr,
+        &ctx.addr,
         "POST",
         "/api/cmd",
         &[("X-Homeostat", "family")],
@@ -514,10 +578,15 @@ async fn dashboard_serves_the_family_surface() {
         .find(|m| m["type"] == "state" && m["key"] == "home/state/livingroom/lamp/brightness")
         .expect("brightness delta on the open socket");
     assert_eq!(delta["value"], json!(99));
+    ws
+}
 
+/// Commands the vocabulary does not admit, a tracker's included, and values
+/// of the wrong type are refused before the bus.
+async fn malformed_commands_stay_off_the_bus(ctx: &Ctx) {
     // A command outside the vocabulary is refused before the bus.
     let (status, reply) = http_request(
-        &addr,
+        &ctx.addr,
         "POST",
         "/api/cmd",
         &[("X-Homeostat", "family")],
@@ -527,7 +596,7 @@ async fn dashboard_serves_the_family_surface() {
 
     // A tracker is not commandable: it is not in COMMANDABLE.
     let (status, reply) = http_request(
-        &addr,
+        &ctx.addr,
         "POST",
         "/api/cmd",
         &[("X-Homeostat", "family")],
@@ -539,7 +608,7 @@ async fn dashboard_serves_the_family_surface() {
     // bool, and a string, an object or NaN is refused. A body past the
     // 64 KiB cap does not reach the handler (aiohttp answers 413).
     let (status, reply) = http_request(
-        &addr,
+        &ctx.addr,
         "POST",
         "/api/cmd",
         &[("X-Homeostat", "family")],
@@ -549,7 +618,7 @@ async fn dashboard_serves_the_family_surface() {
     );
     assert_eq!(status, 400, "a string is not a lock value: {reply}");
     let (status, reply) = http_request(
-        &addr,
+        &ctx.addr,
         "POST",
         "/api/cmd",
         &[("X-Homeostat", "family")],
@@ -559,7 +628,7 @@ async fn dashboard_serves_the_family_surface() {
     );
     assert_eq!(status, 400, "a bool is not a brightness: {reply}");
     let (status, _) = http_request(
-        &addr,
+        &ctx.addr,
         "POST",
         "/api/cmd",
         &[("X-Homeostat", "family")],
@@ -573,7 +642,7 @@ async fn dashboard_serves_the_family_surface() {
     );
     // A body that is valid JSON but not an object is a 400, not a 500.
     let (status, reply) = http_request(
-        &addr,
+        &ctx.addr,
         "POST",
         "/api/cmd",
         &[("X-Homeostat", "family")],
@@ -581,15 +650,17 @@ async fn dashboard_serves_the_family_surface() {
     );
     assert_eq!(status, 400, "a JSON array body: {reply}");
     // A mistyped or oversized command does not reach the bus.
-    expect_silence(&lock_cmd_sub, SILENCE, "lock command").await;
+    expect_silence(&ctx.lock_cmd_sub, SILENCE, "lock command").await;
+}
 
-    // A lock command is accepted: COMMANDABLE maps lock -> {"locked"}.
-    // The wish goes to home/cmd at manual band, stamped like any other
-    // command. For a real arbitrated entity, the arbiter (not exercised by
-    // this fixture) makes the family win over automations
-    // (docs/design.md#commanding).
+/// A lock command is accepted: COMMANDABLE maps lock -> {"locked"}.
+/// The wish goes to home/cmd at manual band, stamped like any other
+/// command. For a real arbitrated entity, the arbiter (not exercised by
+/// this fixture) makes the family win over automations
+/// (docs/design.md#commanding).
+async fn lock_command_is_stamped_at_manual_band(ctx: &Ctx) {
     let (status, reply) = http_request(
-        &addr,
+        &ctx.addr,
         "POST",
         "/api/cmd",
         &[("X-Homeostat", "family")],
@@ -598,7 +669,7 @@ async fn dashboard_serves_the_family_surface() {
         ),
     );
     assert_eq!(status, 200, "{reply}");
-    let envelope = next_sample(&lock_cmd_sub, Duration::from_secs(30))
+    let envelope = next_sample(&ctx.lock_cmd_sub, Duration::from_secs(30))
         .await
         .expect("lock cmd envelope observed within 10s")
         .value()
@@ -611,7 +682,11 @@ async fn dashboard_serves_the_family_surface() {
         json!({"value": true, "priority": "manual", "actor": "dashboard", "id": cmd_id}),
         "lock command stamps the same manual-band envelope as any other command"
     );
+}
 
+/// Hold intents are refused on a shared entity and sent on an arbitrated
+/// one, and hold records reach the open socket.
+async fn holds_reach_the_bus_and_the_page(ctx: &Ctx, ws: &mut TcpStream) {
     // A hold intent is for an arbitrated entity, and the page never says
     // what a device did (docs/design.md#hold-intents). Both are refused
     // before the bus; front_door is shared.
@@ -623,7 +698,7 @@ async fn dashboard_serves_the_family_surface() {
                "hold": "report"}),
     ] {
         let (status, reply) = http_request(
-            &addr,
+            &ctx.addr,
             "POST",
             "/api/cmd",
             &[("X-Homeostat", "family")],
@@ -632,7 +707,7 @@ async fn dashboard_serves_the_family_surface() {
         assert_eq!(status, 400, "{body}: {reply}");
     }
     // A refused hold does not reach the bus.
-    expect_silence(&lock_cmd_sub, SILENCE, "lock command").await;
+    expect_silence(&ctx.lock_cmd_sub, SILENCE, "lock command").await;
 
     // On the arbitrated garage door the dashboard sends a release with no
     // value, and a value held until an instant. It still never reports.
@@ -649,14 +724,14 @@ async fn dashboard_serves_the_family_surface() {
         ),
     ] {
         let (status, reply) = http_request(
-            &addr,
+            &ctx.addr,
             "POST",
             "/api/cmd",
             &[("X-Homeostat", "family")],
             Some(&body),
         );
         assert_eq!(status, 200, "{body}: {reply}");
-        let mut envelope = next_sample(&garage_sub, Duration::from_secs(10))
+        let mut envelope = next_sample(&ctx.garage_sub, Duration::from_secs(10))
             .await
             .expect("garage envelope observed")
             .value()
@@ -666,7 +741,7 @@ async fn dashboard_serves_the_family_surface() {
         assert_eq!(envelope, expected);
     }
     let (status, reply) = http_request(
-        &addr,
+        &ctx.addr,
         "POST",
         "/api/cmd",
         &[("X-Homeostat", "family")],
@@ -683,48 +758,49 @@ async fn dashboard_serves_the_family_surface() {
     let record = json!({"schema": 1, "room": "livingroom", "entity": "front_door",
         "aspect": "locked", "priority": "manual", "actor": "dashboard", "value": true,
         "since": "2026-11-16T10:00:00Z", "until": "2099-01-01T00:00:00Z", "refused": 0});
-    observer
+    ctx.observer
         .put(hold_key, record.to_string())
         .await
         .expect("hold put");
     let delta = (0..20)
-        .map(|_| ws_read_message(&mut ws))
+        .map(|_| ws_read_message(ws))
         .find(|m| m["type"] == "hold" && m["key"] == hold_key)
         .expect("hold delta on the open socket");
     assert_eq!(delta["value"], record);
-    observer.delete(hold_key).await.expect("hold delete");
+    ctx.observer.delete(hold_key).await.expect("hold delete");
     let delta = (0..20)
-        .map(|_| ws_read_message(&mut ws))
+        .map(|_| ws_read_message(ws))
         .find(|m| m["type"] == "hold" && m["key"] == hold_key)
         .expect("hold delete on the open socket");
     assert_eq!(delta["value"], Value::Null);
+}
 
-    // A switch command is refused: the capability is in COMMANDABLE, but
-    // this dashboard's manifest (units/dashboard.toml) grants light, lock
-    // and climate and not switch. The unit honours the grant table `plan`
-    // prints. The model says so too, so the page renders the relay
-    // read-only rather than as a toggle that does nothing.
-    let (status, model) = http_request(&addr, "GET", "/api/model", &[], None);
+/// A switch command is refused: the capability is in COMMANDABLE, but
+/// this dashboard's manifest (units/dashboard.toml) grants light, lock
+/// and climate and not switch. The unit honours the grant table `plan`
+/// prints. The model says so too, so the page renders the relay
+/// read-only rather than as a toggle that does nothing.
+async fn grants_decide_what_is_commandable(ctx: &Ctx) -> Value {
+    let (status, model) = http_request(&ctx.addr, "GET", "/api/model", &[], None);
     assert_eq!(status, 200, "{model}");
-    let commandable = |name: &str| {
-        model["entities"]
-            .as_array()
-            .expect("entities")
-            .iter()
-            .find(|e| e["name"] == name)
-            .unwrap_or_else(|| panic!("{name} in model"))["commandable"]
-            .clone()
-    };
-    assert_eq!(commandable("lamp"), json!(true), "granted light");
-    assert_eq!(commandable("heat_pump"), json!(true), "granted climate");
-    assert_eq!(commandable("relay"), json!(false), "ungranted switch");
+    assert_eq!(commandable(&model, "lamp"), json!(true), "granted light");
     assert_eq!(
-        commandable("family_member"),
+        commandable(&model, "heat_pump"),
+        json!(true),
+        "granted climate"
+    );
+    assert_eq!(
+        commandable(&model, "relay"),
+        json!(false),
+        "ungranted switch"
+    );
+    assert_eq!(
+        commandable(&model, "family_member"),
         json!(false),
         "a tracker takes no commands"
     );
     let (status, reply) = http_request(
-        &addr,
+        &ctx.addr,
         "POST",
         "/api/cmd",
         &[("X-Homeostat", "family")],
@@ -732,14 +808,17 @@ async fn dashboard_serves_the_family_surface() {
     );
     assert_eq!(status, 400, "ungranted capability must be refused: {reply}");
     // An ungranted command does not reach the bus.
-    expect_silence(&switch_cmd_sub, SILENCE, "switch command").await;
+    expect_silence(&ctx.switch_cmd_sub, SILENCE, "switch command").await;
+    model
+}
 
-    // A climate command is accepted: COMMANDABLE maps climate ->
-    // {"setpoint"}, the family-facing base aspect
-    // (docs/design.md#the-capability-vocabulary). Setpoint is a float, and
-    // the envelope must carry it through unmodified like any other value.
+/// A climate command is accepted: COMMANDABLE maps climate ->
+/// {"setpoint"}, the family-facing base aspect
+/// (docs/design.md#the-capability-vocabulary). Setpoint is a float, and
+/// the envelope must carry it through unmodified like any other value.
+async fn climate_takes_only_its_setpoint(ctx: &Ctx) {
     let (status, reply) = http_request(
-        &addr,
+        &ctx.addr,
         "POST",
         "/api/cmd",
         &[("X-Homeostat", "family")],
@@ -748,7 +827,7 @@ async fn dashboard_serves_the_family_surface() {
         ),
     );
     assert_eq!(status, 200, "{reply}");
-    let envelope = next_sample(&climate_cmd_sub, Duration::from_secs(30))
+    let envelope = next_sample(&ctx.climate_cmd_sub, Duration::from_secs(30))
         .await
         .expect("climate cmd envelope observed within 10s")
         .value()
@@ -764,7 +843,7 @@ async fn dashboard_serves_the_family_surface() {
 
     // Every other climate aspect is read-only passthrough: not commandable.
     let (status, reply) = http_request(
-        &addr,
+        &ctx.addr,
         "POST",
         "/api/cmd",
         &[("X-Homeostat", "family")],
@@ -776,14 +855,16 @@ async fn dashboard_serves_the_family_surface() {
         status, 400,
         "non-commandable climate aspect must be refused: {reply}"
     );
+}
 
-    // A notifier takes its text: `message` is the base aspect and `alert`
-    // the feature this phone declares. Each is published as it was typed,
-    // in the same manual-band envelope.
-    assert_eq!(commandable("phone"), json!(true), "granted notifier");
+/// A notifier takes its text: `message` is the base aspect and `alert`
+/// the feature this phone declares. Each is published as it was typed,
+/// in the same manual-band envelope.
+async fn notifier_takes_its_text(ctx: &Ctx, model: &Value) {
+    assert_eq!(commandable(model, "phone"), json!(true), "granted notifier");
     for aspect in ["message", "alert"] {
         let (status, reply) = http_request(
-            &addr,
+            &ctx.addr,
             "POST",
             "/api/cmd",
             &[("X-Homeostat", "family")],
@@ -792,7 +873,7 @@ async fn dashboard_serves_the_family_surface() {
             ),
         );
         assert_eq!(status, 200, "{aspect}: {reply}");
-        let cmd = next_sample(&notify_cmd_sub, Duration::from_secs(30))
+        let cmd = next_sample(&ctx.notify_cmd_sub, Duration::from_secs(30))
             .await
             .expect("notifier cmd envelope observed");
         assert_eq!(cmd.key, format!("home/cmd/person/phone/{aspect}"));
@@ -804,7 +885,7 @@ async fn dashboard_serves_the_family_surface() {
     // Text that is blank, too long or not a string does not reach the bus.
     for value in [json!("  "), json!("x".repeat(1001)), json!(42)] {
         let (status, reply) = http_request(
-            &addr,
+            &ctx.addr,
             "POST",
             "/api/cmd",
             &[("X-Homeostat", "family")],
@@ -815,15 +896,17 @@ async fn dashboard_serves_the_family_surface() {
         assert_eq!(status, 400, "{value}: {reply}");
     }
     // Refused text does not reach the bus.
-    expect_silence(&notify_cmd_sub, SILENCE, "notifier command").await;
+    expect_silence(&ctx.notify_cmd_sub, SILENCE, "notifier command").await;
+}
 
-    // 2b. Aspect descriptors (docs/design.md#aspect-descriptors): the
-    // owning adapter's discovery record may describe an entity's aspects
-    // and declare commands beyond the capability's vocabulary. A
-    // family-editable one is admitted at /api/cmd within its constraint;
-    // an owner-tier one stays refused; and the descriptor rides the
-    // WebSocket snapshot so the page can render it.
-    observer
+/// 2b. Aspect descriptors (docs/design.md#aspect-descriptors): the
+/// owning adapter's discovery record may describe an entity's aspects
+/// and declare commands beyond the capability's vocabulary. A
+/// family-editable one is admitted at /api/cmd within its constraint;
+/// an owner-tier one stays refused; and the descriptor rides the
+/// WebSocket snapshot so the page can render it.
+async fn aspect_descriptors_admit_family_commands(ctx: &Ctx) {
+    ctx.observer
         .put(
             "home/discovery/reflector",
             json!([{
@@ -851,7 +934,7 @@ async fn dashboard_serves_the_family_surface() {
         .expect("discovery publish");
     let deadline = Instant::now() + Duration::from_secs(10);
     let snapshot = loop {
-        let mut ws = ws_connect(&addr, "/ws");
+        let mut ws = ws_connect(&ctx.addr, "/ws");
         let snapshot = ws_read_message(&mut ws);
         if snapshot["aspects"]["heat_pump"]["fields"]["operating_mode"]["label"] == json!("mode") {
             break snapshot;
@@ -867,7 +950,7 @@ async fn dashboard_serves_the_family_surface() {
         json!(["control"])
     );
     let (status, reply) = http_request(
-        &addr,
+        &ctx.addr,
         "POST",
         "/api/cmd",
         &[("X-Homeostat", "family")],
@@ -879,7 +962,7 @@ async fn dashboard_serves_the_family_surface() {
     // The wildcard subscriber also saw the earlier setpoint command; the
     // descriptor command is the next envelope on a different key.
     let cmd = await_sample(
-        &mode_cmd_sub,
+        &ctx.mode_cmd_sub,
         Duration::from_secs(30),
         "descriptor command envelope",
         |msg| msg.key == "home/cmd/livingroom/heat_pump/operating_mode",
@@ -894,7 +977,7 @@ async fn dashboard_serves_the_family_surface() {
         json!({"value": 2, "priority": "manual", "actor": "dashboard", "id": cmd_id})
     );
     let (status, reply) = http_request(
-        &addr,
+        &ctx.addr,
         "POST",
         "/api/cmd",
         &[("X-Homeostat", "family")],
@@ -907,7 +990,7 @@ async fn dashboard_serves_the_family_surface() {
         "a value outside the declared enum is refused: {reply}"
     );
     let (status, reply) = http_request(
-        &addr,
+        &ctx.addr,
         "POST",
         "/api/cmd",
         &[("X-Homeostat", "family")],
@@ -920,11 +1003,13 @@ async fn dashboard_serves_the_family_surface() {
         "an owner-tier descriptor command stays refused: {reply}"
     );
     // Refused descriptor commands never reach the bus.
-    expect_silence(&mode_cmd_sub, SILENCE, "heat pump command").await;
+    expect_silence(&ctx.mode_cmd_sub, SILENCE, "heat pump command").await;
+}
 
-    // 3. Parameter path: in-constraint persists, out-of-constraint refused.
+/// 3. Parameter path: in-constraint persists, out-of-constraint refused.
+async fn params_persist_within_constraints(ctx: &Ctx) {
     let (status, reply) = http_request(
-        &addr,
+        &ctx.addr,
         "POST",
         "/api/param",
         &[("X-Homeostat", "family")],
@@ -933,12 +1018,12 @@ async fn dashboard_serves_the_family_surface() {
     assert_eq!(status, 200, "{reply}");
     assert_eq!(reply["value"], json!("21:30"));
     assert_eq!(
-        cache_read(&observer, OFF_TIME_KEY).await,
+        cache_read(&ctx.observer, OFF_TIME_KEY).await,
         Some(json!("21:30"))
     );
 
     let (status, reply) = http_request(
-        &addr,
+        &ctx.addr,
         "POST",
         "/api/param",
         &[("X-Homeostat", "family")],
@@ -947,14 +1032,14 @@ async fn dashboard_serves_the_family_surface() {
     assert_eq!(status, 400, "out-of-constraint accepted: {reply}");
     assert!(reply["error"].is_string(), "{reply}");
     assert_eq!(
-        cache_read(&observer, OFF_TIME_KEY).await,
+        cache_read(&ctx.observer, OFF_TIME_KEY).await,
         Some(json!("21:30")),
         "refused write must change nothing"
     );
 
     // An owner param is visible but not writable from the family surface.
     let (status, reply) = http_request(
-        &addr,
+        &ctx.addr,
         "POST",
         "/api/param",
         &[("X-Homeostat", "family")],
@@ -962,14 +1047,16 @@ async fn dashboard_serves_the_family_surface() {
     );
     assert_eq!(status, 400, "owner param write must be refused: {reply}");
     assert_eq!(
-        cache_read(&observer, "home/config/evening_lights/grace_minutes").await,
+        cache_read(&ctx.observer, "home/config/evening_lights/grace_minutes").await,
         Some(json!(5)),
         "refused write must change nothing"
     );
+}
 
-    // 4. The local-only gate.
+/// 4. The local-only gate.
+fn local_only_gate_holds(ctx: &Ctx) {
     let (status, _) = http_request(
-        &addr,
+        &ctx.addr,
         "POST",
         "/api/param",
         &[],
@@ -982,19 +1069,21 @@ async fn dashboard_serves_the_family_surface() {
     for (list, want) in [("allowed", 200), ("refused", 403)] {
         for host in table[list].as_array().expect("a list of hosts") {
             let host = host.as_str().expect("a host string");
-            let (status, _) = http_request(&addr, "GET", "/", &[("Host", host)], None);
+            let (status, _) = http_request(&ctx.addr, "GET", "/", &[("Host", host)], None);
             assert_eq!(status, want, "Host {host:?}");
         }
     }
+}
 
-    // 9. `/api/history` builds a recorder selector from browser input, so
-    // the entity must be one the model knows and the aspect one key
-    // segment. A wildcard would fan the per-series limit out over the
-    // whole store, and `/`, `#`, `$` would raise inside the executor.
-    // No recorder in this fixture: a valid pair answers an empty series
-    // list, which is the 200 that matters here.
+/// 9. `/api/history` builds a recorder selector from browser input, so
+///    the entity must be one the model knows and the aspect one key
+///    segment. A wildcard would fan the per-series limit out over the
+///    whole store, and `/`, `#`, `$` would raise inside the executor.
+///    No recorder in this fixture: a valid pair answers an empty series
+///    list, which is the 200 that matters here.
+fn history_checks_its_selector(ctx: &Ctx) {
     let (status, reply) = http_request(
-        &addr,
+        &ctx.addr,
         "GET",
         "/api/history?entity=lamp&aspect=brightness",
         &[],
@@ -1007,8 +1096,13 @@ async fn dashboard_serves_the_family_surface() {
         "entity=lamp&aspect=brightness&hours=168&bucket=1512",
         "entity=lamp&aspect=on&changes=1",
     ] {
-        let (status, reply) =
-            http_request(&addr, "GET", &format!("/api/history?{query}"), &[], None);
+        let (status, reply) = http_request(
+            &ctx.addr,
+            "GET",
+            &format!("/api/history?{query}"),
+            &[],
+            None,
+        );
         assert_eq!(status, 200, "{query}: {reply}");
     }
     for query in [
@@ -1023,12 +1117,26 @@ async fn dashboard_serves_the_family_surface() {
         "entity=lamp&aspect=brightness&hours=744&bucket=1",
         "entity=lamp&aspect=brightness&bucket=60&changes=1",
     ] {
-        let (status, reply) =
-            http_request(&addr, "GET", &format!("/api/history?{query}"), &[], None);
+        let (status, reply) = http_request(
+            &ctx.addr,
+            "GET",
+            &format!("/api/history?{query}"),
+            &[],
+            None,
+        );
         assert_eq!(status, 400, "{query}: {reply}");
     }
+}
 
-    sup.shutdown();
+/// The `commandable` flag the model gives the entity called `name`.
+fn commandable(model: &Value, name: &str) -> Value {
+    model["entities"]
+        .as_array()
+        .expect("entities")
+        .iter()
+        .find(|e| e["name"] == name)
+        .unwrap_or_else(|| panic!("{name} in model"))["commandable"]
+        .clone()
 }
 
 /// 5. With `HOMEOSTAT_DASHBOARD_TILES` set, /tiles.pmtiles serves the file
