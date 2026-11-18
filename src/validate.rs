@@ -465,9 +465,14 @@ fn check_family_policy(
 const CLOCK_MINUTE: &str = "home/clock/minute";
 
 /// Whether some unit publishes the house clock's minute, literally or
-/// through a wildcard such as `home/clock/*`.
+/// through a wildcard such as `home/clock/*`. The key itself must match:
+/// a publish only under it, such as `home/clock/minute/x`, never carries it.
 fn has_clock(expanded: &[ExpandedKey]) -> bool {
-    expand::publishes(expanded, None, &["home", "clock", "minute"])
+    let minute: Vec<&str> = CLOCK_MINUTE.split('/').collect();
+    expanded.iter().any(|k| {
+        k.direction == expand::Direction::Publishes
+            && k.exprs.iter().any(|e| e.matches_key(&minute))
+    })
 }
 
 /// Whether `s` is a time of day, `"HH:MM"` (`parse_time`).
@@ -1312,6 +1317,9 @@ mod tests {
             ("home/clock/*", true),
             ("home/clock/**", true),
             ("home/clock/date", false),
+            ("home/clock/minute/x", false),
+            ("home/clock/*/x", false),
+            ("home/clock/**/tick", false),
         ] {
             let clock = format!(
                 r#"

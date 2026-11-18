@@ -203,6 +203,26 @@ impl KeyExpr {
         }
         rec(&self.0, prefix)
     }
+
+    /// Whether this expression can match the whole literal key `key`, as
+    /// zenoh would deliver it. Unlike `matches_prefix`, a key under `key`
+    /// does not count.
+    pub fn matches_key(&self, key: &[&str]) -> bool {
+        fn rec(segs: &[Segment], key: &[&str]) -> bool {
+            match (segs.first(), key.first()) {
+                (None, None) => true,
+                (Some(Segment::AnyRec), _) => {
+                    rec(&segs[1..], key) || (!key.is_empty() && rec(segs, &key[1..]))
+                }
+                (None, Some(_)) | (Some(_), None) => false,
+                (Some(Segment::Literal(l)), Some(k)) => l == k && rec(&segs[1..], &key[1..]),
+                (Some(Segment::Any | Segment::RoomTemplate | Segment::EntityTemplate), Some(_)) => {
+                    rec(&segs[1..], &key[1..])
+                }
+            }
+        }
+        rec(&self.0, key)
+    }
 }
 
 impl fmt::Display for KeyExpr {
@@ -223,6 +243,25 @@ mod tests {
 
     fn expr(s: &str) -> KeyExpr {
         KeyExpr::parse(s).unwrap()
+    }
+
+    #[test]
+    fn matches_key_needs_the_whole_key() {
+        let minute = ["home", "clock", "minute"];
+        for (e, matches) in [
+            ("home/clock/minute", true),
+            ("home/clock/*", true),
+            ("home/clock/**", true),
+            ("home/**/minute", true),
+            ("home/clock/minute/**", true),
+            ("home/clock/date", false),
+            ("home/clock/minute/x", false),
+            ("home/clock/*/x", false),
+            ("home/clock/**/tick", false),
+            ("home/clock", false),
+        ] {
+            assert_eq!(expr(e).matches_key(&minute), matches, "{e}");
+        }
     }
 
     #[test]
