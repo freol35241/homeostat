@@ -10,9 +10,10 @@ use crate::error::{Code, Diagnostics, Scoped};
 use crate::expand::{self, ExpandedKey};
 use crate::keyspace::{is_reserved_word, PSEUDO_ROOMS};
 use crate::manifest::{
-    self, ControlSpec, DiscoveryMode, FamilyHold, FamilyUntil, ParamSpec, ParamType, UnitKind,
-    ValueType, WidgetKind, WidgetSpec, WriteMode, ENABLED_PARAM,
+    self, ControlSpec, DiscoveryMode, FamilyHold, FamilyUntil, ParamType, UnitKind, ValueType,
+    WidgetKind, WidgetSpec, WriteMode, ENABLED_PARAM,
 };
+use crate::params::{parse_time, Constraint};
 use crate::repo::{House, LoadedEntity};
 
 /// Structural validation that does not involve grants: uniqueness,
@@ -753,148 +754,13 @@ fn check_params(house: &House, diags: &mut Diagnostics) {
         let mut diags = diags.in_file(&unit.path);
         for (name, spec) in params {
             let subject = format!("{}.{name}", unit.manifest.unit.name);
-            check_param(&subject, spec, &mut diags);
-        }
-    }
-}
-
-fn check_param(subject: &str, spec: &ParamSpec, diags: &mut Scoped<'_>) {
-    let before = diags.error_count();
-    let t = spec.param_type;
-
-    let default_ok = match (t, &spec.default) {
-        (ParamType::Bool, toml::Value::Boolean(_))
-        | (ParamType::Int, toml::Value::Integer(_))
-        | (ParamType::Float, toml::Value::Float(_) | toml::Value::Integer(_))
-        | (ParamType::String, toml::Value::String(_)) => true,
-        (ParamType::Time, toml::Value::String(s)) => parse_time(s).is_some(),
-        _ => false,
-    };
-    if !default_ok {
-        diags.error(
-            Code::InvalidDefault,
-            subject,
-            format!(
-                "default {} does not match type \"{t}\"",
-                display_value(&spec.default)
-            ),
-        );
-    }
-
-    let Some(constraint) = &spec.constraint else {
-        return;
-    };
-    for (key, value) in constraint {
-        let valid_for_type = match key.as_str() {
-            "min" | "max" => matches!(t, ParamType::Int | ParamType::Float),
-            "after" | "before" => t == ParamType::Time,
-            "enum" => t == ParamType::String,
-            _ => {
-                diags.error(
-                    Code::MalformedConstraint,
-                    subject,
-                    format!("unknown constraint \"{key}\""),
-                );
-                continue;
+            if let Err(errors) = Constraint::parse(spec) {
+                for (code, message) in errors {
+                    diags.error(code, &subject, message);
+                }
             }
-        };
-        if !valid_for_type {
-            diags.error(
-                Code::MalformedConstraint,
-                subject,
-                format!("constraint \"{key}\" is not valid for type \"{t}\""),
-            );
-            continue;
-        }
-        let value_ok = match key.as_str() {
-            "min" | "max" => matches!(value, toml::Value::Integer(_) | toml::Value::Float(_)),
-            "after" | "before" => {
-                matches!(value, toml::Value::String(s) if parse_time(s).is_some())
-            }
-            "enum" => matches!(
-                value,
-                toml::Value::Array(items)
-                    if !items.is_empty() && items.iter().all(toml::Value::is_str)
-            ),
-            _ => unreachable!(),
-        };
-        if !value_ok {
-            let expected = match key.as_str() {
-                "min" | "max" => "a number",
-                "after" | "before" => "a time (HH:MM)",
-                _ => "a non-empty array of strings",
-            };
-            diags.error(
-                Code::MalformedConstraint,
-                subject,
-                format!("constraint \"{key}\" must be {expected}"),
-            );
         }
     }
-
-    if let (Some(min), Some(max)) = (
-        constraint.get("min").and_then(as_number),
-        constraint.get("max").and_then(as_number),
-    ) {
-        if min > max {
-            diags.error(
-                Code::MalformedConstraint,
-                subject,
-                format!(
-                    "min ({}) is greater than max ({})",
-                    display_value(&constraint["min"]),
-                    display_value(&constraint["max"])
-                ),
-            );
-        }
-    }
-
-    // The default must satisfy its own constraint. The repo-edit parameter
-    // path is enforced here, so an out-of-constraint default does not plan and
-    // cannot reach a running unit. Skipped when this param already has errors,
-    // since judging a default against a malformed constraint only adds noise.
-    // No new errors also implies the default matched its type.
-    if diags.error_count() == before {
-        if let Err(message) = crate::config::default_within_constraint(spec) {
-            diags.error(
-                Code::InvalidDefault,
-                subject,
-                format!("default {}: {message}", display_value(&spec.default)),
-            );
-        }
-    }
-}
-
-fn as_number(value: &toml::Value) -> Option<f64> {
-    match value {
-        toml::Value::Integer(i) => Some(*i as f64),
-        toml::Value::Float(f) => Some(*f),
-        _ => None,
-    }
-}
-
-/// Renders a TOML value without string quotes, for error messages and plan
-/// output.
-pub fn display_value(value: &toml::Value) -> String {
-    match value {
-        toml::Value::String(s) => s.clone(),
-        other => other.to_string(),
-    }
-}
-
-/// Parses a time of day: `"HH:MM"` on a 24-hour clock, two ASCII digits
-/// each side. It is the form every reader accepts: the SDK reads a `time`
-/// parameter with Python's `time.fromisoformat`, which refuses `7:30`, and
-/// the page and the arbiter read `HH:MM` only. `tests/fixtures/time_of_day.json`
-/// holds the cases every reader is tested against.
-pub(crate) fn parse_time(s: &str) -> Option<(u8, u8)> {
-    let b = s.as_bytes();
-    if b.len() != 5 || b[2] != b':' || ![0, 1, 3, 4].iter().all(|&i| b[i].is_ascii_digit()) {
-        return None;
-    }
-    let hh = (b[0] - b'0') * 10 + (b[1] - b'0');
-    let mm = (b[3] - b'0') * 10 + (b[4] - b'0');
-    (hh < 24 && mm < 60).then_some((hh, mm))
 }
 
 /// `dashboard.toml`: each view is either a generated one or a composition.
@@ -1178,7 +1044,7 @@ fn hex_color(color: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_time, valid_segment, validate};
+    use super::{valid_segment, validate};
     use crate::error::{Code, Diagnostics};
     use crate::expand::expand;
     use crate::repo::House;
@@ -1278,23 +1144,5 @@ mod tests {
             let s = s.as_str().unwrap();
             assert!(!valid_segment(s), "{s:?} is not a key segment");
         }
-    }
-
-    /// The core reads a time of day as every other reader does
-    /// (`tests/fixtures/time_of_day.json`).
-    #[test]
-    fn the_time_of_day_grammar_is_the_shared_one() {
-        let cases: serde_json::Value =
-            serde_json::from_str(include_str!("../tests/fixtures/time_of_day.json")).unwrap();
-        for s in cases["valid"].as_array().unwrap() {
-            let s = s.as_str().unwrap();
-            let (hh, mm) = parse_time(s).unwrap_or_else(|| panic!("{s:?} is a time of day"));
-            assert_eq!(format!("{hh:02}:{mm:02}"), s);
-        }
-        for s in cases["invalid"].as_array().unwrap() {
-            let s = s.as_str().unwrap();
-            assert!(parse_time(s).is_none(), "{s:?} is not a time of day");
-        }
-        assert_eq!(parse_time("07:30"), Some((7, 30)));
     }
 }
