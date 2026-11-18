@@ -1,16 +1,12 @@
 """The Aduro translation, without a bridge: NBE documents in, a burner out."""
 
 import json
-import sys
 import unittest
-from pathlib import Path
 from types import SimpleNamespace
 
-from homeostat.testing import FakeSession
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "adapters"))
-
+import _adapters_path  # noqa: F401
 from aduro import ASPECT_DESCRIPTOR, Stoves, command_body, route, status_aspects
+from homeostat.testing import FakeSession
 
 STOVE = SimpleNamespace(name="stove", room="living", id="aduro/stove1")
 KEY = "home/state/living/stove/"

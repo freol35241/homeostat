@@ -2,18 +2,15 @@
 
 import datetime
 import sqlite3
-import sys
 import tempfile
 import threading
 import types
 import unittest
 from pathlib import Path
 
+import _adapters_path  # noqa: F401
 import zenoh
 from homeostat.testing import FakeSample, FakeSession
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "adapters"))
-
 from recorder import (
     KINDS,
     MAX_QUERY_LIMIT,

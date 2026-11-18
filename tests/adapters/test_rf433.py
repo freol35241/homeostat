@@ -1,14 +1,10 @@
 """The 433 MHz translation, without a bridge: codes in, held booleans out."""
 
-import sys
 import unittest
-from pathlib import Path
 from types import SimpleNamespace
 
+import _adapters_path  # noqa: F401
 from homeostat.testing import FakeSession
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "adapters"))
-
 from rf433 import EVENTS_SUFFIX, LWT_SUFFIX, MAX_UNBOUND, Radio, aspect_for, code_from
 
 BASE = "rfbridge"

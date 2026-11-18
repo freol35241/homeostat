@@ -1,16 +1,12 @@
 """What one gesture action sends (docs/design.md#gesture-actions), without a bus."""
 
-import sys
 import types
 import unittest
-from pathlib import Path
 
-from homeostat import house as house_mod
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "adapters"))
-
+import _adapters_path  # noqa: F401
 import buttons
 from buttons import UnknownState, commands
+from homeostat import house as house_mod
 
 
 class CommandsTest(unittest.TestCase):

@@ -1,12 +1,9 @@
 """ntfy's admission rule, without a server: which wishes become sends."""
 
 import json
-import sys
 import unittest
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "adapters"))
-
+import _adapters_path  # noqa: F401
 from ntfy import Gate, Send
 
 MESSAGE = "home/cmd/person/alice_phone/message"

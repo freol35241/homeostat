@@ -7,14 +7,10 @@ grant table.
 
 import datetime
 import json
-import sys
 import unittest
 from pathlib import Path
 
-from homeostat.testing import FakeSample, FakeSession
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "adapters"))
-
+import _adapters_path  # noqa: F401
 from arbiter import (
     GRANTS_KEY,
     PENDING_KEY,
@@ -24,6 +20,7 @@ from arbiter import (
     holders,
     policy_entry,
 )
+from homeostat.testing import FakeSample, FakeSession
 
 STOVE = ("utility", "stove", "on")
 LAMP = ("hall", "lamp", "on")

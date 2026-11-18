@@ -1,17 +1,13 @@
 """The companion translation, without a broker: a phone's messages in, aspects out."""
 
 import json
-import sys
 import time
 import unittest
-from pathlib import Path
 from types import SimpleNamespace
 
-from homeostat.testing import FakeSession
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "adapters"))
-
+import _adapters_path  # noqa: F401
 from companion import Phones
+from homeostat.testing import FakeSession
 
 TRACKER = SimpleNamespace(name="alice_tracker", room="person", id="alice/person", capability="tracker")
 NOTIFIER = SimpleNamespace(name="alice_phone", room="person", id="alice/notifier", capability="notifier")

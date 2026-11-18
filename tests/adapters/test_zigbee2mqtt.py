@@ -1,15 +1,11 @@
 """The zigbee2mqtt translation, without a broker: z2m's dialect in and out."""
 
 import json
-import sys
 import unittest
-from pathlib import Path
 from types import SimpleNamespace
 
+import _adapters_path  # noqa: F401
 from homeostat.testing import FakeSession
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "adapters"))
-
 from zigbee2mqtt import (
     Bridge,
     availability_state,

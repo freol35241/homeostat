@@ -29,6 +29,13 @@ fn valid_house_produces_no_errors_and_golden_plan() {
     let world = homeostat::plan::World::empty();
     let diff = homeostat::plan::diff(&result, &root, &world, false);
     let plan = homeostat::plan::render(&result, &diff, REFERENCE, &world);
+    if bless() {
+        write_golden(
+            &manifest_dir().join("tests/corpus/expected_plan.txt"),
+            &plan,
+        );
+        return;
+    }
     let expected = include_str!("corpus/expected_plan.txt");
     assert_eq!(
         plan, expected,
@@ -51,9 +58,14 @@ fn invalid_corpus_produces_expected_error_lists() {
     let mut failures = Vec::new();
     for case in &cases {
         let name = case.file_name().unwrap().to_string_lossy().to_string();
-        let expected = read_lines(&case.join("expected_errors.txt"));
         let result = homeostat::check(&case.join("house"));
         let actual = render_sorted(&result.errors);
+        let golden = case.join("expected_errors.txt");
+        if bless() {
+            write_golden(&golden, &format!("{}\n", actual.join("\n")));
+            continue;
+        }
+        let expected = read_lines(&golden);
         if actual != expected {
             failures.push(format!(
                 "case {name}:\n  expected:\n    {}\n  actual:\n    {}",
@@ -68,6 +80,17 @@ fn invalid_corpus_produces_expected_error_lists() {
         failures.len(),
         failures.join("\n")
     );
+}
+
+/// Whether to write the actual output over the expected files instead of
+/// comparing. `HOMEOSTAT_BLESS=1 cargo test --test corpus` regenerates
+/// them after an intended change to the plan or to an error message.
+fn bless() -> bool {
+    std::env::var("HOMEOSTAT_BLESS").as_deref() == Ok("1")
+}
+
+fn write_golden(path: &Path, text: &str) {
+    fs::write(path, text).unwrap_or_else(|e| panic!("cannot write {}: {e}", path.display()));
 }
 
 fn read_lines(path: &Path) -> Vec<String> {

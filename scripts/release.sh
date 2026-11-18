@@ -16,8 +16,9 @@ if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-(a|b|rc|alpha|beta)[0-9]*)?$ ]]; 
   echo "usage: scripts/release.sh X.Y.Z[-rcN]" >&2
   exit 2
 fi
-# Python spells a prerelease without the hyphen (see sync_starter.sh).
-PY_VERSION="$(printf '%s' "$VERSION" | sed -E 's/-(a|b|rc|alpha|beta)/\1/')"
+# Python spells a prerelease without the hyphen (see py_version in lib/sdk_pin.sh).
+. "$(dirname "$0")/lib/sdk_pin.sh"
+PY_VERSION="$(py_version "$VERSION")"
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO"

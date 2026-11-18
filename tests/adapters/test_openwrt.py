@@ -1,17 +1,13 @@
 """The OpenWrt translation, without a router: polls in, WAN and sightings out."""
 
 import asyncio
-import sys
 import unittest
-from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from homeostat.testing import FakeSample, FakeSession
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "adapters"))
-
+import _adapters_path  # noqa: F401
 import openwrt
+from homeostat.testing import FakeSample, FakeSession
 from openwrt import Adapter, UbusError, classify, router_place
 
 PHONE = "aa:bb:cc:dd:ee:ff"
