@@ -4,7 +4,7 @@
 //! performs the same expansion at runtime, so what a unit subscribes to is
 //! what `plan` printed for it.
 
-use crate::error::{Code, ValidationError};
+use crate::error::{Code, Diagnostics};
 use crate::keyspace::{KeyExpr, Segment, CLASSES};
 use crate::manifest::{UnitKind, WriteMode};
 use crate::repo::House;
@@ -81,12 +81,11 @@ fn any_reaches(
 /// outside the key-space schema produce errors and no expansion. A zone
 /// reference that expands to no rooms produces a warning, because otherwise
 /// the entry would be dead without anyone noticing.
-pub fn expand(house: &House) -> (Vec<ExpandedKey>, Vec<String>, Vec<ValidationError>) {
+pub fn expand(house: &House, diags: &mut Diagnostics) -> Vec<ExpandedKey> {
     let mut expanded = Vec::new();
-    let mut warnings = Vec::new();
-    let mut errors = Vec::new();
 
     for unit in &house.units {
+        let mut diags = diags.in_file(&unit.path);
         let Some(bus) = &unit.manifest.bus else {
             continue;
         };
@@ -104,12 +103,7 @@ pub fn expand(house: &House) -> (Vec<ExpandedKey>, Vec<String>, Vec<ValidationEr
             let expr = match KeyExpr::parse(raw).and_then(|e| e.check_schema(raw).map(|()| e)) {
                 Ok(expr) => expr,
                 Err(message) => {
-                    errors.push(ValidationError::new(
-                        Code::KeyOutsideSchema,
-                        subject,
-                        message,
-                        Some(unit.path.clone()),
-                    ));
+                    diags.error(Code::KeyOutsideSchema, subject, message);
                     continue;
                 }
             };
@@ -126,12 +120,11 @@ pub fn expand(house: &House) -> (Vec<ExpandedKey>, Vec<String>, Vec<ValidationEr
                     unit.manifest.unit.kind,
                     UnitKind::Adapter | UnitKind::Automation
                 ) {
-                    errors.push(ValidationError::new(
+                    diags.error(
                         Code::TemplateOutsideBindingUnit,
                         subject,
                         format!("\"{raw}\" uses {{room}}/{{entity}} templates, which only entity-binding units (adapters and automations) may use"),
-                        Some(unit.path.clone()),
-                    ));
+                    );
                     continue;
                 }
                 // An adapter has no cmd path to an arbitrated entity. Its
@@ -163,10 +156,13 @@ pub fn expand(house: &House) -> (Vec<ExpandedKey>, Vec<String>, Vec<ValidationEr
 
             if exprs.is_empty() {
                 if let Some(zone) = &zone {
-                    warnings.push(format!(
-                        "{} {subject} matches nothing: zone \"{zone}\" has no rooms",
-                        direction.verb()
-                    ));
+                    diags.warn(
+                        subject,
+                        format!(
+                            "{} a key that matches nothing: zone \"{zone}\" has no rooms",
+                            direction.verb()
+                        ),
+                    );
                 } else if templated
                     && !house
                         .entities
@@ -183,19 +179,21 @@ pub fn expand(house: &House) -> (Vec<ExpandedKey>, Vec<String>, Vec<ValidationEr
                     // is an error. A table that is present but yields nothing
                     // is a house being built up, so it warns.
                     if unit.manifest.entities.is_none() {
-                        errors.push(ValidationError::new(
+                        diags.error(
                             Code::TemplateWithoutEntities,
                             subject,
                             format!(
                                 "\"{raw}\" uses {{room}}/{{entity}} templates but the unit has no [entities] table, so it expands to nothing"
                             ),
-                            Some(unit.path.clone()),
-                        ));
+                        );
                     } else {
-                        warnings.push(format!(
-                            "{} {subject} matches nothing: unit binds no entities",
-                            direction.verb()
-                        ));
+                        diags.warn(
+                            subject,
+                            format!(
+                                "{} a key that matches nothing: unit binds no entities",
+                                direction.verb()
+                            ),
+                        );
                     }
                 }
             }
@@ -213,7 +211,7 @@ pub fn expand(house: &House) -> (Vec<ExpandedKey>, Vec<String>, Vec<ValidationEr
         }
     }
 
-    (expanded, warnings, errors)
+    expanded
 }
 
 #[cfg(test)]
@@ -271,8 +269,9 @@ mod tests {
             &[("zigbee", "lamp", LAMP), ("zigbee", "lock", LOCK)],
         );
 
-        let (expanded, _warnings, errors) = expand(&house);
-        assert!(errors.is_empty(), "{errors:?}");
+        let mut diags = Diagnostics::default();
+        let expanded = expand(&house, &mut diags);
+        assert!(diags.errors.is_empty(), "{:?}", diags.errors);
 
         let cmd = expanded.iter().find(|k| k.entry == "commands").unwrap();
         assert_eq!(
@@ -311,8 +310,9 @@ mod tests {
         "#;
         let house = House::from_toml(&[("zigbee", zigbee)], &[("zigbee", "lock", LOCK)]);
 
-        let (expanded, _warnings, errors) = expand(&house);
-        assert!(errors.is_empty(), "{errors:?}");
+        let mut diags = Diagnostics::default();
+        let expanded = expand(&house, &mut diags);
+        assert!(diags.errors.is_empty(), "{:?}", diags.errors);
         let cmd = expanded.iter().find(|k| k.entry == "commands").unwrap();
         assert!(cmd.exprs.is_empty());
         assert_eq!(cmd.class, "cmd");
@@ -340,11 +340,13 @@ mod tests {
         "#;
         let house = House::from_toml(&[("latches", latches)], &[]);
 
-        let (_expanded, warnings, errors) = expand(&house);
+        let mut diags = Diagnostics::default();
+        expand(&house, &mut diags);
+        let errors = &diags.errors;
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert_eq!(errors[0].code, Code::TemplateWithoutEntities);
         assert_eq!(errors[0].subject, "latches.commands");
-        assert!(warnings.is_empty(), "{warnings:?}");
+        assert!(diags.warnings.is_empty(), "{:?}", diags.warnings);
     }
 
     #[test]
@@ -368,11 +370,13 @@ mod tests {
         "#;
         let house = House::from_toml(&[("latches", latches)], &[]);
 
-        let (_expanded, warnings, errors) = expand(&house);
-        assert!(errors.is_empty(), "{errors:?}");
+        let mut diags = Diagnostics::default();
+        expand(&house, &mut diags);
+        assert!(diags.errors.is_empty(), "{:?}", diags.errors);
+        let warnings: Vec<String> = diags.warnings.iter().map(ToString::to_string).collect();
         assert_eq!(
             warnings,
-            vec!["subscribes latches.commands matches nothing: unit binds no entities"]
+            vec!["latches.commands: subscribes a key that matches nothing: unit binds no entities (units/latches.toml)"]
         );
     }
 }

@@ -140,8 +140,13 @@ mod tests {
     }
 
     fn hash_of(root: &Path, unit_name: &str) -> String {
-        let (house, errors) = crate::repo::load(root);
-        assert!(errors.is_empty(), "fixture must be valid: {errors:?}");
+        let mut diags = crate::error::Diagnostics::default();
+        let house = crate::repo::load(root, &mut diags);
+        assert!(
+            diags.errors.is_empty(),
+            "fixture must be valid: {:?}",
+            diags.errors
+        );
         let unit = house.unit(unit_name).expect("unit in fixture");
         files_hash(root, unit, &house, false)
     }

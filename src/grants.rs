@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::{Code, ValidationError};
+use crate::error::{Code, Diagnostics, ValidationError};
 use crate::expand::{publishes, subscribes, Direction, ExpandedKey};
 use crate::keyspace::{KeyExpr, Segment};
 use crate::manifest::{self, FamilyHold, OnLoss, Priority, UnitKind, WriteMode};
@@ -180,9 +180,12 @@ pub struct Feed {
 /// Resolves every `[inputs]` block. It checks that the source exists, that the
 /// target is a device, and that an automation-owned source publishes the
 /// aspect.
-pub fn resolve_feeds(house: &House, expanded: &[ExpandedKey]) -> (Vec<Feed>, Vec<ValidationError>) {
+pub fn resolve_feeds(
+    house: &House,
+    expanded: &[ExpandedKey],
+    diags: &mut Diagnostics,
+) -> Vec<Feed> {
     let mut feeds = Vec::new();
-    let mut errors = Vec::new();
     for entity in &house.entities {
         let Some(inputs) = &entity.file.inputs else {
             continue;
@@ -191,12 +194,11 @@ pub fn resolve_feeds(house: &House, expanded: &[ExpandedKey]) -> (Vec<Feed>, Vec
             .unit(&entity.owner)
             .is_some_and(|u| u.manifest.unit.kind == UnitKind::Automation);
         if owner_is_automation {
-            errors.push(ValidationError::new(
+            diags.in_file(&entity.path).error(
                 Code::VirtualEntityFed,
                 &entity.name,
                 "automation-owned entities have no device inputs to feed",
-                Some(entity.path.clone()),
-            ));
+            );
             continue;
         }
         for (input, source) in inputs {
@@ -214,11 +216,11 @@ pub fn resolve_feeds(house: &House, expanded: &[ExpandedKey]) -> (Vec<Feed>, Vec
                     input: input.clone(),
                     source: contributor,
                 }),
-                Err(error) => errors.push(error),
+                Err(error) => diags.push(error),
             }
         }
     }
-    (feeds, errors)
+    feeds
 }
 
 /// One resolved `[sources]` entry: a contributor to a computed value.
@@ -241,8 +243,7 @@ pub struct Source {
 /// owner is checked. An owner that publishes its entities' aspects under a
 /// wildcard, as most adapters do, covers any name. A name that is not a key
 /// segment is `invalid-name` already and is not checked again.
-pub fn check_aspects(house: &House, expanded: &[ExpandedKey]) -> Vec<ValidationError> {
-    let mut errors = Vec::new();
+pub fn check_aspects(house: &House, expanded: &[ExpandedKey], diags: &mut Diagnostics) {
     for entity in &house.entities {
         for aspect in entity.file.aspects.iter().flat_map(|a| a.keys()) {
             let segments = [
@@ -257,19 +258,17 @@ pub fn check_aspects(house: &House, expanded: &[ExpandedKey]) -> Vec<ValidationE
                 continue;
             }
             if !publishes(expanded, Some(&entity.owner), &segments) {
-                errors.push(ValidationError::new(
+                diags.in_file(&entity.path).error(
                     Code::AspectUnpublished,
                     format!("{}.{aspect}", entity.name),
                     format!(
                         "\"{}\" does not publish {key}; [aspects] names an aspect its owner publishes",
                         entity.owner
                     ),
-                    Some(entity.path.clone()),
-                ));
+                );
             }
         }
     }
-    errors
 }
 
 /// Resolves every `[sources]` block. It makes the same two checks as
@@ -281,10 +280,9 @@ pub fn check_aspects(house: &House, expanded: &[ExpandedKey]) -> Vec<ValidationE
 pub fn resolve_sources(
     house: &House,
     expanded: &[ExpandedKey],
-) -> (Vec<Source>, Vec<String>, Vec<ValidationError>) {
+    diags: &mut Diagnostics,
+) -> Vec<Source> {
     let mut sources = Vec::new();
-    let mut warnings = Vec::new();
-    let mut errors = Vec::new();
     for entity in &house.entities {
         let Some(declared) = &entity.file.sources else {
             continue;
@@ -301,15 +299,18 @@ pub fn resolve_sources(
             ) {
                 Ok(resolved) => resolved,
                 Err(error) => {
-                    errors.push(error);
+                    diags.push(error);
                     continue;
                 }
             };
             if !subscribes(expanded, Some(&entity.owner), &segments) {
-                warnings.push(format!(
-                    "{}.{name}: \"{}\" declares {} as a source but does not subscribe it",
-                    entity.name, entity.owner, contributor.key
-                ));
+                diags.in_file(&entity.path).warn(
+                    format!("{}.{name}", entity.name),
+                    format!(
+                        "\"{}\" declares {} as a source but does not subscribe it",
+                        entity.owner, contributor.key
+                    ),
+                );
             }
             sources.push(Source {
                 entity: entity.name.clone(),
@@ -319,7 +320,7 @@ pub fn resolve_sources(
             });
         }
     }
-    (sources, warnings, errors)
+    sources
 }
 
 /// One slot of a forecast publish (aspect or source): a literal, or any value
@@ -341,32 +342,22 @@ impl Slot {
 }
 
 /// Resolves the grant table and enforces write policy.
-pub fn resolve(
-    house: &House,
-    expanded: &[ExpandedKey],
-) -> (Vec<Grant>, Vec<String>, Vec<ValidationError>) {
-    let mut warnings = Vec::new();
-    let mut errors = Vec::new();
-    let grants = build_grants(house, expanded, &mut warnings, &mut errors);
-    check_exclusive_writers(house, &grants, &mut errors);
-    check_arbitrated_coverage(house, expanded, &mut errors);
-    check_commanded_virtuals(house, expanded, &grants, &mut errors);
-    check_grant_cycle(&grants, &mut errors);
-    check_entity_keys_bound(house, expanded, &mut errors);
-    check_forecast_conflicts(expanded, &mut errors);
-    check_reserved_classes(house, expanded, &mut errors);
-    (grants, warnings, errors)
+pub fn resolve(house: &House, expanded: &[ExpandedKey], diags: &mut Diagnostics) -> Vec<Grant> {
+    let grants = build_grants(house, expanded, diags);
+    check_exclusive_writers(house, &grants, diags);
+    check_arbitrated_coverage(house, expanded, diags);
+    check_commanded_virtuals(house, expanded, &grants, diags);
+    check_grant_cycle(&grants, diags);
+    check_entity_keys_bound(house, expanded, diags);
+    check_forecast_conflicts(expanded, diags);
+    check_reserved_classes(house, expanded, diags);
+    grants
 }
 
 /// One grant per state and forecast publish (the entities its unit binds)
 /// and per non-adapter cmd publish (the entities its capability and keys
 /// reach), sorted by unit and binding.
-fn build_grants(
-    house: &House,
-    expanded: &[ExpandedKey],
-    warnings: &mut Vec<String>,
-    errors: &mut Vec<ValidationError>,
-) -> Vec<Grant> {
+fn build_grants(house: &House, expanded: &[ExpandedKey], diags: &mut Diagnostics) -> Vec<Grant> {
     let mut grants = Vec::new();
 
     for key in expanded {
@@ -382,18 +373,18 @@ fn build_grants(
             .expect("expanded key from loaded unit");
         let spec = &unit.manifest.bus.as_ref().expect("unit has bus").publishes[&key.entry];
         let subject = format!("{}.{}", key.unit, key.entry);
+        let mut diags = diags.in_file(&unit.path);
         let mut keys: Vec<String> = key.exprs.iter().map(ToString::to_string).collect();
         keys.sort();
         if spec.on_loss.is_some() && class != "hold" {
-            errors.push(ValidationError::new(
+            diags.error(
                 Code::OnLossNotHold,
                 subject.clone(),
                 format!(
                     "publish \"{}\" declares on_loss, which only a hold publish takes",
                     key.source
                 ),
-                Some(unit.path.clone()),
-            ));
+            );
         }
 
         // A binding unit's state or forecast publish records what it binds, so
@@ -445,42 +436,38 @@ fn build_grants(
         }
 
         let Some(capability) = spec.capability.clone() else {
-            errors.push(ValidationError::new(
+            diags.error(
                 Code::PublishMissingCapability,
                 subject,
                 format!(
                     "{class} publish \"{}\" must declare a capability",
                     key.source
                 ),
-                Some(unit.path.clone()),
-            ));
+            );
             continue;
         };
         if manifest::capability(&capability).is_none() {
-            errors.push(ValidationError::new(
+            diags.error(
                 Code::UnknownCapability,
                 subject,
                 format!("unknown capability \"{capability}\""),
-                Some(unit.path.clone()),
-            ));
+            );
             continue;
         }
         let Some(priority) = spec.priority else {
-            errors.push(ValidationError::new(
+            diags.error(
                 Code::PublishMissingPriority,
                 subject,
                 format!("{class} publish \"{}\" must declare a priority", key.source),
-                Some(unit.path.clone()),
-            ));
+            );
             continue;
         };
         if hold && !matches!(priority, Priority::Automation | Priority::Agent) {
-            errors.push(ValidationError::new(
+            diags.error(
                 Code::HoldBand,
                 subject,
                 format!("hold publish \"{}\" declares priority \"{priority}\"; a unit holds at automation or agent", key.source),
-                Some(unit.path.clone()),
-            ));
+            );
             continue;
         }
 
@@ -513,29 +500,31 @@ fn build_grants(
         granted.dedup();
 
         if granted.is_empty() {
-            warnings.push(format!("publish {subject} matches no entities"));
+            diags.warn(&subject, "publish matches no entities");
         }
         if hold {
             for entity in granted.iter().filter(|e| e.write != WriteMode::Arbitrated) {
-                errors.push(ValidationError::new(
+                diags.error(
                     Code::HoldNotArbitrated,
                     subject.clone(),
                     format!(
                         "hold publish \"{}\" reaches \"{}\", which is {}, not arbitrated",
                         key.source, entity.name, entity.write
                     ),
-                    Some(unit.path.clone()),
-                ));
+                );
             }
         }
         // The manual band belongs to the family's surfaces (dashboard, voice)
         // and is exempt from exclusive-write checks. Nothing forbids an
         // automation from claiming it, but the plan warns about it.
         if !hold && priority == Priority::Manual && unit.manifest.unit.kind != UnitKind::Service {
-            warnings.push(format!(
-                "publish {subject} declares priority \"manual\" on {} \"{}\"; the manual band is the family's and is exempt from exclusive-write checks",
-                unit.manifest.unit.kind, key.unit
-            ));
+            diags.warn(
+                &subject,
+                format!(
+                    "publish declares priority \"manual\" on {} \"{}\"; the manual band is the family's and is exempt from exclusive-write checks",
+                    unit.manifest.unit.kind, key.unit
+                ),
+            );
         }
         grants.push(Grant {
             unit: key.unit.clone(),
@@ -550,7 +539,7 @@ fn build_grants(
     }
 
     grants.sort_by(|a, b| (&a.unit, &a.publish).cmp(&(&b.unit, &b.publish)));
-    warn_same_rank_holders(&grants, warnings);
+    warn_same_rank_holders(&grants, diags);
     grants
 }
 
@@ -562,7 +551,7 @@ type HolderRows<'a> = Vec<(&'a str, &'a str, Vec<Option<String>>)>;
 /// aspect's rest value (docs/design.md#which-hold-wins). Without one, the
 /// newest hold wins, so the outcome depends only on timing, and plan says
 /// so.
-fn warn_same_rank_holders(grants: &[Grant], warnings: &mut Vec<String>) {
+fn warn_same_rank_holders(grants: &[Grant], diags: &mut Diagnostics) {
     // The aspect each of a row's keys holds on an entity: a literal, or
     // None where a wildcard covers any aspect.
     let aspects = |grant: &Grant, entity: &GrantEntity| -> Vec<Option<String>> {
@@ -624,10 +613,13 @@ fn warn_same_rank_holders(grants: &[Grant], warnings: &mut Vec<String>) {
         }
         if units.len() > 1 {
             let names: Vec<&str> = units.into_iter().collect();
-            warnings.push(format!(
-                "{} hold \"{entity}\" at {priority} on an aspect without a rest value: the newest hold wins",
-                names.join(" and ")
-            ));
+            diags.warn(
+                entity,
+                format!(
+                    "{} hold it at {priority} on an aspect without a rest value: the newest hold wins",
+                    names.join(" and ")
+                ),
+            );
         }
     }
 }
@@ -636,7 +628,7 @@ fn warn_same_rank_holders(grants: &[Grant], warnings: &mut Vec<String>) {
 /// Exclusivity constrains only the bands below manual. Manual-band units
 /// (dashboard, voice) sit above it and do not count. A writer is a unit rather
 /// than a binding, because authority is per process.
-fn check_exclusive_writers(house: &House, grants: &[Grant], errors: &mut Vec<ValidationError>) {
+fn check_exclusive_writers(house: &House, grants: &[Grant], diags: &mut Diagnostics) {
     let mut writers: BTreeMap<&str, BTreeMap<&str, Vec<String>>> = BTreeMap::new();
     for grant in grants {
         if matches!(grant.priority, None | Some(Priority::Manual)) {
@@ -658,7 +650,7 @@ fn check_exclusive_writers(house: &House, grants: &[Grant], errors: &mut Vec<Val
         if let Some(writers) = writers.get(entity.name.as_str()) {
             if writers.len() > 1 {
                 let bindings: Vec<&str> = writers.values().flatten().map(String::as_str).collect();
-                errors.push(ValidationError::new(
+                diags.in_file(&entity.path).error(
                     Code::ExclusiveWriteConflict,
                     &entity.name,
                     format!(
@@ -666,8 +658,7 @@ fn check_exclusive_writers(house: &House, grants: &[Grant], errors: &mut Vec<Val
                         writers.len(),
                         bindings.join(", ")
                     ),
-                    Some(entity.path.clone()),
-                ));
+                );
             }
         }
     }
@@ -678,11 +669,7 @@ fn check_exclusive_writers(house: &House, grants: &[Grant], errors: &mut Vec<Val
 /// no path to it. This mirrors `check_exclusive_writers`, but works over
 /// `expanded` directly, since arbiter-class publishes do not form cmd-class
 /// grants.
-fn check_arbitrated_coverage(
-    house: &House,
-    expanded: &[ExpandedKey],
-    errors: &mut Vec<ValidationError>,
-) {
+fn check_arbitrated_coverage(house: &House, expanded: &[ExpandedKey], diags: &mut Diagnostics) {
     for entity in &house.entities {
         if entity.file.write_policy.mode() != WriteMode::Arbitrated {
             continue;
@@ -694,15 +681,14 @@ fn check_arbitrated_coverage(
             entity.name.as_str(),
         ];
         if !publishes(expanded, None, &prefix) {
-            errors.push(ValidationError::new(
+            diags.in_file(&entity.path).error(
                 Code::ArbitratedUncovered,
                 &entity.name,
                 format!(
                     "arbitrated entity \"{}\" has no arbiter-class publish covering it",
                     entity.name
                 ),
-                Some(entity.path.clone()),
-            ));
+            );
         }
     }
 }
@@ -716,7 +702,7 @@ fn check_commanded_virtuals(
     house: &House,
     expanded: &[ExpandedKey],
     grants: &[Grant],
-    errors: &mut Vec<ValidationError>,
+    diags: &mut Diagnostics,
 ) {
     for grant in grants.iter().filter(|g| g.is_cmd()) {
         for granted in &grant.entities {
@@ -733,15 +719,14 @@ fn check_commanded_virtuals(
             let room = entity.file.entity.room.as_str();
             let prefix = ["home", "cmd", room, name.as_str()];
             if !subscribes(expanded, Some(&entity.owner), &prefix) {
-                errors.push(ValidationError::new(
+                diags.in_file(&entity.path).error(
                     Code::VirtualEntityCommanded,
                     name,
                     format!(
                         "\"{name}\" is bound by automation \"{}\", which subscribes to no home/cmd/{room}/{name} keys (cmd publish {}.{})",
                         entity.owner, grant.unit, grant.publish
                     ),
-                    Some(entity.path.clone()),
-                ));
+                );
             }
         }
     }
@@ -783,7 +768,7 @@ pub fn free_nodes(remaining: &BTreeSet<String>, edges: &[(String, String)]) -> V
 /// cycle is possible: A commands an entity B binds while B commands one A
 /// binds. The apply walk needs an order, so the house is refused at plan time
 /// instead of starting units in an arbitrary order.
-fn check_grant_cycle(grants: &[Grant], errors: &mut Vec<ValidationError>) {
+fn check_grant_cycle(grants: &[Grant], diags: &mut Diagnostics) {
     let edges = grant_edges(grants);
     let mut remaining: BTreeSet<String> = edges
         .iter()
@@ -800,12 +785,11 @@ fn check_grant_cycle(grants: &[Grant], errors: &mut Vec<ValidationError>) {
     }
     if !remaining.is_empty() {
         let members: Vec<String> = remaining.into_iter().collect();
-        errors.push(ValidationError::new(
+        diags.error(
             Code::GrantCycle,
             members.join(", "),
             "each of these units commands an entity another of them binds, so no apply order exists",
-            None,
-        ));
+        );
     }
 }
 
@@ -815,11 +799,7 @@ fn check_grant_cycle(grants: &[Grant], errors: &mut Vec<ValidationError>) {
 /// free-form key. `forecast` follows the same rule as `state`, because a
 /// forecast extends the same series forward and so uses the same entity's key
 /// space.
-fn check_entity_keys_bound(
-    house: &House,
-    expanded: &[ExpandedKey],
-    errors: &mut Vec<ValidationError>,
-) {
+fn check_entity_keys_bound(house: &House, expanded: &[ExpandedKey], diags: &mut Diagnostics) {
     for key in expanded {
         if key.direction != Direction::Publishes || key.templated {
             continue;
@@ -845,12 +825,7 @@ fn check_entity_keys_bound(
                     "{class} publish \"{}\" needs literal room and entity segments (or {{room}}/{{entity}} templates)",
                     key.source
                 );
-                errors.push(ValidationError::new(
-                    code,
-                    subject,
-                    message,
-                    Some(unit.path.clone()),
-                ));
+                diags.in_file(&unit.path).error(code, subject, message);
                 continue;
             };
             // State needs the binding unit, because each entity has one master
@@ -880,12 +855,7 @@ fn check_entity_keys_bound(
                         key.unit
                     )
                 };
-                errors.push(ValidationError::new(
-                    code,
-                    subject,
-                    message,
-                    Some(unit.path.clone()),
-                ));
+                diags.in_file(&unit.path).error(code, subject, message);
             }
         }
     }
@@ -899,7 +869,7 @@ fn check_entity_keys_bound(
 /// A publish may wildcard its aspect or source slot, so entries are compared
 /// pairwise instead of grouped by key. Two publishes collide when, at every
 /// slot, they agree or one of them accepts anything.
-fn check_forecast_conflicts(expanded: &[ExpandedKey], errors: &mut Vec<ValidationError>) {
+fn check_forecast_conflicts(expanded: &[ExpandedKey], diags: &mut Diagnostics) {
     let slot = |expr: &KeyExpr, i: usize| -> Slot {
         // `**` anywhere from the aspect slot on stands for every slot
         // after it, so a key that has one accepts anything here.
@@ -947,7 +917,7 @@ fn check_forecast_conflicts(expanded: &[ExpandedKey], errors: &mut Vec<Validatio
             if !reported.insert(pair) {
                 continue;
             }
-            errors.push(ValidationError::new(
+            diags.error(
                 Code::ForecastPublishConflict,
                 format!("home/forecast/{}/{}", a.1, a.2),
                 format!(
@@ -955,8 +925,7 @@ fn check_forecast_conflicts(expanded: &[ExpandedKey], errors: &mut Vec<Validatio
                      give each source its own segment, or one overwrites the other",
                     pair.0, pair.1
                 ),
-                None,
-            ));
+            );
         }
     }
 }
@@ -969,11 +938,7 @@ fn check_forecast_conflicts(expanded: &[ExpandedKey], errors: &mut Vec<Validatio
 /// declared expression. Without this check an automation could declare
 /// `home/arbiter/**` and forge post-arbitration commands, or another unit's
 /// discovery record or holds, with an empty grant table.
-fn check_reserved_classes(
-    house: &House,
-    expanded: &[ExpandedKey],
-    errors: &mut Vec<ValidationError>,
-) {
+fn check_reserved_classes(house: &House, expanded: &[ExpandedKey], diags: &mut Diagnostics) {
     let mut singleton_publishers: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
     for key in expanded
         .iter()
@@ -1031,12 +996,11 @@ fn check_reserved_classes(
             _ => None,
         };
         if let Some(message) = message {
-            errors.push(ValidationError::new(
+            diags.in_file(&unit.path).error(
                 Code::ReservedClassPublish,
                 format!("{}.{}", key.unit, key.entry),
                 message,
-                Some(unit.path.clone()),
-            ));
+            );
         }
     }
 }
@@ -1044,7 +1008,18 @@ fn check_reserved_classes(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::Warning;
     use crate::expand::expand;
+
+    /// Runs one stage into a fresh sink and returns its output beside the
+    /// warnings and errors it reported.
+    fn collect<T>(
+        stage: impl FnOnce(&mut Diagnostics) -> T,
+    ) -> (T, Vec<Warning>, Vec<ValidationError>) {
+        let mut diags = Diagnostics::default();
+        let out = stage(&mut diags);
+        (out, diags.warnings, diags.errors)
+    }
 
     const ZIGBEE: &str = r#"
         schema = 1
@@ -1150,7 +1125,7 @@ mod tests {
     fn arbitrated_entity_covered_by_arbiter_publish_has_no_errors() {
         let house = house_with_lock(true);
 
-        let (expanded, _warnings, expand_errors) = expand(&house);
+        let (expanded, _warnings, expand_errors) = collect(|d| expand(&house, d));
         assert!(expand_errors.is_empty(), "{expand_errors:?}");
 
         // Correct expansion split: the adapter's cmd template excludes the
@@ -1169,7 +1144,7 @@ mod tests {
             vec![KeyExpr::parse("home/arbiter/hallway/lock/**").unwrap()]
         );
 
-        let (grants, warnings, errors) = resolve(&house, &expanded);
+        let (grants, warnings, errors) = collect(|d| resolve(&house, &expanded, d));
         assert!(errors.is_empty(), "{errors:?}");
         assert!(warnings.is_empty(), "{warnings:?}");
         let night_mode = grants.iter().find(|g| g.unit == "night_mode").unwrap();
@@ -1192,15 +1167,15 @@ mod tests {
     #[test]
     fn entity_move_and_policy_flip_change_the_grant_table() {
         let baseline = house_with_lock(true);
-        let (expanded, _, _) = expand(&baseline);
-        let (grants, _, _) = resolve(&baseline, &expanded);
+        let (expanded, _, _) = collect(|d| expand(&baseline, d));
+        let (grants, _, _) = collect(|d| resolve(&baseline, &expanded, d));
 
         let mut moved = house_with_lock(true);
         moved.entities[1].file.entity.room = "porch".to_string();
         // The publish key still names the old room, so re-expansion changes
         // the granted set. The tables differ either way.
-        let (expanded, _, _) = expand(&moved);
-        let (moved_grants, _, _) = resolve(&moved, &expanded);
+        let (expanded, _, _) = collect(|d| expand(&moved, d));
+        let (moved_grants, _, _) = collect(|d| resolve(&moved, &expanded, d));
         assert_ne!(
             grants, moved_grants,
             "a room move must change the grant table"
@@ -1211,8 +1186,8 @@ mod tests {
         // The lamp is granted to nobody; flip the lock instead, which
         // night_mode writes.
         flipped.entities[1].file.write_policy.mode = Some(WriteMode::Shared);
-        let (expanded, _, _) = expand(&flipped);
-        let (flipped_grants, _, _) = resolve(&flipped, &expanded);
+        let (expanded, _, _) = collect(|d| expand(&flipped, d));
+        let (flipped_grants, _, _) = collect(|d| resolve(&flipped, &expanded, d));
         assert_ne!(
             grants, flipped_grants,
             "a write-mode flip must change the grant table"
@@ -1283,10 +1258,10 @@ mod tests {
     #[test]
     fn a_commanded_virtual_entity_whose_owner_listens_is_a_latch() {
         let house = house_with_latch(true);
-        let (expanded, _warnings, expand_errors) = expand(&house);
+        let (expanded, _warnings, expand_errors) = collect(|d| expand(&house, d));
         assert!(expand_errors.is_empty(), "{expand_errors:?}");
 
-        let (grants, warnings, errors) = resolve(&house, &expanded);
+        let (grants, warnings, errors) = collect(|d| resolve(&house, &expanded, d));
         assert!(errors.is_empty(), "{errors:?}");
         assert!(warnings.is_empty(), "{warnings:?}");
         let buttons = grants.iter().find(|g| g.unit == "buttons").unwrap();
@@ -1307,10 +1282,10 @@ mod tests {
     #[test]
     fn a_commanded_virtual_entity_nobody_listens_for_is_a_plan_error() {
         let house = house_with_latch(false);
-        let (expanded, _warnings, expand_errors) = expand(&house);
+        let (expanded, _warnings, expand_errors) = collect(|d| expand(&house, d));
         assert!(expand_errors.is_empty(), "{expand_errors:?}");
 
-        let (_grants, _warnings, errors) = resolve(&house, &expanded);
+        let (_grants, _warnings, errors) = collect(|d| resolve(&house, &expanded, d));
         let codes: Vec<Code> = errors.iter().map(|e| e.code).collect();
         assert_eq!(codes, vec![Code::VirtualEntityCommanded], "{errors:?}");
     }
@@ -1321,8 +1296,8 @@ mod tests {
     #[test]
     fn widening_a_key_expression_changes_the_grant_table() {
         let house = house_with_lock(false);
-        let (expanded, _, _) = expand(&house);
-        let (grants, _, _) = resolve(&house, &expanded);
+        let (expanded, _, _) = collect(|d| expand(&house, d));
+        let (grants, _, _) = collect(|d| resolve(&house, &expanded, d));
         let night_mode = grants.iter().find(|g| g.unit == "night_mode").unwrap();
         assert_eq!(
             night_mode.keys,
@@ -1332,8 +1307,8 @@ mod tests {
         let mut widened = house_with_lock(false);
         let bus = night_mode_bus(&mut widened);
         bus.publishes.get_mut("lock").unwrap().key = "home/cmd/hallway/lock/**".to_string();
-        let (expanded, _, _) = expand(&widened);
-        let (widened_grants, _, _) = resolve(&widened, &expanded);
+        let (expanded, _, _) = collect(|d| expand(&widened, d));
+        let (widened_grants, _, _) = collect(|d| resolve(&widened, &expanded, d));
         let widened_night_mode = widened_grants
             .iter()
             .find(|g| g.unit == "night_mode")
@@ -1385,8 +1360,8 @@ mod tests {
             owner = "seer"
         "#;
         let house = House::from_toml(&[("seer", seer)], &[("seer", "spot_price", spot_price)]);
-        let (expanded, _, _) = expand(&house);
-        let (grants, warnings, errors) = resolve(&house, &expanded);
+        let (expanded, _, _) = collect(|d| expand(&house, d));
+        let (grants, warnings, errors) = collect(|d| resolve(&house, &expanded, d));
         assert!(warnings.is_empty(), "{warnings:?}");
         assert!(errors.is_empty(), "{errors:?}");
         let seer = grants
@@ -1415,8 +1390,8 @@ mod tests {
                 ("yr", "home/forecast/global/outdoor_temp/temperature/yr"),
             ],
         );
-        let (expanded, _, _) = expand(&house);
-        let (_, _, errors) = resolve(&house, &expanded);
+        let (expanded, _, _) = collect(|d| expand(&house, d));
+        let (_, _, errors) = collect(|d| resolve(&house, &expanded, d));
         assert!(errors.is_empty(), "{errors:?}");
     }
 
@@ -1432,8 +1407,8 @@ mod tests {
                 ("smhi", "home/forecast/global/outdoor_temp/temperature/smhi"),
             ],
         );
-        let (expanded, _, _) = expand(&house);
-        let (_, _, errors) = resolve(&house, &expanded);
+        let (expanded, _, _) = collect(|d| expand(&house, d));
+        let (_, _, errors) = collect(|d| resolve(&house, &expanded, d));
         assert_eq!(
             errors.iter().map(|e| e.code).collect::<Vec<_>>(),
             vec![Code::ForecastPublishConflict],
@@ -1520,8 +1495,8 @@ mod tests {
                 "home/forecast/global/outdoor_temp/temperature/smhi",
             )],
         );
-        let (expanded, _, _) = expand(&house);
-        let (_, _, errors) = resolve(&house, &expanded);
+        let (expanded, _, _) = collect(|d| expand(&house, d));
+        let (_, _, errors) = collect(|d| resolve(&house, &expanded, d));
         assert!(errors.is_empty(), "{errors:?}");
     }
 
@@ -1535,8 +1510,8 @@ mod tests {
             "global",
             &[("weather", "home/forecast/global/nowhere/temperature/smhi")],
         );
-        let (expanded, _, _) = expand(&house);
-        let (_, _, errors) = resolve(&house, &expanded);
+        let (expanded, _, _) = collect(|d| expand(&house, d));
+        let (_, _, errors) = collect(|d| resolve(&house, &expanded, d));
         assert_eq!(
             errors.iter().map(|e| e.code).collect::<Vec<_>>(),
             vec![Code::ForecastPublishUnbound],
@@ -1565,8 +1540,8 @@ mod tests {
                 ),
             ],
         );
-        let (expanded, _, _) = expand(&house);
-        let (_, _, errors) = resolve(&house, &expanded);
+        let (expanded, _, _) = collect(|d| expand(&house, d));
+        let (_, _, errors) = collect(|d| resolve(&house, &expanded, d));
         let conflict = errors
             .iter()
             .find(|e| e.code == Code::ForecastPublishConflict)
@@ -1652,8 +1627,8 @@ mod tests {
             "temperature",
             Some("home/state/global/outdoor_temp/temperature"),
         );
-        let (expanded, _, _) = expand(&house);
-        let (sources, warnings, errors) = resolve_sources(&house, &expanded);
+        let (expanded, _, _) = collect(|d| expand(&house, d));
+        let (sources, warnings, errors) = collect(|d| resolve_sources(&house, &expanded, d));
         assert!(errors.is_empty(), "{errors:?}");
         assert!(warnings.is_empty(), "{warnings:?}");
         assert_eq!(
@@ -1678,13 +1653,13 @@ mod tests {
     #[test]
     fn a_source_the_owner_does_not_subscribe_warns() {
         let house = house_with_sources("temperature", None);
-        let (expanded, _, _) = expand(&house);
-        let (sources, warnings, errors) = resolve_sources(&house, &expanded);
+        let (expanded, _, _) = collect(|d| expand(&house, d));
+        let (sources, warnings, errors) = collect(|d| resolve_sources(&house, &expanded, d));
         assert!(errors.is_empty(), "{errors:?}");
         assert_eq!(sources.len(), 1, "the source still resolves");
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert!(
-            warnings[0].contains("does not subscribe"),
+            warnings[0].message.contains("does not subscribe"),
             "{}",
             warnings[0]
         );
@@ -1708,8 +1683,8 @@ mod tests {
             .get_mut("station")
             .unwrap()
             .entity = "ghost".to_string();
-        let (expanded, _, _) = expand(&house);
-        let (_, _, errors) = resolve_sources(&house, &expanded);
+        let (expanded, _, _) = collect(|d| expand(&house, d));
+        let (_, _, errors) = collect(|d| resolve_sources(&house, &expanded, d));
         assert_eq!(
             errors.iter().map(|e| e.code).collect::<Vec<_>>(),
             vec![Code::SourceUnknownEntity],
@@ -1737,8 +1712,8 @@ mod tests {
             )
         };
         let baseline = with_state();
-        let (expanded, _, _) = expand(&baseline);
-        let (grants, _, _) = resolve(&baseline, &expanded);
+        let (expanded, _, _) = collect(|d| expand(&baseline, d));
+        let (grants, _, _) = collect(|d| resolve(&baseline, &expanded, d));
         let zigbee = grants.iter().find(|g| g.unit == "zigbee").unwrap();
         assert!(!zigbee.is_cmd());
         assert_eq!(
@@ -1752,8 +1727,8 @@ mod tests {
 
         let mut moved = with_state();
         moved.entities[0].file.entity.room = "porch".to_string();
-        let (expanded, _, _) = expand(&moved);
-        let (moved_grants, _, _) = resolve(&moved, &expanded);
+        let (expanded, _, _) = collect(|d| expand(&moved, d));
+        let (moved_grants, _, _) = collect(|d| resolve(&moved, &expanded, d));
         assert_ne!(
             grants, moved_grants,
             "moving the ungranted lamp must change the table"
@@ -1761,8 +1736,8 @@ mod tests {
 
         let mut retyped = with_state();
         retyped.entities[0].file.entity.capability = "switch".to_string();
-        let (expanded, _, _) = expand(&retyped);
-        let (retyped_grants, _, _) = resolve(&retyped, &expanded);
+        let (expanded, _, _) = collect(|d| expand(&retyped, d));
+        let (retyped_grants, _, _) = collect(|d| resolve(&retyped, &expanded, d));
         assert_ne!(
             grants, retyped_grants,
             "a capability change must change the table"
@@ -1793,8 +1768,8 @@ mod tests {
             LOCK_ENTITIES,
         );
         house.entities[0].file.write_policy.mode = Some(WriteMode::Exclusive);
-        let (expanded, _, _) = expand(&house);
-        let (_, _, errors) = resolve(&house, &expanded);
+        let (expanded, _, _) = collect(|d| expand(&house, d));
+        let (_, _, errors) = collect(|d| resolve(&house, &expanded, d));
         assert!(
             !errors
                 .iter()
@@ -1820,12 +1795,14 @@ mod tests {
         let mut house = house_with_lock(false);
         let bus = night_mode_bus(&mut house);
         bus.publishes.get_mut("lock").unwrap().priority = Some(Priority::Manual);
-        let (expanded, _, _) = expand(&house);
-        let (_, warnings, _) = resolve(&house, &expanded);
+        let (expanded, _, _) = collect(|d| expand(&house, d));
+        let (_, warnings, _) = collect(|d| resolve(&house, &expanded, d));
         assert!(
-            warnings.iter().any(|w| w.starts_with(
-                "publish night_mode.lock declares priority \"manual\" on automation \"night_mode\""
-            )),
+            warnings.iter().any(|w| {
+                w.to_string().starts_with(
+                "night_mode.lock: publish declares priority \"manual\" on automation \"night_mode\""
+            )
+            }),
             "{warnings:?}"
         );
     }
@@ -1833,10 +1810,10 @@ mod tests {
     #[test]
     fn arbitrated_entity_with_no_arbiter_publish_is_a_plan_error() {
         let house = house_with_lock(false);
-        let (expanded, _warnings, expand_errors) = expand(&house);
+        let (expanded, _warnings, expand_errors) = collect(|d| expand(&house, d));
         assert!(expand_errors.is_empty(), "{expand_errors:?}");
 
-        let (_grants, _warnings, errors) = resolve(&house, &expanded);
+        let (_grants, _warnings, errors) = collect(|d| resolve(&house, &expanded, d));
         assert!(
             errors
                 .iter()
@@ -1970,11 +1947,11 @@ mod tests {
 
     fn resolve_holding(
         holders: &[(&str, &str, Priority)],
-    ) -> (Vec<Grant>, Vec<String>, Vec<ValidationError>) {
+    ) -> (Vec<Grant>, Vec<Warning>, Vec<ValidationError>) {
         let house = house_holding(holders);
-        let (expanded, _warnings, expand_errors) = expand(&house);
+        let (expanded, _warnings, expand_errors) = collect(|d| expand(&house, d));
         assert!(expand_errors.is_empty(), "{expand_errors:?}");
-        resolve(&house, &expanded)
+        collect(|d| resolve(&house, &expanded, d))
     }
 
     #[test]
@@ -2060,9 +2037,9 @@ mod tests {
             ),
         ]);
         assert!(
-            warnings
-                .iter()
-                .any(|w| w.contains("flue_guard and heating hold \"stove\"")),
+            warnings.iter().any(|w| w
+                .to_string()
+                .starts_with("stove: flue_guard and heating hold it")),
             "{warnings:?}"
         );
     }
@@ -2100,9 +2077,9 @@ mod tests {
         ]);
         assert!(errors.is_empty(), "{errors:?}");
         assert!(
-            warnings
-                .iter()
-                .any(|w| w.contains("curve and setback hold \"heat_pump\" at automation")),
+            warnings.iter().any(|w| w
+                .to_string()
+                .starts_with("heat_pump: curve and setback hold it at automation")),
             "{warnings:?}"
         );
     }
@@ -2134,8 +2111,8 @@ mod tests {
             on_loss = "release"
         "#;
         let house = house_with_holders(&[("flue_guard", flue_guard)]);
-        let (expanded, _warnings, _expand_errors) = expand(&house);
-        let (grants, _warnings, errors) = resolve(&house, &expanded);
+        let (expanded, _warnings, _expand_errors) = collect(|d| expand(&house, d));
+        let (grants, _warnings, errors) = collect(|d| resolve(&house, &expanded, d));
         let row = grants.iter().find(|g| g.hold).expect("a holder row");
         assert_eq!(row.on_loss, Some(OnLoss::Keep));
         assert!(

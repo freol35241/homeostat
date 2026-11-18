@@ -1,6 +1,7 @@
-//! Validation errors: one rendering for the CLI, the corpus tests and the
-//! MCP server, and the registry of every error code with the rule behind
-//! it (`homeostat explain`).
+//! Validation errors and warnings: one rendering for the CLI, the corpus
+//! tests and the MCP server, the sink the plan-time stages report into, and
+//! the registry of every error code with the rule behind it
+//! (`homeostat explain`).
 
 use std::fmt;
 
@@ -39,6 +40,87 @@ impl fmt::Display for ValidationError {
             write!(f, " ({file})")?;
         }
         Ok(())
+    }
+}
+
+/// A finding that refuses nothing: a house with warnings still plans and
+/// applies. It renders as `<subject>: <message> (<file>)`, the shape of a
+/// [`ValidationError`] without the code.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Warning {
+    pub subject: String,
+    pub message: String,
+    /// House-relative path, when the warning is attributable to one file.
+    pub file: Option<String>,
+}
+
+impl fmt::Display for Warning {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}: {}", self.subject, self.message)?;
+        if let Some(file) = &self.file {
+            write!(f, " ({file})")?;
+        }
+        Ok(())
+    }
+}
+
+/// The sink every plan-time stage reports into: errors and warnings in the
+/// order they are found.
+#[derive(Debug, Default)]
+pub struct Diagnostics {
+    pub errors: Vec<ValidationError>,
+    pub warnings: Vec<Warning>,
+}
+
+impl Diagnostics {
+    /// Reports an error that no single file is to blame for.
+    pub fn error(&mut self, code: Code, subject: impl Into<String>, message: impl Into<String>) {
+        self.errors
+            .push(ValidationError::new(code, subject, message, None));
+    }
+
+    /// Reports a warning that no single file is to blame for.
+    pub fn warn(&mut self, subject: impl Into<String>, message: impl Into<String>) {
+        self.warnings.push(Warning {
+            subject: subject.into(),
+            message: message.into(),
+            file: None,
+        });
+    }
+
+    /// Reports an error built elsewhere.
+    pub fn push(&mut self, error: ValidationError) {
+        self.errors.push(error);
+    }
+
+    /// A view of this sink that attributes what it reports to `file`, a
+    /// house-relative path.
+    pub fn in_file<'a>(&'a mut self, file: &'a str) -> Scoped<'a> {
+        Scoped { diags: self, file }
+    }
+}
+
+/// A [`Diagnostics`] sink bound to one file, from [`Diagnostics::in_file`].
+pub struct Scoped<'a> {
+    diags: &'a mut Diagnostics,
+    file: &'a str,
+}
+
+impl Scoped<'_> {
+    /// Reports an error in this file.
+    pub fn error(&mut self, code: Code, subject: impl Into<String>, message: impl Into<String>) {
+        let file = Some(self.file.to_string());
+        self.diags
+            .push(ValidationError::new(code, subject, message, file));
+    }
+
+    /// Reports a warning about this file.
+    pub fn warn(&mut self, subject: impl Into<String>, message: impl Into<String>) {
+        self.diags.warnings.push(Warning {
+            subject: subject.into(),
+            message: message.into(),
+            file: Some(self.file.to_string()),
+        });
     }
 }
 

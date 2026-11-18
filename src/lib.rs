@@ -27,7 +27,7 @@ pub mod world;
 
 use std::path::Path;
 
-pub use error::ValidationError;
+pub use error::{ValidationError, Warning};
 
 /// Everything the plan-time pipeline learned about a house: the loaded
 /// files, the expanded keys, the resolved grants, feeds and sources, and
@@ -39,26 +39,22 @@ pub struct CheckResult {
     pub grants: Vec<grants::Grant>,
     pub feeds: Vec<grants::Feed>,
     pub sources: Vec<grants::Source>,
-    pub warnings: Vec<String>,
+    pub warnings: Vec<Warning>,
     pub errors: Vec<ValidationError>,
 }
 
 /// Loads a house repo and runs the full plan-time pipeline: load, expand,
 /// validate, resolve grants. Errors accumulate across all stages.
 pub fn check(root: &Path) -> CheckResult {
-    let (house, mut errors) = repo::load(root);
-    let (expanded, mut warnings, expand_errors) = expand::expand(&house);
-    errors.extend(validate::validate(&house, &expanded));
-    errors.extend(expand_errors);
-    let (grants, grant_warnings, grant_errors) = grants::resolve(&house, &expanded);
-    warnings.extend(grant_warnings);
-    errors.extend(grant_errors);
-    let (feeds, feed_errors) = grants::resolve_feeds(&house, &expanded);
-    errors.extend(feed_errors);
-    let (sources, source_warnings, source_errors) = grants::resolve_sources(&house, &expanded);
-    warnings.extend(source_warnings);
-    errors.extend(source_errors);
-    errors.extend(grants::check_aspects(&house, &expanded));
+    let mut diags = error::Diagnostics::default();
+    let house = repo::load(root, &mut diags);
+    let expanded = expand::expand(&house, &mut diags);
+    validate::validate(&house, &expanded, &mut diags);
+    let grants = grants::resolve(&house, &expanded, &mut diags);
+    let feeds = grants::resolve_feeds(&house, &expanded, &mut diags);
+    let sources = grants::resolve_sources(&house, &expanded, &mut diags);
+    grants::check_aspects(&house, &expanded, &mut diags);
+    let error::Diagnostics { errors, warnings } = diags;
     CheckResult {
         house,
         expanded,
