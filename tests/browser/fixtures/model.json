@@ -578,6 +578,41 @@
    "step": 5
   }
  ],
+ "vocabulary": {
+  "base_aspects": {
+   "burner": "on",
+   "climate": "setpoint",
+   "light": "on",
+   "lock": "locked",
+   "notifier": "message",
+   "switch": "on"
+  },
+  "priorities": [
+   "automation",
+   "agent",
+   "family",
+   "manual"
+  ],
+  "hold_words": [
+   "none",
+   "report",
+   "release"
+  ],
+  "pause_param": "enabled",
+  "occupancy_aspects": [
+   "motion",
+   "occupied"
+  ],
+  "brightness": {
+   "min": 0,
+   "max": 254
+  }
+ },
+ "limits": {
+  "history_limit_max": 5000,
+  "history_hours_max": 744,
+  "max_text_chars": 1000
+ },
  "tiles": false,
  "driven": {
   "livingroom/heat_pump/mode": "automation",

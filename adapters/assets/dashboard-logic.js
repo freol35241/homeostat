@@ -29,16 +29,17 @@
     return state[entityKey(room, entity, aspect)];
   }
 
-  // A room sensor publishes `motion` (a PIR) or `occupied` (a radar),
-  // whichever its device observes (docs/design.md#the-capability-vocabulary).
-  var OCCUPANCY_ASPECTS = ['motion', 'occupied'];
-
   /* A room sensor's reading: { aspect, value }, from whichever occupancy
-   * aspect it publishes. Both are undefined when it has published neither. */
-  function occupancyReading(state, entity) {
-    for (var i = 0; i < OCCUPANCY_ASPECTS.length; i++) {
-      var v = stateValue(state, entity.room, entity.name, OCCUPANCY_ASPECTS[i]);
-      if (v !== undefined) return { aspect: OCCUPANCY_ASPECTS[i], value: v };
+   * aspect it publishes. A sensor publishes `motion` (a PIR) or
+   * `occupied` (a radar), whichever its device observes
+   * (docs/design.md#the-capability-vocabulary). `vocabulary` is the
+   * model's, which lists them. Both are undefined when it has published
+   * neither. */
+  function occupancyReading(state, entity, vocabulary) {
+    var names = vocabulary.occupancy_aspects;
+    for (var i = 0; i < names.length; i++) {
+      var v = stateValue(state, entity.room, entity.name, names[i]);
+      if (v !== undefined) return { aspect: names[i], value: v };
     }
     return { aspect: undefined, value: undefined };
   }
@@ -201,10 +202,10 @@
   }
 
   // "room/entity" when the key is an occupancy-aspect state key, else null.
-  function occupancyEntityFromKey(key) {
+  function occupancyEntityFromKey(key, vocabulary) {
     var parts = key.split('/');
     if (parts[0] === 'home' && parts[1] === 'state' && parts.length >= 5 &&
-        OCCUPANCY_ASPECTS.indexOf(parts[4]) !== -1) {
+        vocabulary.occupancy_aspects.indexOf(parts[4]) !== -1) {
       return parts[2] + '/' + parts[3];
     }
     return null;
@@ -426,8 +427,6 @@
    * tap places one, so most holds are the family using the house. A hold is
    * only worth reporting when it displaced somebody.
    */
-  var CMD_BANDS = ['automation', 'agent', 'family', 'manual'];
-
   // Deviation rows are built here, so the time formatting they need is
   // here too. Local time with no date, because a hold lasts at most an
   // hour or two.
@@ -526,11 +525,16 @@
    * about its author and not about the house. An override of a boost
    * schedule is a takeover from the moment it starts, even if the schedule
    * would not have written again until morning.
+   *
+   * `vocabulary` is the model's, whose `priorities` lists the bands
+   * lowest first. A hold can arrive before the model does, and then
+   * nothing is driven.
    */
-  function displaces(hold, driven) {
+  function displaces(hold, driven, vocabulary) {
     var band = (driven || {})[hold.room + '/' + hold.entity + '/' + hold.aspect];
-    var below = CMD_BANDS.indexOf(band);
-    var holder = CMD_BANDS.indexOf(hold.priority);
+    if (band === undefined) return false;
+    var below = vocabulary.priorities.indexOf(band);
+    var holder = vocabulary.priorities.indexOf(hold.priority);
     return below !== -1 && holder !== -1 && holder > below;
   }
 
@@ -636,7 +640,7 @@
         if (!(configKey in config)) return;
         var live = config[configKey];
         var def = params[pname].default;
-        if (pname === PAUSE_PARAM && pauseParam(u)) {
+        if (pname === model.vocabulary.pause_param && pauseParam(u, model.vocabulary)) {
           // A pause reads as what it is, and taps to the unit, whose card
           // carries the switch.
           if (live === false) {
@@ -674,7 +678,7 @@
     var entityByName = {};
     entities.forEach(function (e) { entityByName[e.name] = e; });
     liveHolds(holds, now).forEach(function (hold) {
-      if (!displaces(hold, model.driven)) return;
+      if (!displaces(hold, model.driven, model.vocabulary)) return;
       var e = entityByName[hold.entity];
       var label = e ? e.label || titleCase(hold.entity) : titleCase(hold.entity);
       var detail = 'held by ' + hold.actor + (hold.nextChange ? ' until the next change' : ' until ' + clockOf(hold.until));
@@ -1173,10 +1177,25 @@
     return entry ? entry.value : current;
   }
 
+  /* A light's brightness as the percent its controls show, and back.
+   * `vocabulary` is the model's, which has the brightness scale. */
+  function percentOfBrightness(value, vocabulary) {
+    var range = vocabulary.brightness;
+    return Math.round((value - range.min) / (range.max - range.min) * 100);
+  }
+
+  function brightnessOfPercent(pct, vocabulary) {
+    var range = vocabulary.brightness;
+    return Math.round(range.min + pct / 100 * (range.max - range.min));
+  }
+
   /* How far a readback may be from a command and still match it. The
-   * brightness scale (0–254) is finer than the percent its control shows. */
-  function cmdTolerance(aspect) {
-    return aspect === 'brightness' ? 254 / 200 : 0;
+   * brightness scale is finer than the percent its control shows, so
+   * half a percent of it still matches. */
+  function cmdTolerance(aspect, vocabulary) {
+    if (aspect !== 'brightness') return 0;
+    var range = vocabulary.brightness;
+    return (range.max - range.min) / 200;
   }
 
   function sameValue(a, b, tolerance) {
@@ -1898,6 +1917,14 @@
     return out.sort(function (a, b) { return (b.ts || 0) - (a.ts || 0); });
   }
 
+  /* The hold words the page acts on (docs/design.md#hold-intents). A
+   * release hands an aspect back, and a report says the device already
+   * did it. The page has to name a word to send or recognise it, so these
+   * are the one place it does. The model's `vocabulary.hold_words` lists
+   * every word, and tests/js checks that these are among them. */
+  var HOLD_RELEASE = 'release';
+  var HOLD_REPORT = 'report';
+
   /* An automation's timeline (docs/design.md#unit-timeline), newest first,
    * built from what /api/unit-timeline gathers from the recorder:
    * - `param`: a write to one of its parameters.
@@ -1941,14 +1968,14 @@
           entry.by = unitNameFromHealthKey(answer.key);
           entry.reason = answer.value.reason || null;
         }
-      } else if (envelope.hold === 'release' || envelope.hold === 'report') {
-        entry.outcome = envelope.hold === 'release' ? 'released' : 'reported';
+      } else if (envelope.hold === HOLD_RELEASE || envelope.hold === HOLD_REPORT) {
+        entry.outcome = envelope.hold === HOLD_RELEASE ? 'released' : 'reported';
       } else if (cut(c.ts, raw.answers_from) || cut(c.ts, series.from)) {
         entry.outcome = 'unknown';
       } else {
         var e = byName[entity] || {};
         var waitS = commandTimeoutMs(e.capability, aspects && aspects[entity], aspect) / 1000;
-        var tol = cmdTolerance(aspect);
+        var tol = cmdTolerance(aspect, model.vocabulary);
         var before = null;
         var reached = (series.points || []).some(function (p) {
           if (p.ts <= c.ts) before = p;
@@ -1977,28 +2004,28 @@
 
   /* The family's parameters of a unit, without an automation's pause
    * switch, which its card shows in its head instead. */
-  function familyParams(unit) {
+  function familyParams(unit, vocabulary) {
     var params = (unit && unit.params) || {};
     return Object.keys(params).filter(function (p) {
-      return params[p].editable_by === 'family' && !(p === PAUSE_PARAM && pauseParam(unit));
+      return params[p].editable_by === 'family' && !(p === vocabulary.pause_param && pauseParam(unit, vocabulary));
     });
   }
 
   /* An automation's pause switch: the `enabled` parameter the core gives
-   * every automation (docs/design.md#pausing-an-automation). Its spec, or
-   * null for a unit that has none. */
-  var PAUSE_PARAM = 'enabled';
-  function pauseParam(unit) {
+   * every automation (docs/design.md#pausing-an-automation), which the
+   * model's vocabulary names as `pause_param`. Its spec, or null for a
+   * unit that has none. */
+  function pauseParam(unit, vocabulary) {
     if (!unit || unit.kind !== 'automation') return null;
-    return (unit.params || {})[PAUSE_PARAM] || null;
+    return (unit.params || {})[vocabulary.pause_param] || null;
   }
 
   /* Whether an automation is paused: its `enabled` reads false, or its
    * default is false while no value is served yet. */
-  function isPaused(unit, config) {
-    var spec = pauseParam(unit);
+  function isPaused(unit, config, vocabulary) {
+    var spec = pauseParam(unit, vocabulary);
     if (!spec) return false;
-    var key = 'home/config/' + unit.name + '/' + PAUSE_PARAM;
+    var key = 'home/config/' + unit.name + '/' + vocabulary.pause_param;
     var live = config && key in config ? config[key] : spec.default;
     return live === false;
   }
@@ -2035,7 +2062,7 @@
     function placeUnit(name) {
       var u = byName[name];
       if (!u) return;
-      familyParams(u).forEach(function (p) { placedParam[name + '.' + p] = true; });
+      familyParams(u, model.vocabulary).forEach(function (p) { placedParam[name + '.' + p] = true; });
       (u.drives || []).forEach(function (f) { placedEntity[f.entity] = true; });
       entities.forEach(function (e) { if (e.owner === name) placedEntity[e.name] = true; });
     }
@@ -2047,7 +2074,7 @@
         if (w.entity) placedEntity[w.entity] = true;
         if (w.kind === 'room') entities.forEach(function (e) { if (e.room === w.room) placedEntity[e.name] = true; });
         if (w.kind === 'unit') placeUnit(w.unit);
-        if (w.kind === 'params') familyParams(byName[w.unit]).forEach(function (p) { placedParam[w.unit + '.' + p] = true; });
+        if (w.kind === 'params') familyParams(byName[w.unit], model.vocabulary).forEach(function (p) { placedParam[w.unit + '.' + p] = true; });
         if (w.kind === 'people') persons = true;
       });
     });
@@ -2059,7 +2086,7 @@
     var unplacedParams = [];
     if (!allParams) {
       units.forEach(function (u) {
-        familyParams(u).forEach(function (p) {
+        familyParams(u, model.vocabulary).forEach(function (p) {
           if (!placedParam[u.name + '.' + p]) unplacedParams.push({ unit: u.name, param: p, spec: u.params[p] });
         });
       });
@@ -2089,8 +2116,8 @@
     };
     return {
       unit: unit,
-      params: familyParams(unit),
-      pause: pauseParam(unit),
+      params: familyParams(unit, model.vocabulary),
+      pause: pauseParam(unit, model.vocabulary),
       publishes: (model.entities || []).filter(function (e) { return e.owner === unitName; }),
       drives: fields(unit.drives),
       sources: fields(unit.sources)
@@ -2119,7 +2146,6 @@
   }
 
   return {
-    OCCUPANCY_ASPECTS: OCCUPANCY_ASPECTS,
     viewsOf: viewsOf,
     placement: placement,
     unitCardPlan: unitCardPlan,
@@ -2128,6 +2154,10 @@
     mergeUnitEvents: mergeUnitEvents,
     unitTimeline: unitTimeline,
     cmdTolerance: cmdTolerance,
+    percentOfBrightness: percentOfBrightness,
+    brightnessOfPercent: brightnessOfPercent,
+    HOLD_RELEASE: HOLD_RELEASE,
+    HOLD_REPORT: HOLD_REPORT,
     isPaused: isPaused,
     viewFor: viewFor,
     historyShape: historyShape,

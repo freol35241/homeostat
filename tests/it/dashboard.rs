@@ -134,7 +134,8 @@ fn ws_read_message(stream: &mut TcpStream) -> Value {
 /// has a field the fixture lacks.
 ///
 /// It compares names and not values, because the fixture house is a
-/// different house and only the shape has to match.
+/// different house and only the shape has to match. `vocabulary` and
+/// `limits` are the same in every house, so their values must match too.
 #[tokio::test(flavor = "multi_thread")]
 async fn browser_fixtures_still_look_like_the_real_model() {
     let port = common::free_port();
@@ -167,6 +168,12 @@ async fn browser_fixtures_still_look_like_the_real_model() {
     missing(&model, &fixture, "model");
     missing(&model["entities"][0], &fixture["entities"][0], "an entity");
     missing(&model["units"][0], &fixture["units"][0], "a unit");
+    for block in ["vocabulary", "limits"] {
+        assert_eq!(
+            model[block], fixture[block],
+            "/api/model's \"{block}\" differs from tests/browser/fixtures/model.json's"
+        );
+    }
 
     sup.shutdown();
 }

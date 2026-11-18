@@ -113,7 +113,7 @@ from aioesphomeapi import (
     SwitchState,
 )
 from homeostat import causes as causes_mod
-from homeostat import house, keys
+from homeostat import house, keys, vocabulary
 from zeroconf import ServiceStateChange
 from zeroconf.asyncio import AsyncServiceBrowser, AsyncServiceInfo, AsyncZeroconf
 
@@ -122,10 +122,11 @@ MDNS_SERVICE = "_esphomelib._tcp.local."
 DEFAULT_PORT = 6053
 OCCUPANCY_DEVICE_CLASSES = {"motion", "occupancy", "presence"}
 # ESPHome's native brightness is a 0.0-1.0 float. z2m's `brightness` is
-# the raw Zigbee 0-254 integer (see zigbee2mqtt.py, and the dashboard's
-# `b / 254`), so brightness is rescaled both ways to match it. color_temp
-# is mireds on both sides and is only rounded to an int.
-BRIGHTNESS_SCALE = 254
+# the raw Zigbee 0-254 integer (see zigbee2mqtt.py), the scale the
+# vocabulary names (vocabulary.BRIGHTNESS_RANGE), so brightness is rescaled
+# both ways to match it. color_temp is mireds on both sides and is only
+# rounded to an int.
+BRIGHTNESS_SCALE = vocabulary.BRIGHTNESS_RANGE[1]
 RUNTIME_ASPECT = "runtime_s"
 
 

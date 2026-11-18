@@ -151,7 +151,7 @@ pub const VOCABULARY: &[Capability] = &[
             aspects: &["on", "brightness", "color_temp"],
             note: "Seconds the light takes to reach the value, a number ≥ 0.",
         }],
-        note: "`brightness` 0–254 (the Zigbee2MQTT scale the dashboard assumes), `color_temp` in mired.",
+        note: "`brightness` 0–254 (the Zigbee2MQTT scale; the dashboard and esphome read it as `BRIGHTNESS_RANGE`), `color_temp` in mired.",
     },
     Capability {
         name: "lock",
@@ -247,6 +247,11 @@ pub const COMMON_ASPECTS: &[(&str, &str)] = &[
     ("available", "bool, published on transition by the owning adapter when the protocol has a real loss signal; `false` is notable (docs/design.md#availability)."),
     ("{aspect}_valid", "bool beside a reading the device itself may stop trusting; the value stands, the flag says stale."),
 ];
+
+/// The lowest and highest `brightness` of a `light`, the Zigbee2MQTT
+/// scale. An adapter whose device counts otherwise rescales to it, and
+/// the dashboard shows it as a percent. The light row's note states it.
+pub const BRIGHTNESS_RANGE: (u32, u32) = (0, 254);
 
 /// The `schema` version every house file must declare.
 pub const SUPPORTED_SCHEMA: u32 = 1;

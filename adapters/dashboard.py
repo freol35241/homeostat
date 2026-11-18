@@ -193,6 +193,8 @@ MAX_TEXT_CHARS = 1000
 # anything on the LAN make the dashboard buffer far more than it needs.
 MAX_BODY_BYTES = 64 * 1024
 HISTORY_LIMIT_MAX = 5000
+# The longest window, in hours, a read of the recorder may ask for.
+HISTORY_HOURS_MAX = 24 * 31
 # How far before a drawn window to read source-participation events. A
 # source excluded before the window opened has no transition inside it
 # and would read as used for the whole span. A week covers a sensor that
@@ -292,6 +294,26 @@ def build_model(model: house.HouseModel, granted: set[str]) -> dict:
         # controlled, so the page applies it wherever that control is
         # drawn: room card, view or overlay.
         "controls": model.controls,
+        # The vocabulary's words and scales the page acts on, from
+        # homeostat.vocabulary and homeostat.keys, so the page does not
+        # restate them.
+        "vocabulary": {
+            "base_aspects": vocabulary.BASE_ASPECTS,
+            "priorities": list(vocabulary.CMD_PRIORITIES),
+            "hold_words": list(keys.HOLD_WORDS),
+            "pause_param": vocabulary.ENABLED_PARAM,
+            "occupancy_aspects": list(vocabulary.OCCUPANCY_ASPECTS),
+            "brightness": {
+                "min": vocabulary.BRIGHTNESS_RANGE[0],
+                "max": vocabulary.BRIGHTNESS_RANGE[1],
+            },
+        },
+        # This unit's own caps on what the page may ask for.
+        "limits": {
+            "history_limit_max": HISTORY_LIMIT_MAX,
+            "history_hours_max": HISTORY_HOURS_MAX,
+            "max_text_chars": MAX_TEXT_CHARS,
+        },
     }
 
 
@@ -1001,9 +1023,10 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         is marked commandable when this unit's own manifest grants its
         capability. Each unit carries the fields it drives (from the grant
         table) and reads (from its subscriptions), for the unit card.
-        `about` has the versions for the footer, `driven` the lowest band
-        each aspect is commanded at, and `tiles` whether a tile extract is
-        configured.
+        `vocabulary` has the core's words and scales the page acts on, and
+        `limits` this unit's caps on what the page asks for. `about` has
+        the versions for the footer, `driven` the lowest band each aspect
+        is commanded at, and `tiles` whether a tile extract is configured.
         """
         await model.refresh()
         about = await asyncio.get_running_loop().run_in_executor(None, hub.about)
@@ -1220,7 +1243,7 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
             return json_error("aspect must be a single key segment")
         now = datetime.datetime.now(datetime.timezone.utc)
         try:
-            hours = min(float(request.query.get("hours", "24")), 24 * 31)
+            hours = min(float(request.query.get("hours", "24")), HISTORY_HOURS_MAX)
             limit = max(1, min(int(request.query.get("limit", "500")), HISTORY_LIMIT_MAX))
             bucket = int(request.query.get("bucket", "0"))
             start = now - datetime.timedelta(hours=hours)
@@ -1274,7 +1297,7 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
             return json_error("aspect must be a single key segment")
         now = datetime.datetime.now(datetime.timezone.utc)
         try:
-            hours = min(float(request.query.get("hours", "24")), 24 * 31)
+            hours = min(float(request.query.get("hours", "24")), HISTORY_HOURS_MAX)
             limit = max(1, min(int(request.query.get("limit", "60")), FORECAST_ISSUE_MAX))
             start = now - datetime.timedelta(hours=hours)
         except (ValueError, OverflowError):
@@ -1323,7 +1346,7 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         if not owner:
             return web.json_response({"events": []})
         try:
-            hours = min(float(request.query.get("hours", "24")), 24 * 31)
+            hours = min(float(request.query.get("hours", "24")), HISTORY_HOURS_MAX)
         except (ValueError, OverflowError):
             return json_error("hours must be a number")
         now = datetime.datetime.now(datetime.timezone.utc)
@@ -1375,7 +1398,7 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         if unit not in model.units:
             return json_error(f"unknown unit {unit}", status=404)
         try:
-            hours = min(float(request.query.get("hours", "24")), 24 * 31)
+            hours = min(float(request.query.get("hours", "24")), HISTORY_HOURS_MAX)
         except (ValueError, OverflowError):
             return json_error("hours must be a number")
         if not hours > 0:

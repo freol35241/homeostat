@@ -158,18 +158,20 @@ export function renderUnitDetailBody() {
   var hkey = 'home/health/' + unit.name;
   var h = store.health[hkey] || {};
   var status = h.status || 'stopped';
+  var vocabulary = store.model.vocabulary;
+  var pause = logic.pauseParam(unit, vocabulary);
 
   var fieldRows = html`<div class="aspect-row"><span class="muted">status:</span> ${statusChipHtml(status)}</div>
     <div class="aspect-row"><span class="muted">pid:</span> ${fmtOrDash(h.pid)}</div>
     <div class="aspect-row"><span class="muted">restarts:</span> ${fmtOrDash(h.restarts)}</div>
     <div class="aspect-row"><span class="muted">backoff_ms:</span> ${fmtOrDash(h.backoff_ms)}</div>
     <div class="aspect-row"><span class="muted">last_exit_code:</span> ${fmtOrDash(h.last_exit_code)}</div>
-    ${logic.pauseParam(unit) ? html`<div class="aspect-row"><span class="muted">enabled:</span> ${renderPauseSwitch(unit)}</div>` : ''}`;
+    ${pause ? html`<div class="aspect-row"><span class="muted">${vocabulary.pause_param}:</span> ${renderPauseSwitch(unit)}</div>` : ''}`;
 
   var params = unit.params || {};
   // An automation's `enabled` is its pause switch, shown under Health.
   var paramRows = Object.keys(params).filter(function (pname) {
-    return !(pname === 'enabled' && logic.pauseParam(unit));
+    return !(pname === vocabulary.pause_param && pause);
   }).map(function (pname) {
     return renderParamRow(unit.name, pname, params[pname]);
   });

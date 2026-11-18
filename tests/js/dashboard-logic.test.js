@@ -10,11 +10,15 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 
 const logic = require(path.join(__dirname, '../../adapters/assets/dashboard-logic.js'));
+// The model's `vocabulary` block. tests/it/dashboard.rs checks that the
+// browser fixture's is the one /api/model serves, so it is read from there.
+const VOCABULARY = require(path.join(__dirname, '../browser/fixtures/model.json')).vocabulary;
 
 function model(overrides) {
   return Object.assign(
     {
       zones: {},
+      vocabulary: VOCABULARY,
       units: [
         {
           name: 'evening_lights',
@@ -138,19 +142,19 @@ function pausable(params) {
 }
 
 test('only an automation has a pause switch', () => {
-  assert.deepEqual(logic.pauseParam(pausable()), { type: 'bool', default: true, editable_by: 'family' });
+  assert.deepEqual(logic.pauseParam(pausable(), VOCABULARY), { type: 'bool', default: true, editable_by: 'family' });
   const adapter = Object.assign(pausable(), { kind: 'adapter' });
-  assert.equal(logic.pauseParam(adapter), null, 'an adapter enabled param is an ordinary param');
-  assert.equal(logic.pauseParam({ name: 'x', kind: 'automation', params: {} }), null);
+  assert.equal(logic.pauseParam(adapter, VOCABULARY), null, 'an adapter enabled param is an ordinary param');
+  assert.equal(logic.pauseParam({ name: 'x', kind: 'automation', params: {} }, VOCABULARY), null);
 });
 
 test('a paused automation reads as paused, and only on false', () => {
   const unit = pausable();
-  assert.equal(logic.isPaused(unit, { 'home/config/porch/enabled': false }), true);
-  assert.equal(logic.isPaused(unit, { 'home/config/porch/enabled': true }), false);
-  assert.equal(logic.isPaused(unit, {}), false, 'no served value reads as the default');
+  assert.equal(logic.isPaused(unit, { 'home/config/porch/enabled': false }, VOCABULARY), true);
+  assert.equal(logic.isPaused(unit, { 'home/config/porch/enabled': true }, VOCABULARY), false);
+  assert.equal(logic.isPaused(unit, {}, VOCABULARY), false, 'no served value reads as the default');
   const offByDefault = pausable({ enabled: { type: 'bool', default: false, editable_by: 'owner' } });
-  assert.equal(logic.isPaused(offByDefault, {}), true, 'a declared default of false is a pause');
+  assert.equal(logic.isPaused(offByDefault, {}, VOCABULARY), true, 'a declared default of false is a pause');
 });
 
 test('the pause switch is in the card head, not among its setpoints', () => {
@@ -220,6 +224,13 @@ test('a hold that displaces nobody says nothing here', () => {
   assert.deepEqual(
     logic.computeDeviations(ownHold, {}, {}, {}, {}, holdDoc({ priority: 'automation' }), NOW), [],
     "an automation's own hold is the house working");
+});
+
+test('a hold that arrives before the model is not a deviation', () => {
+  // The WebSocket snapshot can beat /api/model, whose default stand-in
+  // has no vocabulary and drives nothing.
+  const empty = { zones: {}, entities: [], units: [] };
+  assert.deepEqual(logic.computeDeviations(empty, {}, {}, {}, {}, holdDoc(), NOW), []);
 });
 
 test('an expired hold is not a hold', () => {
@@ -360,21 +371,21 @@ test('unrecognized messages apply nothing', () => {
 // ---- occupancy and people helpers ----
 
 test('occupancy keys parse for both aspects, off-schema keys do not', () => {
-  assert.equal(logic.occupancyEntityFromKey('home/state/hall/sensor1/motion'), 'hall/sensor1');
-  assert.equal(logic.occupancyEntityFromKey('home/state/hall/radar/occupied'), 'hall/radar');
-  assert.equal(logic.occupancyEntityFromKey('home/state/person/phone/sighted'), null);
-  assert.equal(logic.occupancyEntityFromKey('home/state/hall/sensor1/temperature'), null);
-  assert.equal(logic.occupancyEntityFromKey('home/cmd/hall/sensor1/motion'), null);
-  assert.equal(logic.occupancyEntityFromKey('home/state/short'), null);
+  assert.equal(logic.occupancyEntityFromKey('home/state/hall/sensor1/motion', VOCABULARY), 'hall/sensor1');
+  assert.equal(logic.occupancyEntityFromKey('home/state/hall/radar/occupied', VOCABULARY), 'hall/radar');
+  assert.equal(logic.occupancyEntityFromKey('home/state/person/phone/sighted', VOCABULARY), null);
+  assert.equal(logic.occupancyEntityFromKey('home/state/hall/sensor1/temperature', VOCABULARY), null);
+  assert.equal(logic.occupancyEntityFromKey('home/cmd/hall/sensor1/motion', VOCABULARY), null);
+  assert.equal(logic.occupancyEntityFromKey('home/state/short', VOCABULARY), null);
 });
 
 test('occupancyReading says which aspect the sensor publishes', () => {
   const entity = { room: 'hall', name: 'sensor1' };
-  assert.deepEqual(logic.occupancyReading({ 'home/state/hall/sensor1/motion': true }, entity),
+  assert.deepEqual(logic.occupancyReading({ 'home/state/hall/sensor1/motion': true }, entity, VOCABULARY),
     { aspect: 'motion', value: true });
-  assert.deepEqual(logic.occupancyReading({ 'home/state/hall/sensor1/occupied': false }, entity),
+  assert.deepEqual(logic.occupancyReading({ 'home/state/hall/sensor1/occupied': false }, entity, VOCABULARY),
     { aspect: 'occupied', value: false });
-  assert.deepEqual(logic.occupancyReading({}, entity), { aspect: undefined, value: undefined });
+  assert.deepEqual(logic.occupancyReading({}, entity, VOCABULARY), { aspect: undefined, value: undefined });
 });
 
 test('personStatus reads presence and the last fix, and nothing else', () => {
@@ -1027,10 +1038,22 @@ test('on, off, on: the first reply does not claim the third request', () => {
   assert.equal(done.outcome, 'rejected');
 });
 
+test('brightness converts to the percent its controls show and back', () => {
+  assert.deepEqual([0, 127, 254].map((b) => logic.percentOfBrightness(b, VOCABULARY)), [0, 50, 100]);
+  assert.deepEqual([0, 50, 100].map((p) => logic.brightnessOfPercent(p, VOCABULARY)), [0, 127, 254]);
+  assert.equal(logic.cmdTolerance('brightness', VOCABULARY), 1.27, 'half a percent');
+  assert.equal(logic.cmdTolerance('on', VOCABULARY), 0);
+});
+
+test('the hold words the page names are the vocabulary\'s', () => {
+  assert.ok(VOCABULARY.hold_words.includes(logic.HOLD_RELEASE));
+  assert.ok(VOCABULARY.hold_words.includes(logic.HOLD_REPORT));
+});
+
 test('a brightness readback one step off the scale is the asked value', () => {
   // 127 is 50 %; a bulb reporting 128 has done what it was asked, and
   // "settled on 50 % (asked 50 %)" would be nonsense.
-  const pending = logic.trackCommand({}, cmd({ aspect: 'brightness', value: 127, before: 40, tolerance: 254 / 200 }), 1000);
+  const pending = logic.trackCommand({}, cmd({ aspect: 'brightness', value: 127, before: 40, tolerance: logic.cmdTolerance('brightness', VOCABULARY) }), 1000);
   assert.equal(logic.resolveFromState(pending, 'home/state/livingroom/lamp/brightness', 128).outcome, 'confirmed');
 });
 
@@ -1301,6 +1324,7 @@ test('timeline stats: time on for a boolean, changes and the latest value for an
 function viewsModel(views) {
   return {
     zones: { downstairs: ['kitchen', 'livingroom'] },
+    vocabulary: VOCABULARY,
     entities: [
       { name: 'lamp', label: 'Lamp', capability: 'light', room: 'livingroom', owner: 'zigbee' },
       { name: 'thermo', label: 'Thermo', capability: 'sensor', room: 'kitchen', owner: 'zigbee' },
@@ -1347,6 +1371,7 @@ test('People places the trackers it draws, and a listed tracker stays under Not 
     ],
     units: [],
     views: [{ name: 'v', widgets: [{ kind: 'people' }] }],
+    vocabulary: VOCABULARY,
   };
   assert.deepEqual(logic.placement(model).entities.map((e) => e.name), ['anna_phone']);
 });
@@ -2028,7 +2053,7 @@ function timelineRaw(overrides) {
     events: [{ ts: 400, key: 'home/health/evening_lights/event', value: { kind: 'paused' } }],
   }, overrides || {});
 }
-const timelineModel = { entities: [{ name: 'lamp', room: 'livingroom', capability: 'light' }] };
+const timelineModel = { entities: [{ name: 'lamp', room: 'livingroom', capability: 'light' }], vocabulary: VOCABULARY };
 
 test('the timeline lists writes, commands and events newest first', () => {
   const t = logic.unitTimeline(timelineRaw(), timelineModel, {}, 'evening_lights');

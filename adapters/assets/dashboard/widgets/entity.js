@@ -19,7 +19,7 @@ function widgetForLight(entity) {
   if (entity.features && entity.features.indexOf('brightness') !== -1) {
     var b = stateValue(entity.room, entity.name, 'brightness');
     var bkey = entity.room + '/' + entity.name + '/brightness';
-    var pct = typeof b === 'number' ? Math.round((b / 254) * 100) : 0;
+    var pct = typeof b === 'number' ? logic.percentOfBrightness(b, store.model.vocabulary) : 0;
     if (localState.sliderDrag[bkey] !== undefined) pct = localState.sliderDrag[bkey];
     var nudgeAttrs = html` data-room="${entity.room}" data-entity="${entity.name}"${inert || typeof b !== 'number' ? html` disabled` : ''}`;
     // A house may want this percent in steps of five. The light's own

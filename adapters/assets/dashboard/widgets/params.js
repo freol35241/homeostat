@@ -8,7 +8,7 @@ import { houseControls, localState, store, unitLabel } from '../store.js';
 // A unit's family-editable parameters as one card.
 export function widgetParams(unit) {
   var params = unit.params || {};
-  var rows = logic.familyParams(unit)
+  var rows = logic.familyParams(unit, store.model.vocabulary)
     .map(function (p) { return renderParamRow(unit.name, p, params[p], true); });
   return html`<div class="card"><div class="card-label">${unit.label}</div>
     ${rows.length ? rows : html`<div class="empty-hint">No family-editable parameters.</div>`}</div>`;
@@ -83,15 +83,16 @@ export function familyEditable(p) { return p.editable_by === 'family'; }
 // An owner-tier switch is shown but not offered. Empty for a unit with no
 // switch.
 export function renderPauseSwitch(unit) {
-  var spec = logic.pauseParam(unit);
+  var vocabulary = store.model.vocabulary;
+  var spec = logic.pauseParam(unit, vocabulary);
   if (!spec) return '';
-  var on = !logic.isPaused(unit, store.config);
+  var on = !logic.isPaused(unit, store.config, vocabulary);
   var title = on ? 'Running. Switch off to pause it.' : 'Paused: its commands are not sent.';
   var pill = on ? '' : html`<span class="paused-pill">paused</span>`;
   if (!familyEditable(spec)) {
     return html`<span class="pause-switch">${pill}<span class="toggle disabled ${on ? 'on' : ''}" title="${title} Only the owner can change it."><span class="knob"></span></span></span>`;
   }
-  return html`<span class="pause-switch">${pill}<span class="toggle ${on ? 'on' : ''}" role="switch" aria-checked="${on}" aria-label="${unit.label} enabled" title="${title}" data-action="param-toggle" data-unit="${unit.name}" data-param="enabled" data-value="${!on}"><span class="knob"></span></span></span>`;
+  return html`<span class="pause-switch">${pill}<span class="toggle ${on ? 'on' : ''}" role="switch" aria-checked="${on}" aria-label="${unit.label} enabled" title="${title}" data-action="param-toggle" data-unit="${unit.name}" data-param="${vocabulary.pause_param}" data-value="${!on}"><span class="knob"></span></span></span>`;
 }
 
 // Shared by the Setpoints view and the unit-detail overlay. A param the
