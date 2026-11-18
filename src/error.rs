@@ -43,8 +43,7 @@ impl fmt::Display for ValidationError {
     }
 }
 
-/// A finding that refuses nothing: a house with warnings still plans and
-/// applies. It renders as `<subject>: <message> (<file>)`, the shape of a
+/// A finding that does not stop a plan or an apply. It renders as `<subject>: <message> (<file>)`, the shape of a
 /// [`ValidationError`] without the code.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Warning {
@@ -88,11 +87,6 @@ impl Diagnostics {
         });
     }
 
-    /// Reports an error built elsewhere.
-    pub fn push(&mut self, error: ValidationError) {
-        self.errors.push(error);
-    }
-
     /// A view of this sink that attributes what it reports to `file`, a
     /// house-relative path.
     pub fn in_file<'a>(&'a mut self, file: &'a str) -> Scoped<'a> {
@@ -111,10 +105,17 @@ impl Scoped<'_> {
     pub fn error(&mut self, code: Code, subject: impl Into<String>, message: impl Into<String>) {
         let file = Some(self.file.to_string());
         self.diags
+            .errors
             .push(ValidationError::new(code, subject, message, file));
     }
 
-    /// Reports a warning about this file.
+    /// How many errors the whole sink holds, for a caller that checks
+    /// whether its own checks added any.
+    pub fn error_count(&self) -> usize {
+        self.diags.errors.len()
+    }
+
+    /// Reports a warning in this file.
     pub fn warn(&mut self, subject: impl Into<String>, message: impl Into<String>) {
         self.diags.warnings.push(Warning {
             subject: subject.into(),

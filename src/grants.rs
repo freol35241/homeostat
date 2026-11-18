@@ -216,7 +216,7 @@ pub fn resolve_feeds(
                     input: input.clone(),
                     source: contributor,
                 }),
-                Err(error) => diags.push(error),
+                Err(error) => diags.errors.push(error),
             }
         }
     }
@@ -299,7 +299,7 @@ pub fn resolve_sources(
             ) {
                 Ok(resolved) => resolved,
                 Err(error) => {
-                    diags.push(error);
+                    diags.errors.push(error);
                     continue;
                 }
             };
@@ -521,8 +521,8 @@ fn build_grants(house: &House, expanded: &[ExpandedKey], diags: &mut Diagnostics
             diags.warn(
                 &subject,
                 format!(
-                    "publish declares priority \"manual\" on {} \"{}\"; the manual band is the family's and is exempt from exclusive-write checks",
-                    unit.manifest.unit.kind, key.unit
+                    "publish declares priority \"manual\" on an {}; the manual band is the family's and is exempt from exclusive-write checks",
+                    unit.manifest.unit.kind
                 ),
             );
         }
@@ -616,7 +616,7 @@ fn warn_same_rank_holders(grants: &[Grant], diags: &mut Diagnostics) {
             diags.warn(
                 entity,
                 format!(
-                    "{} hold it at {priority} on an aspect without a rest value: the newest hold wins",
+                    "{} both hold at {priority} on an aspect without a rest value, so the newest hold wins",
                     names.join(" and ")
                 ),
             );
@@ -1800,8 +1800,8 @@ mod tests {
         assert!(
             warnings.iter().any(|w| {
                 w.to_string().starts_with(
-                "night_mode.lock: publish declares priority \"manual\" on automation \"night_mode\""
-            )
+                    "night_mode.lock: publish declares priority \"manual\" on an automation",
+                )
             }),
             "{warnings:?}"
         );
@@ -2039,7 +2039,7 @@ mod tests {
         assert!(
             warnings.iter().any(|w| w
                 .to_string()
-                .starts_with("stove: flue_guard and heating hold it")),
+                .starts_with("stove: flue_guard and heating both hold")),
             "{warnings:?}"
         );
     }
@@ -2079,7 +2079,7 @@ mod tests {
         assert!(
             warnings.iter().any(|w| w
                 .to_string()
-                .starts_with("heat_pump: curve and setback hold it at automation")),
+                .starts_with("heat_pump: curve and setback both hold at automation")),
             "{warnings:?}"
         );
     }

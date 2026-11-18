@@ -750,16 +750,16 @@ fn check_params(house: &House, diags: &mut Diagnostics) {
         let Some(params) = &unit.manifest.params else {
             continue;
         };
+        let mut diags = diags.in_file(&unit.path);
         for (name, spec) in params {
             let subject = format!("{}.{name}", unit.manifest.unit.name);
-            check_param(&subject, spec, &unit.path, diags);
+            check_param(&subject, spec, &mut diags);
         }
     }
 }
 
-fn check_param(subject: &str, spec: &ParamSpec, path: &str, diags: &mut Diagnostics) {
-    let before = diags.errors.len();
-    let mut file = diags.in_file(path);
+fn check_param(subject: &str, spec: &ParamSpec, diags: &mut Scoped<'_>) {
+    let before = diags.error_count();
     let t = spec.param_type;
 
     let default_ok = match (t, &spec.default) {
@@ -771,7 +771,7 @@ fn check_param(subject: &str, spec: &ParamSpec, path: &str, diags: &mut Diagnost
         _ => false,
     };
     if !default_ok {
-        file.error(
+        diags.error(
             Code::InvalidDefault,
             subject,
             format!(
@@ -790,7 +790,7 @@ fn check_param(subject: &str, spec: &ParamSpec, path: &str, diags: &mut Diagnost
             "after" | "before" => t == ParamType::Time,
             "enum" => t == ParamType::String,
             _ => {
-                file.error(
+                diags.error(
                     Code::MalformedConstraint,
                     subject,
                     format!("unknown constraint \"{key}\""),
@@ -799,7 +799,7 @@ fn check_param(subject: &str, spec: &ParamSpec, path: &str, diags: &mut Diagnost
             }
         };
         if !valid_for_type {
-            file.error(
+            diags.error(
                 Code::MalformedConstraint,
                 subject,
                 format!("constraint \"{key}\" is not valid for type \"{t}\""),
@@ -824,7 +824,7 @@ fn check_param(subject: &str, spec: &ParamSpec, path: &str, diags: &mut Diagnost
                 "after" | "before" => "a time (HH:MM)",
                 _ => "a non-empty array of strings",
             };
-            file.error(
+            diags.error(
                 Code::MalformedConstraint,
                 subject,
                 format!("constraint \"{key}\" must be {expected}"),
@@ -837,7 +837,7 @@ fn check_param(subject: &str, spec: &ParamSpec, path: &str, diags: &mut Diagnost
         constraint.get("max").and_then(as_number),
     ) {
         if min > max {
-            file.error(
+            diags.error(
                 Code::MalformedConstraint,
                 subject,
                 format!(
@@ -853,10 +853,10 @@ fn check_param(subject: &str, spec: &ParamSpec, path: &str, diags: &mut Diagnost
     // path is enforced here, so an out-of-constraint default does not plan and
     // cannot reach a running unit. Skipped when this param already has errors,
     // since judging a default against a malformed constraint only adds noise.
-    // `errors.len() == before` also implies the default matched its type.
-    if diags.errors.len() == before {
+    // No new errors also implies the default matched its type.
+    if diags.error_count() == before {
         if let Err(message) = crate::config::default_within_constraint(spec) {
-            diags.in_file(path).error(
+            diags.error(
                 Code::InvalidDefault,
                 subject,
                 format!("default {}: {message}", display_value(&spec.default)),

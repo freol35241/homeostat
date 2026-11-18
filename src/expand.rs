@@ -159,7 +159,7 @@ pub fn expand(house: &House, diags: &mut Diagnostics) -> Vec<ExpandedKey> {
                     diags.warn(
                         subject,
                         format!(
-                            "{} a key that matches nothing: zone \"{zone}\" has no rooms",
+                            "{} a key that matches nothing, because zone \"{zone}\" has no rooms",
                             direction.verb()
                         ),
                     );
@@ -190,7 +190,7 @@ pub fn expand(house: &House, diags: &mut Diagnostics) -> Vec<ExpandedKey> {
                         diags.warn(
                             subject,
                             format!(
-                                "{} a key that matches nothing: unit binds no entities",
+                                "{} a key that matches nothing, because the unit binds no entities",
                                 direction.verb()
                             ),
                         );
@@ -376,7 +376,7 @@ mod tests {
         let warnings: Vec<String> = diags.warnings.iter().map(ToString::to_string).collect();
         assert_eq!(
             warnings,
-            vec!["latches.commands: subscribes a key that matches nothing: unit binds no entities (units/latches.toml)"]
+            vec!["latches.commands: subscribes a key that matches nothing, because the unit binds no entities (units/latches.toml)"]
         );
     }
 }
