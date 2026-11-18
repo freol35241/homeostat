@@ -151,7 +151,7 @@ pub const VOCABULARY: &[Capability] = &[
             aspects: &["on", "brightness", "color_temp"],
             note: "Seconds the light takes to reach the value, a number ≥ 0.",
         }],
-        note: "`brightness` 0–254 (the Zigbee2MQTT scale the dashboard assumes), `color_temp` in mired.",
+        note: "`brightness` 0–254 (the Zigbee2MQTT scale; the dashboard and esphome read it as `BRIGHTNESS_RANGE`), `color_temp` in mired.",
     },
     Capability {
         name: "lock",

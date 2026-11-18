@@ -427,7 +427,6 @@
    * tap places one, so most holds are the family using the house. A hold is
    * only worth reporting when it displaced somebody.
    */
-
   // Deviation rows are built here, so the time formatting they need is
   // here too. Local time with no date, because a hold lasts at most an
   // hour or two.
@@ -1194,8 +1193,9 @@
    * brightness scale is finer than the percent its control shows, so
    * half a percent of it still matches. */
   function cmdTolerance(aspect, vocabulary) {
+    if (aspect !== 'brightness') return 0;
     var range = vocabulary.brightness;
-    return aspect === 'brightness' ? (range.max - range.min) / 200 : 0;
+    return (range.max - range.min) / 200;
   }
 
   function sameValue(a, b, tolerance) {

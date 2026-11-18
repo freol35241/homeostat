@@ -10,6 +10,7 @@ import { localState, scheduleRender, store } from './store.js';
 export function loadModel() {
   getJson('/api/model').then(function (m) {
     store.model = m || store.model;
+    stampEarlySeen();
     scheduleRender();
   }).catch(function () { /* keep defaults; page still renders */ });
 }
@@ -72,12 +73,22 @@ function handleWsMessage(msg) {
 
 // For a key like home/state/{room}/{entity}/motion, track lastSeen per
 // entity (both occupancy aspect names; see dashboard-logic.js). The
-// model's vocabulary names them, and a delta that arrives before the
-// model has no sensor drawn for it yet.
+// model's vocabulary names them, so a delta that arrives before the model
+// is kept and stamped when it loads.
+var earlySeen = {};
 function trackLastSeen(key) {
-  if (!store.model.vocabulary) return;
+  if (!store.model.vocabulary) { earlySeen[key] = Date.now(); return; }
   var pe = logic.occupancyEntityFromKey(key, store.model.vocabulary);
   if (pe) store.lastSeen[pe] = Date.now();
+}
+
+function stampEarlySeen() {
+  if (!store.model.vocabulary) return;
+  Object.keys(earlySeen).forEach(function (key) {
+    var pe = logic.occupancyEntityFromKey(key, store.model.vocabulary);
+    if (pe) store.lastSeen[pe] = Math.max(store.lastSeen[pe] || 0, earlySeen[key]);
+  });
+  earlySeen = {};
 }
 
 function appendSparklinePoint(key, value) {
