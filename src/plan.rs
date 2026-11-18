@@ -13,7 +13,7 @@ use serde_json::Value;
 use crate::config::{default_value, keeps_live};
 use crate::content;
 use crate::expand::ExpandedKey;
-use crate::grants::{free_nodes, grant_edges, Grant};
+use crate::grants::{free_nodes, grant_edges, Contributor, Grant};
 use crate::manifest::{implicit_enabled, ParamSpec, UnitKind, ENABLED_PARAM};
 use crate::repo::LoadedUnit;
 use crate::validate::display_value;
@@ -653,15 +653,7 @@ pub fn render(check: &CheckResult, diff: &Diff, repo_label: &str, world: &World)
     if !check.feeds.is_empty() {
         out.push_str("\nFeeds:\n\n");
         for feed in &check.feeds {
-            out.push_str(&format!(
-                "  {}.{}  <-  {}.{}  ({}, owner={})\n",
-                feed.entity,
-                feed.input,
-                feed.source_entity,
-                feed.source_aspect,
-                feed.key,
-                feed.source_owner
-            ));
+            render_contributor(&feed.entity, &feed.input, &feed.source, &mut out);
         }
     }
 
@@ -670,15 +662,7 @@ pub fn render(check: &CheckResult, diff: &Diff, repo_label: &str, world: &World)
     if !check.sources.is_empty() {
         out.push_str("\nSources:\n\n");
         for source in &check.sources {
-            out.push_str(&format!(
-                "  {}.{}  <-  {}.{}  ({}, owner={})\n",
-                source.entity,
-                source.name,
-                source.source_entity,
-                source.source_aspect,
-                source.key,
-                source.source_owner
-            ));
+            render_contributor(&source.entity, &source.name, &source.contributor, &mut out);
             if let Some(note) = &source.note {
                 out.push_str(&format!("      {note}\n"));
             }
@@ -748,6 +732,15 @@ fn summarize(diff: &Diff) -> String {
         ));
     }
     parts.join(", ")
+}
+
+/// One feed or declared source row: the naming entity and its name for the
+/// contributor, then the contributor's aspect, key and owner.
+fn render_contributor(entity: &str, name: &str, contributor: &Contributor, out: &mut String) {
+    out.push_str(&format!(
+        "  {entity}.{name}  <-  {}.{}  ({}, owner={})\n",
+        contributor.entity, contributor.aspect, contributor.key, contributor.owner
+    ));
 }
 
 fn render_grant(grant: &Grant, mark: char, out: &mut String) {
