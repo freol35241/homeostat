@@ -582,28 +582,33 @@ fn check_actions(
             // A command goes to an aspect in the capability's commands
             // column: the base aspect, or a feature the entity declares. A
             // toggle needs a bool command, and a set sends a value of the
-            // command's type.
-            let Some(vocabulary) = vocabulary.filter(|c| c.base.is_some()) else {
+            // command's type. A declared feature the vocabulary does not
+            // name is an adapter's own knob, which its descriptor types and
+            // bounds, so plan takes any scalar for it, as the dashboard
+            // does. A feature the vocabulary names as a reading takes none.
+            let Some(vocabulary) = vocabulary.filter(|c| !c.commands.is_empty()) else {
                 errors.push(err(
                     Code::ActionAspect,
                     format!("capability \"{target_capability}\" takes no commands"),
                 ));
                 continue;
             };
-            let command = |aspect: &str| {
-                let declared = vocabulary.base == Some(aspect)
-                    || target.file.entity.features.iter().any(|f| f == aspect);
-                if !declared {
+            let declared = |aspect: &str| {
+                vocabulary.base == Some(aspect)
+                    || target.file.entity.features.iter().any(|f| f == aspect)
+            };
+            let command = |aspect: &str| -> Option<Option<ValueType>> {
+                if !declared(aspect) {
                     return None;
                 }
-                vocabulary
-                    .commands
-                    .iter()
-                    .find(|(a, _)| *a == aspect)
-                    .map(|&(_, ty)| ty)
+                if let Some(&(_, ty)) = vocabulary.commands.iter().find(|(a, _)| *a == aspect) {
+                    return Some(Some(ty));
+                }
+                let named = vocabulary.base == Some(aspect) || vocabulary.aspects.contains(&aspect);
+                (!named).then_some(None)
             };
             if let Some(aspect) = &action.toggle {
-                if command(aspect) != Some(ValueType::Bool) {
+                if command(aspect) != Some(Some(ValueType::Bool)) {
                     errors.push(err(
                         Code::ActionAspect,
                         format!("\"{aspect}\" of \"{name}\" is not a bool command to toggle"),
@@ -614,21 +619,28 @@ fn check_actions(
                 let Some(ty) = command(aspect) else {
                     errors.push(err(
                         Code::ActionAspect,
-                        format!("\"{name}\" takes no command on \"{aspect}\": its base aspect or a declared feature that takes commands"),
+                        format!("\"{name}\" takes no command on \"{aspect}\", which is not its base aspect or a declared feature that takes commands"),
                     ));
                     continue;
                 };
                 let typed = match (ty, value) {
-                    (ValueType::Bool, toml::Value::Boolean(_))
-                    | (ValueType::Number, toml::Value::Integer(_))
-                    | (ValueType::Text, toml::Value::String(_)) => true,
-                    (ValueType::Number, toml::Value::Float(f)) => f.is_finite(),
+                    (Some(ValueType::Bool) | None, toml::Value::Boolean(_))
+                    | (Some(ValueType::Number) | None, toml::Value::Integer(_))
+                    | (Some(ValueType::Text) | None, toml::Value::String(_)) => true,
+                    (Some(ValueType::Number) | None, toml::Value::Float(f)) => f.is_finite(),
                     _ => false,
                 };
                 if !typed {
+                    let what = ty.map_or("scalar".to_string(), |ty| ty.to_string());
                     errors.push(err(
                         Code::ActionShape,
-                        format!("set {aspect} = {value} is not a {ty}"),
+                        format!("set {aspect} = {value} is not a {what}"),
+                    ));
+                } else if value.as_str().is_some_and(|text| text.trim().is_empty()) {
+                    // Notifiers and the dashboard refuse blank text.
+                    errors.push(err(
+                        Code::ActionShape,
+                        format!("set {aspect} is blank text"),
                     ));
                 }
             }

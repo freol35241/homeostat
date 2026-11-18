@@ -25,6 +25,7 @@ remote = { toggle = "on" }
 door = { set = { locked = true }, hold = "+6:00" }
 
 # Not fine: a declared reading, which takes no command, and a value of the
-# wrong type.
+# wrong type. Fine: a declared feature the vocabulary does not name, which
+# the adapter's descriptor types.
 [actions.quadruple]
-heater = { set = { indoor_temperature = 20, setpoint = "warm" } }
+heater = { set = { indoor_temperature = 20, setpoint = "warm", operating_mode = 2 } }

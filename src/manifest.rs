@@ -26,9 +26,8 @@ pub struct Capability {
     /// names the vocabulary reserves for this capability.
     pub aspects: &'static [&'static str],
     /// The aspects that take a command, with the type of value each
-    /// carries: the base aspect and the features that are levers rather
-    /// than readings. A feature takes commands only on an entity that
-    /// declares it. The adapter checks bounds (docs/adapters.md, Commands).
+    /// carries: the base aspect and the features a unit or a person sets.
+    /// A feature takes commands only on an entity that declares it. The adapter checks bounds (docs/adapters.md, Commands).
     pub commands: &'static [(&'static str, ValueType)],
     /// The reading and value that is out of the ordinary, if any.
     pub notable: Option<&'static str>,

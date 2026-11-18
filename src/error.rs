@@ -334,13 +334,16 @@ codes! {
         when it is in the commands column of the target's capability \
         (docs/manifest.md, Capability vocabulary) and is the base aspect or \
         a feature the entity file declares. A reading such as a climate's \
-        `indoor_temperature` takes none (docs/design.md#gesture-actions).",
+        `indoor_temperature` takes none. A declared feature the vocabulary \
+        does not name is the adapter's own and takes a command \
+        (docs/design.md#gesture-actions).",
     ActionShape => "action-shape":
         "A gesture action does not say one thing to send. It takes exactly \
         one of `toggle` and `set`, or `hold = \"release\"` alone, and a \
         `hold` of `\"none\"`, `\"release\"` or `\"HH:MM\"`. A `set` value \
         is of the type the commands column gives its aspect: a boolean, a \
-        finite number or a string (docs/design.md#gesture-actions).",
+        finite number or text that is not blank. An adapter's own knob \
+        takes any of these (docs/design.md#gesture-actions).",
     ActionHoldNotArbitrated => "action-hold-not-arbitrated":
         "A gesture action carries a `hold` toward an entity that is not \
         arbitrated. A hold intent tells the arbiter what to do with the \

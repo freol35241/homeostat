@@ -789,9 +789,13 @@ the bus.
   aspect in its capability's
   [commands](#the-capability-vocabulary), the base aspect or a feature
   the target declares, so a climate's `indoor_temperature` is refused
-  even where it is declared. A toggle needs a bool command. The action
-  must say one thing to send, and each value must have its command's
-  type, so `setpoint = "warm"` is refused (`action-shape`). A
+  even where it is declared. A declared feature the vocabulary does not
+  name is an adapter's own knob, such as ivt490's `operating_mode`; the
+  adapter's descriptor types and bounds it, so plan takes any scalar
+  for it, as the dashboard does. A toggle needs a bool command. The
+  action must say one thing to send, and each value must have its
+  command's type, so `setpoint = "warm"` is refused (`action-shape`),
+  as is blank text. A
   `hold` must go to an arbitrated target (`action-hold-not-arbitrated`),
   and a time of day needs the clock (`time-of-day-no-clock`). An action
   that can unlock a lock must say `unlocks = true` (`action-unlocks`),

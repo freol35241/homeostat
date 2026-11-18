@@ -171,8 +171,8 @@ COMMANDABLE = {
     "notifier": {"message", "alert"},
 }
 # The vocabulary's value types, in the descriptor-command shape so one
-# check serves both (the commands column's types, checked by the same
-# test): `on`/`locked` are bools (z2m, esphome, the lock
+# check serves both. The same test keeps them in step with the commands
+# column. `on`/`locked` are bools (z2m, esphome, the lock
 # adapters), `brightness`/`color_temp` numbers (z2m, esphome), `setpoint`
 # a float (ivt490), `power_level` a number (aduro's 10/50/100), and a
 # notifier's `message` and `alert` the text itself. The adapter checks
