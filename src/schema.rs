@@ -178,7 +178,7 @@ fn render_vocabulary(out: &mut String) {
 /// name order for VOCABULARY.
 pub fn sdk_vocabulary() -> String {
     use crate::manifest::{
-        implicit_enabled, Priority, BRIGHTNESS_RANGE, ENABLED_PARAM, VOCABULARY,
+        implicit_enabled, Priority, BRIGHTNESS_RANGE, ENABLED_PARAM, HOLD_WORDS, VOCABULARY,
     };
     let mut out = String::from(
         "\"\"\"The core's vocabulary tables, as the SDK and the adapters read them.\n\
@@ -194,6 +194,14 @@ pub fn sdk_vocabulary() -> String {
     out.push_str(&format!(
         "CMD_PRIORITIES = {}\n\n",
         python_tuple(priorities.iter().map(String::as_str))
+    ));
+    out.push_str(
+        "# The words a manual-band command's `hold` may carry besides an instant or\n\
+         # \"HH:MM\" (`HOLD_WORDS`).\n",
+    );
+    out.push_str(&format!(
+        "HOLD_WORDS = {}\n\n",
+        python_tuple(HOLD_WORDS.iter().copied())
     ));
     out.push_str(
         "# The classes addressed per entity, as home/{class}/{room}/{entity}/{aspect}\n\

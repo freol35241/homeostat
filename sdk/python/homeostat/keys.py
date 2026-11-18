@@ -15,9 +15,9 @@ ENV_UNIT = "HOMEOSTAT_UNIT"
 ENV_BUS = "HOMEOSTAT_BUS"
 
 # The core's rule for a name that becomes one key segment (src/validate.rs,
-# valid_segment). Other characters either break the fixed key schema ("/"),
-# have a meaning on the bus ("*", "$", "?", "#"), or risk encoding
-# problems.
+# valid_segment; tests/fixtures/key_segments.json). Other characters either
+# break the fixed key schema ("/"), have a meaning on the bus ("*", "$", "?",
+# "#"), or risk encoding problems.
 _SEGMENT = re.compile(r"[A-Za-z0-9_.-]+")
 
 
@@ -293,7 +293,7 @@ CMD_PRIORITIES = vocabulary.CMD_PRIORITIES
 # The words a manual-band command's `hold` may carry besides an instant
 # (docs/design.md#hold-intents). "report" and "release" are for the
 # arbiter alone: neither is forwarded to the device.
-HOLD_WORDS = ("none", "report", "release")
+HOLD_WORDS = vocabulary.HOLD_WORDS
 
 # The aspect and value each capability's device is safe at, where it has
 # one. Between two holds at one band, the one for the rest value wins

@@ -9,6 +9,10 @@ renders the same vocabulary for people.
 # Command priority bands, lowest to highest (`Priority::ALL`).
 CMD_PRIORITIES = ("automation", "agent", "family", "manual")
 
+# The words a manual-band command's `hold` may carry besides an instant or
+# "HH:MM" (`HOLD_WORDS`).
+HOLD_WORDS = ("none", "report", "release")
+
 # The classes addressed per entity, as home/{class}/{room}/{entity}/{aspect}
 # (`ENTITY_ADDRESSED` in src/keyspace.rs).
 ENTITY_ADDRESSED = ("state", "cmd", "arbiter", "forecast")

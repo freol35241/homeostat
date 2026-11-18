@@ -35,8 +35,8 @@ pub fn validate(house: &House) -> Vec<ValidationError> {
 /// fixed key schema (`/`), mean something to the bus (`*`, `$`, `?`, `#`), or
 /// risk whitespace and encoding problems. A bad unit name would also panic the
 /// supervisor's liveliness subscriber. `.` and `..` are refused as path-like.
-/// The SDK refuses the same names, so a name that passes here is one every
-/// unit can build keys from.
+/// The SDK refuses the same names (`tests/fixtures/key_segments.json`), so a
+/// name that passes here is one every unit can build keys from.
 pub(crate) fn valid_segment(name: &str) -> bool {
     !name.is_empty()
         && name != "."
@@ -1266,7 +1266,23 @@ fn hex_color(color: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_time;
+    use super::{parse_time, valid_segment};
+
+    /// The core reads a key segment as the SDK does
+    /// (`tests/fixtures/key_segments.json`).
+    #[test]
+    fn the_key_segment_rule_is_the_shared_one() {
+        let cases: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/key_segments.json")).unwrap();
+        for s in cases["accepted"].as_array().unwrap() {
+            let s = s.as_str().unwrap();
+            assert!(valid_segment(s), "{s:?} is a key segment");
+        }
+        for s in cases["refused"].as_array().unwrap() {
+            let s = s.as_str().unwrap();
+            assert!(!valid_segment(s), "{s:?} is not a key segment");
+        }
+    }
 
     /// The core reads a time of day as every other reader does
     /// (`tests/fixtures/time_of_day.json`).
