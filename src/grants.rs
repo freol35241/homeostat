@@ -13,7 +13,7 @@ use crate::error::{Code, ValidationError};
 use crate::expand::{publishes, subscribes, Direction, ExpandedKey};
 use crate::keyspace::{KeyExpr, Segment};
 use crate::manifest::{self, FamilyHold, OnLoss, Priority, UnitKind, WriteMode};
-use crate::repo::House;
+use crate::repo::{House, LoadedEntity};
 
 /// One resolved grant: a publish expression resolved against the concrete
 /// entity set. A cmd-class row is a writer: a non-adapter's cmd publish, with
@@ -78,20 +78,103 @@ pub struct GrantEntity {
     pub family: BTreeMap<String, BTreeMap<String, FamilyHold>>,
 }
 
+/// An aspect of another entity that a feed or a declared source names,
+/// resolved to its state key and its entity's owner.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Contributor {
+    /// The contributing entity.
+    pub entity: String,
+    /// The contributing aspect.
+    pub aspect: String,
+    /// The unit that binds the contributing entity.
+    pub owner: String,
+    /// The state key the aspect is read from,
+    /// `home/state/{room}/{entity}/{aspect}`.
+    pub key: String,
+}
+
+/// The block that names a contributor. The two raise the same errors under
+/// different codes and wording.
+enum Block {
+    Inputs,
+    Sources,
+}
+
+/// Resolves `aspect` of the entity `contributing`, which `entity` names as
+/// `name` in its `[inputs]` or `[sources]`. The contributing entity must exist, and
+/// an automation-owned one must publish the aspect. The key's segments come
+/// back beside the contributor, for a caller that matches them against a
+/// unit's subscriptions.
+fn resolve_contributor<'h>(
+    house: &'h House,
+    expanded: &[ExpandedKey],
+    entity: &LoadedEntity,
+    name: &str,
+    contributing: &str,
+    aspect: &'h str,
+    block: Block,
+) -> Result<(Contributor, [&'h str; 5]), ValidationError> {
+    let (unknown_entity, unpublished_aspect, entity_noun, key_noun) = match block {
+        Block::Inputs => (
+            Code::InputUnknownEntity,
+            Code::InputUnpublishedAspect,
+            "source entity",
+            "a fed aspect",
+        ),
+        Block::Sources => (
+            Code::SourceUnknownEntity,
+            Code::SourceUnpublishedAspect,
+            "contributing entity",
+            "a declared source",
+        ),
+    };
+    let subject = format!("{}.{name}", entity.name);
+    let file = Some(entity.path.clone());
+    let Some(src) = house.entities.iter().find(|e| e.name == contributing) else {
+        return Err(ValidationError::new(
+            unknown_entity,
+            subject,
+            format!("{entity_noun} \"{contributing}\" does not exist"),
+            file,
+        ));
+    };
+    let segments = ["home", "state", &src.file.entity.room, &src.name, aspect];
+    let key = segments.join("/");
+    let src_is_automation = house
+        .unit(&src.owner)
+        .is_some_and(|u| u.manifest.unit.kind == UnitKind::Automation);
+    if src_is_automation && !publishes(expanded, Some(&src.owner), &segments) {
+        return Err(ValidationError::new(
+            unpublished_aspect,
+            subject,
+            format!(
+                "\"{}\" does not publish {key}; {key_noun} must be in its owner's [bus.publishes]",
+                src.owner
+            ),
+            file,
+        ));
+    }
+    let contributor = Contributor {
+        entity: src.name.clone(),
+        aspect: aspect.to_string(),
+        owner: src.owner.clone(),
+        key,
+    };
+    Ok((contributor, segments))
+}
+
 /// One resolved feed: a device input wired to a source aspect
 /// (docs/design.md#device-feeds). The plan renders it next to the grant table.
 /// A feed is not a walk-order edge, because a control loop that reads a device
 /// and feeds a term back to it is a legitimate cycle.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Feed {
-    /// The fed entity and its adapter's input name.
+    /// The fed entity.
     pub entity: String,
+    /// The adapter's name for the input.
     pub input: String,
     /// The source, resolved.
-    pub source_entity: String,
-    pub source_aspect: String,
-    pub source_owner: String,
-    pub key: String,
+    pub source: Contributor,
 }
 
 /// Resolves every `[inputs]` block. It checks that the source exists, that the
@@ -104,7 +187,6 @@ pub fn resolve_feeds(house: &House, expanded: &[ExpandedKey]) -> (Vec<Feed>, Vec
         let Some(inputs) = &entity.file.inputs else {
             continue;
         };
-        let file = Some(entity.path.clone());
         let owner_is_automation = house
             .unit(&entity.owner)
             .is_some_and(|u| u.manifest.unit.kind == UnitKind::Automation);
@@ -113,52 +195,27 @@ pub fn resolve_feeds(house: &House, expanded: &[ExpandedKey]) -> (Vec<Feed>, Vec
                 Code::VirtualEntityFed,
                 &entity.name,
                 "automation-owned entities have no device inputs to feed",
-                file.clone(),
+                Some(entity.path.clone()),
             ));
             continue;
         }
         for (input, source) in inputs {
-            let subject = format!("{}.{input}", entity.name);
-            let Some(src) = house.entities.iter().find(|e| e.name == source.entity) else {
-                errors.push(ValidationError::new(
-                    Code::InputUnknownEntity,
-                    subject,
-                    format!("source entity \"{}\" does not exist", source.entity),
-                    file.clone(),
-                ));
-                continue;
-            };
-            let segments = [
-                "home",
-                "state",
-                &src.file.entity.room,
-                &src.name,
+            match resolve_contributor(
+                house,
+                expanded,
+                entity,
+                input,
+                &source.entity,
                 &source.aspect,
-            ];
-            let key = segments.join("/");
-            let src_is_automation = house
-                .unit(&src.owner)
-                .is_some_and(|u| u.manifest.unit.kind == UnitKind::Automation);
-            if src_is_automation && !publishes(expanded, Some(&src.owner), &segments) {
-                errors.push(ValidationError::new(
-                    Code::InputUnpublishedAspect,
-                    subject,
-                    format!(
-                        "\"{}\" does not publish {key}; a fed aspect must be in its owner's [bus.publishes]",
-                        src.owner
-                    ),
-                    file.clone(),
-                ));
-                continue;
+                Block::Inputs,
+            ) {
+                Ok((contributor, _)) => feeds.push(Feed {
+                    entity: entity.name.clone(),
+                    input: input.clone(),
+                    source: contributor,
+                }),
+                Err(error) => errors.push(error),
             }
-            feeds.push(Feed {
-                entity: entity.name.clone(),
-                input: input.clone(),
-                source_entity: src.name.clone(),
-                source_aspect: source.aspect.clone(),
-                source_owner: src.owner.clone(),
-                key,
-            });
         }
     }
     (feeds, errors)
@@ -167,14 +224,12 @@ pub fn resolve_feeds(house: &House, expanded: &[ExpandedKey]) -> (Vec<Feed>, Vec
 /// One resolved `[sources]` entry: a contributor to a computed value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Source {
-    /// The computed entity and the name it gives this contributor.
+    /// The computed entity.
     pub entity: String,
+    /// The name the computed entity gives this contributor.
     pub name: String,
     /// The contributor, resolved.
-    pub source_entity: String,
-    pub source_aspect: String,
-    pub source_owner: String,
-    pub key: String,
+    pub contributor: Contributor,
     /// This contributor's own caveat, as declared.
     pub note: Option<String>,
 }
@@ -234,54 +289,32 @@ pub fn resolve_sources(
         let Some(declared) = &entity.file.sources else {
             continue;
         };
-        let file = Some(entity.path.clone());
         for (name, source) in declared {
-            let subject = format!("{}.{name}", entity.name);
-            let Some(src) = house.entities.iter().find(|e| e.name == source.entity) else {
-                errors.push(ValidationError::new(
-                    Code::SourceUnknownEntity,
-                    subject,
-                    format!("contributing entity \"{}\" does not exist", source.entity),
-                    file.clone(),
-                ));
-                continue;
-            };
-            let segments = [
-                "home",
-                "state",
-                &src.file.entity.room,
-                &src.name,
+            let (contributor, segments) = match resolve_contributor(
+                house,
+                expanded,
+                entity,
+                name,
+                &source.entity,
                 &source.aspect,
-            ];
-            let key = segments.join("/");
-            let src_is_automation = house
-                .unit(&src.owner)
-                .is_some_and(|u| u.manifest.unit.kind == UnitKind::Automation);
-            if src_is_automation && !publishes(expanded, Some(&src.owner), &segments) {
-                errors.push(ValidationError::new(
-                    Code::SourceUnpublishedAspect,
-                    subject,
-                    format!(
-                        "\"{}\" does not publish {key}; a declared source must be in its owner's [bus.publishes]",
-                        src.owner
-                    ),
-                    file.clone(),
-                ));
-                continue;
-            }
+                Block::Sources,
+            ) {
+                Ok(resolved) => resolved,
+                Err(error) => {
+                    errors.push(error);
+                    continue;
+                }
+            };
             if !subscribes(expanded, Some(&entity.owner), &segments) {
                 warnings.push(format!(
-                    "{subject}: \"{}\" declares {key} as a source but does not subscribe it",
-                    entity.owner
+                    "{}.{name}: \"{}\" declares {} as a source but does not subscribe it",
+                    entity.name, entity.owner, contributor.key
                 ));
             }
             sources.push(Source {
                 entity: entity.name.clone(),
                 name: name.clone(),
-                source_entity: src.name.clone(),
-                source_aspect: source.aspect.clone(),
-                source_owner: src.owner.clone(),
-                key,
+                contributor,
                 note: source.note.clone(),
             });
         }
@@ -1628,10 +1661,12 @@ mod tests {
             vec![Source {
                 entity: "fused_temp".to_string(),
                 name: "station".to_string(),
-                source_entity: "outdoor_temp".to_string(),
-                source_aspect: "temperature".to_string(),
-                source_owner: "esphome".to_string(),
-                key: "home/state/global/outdoor_temp/temperature".to_string(),
+                contributor: Contributor {
+                    entity: "outdoor_temp".to_string(),
+                    aspect: "temperature".to_string(),
+                    owner: "esphome".to_string(),
+                    key: "home/state/global/outdoor_temp/temperature".to_string(),
+                },
                 note: None,
             }]
         );
