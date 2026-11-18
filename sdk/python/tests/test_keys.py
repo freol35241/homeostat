@@ -13,14 +13,17 @@ from homeostat.automation import _typed
 
 
 class SegmentTest(unittest.TestCase):
-    def test_accepts_the_core_rule(self):
-        for name in ("on", "GT3_2_raw", "regulation.fixed_power", "lamp-1", "0x00158d0001a2b3c4"):
-            self.assertTrue(keys.valid_segment(name), name)
+    def test_the_key_segment_rule_is_the_cores(self):
+        # tests/fixtures/key_segments.json: what the core accepts as a key
+        # segment, the SDK builds keys from.
+        cases = json.loads((Path(__file__).resolve().parents[3] / "tests/fixtures/key_segments.json").read_text(encoding="utf-8"))
+        for name in cases["accepted"]:
+            self.assertTrue(keys.valid_segment(name), repr(name))
+        for name in cases["refused"]:
+            self.assertFalse(keys.valid_segment(name), repr(name))
 
-    def test_refuses_what_the_core_refuses(self):
-        # "**" would put on a wildcard and fan out to every aspect subscriber;
-        # "" and "#" raise inside zenoh; "/" breaks the key schema.
-        for name in ("", "**", "*", "a/b", "#", "$x", "a b", "å", ".", "..", None, 3):
+    def test_refuses_a_non_string(self):
+        for name in (None, 3):
             self.assertFalse(keys.valid_segment(name), repr(name))
 
     def test_builders_raise_on_a_bad_segment(self):
