@@ -6,7 +6,7 @@ src/schema.rs; do not edit (a test refuses a stale copy). Regenerate with
 renders the same vocabulary for people.
 """
 
-# Command priority bands, lowest to highest (`Priority`).
+# Command priority bands, lowest to highest (`Priority::ALL`).
 CMD_PRIORITIES = ("automation", "agent", "family", "manual")
 
 # The classes addressed per entity, as home/{class}/{room}/{entity}/{aspect}
@@ -24,8 +24,8 @@ BASE_ASPECTS = {
 }
 
 # The aspects that take a command, per capability, with the type of value
-# each carries: "bool", "number" or "text" (`commands`). A feature takes
-# commands only on an entity that declares it.
+# each carries (`commands`, `ValueType`). A feature takes commands only on
+# an entity that declares it.
 COMMANDS = {
     "burner": {"on": "bool", "power_level": "number"},
     "climate": {"setpoint": "number"},

@@ -13,8 +13,8 @@
 # adapter is copied with it and gets the same edit (pin_lock below), so a
 # shipped unit resolves what the release's adapter was locked against.
 # Adapter and SDK must come from the same commit. An adapter from main
-# running against the previous tag's SDK raises AttributeError on anything
-# the SDK has added since.
+# running against the previous tag's SDK raises AttributeError or
+# ImportError on anything the SDK has added since.
 #
 # The starter is therefore a snapshot of SDK_TAG rather than of main.
 # --check compares against adapters/ as of that tag, which stays true on

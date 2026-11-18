@@ -508,6 +508,17 @@ pub enum Priority {
     Manual,
 }
 
+impl Priority {
+    /// Every band, lowest to highest. The SDK ranks commands by this order
+    /// (sdk/python/homeostat/vocabulary.py).
+    pub const ALL: [Priority; 4] = [
+        Priority::Automation,
+        Priority::Agent,
+        Priority::Family,
+        Priority::Manual,
+    ];
+}
+
 impl fmt::Display for Priority {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {

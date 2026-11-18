@@ -173,9 +173,9 @@ fn render_vocabulary(out: &mut String) {
 }
 
 /// sdk/python/homeostat/vocabulary.py: the core's tables that the SDK and
-/// the adapters read, as Python literals. It carries what a Python
-/// consumer uses and nothing else. Rows follow the Rust tables' order,
-/// which a test keeps in name order for VOCABULARY.
+/// the adapters read, as Python literals. Only tables a Python unit reads
+/// are rendered. Rows follow the Rust tables' order, which a test keeps in
+/// name order for VOCABULARY.
 pub fn sdk_vocabulary() -> String {
     use crate::manifest::{implicit_enabled, Priority, ENABLED_PARAM, VOCABULARY};
     let mut out = String::from(
@@ -187,12 +187,11 @@ pub fn sdk_vocabulary() -> String {
          renders the same vocabulary for people.\n\
          \"\"\"\n\n",
     );
-    let priorities = enum_values(&serde_json::to_value(schema_for!(Priority)).expect("serializes"))
-        .expect("Priority is an enum");
-    out.push_str("# Command priority bands, lowest to highest (`Priority`).\n");
+    let priorities: Vec<String> = Priority::ALL.iter().map(Priority::to_string).collect();
+    out.push_str("# Command priority bands, lowest to highest (`Priority::ALL`).\n");
     out.push_str(&format!(
         "CMD_PRIORITIES = {}\n\n",
-        python_tuple(priorities.iter().map(|(p, _)| p.as_str()))
+        python_tuple(priorities.iter().map(String::as_str))
     ));
     out.push_str(
         "# The classes addressed per entity, as home/{class}/{room}/{entity}/{aspect}\n\
@@ -208,12 +207,12 @@ pub fn sdk_vocabulary() -> String {
         "BASE_ASPECTS",
         VOCABULARY
             .iter()
-            .filter_map(|c| Some((c.name, format!("\"{}\"", c.base?)))),
+            .filter_map(|c| Some((c.name, python_str(c.base?)))),
     );
     out.push_str(
         "# The aspects that take a command, per capability, with the type of value\n\
-         # each carries: \"bool\", \"number\" or \"text\" (`commands`). A feature takes\n\
-         # commands only on an entity that declares it.\n",
+         # each carries (`commands`, `ValueType`). A feature takes commands only on\n\
+         # an entity that declares it.\n",
     );
     python_dict(
         &mut out,
@@ -225,7 +224,9 @@ pub fn sdk_vocabulary() -> String {
                 let commands: Vec<String> = c
                     .commands
                     .iter()
-                    .map(|(aspect, ty)| format!("\"{aspect}\": \"{ty}\""))
+                    .map(|(aspect, ty)| {
+                        format!("{}: {}", python_str(aspect), python_str(&ty.to_string()))
+                    })
                     .collect();
                 (c.name, format!("{{{}}}", commands.join(", ")))
             }),
@@ -236,7 +237,10 @@ pub fn sdk_vocabulary() -> String {
         "REST_VALUES",
         VOCABULARY.iter().filter_map(|c| {
             let (aspect, value) = c.rest?;
-            Some((c.name, format!("(\"{aspect}\", {})", python_literal(value))))
+            Some((
+                c.name,
+                format!("({}, {})", python_str(aspect), python_literal(value)),
+            ))
         }),
     );
     out.push_str(
@@ -255,8 +259,8 @@ pub fn sdk_vocabulary() -> String {
                     .iter()
                     .map(|o| {
                         format!(
-                            "\"{}\": {}",
-                            o.name,
+                            "{}: {}",
+                            python_str(o.name),
                             python_tuple(o.aspects.iter().copied())
                         )
                     })
@@ -264,26 +268,32 @@ pub fn sdk_vocabulary() -> String {
                 (c.name, format!("{{{}}}", options.join(", ")))
             }),
     );
-    let enabled = implicit_enabled();
+    // Destructured, so a new field of ParamSpec is a compile error here.
+    let crate::manifest::ParamSpec {
+        param_type,
+        default,
+        constraint,
+        editable_by,
+    } = implicit_enabled();
     assert!(
-        enabled.constraint.is_none(),
+        constraint.is_none(),
         "implicit_enabled has a constraint: render it here"
     );
     let mut spec = vec![
-        format!("\"type\": \"{}\"", enabled.param_type),
-        format!(
-            "\"default\": {}",
-            python_literal(&enabled.default.to_string())
-        ),
+        format!("\"type\": {}", python_str(&param_type.to_string())),
+        format!("\"default\": {}", python_literal(&default.to_string())),
     ];
-    if let Some(editable_by) = enabled.editable_by {
-        spec.push(format!("\"editable_by\": \"{editable_by}\""));
+    if let Some(editable_by) = editable_by {
+        spec.push(format!(
+            "\"editable_by\": {}",
+            python_str(&editable_by.to_string())
+        ));
     }
     out.push_str(
         "# The parameter that pauses an automation, and its spec when the manifest\n\
          # does not declare it (`ENABLED_PARAM`, `implicit_enabled`).\n",
     );
-    out.push_str(&format!("ENABLED_PARAM = \"{ENABLED_PARAM}\"\n"));
+    out.push_str(&format!("ENABLED_PARAM = {}\n", python_str(ENABLED_PARAM)));
     out.push_str(&format!("IMPLICIT_ENABLED = {{{}}}\n", spec.join(", ")));
     out
 }
@@ -292,27 +302,36 @@ pub fn sdk_vocabulary() -> String {
 fn python_dict<'a>(out: &mut String, name: &str, rows: impl Iterator<Item = (&'a str, String)>) {
     out.push_str(&format!("{name} = {{\n"));
     for (key, value) in rows {
-        out.push_str(&format!("    \"{key}\": {value},\n"));
+        out.push_str(&format!("    {}: {value},\n", python_str(key)));
     }
     out.push_str("}\n\n");
 }
 
 /// A tuple of strings, with the trailing comma a one-element tuple needs.
 fn python_tuple<'a>(items: impl Iterator<Item = &'a str>) -> String {
-    let items: Vec<String> = items.map(|i| format!("\"{i}\"")).collect();
+    let items: Vec<String> = items.map(python_str).collect();
     match items.len() {
         1 => format!("({},)", items[0]),
         _ => format!("({})", items.join(", ")),
     }
 }
 
+/// A string as a Python literal. A JSON string is one: its escapes are
+/// valid Python escapes.
+fn python_str(text: &str) -> String {
+    serde_json::to_string(text).expect("a string serializes")
+}
+
 /// A value as the vocabulary writes it (`false`, `30`), spelled as Python
-/// spells it. Only the booleans differ.
+/// spells it. Anything but a boolean, null or a number panics, so a new
+/// kind of value is rendered on purpose.
 fn python_literal(literal: &str) -> &str {
     match literal {
         "true" => "True",
         "false" => "False",
-        other => other,
+        "null" => "None",
+        number if number.parse::<f64>().is_ok_and(f64::is_finite) => number,
+        other => panic!("no Python spelling for the vocabulary value {other}"),
     }
 }
 
@@ -556,9 +575,26 @@ mod tests {
         }
     }
 
+    /// `Priority::ALL` names every band the schema knows, once, so the
+    /// SDK's ranking misses none.
+    #[test]
+    fn priority_all_names_every_band() {
+        use crate::manifest::Priority;
+        let schema = serde_json::to_value(schema_for!(Priority)).expect("serializes");
+        let mut known: Vec<String> = enum_values(&schema)
+            .expect("Priority is an enum")
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+        let mut all: Vec<String> = Priority::ALL.iter().map(Priority::to_string).collect();
+        known.sort();
+        all.sort();
+        assert_eq!(all, known);
+    }
+
     /// The SDK's vocabulary module is the rendering. With
-    /// `HOMEOSTAT_BLESS=1` the test writes the rendering instead, after a
-    /// change to the tables; review the diff.
+    /// `HOMEOSTAT_BLESS=1` the test first writes the rendering to the file,
+    /// after a change to the tables; review the diff.
     #[test]
     fn sdk_vocabulary_py_is_current() {
         let path = concat!(

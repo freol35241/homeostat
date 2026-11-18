@@ -170,12 +170,22 @@ COMMANDABLE = {c: set(commands) - DESCRIPTOR_ONLY for c, commands in vocabulary.
 # admits an integer too, as aduro's power levels 10/50/100 are. The
 # adapter checks bounds (docs/adapters.md, Commands). The type is checked
 # here so a JSON object cannot reach the bus in a manual-band envelope.
+# An unknown vocabulary type fails here, at import, rather than as a
+# command the page cannot send.
+DESCRIPTOR_TYPE = {"bool": "bool", "number": "float", "text": "text"}
 VOCABULARY_COMMANDS = {
-    aspect: {"type": "float" if kind == "number" else kind}
+    aspect: {"type": DESCRIPTOR_TYPE[kind]}
     for commands in vocabulary.COMMANDS.values()
     for aspect, kind in commands.items()
     if aspect not in DESCRIPTOR_ONLY
 }
+# The table is keyed by aspect, so two capabilities must agree on one.
+assert all(
+    VOCABULARY_COMMANDS[a]["type"] == DESCRIPTOR_TYPE[k]
+    for commands in vocabulary.COMMANDS.values()
+    for a, k in commands.items()
+    if a not in DESCRIPTOR_ONLY
+)
 # The longest text a person may send from the page. A notification is a
 # line or two, and a phone shows little more.
 MAX_TEXT_CHARS = 1000

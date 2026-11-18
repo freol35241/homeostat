@@ -153,13 +153,13 @@ KIND_BY_UNIT = {"°C": "temperature", "%": "percent"}
 DIAGNOSTIC_PROPERTIES = frozenset({"linkquality"})
 # The capabilities whose vocabulary commands this adapter translates.
 COMMANDED = ("light", "lock", "switch")
-# Their vocabulary commands, which the dashboard's own widgets command.
-# These are described as readings and get no descriptor command. A
-# switch's `runtime_s` is left out, because this adapter does not map it
-# (docs/design.md#device-timed-runtime).
-VOCABULARY_ASPECTS = frozenset(
-    a for c in COMMANDED for a in vocabulary.COMMANDS[c] if a != "runtime_s"
-)
+# The vocabulary commands this adapter translates, which the dashboard's
+# own widgets command. These are described as readings and get no
+# descriptor command. The list is the adapter's own, because a new
+# vocabulary command needs its translation written here first; a
+# switch's `runtime_s` is not translated (docs/design.md#device-timed-runtime).
+VOCABULARY_ASPECTS = frozenset({"on", "brightness", "color_temp", "locked"})
+assert VOCABULARY_ASPECTS.issubset(a for c in COMMANDED for a in vocabulary.COMMANDS[c])
 # The capability's base aspect (docs/manifest.md, Capability vocabulary):
 # the one command every entity of that capability takes.
 BASE_ASPECT = {c: vocabulary.BASE_ASPECTS[c] for c in COMMANDED}
