@@ -523,7 +523,7 @@ reading Rust, and a second description would drift.
 ### What validation guarantees
 
 `homeostat::check` is the plan-time pipeline every command starts
-from. It loads, validates, expands key expressions, and resolves
+from. It loads, expands key expressions, validates, and resolves
 grants, feeds and sources. Errors accumulate across stages. A file that
 fails to parse is reported and skipped, so one bad file does not hide
 the errors in the others. `plan`, `apply` and `up` refuse a house with

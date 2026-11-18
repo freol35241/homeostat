@@ -4,7 +4,7 @@
 //! integration tests drive it directly.
 //!
 //! Every command starts from [`check`], the plan-time pipeline: load the
-//! house repo, validate it, expand its key expressions, and resolve its
+//! house repo, expand its key expressions, validate it, and resolve its
 //! grants, feeds and sources.
 
 pub mod bus;
@@ -43,12 +43,12 @@ pub struct CheckResult {
     pub errors: Vec<ValidationError>,
 }
 
-/// Loads a house repo and runs the full plan-time pipeline: load, validate,
-/// expand, resolve grants. Errors accumulate across all stages.
+/// Loads a house repo and runs the full plan-time pipeline: load, expand,
+/// validate, resolve grants. Errors accumulate across all stages.
 pub fn check(root: &Path) -> CheckResult {
     let (house, mut errors) = repo::load(root);
-    errors.extend(validate::validate(&house));
     let (expanded, mut warnings, expand_errors) = expand::expand(&house);
+    errors.extend(validate::validate(&house, &expanded));
     errors.extend(expand_errors);
     let (grants, grant_warnings, grant_errors) = grants::resolve(&house, &expanded);
     warnings.extend(grant_warnings);
