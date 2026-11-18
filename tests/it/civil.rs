@@ -80,6 +80,10 @@ fn civil_dates_round_trip() {
     for days in first..=last {
         let (y, m, d) = civil_from_days(days);
         assert_eq!(days_from_civil(y, m, d), days, "{y}-{m}-{d}");
+        assert!(
+            (1..=12).contains(&m) && (1..=31).contains(&d),
+            "{y}-{m}-{d}"
+        );
         let next_day = (prev.0, prev.1, prev.2 + 1);
         let next_month = (prev.0, prev.1 + 1, 1);
         let next_year = (prev.0 + 1, 1, 1);

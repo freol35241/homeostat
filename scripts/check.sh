@@ -74,10 +74,12 @@ if [ "$#" = 0 ]; then
   set -- $CHECKS
 fi
 for name in "$@"; do
+  # A name with a space in it would match across two names below.
   case " $CHECKS " in
-    *" $name "*) ;;
-    *) echo "unknown check: $name (the checks: $CHECKS)" >&2; exit 2 ;;
+    *" $name "*) [[ "$name" != *" "* ]] && continue ;;
   esac
+  echo "unknown check: $name (the checks: $CHECKS)" >&2
+  exit 2
 done
 for name in "$@"; do
   echo "==> $name"

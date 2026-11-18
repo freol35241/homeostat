@@ -62,6 +62,9 @@ fn invalid_corpus_produces_expected_error_lists() {
         let actual = render_sorted(&result.errors);
         let golden = case.join("expected_errors.txt");
         if bless() {
+            // An empty list would pass the strict test forever, whatever
+            // the house does, so a case that finds no error is not blessed.
+            assert!(!actual.is_empty(), "case {name} reports no error");
             write_golden(&golden, &format!("{}\n", actual.join("\n")));
             continue;
         }
@@ -84,7 +87,8 @@ fn invalid_corpus_produces_expected_error_lists() {
 
 /// Whether to write the actual output over the expected files instead of
 /// comparing. `HOMEOSTAT_BLESS=1 cargo test --test corpus` regenerates
-/// them after an intended change to the plan or to an error message.
+/// them after an intended change to the plan or to an error message. A
+/// blessed run checks nothing against the goldens, so review the diff.
 fn bless() -> bool {
     std::env::var("HOMEOSTAT_BLESS").as_deref() == Ok("1")
 }
