@@ -21,6 +21,7 @@ use zenoh::Session;
 
 use crate::bus::{self, Health, HealthStatus, LogEntry};
 use crate::config::ConfigStore;
+use crate::expand::Direction;
 use crate::grants::Grant;
 use crate::plan::WorldUnit;
 use crate::supervisor::mirror::mirror;
@@ -620,30 +621,24 @@ async fn serve_health(session: &Session, health: HealthMap) -> Result<(), String
     Ok(())
 }
 
-/// The unit that publishes under `home/history/`: the house's recorder, of
-/// which validation allows one (docs/design.md#reserved-classes).
 /// The units that publish `home/arbitration/{unit}`: the arbiters whose
 /// holds a replay gives back.
 fn arbiters(check: &CheckResult) -> std::collections::BTreeSet<String> {
     check
         .expanded
         .iter()
-        .filter(|k| {
-            k.direction == crate::expand::Direction::Publishes
-                && k.source.starts_with("home/arbitration/")
-        })
+        .filter(|k| k.direction == Direction::Publishes && k.class == "arbitration")
         .map(|k| k.unit.clone())
         .collect()
 }
 
+/// The unit that publishes under `home/history/`: the house's recorder, of
+/// which validation allows one (docs/design.md#reserved-classes).
 fn recorder_unit(check: &CheckResult) -> Option<String> {
     check
         .expanded
         .iter()
-        .find(|k| {
-            k.direction == crate::expand::Direction::Publishes
-                && k.source.starts_with("home/history/")
-        })
+        .find(|k| k.direction == Direction::Publishes && k.class == "history")
         .map(|k| k.unit.clone())
 }
 

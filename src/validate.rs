@@ -1,11 +1,13 @@
 //! Structural validation of a loaded house: names, uniqueness, manifest
 //! shape, entity ownership, zones, parameters and `dashboard.toml`.
-//! Checks that need expanded keys or the grant table live in `expand` and
-//! `grants`.
+//! Checks over expanded keys or the grant table live in `expand` and
+//! `grants`. The exception is whether some unit publishes the house clock,
+//! which the time-of-day checks here need.
 
 use std::collections::BTreeMap;
 
 use crate::error::{Code, ValidationError};
+use crate::expand::{self, ExpandedKey};
 use crate::keyspace::{is_reserved_word, PSEUDO_ROOMS};
 use crate::manifest::{
     self, ControlSpec, DiscoveryMode, FamilyHold, FamilyUntil, ParamSpec, ParamType, UnitKind,
@@ -13,15 +15,16 @@ use crate::manifest::{
 };
 use crate::repo::{House, LoadedEntity};
 
-/// Structural validation that does not involve key expansion or grants:
-/// uniqueness, capabilities, reserved rooms, ownership, zones, params.
-pub fn validate(house: &House) -> Vec<ValidationError> {
+/// Structural validation that does not involve grants: uniqueness,
+/// capabilities, reserved rooms, ownership, zones, params. `expanded` is the
+/// house's expanded keys, from which it learns whether the house has a clock.
+pub fn validate(house: &House, expanded: &[ExpandedKey]) -> Vec<ValidationError> {
     let mut errors = Vec::new();
 
     check_names(house, &mut errors);
     check_duplicates(house, &mut errors);
     check_manifest_shape(house, &mut errors);
-    check_entities(house, &mut errors);
+    check_entities(house, has_clock(expanded), &mut errors);
     check_persons(house, &mut errors);
     check_aspect_intervals(house, &mut errors);
     check_zones(house, &mut errors);
@@ -286,7 +289,8 @@ fn check_manifest_shape(house: &House, errors: &mut Vec<ValidationError>) {
     }
 }
 
-fn check_entities(house: &House, errors: &mut Vec<ValidationError>) {
+/// `clock` says whether some unit publishes the house clock's minute.
+fn check_entities(house: &House, clock: bool, errors: &mut Vec<ValidationError>) {
     for entity in &house.entities {
         let file = Some(entity.path.clone());
         let capability = &entity.file.entity.capability;
@@ -315,8 +319,8 @@ fn check_entities(house: &House, errors: &mut Vec<ValidationError>) {
             ));
         }
 
-        check_family_policy(house, entity, capability, file.as_ref(), errors);
-        check_actions(house, entity, capability, file.as_ref(), errors);
+        check_family_policy(entity, capability, clock, file.as_ref(), errors);
+        check_actions(house, entity, capability, clock, file.as_ref(), errors);
         check_causes(entity, capability, file.as_ref(), errors);
 
         // An adapter binds devices, so its entity files address them. An
@@ -398,9 +402,9 @@ fn check_entities(house: &House, errors: &mut Vec<ValidationError>) {
 /// arbiter can read. A time of day needs the house clock, whose minute
 /// gives the arbiter the house's UTC offset.
 fn check_family_policy(
-    house: &House,
     entity: &LoadedEntity,
     capability: &str,
+    clock: bool,
     file: Option<&String>,
     errors: &mut Vec<ValidationError>,
 ) {
@@ -419,7 +423,6 @@ fn check_family_policy(
             file.cloned(),
         ));
     }
-    let clock = has_clock(house);
     let vocabulary = manifest::capability(capability);
     for (aspect, values) in &policy.family {
         let known = vocabulary.is_some_and(|c| {
@@ -461,14 +464,14 @@ fn check_family_policy(
 /// The key whose payload carries the house's local time and UTC offset.
 const CLOCK_MINUTE: &str = "home/clock/minute";
 
-/// Whether some unit publishes the house clock's minute.
-fn has_clock(house: &House) -> bool {
-    house.units.iter().any(|u| {
-        u.manifest
-            .bus
-            .iter()
-            .flat_map(|b| b.publishes.values())
-            .any(|p| p.key == CLOCK_MINUTE)
+/// Whether some unit publishes the house clock's minute, literally or
+/// through a wildcard such as `home/clock/*`. The key itself must match:
+/// a publish only under it, such as `home/clock/minute/x`, never carries it.
+fn has_clock(expanded: &[ExpandedKey]) -> bool {
+    let minute: Vec<&str> = CLOCK_MINUTE.split('/').collect();
+    expanded.iter().any(|k| {
+        k.direction == expand::Direction::Publishes
+            && k.exprs.iter().any(|e| e.matches_key(&minute))
     })
 }
 
@@ -533,6 +536,7 @@ fn check_actions(
     house: &House,
     entity: &LoadedEntity,
     capability: &str,
+    clock: bool,
     file: Option<&String>,
     errors: &mut Vec<ValidationError>,
 ) {
@@ -547,7 +551,6 @@ fn check_actions(
             file.cloned(),
         ));
     }
-    let clock = has_clock(house);
     for (gesture, targets) in actions {
         for (name, action) in targets {
             let subject = format!("{}.{gesture}.{name}", entity.name);
@@ -1266,7 +1269,92 @@ fn hex_color(color: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_time, valid_segment};
+    use super::{parse_time, valid_segment, validate};
+    use crate::error::Code;
+    use crate::expand::expand;
+    use crate::repo::House;
+
+    /// A clock that publishes the minute through a wildcard is the house's
+    /// clock, so a time-of-day hold is accepted. One that publishes only
+    /// the date is not.
+    #[test]
+    fn a_clock_publishing_the_minute_through_a_wildcard_counts() {
+        let zigbee = r#"
+            schema = 1
+
+            [unit]
+            name = "zigbee"
+            kind = "adapter"
+
+            [runtime]
+            command = "true"
+            restart = "always"
+
+            [discovery]
+            mode = "static"
+            endpoint = "mqtt://localhost:1883"
+
+            [entities]
+            dir = "entities/zigbee/"
+        "#;
+        let lamp = r#"
+            schema = 1
+
+            [entity]
+            id = "0x02"
+            capability = "light"
+            room = "hallway"
+
+            [write_policy]
+            mode = "arbitrated"
+            owner = "zigbee"
+
+            [write_policy.family.on]
+            false = { until = "06:00" }
+        "#;
+        for (key, has_clock) in [
+            ("home/clock/minute", true),
+            ("home/clock/*", true),
+            ("home/clock/**", true),
+            ("home/clock/date", false),
+            ("home/clock/minute/x", false),
+            ("home/clock/*/x", false),
+            ("home/clock/**/tick", false),
+        ] {
+            let clock = format!(
+                r#"
+                schema = 1
+
+                [unit]
+                name = "clock"
+                kind = "service"
+
+                [runtime]
+                command = "true"
+                restart = "always"
+
+                [bus.publishes]
+                time = {{ key = "{key}" }}
+                "#
+            );
+            let house = House::from_toml(
+                &[("zigbee", zigbee), ("clock", &clock)],
+                &[("zigbee", "lamp", lamp)],
+            );
+            let (expanded, _warnings, expand_errors) = expand(&house);
+            assert!(expand_errors.is_empty(), "{expand_errors:?}");
+            let codes: Vec<Code> = validate(&house, &expanded)
+                .into_iter()
+                .map(|e| e.code)
+                .collect();
+            let expected = if has_clock {
+                vec![]
+            } else {
+                vec![Code::TimeOfDayNoClock]
+            };
+            assert_eq!(codes, expected, "{key}");
+        }
+    }
 
     /// The core reads a key segment as the SDK does
     /// (`tests/fixtures/key_segments.json`).

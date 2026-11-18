@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Code, ValidationError};
-use crate::expand::{Direction, ExpandedKey};
+use crate::expand::{publishes, subscribes, Direction, ExpandedKey};
 use crate::keyspace::{KeyExpr, Segment};
 use crate::manifest::{self, FamilyHold, OnLoss, Priority, UnitKind, WriteMode};
 use crate::repo::House;
@@ -128,33 +128,28 @@ pub fn resolve_feeds(house: &House, expanded: &[ExpandedKey]) -> (Vec<Feed>, Vec
                 ));
                 continue;
             };
-            let key = format!(
-                "home/state/{}/{}/{}",
-                src.file.entity.room, src.name, source.aspect
-            );
+            let segments = [
+                "home",
+                "state",
+                &src.file.entity.room,
+                &src.name,
+                &source.aspect,
+            ];
+            let key = segments.join("/");
             let src_is_automation = house
                 .unit(&src.owner)
                 .is_some_and(|u| u.manifest.unit.kind == UnitKind::Automation);
-            if src_is_automation {
-                let published = expanded.iter().any(|k| {
-                    k.unit == src.owner
-                        && k.direction == Direction::Publishes
-                        && k.exprs
-                            .iter()
-                            .any(|e| e.matches_prefix(&key.split('/').collect::<Vec<_>>()))
-                });
-                if !published {
-                    errors.push(ValidationError::new(
-                        Code::InputUnpublishedAspect,
-                        subject,
-                        format!(
-                            "\"{}\" does not publish {key}; a fed aspect must be in its owner's [bus.publishes]",
-                            src.owner
-                        ),
-                        file.clone(),
-                    ));
-                    continue;
-                }
+            if src_is_automation && !publishes(expanded, Some(&src.owner), &segments) {
+                errors.push(ValidationError::new(
+                    Code::InputUnpublishedAspect,
+                    subject,
+                    format!(
+                        "\"{}\" does not publish {key}; a fed aspect must be in its owner's [bus.publishes]",
+                        src.owner
+                    ),
+                    file.clone(),
+                ));
+                continue;
             }
             feeds.push(Feed {
                 entity: entity.name.clone(),
@@ -195,20 +190,18 @@ pub fn check_aspects(house: &House, expanded: &[ExpandedKey]) -> Vec<ValidationE
     let mut errors = Vec::new();
     for entity in &house.entities {
         for aspect in entity.file.aspects.iter().flat_map(|a| a.keys()) {
-            let key = format!(
-                "home/state/{}/{}/{aspect}",
-                entity.file.entity.room, entity.name
-            );
+            let segments = [
+                "home",
+                "state",
+                &entity.file.entity.room,
+                &entity.name,
+                aspect,
+            ];
+            let key = segments.join("/");
             if !crate::validate::valid_segment(aspect) {
                 continue;
             }
-            let segments: Vec<&str> = key.split('/').collect();
-            let published = expanded.iter().any(|k| {
-                k.unit == entity.owner
-                    && k.direction == Direction::Publishes
-                    && k.exprs.iter().any(|e| e.matches_prefix(&segments))
-            });
-            if !published {
+            if !publishes(expanded, Some(&entity.owner), &segments) {
                 errors.push(ValidationError::new(
                     Code::AspectUnpublished,
                     format!("{}.{aspect}", entity.name),
@@ -253,39 +246,30 @@ pub fn resolve_sources(
                 ));
                 continue;
             };
-            let key = format!(
-                "home/state/{}/{}/{}",
-                src.file.entity.room, src.name, source.aspect
-            );
-            let segments: Vec<&str> = key.split('/').collect();
+            let segments = [
+                "home",
+                "state",
+                &src.file.entity.room,
+                &src.name,
+                &source.aspect,
+            ];
+            let key = segments.join("/");
             let src_is_automation = house
                 .unit(&src.owner)
                 .is_some_and(|u| u.manifest.unit.kind == UnitKind::Automation);
-            if src_is_automation {
-                let published = expanded.iter().any(|k| {
-                    k.unit == src.owner
-                        && k.direction == Direction::Publishes
-                        && k.exprs.iter().any(|e| e.matches_prefix(&segments))
-                });
-                if !published {
-                    errors.push(ValidationError::new(
-                        Code::SourceUnpublishedAspect,
-                        subject,
-                        format!(
-                            "\"{}\" does not publish {key}; a declared source must be in its owner's [bus.publishes]",
-                            src.owner
-                        ),
-                        file.clone(),
-                    ));
-                    continue;
-                }
+            if src_is_automation && !publishes(expanded, Some(&src.owner), &segments) {
+                errors.push(ValidationError::new(
+                    Code::SourceUnpublishedAspect,
+                    subject,
+                    format!(
+                        "\"{}\" does not publish {key}; a declared source must be in its owner's [bus.publishes]",
+                        src.owner
+                    ),
+                    file.clone(),
+                ));
+                continue;
             }
-            let consumed = expanded.iter().any(|k| {
-                k.unit == entity.owner
-                    && k.direction == Direction::Subscribes
-                    && k.exprs.iter().any(|e| e.matches_prefix(&segments))
-            });
-            if !consumed {
+            if !subscribes(expanded, Some(&entity.owner), &segments) {
                 warnings.push(format!(
                     "{subject}: \"{}\" declares {key} as a source but does not subscribe it",
                     entity.owner
@@ -356,10 +340,10 @@ fn build_grants(
         if key.direction != Direction::Publishes {
             continue;
         }
-        // Classify by the source. A templated publish that expanded to nothing
-        // has no exprs to show its class, and it still gets the capability
-        // checks and the "matches no entities" warning.
-        let class = key.source.split('/').nth(1).unwrap_or_default();
+        // The class comes from the source, so a templated publish that
+        // expanded to nothing still gets the capability checks and the
+        // "matches no entities" warning.
+        let class = key.class;
         let unit = house
             .unit(&key.unit)
             .expect("expanded key from loaded unit");
@@ -393,7 +377,7 @@ fn build_grants(
                 .filter(|e| e.owner == key.unit)
                 .filter(|e| {
                     let prefix = ["home", class, e.file.entity.room.as_str(), e.name.as_str()];
-                    key.exprs.iter().any(|expr| expr.matches_prefix(&prefix))
+                    key.reaches(Direction::Publishes, &prefix)
                 })
                 .map(|e| GrantEntity {
                     name: e.name.clone(),
@@ -475,11 +459,12 @@ fn build_grants(
                 let (room, name) = (e.file.entity.room.as_str(), e.name.as_str());
                 if hold {
                     // home/hold/{unit}/{room}/{entity}/{aspect}
-                    let prefix = ["home", "hold", key.unit.as_str(), room, name];
-                    key.exprs.iter().any(|expr| expr.matches_prefix(&prefix))
+                    key.reaches(
+                        Direction::Publishes,
+                        &["home", "hold", key.unit.as_str(), room, name],
+                    )
                 } else {
-                    let prefix = ["home", "cmd", room, name];
-                    key.exprs.iter().any(|expr| expr.matches_prefix(&prefix))
+                    key.reaches(Direction::Publishes, &["home", "cmd", room, name])
                 }
             })
             .map(|e| GrantEntity {
@@ -675,13 +660,7 @@ fn check_arbitrated_coverage(
             entity.file.entity.room.as_str(),
             entity.name.as_str(),
         ];
-        let covered = expanded.iter().any(|k| {
-            k.direction == Direction::Publishes
-                && k.exprs
-                    .iter()
-                    .any(|e| e.class() == Some("arbiter") && e.matches_prefix(&prefix))
-        });
-        if !covered {
+        if !publishes(expanded, None, &prefix) {
             errors.push(ValidationError::new(
                 Code::ArbitratedUncovered,
                 &entity.name,
@@ -720,14 +699,7 @@ fn check_commanded_virtuals(
             }
             let room = entity.file.entity.room.as_str();
             let prefix = ["home", "cmd", room, name.as_str()];
-            let listens = expanded.iter().any(|k| {
-                k.unit == entity.owner
-                    && k.direction == Direction::Subscribes
-                    && k.exprs
-                        .iter()
-                        .any(|e| e.class() == Some("cmd") && e.matches_prefix(&prefix))
-            });
-            if !listens {
+            if !subscribes(expanded, Some(&entity.owner), &prefix) {
                 errors.push(ValidationError::new(
                     Code::VirtualEntityCommanded,
                     name,
@@ -969,49 +941,40 @@ fn check_reserved_classes(
     expanded: &[ExpandedKey],
     errors: &mut Vec<ValidationError>,
 ) {
-    let publish_class = |key: &ExpandedKey| -> Option<(String, Option<String>)> {
-        let mut segments = key.source.split('/').skip(1).map(str::to_string);
-        Some((segments.next()?, segments.next()))
-    };
-    let mut singleton_publishers: BTreeMap<String, BTreeSet<&str>> = BTreeMap::new();
+    let mut singleton_publishers: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
     for key in expanded
         .iter()
         .filter(|k| k.direction == Direction::Publishes)
     {
-        if let Some((class, _)) = publish_class(key) {
-            if matches!(class.as_str(), "arbiter" | "clock" | "history") {
-                singleton_publishers
-                    .entry(class)
-                    .or_default()
-                    .insert(key.unit.as_str());
-            }
+        if matches!(key.class, "arbiter" | "clock" | "history") {
+            singleton_publishers
+                .entry(key.class)
+                .or_default()
+                .insert(key.unit.as_str());
         }
     }
     for key in expanded
         .iter()
         .filter(|k| k.direction == Direction::Publishes)
     {
-        let Some((class, next)) = publish_class(key) else {
-            continue;
-        };
+        let class = key.class;
+        let next = key.source.split('/').nth(2);
         let unit = house
             .unit(&key.unit)
             .expect("expanded key from loaded unit");
-        let message = match class.as_str() {
+        let message = match class {
             "config" | "meta" => Some(format!(
                 "\"{}\" publishes under home/{class}/, which only the core writes",
                 key.source
             )),
-            "health" | "discovery" | "hold" | "arbitration"
-                if next.as_deref() != Some(key.unit.as_str()) =>
-            {
+            "health" | "discovery" | "hold" | "arbitration" if next != Some(key.unit.as_str()) => {
                 Some(format!(
                     "\"{}\" must sit under this unit's own name: home/{class}/{}/...",
                     key.source, key.unit
                 ))
             }
             "arbiter" | "clock" | "history" => {
-                let publishers = &singleton_publishers[&class];
+                let publishers = &singleton_publishers[class];
                 if unit.manifest.unit.kind != UnitKind::Service {
                     Some(format!(
                         "\"{}\": only a service may publish under home/{class}/",

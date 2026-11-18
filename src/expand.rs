@@ -5,7 +5,7 @@
 //! what `plan` printed for it.
 
 use crate::error::{Code, ValidationError};
-use crate::keyspace::{KeyExpr, Segment};
+use crate::keyspace::{KeyExpr, Segment, CLASSES};
 use crate::manifest::{UnitKind, WriteMode};
 use crate::repo::House;
 
@@ -36,12 +36,45 @@ pub struct ExpandedKey {
     pub direction: Direction,
     /// The expression as written in the manifest.
     pub source: String,
+    /// The class segment of `source` (`state`, `cmd`, ...). It is read
+    /// before templates are substituted, so it is known even when a
+    /// template expands to nothing.
+    pub class: &'static str,
     /// Whether the source used {room}/{entity} templates. Stored here so
     /// consumers do not re-parse `source` to recover it.
     pub templated: bool,
     /// Zone name, when the room slot referenced a zone.
     pub zone: Option<String>,
     pub exprs: Vec<KeyExpr>,
+}
+
+impl ExpandedKey {
+    /// Whether this is a `direction` entry with an expression that can match
+    /// keys under the literal `prefix` (`KeyExpr::matches_prefix`).
+    pub fn reaches(&self, direction: Direction, prefix: &[&str]) -> bool {
+        self.direction == direction && self.exprs.iter().any(|e| e.matches_prefix(prefix))
+    }
+}
+
+/// Whether `unit`, or any unit when `None`, publishes a key under `prefix`.
+pub fn publishes(expanded: &[ExpandedKey], unit: Option<&str>, prefix: &[&str]) -> bool {
+    any_reaches(expanded, unit, Direction::Publishes, prefix)
+}
+
+/// Whether `unit`, or any unit when `None`, subscribes a key under `prefix`.
+pub fn subscribes(expanded: &[ExpandedKey], unit: Option<&str>, prefix: &[&str]) -> bool {
+    any_reaches(expanded, unit, Direction::Subscribes, prefix)
+}
+
+fn any_reaches(
+    expanded: &[ExpandedKey],
+    unit: Option<&str>,
+    direction: Direction,
+    prefix: &[&str],
+) -> bool {
+    expanded
+        .iter()
+        .any(|k| unit.is_none_or(|u| k.unit == u) && k.reaches(direction, prefix))
 }
 
 /// Expands every bus entry of every unit. Keys that fail to parse or fall
@@ -81,6 +114,11 @@ pub fn expand(house: &House) -> (Vec<ExpandedKey>, Vec<String>, Vec<ValidationEr
                 }
             };
 
+            let class = CLASSES
+                .iter()
+                .copied()
+                .find(|c| expr.class() == Some(*c))
+                .expect("check_schema accepts only known classes");
             let templated = expr.has_template();
             let mut zone = None;
             let exprs = if templated {
@@ -167,6 +205,7 @@ pub fn expand(house: &House) -> (Vec<ExpandedKey>, Vec<String>, Vec<ValidationEr
                 entry: entry.clone(),
                 direction,
                 source: raw.to_string(),
+                class,
                 templated,
                 zone,
                 exprs,
@@ -276,6 +315,7 @@ mod tests {
         assert!(errors.is_empty(), "{errors:?}");
         let cmd = expanded.iter().find(|k| k.entry == "commands").unwrap();
         assert!(cmd.exprs.is_empty());
+        assert_eq!(cmd.class, "cmd");
     }
 
     /// A templated key in a unit that binds nothing fails quietly: it plans
