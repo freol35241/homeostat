@@ -17,7 +17,7 @@ from dashboard import (
     text_ok,
     unit_relations,
 )
-from homeostat import house
+from homeostat import house, keys, vocabulary
 
 
 def entity(name, capability, features=(), room="hall"):
@@ -110,6 +110,19 @@ class BuildModelTest(unittest.TestCase):
         self.assertEqual(model["controls"], [{"control": "setpoint", "step": 0.5}])
         self.assertEqual(model["units"][0]["params"], {"lux": {"default": 50}})
         self.assertEqual(model["units"][0]["subscribes"], {"motion": "home/state/hall/*/motion"})
+
+    def test_the_vocabulary_is_the_sdks(self):
+        self.assertEqual(
+            build_model(self.house, set())["vocabulary"],
+            {
+                "base_aspects": vocabulary.BASE_ASPECTS,
+                "priorities": list(vocabulary.CMD_PRIORITIES),
+                "hold_words": list(keys.HOLD_WORDS),
+                "pause_param": vocabulary.ENABLED_PARAM,
+                "occupancy_aspects": list(vocabulary.OCCUPANCY_ASPECTS),
+                "brightness": dict(zip(("min", "max"), vocabulary.BRIGHTNESS_RANGE, strict=True)),
+            },
+        )
 
 
 class CommandableAspectsTest(unittest.TestCase):

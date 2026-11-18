@@ -71,9 +71,12 @@ function handleWsMessage(msg) {
 }
 
 // For a key like home/state/{room}/{entity}/motion, track lastSeen per
-// entity (both occupancy aspect names; see dashboard-logic.js).
+// entity (both occupancy aspect names; see dashboard-logic.js). The
+// model's vocabulary names them, and a delta that arrives before the
+// model has no sensor drawn for it yet.
 function trackLastSeen(key) {
-  var pe = logic.occupancyEntityFromKey(key);
+  if (!store.model.vocabulary) return;
+  var pe = logic.occupancyEntityFromKey(key, store.model.vocabulary);
   if (pe) store.lastSeen[pe] = Date.now();
 }
 
@@ -115,10 +118,6 @@ export function errText(e) {
 // of the state. The window is returned with the points so the chart can
 // place them by time.
 
-// The most rows /api/history returns (HISTORY_LIMIT_MAX in
-// adapters/dashboard.py).
-var HISTORY_LIMIT = 5000;
-
 // The most presses of a button one history read asks for.
 export var PRESSES_READ = 500;
 
@@ -142,7 +141,7 @@ export function fetchHistory(entity, aspect, hours, shape, cls, intervalS) {
   var limit = 0;
   if (query === null) {
     var extra = intervalS / 3600 + (logic.barsByDay(hours * 3600e3, intervalS) ? 24 : 0);
-    limit = Math.min(Math.ceil((hours + extra) * 3600 / intervalS) + 1, HISTORY_LIMIT);
+    limit = Math.min(Math.ceil((hours + extra) * 3600 / intervalS) + 1, store.model.limits.history_limit_max);
     query = '&hours=' + (hours + extra) + '&limit=' + limit;
   }
   var url = '/api/history?entity=' + encodeURIComponent(entity) + '&aspect=' + encodeURIComponent(aspect) + query +

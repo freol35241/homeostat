@@ -15,7 +15,7 @@ import { fetchHistoryRange, fetchIssues, fetchLayerLines, fetchSourceEvents, ope
 import { closeOverlay, overlayWide, renderOverlayContent, setOverlayWide } from './overlay/panel.js';
 import { openViewText } from './overlay/text.js';
 import { openUnitDetail } from './overlay/unit.js';
-import { descriptorField, findEntity, localState, overlay, scheduleRender, setRenderer, store } from './store.js';
+import { baseAspect, descriptorField, findEntity, localState, overlay, scheduleRender, setRenderer, store } from './store.js';
 import { renderView } from './views/index.js';
 import { flashParamRow } from './widgets/params.js';
 
@@ -43,7 +43,7 @@ document.addEventListener('click', function (e) {
     var room = el.getAttribute('data-room');
     var entity = el.getAttribute('data-entity');
     var value = el.getAttribute('data-value') === 'true';
-    sendCmd(room, entity, 'on', value);
+    sendCmd(room, entity, baseAspect('light'), value);
     return;
   }
   if (action === 'notify-send') {
@@ -52,7 +52,7 @@ document.addEventListener('click', function (e) {
   }
   if (action === 'hold-release') {
     delete localState.holdTimes[el.getAttribute('data-key')];
-    sendHold(el.getAttribute('data-room'), el.getAttribute('data-entity'), el.getAttribute('data-aspect'), null, 'release');
+    sendHold(el.getAttribute('data-room'), el.getAttribute('data-entity'), el.getAttribute('data-aspect'), null, logic.HOLD_RELEASE);
     return;
   }
   if (action === 'hold-until') {
@@ -63,17 +63,18 @@ document.addEventListener('click', function (e) {
     var lockRoom = el.getAttribute('data-room');
     var lockEntity = el.getAttribute('data-entity');
     var lockValue = el.getAttribute('data-value') === 'true';
-    sendCmd(lockRoom, lockEntity, 'locked', lockValue);
+    sendCmd(lockRoom, lockEntity, baseAspect('lock'), lockValue);
     return;
   }
   if (action === 'climate-step') {
     var stepRoom = el.getAttribute('data-room');
     var stepEntity = el.getAttribute('data-entity');
-    var current = stepBase(stepRoom, stepEntity, 'setpoint');
+    var stepAspect = baseAspect('climate');
+    var current = stepBase(stepRoom, stepEntity, stepAspect);
     if (typeof current !== 'number') return; // no fabricated default to step from
     var delta = parseFloat(el.getAttribute('data-delta'));
     var next = Math.round((current + delta) * 10) / 10;
-    stepCmd(stepRoom, stepEntity, 'setpoint', next);
+    stepCmd(stepRoom, stepEntity, stepAspect, next);
     return;
   }
   if (action === 'brightness-step') {
@@ -81,8 +82,8 @@ document.addEventListener('click', function (e) {
     var bEntity = el.getAttribute('data-entity');
     var bCurrent = stepBase(bRoom, bEntity, 'brightness');
     if (typeof bCurrent !== 'number') return;
-    var bPct = Math.max(0, Math.min(100, Math.round(bCurrent / 254 * 100) + parseInt(el.getAttribute('data-delta'), 10)));
-    stepCmd(bRoom, bEntity, 'brightness', Math.round(bPct / 100 * 254));
+    var bPct = Math.max(0, Math.min(100, logic.percentOfBrightness(bCurrent, store.model.vocabulary) + parseInt(el.getAttribute('data-delta'), 10)));
+    stepCmd(bRoom, bEntity, 'brightness', logic.brightnessOfPercent(bPct, store.model.vocabulary));
     return;
   }
   if (action === 'aspect-step') {
@@ -242,7 +243,7 @@ document.addEventListener('change', function (e) {
     var pct = parseInt(el.value, 10);
     var sendValue;
     if (kind === 'brightness') {
-      sendValue = Math.round((pct / 100) * 254);
+      sendValue = logic.brightnessOfPercent(pct, store.model.vocabulary);
       sendCmd(room, entity, 'brightness', sendValue);
     } else if (kind === 'color_temp') {
       sendValue = pct; // el.value already the mired value for color_temp

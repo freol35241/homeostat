@@ -60,7 +60,8 @@ explicit timestamps.
 
 Fixtures can drift from the real unit. The canary test boots a real house
 once and checks that `model.json` has the same fields as the unit's
-`/api/model`. Nothing checks `snapshot.json` that way, so keep it to
+`/api/model`, and the same `vocabulary` and `limits`, which do not depend
+on the house. Nothing checks `snapshot.json` that way, so keep it to
 shapes the unit emits.
 
 ## Checking that the tests can fail

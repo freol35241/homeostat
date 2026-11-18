@@ -112,7 +112,7 @@ function renderSend(entity) {
     : '';
   return html`<div class="card-label" style="margin-top:20px;">Send</div>
     <div class="aspect-row notify-row">
-      <input type="text" id="notify-${entity.name}" maxlength="1000" placeholder="Message text" aria-label="Message text"
+      <input type="text" id="notify-${entity.name}" maxlength="${store.model.limits.max_text_chars}" placeholder="Message text" aria-label="Message text"
         value="${localState.notifyDrafts[entity.name] || ''}" data-action="notify-text"${attrs}>
       <div class="seg"><button data-action="notify-send"${attrs} data-aspect="message">Send</button>${alert}</div></div>`;
 }

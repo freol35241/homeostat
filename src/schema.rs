@@ -177,7 +177,9 @@ fn render_vocabulary(out: &mut String) {
 /// are rendered. Rows follow the Rust tables' order, which a test keeps in
 /// name order for VOCABULARY.
 pub fn sdk_vocabulary() -> String {
-    use crate::manifest::{implicit_enabled, Priority, ENABLED_PARAM, VOCABULARY};
+    use crate::manifest::{
+        implicit_enabled, Priority, BRIGHTNESS_RANGE, ENABLED_PARAM, VOCABULARY,
+    };
     let mut out = String::from(
         "\"\"\"The core's vocabulary tables, as the SDK and the adapters read them.\n\
          \n\
@@ -268,6 +270,18 @@ pub fn sdk_vocabulary() -> String {
                 (c.name, format!("{{{}}}", options.join(", ")))
             }),
     );
+    out.push_str(
+        "# The aspects a room sensor publishes, whichever its device observes\n\
+         # (the `occupancy` row's `aspects`).\n",
+    );
+    let occupancy = crate::manifest::capability("occupancy").expect("occupancy is in VOCABULARY");
+    out.push_str(&format!(
+        "OCCUPANCY_ASPECTS = {}\n\n",
+        python_tuple(occupancy.aspects.iter().copied())
+    ));
+    let (lowest, highest) = BRIGHTNESS_RANGE;
+    out.push_str("# A light's lowest and highest `brightness` (`BRIGHTNESS_RANGE`).\n");
+    out.push_str(&format!("BRIGHTNESS_RANGE = ({lowest}, {highest})\n\n"));
     // Destructured, so a new field of ParamSpec is a compile error here.
     let crate::manifest::ParamSpec {
         param_type,
@@ -538,6 +552,20 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// docs/manifest.md gives a light's brightness scale in the light row's
+    /// note, which is prose, so this keeps it to `BRIGHTNESS_RANGE`.
+    #[test]
+    fn light_note_states_the_brightness_range() {
+        let (lowest, highest) = crate::manifest::BRIGHTNESS_RANGE;
+        let light = crate::manifest::capability("light").expect("light is in VOCABULARY");
+        assert!(
+            light
+                .note
+                .contains(&format!("`brightness` {lowest}–{highest} ")),
+            "the light note does not state BRIGHTNESS_RANGE"
+        );
     }
 
     #[test]

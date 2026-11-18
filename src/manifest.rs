@@ -248,6 +248,11 @@ pub const COMMON_ASPECTS: &[(&str, &str)] = &[
     ("{aspect}_valid", "bool beside a reading the device itself may stop trusting; the value stands, the flag says stale."),
 ];
 
+/// The lowest and highest `brightness` of a `light`, the Zigbee2MQTT
+/// scale. An adapter whose device counts otherwise rescales to it, and
+/// the dashboard shows it as a percent. The light row's note states it.
+pub const BRIGHTNESS_RANGE: (u32, u32) = (0, 254);
+
 /// The `schema` version every house file must declare.
 pub const SUPPORTED_SCHEMA: u32 = 1;
 

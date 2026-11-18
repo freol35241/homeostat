@@ -46,6 +46,13 @@ OPTIONS = {
     "light": {"transition": ("on", "brightness", "color_temp")},
 }
 
+# The aspects a room sensor publishes, whichever its device observes
+# (the `occupancy` row's `aspects`).
+OCCUPANCY_ASPECTS = ("motion", "occupied")
+
+# A light's lowest and highest `brightness` (`BRIGHTNESS_RANGE`).
+BRIGHTNESS_RANGE = (0, 254)
+
 # The parameter that pauses an automation, and its spec when the manifest
 # does not declare it (`ENABLED_PARAM`, `implicit_enabled`).
 ENABLED_PARAM = "enabled"

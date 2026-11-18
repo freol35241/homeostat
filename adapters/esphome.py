@@ -122,9 +122,10 @@ MDNS_SERVICE = "_esphomelib._tcp.local."
 DEFAULT_PORT = 6053
 OCCUPANCY_DEVICE_CLASSES = {"motion", "occupancy", "presence"}
 # ESPHome's native brightness is a 0.0-1.0 float. z2m's `brightness` is
-# the raw Zigbee 0-254 integer (see zigbee2mqtt.py, and the dashboard's
-# `b / 254`), so brightness is rescaled both ways to match it. color_temp
-# is mireds on both sides and is only rounded to an int.
+# the raw Zigbee 0-254 integer (see zigbee2mqtt.py), the scale the
+# vocabulary names (vocabulary.BRIGHTNESS_RANGE), so brightness is rescaled
+# both ways to match it. color_temp is mireds on both sides and is only
+# rounded to an int.
 BRIGHTNESS_SCALE = 254
 RUNTIME_ASPECT = "runtime_s"
 

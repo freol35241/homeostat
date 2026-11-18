@@ -104,7 +104,13 @@ export function unitLabel(unitName) {
 }
 
 export function occupancyReading(entity) {
-  return logic.occupancyReading(store.state, entity);
+  return logic.occupancyReading(store.state, entity, store.model.vocabulary);
+}
+
+// The aspect a capability's own controls command: its base aspect in the
+// model's vocabulary.
+export function baseAspect(capability) {
+  return store.model.vocabulary.base_aspects[capability];
 }
 
 export function entitySpec(room, entity) {

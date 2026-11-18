@@ -4,7 +4,7 @@
 import { errText } from './api.js';
 import { toast } from './chrome.js';
 import logic from './logic.js';
-import { descriptorField, entitySpec, scheduleRender, stateValue, store, unitLabel } from './store.js';
+import { baseAspect, descriptorField, entitySpec, scheduleRender, stateValue, store, unitLabel } from './store.js';
 
 /* In-flight commands, keyed room/entity/aspect. They are kept outside
  * `store`, which holds the house's state as the bus reports it. A pending
@@ -40,7 +40,7 @@ export function sendCmd(room, entity, aspect, value) {
   var spec = entitySpec(room, entity);
   var seq = ++cmdSeq;
   logic.trackCommand(pending, {
-    room: room, entity: entity, aspect: aspect, value: value, seq: seq, tolerance: logic.cmdTolerance(aspect),
+    room: room, entity: entity, aspect: aspect, value: value, seq: seq, tolerance: logic.cmdTolerance(aspect, store.model.vocabulary),
     capability: spec ? spec.capability : null, descriptor: store.aspects[entity],
     before: stateValue(room, entity, aspect)
   }, Date.now(), 'sending');
@@ -82,7 +82,7 @@ export function stepCmd(room, entity, aspect, value) {
   delete recent[key];
   var spec = entitySpec(room, entity);
   logic.trackCommand(pending, {
-    room: room, entity: entity, aspect: aspect, value: value, tolerance: logic.cmdTolerance(aspect),
+    room: room, entity: entity, aspect: aspect, value: value, tolerance: logic.cmdTolerance(aspect, store.model.vocabulary),
     capability: spec ? spec.capability : null, descriptor: store.aspects[entity],
     before: stateValue(room, entity, aspect)
   }, Date.now(), 'draft');
@@ -105,7 +105,7 @@ function formatCmdValue(room, entity, aspect, value) {
     var text = value.length > 40 ? value.slice(0, 39) + '\u2026' : value;
     return (aspect === 'alert' ? 'alert \u201c' : '\u201c') + text + '\u201d';
   }
-  if (aspect === 'brightness' && typeof value === 'number') return Math.round(value / 254 * 100) + '%';
+  if (aspect === 'brightness' && typeof value === 'number') return logic.percentOfBrightness(value, store.model.vocabulary) + '%';
   if (typeof value === 'boolean' && aspect === 'locked') return value ? 'locked' : 'unlocked';
   if (typeof value === 'boolean' && aspect === 'on') return value ? 'on' : 'off';
   var spec = entitySpec(room, entity);
@@ -204,7 +204,7 @@ function cssEscape(text) {
  * hold's record changing is the answer, and the page redraws when it
  * does. Resolves to whether the dashboard took it. */
 export function sendHold(room, entity, aspect, value, hold) {
-  var body = hold === 'release'
+  var body = hold === logic.HOLD_RELEASE
     ? { room: room, entity: entity, aspect: aspect, hold: hold }
     : { room: room, entity: entity, aspect: aspect, value: value, hold: hold };
   return fetch('/api/cmd', {
@@ -244,18 +244,19 @@ export function sendParam(unit, param, value, onError) {
   });
 }
 
-/* The aspect a control commands. Most carry it explicitly; these actions
- * imply it. The light sliders name theirs `data-kind`. */
-var CONTROL_ASPECTS = {
-  'toggle-light': 'on',
-  'toggle-lock': 'locked',
-  'climate-step': 'setpoint',
-  'brightness-step': 'brightness'
+/* The aspect a control commands. Most carry it explicitly. These actions
+ * command their capability's base aspect, and the brightness stepper its
+ * aspect. The light sliders name theirs `data-kind`. */
+var CONTROL_CAPABILITIES = {
+  'toggle-light': 'light',
+  'toggle-lock': 'lock',
+  'climate-step': 'climate'
 };
 
 function controlAspect(el) {
   var action = el.getAttribute('data-action');
-  if (CONTROL_ASPECTS[action]) return CONTROL_ASPECTS[action];
+  if (CONTROL_CAPABILITIES[action]) return baseAspect(CONTROL_CAPABILITIES[action]);
+  if (action === 'brightness-step') return 'brightness';
   if (action === 'slider') return el.getAttribute('data-kind');
   return el.getAttribute('data-aspect');
 }

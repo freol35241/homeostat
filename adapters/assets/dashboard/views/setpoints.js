@@ -10,7 +10,7 @@ import { renderParamRow } from '../widgets/params.js';
 export function renderSetpoints() {
   var rows = [];
   (store.model.units || []).forEach(function (u) {
-    logic.familyParams(u).forEach(function (pname) {
+    logic.familyParams(u, store.model.vocabulary).forEach(function (pname) {
       rows.push(renderParamRow(u.name, pname, u.params[pname]));
     });
   });

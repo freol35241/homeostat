@@ -2861,7 +2861,12 @@ The whole HTTP API sits behind the gates in
 
 - `GET /api/model` is the house rendered for the browser. Each entity
   is marked `commandable`. Each unit lists what it drives and reads.
-  The model also carries the views and the `driven` bands.
+  The model also carries the views and the `driven` bands. `vocabulary`
+  holds the words and scales the page acts on, read from the SDK: base
+  aspects, priority bands, hold words, the pause parameter, occupancy
+  aspects and the brightness range. `limits` holds the unit's caps on
+  what the page may ask for. The page reads both rather than restating
+  them.
 - `GET /ws` sends a snapshot of state, forecasts, holds, health, config
   and descriptors, followed by live deltas.
 - The writes are `POST /api/cmd`, `/api/lights/off` and `/api/param`.
@@ -3059,7 +3064,8 @@ escapes every interpolated value unless the value is itself markup, so
 a forgotten escape cannot turn a label from the house into markup.
 `tests/browser` drives the real page against canned fixtures. A canary
 in `tests/it/dashboard.rs` checks the fixtures' field names against a real
-`/api/model`. The browser suite is a broad net and does not replace
+`/api/model`, and the values of its `vocabulary` and `limits`, which do
+not depend on the house. The browser suite is a broad net and does not replace
 opening a browser on a change.
 
 ### Views are text
