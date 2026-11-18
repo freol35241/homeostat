@@ -10,13 +10,12 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use crate::config::{default_value, keeps_live};
 use crate::content;
 use crate::expand::ExpandedKey;
 use crate::grants::{free_nodes, grant_edges, Contributor, Grant};
 use crate::manifest::{implicit_enabled, ParamSpec, UnitKind, ENABLED_PARAM};
+use crate::params::{default_value, display_value, keeps_live};
 use crate::repo::LoadedUnit;
-use crate::validate::display_value;
 use crate::CheckResult;
 
 /// Plan tiers per docs/design.md#tiers. They are derived from the diff, and

@@ -109,7 +109,7 @@ async fn execute(core: &Arc<Core>, request: ApplyRequest) -> ApplyResult {
     };
 
     // Parameters first. The diff's parameter changes get their repo default,
-    // and the live edits it keeps stay (config::keeps_live). Every subscribed
+    // and the live edits it keeps stay (params::keeps_live). Every subscribed
     // unit sees the put, and nothing restarts. A unit restarted later in the
     // walk reads its values with a get anyway.
     let replaced: BTreeSet<(String, String)> = diff

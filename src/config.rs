@@ -21,9 +21,9 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::manifest::{ParamSpec, ParamType};
+use crate::manifest::ParamType;
+use crate::params::{check, default_value, Constraint};
 use crate::repo::House;
-use crate::validate::parse_time;
 
 struct StoredParam {
     param_type: ParamType,
@@ -49,51 +49,6 @@ struct SavedEdit {
     default: Value,
 }
 
-#[derive(Default)]
-struct Constraint {
-    min: Option<f64>,
-    max: Option<f64>,
-    /// (hour, minute) bounds; together they form a window that may span
-    /// midnight (`after 20:00, before 02:00`).
-    after: Option<(u8, u8)>,
-    before: Option<(u8, u8)>,
-    allowed: Option<Vec<String>>,
-}
-
-impl Constraint {
-    /// Builds from a manifest constraint table. The table already passed
-    /// plan-time validation, so anything unusable here is not enforced.
-    fn from_spec(spec: &ParamSpec) -> Constraint {
-        let Some(table) = &spec.constraint else {
-            return Constraint::default();
-        };
-        let num = |key: &str| match table.get(key) {
-            Some(toml::Value::Integer(i)) => Some(*i as f64),
-            Some(toml::Value::Float(f)) => Some(*f),
-            _ => None,
-        };
-        let time = |key: &str| match table.get(key) {
-            Some(toml::Value::String(s)) => parse_time(s),
-            _ => None,
-        };
-        Constraint {
-            min: num("min"),
-            max: num("max"),
-            after: time("after"),
-            before: time("before"),
-            allowed: match table.get("enum") {
-                Some(toml::Value::Array(items)) => Some(
-                    items
-                        .iter()
-                        .filter_map(|i| i.as_str().map(str::to_string))
-                        .collect(),
-                ),
-                _ => None,
-            },
-        }
-    }
-}
-
 /// The live parameter values by unit and name, each with the type and
 /// constraint its manifest declares.
 pub struct ConfigStore {
@@ -112,7 +67,8 @@ impl ConfigStore {
     /// A store holding every parameter's manifest default, with the live
     /// edits saved at `saved` restored over them. A saved edit is restored
     /// when its default is still the manifest default and the value meets the
-    /// constraint, the rule an apply uses ([`keeps_live`]). Returns the store
+    /// constraint, the rule an apply uses
+    /// ([`keeps_live`](crate::params::keeps_live)). Returns the store
     /// and one line per edit restored or dropped, for the supervisor's log.
     pub fn from_house(house: &House, saved: Option<PathBuf>) -> (ConfigStore, Vec<String>) {
         let mut params = build(house);
@@ -142,7 +98,7 @@ impl ConfigStore {
     /// Rebuilds the store from a new house. The params in `replaced` are set
     /// to their repo default, as are new params. Every other param keeps its
     /// live value while it meets the new type and constraint. The plan's diff
-    /// names `replaced` ([`keeps_live`]), so plan and apply decide alike. A
+    /// names `replaced` ([`keeps_live`](crate::params::keeps_live)), so plan and apply decide alike. A
     /// write that lands after the diff was taken is kept the same way.
     /// Returns the params whose effective value changed, so the caller can
     /// put them on the bus for live subscribers. Params of new units need no
@@ -333,7 +289,7 @@ fn build(house: &House) -> BTreeMap<(String, String), StoredParam> {
                 (unit.manifest.unit.name.clone(), name.clone()),
                 StoredParam {
                     param_type: spec.param_type,
-                    constraint: Constraint::from_spec(spec),
+                    constraint: Constraint::parse(spec).0,
                     default: default_value(spec),
                     value: default_value(spec),
                 },
@@ -343,144 +299,10 @@ fn build(house: &House) -> BTreeMap<(String, String), StoredParam> {
     params
 }
 
-/// Whether an apply keeps a live value. The owner decides through the
-/// default and the family through the live value. An apply that leaves the
-/// default alone keeps the family's value. An apply that changes the default,
-/// or a constraint the live value no longer meets, sets the new default.
-/// `old_default` is the default as of the last apply.
-pub fn keeps_live(old_default: &Value, spec: &ParamSpec, live: &Value) -> bool {
-    *old_default == default_value(spec)
-        && check(spec.param_type, &Constraint::from_spec(spec), live).is_ok()
-}
-
-/// Whether the spec's default satisfies its own constraint. This is the
-/// plan-time check behind the repo-edit parameter path: a default outside the
-/// constraint must fail validation before it reaches a running unit (see
-/// docs/design.md#repo-and-live-values). A malformed constraint enforces
-/// nothing here; plan-time validation reports it separately.
-pub fn default_within_constraint(spec: &ParamSpec) -> Result<(), String> {
-    check(
-        spec.param_type,
-        &Constraint::from_spec(spec),
-        &default_value(spec),
-    )
-}
-
-/// A parameter's manifest default as the JSON value the bus carries.
-pub fn default_value(spec: &ParamSpec) -> Value {
-    match &spec.default {
-        toml::Value::Boolean(b) => Value::from(*b),
-        // An integer default on a float param becomes the float it means.
-        // serde_json's Number(5) != Number(5.0), so an integral default would
-        // make every decimal write of the same value plan as permanent drift.
-        toml::Value::Integer(i) if spec.param_type == ParamType::Float => Value::from(*i as f64),
-        toml::Value::Integer(i) => Value::from(*i),
-        toml::Value::Float(f) => Value::from(*f),
-        toml::Value::String(s) => Value::from(s.clone()),
-        other => Value::from(other.to_string()),
-    }
-}
-
-fn check(param_type: ParamType, constraint: &Constraint, value: &Value) -> Result<(), String> {
-    match param_type {
-        ParamType::Bool => {
-            value
-                .as_bool()
-                .ok_or_else(|| type_error(param_type, value))?;
-        }
-        ParamType::Int => {
-            let n = value
-                .as_i64()
-                .ok_or_else(|| type_error(param_type, value))?;
-            check_range(n as f64, constraint)?;
-        }
-        ParamType::Float => {
-            let n = value
-                .as_f64()
-                .ok_or_else(|| type_error(param_type, value))?;
-            check_range(n, constraint)?;
-        }
-        ParamType::String => {
-            let s = value
-                .as_str()
-                .ok_or_else(|| type_error(param_type, value))?;
-            if let Some(allowed) = &constraint.allowed {
-                if !allowed.iter().any(|a| a == s) {
-                    return Err(format!(
-                        "\"{s}\" is not one of {}",
-                        allowed
-                            .iter()
-                            .map(|a| format!("\"{a}\""))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ));
-                }
-            }
-        }
-        ParamType::Time => {
-            let s = value
-                .as_str()
-                .ok_or_else(|| type_error(param_type, value))?;
-            let t = parse_time(s).ok_or_else(|| format!("\"{s}\" is not a time (HH:MM)"))?;
-            check_window(t, constraint)?;
-        }
-    }
-    Ok(())
-}
-
-fn type_error(param_type: ParamType, value: &Value) -> String {
-    format!("{value} does not match type \"{param_type}\"")
-}
-
-fn check_range(n: f64, constraint: &Constraint) -> Result<(), String> {
-    if let Some(min) = constraint.min {
-        if n < min {
-            return Err(format!("{n} is below min {min}"));
-        }
-    }
-    if let Some(max) = constraint.max {
-        if n > max {
-            return Err(format!("{n} is above max {max}"));
-        }
-    }
-    Ok(())
-}
-
-/// `after`/`before` form an inclusive window that may span midnight:
-/// `after 20:00, before 02:00` admits 20:00..=23:59 and 00:00..=02:00.
-fn check_window(t: (u8, u8), constraint: &Constraint) -> Result<(), String> {
-    let minutes = |(h, m): (u8, u8)| u16::from(h) * 60 + u16::from(m);
-    let v = minutes(t);
-    let err = |bound: &str, (h, m): (u8, u8)| {
-        Err(format!(
-            "{:02}:{:02} is not {bound} {h:02}:{m:02}",
-            t.0, t.1
-        ))
-    };
-    match (constraint.after, constraint.before) {
-        (Some(a), Some(b)) => {
-            let inside = if minutes(a) <= minutes(b) {
-                v >= minutes(a) && v <= minutes(b)
-            } else {
-                v >= minutes(a) || v <= minutes(b)
-            };
-            if !inside {
-                return Err(format!(
-                    "{:02}:{:02} is outside {:02}:{:02}..{:02}:{:02}",
-                    t.0, t.1, a.0, a.1, b.0, b.1
-                ));
-            }
-        }
-        (Some(a), None) if v < minutes(a) => return err("after", a),
-        (None, Some(b)) if v > minutes(b) => return err("before", b),
-        _ => {}
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::params::parse_time;
     use serde_json::json;
 
     fn time_spec(after: &str, before: &str) -> StoredParam {
@@ -494,69 +316,6 @@ mod tests {
             default: json!("22:00"),
             value: json!("22:00"),
         }
-    }
-
-    fn check_param(p: &StoredParam, value: Value) -> Result<(), String> {
-        check(p.param_type, &p.constraint, &value)
-    }
-
-    #[test]
-    fn time_window_spans_midnight() {
-        let p = time_spec("20:00", "02:00");
-        for ok in ["20:00", "23:59", "00:30", "02:00"] {
-            check_param(&p, json!(ok)).unwrap_or_else(|e| panic!("{ok}: {e}"));
-        }
-        for bad in ["19:59", "02:01", "12:00"] {
-            assert!(check_param(&p, json!(bad)).is_err(), "{bad} accepted");
-        }
-    }
-
-    #[test]
-    fn time_window_same_day() {
-        let p = time_spec("08:00", "17:00");
-        check_param(&p, json!("12:00")).unwrap();
-        assert!(check_param(&p, json!("18:00")).is_err());
-        assert!(check_param(&p, json!("07:59")).is_err());
-    }
-
-    #[test]
-    fn time_rejects_non_times() {
-        let p = time_spec("20:00", "02:00");
-        // "7:30" and "+7:30" too: the SDK reads a time with `fromisoformat`.
-        for bad in [
-            json!("not-a-time"),
-            json!("25:00"),
-            json!("7:30"),
-            json!("+7:30"),
-            json!(22),
-            json!(true),
-        ] {
-            assert!(check_param(&p, bad.clone()).is_err(), "{bad} accepted");
-        }
-    }
-
-    #[test]
-    fn int_range() {
-        let c = Constraint {
-            min: Some(0.0),
-            max: Some(100.0),
-            ..Constraint::default()
-        };
-        check(ParamType::Int, &c, &json!(50)).unwrap();
-        assert!(check(ParamType::Int, &c, &json!(-1)).is_err());
-        assert!(check(ParamType::Int, &c, &json!(101)).is_err());
-        assert!(check(ParamType::Int, &c, &json!(1.5)).is_err());
-    }
-
-    #[test]
-    fn string_enum() {
-        let c = Constraint {
-            allowed: Some(vec!["low".into(), "high".into()]),
-            ..Constraint::default()
-        };
-        check(ParamType::String, &c, &json!("low")).unwrap();
-        assert!(check(ParamType::String, &c, &json!("medium")).is_err());
-        assert!(check(ParamType::String, &c, &json!(3)).is_err());
     }
 
     #[test]
@@ -582,39 +341,6 @@ mod tests {
             "stored as a float, not an integer: {stored}"
         );
         assert_eq!(store.read(|_, _| true)[0].2, json!(21.0));
-    }
-
-    fn level_spec(default: i64, max: i64) -> ParamSpec {
-        ParamSpec {
-            param_type: ParamType::Int,
-            default: toml::Value::Integer(default),
-            constraint: Some(BTreeMap::from([
-                ("min".to_string(), toml::Value::Integer(0)),
-                ("max".to_string(), toml::Value::Integer(max)),
-            ])),
-            editable_by: None,
-        }
-    }
-
-    #[test]
-    fn a_live_edit_under_an_unchanged_default_is_kept() {
-        assert!(keeps_live(&json!(1), &level_spec(1, 10), &json!(7)));
-    }
-
-    #[test]
-    fn a_changed_default_replaces_a_live_edit() {
-        assert!(!keeps_live(&json!(1), &level_spec(3, 10), &json!(7)));
-    }
-
-    #[test]
-    fn a_live_edit_outside_the_new_constraint_is_replaced() {
-        assert!(!keeps_live(&json!(1), &level_spec(1, 5), &json!(7)));
-        assert!(keeps_live(&json!(1), &level_spec(1, 5), &json!(4)));
-    }
-
-    #[test]
-    fn a_live_edit_of_another_type_is_replaced() {
-        assert!(!keeps_live(&json!(1), &level_spec(1, 10), &json!("7")));
     }
 
     fn level_store(saved: PathBuf, default: i64, max: i64) -> (ConfigStore, Vec<String>) {

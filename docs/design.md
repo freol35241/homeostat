@@ -1822,7 +1822,7 @@ it.
   so an unrelated commit does not undo a family member's setpoint. An
   apply sets the new default when the owner changed that default, or
   when the live value is outside a new constraint
-  (`config::keeps_live`). The old default is the one in the manifest
+  (`params::keeps_live`). The old default is the one in the manifest
   the world is running.
 - Plan lists every live value that differs from its default. A kept
   edit is listed under "Live edits kept" and is not a change. A

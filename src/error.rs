@@ -109,12 +109,6 @@ impl Scoped<'_> {
             .push(ValidationError::new(code, subject, message, file));
     }
 
-    /// How many errors the whole sink holds, for a caller that checks
-    /// whether its own checks added any.
-    pub fn error_count(&self) -> usize {
-        self.diags.errors.len()
-    }
-
     /// Reports a warning in this file.
     pub fn warn(&mut self, subject: impl Into<String>, message: impl Into<String>) {
         self.diags.warnings.push(Warning {
@@ -611,6 +605,7 @@ mod tests {
             include_str!("validate.rs"),
             include_str!("expand.rs"),
             include_str!("grants.rs"),
+            include_str!("params.rs"),
         ];
         let dead: Vec<Code> = Code::ALL
             .iter()

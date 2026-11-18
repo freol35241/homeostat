@@ -17,6 +17,7 @@ pub mod grants;
 pub mod keyspace;
 pub mod manifest;
 pub mod mcp;
+pub mod params;
 pub mod pending;
 pub mod plan;
 pub mod repo;
