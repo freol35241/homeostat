@@ -79,52 +79,29 @@ pub struct GrantEntity {
 }
 
 /// An aspect of another entity that a feed or a declared source names,
-/// resolved to its state key and its entity's owner. A feed serialises it
-/// flattened, so the fields serialise under `source_` names beside the
-/// feed's own `entity`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// resolved to its state key and its entity's owner.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Contributor {
     /// The contributing entity.
-    #[serde(rename = "source_entity")]
     pub entity: String,
     /// The contributing aspect.
-    #[serde(rename = "source_aspect")]
     pub aspect: String,
     /// The unit that binds the contributing entity.
-    #[serde(rename = "source_owner")]
     pub owner: String,
     /// The state key the aspect is read from,
     /// `home/state/{room}/{entity}/{aspect}`.
     pub key: String,
 }
 
-/// The codes and wording of the two errors a contributor can raise, which
-/// differ between `[inputs]` and `[sources]`.
-struct Refusals {
-    unknown_entity: Code,
-    unpublished_aspect: Code,
-    /// What the unknown-entity message calls the contributing entity.
-    entity_noun: &'static str,
-    /// What the unpublished-aspect message calls the key.
-    key_noun: &'static str,
+/// The block that names a contributor. The two raise the same errors under
+/// different codes and wording.
+enum Block {
+    Inputs,
+    Sources,
 }
 
-const FEED_REFUSALS: Refusals = Refusals {
-    unknown_entity: Code::InputUnknownEntity,
-    unpublished_aspect: Code::InputUnpublishedAspect,
-    entity_noun: "source entity",
-    key_noun: "a fed aspect",
-};
-
-const SOURCE_REFUSALS: Refusals = Refusals {
-    unknown_entity: Code::SourceUnknownEntity,
-    unpublished_aspect: Code::SourceUnpublishedAspect,
-    entity_noun: "contributing entity",
-    key_noun: "a declared source",
-};
-
-/// Resolves the `aspect` of entity `target`, which `entity` names as `name`
-/// in its `[inputs]` or `[sources]`. The contributing entity must exist, and
+/// Resolves `aspect` of the entity `contributing`, which `entity` names as
+/// `name` in its `[inputs]` or `[sources]`. The contributing entity must exist, and
 /// an automation-owned one must publish the aspect. The key's segments come
 /// back beside the contributor, for a caller that matches them against a
 /// unit's subscriptions.
@@ -133,16 +110,31 @@ fn resolve_contributor<'h>(
     expanded: &[ExpandedKey],
     entity: &LoadedEntity,
     name: &str,
-    (target, aspect): (&str, &'h str),
-    refusals: &Refusals,
+    contributing: &str,
+    aspect: &'h str,
+    block: Block,
 ) -> Result<(Contributor, [&'h str; 5]), ValidationError> {
+    let (unknown_entity, unpublished_aspect, entity_noun, key_noun) = match block {
+        Block::Inputs => (
+            Code::InputUnknownEntity,
+            Code::InputUnpublishedAspect,
+            "source entity",
+            "a fed aspect",
+        ),
+        Block::Sources => (
+            Code::SourceUnknownEntity,
+            Code::SourceUnpublishedAspect,
+            "contributing entity",
+            "a declared source",
+        ),
+    };
     let subject = format!("{}.{name}", entity.name);
     let file = Some(entity.path.clone());
-    let Some(src) = house.entities.iter().find(|e| e.name == target) else {
+    let Some(src) = house.entities.iter().find(|e| e.name == contributing) else {
         return Err(ValidationError::new(
-            refusals.unknown_entity,
+            unknown_entity,
             subject,
-            format!("{} \"{target}\" does not exist", refusals.entity_noun),
+            format!("{entity_noun} \"{contributing}\" does not exist"),
             file,
         ));
     };
@@ -153,11 +145,11 @@ fn resolve_contributor<'h>(
         .is_some_and(|u| u.manifest.unit.kind == UnitKind::Automation);
     if src_is_automation && !publishes(expanded, Some(&src.owner), &segments) {
         return Err(ValidationError::new(
-            refusals.unpublished_aspect,
+            unpublished_aspect,
             subject,
             format!(
-                "\"{}\" does not publish {key}; {} must be in its owner's [bus.publishes]",
-                src.owner, refusals.key_noun
+                "\"{}\" does not publish {key}; {key_noun} must be in its owner's [bus.publishes]",
+                src.owner
             ),
             file,
         ));
@@ -175,14 +167,13 @@ fn resolve_contributor<'h>(
 /// (docs/design.md#device-feeds). The plan renders it next to the grant table.
 /// A feed is not a walk-order edge, because a control loop that reads a device
 /// and feeds a term back to it is a legitimate cycle.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Feed {
     /// The fed entity.
     pub entity: String,
     /// The adapter's name for the input.
     pub input: String,
     /// The source, resolved.
-    #[serde(flatten)]
     pub source: Contributor,
 }
 
@@ -209,12 +200,19 @@ pub fn resolve_feeds(house: &House, expanded: &[ExpandedKey]) -> (Vec<Feed>, Vec
             continue;
         }
         for (input, source) in inputs {
-            let target = (source.entity.as_str(), source.aspect.as_str());
-            match resolve_contributor(house, expanded, entity, input, target, &FEED_REFUSALS) {
-                Ok((source, _)) => feeds.push(Feed {
+            match resolve_contributor(
+                house,
+                expanded,
+                entity,
+                input,
+                &source.entity,
+                &source.aspect,
+                Block::Inputs,
+            ) {
+                Ok((contributor, _)) => feeds.push(Feed {
                     entity: entity.name.clone(),
                     input: input.clone(),
-                    source,
+                    source: contributor,
                 }),
                 Err(error) => errors.push(error),
             }
@@ -292,14 +290,14 @@ pub fn resolve_sources(
             continue;
         };
         for (name, source) in declared {
-            let target = (source.entity.as_str(), source.aspect.as_str());
             let (contributor, segments) = match resolve_contributor(
                 house,
                 expanded,
                 entity,
                 name,
-                target,
-                &SOURCE_REFUSALS,
+                &source.entity,
+                &source.aspect,
+                Block::Sources,
             ) {
                 Ok(resolved) => resolved,
                 Err(error) => {
