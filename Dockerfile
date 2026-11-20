@@ -13,7 +13,7 @@
 # cross-compiles for $TARGETARCH, so a multi-arch `docker buildx build`
 # does not run rustc under QEMU.
 
-FROM --platform=$BUILDPLATFORM rust:1-trixie@sha256:0b0ea86881537b3f645aace7e8e39556289f8787db057317c8d4978548213b9e AS build
+FROM --platform=$BUILDPLATFORM rust:1-trixie@sha256:223cc32ddca8f3ee90c436dbc94b6b5f052ea7f9653c5201e9612f08ad7d21b8 AS build
 ARG TARGETARCH
 WORKDIR /src
 
