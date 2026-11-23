@@ -37,10 +37,7 @@ class PressTest(unittest.TestCase):
             name="remote", id="2", capability="button", room="hall",
             actions={"single": {"lamp": {"set": {"on": True, "brightness": 120}}}},
         )
-        model = house_mod.HouseModel(
-            zones={}, entities=[light, remote],
-            units=[types.SimpleNamespace(name="buttons", publishes=publishes)],
-        )
+        model = house_mod.HouseModel(zones={}, entities=[light, remote], units=[])
         handlers, sent, events = {}, [], []
 
         def publish(binding, value, **kw):
@@ -50,6 +47,7 @@ class PressTest(unittest.TestCase):
 
         ctx = types.SimpleNamespace(
             unit="buttons",
+            manifest=types.SimpleNamespace(publishes=publishes),
             subscribe=lambda binding, handler: handlers.__setitem__(binding, handler),
             publish=publish,
             health_event=lambda kind, **fields: events.append(fields["reason"]),

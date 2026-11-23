@@ -195,12 +195,11 @@ def load_endpoint(unit: str, root: str | Path = ".") -> str:
     KeyError
         If the manifest declares no `[discovery].endpoint`.
     """
-    manifest = tomllib.loads((Path(root) / "units" / f"{unit}.toml").read_text())
-    return _expand_endpoint(manifest)
+    return load_unit(unit, root).endpoint()
 
 
-def _expand_endpoint(manifest: dict) -> str:
-    endpoint = os.path.expandvars(manifest["discovery"]["endpoint"])
+def _expand_endpoint(discovery: dict) -> str:
+    endpoint = os.path.expandvars(discovery["endpoint"])
     if "$" in endpoint:
         raise ValueError(f"unset variable in discovery endpoint: {endpoint}")
     return endpoint
@@ -259,6 +258,8 @@ class UnitInfo:
         `[bus.publishes]`, as declared.
     subscribes : dict
         `[bus.subscribes]`, as declared.
+    discovery : dict
+        `[discovery]`, as declared. Its endpoint is unexpanded.
     """
 
     name: str
@@ -268,6 +269,79 @@ class UnitInfo:
     params: dict = field(default_factory=dict)
     publishes: dict = field(default_factory=dict)
     subscribes: dict = field(default_factory=dict)
+    discovery: dict = field(default_factory=dict)
+
+    def endpoint(self) -> str:
+        """Return the `[discovery]` endpoint with ${VAR} expansion.
+
+        It is expanded when asked, so reading the house does not need
+        every unit's variables set.
+
+        Returns
+        -------
+        str
+            The endpoint, variables expanded.
+
+        Raises
+        ------
+        ValueError
+            If the endpoint references an unset variable.
+        KeyError
+            If the manifest declares no `[discovery].endpoint`.
+        """
+        return _expand_endpoint(self.discovery)
+
+
+def _unit_from(manifest: dict) -> UnitInfo:
+    unit = manifest["unit"]
+    bus = manifest.get("bus", {})
+    return UnitInfo(
+        name=unit["name"],
+        kind=unit["kind"],
+        description=unit.get("description", ""),
+        naming=dict(manifest.get("naming", {})),
+        params=params_of(manifest),
+        publishes=dict(bus.get("publishes", {})),
+        subscribes=dict(bus.get("subscribes", {})),
+        discovery=dict(manifest.get("discovery", {})),
+    )
+
+
+def load_unit(unit: str, root: str | Path = ".") -> UnitInfo:
+    """Return one unit's manifest, read from units/{unit}.toml.
+
+    Parameters
+    ----------
+    unit : str
+        The unit whose manifest to read.
+    root : str or Path, optional
+        The house root.
+
+    Returns
+    -------
+    UnitInfo
+        The manifest as declared.
+    """
+    return _unit_from(tomllib.loads((Path(root) / "units" / f"{unit}.toml").read_text()))
+
+
+def load_zones(root: str | Path = ".") -> dict[str, list[str]]:
+    """Return zones.toml's zones, or none without the file.
+
+    Parameters
+    ----------
+    root : str or Path, optional
+        The house root.
+
+    Returns
+    -------
+    dict of str to list of str
+        Zone name to member rooms.
+    """
+    zones_path = Path(root) / "zones.toml"
+    if not zones_path.exists():
+        return {}
+    return dict(tomllib.loads(zones_path.read_text()).get("zones", {}))
 
 
 @dataclass
@@ -317,10 +391,7 @@ def load_house(root: str | Path = ".") -> HouseModel:
     """
     root = Path(root)
 
-    zones: dict[str, list[str]] = {}
-    zones_path = root / "zones.toml"
-    if zones_path.exists():
-        zones = dict(tomllib.loads(zones_path.read_text()).get("zones", {}))
+    zones = load_zones(root)
 
     views: list[dict] | None = None
     controls: list[dict] = []
@@ -334,23 +405,12 @@ def load_house(root: str | Path = ".") -> HouseModel:
     entities: list[Entity] = []
     for manifest_path in sorted((root / "units").glob("*.toml")):
         manifest = tomllib.loads(manifest_path.read_text())
-        unit = manifest["unit"]
-        units.append(
-            UnitInfo(
-                name=unit["name"],
-                kind=unit["kind"],
-                description=unit.get("description", ""),
-                naming=dict(manifest.get("naming", {})),
-                params=params_of(manifest),
-                publishes=dict(manifest.get("bus", {}).get("publishes", {})),
-                subscribes=dict(manifest.get("bus", {}).get("subscribes", {})),
-            )
-        )
+        units.append(_unit_from(manifest))
         entities_dir = manifest.get("entities", {}).get("dir")
         if entities_dir is None:
             continue
         for path in sorted((root / entities_dir).glob("*.toml")):
-            entities.append(_entity_from(path, tomllib.loads(path.read_text()), unit["name"]))
+            entities.append(_entity_from(path, tomllib.loads(path.read_text()), units[-1].name))
     return HouseModel(
         zones=zones, units=units, entities=entities, views=views, controls=controls
     )
@@ -389,7 +449,7 @@ def load_adapter(unit: str, root: str | Path = ".") -> AdapterConfig:
     # device's address separately and declare no [discovery].endpoint.
     # Only single-endpoint adapters need it.
     endpoint = (
-        _expand_endpoint(manifest) if "endpoint" in manifest.get("discovery", {}) else None
+        _expand_endpoint(manifest["discovery"]) if "endpoint" in manifest.get("discovery", {}) else None
     )
 
     entities = []

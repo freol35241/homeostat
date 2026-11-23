@@ -36,7 +36,6 @@ from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
 
-import tomllib
 import zenoh
 
 from . import house, intervals, keys, vocabulary
@@ -149,7 +148,7 @@ def _expand(
     return ["/".join([*segments[:2], room, *segments[3:]]) for room in rooms]
 
 
-def _house_has_recorder(root: str | Path) -> bool:
+def _house_has_recorder(model: house.HouseModel) -> bool:
     """Return whether the house runs a recorder, read from the manifests.
 
     The recorder is the unit that declares a publish under home/history/.
@@ -159,7 +158,7 @@ def _house_has_recorder(root: str | Path) -> bool:
     """
     return any(
         spec.get("key", "").startswith("home/history/")
-        for unit in house.load_house(root).units
+        for unit in model.units
         for spec in unit.publishes.values()
     )
 
@@ -206,6 +205,8 @@ class Context:
     ----------
     unit : str
         The unit's name.
+    manifest : house.UnitInfo
+        The unit's own manifest, read once here.
     params : object
         The current typed parameter values, one attribute per `[params.*]`
         entry; a `time` parameter reads as a `datetime.time`.
@@ -219,33 +220,26 @@ class Context:
     def __init__(
         self, unit: str, root: str | Path = ".", session: UnitSession | None = None
     ):
-        root = Path(root)
-        self._root = root
-        manifest = tomllib.loads((root / "units" / f"{unit}.toml").read_text())
-        bus = manifest.get("bus", {})
-        self._subscribes: dict[str, str] = bus.get("subscribes", {})
+        self._root = Path(root)
+        self.manifest = house.load_unit(unit, root)
+        self._subscribes: dict[str, str] = self.manifest.subscribes
         self._publishes: dict[str, dict] = {
             name: {"key": spec["key"], "priority": spec.get("priority")}
-            for name, spec in bus.get("publishes", {}).items()
+            for name, spec in self.manifest.publishes.items()
         }
-        self._param_specs: dict[str, dict] = house.params_of(manifest)
-        self._zones: dict[str, list[str]] = {}
-        zones_path = root / "zones.toml"
-        if zones_path.exists():
-            self._zones = tomllib.loads(zones_path.read_text()).get("zones", {})
-        # Entities are only needed to expand templates, and reading them
-        # means parsing the whole house. Units without templates skip it.
-        # Units with templates fail at startup if it goes wrong, not while
+        self._param_specs: dict[str, dict] = self.manifest.params
+        self._zones = house.load_zones(root)
+        # The whole house, parsed on first use (`_load_house`). Units
+        # without templates may never need it. Units with templates read
+        # it now, so they fail at startup if it goes wrong, not while
         # running.
-        self._entities: list[house.Entity] = []
+        self._house: house.HouseModel | None = None
         declared = [
             *self._subscribes.values(),
             *(p["key"] for p in self._publishes.values()),
         ]
         if any("{" in expr for expr in declared):
-            self._entities = [
-                e for e in house.load_house(root).entities if e.owner == unit
-            ]
+            self._load_house()
 
         self.unit = unit
         self.params = _Params(self)
@@ -260,13 +254,6 @@ class Context:
         self._subs: list = []
         # One per subscribe: delivers the binding's current values again.
         self._redeliveries: list[Callable[[], None]] = []
-        self._recorder: bool | None = None
-        # (entity, aspect) -> interval_s from the house's entity files, read
-        # on the first `history_total`.
-        self._intervals: dict[tuple[str, str], int] | None = None
-        # The house's button entities, read on the first catch-up that
-        # meets an `action` key (`_is_press`).
-        self._buttons: set[str] | None = None
         if session is None:
             session = UnitSession(unit, os.environ[keys.ENV_BUS])
         self._session = session
@@ -351,8 +338,37 @@ class Context:
             except QueryError as err:
                 self._session.health_event("redeliver-failed", error=str(err))
 
+    def _load_house(self) -> house.HouseModel:
+        """Return the whole house, parsed once per Context.
+
+        A house that cannot be read is not kept, so the next call reads it
+        again.
+        """
+        if self._house is None:
+            self._house = house.load_house(self._root)
+        return self._house
+
+    @property
+    def entities(self) -> list[house.Entity]:
+        """The entities this unit owns, read from the house's entity files.
+
+        The house is parsed on first use and kept.
+
+        Raises
+        ------
+        OSError
+            If a house file cannot be read.
+        ValueError
+            If one is not valid TOML.
+        KeyError
+            If one lacks a table the core requires.
+        """
+        return [e for e in self._load_house().entities if e.owner == self.unit]
+
     def _variants(self, expr: str) -> list[str]:
-        return _expand(expr, self._zones, self._entities)
+        # Only templates need the entities. A unit with templates read the
+        # house at startup.
+        return _expand(expr, self._zones, self.entities if "{" in expr else [])
 
     def subscribe(self, binding: str, handler: Callable[..., None]) -> None:
         """Subscribe a `[bus.subscribes]` binding and deliver its current values.
@@ -459,22 +475,19 @@ class Context:
     def _is_press(self, key: str) -> bool:
         """Return whether `key` is a button's `action`, a press and not a state.
 
-        The house's buttons are read once per process. A house that cannot
-        be read counts every `action` as a press, because a press missed
-        does less harm than a stale one acted on, and is read again next
-        time.
+        A house that cannot be read counts every `action` as a press,
+        because a press missed does less harm than a stale one acted on,
+        and is read again next time.
         """
         parts = key.split("/")
         if len(parts) != 5 or parts[1] != "state" or parts[4] != "action":
             return False
-        if self._buttons is None:
-            try:
-                entities = house.load_house(self._root).entities
-            except (OSError, ValueError, KeyError) as err:
-                self._session.health_event("drop", reason="house-unreadable", key=key, error=str(err))
-                return True
-            self._buttons = {e.name for e in entities if e.capability == "button"}
-        return parts[3] in self._buttons
+        try:
+            entities = self._load_house().entities
+        except (OSError, ValueError, KeyError) as err:
+            self._session.health_event("drop", reason="house-unreadable", key=key, error=str(err))
+            return True
+        return any(e.name == parts[3] and e.capability == "button" for e in entities)
 
     def _concrete_key(
         self,
@@ -928,9 +941,7 @@ class Context:
         )
 
     def _has_recorder(self) -> bool:
-        if self._recorder is None:
-            self._recorder = _house_has_recorder(self._root)
-        return self._recorder
+        return _house_has_recorder(self._load_house())
 
     def _await_recorder(self, timeout_s: float) -> str | None:
         """Wait for the recorder to answer. Returns why it did not, or None.
@@ -1421,18 +1432,10 @@ class Context:
 
     def _interval_of(self, entity: str, aspect: str) -> int:
         """Return the `interval_s` an entity file declares for an aspect."""
-        if self._intervals is None:
-            self._intervals = {
-                (e.name, name): seconds
-                for e in house.load_house(self._root).entities
-                for name, seconds in e.intervals.items()
-            }
-        try:
-            return self._intervals[(entity, aspect)]
-        except KeyError:
-            raise ValueError(
-                f"{entity}.{aspect} declares no interval_s in its entity file"
-            ) from None
+        for e in self._load_house().entities:
+            if e.name == entity and aspect in e.intervals:
+                return e.intervals[aspect]
+        raise ValueError(f"{entity}.{aspect} declares no interval_s in its entity file")
 
     def health_event(self, kind: str, **fields: Any) -> None:
         """Publish a JSON event at home/health/{unit}/event.

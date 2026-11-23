@@ -12,6 +12,7 @@ import datetime
 import unittest
 import zoneinfo
 from pathlib import Path
+from unittest import mock
 
 from homeostat import house as house_mod
 from homeostat import keys
@@ -307,10 +308,38 @@ class RecorderPresenceTest(unittest.TestCase):
     house must start on its defaults at once, not after the timeout."""
 
     def test_a_house_running_a_recorder_is_recognised(self):
-        self.assertTrue(_house_has_recorder(FIXTURES / "house_restore"))
+        self.assertTrue(_house_has_recorder(house_mod.load_house(FIXTURES / "house_restore")))
 
     def test_a_house_without_one_is_too(self):
-        self.assertFalse(_house_has_recorder(FIXTURES / "house_templates"))
+        self.assertFalse(_house_has_recorder(house_mod.load_house(FIXTURES / "house_templates")))
+
+
+class HouseTest(unittest.TestCase):
+    """The Context reads its own manifest once, and every feature that
+    needs the rest of the house shares one parse of it."""
+
+    def test_the_house_is_parsed_once_for_every_feature(self):
+        files = {
+            **LATCH_FILES,
+            f"entities/{UNIT}/gauge.toml": house_entity(
+                "garden", "sensor", "[aspects]\nprecipitation = { interval_s = 3600 }\n"
+            ),
+            "units/recorder.toml": RECORDER,
+        }
+        body = (
+            f'[entities]\ndir = "entities/{UNIT}/"\n'
+            '[bus.publishes]\nlatch = { key = "home/state/{room}/{entity}/on" }\n'
+        )
+        with mock.patch.object(house_mod, "load_house", wraps=house_mod.load_house) as load_house:
+            ctx = context(self, body, files)
+            self.assertTrue(ctx._has_recorder())
+            self.assertFalse(ctx._is_press("home/state/garden/gauge/action"))
+            self.assertEqual(ctx._interval_of("gauge", "precipitation"), 3600)
+            self.assertEqual(
+                sorted(e.name for e in ctx.entities), ["gauge", "motion_lighting", "night_mode"]
+            )
+        self.assertEqual(load_house.call_count, 1)
+        self.assertEqual(ctx.manifest.publishes["latch"]["key"], "home/state/{room}/{entity}/on")
 
 
 class RestoreWaitTest(unittest.TestCase):

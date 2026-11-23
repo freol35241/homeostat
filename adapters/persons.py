@@ -275,10 +275,7 @@ class Unit:
 
 def main():
     ctx = automation.context()
-    persons = [
-        e for e in house.load_house().entities
-        if e.owner == ctx.unit and e.capability == "person"
-    ]
+    persons = [e for e in ctx.entities if e.capability == "person"]
     unit = Unit(ctx, persons)
     ctx.subscribe("trackers", unit.on_state)
     unit.start()
