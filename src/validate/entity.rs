@@ -45,10 +45,9 @@ pub(super) fn check_entities(house: &House, clock: bool, diags: &mut Diagnostics
         // An adapter binds devices, so its entity files address them. An
         // automation's do not: a computed value has no device behind it, and
         // requiring an `id` would only make units invent one.
-        let owner_is_adapter = house
-            .unit(&entity.file.write_policy.owner)
-            .is_some_and(|u| u.manifest.unit.kind == UnitKind::Adapter);
-        if owner_is_adapter && entity.file.entity.id.is_none() {
+        if house.kind_of(&entity.owner) == Some(UnitKind::Adapter)
+            && entity.file.entity.id.is_none()
+        {
             diags.error(
                 Code::EntityIdRequired,
                 &entity.name,
@@ -72,12 +71,7 @@ pub(super) fn check_entities(house: &House, clock: bool, diags: &mut Diagnostics
                 &entity.name,
                 format!("owner unit \"{owner}\" does not exist"),
             ),
-            Some(unit)
-                if !matches!(
-                    unit.manifest.unit.kind,
-                    UnitKind::Adapter | UnitKind::Automation
-                ) =>
-            {
+            Some(unit) if !unit.manifest.unit.kind.binds_entities() => {
                 diags.error(
                     Code::MissingOwnerUnit,
                     &entity.name,
@@ -400,16 +394,13 @@ pub(super) fn check_persons(house: &House, diags: &mut Diagnostics) {
             continue;
         }
         let mut diags = diags.in_file(&entity.path);
-        let owner_is_adapter = house
-            .unit(&entity.file.write_policy.owner)
-            .is_some_and(|u| u.manifest.unit.kind == UnitKind::Adapter);
-        if owner_is_adapter {
+        if house.kind_of(&entity.owner) == Some(UnitKind::Adapter) {
             diags.error(
                 Code::PersonBoundByAdapter,
                 &entity.name,
                 format!(
                     "adapter \"{}\" binds a person; bind the device as `tracker` and list it in a person file owned by an automation",
-                    entity.file.write_policy.owner
+                    entity.owner
                 ),
             );
         }

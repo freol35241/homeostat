@@ -367,6 +367,13 @@ pub enum UnitKind {
     Service,
 }
 
+impl UnitKind {
+    /// Whether units of this kind may bind entities with `[entities]`.
+    pub fn binds_entities(self) -> bool {
+        matches!(self, UnitKind::Adapter | UnitKind::Automation)
+    }
+}
+
 impl fmt::Display for UnitKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {

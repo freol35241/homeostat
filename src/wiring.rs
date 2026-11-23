@@ -70,9 +70,7 @@ fn resolve_contributor<'h>(
     };
     let segments = ["home", "state", &src.file.entity.room, &src.name, aspect];
     let key = segments.join("/");
-    let src_is_automation = house
-        .unit(&src.owner)
-        .is_some_and(|u| u.manifest.unit.kind == UnitKind::Automation);
+    let src_is_automation = house.kind_of(&src.owner) == Some(UnitKind::Automation);
     if src_is_automation && !publishes(expanded, Some(&src.owner), &segments) {
         return Err(ValidationError::new(
             unpublished_aspect,
@@ -120,10 +118,7 @@ pub(crate) fn resolve_feeds(
         let Some(inputs) = &entity.file.inputs else {
             continue;
         };
-        let owner_is_automation = house
-            .unit(&entity.owner)
-            .is_some_and(|u| u.manifest.unit.kind == UnitKind::Automation);
-        if owner_is_automation {
+        if house.kind_of(&entity.owner) == Some(UnitKind::Automation) {
             diags.in_file(&entity.path).error(
                 Code::VirtualEntityFed,
                 &entity.name,
