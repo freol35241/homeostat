@@ -19,6 +19,7 @@ pub mod http;
 pub mod protocol;
 
 use serde_json::{json, Value};
+use zenoh::sample::Sample;
 use zenoh::Session;
 
 use crate::bus::{self, LogEntry};
@@ -71,18 +72,45 @@ impl Server {
         })
     }
 
-    /// Handles one tools/call. Ok is the tool's text output; Err becomes an
-    /// MCP tool result with isError set, not a protocol error.
-    pub fn call(&self, name: &str, args: &Value) -> Result<String, String> {
-        match name {
-            "read_state" => self.read_state(args),
-            "read_history" => self.read_history(args),
-            "read_logs" => self.read_logs(args),
-            "read_events" => self.read_events(args),
-            "explain" => explain(args),
-            "schema" => schema(args),
-            _ => Err(format!("unknown tool \"{name}\"")),
-        }
+    /// Handles one tools/call. None means no tool has that name. Ok is the
+    /// tool's text output; Err becomes an MCP tool result with isError set,
+    /// not a protocol error.
+    pub fn call(&self, name: &str, args: &Value) -> Option<Result<String, String>> {
+        let (_, run) = TOOLS.iter().find(|(tool, _)| *tool == name)?;
+        Some(run(self, args))
+    }
+
+    /// Queries the bus at `key`, with `params` joined into the selector's
+    /// parameters, and returns every reply in arrival order. An error reply
+    /// carries its payload as text. `what` names the read when the query
+    /// itself fails.
+    fn query(
+        &self,
+        key: &str,
+        params: &[String],
+        what: &str,
+    ) -> Result<Vec<Result<Sample, String>>, String> {
+        let selector = if params.is_empty() {
+            key.to_string()
+        } else {
+            format!("{key}?{}", params.join(";"))
+        };
+        self.runtime.block_on(async {
+            let replies = self
+                .session
+                .get(&selector)
+                .await
+                .map_err(|e| format!("{what} read failed: {e}"))?;
+            let mut results = Vec::new();
+            while let Ok(reply) = replies.recv_async().await {
+                results.push(
+                    reply.into_result().map_err(|err| {
+                        String::from_utf8_lossy(&err.payload().to_bytes()).to_string()
+                    }),
+                );
+            }
+            Ok(results)
+        })
     }
 
     fn read_state(&self, args: &Value) -> Result<String, String> {
@@ -90,24 +118,13 @@ impl Server {
         if !(key == "home" || key.starts_with("home/")) {
             return Err("read_state reads the house bus: the key must be under home/".into());
         }
-        let values = self.runtime.block_on(async {
-            let replies = self
-                .session
-                .get(key)
-                .await
-                .map_err(|e| format!("bus read failed: {e}"))?;
-            let mut values = serde_json::Map::new();
-            while let Ok(reply) = replies.recv_async().await {
-                if let Ok(sample) = reply.result() {
-                    let bytes = sample.payload().to_bytes();
-                    let value = serde_json::from_slice(&bytes).unwrap_or_else(|_| {
-                        Value::String(String::from_utf8_lossy(&bytes).to_string())
-                    });
-                    values.insert(sample.key_expr().to_string(), value);
-                }
-            }
-            Ok::<_, String>(values)
-        })?;
+        let mut values = serde_json::Map::new();
+        for sample in self.query(key, &[], "bus")?.into_iter().flatten() {
+            let bytes = sample.payload().to_bytes();
+            let value = serde_json::from_slice(&bytes)
+                .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).to_string()));
+            values.insert(sample.key_expr().to_string(), value);
+        }
         serde_json::to_string_pretty(&Value::Object(values))
             .map_err(|e| format!("values do not serialize: {e}"))
     }
@@ -156,34 +173,16 @@ impl Server {
         if changes {
             params.push("changes=1".into());
         }
-        let selector = if params.is_empty() {
-            format!("home/history/{series}")
-        } else {
-            format!("home/history/{series}?{}", params.join(";"))
-        };
 
-        self.runtime.block_on(async {
-            let replies = self
-                .session
-                .get(&selector)
-                .await
-                .map_err(|e| format!("history read failed: {e}"))?;
-            let mut values = serde_json::Map::new();
-            while let Ok(reply) = replies.recv_async().await {
-                match reply.result() {
-                    Ok(sample) => {
-                        let rows: Value = serde_json::from_slice(&sample.payload().to_bytes())
-                            .unwrap_or(Value::Null);
-                        values.insert(sample.key_expr().to_string(), rows);
-                    }
-                    Err(err) => {
-                        return Err(String::from_utf8_lossy(&err.payload().to_bytes()).to_string());
-                    }
-                }
-            }
-            serde_json::to_string_pretty(&Value::Object(values))
-                .map_err(|e| format!("rows do not serialize: {e}"))
-        })
+        let mut values = serde_json::Map::new();
+        for reply in self.query(&format!("home/history/{series}"), &params, "history")? {
+            let sample = reply?;
+            let rows: Value =
+                serde_json::from_slice(&sample.payload().to_bytes()).unwrap_or(Value::Null);
+            values.insert(sample.key_expr().to_string(), rows);
+        }
+        serde_json::to_string_pretty(&Value::Object(values))
+            .map_err(|e| format!("rows do not serialize: {e}"))
     }
 
     /// Reads a unit's captured stdout/stderr ring buffer over the bus and
@@ -191,37 +190,22 @@ impl Server {
     /// output for debugging and is lost when the supervisor restarts.
     fn read_logs(&self, args: &Value) -> Result<String, String> {
         let unit = str_arg(args, "unit")?;
-        let mut selector = bus::log_key(unit);
+        let mut params = Vec::new();
         if let Some(value) = args.get("lines") {
             let value = value
                 .as_u64()
                 .ok_or("\"lines\" must be a positive integer")?;
-            selector.push_str(&format!("?lines={value}"));
+            params.push(format!("lines={value}"));
         }
-        self.runtime.block_on(async {
-            let replies = self
-                .session
-                .get(&selector)
-                .await
-                .map_err(|e| format!("log read failed: {e}"))?;
-            let mut rows = Vec::new();
-            while let Ok(reply) = replies.recv_async().await {
-                match reply.result() {
-                    Ok(sample) => {
-                        let entries: Vec<LogEntry> =
-                            serde_json::from_slice(&sample.payload().to_bytes())
-                                .map_err(|e| format!("log entries do not parse: {e}"))?;
-                        for entry in entries {
-                            rows.push(format!("{} {} {}", entry.ts_us, entry.stream, entry.line));
-                        }
-                    }
-                    Err(err) => {
-                        return Err(String::from_utf8_lossy(&err.payload().to_bytes()).to_string());
-                    }
-                }
+        let mut rows = Vec::new();
+        for reply in self.query(&bus::log_key(unit), &params, "log")? {
+            let entries: Vec<LogEntry> = serde_json::from_slice(&reply?.payload().to_bytes())
+                .map_err(|e| format!("log entries do not parse: {e}"))?;
+            for entry in entries {
+                rows.push(format!("{} {} {}", entry.ts_us, entry.stream, entry.line));
             }
-            Ok(rows.join("\n"))
-        })
+        }
+        Ok(rows.join("\n"))
     }
 
     /// Reads the recorder's durable events trail over the bus: health
@@ -251,37 +235,32 @@ impl Server {
                 .ok_or("\"limit\" must be a positive integer")?;
             params.push(format!("limit={value}"));
         }
-        let selector = if params.is_empty() {
-            "home/history/events".to_string()
-        } else {
-            format!("home/history/events?{}", params.join(";"))
-        };
-
-        self.runtime.block_on(async {
-            let replies = self
-                .session
-                .get(&selector)
-                .await
-                .map_err(|e| format!("events read failed: {e}"))?;
-            let mut rows = Vec::new();
-            while let Ok(reply) = replies.recv_async().await {
-                match reply.result() {
-                    Ok(sample) => {
-                        let payload = sample.payload().to_bytes();
-                        if let Ok(Value::Array(mut entries)) = serde_json::from_slice(&payload) {
-                            rows.append(&mut entries);
-                        }
-                    }
-                    Err(err) => {
-                        return Err(String::from_utf8_lossy(&err.payload().to_bytes()).to_string());
-                    }
-                }
+        let mut rows = Vec::new();
+        for reply in self.query("home/history/events", &params, "events")? {
+            if let Ok(Value::Array(mut entries)) =
+                serde_json::from_slice(&reply?.payload().to_bytes())
+            {
+                rows.append(&mut entries);
             }
-            serde_json::to_string_pretty(&Value::Array(rows))
-                .map_err(|e| format!("rows do not serialize: {e}"))
-        })
+        }
+        serde_json::to_string_pretty(&Value::Array(rows))
+            .map_err(|e| format!("rows do not serialize: {e}"))
     }
 }
+
+/// A tool's handler, given the server and the call's arguments.
+type Tool = fn(&Server, &Value) -> Result<String, String>;
+
+/// The tools the server dispatches, by name, in the order tools/list lists
+/// them. A test checks the names against `tools()`.
+const TOOLS: &[(&str, Tool)] = &[
+    ("read_state", Server::read_state),
+    ("read_history", Server::read_history),
+    ("read_logs", Server::read_logs),
+    ("read_events", Server::read_events),
+    ("schema", |_, args| schema(args)),
+    ("explain", |_, args| explain(args)),
+];
 
 fn str_arg<'a>(args: &'a Value, name: &str) -> Result<&'a str, String> {
     args.get(name)
@@ -289,16 +268,6 @@ fn str_arg<'a>(args: &'a Value, name: &str) -> Result<&'a str, String> {
         .filter(|s| !s.is_empty())
         .ok_or_else(|| format!("missing \"{name}\" (string)"))
 }
-
-/// The tools the server offers, by name.
-pub const TOOL_NAMES: &[&str] = &[
-    "read_state",
-    "read_history",
-    "read_logs",
-    "read_events",
-    "explain",
-    "schema",
-];
 
 /// The `schema` tool: the manifest contract as JSON Schema, for one file kind
 /// or all four. An agent reads this before authoring a unit, instead of the
@@ -442,4 +411,21 @@ pub fn tools() -> Value {
             }
         }
     ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_listed_tool_dispatches() {
+        let listed: Vec<Value> = tools()
+            .as_array()
+            .expect("tools array")
+            .iter()
+            .map(|tool| tool["name"].clone())
+            .collect();
+        let dispatched: Vec<Value> = TOOLS.iter().map(|(name, _)| json!(name)).collect();
+        assert_eq!(listed, dispatched);
+    }
 }
