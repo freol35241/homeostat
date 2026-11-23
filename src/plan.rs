@@ -12,10 +12,11 @@ use serde_json::Value;
 
 use crate::content;
 use crate::expand::ExpandedKey;
-use crate::grants::{free_nodes, grant_edges, Contributor, Grant};
+use crate::grants::{free_nodes, grant_edges, Grant};
 use crate::manifest::{implicit_enabled, ParamSpec, UnitKind, ENABLED_PARAM};
 use crate::params::{default_value, display_value, keeps_live};
 use crate::repo::LoadedUnit;
+use crate::wiring::Contributor;
 use crate::CheckResult;
 
 /// Plan tiers per docs/design.md#tiers. They are derived from the diff, and

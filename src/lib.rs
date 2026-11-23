@@ -20,10 +20,14 @@ pub mod mcp;
 pub mod params;
 pub mod pending;
 pub mod plan;
+mod publish_rules;
 pub mod repo;
 pub mod schema;
 pub mod supervisor;
+#[cfg(test)]
+mod test_houses;
 pub mod validate;
+pub mod wiring;
 pub mod world;
 
 use std::path::Path;
@@ -38,8 +42,8 @@ pub struct CheckResult {
     pub house: repo::House,
     pub expanded: Vec<expand::ExpandedKey>,
     pub grants: Vec<grants::Grant>,
-    pub feeds: Vec<grants::Feed>,
-    pub sources: Vec<grants::Source>,
+    pub feeds: Vec<wiring::Feed>,
+    pub sources: Vec<wiring::Source>,
     pub warnings: Vec<Warning>,
     pub errors: Vec<ValidationError>,
 }
@@ -52,9 +56,9 @@ pub fn check(root: &Path) -> CheckResult {
     let expanded = expand::expand(&house, &mut diags);
     validate::validate(&house, &expanded, &mut diags);
     let grants = grants::resolve(&house, &expanded, &mut diags);
-    let feeds = grants::resolve_feeds(&house, &expanded, &mut diags);
-    let sources = grants::resolve_sources(&house, &expanded, &mut diags);
-    grants::check_aspects(&house, &expanded, &mut diags);
+    let feeds = wiring::resolve_feeds(&house, &expanded, &mut diags);
+    let sources = wiring::resolve_sources(&house, &expanded, &mut diags);
+    publish_rules::check_aspects(&house, &expanded, &mut diags);
     let error::Diagnostics { errors, warnings } = diags;
     CheckResult {
         house,

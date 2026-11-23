@@ -2499,7 +2499,7 @@ indoor_temperature_actual = { entity = "indoor_temperature", aspect = "temperatu
   unit. Entities are the identity layer that keys derive from, and a
   device consumes one signal. The plan resolves the reference to a
   state key and prints the edge under `Feeds:`.
-- The plan checks (`resolve_feeds` in `src/grants.rs`) that the source
+- The plan checks (`resolve_feeds` in `src/wiring.rs`) that the source
   entity exists (`input-unknown-entity`), that an automation-owned
   source publishes the aspect (`input-unpublished-aspect`), and that
   the fed entity is a device (`virtual-entity-fed`). An aspect of any

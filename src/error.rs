@@ -602,9 +602,13 @@ mod tests {
     fn every_code_is_emitted_and_renders_distinctly() {
         let sources = [
             include_str!("repo.rs"),
-            include_str!("validate.rs"),
+            include_str!("validate/mod.rs"),
+            include_str!("validate/entity.rs"),
+            include_str!("validate/dashboard.rs"),
             include_str!("expand.rs"),
             include_str!("grants.rs"),
+            include_str!("publish_rules.rs"),
+            include_str!("wiring.rs"),
             include_str!("params.rs"),
         ];
         let dead: Vec<Code> = Code::ALL
