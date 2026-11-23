@@ -339,18 +339,21 @@ impl Core {
         }
     }
 
+    /// The unit's health status, if it has a health entry.
+    fn unit_status(&self, name: &str) -> Option<HealthStatus> {
+        self.health
+            .lock()
+            .expect("health map lock")
+            .get(name)
+            .map(|h| h.status)
+    }
+
     /// Waits until the unit's liveliness token is up (health `running`).
     /// Halts early when the breaker opens or the unit stops for good.
     async fn await_ready(&self, name: &str) -> Result<(), String> {
         let deadline = tokio::time::Instant::now() + READY_DEADLINE;
         loop {
-            let status = self
-                .health
-                .lock()
-                .expect("health map lock")
-                .get(name)
-                .map(|h| h.status);
-            match status {
+            match self.unit_status(name) {
                 Some(HealthStatus::Running) => return Ok(()),
                 Some(HealthStatus::Open) => {
                     return Err("circuit breaker open".to_string());
