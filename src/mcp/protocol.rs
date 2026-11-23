@@ -58,19 +58,19 @@ fn tool_call(server: &Server, params: &Value) -> Result<Value, Value> {
         .get("name")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    if !super::TOOL_NAMES.contains(&name) {
-        return Err(json!({
-            "code": -32602,
-            "message": format!("unknown tool \"{name}\"")
-        }));
-    }
     let args = params
         .get("arguments")
         .cloned()
         .unwrap_or_else(|| json!({}));
     let (text, is_error) = match server.call(name, &args) {
-        Ok(text) => (text, false),
-        Err(text) => (text, true),
+        Some(Ok(text)) => (text, false),
+        Some(Err(text)) => (text, true),
+        None => {
+            return Err(json!({
+                "code": -32602,
+                "message": format!("unknown tool \"{name}\"")
+            }))
+        }
     };
     Ok(json!({
         "content": [{"type": "text", "text": text}],
