@@ -1116,17 +1116,23 @@ mod tests {
         use ParamType as P;
         use UnitKind as U;
         use WriteMode as W;
-        assert!([U::Adapter, U::Automation, U::Service]
-            .into_iter()
-            .all(round_trips));
-        assert!([OnLoss::Keep, OnLoss::Release].into_iter().all(round_trips));
-        assert!(Priority::ALL.into_iter().all(round_trips));
-        assert!([P::Bool, P::Int, P::Float, P::String, P::Time]
-            .into_iter()
-            .all(round_trips));
-        assert!([E::Owner, E::Family].into_iter().all(round_trips));
-        assert!([W::Shared, W::Exclusive, W::Arbitrated]
-            .into_iter()
-            .all(round_trips));
+        for kind in [U::Adapter, U::Automation, U::Service] {
+            assert!(round_trips(kind), "{kind}");
+        }
+        for on_loss in [OnLoss::Keep, OnLoss::Release] {
+            assert!(round_trips(on_loss), "{on_loss}");
+        }
+        for priority in Priority::ALL {
+            assert!(round_trips(priority), "{priority}");
+        }
+        for param_type in [P::Bool, P::Int, P::Float, P::String, P::Time] {
+            assert!(round_trips(param_type), "{param_type}");
+        }
+        for editable_by in [E::Owner, E::Family] {
+            assert!(round_trips(editable_by), "{editable_by}");
+        }
+        for mode in [W::Shared, W::Exclusive, W::Arbitrated] {
+            assert!(round_trips(mode), "{mode}");
+        }
     }
 }

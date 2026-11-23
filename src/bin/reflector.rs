@@ -4,9 +4,8 @@
 //! see a command land as state. Envelope-less commands are dropped, like
 //! any real adapter drops invalid commands.
 //!
-//! It exists for the tests. Cargo has no test-only binaries, so it builds
-//! with the package, and the release builds name `--bin homeostat` to
-//! leave it out.
+//! Cargo has no test-only binaries, so release builds name `--bin homeostat`
+//! to leave it out.
 
 use std::env;
 
