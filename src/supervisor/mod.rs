@@ -16,6 +16,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use serde::Serialize;
 use tokio::sync::watch;
 use zenoh::Session;
 
@@ -62,9 +63,54 @@ pub struct WorldMeta {
     /// apply that completed ([`bus::GRANTS_PENDING_KEY`]).
     pub pending_grants: Vec<Grant>,
     pub applied_commit: Option<String>,
-    /// Where the replay after this start stands ([`bus::REPLAY_KEY`]):
-    /// `none`, `pending` or `done`.
-    pub replay: &'static str,
+    /// Where the replay after this start stands ([`bus::REPLAY_KEY`]).
+    pub replay: ReplayState,
+}
+
+impl WorldMeta {
+    /// The meta space this world serves, `about` and the logs aside: every
+    /// unit's entries, the grant tables, the replay state, and the applied
+    /// commit once there is one.
+    fn entries(&self) -> Vec<(String, Vec<u8>)> {
+        let mut entries: Vec<(String, Vec<u8>)> = self
+            .units
+            .iter()
+            .flat_map(|(name, unit)| unit.meta_entries(name))
+            .collect();
+        entries.push((
+            bus::GRANTS_KEY.to_string(),
+            serde_json::to_vec(&self.grants).expect("grants serialize"),
+        ));
+        entries.push((
+            bus::GRANTS_PENDING_KEY.to_string(),
+            serde_json::to_vec(&self.pending_grants).expect("grants serialize"),
+        ));
+        entries.push((
+            bus::REPLAY_KEY.to_string(),
+            serde_json::to_vec(&self.replay).expect("replay state serializes"),
+        ));
+        if let Some(commit) = &self.applied_commit {
+            entries.push((
+                bus::APPLIED_COMMIT_KEY.to_string(),
+                commit.clone().into_bytes(),
+            ));
+        }
+        entries
+    }
+}
+
+/// Where the replay after this core's start stands, served as a JSON string
+/// at [`bus::REPLAY_KEY`].
+#[derive(Default, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ReplayState {
+    /// The house has no recorder, so there is nothing to replay.
+    #[default]
+    None,
+    /// The arbiters' holds are not back yet.
+    Pending,
+    /// The replay finished, or gave up.
+    Done,
 }
 
 struct UnitHandle {
@@ -139,9 +185,9 @@ pub async fn run(check: &CheckResult, root: &Path, listen: &str) -> Result<(), S
     let mut world = WorldMeta {
         grants: check.grants.clone(),
         replay: if recorder.is_some() {
-            "pending"
+            ReplayState::Pending
         } else {
-            "none"
+            ReplayState::None
         },
         ..WorldMeta::default()
     };
@@ -288,11 +334,7 @@ impl Core {
             .expect("world meta lock")
             .units
             .remove(name);
-        for key in [
-            bus::manifest_hash_key(name),
-            bus::files_hash_key(name),
-            bus::manifest_key(name),
-        ] {
+        for key in WorldUnit::meta_keys(name) {
             let _ = self.session.delete(key).await;
         }
     }
@@ -327,23 +369,15 @@ impl Core {
 
     /// Records a unit as applied and publishes its meta keys.
     async fn record_unit(&self, name: &str, unit: WorldUnit) {
-        let manifest = unit.manifest.clone();
-        let manifest_hash = unit.manifest_hash.clone();
-        let files_hash = unit.files_hash.clone();
+        let entries = unit.meta_entries(name);
         self.world
             .lock()
             .expect("world meta lock")
             .units
             .insert(name.to_string(), unit);
-        let _ = self
-            .session
-            .put(bus::manifest_hash_key(name), manifest_hash)
-            .await;
-        let _ = self
-            .session
-            .put(bus::files_hash_key(name), files_hash)
-            .await;
-        let _ = self.session.put(bus::manifest_key(name), manifest).await;
+        for (key, payload) in entries {
+            let _ = self.session.put(key, payload).await;
+        }
     }
 
     async fn record_grants(&self, grants: Vec<Grant>) {
@@ -370,8 +404,9 @@ impl Core {
 
     /// Marks the replay after this start done and says so on the bus.
     pub async fn replay_done(&self) {
-        self.world.lock().expect("world meta lock").replay = "done";
-        let _ = self.session.put(bus::REPLAY_KEY, "\"done\"").await;
+        self.world.lock().expect("world meta lock").replay = ReplayState::Done;
+        let payload = serde_json::to_vec(&ReplayState::Done).expect("replay state serializes");
+        let _ = self.session.put(bus::REPLAY_KEY, payload).await;
     }
 
     /// Empties the pending table once an apply has completed and every unit
@@ -392,44 +427,10 @@ impl Core {
 
     /// Publishes the whole meta space (startup).
     async fn publish_meta(&self) {
-        let (units, grants, pending): (Vec<(String, WorldUnit)>, Vec<Grant>, Vec<Grant>) = {
-            let world = self.world.lock().expect("world meta lock");
-            (
-                world
-                    .units
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect(),
-                world.grants.clone(),
-                world.pending_grants.clone(),
-            )
-        };
-        for (name, unit) in units {
-            let _ = self
-                .session
-                .put(bus::manifest_hash_key(&name), unit.manifest_hash)
-                .await;
-            let _ = self
-                .session
-                .put(bus::files_hash_key(&name), unit.files_hash)
-                .await;
-            let _ = self
-                .session
-                .put(bus::manifest_key(&name), unit.manifest)
-                .await;
+        let entries = self.world.lock().expect("world meta lock").entries();
+        for (key, payload) in entries {
+            let _ = self.session.put(key, payload).await;
         }
-        let payload = serde_json::to_string(&grants).expect("grants serialize");
-        let _ = self.session.put(bus::GRANTS_KEY, payload).await;
-        let payload = serde_json::to_string(&pending).expect("grants serialize");
-        let _ = self.session.put(bus::GRANTS_PENDING_KEY, payload).await;
-        let replay = self.world.lock().expect("world meta lock").replay;
-        let _ = self
-            .session
-            .put(
-                bus::REPLAY_KEY,
-                serde_json::to_string(replay).expect("a string"),
-            )
-            .await;
     }
 }
 
@@ -460,36 +461,7 @@ async fn serve_meta(core: Arc<Core>) -> Result<(), String> {
                 .and_then(|v| v.parse::<usize>().ok());
             let mut entries: Vec<(String, Vec<u8>)> = {
                 let world = core.world.lock().expect("world meta lock");
-                let mut entries = Vec::new();
-                for (name, unit) in &world.units {
-                    entries.push((
-                        bus::manifest_hash_key(name),
-                        unit.manifest_hash.clone().into_bytes(),
-                    ));
-                    entries.push((
-                        bus::files_hash_key(name),
-                        unit.files_hash.clone().into_bytes(),
-                    ));
-                    entries.push((bus::manifest_key(name), unit.manifest.clone()));
-                }
-                entries.push((
-                    bus::GRANTS_KEY.to_string(),
-                    serde_json::to_vec(&world.grants).expect("grants serialize"),
-                ));
-                entries.push((
-                    bus::GRANTS_PENDING_KEY.to_string(),
-                    serde_json::to_vec(&world.pending_grants).expect("grants serialize"),
-                ));
-                entries.push((
-                    bus::REPLAY_KEY.to_string(),
-                    serde_json::to_vec(world.replay).expect("a string"),
-                ));
-                if let Some(commit) = &world.applied_commit {
-                    entries.push((
-                        bus::APPLIED_COMMIT_KEY.to_string(),
-                        commit.clone().into_bytes(),
-                    ));
-                }
+                let mut entries = world.entries();
                 entries.push((
                     bus::ABOUT_KEY.to_string(),
                     serde_json::to_vec(&bus::about(world.applied_commit.as_deref()))
