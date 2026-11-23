@@ -14,7 +14,7 @@ from . import vocabulary
 ENV_UNIT = "HOMEOSTAT_UNIT"
 ENV_BUS = "HOMEOSTAT_BUS"
 
-# The core's rule for a name that becomes one key segment (src/validate.rs,
+# The core's rule for a name that becomes one key segment (src/validate/mod.rs,
 # valid_segment; tests/fixtures/key_segments.json). Other characters either
 # break the fixed key schema ("/"), have a meaning on the bus ("*", "$", "?",
 # "#"), or risk encoding problems.

@@ -1,5 +1,5 @@
 {
-  "comment": "The one grammar for a time of day, \"HH:MM\" on a 24-hour clock with two digits each side: a `time` parameter's default, constraint and live value, a family policy's `until`, a gesture action's `hold`, and the \"HH:MM\" hold intent. Read by src/validate.rs (unit test), sdk/python/tests/test_keys.py, tests/adapters/test_arbiter.py and tests/js/dashboard-logic.test.js, so the core, the SDK, the arbiter and the page accept and refuse the same strings.",
+  "comment": "The one grammar for a time of day, \"HH:MM\" on a 24-hour clock with two digits each side: a `time` parameter's default, constraint and live value, a family policy's `until`, a gesture action's `hold`, and the \"HH:MM\" hold intent. Read by src/params.rs (unit test), sdk/python/tests/test_keys.py, tests/adapters/test_arbiter.py and tests/js/dashboard-logic.test.js, so the core, the SDK, the arbiter and the page accept and refuse the same strings.",
   "valid": [
     "00:00",
     "06:00",

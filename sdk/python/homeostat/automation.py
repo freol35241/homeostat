@@ -153,7 +153,7 @@ def _house_has_recorder(root: str | Path) -> bool:
     """Return whether the house runs a recorder, read from the manifests.
 
     The recorder is the unit that declares a publish under home/history/.
-    src/grants.rs allows only one service to publish there. Without a
+    src/publish_rules.rs allows only one service to publish there. Without a
     recorder, `restore` and `history` have nothing to wait for, and
     waiting out the timeout would delay every start in a house without one.
     """
