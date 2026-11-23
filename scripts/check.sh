@@ -54,8 +54,9 @@ check_starter() { scripts/sync_starter.sh --check; }
 
 # Installs the binary and the SDK wheel without Docker, the way a release's
 # tarball and wheel are installed. scripts/smoke_bare.sh lists what it
-# asserts. The build is a no-op after cargo-test, and lets this check run
-# on its own.
+# asserts. The build lets this check run on its own. After cargo-test it
+# recompiles zenoh and its dependents without the `unstable` feature the
+# tests enable, as a release build does.
 check_smoke_bare() {
   WHEELS="$(mktemp -d)"
   trap 'rm -rf "$WHEELS"' EXIT

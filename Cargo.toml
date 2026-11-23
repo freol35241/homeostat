@@ -10,9 +10,7 @@ default-run = "homeostat"
 serde = { version = "1", features = ["derive"] }
 toml = "1.1"
 clap = { version = "4", features = ["derive"] }
-# "unstable" for the matching-status API the integration tests use to
-# synchronize on subscriber-interest propagation.
-zenoh = { version = "1.10", features = ["unstable"] }
+zenoh = "1.10"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "signal", "time", "sync", "io-util"] }
 serde_json = "1.0.150"
 sha2 = "0.11.0"
@@ -20,6 +18,9 @@ libc = "0.2.186"
 schemars = "1"
 
 [dev-dependencies]
+# "unstable" for the matching-status API the integration tests use to
+# synchronize on subscriber-interest propagation.
+zenoh = { version = "1.10", features = ["unstable"] }
 rumqttc = "0.25.1"
 # "bundled" so the recorder tests can assert on the store without a system
 # libsqlite3; the recorder itself uses Python's stdlib sqlite3.

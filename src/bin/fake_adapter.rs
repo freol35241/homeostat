@@ -10,6 +10,10 @@
 //! ("stdout-line-{i}" / "stderr-line-{i}") before touching the bus, for the
 //! supervisor's log-capture tests. `--ready-after-ms` waits before declaring
 //! the token, which holds an apply's walk at this unit for that long.
+//!
+//! It exists for the tests. Cargo has no test-only binaries, so it builds
+//! with the package, and the release builds name `--bin homeostat` to
+//! leave it out.
 
 use std::env;
 use std::time::Duration;
