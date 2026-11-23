@@ -58,6 +58,7 @@ from pathlib import Path
 
 import zenoh
 from homeostat import forecast, house, keys, session
+from homeostat.history import MAX_ROWS, rfc3339_us, split_params
 from homeostat.params import LiveParams
 from homeostat.stamps import stamp_us
 
@@ -84,8 +85,6 @@ PARAM_DEFAULTS = {
 RETENTION_PARAMS = ("retain_samples_days", "retain_forecasts_days", "retain_events_days")
 DEFAULT_QUERY_LIMIT = 1000
 DEFAULT_EVENTS_LIMIT = 500
-# The most rows one reply carries. A larger limit is clamped to it.
-MAX_QUERY_LIMIT = 10_000
 # SQLite binds Python ints as signed 64-bit; anything else raises at bind
 # time, outside sqlite3.Error, so the parse helpers refuse it first.
 INT64_MIN, INT64_MAX = -(2**63), 2**63 - 1
@@ -1450,7 +1449,7 @@ class Recorder:
 
         Every path keeps at most `limit` rows (issues, for forecasts),
         keeps the newest, and replies oldest first. A limit above
-        MAX_QUERY_LIMIT is clamped to it. Malformed parameters get an error
+        MAX_ROWS is clamped to it. Malformed parameters get an error
         reply.
         """
         # A query callback that raises sends no reply, and the caller cannot
@@ -1887,43 +1886,19 @@ def event_payload(text: str):
         return text
 
 
-def split_selector(raw: str) -> dict[str, str]:
-    """Split a selector's parameters (zenoh's `a=1;b=2` grammar) into a dict.
-
-    No URL decoding: RFC3339 offsets contain '+', which must stay literal.
-    """
-    params = {}
-    for part in raw.split(";"):
-        if not part:
-            continue
-        name, _, value = part.partition("=")
-        params[name] = value
-    return params
-
-
 def parse_params(raw: str) -> tuple[int, int, int, int, bool]:
     """Parse a samples query's parameters from a selector.
 
     Returns from/to (RFC3339 with offset), limit, bucket (µs, 0 = raw rows)
     and changes.
     """
-    params = split_selector(raw)
+    params = split_params(raw)
     from_us, to_us, limit = 0, now_us(), DEFAULT_QUERY_LIMIT
     bucket_us, changes = 0, False
-    for bound in ("from", "to"):
-        if bound not in params:
-            continue
-        try:
-            dt = datetime.datetime.fromisoformat(params[bound])
-        except ValueError:
-            raise ValueError(f"{bound}: {params[bound]!r} is not RFC3339") from None
-        if dt.tzinfo is None:
-            raise ValueError(f"{bound}: {params[bound]!r} needs a UTC offset")
-        us = int(dt.timestamp() * 1e6)
-        if bound == "from":
-            from_us = us
-        else:
-            to_us = us
+    if "from" in params:
+        from_us = rfc3339_us("from", params["from"])
+    if "to" in params:
+        to_us = rfc3339_us("to", params["to"])
     if "limit" in params:
         limit = parse_limit(params["limit"])
     if "bucket" in params:
@@ -1934,13 +1909,13 @@ def parse_params(raw: str) -> tuple[int, int, int, int, bool]:
         changes = True
     if bucket_us and changes:
         raise ValueError("bucket and changes are exclusive")
-    if bucket_us and to_us // bucket_us - from_us // bucket_us + 1 > MAX_QUERY_LIMIT:
+    if bucket_us and to_us // bucket_us - from_us // bucket_us + 1 > MAX_ROWS:
         # The fold walks the whole window, so a bucket that yields more
         # points than a reply can carry would scan for nothing, and the
         # reply would leave the oldest buckets out. Buckets are aligned to
         # the epoch, so the count is of the buckets the window touches.
         raise ValueError(
-            f"bucket: {bucket_us // 1_000_000} s makes more than {MAX_QUERY_LIMIT}"
+            f"bucket: {bucket_us // 1_000_000} s makes more than {MAX_ROWS}"
             " buckets over the window; widen it or narrow from/to"
         )
     return from_us, to_us, limit, bucket_us, changes
@@ -1977,7 +1952,7 @@ def parse_forecast_params(raw: str) -> tuple[int | None, int, int, int]:
     default for one end would be a guess. With neither given, `at` is
     now, so a bare read of the key returns the current forecast.
     """
-    params = split_selector(raw)
+    params = split_params(raw)
     limit = parse_limit(params["limit"]) if "limit" in params else DEFAULT_QUERY_LIMIT
     ranged = "valid_from" in params or "valid_to" in params
     if "at" in params and ranged:
@@ -1991,21 +1966,6 @@ def parse_forecast_params(raw: str) -> tuple[int | None, int, int, int]:
         ), limit
     at_us = rfc3339_us("at", params["at"]) if "at" in params else now_us()
     return at_us, 0, 0, limit
-
-
-def rfc3339_us(name: str, raw: str) -> int:
-    """Parse an RFC3339 instant with an offset, returned in µs.
-
-    The samples path's convention, shared so the forecast path parses
-    time the same way.
-    """
-    try:
-        dt = datetime.datetime.fromisoformat(raw)
-    except ValueError:
-        raise ValueError(f"{name}: {raw!r} is not RFC3339") from None
-    if dt.tzinfo is None:
-        raise ValueError(f"{name}: {raw!r} needs a UTC offset")
-    return int(dt.timestamp() * 1e6)
 
 
 def parse_bucket(raw: str) -> int:
@@ -2076,14 +2036,14 @@ def changes_only(rows, limit: int) -> list[tuple]:
 
 
 def parse_limit(raw: str) -> int:
-    """Parse a positive row count, clamped to MAX_QUERY_LIMIT."""
+    """Parse a positive row count, clamped to MAX_ROWS."""
     try:
         limit = int(raw)
     except ValueError:
         raise ValueError(f"limit: {raw!r} is not an integer") from None
     if limit < 1:
         raise ValueError(f"limit: {limit} is not positive")
-    return min(limit, MAX_QUERY_LIMIT)
+    return min(limit, MAX_ROWS)
 
 
 def parse_event_params(raw: str) -> tuple[str | None, int, int, int]:
@@ -2094,7 +2054,7 @@ def parse_event_params(raw: str) -> tuple[str | None, int, int, int]:
     the recorder's own timestamps, unlike the RFC3339 samples path) and
     limit.
     """
-    params = split_selector(raw)
+    params = split_params(raw)
     key = params.get("key")
     if key is not None:
         try:

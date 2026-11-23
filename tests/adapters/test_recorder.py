@@ -10,10 +10,10 @@ from pathlib import Path
 
 import _adapters_path  # noqa: F401
 import zenoh
+from homeostat.history import MAX_ROWS
 from homeostat.testing import FakeSample, FakeSession
 from recorder import (
     KINDS,
-    MAX_QUERY_LIMIT,
     SEED_TOLERANCE_US,
     Recorder,
     Writer,
@@ -31,7 +31,6 @@ from recorder import (
     parse_limit,
     parse_params,
     rows_per_day,
-    split_selector,
     standing,
     typed,
 )
@@ -71,18 +70,12 @@ class ValuesTest(unittest.TestCase):
 
 
 class SelectorTest(unittest.TestCase):
-    def test_parameters_split_without_url_decoding(self):
-        self.assertEqual(
-            split_selector("from=2026-01-01T00:00:00+01:00;limit=5;;"),
-            {"from": "2026-01-01T00:00:00+01:00", "limit": "5"},
-        )
-
     def test_a_samples_window_reads_rfc3339_with_an_offset(self):
         from_us, to_us, limit, bucket, changes = parse_params(
             "from=2026-01-01T01:00:00+01:00;to=2026-01-01T00:01:00Z;limit=20000"
         )
         self.assertEqual((from_us, to_us - from_us), (JAN_2026, 60 * S))
-        self.assertEqual((limit, bucket, changes), (MAX_QUERY_LIMIT, 0, False))
+        self.assertEqual((limit, bucket, changes), (MAX_ROWS, 0, False))
 
     def test_bad_samples_parameters_are_refused(self):
         for raw in (
@@ -112,16 +105,9 @@ class SelectorTest(unittest.TestCase):
                 else:
                     parse_params(raw)
 
-    def test_the_sdk_reads_up_to_the_recorders_limit(self):
-        # `Context.history` takes a full read as a cut window, so it must
-        # ask for exactly the most the recorder returns.
-        from homeostat.automation import _HISTORY_LIMIT
-
-        self.assertEqual(_HISTORY_LIMIT, MAX_QUERY_LIMIT)
-
     def test_limit_is_positive_and_clamped(self):
         self.assertEqual(parse_limit("3"), 3)
-        self.assertEqual(parse_limit(str(MAX_QUERY_LIMIT * 2)), MAX_QUERY_LIMIT)
+        self.assertEqual(parse_limit(str(MAX_ROWS * 2)), MAX_ROWS)
         with self.assertRaises(ValueError):
             parse_limit("-1")
 

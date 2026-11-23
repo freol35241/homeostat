@@ -69,7 +69,15 @@ from pathlib import Path
 import aiohttp
 import zenoh
 from aiohttp import WSMsgType, web
-from homeostat import ConfigWriteError, Newest, connect, house, keys, vocabulary
+from homeostat import (
+    ConfigWriteError,
+    Newest,
+    connect,
+    history,
+    house,
+    keys,
+    vocabulary,
+)
 from homeostat.session import QueryError
 
 ENV_HOSTS = "HOMEOSTAT_DASHBOARD_HOSTS"
@@ -1257,17 +1265,18 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
             return json_error(f"bucket must be positive and no finer than {HISTORY_LIMIT_MAX} per window")
         if bucket and changes:
             return json_error("bucket and changes are exclusive")
-        selector = (
-            f"{keys.history_key(series_class, entity, aspect)}"
-            f"?from={start.isoformat(timespec='seconds')}"
-            f";to={now.isoformat(timespec='seconds')};limit={limit}"
-        )
+        params = {
+            "from": start.isoformat(timespec="seconds"),
+            "to": now.isoformat(timespec="seconds"),
+            "limit": limit,
+        }
         # The recorder's chart shapes (docs/design.md#read-path): one point
         # per bucket for a line, or the runs of a state for a timeline.
         if bucket:
-            selector += f";bucket={bucket}"
+            params["bucket"] = bucket
         elif changes:
-            selector += ";changes=1"
+            params["changes"] = 1
+        selector = history.selector(keys.history_key(series_class, entity, aspect), params)
         try:
             replies = await asyncio.get_running_loop().run_in_executor(
                 None, hub.session.get_json, selector
@@ -1307,10 +1316,13 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         # that reaches into it is included. The wildcard in the source slot
         # returns every provider for this aspect, each as its own series
         # (docs/design.md#forecasts).
-        selector = (
-            f"{keys.history_key('forecast', entity, aspect)}/*"
-            f"?valid_from={start.isoformat(timespec='seconds')}"
-            f";valid_to={now.isoformat(timespec='seconds')};limit={limit}"
+        selector = history.selector(
+            keys.history_key("forecast", entity, aspect) + "/*",
+            {
+                "valid_from": start.isoformat(timespec="seconds"),
+                "valid_to": now.isoformat(timespec="seconds"),
+                "limit": limit,
+            },
         )
         try:
             replies = await asyncio.get_running_loop().run_in_executor(
@@ -1354,9 +1366,9 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         # samples path takes RFC3339.
         to_us = int(now.timestamp() * 1_000_000)
         from_us = to_us - int((hours + SOURCE_EVENT_LOOKBACK_H) * 3600 * 1_000_000)
-        selector = (
-            f"home/history/events?key=home/health/{owner}/event"
-            f";from={from_us};to={to_us};limit={SOURCE_EVENT_MAX}"
+        selector = history.selector(
+            "home/history/events",
+            {"key": f"home/health/{owner}/event", "from": from_us, "to": to_us, "limit": SOURCE_EVENT_MAX},
         )
         try:
             replies = await asyncio.get_running_loop().run_in_executor(
@@ -1406,9 +1418,9 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         now = datetime.datetime.now(datetime.timezone.utc)
         to_us = int(now.timestamp() * 1_000_000)
         from_us = to_us - int(hours * 3600 * 1_000_000)
-        selector = (
-            f"home/history/events?key=home/health/{unit}/event"
-            f";from={from_us};to={to_us};limit={UNIT_EVENT_MAX}"
+        selector = history.selector(
+            "home/history/events",
+            {"key": f"home/health/{unit}/event", "from": from_us, "to": to_us, "limit": UNIT_EVENT_MAX},
         )
         try:
             replies = await asyncio.get_running_loop().run_in_executor(
@@ -1440,9 +1452,9 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
 
         def events(key: str) -> list[dict]:
             nonlocal truncated
-            selector = (
-                f"home/history/events?key={key}"
-                f";from={from_us};to={to_us};limit={TIMELINE_ROW_MAX}"
+            selector = history.selector(
+                "home/history/events",
+                {"key": key, "from": from_us, "to": to_us, "limit": TIMELINE_ROW_MAX},
             )
             rows = [
                 {"ts": row["ts"] / 1_000_000, "key": row["key"], "value": row["payload"]}
@@ -1454,10 +1466,14 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
 
         def changes(entity: str, aspect: str, limit: int) -> dict:
             nonlocal truncated
-            selector = (
-                f"{keys.history_key('state', entity, aspect)}"
-                f"?from={start.isoformat(timespec='seconds')}"
-                f";to={end.isoformat(timespec='seconds')};limit={limit};changes=1"
+            selector = history.selector(
+                keys.history_key("state", entity, aspect),
+                {
+                    "from": start.isoformat(timespec="seconds"),
+                    "to": end.isoformat(timespec="seconds"),
+                    "limit": limit,
+                    "changes": 1,
+                },
             )
             points = [
                 {"ts": datetime.datetime.fromisoformat(p["ts"]).timestamp(), "value": p["value"]}
