@@ -13,7 +13,7 @@ pub enum Publisher {
     Core,
     /// Each unit, under its own name: `home/{class}/{unit}/...`.
     OwnName,
-    /// Exactly one service in the house.
+    /// One service, and no more than one in the house.
     OneService,
 }
 
@@ -30,7 +30,7 @@ impl Class {
     }
 }
 
-/// `home/{class}/...`: the classes the core owns.
+/// The classes under `home/`, each with who may publish under it.
 pub const CLASSES: &[Class] = &[
     Class::new("state", Publisher::Any),
     Class::new("cmd", Publisher::Any),
@@ -156,7 +156,7 @@ impl KeyExpr {
             _ => return Err(format!("\"{raw}\" does not start with \"home/\"")),
         }
         let class = match self.0.get(1) {
-            Some(Segment::Literal(c)) if class(c).is_some() => c.as_str(),
+            Some(Segment::Literal(c)) if self::class(c).is_some() => c.as_str(),
             Some(Segment::Literal(c)) => {
                 return Err(format!("\"{raw}\" has unknown class \"{c}\""));
             }
