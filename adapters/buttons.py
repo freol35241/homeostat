@@ -39,7 +39,7 @@ for a command the SDK refuses to send.
 """
 
 import zenoh
-from homeostat import automation, house, keys
+from homeostat import automation, keys
 
 
 class UnknownState(LookupError):
@@ -71,7 +71,7 @@ def commands(action: dict, capability: str, state) -> list[tuple[str, object, st
 
 def main():
     ctx = automation.context()
-    model = house.load_house(".")
+    model = ctx.house
     entities = {e.name: e for e in model.entities}
     # (capability, key expression, binding) per cmd publish.
     publishes = [

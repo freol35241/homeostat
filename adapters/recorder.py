@@ -2312,7 +2312,7 @@ def main():
     sess = session.connect()
     own = house.load_unit(sess.unit)
 
-    endpoint = own.endpoint()
+    endpoint = house.load_endpoint(sess.unit)
     if not endpoint.startswith("sqlite:"):
         raise ValueError(f"recorder endpoint must be sqlite:<path>, got {endpoint}")
     db_path = Path(endpoint.removeprefix("sqlite:"))

@@ -315,12 +315,11 @@ class RecorderPresenceTest(unittest.TestCase):
 
 
 class HouseTest(unittest.TestCase):
-    """The Context reads its own manifest once, and every feature that
-    needs the rest of the house shares one parse of it."""
+    """Every Context feature that needs the house shares one parse of it,
+    made on first use, and a parse that fails is tried again."""
 
-    def test_the_house_is_parsed_once_for_every_feature(self):
+    def test_the_house_is_parsed_once_on_first_use(self):
         files = {
-            **LATCH_FILES,
             f"entities/{UNIT}/gauge.toml": house_entity(
                 "garden", "sensor", "[aspects]\nprecipitation = { interval_s = 3600 }\n"
             ),
@@ -328,18 +327,26 @@ class HouseTest(unittest.TestCase):
         }
         body = (
             f'[entities]\ndir = "entities/{UNIT}/"\n'
-            '[bus.publishes]\nlatch = { key = "home/state/{room}/{entity}/on" }\n'
+            '[bus.publishes]\nrain = { key = "home/state/garden/gauge/precipitation" }\n'
         )
         with mock.patch.object(house_mod, "load_house", wraps=house_mod.load_house) as load_house:
             ctx = context(self, body, files)
+            self.assertEqual(load_house.call_count, 0)
             self.assertTrue(ctx._has_recorder())
             self.assertFalse(ctx._is_press("home/state/garden/gauge/action"))
             self.assertEqual(ctx._interval_of("gauge", "precipitation"), 3600)
-            self.assertEqual(
-                sorted(e.name for e in ctx.entities), ["gauge", "motion_lighting", "night_mode"]
-            )
+            self.assertEqual([e.name for e in ctx.entities], ["gauge"])
+            self.assertIs(ctx.house, ctx.house)
         self.assertEqual(load_house.call_count, 1)
-        self.assertEqual(ctx.manifest.publishes["latch"]["key"], "home/state/{room}/{entity}/on")
+
+    def test_a_failed_parse_is_not_kept(self):
+        ctx = context(self, "", {"units/half.toml": "[unit\nname ="})
+        with mock.patch.object(house_mod, "load_house", wraps=house_mod.load_house) as load_house:
+            with self.assertRaises(ValueError):
+                ctx.house  # noqa: B018
+            (ctx._root / "units" / "half.toml").write_text(RECORDER)
+            self.assertEqual(sorted(u.name for u in ctx.house.units), [UNIT, "recorder"])
+        self.assertEqual(load_house.call_count, 2)
 
 
 class RestoreWaitTest(unittest.TestCase):

@@ -48,17 +48,18 @@ class PressTest(unittest.TestCase):
         ctx = types.SimpleNamespace(
             unit="buttons",
             manifest=types.SimpleNamespace(publishes=publishes),
+            house=model,
             subscribe=lambda binding, handler: handlers.__setitem__(binding, handler),
             publish=publish,
             health_event=lambda kind, **fields: events.append(fields["reason"]),
             ready=lambda: None, run=lambda: None,
         )
-        original = (buttons.automation.context, buttons.house.load_house)
-        buttons.automation.context, buttons.house.load_house = (lambda: ctx), (lambda root: model)
+        original = buttons.automation.context
+        buttons.automation.context = lambda: ctx
         try:
             buttons.main()
         finally:
-            buttons.automation.context, buttons.house.load_house = original
+            buttons.automation.context = original
         handlers["state"]("home/state/hall/lamp/on", light_state)
         handlers["presses"]("home/state/hall/remote/action", gesture)
         return sent, events

@@ -195,11 +195,12 @@ def load_endpoint(unit: str, root: str | Path = ".") -> str:
     KeyError
         If the manifest declares no `[discovery].endpoint`.
     """
-    return load_unit(unit, root).endpoint()
+    manifest = tomllib.loads((Path(root) / "units" / f"{unit}.toml").read_text())
+    return _expand_endpoint(manifest)
 
 
-def _expand_endpoint(discovery: dict) -> str:
-    endpoint = os.path.expandvars(discovery["endpoint"])
+def _expand_endpoint(manifest: dict) -> str:
+    endpoint = os.path.expandvars(manifest["discovery"]["endpoint"])
     if "$" in endpoint:
         raise ValueError(f"unset variable in discovery endpoint: {endpoint}")
     return endpoint
@@ -258,8 +259,6 @@ class UnitInfo:
         `[bus.publishes]`, as declared.
     subscribes : dict
         `[bus.subscribes]`, as declared.
-    discovery : dict
-        `[discovery]`, as declared. Its endpoint is unexpanded.
     """
 
     name: str
@@ -269,27 +268,6 @@ class UnitInfo:
     params: dict = field(default_factory=dict)
     publishes: dict = field(default_factory=dict)
     subscribes: dict = field(default_factory=dict)
-    discovery: dict = field(default_factory=dict)
-
-    def endpoint(self) -> str:
-        """Return the `[discovery]` endpoint with ${VAR} expansion.
-
-        It is expanded when asked, so reading the house does not need
-        every unit's variables set.
-
-        Returns
-        -------
-        str
-            The endpoint, variables expanded.
-
-        Raises
-        ------
-        ValueError
-            If the endpoint references an unset variable.
-        KeyError
-            If the manifest declares no `[discovery].endpoint`.
-        """
-        return _expand_endpoint(self.discovery)
 
 
 def _unit_from(manifest: dict) -> UnitInfo:
@@ -303,7 +281,6 @@ def _unit_from(manifest: dict) -> UnitInfo:
         params=params_of(manifest),
         publishes=dict(bus.get("publishes", {})),
         subscribes=dict(bus.get("subscribes", {})),
-        discovery=dict(manifest.get("discovery", {})),
     )
 
 
@@ -321,6 +298,15 @@ def load_unit(unit: str, root: str | Path = ".") -> UnitInfo:
     -------
     UnitInfo
         The manifest as declared.
+
+    Raises
+    ------
+    OSError
+        If the manifest cannot be read.
+    tomllib.TOMLDecodeError
+        If it is not valid TOML. This is a ValueError.
+    KeyError
+        If it declares no `[unit]` name or kind.
     """
     return _unit_from(tomllib.loads((Path(root) / "units" / f"{unit}.toml").read_text()))
 
@@ -337,6 +323,13 @@ def load_zones(root: str | Path = ".") -> dict[str, list[str]]:
     -------
     dict of str to list of str
         Zone name to member rooms.
+
+    Raises
+    ------
+    OSError
+        If zones.toml exists but cannot be read.
+    tomllib.TOMLDecodeError
+        If it is not valid TOML. This is a ValueError.
     """
     zones_path = Path(root) / "zones.toml"
     if not zones_path.exists():
@@ -449,7 +442,7 @@ def load_adapter(unit: str, root: str | Path = ".") -> AdapterConfig:
     # device's address separately and declare no [discovery].endpoint.
     # Only single-endpoint adapters need it.
     endpoint = (
-        _expand_endpoint(manifest["discovery"]) if "endpoint" in manifest.get("discovery", {}) else None
+        _expand_endpoint(manifest) if "endpoint" in manifest.get("discovery", {}) else None
     )
 
     entities = []

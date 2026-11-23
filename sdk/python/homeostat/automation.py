@@ -41,6 +41,7 @@ import zenoh
 from . import house, intervals, keys, vocabulary
 from .forecast import Forecast, Point
 from .forecast import decode as decode_forecast
+from .house import Entity, HouseModel
 from .session import QueryError, QueryTimeout, UnitSession
 from .stamps import Newest
 
@@ -206,7 +207,7 @@ class Context:
     unit : str
         The unit's name.
     manifest : house.UnitInfo
-        The unit's own manifest, read once here.
+        The unit's own manifest, read when the Context is built.
     params : object
         The current typed parameter values, one attribute per `[params.*]`
         entry; a `time` parameter reads as a `datetime.time`.
@@ -338,7 +339,7 @@ class Context:
             except QueryError as err:
                 self._session.health_event("redeliver-failed", error=str(err))
 
-    def _load_house(self) -> house.HouseModel:
+    def _load_house(self) -> HouseModel:
         """Return the whole house, parsed once per Context.
 
         A house that cannot be read is not kept, so the next call reads it
@@ -348,11 +349,14 @@ class Context:
             self._house = house.load_house(self._root)
         return self._house
 
+    # Below this property, `house` in the class body names it and not the
+    # module, so signatures here name `Entity` and `HouseModel` directly.
     @property
-    def entities(self) -> list[house.Entity]:
-        """The entities this unit owns, read from the house's entity files.
+    def house(self) -> HouseModel:
+        """The whole house, as `house.load_house` reads it.
 
-        The house is parsed on first use and kept.
+        It is parsed on first use and kept. A parse that fails is not kept,
+        so the next use reads the house again.
 
         Raises
         ------
@@ -363,7 +367,22 @@ class Context:
         KeyError
             If one lacks a table the core requires.
         """
-        return [e for e in self._load_house().entities if e.owner == self.unit]
+        return self._load_house()
+
+    @property
+    def entities(self) -> list[Entity]:
+        """The entities this unit owns, from `house`.
+
+        Raises
+        ------
+        OSError
+            If a house file cannot be read.
+        ValueError
+            If one is not valid TOML.
+        KeyError
+            If one lacks a table the core requires.
+        """
+        return [e for e in self.house.entities if e.owner == self.unit]
 
     def _variants(self, expr: str) -> list[str]:
         # Only templates need the entities. A unit with templates read the

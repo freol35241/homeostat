@@ -628,8 +628,9 @@ offers the surface the manifest declares and nothing more:
 - `ctx.decision` ([Unit timeline](#unit-timeline));
 - `ctx.paused` ([Pausing an automation](#pausing-an-automation));
 - `ctx.health_event`;
-- `ctx.manifest` and `ctx.entities`, the unit's own manifest and the
-  entities it owns, each parsed once;
+- `ctx.manifest`, the unit's own manifest, read once at start;
+- `ctx.house` and `ctx.entities`, the whole house and the entities the
+  unit owns, read on first use and then kept;
 - `ctx.ready()`, which declares the liveliness token once the unit can
   do its job;
 - `ctx.run()`.
