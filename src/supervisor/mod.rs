@@ -101,7 +101,7 @@ impl WorldMeta {
 
 /// Where the replay after this core's start stands, served as a JSON string
 /// at [`bus::REPLAY_KEY`].
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[derive(Default, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ReplayState {
     /// The house has no recorder, so there is nothing to replay.

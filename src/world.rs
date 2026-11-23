@@ -5,7 +5,7 @@
 //! unit's meta entries with [`WorldUnit::meta_entries`], and [`read`] parses
 //! them back with [`WorldUnit::from_meta`].
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use zenoh::Session;
 
@@ -50,17 +50,16 @@ pub async fn read(session: &Session, endpoint: &str) -> Result<World, String> {
     if let Some(payload) = meta.get(bus::APPLIED_COMMIT_KEY) {
         world.applied_commit = Some(String::from_utf8_lossy(payload).to_string());
     }
-    for key in meta.keys() {
-        let Some((name, _)) = key
-            .strip_prefix("home/meta/")
-            .and_then(|rest| rest.split_once('/'))
-        else {
-            continue;
-        };
-        if let Some(unit) = WorldUnit::from_meta(name, &meta) {
-            world.units.insert(name.to_string(), unit);
-        }
-    }
+    let names: BTreeSet<&str> = meta
+        .keys()
+        .filter_map(|key| key.strip_prefix("home/meta/")?.split_once('/'))
+        .map(|(name, _)| name)
+        .collect();
+    world.units.extend(
+        names
+            .into_iter()
+            .filter_map(|name| Some((name.to_string(), WorldUnit::from_meta(name, &meta)?))),
+    );
 
     let replies = session
         .get("home/config/*/*")

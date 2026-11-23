@@ -8,7 +8,6 @@ use std::fmt;
 use std::fs;
 use std::path::Path;
 
-use serde::Deserialize;
 use serde_json::Value;
 
 use crate::content;
@@ -50,18 +49,11 @@ pub struct WorldUnit {
 
 impl WorldUnit {
     /// The kind the unit's manifest declares. `None` when the manifest does
-    /// not parse.
+    /// not parse or its `[unit].kind` is missing or not a known kind.
     fn kind(&self) -> Option<UnitKind> {
-        #[derive(Deserialize)]
-        struct Head {
-            unit: HeadUnit,
-        }
-        #[derive(Deserialize)]
-        struct HeadUnit {
-            kind: UnitKind,
-        }
         let text = std::str::from_utf8(&self.manifest).ok()?;
-        toml::from_str::<Head>(text).ok().map(|head| head.unit.kind)
+        let manifest: toml::Value = toml::from_str(text).ok()?;
+        manifest.get("unit")?.get("kind")?.clone().try_into().ok()
     }
 }
 
@@ -539,7 +531,7 @@ pub fn render(check: &CheckResult, diff: &Diff, repo_label: &str, world: &World)
                 .units
                 .get(name)
                 .and_then(WorldUnit::kind)
-                .map_or_else(|| "unit".to_string(), |kind| kind.to_string());
+                .map_or("unit".to_string(), |kind| kind.to_string());
             out.push_str(&format!("- {kind} {name}\n"));
         }
     }
