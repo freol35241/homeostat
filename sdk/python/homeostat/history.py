@@ -26,7 +26,7 @@ STATS_KEY = "home/history/stats"
 
 
 class HistoryUnavailable(Exception):
-    """`Context.history` or `Context.forecast_history` could not read.
+    """`Context.history`, `Context.forecast_history` or `read` could not read.
 
     The house runs no recorder, the recorder did not answer or answered
     with an error, or the read holds more rows or issues than one read
@@ -35,18 +35,19 @@ class HistoryUnavailable(Exception):
 
 
 def selector(key: str, params: Mapping[str, str | int | datetime.datetime]) -> str:
-    """Return a history read of `key` with `params`, in the mapping's order.
+    """Return the selector that reads `key` with `params`, in the mapping's order.
 
-    A datetime is written as RFC3339 in UTC, which `rfc3339_us` reads
-    back. Other values are written with `str`. Nothing is URL-encoded,
-    because an RFC3339 offset's '+' must stay literal.
+    A datetime is written as RFC3339 in UTC. A naive one is read as local
+    time. Other values are written with `str`. Nothing is URL-encoded,
+    because an RFC3339 offset's '+' must stay literal and the recorder
+    does not decode.
 
     Parameters
     ----------
     key : str
         The key expression to read, such as a `keys.history_key`.
     params : Mapping of str to str, int or datetime.datetime
-        The parameters, by name. A datetime must be timezone-aware.
+        The parameters, by name.
 
     Returns
     -------
@@ -64,8 +65,7 @@ def selector(key: str, params: Mapping[str, str | int | datetime.datetime]) -> s
 def split_params(raw: str) -> dict[str, str]:
     """Split a selector's parameters into a dict, as the recorder reads them.
 
-    No URL decoding: RFC3339 offsets contain '+', which must stay literal.
-    Empty parts are skipped.
+    Nothing is URL-decoded (see `selector`). Empty parts are skipped.
 
     Parameters
     ----------
@@ -86,43 +86,13 @@ def split_params(raw: str) -> dict[str, str]:
     return params
 
 
-def rfc3339_us(name: str, raw: str) -> int:
-    """Parse an RFC3339 instant with an offset, returned in µs.
-
-    Parameters
-    ----------
-    name : str
-        The parameter's name, for the error message.
-    raw : str
-        The parameter's value.
-
-    Returns
-    -------
-    int
-        Microseconds since the epoch.
-
-    Raises
-    ------
-    ValueError
-        If `raw` is not RFC3339 or has no UTC offset.
-    """
-    try:
-        dt = datetime.datetime.fromisoformat(raw)
-    except ValueError:
-        raise ValueError(f"{name}: {raw!r} is not RFC3339") from None
-    if dt.tzinfo is None:
-        raise ValueError(f"{name}: {raw!r} needs a UTC offset")
-    return int(dt.timestamp() * 1e6)
-
-
 def wait(session: UnitSession, timeout_s: float) -> str | None:
     """Wait for the recorder to answer, and return why it did not, or None.
 
-    Wait for the recorder, not for rows. The recorder replies once per
-    series it holds, so a series it does not hold gets no reply at all.
-    Waiting on the series itself would delay every first start by the
-    whole timeout. `stats` describes the store and always answers while
-    the recorder is up.
+    This asks `stats`, not the series to be read. The recorder replies
+    once per series it holds, so a series it does not hold gets no reply
+    at all, and waiting on it would take the whole timeout. `stats`
+    describes the store and always answers while the recorder is up.
 
     Send one query at a time, and let it wait for the rest of the
     deadline. The recorder answers queries one at a time (zenoh runs a

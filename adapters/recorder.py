@@ -58,7 +58,7 @@ from pathlib import Path
 
 import zenoh
 from homeostat import forecast, house, keys, session
-from homeostat.history import MAX_ROWS, rfc3339_us, split_params
+from homeostat.history import MAX_ROWS, split_params
 from homeostat.params import LiveParams
 from homeostat.stamps import stamp_us
 
@@ -1966,6 +1966,21 @@ def parse_forecast_params(raw: str) -> tuple[int | None, int, int, int]:
         ), limit
     at_us = rfc3339_us("at", params["at"]) if "at" in params else now_us()
     return at_us, 0, 0, limit
+
+
+def rfc3339_us(name: str, raw: str) -> int:
+    """Parse an RFC3339 instant with an offset, returned in µs.
+
+    The samples path's convention, shared so the forecast path parses
+    time the same way.
+    """
+    try:
+        dt = datetime.datetime.fromisoformat(raw)
+    except ValueError:
+        raise ValueError(f"{name}: {raw!r} is not RFC3339") from None
+    if dt.tzinfo is None:
+        raise ValueError(f"{name}: {raw!r} needs a UTC offset")
+    return int(dt.timestamp() * 1e6)
 
 
 def parse_bucket(raw: str) -> int:

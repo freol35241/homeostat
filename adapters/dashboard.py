@@ -1368,7 +1368,12 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         from_us = to_us - int((hours + SOURCE_EVENT_LOOKBACK_H) * 3600 * 1_000_000)
         selector = history.selector(
             "home/history/events",
-            {"key": f"home/health/{owner}/event", "from": from_us, "to": to_us, "limit": SOURCE_EVENT_MAX},
+            {
+                "key": f"home/health/{owner}/event",
+                "from": from_us,
+                "to": to_us,
+                "limit": SOURCE_EVENT_MAX,
+            },
         )
         try:
             replies = await asyncio.get_running_loop().run_in_executor(
@@ -1420,7 +1425,12 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         from_us = to_us - int(hours * 3600 * 1_000_000)
         selector = history.selector(
             "home/history/events",
-            {"key": f"home/health/{unit}/event", "from": from_us, "to": to_us, "limit": UNIT_EVENT_MAX},
+            {
+                "key": f"home/health/{unit}/event",
+                "from": from_us,
+                "to": to_us,
+                "limit": UNIT_EVENT_MAX,
+            },
         )
         try:
             replies = await asyncio.get_running_loop().run_in_executor(
