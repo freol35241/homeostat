@@ -81,9 +81,9 @@ impl Server {
     }
 
     /// Queries the bus at `key`, with `params` joined into the selector's
-    /// parameters, and returns every reply in arrival order. An error reply
-    /// carries its payload as text. `what` names the read when the query
-    /// itself fails.
+    /// parameters, and returns every reply in arrival order once the query
+    /// completes. An error reply carries its payload as text. `what` names
+    /// the read when the query itself fails.
     fn query(
         &self,
         key: &str,
@@ -119,7 +119,11 @@ impl Server {
             return Err("read_state reads the house bus: the key must be under home/".into());
         }
         let mut values = serde_json::Map::new();
-        for sample in self.query(key, &[], "bus")?.into_iter().flatten() {
+        for sample in self
+            .query(key, &[], "bus")?
+            .into_iter()
+            .filter_map(Result::ok)
+        {
             let bytes = sample.payload().to_bytes();
             let value = serde_json::from_slice(&bytes)
                 .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).to_string()));
@@ -418,7 +422,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_listed_tool_dispatches() {
+    fn tools_table_matches_tools_list() {
         let listed: Vec<Value> = tools()
             .as_array()
             .expect("tools array")
