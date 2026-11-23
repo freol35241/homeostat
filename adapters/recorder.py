@@ -56,7 +56,6 @@ import time
 from collections import deque
 from pathlib import Path
 
-import tomllib
 import zenoh
 from homeostat import forecast, house, keys, session
 from homeostat.params import LiveParams
@@ -2311,7 +2310,7 @@ def migrate_v4(conn: sqlite3.Connection) -> None:
 
 def main():
     sess = session.connect()
-    manifest = tomllib.loads(Path(f"units/{sess.unit}.toml").read_text())
+    own = house.load_unit(sess.unit)
 
     endpoint = house.load_endpoint(sess.unit)
     if not endpoint.startswith("sqlite:"):
@@ -2322,17 +2321,17 @@ def main():
     recorder = Recorder(db_path, sess)
     subs = [
         sess.subscribe(expr, recorder.record)
-        for expr in manifest["bus"]["subscribes"].values()
+        for expr in own.subscribes.values()
     ]
     queryable = sess.declare_queryable(
-        manifest["bus"]["publishes"]["history"]["key"], recorder.answer
+        own.publishes["history"]["key"], recorder.answer
     )
-    if any(e.startswith(("home/hold/", "home/arbitration/")) for e in manifest["bus"]["subscribes"].values()):
+    if any(e.startswith(("home/hold/", "home/arbitration/")) for e in own.subscribes.values()):
         recorder.reconcile_standing()
     recorder.writer.thread.start()
     recorder.writer.checker.thread.start()
     recorder.seed(
-        [e for e in manifest["bus"]["subscribes"].values() if e.startswith("home/state/")]
+        [e for e in own.subscribes.values() if e.startswith("home/state/")]
     )
     sess.ready()
 

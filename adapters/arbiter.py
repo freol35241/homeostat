@@ -898,7 +898,7 @@ class Resolver:
 
 def main():
     unit = os.environ[keys.ENV_UNIT]
-    own = next(u for u in house.load_house(".").units if u.name == unit)
+    own = house.load_unit(unit)
 
     session = homeostat.connect()
     params = Params(session, {PARAM: float(own.params[PARAM]["default"])})

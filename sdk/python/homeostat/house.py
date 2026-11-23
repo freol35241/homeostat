@@ -270,6 +270,73 @@ class UnitInfo:
     subscribes: dict = field(default_factory=dict)
 
 
+def _unit_from(manifest: dict) -> UnitInfo:
+    unit = manifest["unit"]
+    bus = manifest.get("bus", {})
+    return UnitInfo(
+        name=unit["name"],
+        kind=unit["kind"],
+        description=unit.get("description", ""),
+        naming=dict(manifest.get("naming", {})),
+        params=params_of(manifest),
+        publishes=dict(bus.get("publishes", {})),
+        subscribes=dict(bus.get("subscribes", {})),
+    )
+
+
+def load_unit(unit: str, root: str | Path = ".") -> UnitInfo:
+    """Return one unit's manifest, read from units/{unit}.toml.
+
+    Parameters
+    ----------
+    unit : str
+        The unit whose manifest to read.
+    root : str or Path, optional
+        The house root.
+
+    Returns
+    -------
+    UnitInfo
+        The manifest as declared.
+
+    Raises
+    ------
+    OSError
+        If the manifest cannot be read.
+    tomllib.TOMLDecodeError
+        If it is not valid TOML. This is a ValueError.
+    KeyError
+        If it declares no `[unit]` name or kind.
+    """
+    return _unit_from(tomllib.loads((Path(root) / "units" / f"{unit}.toml").read_text()))
+
+
+def load_zones(root: str | Path = ".") -> dict[str, list[str]]:
+    """Return zones.toml's zones, or none without the file.
+
+    Parameters
+    ----------
+    root : str or Path, optional
+        The house root.
+
+    Returns
+    -------
+    dict of str to list of str
+        Zone name to member rooms.
+
+    Raises
+    ------
+    OSError
+        If zones.toml exists but cannot be read.
+    tomllib.TOMLDecodeError
+        If it is not valid TOML. This is a ValueError.
+    """
+    zones_path = Path(root) / "zones.toml"
+    if not zones_path.exists():
+        return {}
+    return dict(tomllib.loads(zones_path.read_text()).get("zones", {}))
+
+
 @dataclass
 class HouseModel:
     """The whole house as validated text, as `load_house` reads it.
@@ -317,10 +384,7 @@ def load_house(root: str | Path = ".") -> HouseModel:
     """
     root = Path(root)
 
-    zones: dict[str, list[str]] = {}
-    zones_path = root / "zones.toml"
-    if zones_path.exists():
-        zones = dict(tomllib.loads(zones_path.read_text()).get("zones", {}))
+    zones = load_zones(root)
 
     views: list[dict] | None = None
     controls: list[dict] = []
@@ -334,23 +398,12 @@ def load_house(root: str | Path = ".") -> HouseModel:
     entities: list[Entity] = []
     for manifest_path in sorted((root / "units").glob("*.toml")):
         manifest = tomllib.loads(manifest_path.read_text())
-        unit = manifest["unit"]
-        units.append(
-            UnitInfo(
-                name=unit["name"],
-                kind=unit["kind"],
-                description=unit.get("description", ""),
-                naming=dict(manifest.get("naming", {})),
-                params=params_of(manifest),
-                publishes=dict(manifest.get("bus", {}).get("publishes", {})),
-                subscribes=dict(manifest.get("bus", {}).get("subscribes", {})),
-            )
-        )
+        units.append(_unit_from(manifest))
         entities_dir = manifest.get("entities", {}).get("dir")
         if entities_dir is None:
             continue
         for path in sorted((root / entities_dir).glob("*.toml")):
-            entities.append(_entity_from(path, tomllib.loads(path.read_text()), unit["name"]))
+            entities.append(_entity_from(path, tomllib.loads(path.read_text()), units[-1].name))
     return HouseModel(
         zones=zones, units=units, entities=entities, views=views, controls=controls
     )
