@@ -50,7 +50,7 @@ pub(crate) const NIGHT_MODE: &str = r#"
     priority = "automation"
 "#;
 
-pub(crate) const ARBITER: &str = r#"
+const ARBITER: &str = r#"
     schema = 1
 
     [unit]

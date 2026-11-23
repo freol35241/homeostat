@@ -1,4 +1,5 @@
-//! Checks on what a unit may publish, over the expanded keys alone. An
+//! Checks on what a unit may or must publish, over the expanded keys and not
+//! the grant table. An
 //! entity-addressed key names a bound entity, two forecasters do not share
 //! one key, reserved classes stay with their owners, an arbiter-class publish
 //! covers every arbitrated entity, and every declared aspect is published.

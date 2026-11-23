@@ -1,7 +1,7 @@
 //! Structural validation of a loaded house: names, uniqueness, manifest
 //! shape, zones and parameters. Per-entity semantics live in `entity` and
 //! the `dashboard.toml` checks in `dashboard`. Checks over expanded keys or
-//! the grant table live in `expand`, `grants` and `publish_rules`. The
+//! the grant table live in `expand`, `grants`, `publish_rules` and `wiring`. The
 //! exception is whether some unit publishes the house clock, which the
 //! time-of-day checks in `entity` need.
 

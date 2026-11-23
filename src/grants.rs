@@ -1,8 +1,8 @@
 //! The grant table and the checks that need it. A grant is a unit's publish
 //! resolved against the entities it reaches. The table is the permission
 //! record that `plan` shows. It is also the dependency graph that orders an
-//! apply. `resolve` also runs the publish checks in `publish_rules`, which
-//! read the expanded keys but not the table.
+//! apply. `resolve` also runs four of the checks in `publish_rules`, which
+//! do not read the table.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -126,7 +126,7 @@ fn build_grants(house: &House, expanded: &[ExpandedKey], diags: &mut Diagnostics
 
         if class == "state" || class == "forecast" {
             grants.push(binding_row(house, key, keys));
-        } else if let Some(grant) = writer_row(house, key, spec, subject, keys, &mut diags) {
+        } else if let Some(grant) = banded_row(house, key, spec, subject, keys, &mut diags) {
             grants.push(grant);
         }
     }
@@ -136,7 +136,8 @@ fn build_grants(house: &House, expanded: &[ExpandedKey], diags: &mut Diagnostics
     grants
 }
 
-/// A binding unit's state or forecast publish records what it binds, so
+/// The binding row of a state or forecast publish: the entities its unit
+/// binds that the publish reaches. A binding unit's publish records them, so
 /// a change to any bound entity is a grant delta. Forecast counts for
 /// the same reason as state: it is the same series extended forward,
 /// onto the same entity. Leaving it out would break apply. A unit
@@ -175,10 +176,10 @@ fn binding_row(house: &House, key: &ExpandedKey, keys: Vec<String>) -> Grant {
     }
 }
 
-/// The writer row of a non-adapter's cmd publish, or the holder row of a
-/// non-service's hold publish. Any other publish has no row, and neither
+/// The row of a publish with a band: the writer row of a non-adapter's cmd
+/// publish, or the holder row of a non-service's hold publish. Any other publish has no row, and neither
 /// does one that a check here refuses.
-fn writer_row(
+fn banded_row(
     house: &House,
     key: &ExpandedKey,
     spec: &PublishSpec,
