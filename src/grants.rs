@@ -439,10 +439,7 @@ fn check_commanded_virtuals(
             let Some(entity) = house.entities.iter().find(|e| &e.name == name) else {
                 continue;
             };
-            let automation_owned = house
-                .unit(&entity.owner)
-                .is_some_and(|u| u.manifest.unit.kind == UnitKind::Automation);
-            if !automation_owned {
+            if house.kind_of(&entity.owner) != Some(UnitKind::Automation) {
                 continue;
             }
             let room = entity.file.entity.room.as_str();

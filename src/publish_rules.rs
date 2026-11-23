@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::error::{Code, Diagnostics};
 use crate::expand::{publishes, Direction, ExpandedKey};
-use crate::keyspace::{KeyExpr, Segment};
+use crate::keyspace::{self, KeyExpr, Publisher, Segment};
 use crate::manifest::{UnitKind, WriteMode};
 use crate::repo::House;
 
@@ -204,25 +204,28 @@ pub(crate) fn check_forecast_conflicts(expanded: &[ExpandedKey], diags: &mut Dia
     }
 }
 
-/// Reserved classes (docs/design.md#reserved-classes). `config` and `meta`
-/// belong to the core. `health`, `discovery`, `hold` and `arbitration` are
-/// per unit, under
-/// the publishing unit's own name. `arbiter`, `clock` and `history` are each
-/// one service's output. The SDK only checks that a published key is within a
-/// declared expression. Without this check an automation could declare
-/// `home/arbiter/**` and forge post-arbitration commands, or another unit's
-/// discovery record or holds, with an empty grant table.
+/// Reserved classes (docs/design.md#reserved-classes): checks each published
+/// key against its class's [`Publisher`] in [`keyspace::CLASSES`]. The SDK
+/// only checks that a published key is within a declared expression. Without
+/// this check an automation could declare `home/arbiter/**` and forge
+/// post-arbitration commands, or another unit's discovery record or holds,
+/// with an empty grant table.
 pub(crate) fn check_reserved_classes(
     house: &House,
     expanded: &[ExpandedKey],
     diags: &mut Diagnostics,
 ) {
+    let publisher = |key: &ExpandedKey| {
+        keyspace::class(key.class)
+            .expect("expanded key has a known class")
+            .publisher
+    };
     let mut singleton_publishers: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
     for key in expanded
         .iter()
         .filter(|k| k.direction == Direction::Publishes)
     {
-        if matches!(key.class, "arbiter" | "clock" | "history") {
+        if publisher(key) == Publisher::OneService {
             singleton_publishers
                 .entry(key.class)
                 .or_default()
@@ -238,18 +241,16 @@ pub(crate) fn check_reserved_classes(
         let unit = house
             .unit(&key.unit)
             .expect("expanded key from loaded unit");
-        let message = match class {
-            "config" | "meta" => Some(format!(
+        let message = match publisher(key) {
+            Publisher::Core => Some(format!(
                 "\"{}\" publishes under home/{class}/, which only the core writes",
                 key.source
             )),
-            "health" | "discovery" | "hold" | "arbitration" if next != Some(key.unit.as_str()) => {
-                Some(format!(
-                    "\"{}\" must sit under this unit's own name: home/{class}/{}/...",
-                    key.source, key.unit
-                ))
-            }
-            "arbiter" | "clock" | "history" => {
+            Publisher::OwnName if next != Some(key.unit.as_str()) => Some(format!(
+                "\"{}\" must sit under this unit's own name: home/{class}/{}/...",
+                key.source, key.unit
+            )),
+            Publisher::OneService => {
                 let publishers = &singleton_publishers[class];
                 if unit.manifest.unit.kind != UnitKind::Service {
                     Some(format!(
@@ -271,7 +272,7 @@ pub(crate) fn check_reserved_classes(
                     None
                 }
             }
-            _ => None,
+            Publisher::OwnName | Publisher::Any => None,
         };
         if let Some(message) = message {
             diags.in_file(&unit.path).error(

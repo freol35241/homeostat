@@ -245,7 +245,7 @@ fn check_manifest_shape(house: &House, diags: &mut Diagnostics) {
         } else {
             // Automations may bind entities (virtual sensors). Services have
             // no need to, and are refused until one does.
-            if unit.manifest.entities.is_some() && unit.manifest.unit.kind != UnitKind::Automation {
+            if unit.manifest.entities.is_some() && !unit.manifest.unit.kind.binds_entities() {
                 diags.error(
                     Code::InvalidManifest,
                     name,

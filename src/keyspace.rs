@@ -1,37 +1,69 @@
-//! The bus key space: the classes under `home/`, the shape each class
-//! takes, and key expressions as parsed segments.
+//! The bus key space: the classes under `home/` and who may publish under
+//! each, the shape each class takes, and key expressions as parsed
+//! segments.
 
 use std::fmt;
 
+/// Who may publish under a class (docs/design.md#reserved-classes).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Publisher {
+    /// Any unit, as its grants allow.
+    Any,
+    /// Only the core.
+    Core,
+    /// Each unit, under its own name: `home/{class}/{unit}/...`.
+    OwnName,
+    /// Exactly one service in the house.
+    OneService,
+}
+
+/// A class under `home/` and who may publish under it.
+#[derive(Debug)]
+pub struct Class {
+    pub name: &'static str,
+    pub publisher: Publisher,
+}
+
+impl Class {
+    const fn new(name: &'static str, publisher: Publisher) -> Class {
+        Class { name, publisher }
+    }
+}
+
 /// `home/{class}/...`: the classes the core owns.
-pub const CLASSES: &[&str] = &[
-    "state",
-    "cmd",
-    "arbiter",
+pub const CLASSES: &[Class] = &[
+    Class::new("state", Publisher::Any),
+    Class::new("cmd", Publisher::Any),
+    Class::new("arbiter", Publisher::OneService),
     // A series' future, keyed like its present: the same room/entity/aspect,
     // so a forecast extends the same series forward
     // (docs/design.md#forecasts). The core does not interpret it, just as it
     // does not interpret `motion`.
-    "forecast",
-    "config",
-    "meta",
-    "health",
-    "clock",
-    "history",
-    "discovery",
+    Class::new("forecast", Publisher::Any),
+    Class::new("config", Publisher::Core),
+    Class::new("meta", Publisher::Core),
+    Class::new("health", Publisher::OwnName),
+    Class::new("clock", Publisher::OneService),
+    Class::new("history", Publisher::OneService),
+    Class::new("discovery", Publisher::OwnName),
     // Standing wishes for arbitrated aspects: one record per held aspect,
     // under the holder's name (`home/hold/{unit}/{room}/{entity}/{aspect}`),
     // the family's under the arbiter's. They are mirrored so a late joiner
     // can ask what is held right now, which an event stream cannot answer
     // (docs/design.md#holds). The audit trail of preempt and refuse events
     // stays where it is.
-    "hold",
+    Class::new("hold", Publisher::OwnName),
     // What the arbiter resolved: per arbitrated aspect, the hold it applied
     // and the holds beneath it, one document per arbiter unit
     // (`home/arbitration/{unit}`). It is mirrored, and a restarted arbiter
     // reads it back so it does not send an applied hold again.
-    "arbitration",
+    Class::new("arbitration", Publisher::OwnName),
 ];
+
+/// The class named `name`, if the core has one.
+pub fn class(name: &str) -> Option<&'static Class> {
+    CLASSES.iter().find(|c| c.name == name)
+}
 
 /// The classes addressed per entity, as
 /// `home/{class}/{room}/{entity}/{aspect}`. `forecast` is one of them and
@@ -44,7 +76,7 @@ pub const PSEUDO_ROOMS: &[&str] = &["global", "person"];
 /// Words that may not be used as room or zone names (pseudo-rooms are the
 /// exception for entity rooms).
 pub fn is_reserved_word(word: &str) -> bool {
-    word == "home" || CLASSES.contains(&word) || PSEUDO_ROOMS.contains(&word)
+    word == "home" || class(word).is_some() || PSEUDO_ROOMS.contains(&word)
 }
 
 /// One segment of a key expression.
@@ -124,7 +156,7 @@ impl KeyExpr {
             _ => return Err(format!("\"{raw}\" does not start with \"home/\"")),
         }
         let class = match self.0.get(1) {
-            Some(Segment::Literal(c)) if CLASSES.contains(&c.as_str()) => c.as_str(),
+            Some(Segment::Literal(c)) if class(c).is_some() => c.as_str(),
             Some(Segment::Literal(c)) => {
                 return Err(format!("\"{raw}\" has unknown class \"{c}\""));
             }
