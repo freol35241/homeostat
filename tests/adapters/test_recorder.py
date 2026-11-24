@@ -1,6 +1,7 @@
 """The recorder's read path and calendar, without a store or a bus."""
 
 import datetime
+import json
 import sqlite3
 import tempfile
 import threading
@@ -15,6 +16,7 @@ from homeostat.testing import FakeSample, FakeSession
 from recorder import (
     KINDS,
     SEED_TOLERANCE_US,
+    Archiver,
     Recorder,
     Writer,
     archive_boundary_us,
@@ -26,6 +28,7 @@ from recorder import (
     init_store,
     latest_state,
     month_start_us,
+    now_us,
     parse_event_params,
     parse_forecast_params,
     parse_limit,
@@ -423,3 +426,194 @@ class ReconcileStandingTest(StoreTest):
             self.stale()
             self.recorder(status, []).reconcile_standing()
             self.assertEqual(len(standing(self.conn)), 2, status)
+
+
+class TallyTest(StoreTest):
+    """Purge and prune delete per series and keep the `series` tally right."""
+
+    def forecast(self, entity, issued, valid_times):
+        conn = self.conn
+        conn.execute("INSERT OR IGNORE INTO rooms (name) VALUES ('roof')")
+        conn.execute(
+            "INSERT OR IGNORE INTO series (class, entity, aspect, source)"
+            " VALUES ('forecast', ?, 'temperature', 'met')",
+            (entity,),
+        )
+        conn.executemany(
+            "INSERT INTO forecasts VALUES ("
+            " (SELECT id FROM series WHERE class = 'forecast' AND entity = ?),"
+            " ?, ?, NULL, (SELECT id FROM rooms WHERE name = 'roof'), 1.0)",
+            [(entity, issued, valid) for valid in valid_times],
+        )
+        conn.commit()
+
+    def event(self, ts, key="home/health/unit/event"):
+        self.conn.execute("INSERT INTO events VALUES (?, ?, '{}')", (ts, key))
+        self.conn.commit()
+
+    def tally(self):
+        return {
+            entity: (count, oldest, newest)
+            for entity, count, oldest, newest in self.conn.execute(
+                "SELECT entity, row_count, oldest_ts, newest_ts FROM series"
+            )
+        }
+
+    def table(self, name, column):
+        return [row[0] for row in self.conn.execute(f"SELECT {column} FROM {name} ORDER BY 1")]
+
+    def purge(self, samples, forecasts, events):
+        writer = Writer.__new__(Writer)
+        writer.db_path = self.db
+        writer.sess = FakeSession()
+        writer.params = types.SimpleNamespace(
+            retain_samples_days=samples,
+            retain_forecasts_days=forecasts,
+            retain_events_days=events,
+        )
+        writer._purge()
+        return writer
+
+    def test_a_purge_deletes_past_each_window_and_recomputes_both_bounds(self):
+        now = now_us()
+        old, older, recent = now - 2 * 86_400 * S, now - 3 * 86_400 * S, now - 3600 * S
+        self.row("state", "hall", "lamp", "on", older, True)
+        self.row("state", "hall", "lamp", "on", old, False)
+        self.row("state", "hall", "lamp", "on", recent, True)
+        self.row("state", "hall", "door", "open", old, True)
+        self.forecast("sky", old, [old, old + 3600 * S])
+        self.forecast("sky", recent, [recent, recent + 3600 * S])
+        self.forecast("rain", old, [old])
+        self.event(old)
+        self.event(recent)
+        writer = self.purge(samples=1, forecasts=1, events=1)
+        self.assertEqual(self.table("samples", "ts"), [recent])
+        self.assertEqual(self.table("forecasts", "issued_ts"), [recent, recent])
+        self.assertEqual(self.table("events", "ts"), [recent])
+        # A series purged empty has no bounds left.
+        self.assertEqual(
+            self.tally(),
+            {
+                "lamp": (1, recent, recent),
+                "door": (0, None, None),
+                "sky": (2, recent, recent),
+                "rain": (0, None, None),
+            },
+        )
+        [event] = writer.sess.events
+        pages_freed = event.pop("pages_freed")
+        self.assertIsInstance(pages_freed, int)
+        self.assertGreaterEqual(pages_freed, 0)
+        self.assertEqual(event, {"kind": "purge", "samples": 3, "forecasts": 3, "events": 1})
+
+    def test_a_window_of_0_keeps_its_table(self):
+        now = now_us()
+        old, recent = now - 2 * 86_400 * S, now - 3600 * S
+        self.row("state", "hall", "lamp", "on", old, True)
+        self.row("state", "hall", "lamp", "on", recent, False)
+        self.forecast("sky", old, [old])
+        self.forecast("sky", recent, [recent])
+        self.event(old)
+        writer = self.purge(samples=0, forecasts=1, events=0)
+        self.assertEqual(self.table("samples", "ts"), [old, recent])
+        self.assertEqual(self.table("events", "ts"), [old])
+        self.assertEqual(self.tally(), {"lamp": (2, old, recent), "sky": (1, recent, recent)})
+        [event] = writer.sess.events
+        del event["pages_freed"]
+        self.assertEqual(event, {"kind": "purge", "samples": 0, "forecasts": 1, "events": 0})
+
+    def test_a_prune_deletes_held_rows_and_keeps_each_series_newest(self):
+        lo, hi = JAN_2026, month_start_us(2026, 2)
+        h = 3600 * S
+        for ts in (lo + h, lo + 2 * h, lo + 3 * h):
+            self.row("state", "hall", "lamp", "on", ts, True)
+        for ts in (lo + h, lo + 2 * h, hi + h):
+            self.row("state", "hall", "door", "open", ts, True)
+        self.forecast("sky", lo + h, [lo + h, lo + 2 * h])
+        self.forecast("sky", lo + 2 * h, [lo + 3 * h])
+        self.event(lo + h)
+        self.event(lo + 2 * h)
+        self.event(hi + h)
+        # The archive holds every January row but the door's second sample.
+        archive = Path(self.dir.name) / "archive.db"
+        init_store(archive)
+        self.conn.execute("ATTACH DATABASE ? AS part0", (str(archive),))
+        self.conn.execute(
+            "INSERT INTO part0.samples SELECT * FROM main.samples AS r"
+            " WHERE r.ts < ? AND NOT (r.ts = ? AND r.series_id ="
+            "  (SELECT id FROM main.series WHERE entity = 'door'))",
+            (hi, lo + 2 * h),
+        )
+        self.conn.execute("INSERT INTO part0.forecasts SELECT * FROM main.forecasts")
+        self.conn.execute("INSERT INTO part0.events SELECT * FROM main.events WHERE ts < ?", (hi,))
+        self.conn.commit()
+        gone = Archiver.__new__(Archiver)._prune(self.conn, ["part0"], lo, hi)
+        self.conn.execute("DETACH DATABASE part0")
+        self.assertEqual(gone, 7)
+        self.assertEqual(
+            self.conn.execute(
+                "SELECT entity, ts FROM samples JOIN series ON series.id = series_id ORDER BY 1, 2"
+            ).fetchall(),
+            [("door", lo + 2 * h), ("door", hi + h), ("lamp", lo + 3 * h)],
+        )
+        self.assertEqual(self.table("forecasts", "issued_ts"), [lo + 2 * h])
+        self.assertEqual(self.table("events", "ts"), [hi + h])
+        self.assertEqual(
+            self.tally(),
+            {
+                "lamp": (1, lo + 3 * h, lo + 3 * h),
+                "door": (2, lo + 2 * h, hi + h),
+                "sky": (1, lo + 2 * h, lo + 2 * h),
+            },
+        )
+
+
+class ReadHandlerTest(StoreTest):
+    """The read handlers reply from the store, or say it is unavailable."""
+
+    class Query:
+        parameters = ""
+
+        def __init__(self):
+            self.replies = []
+
+        def reply(self, key, payload):
+            self.replies.append((key, json.loads(payload)))
+
+        def reply_err(self, payload):
+            self.replies.append(("err", json.loads(payload)))
+
+    def ask(self, db_path, handler):
+        rec = Recorder.__new__(Recorder)
+        rec.db_path = db_path
+        query = self.Query()
+        getattr(rec, handler)(query)
+        return query.replies
+
+    def assert_unavailable(self, replies):
+        # The text after the prefix is SQLite's own, which varies by version.
+        self.assertEqual(len(replies), 1, replies)
+        kind, text = replies[0]
+        self.assertEqual(kind, "err")
+        self.assertTrue(text.startswith("store unavailable: "), text)
+
+    def test_a_missing_store_is_unavailable(self):
+        missing = Path(self.dir.name) / "missing.db"
+        for handler in ("_answer_latest", "_answer_events"):
+            with self.subTest(handler=handler):
+                self.assert_unavailable(self.ask(missing, handler))
+
+    def test_a_store_without_tables_is_unavailable(self):
+        bare = Path(self.dir.name) / "bare.db"
+        sqlite3.connect(bare).close()
+        for handler in ("_answer_latest", "_answer_events"):
+            with self.subTest(handler=handler):
+                self.assert_unavailable(self.ask(bare, handler))
+
+    def test_latest_replies_once_with_every_state_series_newest_row(self):
+        self.row("state", "hall", "door", "mode", 3 * S, "away")
+        self.row("state", "hall", "door", "mode", 1 * S, "home")
+        self.assertEqual(
+            self.ask(self.db, "_answer_latest"),
+            [("home/history/latest", [{"key": "home/state/hall/door/mode", "value": "away", "ts": 3 * S}])],
+        )
