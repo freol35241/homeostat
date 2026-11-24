@@ -1,0 +1,48 @@
+schema = 1
+
+[unit]
+name = "rf433"
+kind = "adapter"
+description = "One-way 433 MHz senders through an OpenMQTTGateway bridge"
+
+[runtime]
+command = "uv run units/rf433.py"
+restart = "always"
+shutdown_grace_s = 5
+env = ["HOMEOSTAT_MQTT_CREDENTIALS"]
+
+# The path is the gateway's base topic, default home/OpenMQTTGateway. The
+# bridge owns {base}/SRFBtoMQTT and {base}/LWT.
+[discovery]
+mode = "static"
+endpoint = "mqtt://mosquitto:1883"
+
+[bus.publishes]
+state = { key = "home/state/{room}/{entity}/**" }
+discovery = { key = "home/discovery/rf433" }
+
+# A sender reports only that it fired. Each aspect reads true for this
+# long after the last report, then false.
+[params.motion_hold_s]
+type = "float"
+default = 15.0
+editable_by = "owner"
+
+[params.contact_hold_s]
+type = "float"
+default = 60.0
+editable_by = "owner"
+
+[params.smoke_hold_s]
+type = "float"
+default = 600.0
+editable_by = "owner"
+
+# The hold for any other aspect.
+[params.hold_s]
+type = "float"
+default = 60.0
+editable_by = "owner"
+
+[entities]
+dir = "entities/rf433/"
