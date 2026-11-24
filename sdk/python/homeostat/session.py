@@ -315,7 +315,7 @@ class UnitSession:
         self._session.put(key, encoded)
 
     def parse_command(self, sample: zenoh.Sample):
-        """Run the command prologue every adapter shares (docs/adapters.md, §4).
+        """Run the command prologue every adapter shares (docs/adapters.md#4-commands).
 
         The result is the aspect, the envelope's value and its correlation
         id. It is None after a drop event: "malformed-payload" for a payload
@@ -476,7 +476,7 @@ class UnitSession:
 
         A put whose payload is not JSON is dropped with a "malformed-payload"
         event naming its key, as `parse_command` drops one
-        (docs/adapters.md, §6). A delete has no payload and is skipped.
+        (docs/adapters.md#6-health-events). A delete has no payload and is skipped.
 
         Parameters
         ----------

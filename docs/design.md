@@ -581,7 +581,7 @@ record carries:
 - on bound records, the entity's
   [aspect descriptor](#aspect-descriptors).
 
-The format is in [`docs/adapters.md`](adapters.md), section 5.
+The format is in [`docs/adapters.md`](adapters.md#5-discovery).
 
 - One key holds the whole inventory. Device ids may contain `/`, so a
   key segment per device would break. A complete document makes a
@@ -1342,7 +1342,7 @@ formatting `kind`, a group, and optionally `valid` and `notable`. A
 commandable aspect also carries `command: {type, constraint, step?,
 editable_by}`, which copies the parameter fields. Firmware names get
 labels; they do not become schema. The contract is in
-[`docs/adapters.md`](adapters.md), section 5.
+[`docs/adapters.md`](adapters.md#5-discovery).
 
 - The descriptor travels in the discovery record, as the `aspects`
   member of a bound record. That record is already declared, mirrored
