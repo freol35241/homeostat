@@ -348,8 +348,7 @@ pub struct UnitSection {
     pub description: Option<String>,
     /// Which repo files restart this unit when they change. Absent means
     /// `own`: the unit's command, its own entity files, its zone if it
-    /// uses one. `inputs` is accepted as an older spelling.
-    #[serde(alias = "inputs")]
+    /// uses one.
     pub watches: Option<UnitWatches>,
 }
 

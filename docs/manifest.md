@@ -96,7 +96,7 @@ outside the constraint is refused with the old value still in force.
 | `description` | string | no |  |
 | `kind` | [UnitKind](#unitkind) | yes |  |
 | `name` | string | yes | Unique across the house; a bus key segment (`home/health/{unit}`, `home/config/{unit}/*`), so letters, digits, `_`, `-`, `.` only, and not `.` or `..`. `system` is reserved for the core. |
-| `watches` | [UnitWatches](#unitwatches) | no | Which repo files restart this unit when they change. Absent means `own`: the unit's command, its own entity files, its zone if it uses one. `inputs` is accepted as an older spelling. |
+| `watches` | [UnitWatches](#unitwatches) | no | Which repo files restart this unit when they change. Absent means `own`: the unit's command, its own entity files, its zone if it uses one. |
 
 ### PublishSpec
 
