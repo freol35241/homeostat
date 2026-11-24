@@ -1,0 +1,27 @@
+schema = 1
+
+[unit]
+name = "companion"
+kind = "adapter"
+description = "The house's companion app on the family's phones, over the MQTT broker"
+
+[runtime]
+command = "uv run units/companion.py"
+restart = "always"
+shutdown_grace_s = 5
+env = ["HOMEOSTAT_MQTT_CREDENTIALS"]
+
+[discovery]
+mode = "static"
+endpoint = "mqtt://mosquitto:1883"
+
+[bus.publishes]
+state = { key = "home/state/{room}/{entity}/**" }
+discovery = { key = "home/discovery/companion" }
+
+[bus.subscribes]
+commands = "home/cmd/{room}/{entity}/**"
+arbiter_commands = "home/arbiter/{room}/{entity}/**"
+
+[entities]
+dir = "entities/companion/"

@@ -34,7 +34,10 @@ entities/
     kitchen_lamp.toml  # one file per bound device; the stem is the entity name
 ```
 
-The manifest ([manifest.md](manifest.md) is the field reference):
+The manifest ([manifest.md](manifest.md) is the field reference). The
+manifest that runs is the house's own `units/<name>.toml`. For a generic
+adapter, `adapters/<adapter>.toml` beside its script is the reference a
+house copies it from (§11):
 
 ```toml
 schema = 1
@@ -591,7 +594,31 @@ protocol endpoint, without mocking the bus. The pattern, from
 
 Generic adapters live in `adapters/` in this repo. A house gets a copy
 in its `units/`, pinned to the release's SDK; `scripts/sync_starter.sh`
-regenerates the starter house's copies at each tag. A house-specific
+regenerates the starter house's copies of the scripts at each tag.
+
+Beside each script, `adapters/<adapter>.toml` is its reference manifest.
+It declares every key the code publishes and every parameter it reads,
+with the code's defaults. Its `[bus.subscribes]` lists every key
+expression the code reads from the bus, by subscription or by query (a
+get from the mirror, the recorder or a supervisor queryable). Two reads
+are not listed: the unit's own `home/config/{unit}/*`, which is
+implicit, and the reads the SDK makes on a binding's behalf, such as a
+state binding's recorded history.
+
+A house copies the reference and keeps the copy as its own. It may
+rename the unit, drop bindings and parameters it does not need, and set
+its own endpoint, entities directory and defaults. It keeps the binding
+names and keys it does declare as the reference has them. A house does
+not narrow a binding: the dashboard's and the buttons service's cmd
+grants and the recorder's subscriptions are dropped whole or kept as
+they are. `copies_of_a_generic_manifest_agree` in `tests/corpus.rs`
+checks every copy in this repo against its reference, so a change to the
+keys the code uses or the params it reads starts in the reference
+manifest. The test does not catch a copy that leaves out something the
+code needs, such as the arbiter's `hold_minutes`, which it reads without
+a fallback.
+
+A house-specific
 adapter simply lives in that house's `units/` and pins the SDK the same
 way. There is no registry and no loading step: a file in `units/` with
 a manifest beside it is installed, and `plan` shows it.

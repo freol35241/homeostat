@@ -3817,6 +3817,15 @@ starter. Until the tag exists, the check compares against the working
 tree, which is the release commit itself. CI checks out full history,
 because otherwise the tag is not found.
 
+The starter's manifests are not generated. Each is the house's own
+file, which the owner edits like any other. Beside each generic script,
+`adapters/<unit>.toml` is its reference manifest, the template a house
+copies. `tests/corpus.rs` checks every copy in this repo against it.
+A copy may declare a subset of the reference's bus entries and
+parameters and set its own defaults. The starter's copies are checked
+against the reference manifests at `SDK_TAG`, the release its scripts
+come from. A release without reference manifests leaves them unchecked.
+
 ## Open questions
 
 These are questions the design has named but not answered, and known

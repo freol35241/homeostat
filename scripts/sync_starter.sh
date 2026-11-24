@@ -4,6 +4,10 @@
 # ~/house`). Copies kept by hand drift from the release they claim to be,
 # so this script generates them.
 #
+# It copies scripts, lockfiles and assets, not manifests. A unit's
+# manifest is the house's own file, and adapters/<unit>.toml is the
+# template it was copied from (docs/design.md#the-starter-house).
+#
 #   scripts/sync_starter.sh          rewrite the copies
 #   scripts/sync_starter.sh --check  fail if any copy is stale (CI)
 #
