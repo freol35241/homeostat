@@ -20,7 +20,7 @@ function scheduleHoldExpiry(deviations) {
   }, Math.max(250, next - Date.now() + 250));
 }
 
-// What is out of the ordinary. The rules are in dashboard-logic.js. Here
+// What is out of the ordinary. The rules are in logic.js. Here
 // each record's target is mapped to the tap handlers.
 export function widgetDeviations() {
   var deviations = logic.computeDeviations(

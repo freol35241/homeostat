@@ -6,7 +6,7 @@ import { descriptorField, localState, stateValue, store } from '../store.js';
 import { widgetForEntity } from './entity.js';
 import { renderParamRow, renderPauseSwitch } from './params.js';
 
-// A unit's card (dashboard-logic.js, unitCardPlan): the head, then the
+// A unit's card (logic.js, unitCardPlan): the head, then the
 // relations the manifest and the grant table state. Each section is drawn
 // only when it has members. The labels are the page's words, not the
 // manifest's, but the card shows nothing the manifest does not say.

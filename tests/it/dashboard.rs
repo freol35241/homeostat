@@ -425,11 +425,11 @@ fn page_and_assets_are_served(ctx: &Ctx) {
         );
     };
     revalidates("/");
-    revalidates("/assets/dashboard-logic.js");
+    revalidates("/assets/dashboard.css");
 
-    // The page's own logic and stylesheet are served, allowlisted by
+    // The page's own stylesheet and mark are served, allowlisted by
     // filename.
-    for name in ["dashboard-logic.js", "dashboard.css", "homeostat-mark.svg"] {
+    for name in ["dashboard.css", "homeostat-mark.svg"] {
         let (status, _) = http_request(&ctx.addr, "GET", &format!("/assets/{name}"), &[], None);
         assert_eq!(status, 200, "asset {name}");
     }
@@ -442,6 +442,7 @@ fn page_and_assets_are_served(ctx: &Ctx) {
     for path in [
         "/assets/dashboard/main.js",
         "/assets/dashboard/widgets/entity.js",
+        "/assets/dashboard/logic/index.js",
     ] {
         revalidates(path);
         let HttpResponse { headers, .. } = http(&ctx.addr, "GET", path, &[], None);

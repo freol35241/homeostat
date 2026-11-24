@@ -1,4 +1,4 @@
-/* Charts: line, bar and timeline markup over dashboard-logic.js's geometry,
+/* Charts: line, bar and timeline markup over logic.js's geometry,
  * and the scrub, with its crosshair, tooltip and the readouts under a
  * chart. */
 import { byId, html } from './html.js';
@@ -204,7 +204,7 @@ function timeAxis(from, to, nowX) {
 }
 
 /* Bars over intervals, for an aspect whose samples are amounts per
- * interval (dashboard-logic.js, intervalBars). A bar spans its interval,
+ * interval (logic.js, intervalBars). A bar spans its interval,
  * so an amount reads as an amount: a 6 h forecast interval is six hours
  * wide and not a spike. Recorded amounts are solid and the forecast's
  * are faded, stacked on top where one bar holds both, as today's bar
@@ -272,7 +272,7 @@ export function buildBars(chartId, bars, opts) {
 }
 
 // A timeline: one band per run of a bool or string state over the window
-// (dashboard-logic.js, timelineRuns). A boolean is a filled band while
+// (logic.js, timelineRuns). A boolean is a filled band while
 // true and a faint one while false. A string's runs alternate two tints so
 // each change shows as an edge, and the tooltip names the value.
 export function buildTimeline(chartId, points, opts) {

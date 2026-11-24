@@ -114,7 +114,7 @@ export function widgetForClimate(entity, big) {
 
 // A sensor's card: one sparkline row per reading, and tapping a row opens
 // that aspect's history. The descriptor decides which readings appear and
-// in what order (dashboard-logic.js, sensorCardPlan). A thermometer lists
+// in what order (logic.js, sensorCardPlan). A thermometer lists
 // temperature and humidity, not its link quality. A sensor with several
 // aspects gets a head row with the entity name, which opens the entity
 // detail. Without it, every tap on the card would lead to a chart. The
@@ -190,7 +190,7 @@ function widgetForCamera(entity) {
 // descriptor. The name and the first family control share one line, with
 // the headline readings below. This avoids the undescribed climate
 // widget's layout, which wraps the readout around a stepper in a narrow
-// column. dashboard-logic.js's cardPlan picks the headline readings.
+// column. logic.js's cardPlan picks the headline readings.
 function widgetForDescribed(entity) {
   var plan = logic.cardPlan(entity, store.state, store.aspects[entity.name], !controlDisabled(entity), houseControls());
   var badge = entity.write_mode === 'arbitrated' ? html`<span class="badge-arbitrated">ARBITRATED</span>` : '';
