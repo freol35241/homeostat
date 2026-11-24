@@ -712,8 +712,10 @@ class Hub:
 
     def start(self, loop: asyncio.AbstractEventLoop) -> None:
         self.loop = loop
-        # Subscribe first, then seed from the mirror. The seed uses
-        # setdefault, so a value the subscription already delivered wins.
+        # Subscribe first, then seed from the mirror. State seeds through
+        # `state_stamps`, so the newer of the seed and a delivered value
+        # wins. The other seeds use setdefault, so a value the subscription
+        # already delivered wins.
         self._subs = [
             self.session.subscribe("home/state/**", self._on_state),
             self.session.subscribe("home/forecast/**", self._on_forecast),

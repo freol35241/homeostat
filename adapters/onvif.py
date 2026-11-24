@@ -68,10 +68,10 @@ from homeostat.params import LiveParams
 
 ENV_CAMERAS = "HOMEOSTAT_CAMERAS"
 DEFAULT_PORT = 2020  # Tapo's ONVIF service port; override per camera with host:port
-PULL_TIMEOUT = "PT10S"
 PULL_TIMEOUT_S = 10
-TERMINATION_TIME = "PT60S"
+PULL_TIMEOUT = f"PT{PULL_TIMEOUT_S}S"
 TERMINATION_S = 60
+TERMINATION_TIME = f"PT{TERMINATION_S}S"
 # A camera with no working Renew gets a new subscription this long after
 # the last was created. The old one lingers until it times out, so this
 # also bounds the overlap: against a PT60S termination, at most two per
