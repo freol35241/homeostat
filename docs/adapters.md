@@ -155,8 +155,10 @@ What the supervisor does, and what it expects back:
   comes with the image, not the repo.
 - **Stop.** The supervisor sends SIGTERM and waits `shutdown_grace_s`
   before SIGKILL. Undeclare subscribers, close the session, close the
-  protocol connection, exit. `homeostat.mqtt.wait_for_shutdown()` is the
-  blocking wait the MQTT adapters use.
+  protocol connection, exit. `homeostat.wait_for_shutdown()` blocks until
+  SIGTERM. `homeostat.shutdown_event()` returns the event instead, for a
+  unit whose worker threads stop on it, and
+  `homeostat.async_shutdown_event()` is its asyncio form.
 - **Restart** follows `runtime.restart` with backoff and a circuit
   breaker. A misconfiguration that cannot be recovered (an unset `${VAR}`
   in the endpoint, an unknown input name in an entity file) should exit

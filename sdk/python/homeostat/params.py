@@ -1,16 +1,16 @@
 """Live numeric adapter parameters from home/config/{unit}/*.
 
-This follows the step-4 read pattern: subscribe first, then seed the
-values with a get. A value the subscription has already delivered takes
-precedence over the seed, because the get reply may predate a write that
-raced startup. Adapter-side defaults let a manifest omit any parameter.
-Non-numeric and non-finite values are ignored.
+It subscribes first, then seeds the values with a get, as the Context
+does for an automation's parameters. A value the subscription has already
+delivered takes precedence over the seed, because the get reply may
+predate a write that raced startup. Adapter-side defaults let a manifest
+omit any parameter. Non-numeric and non-finite values are ignored, and a
+payload that is not JSON is dropped with a "malformed-payload" event.
 
 Adapters share this class and subclass it with typed properties over
 `get`.
 """
 
-import json
 import math
 
 from . import keys
@@ -30,18 +30,14 @@ class LiveParams:
     def __init__(self, session, defaults: dict):
         self._values = dict(defaults)
         self._live: set[str] = set()
-        self._sub = session.subscribe(keys.config_keyexpr(session.unit), self._on_config)
+        self._sub = session.subscribe_json(keys.config_keyexpr(session.unit), self._on_config)
         for key, value in session.get_json(keys.config_keyexpr(session.unit)):
             name = key.rsplit("/", 1)[-1]
             if name not in self._live:
                 self._store(name, value)
 
-    def _on_config(self, sample) -> None:
-        try:
-            value = json.loads(sample.payload.to_bytes())
-        except ValueError:
-            return
-        name = str(sample.key_expr).rsplit("/", 1)[-1]
+    def _on_config(self, key: str, value, sample) -> None:
+        name = key.rsplit("/", 1)[-1]
         # Only a value that is kept counts as live, so an invalid one does
         # not make the seed skip the value the core serves.
         if self._store(name, value):

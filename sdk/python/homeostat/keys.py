@@ -1,4 +1,7 @@
-"""Key builders for the homeostat key space (mirrors the Rust src/bus.rs).
+"""Key builders for the homeostat key space.
+
+They mirror the Rust src/keyspace.rs, which has the classes under home/,
+and src/bus.rs, which has the health, meta and config keys.
 
 Schema: home/{class}/{room}/{entity}/{aspect} for state, cmd, arbiter and
 forecast; home/health/{unit}[...] and home/meta/{unit}/... for supervision.
@@ -101,65 +104,6 @@ def state_keyexpr(room: str, entity: str) -> str:
         If a part is not a valid key segment.
     """
     return "home/state/" + _segments(room, entity) + "/*"
-
-
-def forecast_key(room: str, entity: str, aspect: str, source: str) -> str:
-    """Return the key of a series' forecast: its state key plus the source.
-
-    See docs/design.md#forecasts. The key has the same room/entity/aspect as
-    `state_key`, followed by the source. A forecast is therefore the same
-    series extended forward, and the entity's aspect descriptor already
-    labels it. Several sources may forecast one series, such as two weather
-    providers, or a controller publishing the trajectory it plans to cause.
-    The source segment is therefore required.
-
-    Parameters
-    ----------
-    room : str
-        The entity's room.
-    entity : str
-        The entity's name.
-    aspect : str
-        The aspect.
-    source : str
-        Who says so, e.g. a weather provider or a controller.
-
-    Returns
-    -------
-    str
-        home/forecast/{room}/{entity}/{aspect}/{source}.
-
-    Raises
-    ------
-    ValueError
-        If a part is not a valid key segment.
-    """
-    return "home/forecast/" + _segments(room, entity, aspect, source)
-
-
-def forecast_keyexpr(room: str, entity: str) -> str:
-    """Return the key expression matching every forecast aspect of one entity.
-
-    It matches every source.
-
-    Parameters
-    ----------
-    room : str
-        The entity's room.
-    entity : str
-        The entity's name.
-
-    Returns
-    -------
-    str
-        home/forecast/{room}/{entity}/*/*.
-
-    Raises
-    ------
-    ValueError
-        If a part is not a valid key segment.
-    """
-    return "home/forecast/" + _segments(room, entity) + "/*/*"
 
 
 def cmd_key(room: str, entity: str, aspect: str) -> str:

@@ -9,6 +9,7 @@ import json
 import threading
 import unittest
 
+import zenoh
 from homeostat import keys
 from homeostat.session import ConfigWriteError, QueryError, QueryTimeout
 from homeostat.stamps import stamp_us
@@ -169,6 +170,21 @@ class ParseCommandTest(unittest.TestCase):
                 json.dumps({"value": True, "priority": "manual", "hold": hold}).encode(),
             )
             self.assertEqual(session.parse_command(sample), ("on", True, None), hold)
+
+
+class SubscribeJsonTest(unittest.TestCase):
+    def test_decodes_puts_drops_non_json_and_skips_deletes(self):
+        session = FakeSession("u")
+        got = []
+        session.subscribe_json("home/state/**", lambda key, value, _s: got.append((key, value)))
+        session.deliver(FakeSample("home/state/hall/lamp/on", True))
+        session.deliver(FakeSample("home/state/hall/lamp/on", b"not json"))
+        session.deliver(FakeSample("home/state/hall/lamp/on", b"", kind=zenoh.SampleKind.DELETE))
+        self.assertEqual(got, [("home/state/hall/lamp/on", True)])
+        self.assertEqual(
+            session.events,
+            [{"kind": "drop", "reason": "malformed-payload", "key": "home/state/hall/lamp/on"}],
+        )
 
 
 class GetReplyTest(unittest.TestCase):

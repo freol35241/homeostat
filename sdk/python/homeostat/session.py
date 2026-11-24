@@ -5,12 +5,15 @@ sets. It opens a client session against the supervisor's router and
 returns a UnitSession. Scouting is off, because the topology is explicit.
 Call `ready()` once the unit can do its job. The supervisor treats a unit
 as up when its liveliness token is declared, not when its process
-starts.
+starts. `wait_for_shutdown()`, or `shutdown_event()` for a unit with worker
+threads, waits for the supervisor's SIGTERM.
 """
 
+import asyncio
 import datetime
 import json
 import os
+import signal
 import threading
 import time
 import weakref
@@ -69,6 +72,64 @@ def connect() -> "UnitSession":
     unit = os.environ[keys.ENV_UNIT]
     endpoint = os.environ[keys.ENV_BUS]
     return UnitSession(unit, endpoint)
+
+
+def shutdown_event() -> threading.Event:
+    """Return an event that SIGTERM or SIGINT sets.
+
+    SIGTERM is the supervisor's stop signal. A unit that only waits for it
+    calls `wait_for_shutdown`. One that runs worker threads passes them the
+    event, so they see the stop too.
+
+    Returns
+    -------
+    threading.Event
+        Set when either signal arrives.
+
+    Raises
+    ------
+    ValueError
+        If called from a thread other than the main thread, the only one
+        Python lets install signal handlers.
+    """
+    stop = threading.Event()
+    signal.signal(signal.SIGTERM, lambda *_: stop.set())
+    signal.signal(signal.SIGINT, lambda *_: stop.set())
+    return stop
+
+
+def wait_for_shutdown() -> None:
+    """Block until SIGTERM or SIGINT.
+
+    Raises
+    ------
+    ValueError
+        If called from a thread other than the main thread.
+    """
+    shutdown_event().wait()
+
+
+def async_shutdown_event() -> asyncio.Event:
+    """Return an asyncio event that SIGTERM or SIGINT sets.
+
+    The asyncio form of `shutdown_event`. The handlers are the running
+    loop's, so the signal wakes the loop wherever it is waiting.
+
+    Returns
+    -------
+    asyncio.Event
+        Set when either signal arrives.
+
+    Raises
+    ------
+    RuntimeError
+        If no event loop is running in this thread.
+    """
+    loop = asyncio.get_running_loop()
+    stop = asyncio.Event()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, stop.set)
+    return stop
 
 
 class ConfigWriteError(Exception):
@@ -230,30 +291,6 @@ class UnitSession:
             return
         self._session.put(key, encoded)
 
-    def parse_forecast(self, sample: zenoh.Sample):
-        """Decode a subscribed forecast sample, or drop it with a health event.
-
-        Returns None after a "malformed-payload" drop event, as
-        `parse_command` does. What to do when `issued` is old is the
-        consumer's own policy, not the SDK's (see homeostat.forecast).
-
-        Parameters
-        ----------
-        sample : zenoh.Sample
-            A sample received on a forecast key.
-
-        Returns
-        -------
-        Forecast or None
-            The decoded forecast, or None if the payload was malformed.
-        """
-        key = str(sample.key_expr)
-        try:
-            return forecast.decode(sample.payload.to_bytes())
-        except ValueError as error:
-            self.health_event("drop", reason="malformed-payload", key=key, detail=str(error))
-            return None
-
     def parse_command(self, sample: zenoh.Sample):
         """Run the command prologue every adapter shares (docs/adapters.md, §4).
 
@@ -411,6 +448,40 @@ class UnitSession:
         """
         return self._session.declare_subscriber(keyexpr, callback)
 
+    def subscribe_json(self, keyexpr: str, handler: Callable[[str, Any, zenoh.Sample], None]):
+        """Declare a subscriber that decodes each sample's JSON payload.
+
+        A put whose payload is not JSON is dropped with a "malformed-payload"
+        event naming its key, as `parse_command` drops one
+        (docs/adapters.md, §6). A delete has no payload and is skipped.
+
+        Parameters
+        ----------
+        keyexpr : str
+            The key expression to subscribe to.
+        handler : Callable[[str, Any, zenoh.Sample], None]
+            Called as `handler(key, value, sample)` for each put that
+            decodes, on zenoh's thread.
+
+        Returns
+        -------
+        zenoh.Subscriber
+            The subscriber; undeclare it to stop.
+        """
+
+        def callback(sample: zenoh.Sample) -> None:
+            if sample.kind == zenoh.SampleKind.DELETE:
+                return
+            key = str(sample.key_expr)
+            try:
+                value = json.loads(sample.payload.to_bytes())
+            except ValueError:
+                self.health_event("drop", reason="malformed-payload", key=key)
+                return
+            handler(key, value, sample)
+
+        return self.subscribe(keyexpr, callback)
+
     def is_live(self, sample: zenoh.Sample) -> bool:
         """Return whether a sample is a live publish rather than a stamped one.
 
@@ -454,8 +525,8 @@ class UnitSession:
             return True
         if not self._router_ids:
             self._router_ids = {str(zid) for zid in self._session.info.routers_zid()}
-        # With no router known, every sample is taken as live, as before
-        # the core stamped samples.
+        # With no router known, no stamp can be told from a router's, so
+        # every sample is taken as live.
         return not self._router_ids or str(stamp.get_id()) in self._router_ids
 
     def sample_age(self, sample: zenoh.Sample) -> float:

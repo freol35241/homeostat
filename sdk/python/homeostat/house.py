@@ -1,7 +1,9 @@
-"""House repo access for adapters.
+"""House repo access for units.
 
-An adapter learns its bindings from the same files the core validated: its
-own manifest at units/{unit}.toml and the entity files in its entities dir.
+The Context, the dashboard and the adapters read the house through this
+module. An adapter learns its bindings from the same files the core
+validated: its own manifest at units/{unit}.toml and the entity files in
+its entities dir.
 The supervisor sets the unit's cwd to the house root, so paths are relative.
 
 The discovery endpoint may reference environment variables (`${VAR}`),

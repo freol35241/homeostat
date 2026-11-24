@@ -29,7 +29,6 @@ import inspect
 import json
 import os
 import secrets
-import signal
 import threading
 from collections.abc import Callable, Iterable
 from pathlib import Path
@@ -42,7 +41,7 @@ from .forecast import Forecast, Point
 from .forecast import decode as decode_forecast
 from .history import HistoryUnavailable
 from .house import Entity, HouseModel
-from .session import QueryError, UnitSession
+from .session import QueryError, UnitSession, wait_for_shutdown
 from .stamps import Newest
 
 
@@ -253,7 +252,7 @@ class Context:
             # Subscribe, then get, then merge. The get covers everything
             # before the subscription, and the subscriber everything after.
             self._subs.append(
-                self._session.subscribe(keys.config_keyexpr(unit), self._on_config)
+                self._session.subscribe_json(keys.config_keyexpr(unit), self._on_config)
             )
             served = dict(self._session.get_json(keys.config_keyexpr(unit)))
             with self._lock:
@@ -264,13 +263,9 @@ class Context:
                         keys.config_key(unit, name), spec["default"]
                     )
 
-    def _on_config(self, sample: zenoh.Sample) -> None:
-        param = str(sample.key_expr).rsplit("/", 1)[1]
+    def _on_config(self, key: str, value: Any, sample: zenoh.Sample) -> None:
+        param = key.rsplit("/", 1)[1]
         if param not in self._param_specs:
-            return
-        try:
-            value = json.loads(sample.payload.to_bytes())
-        except ValueError:
             return
         with self._lock:
             was_paused = self._is_paused()
@@ -369,8 +364,8 @@ class Context:
     def subscribe(self, binding: str, handler: Callable[..., None]) -> None:
         """Subscribe a `[bus.subscribes]` binding and deliver its current values.
 
-        The handler receives (key, decoded JSON value). Non-JSON payloads
-        are ignored.
+        The handler receives (key, decoded JSON value). A live payload that
+        is not JSON is dropped with a "malformed-payload" event.
 
         This subscribes, then gets, then merges, as for config. The current
         value of every matching key is read from the core's state mirror and
@@ -427,12 +422,7 @@ class Context:
             else:
                 handler(key, value)
 
-        def callback(sample: zenoh.Sample) -> None:
-            try:
-                value = json.loads(sample.payload.to_bytes())
-            except ValueError:
-                return
-            key = str(sample.key_expr)
+        def callback(key: str, value: Any, sample: zenoh.Sample) -> None:
             if self._is_press(key) and not self._session.is_live(sample):
                 # The core replaying the last recorded press after a
                 # restart. It is a past event, not a press.
@@ -444,7 +434,7 @@ class Context:
 
         exprs = self._variants(self._subscribes[binding])
         for expr in exprs:
-            self._subs.append(self._session.subscribe(expr, callback))
+            self._subs.append(self._session.subscribe_json(expr, callback))
         for expr in exprs:
             for key, value, age_s, stamp in self._session.get_json_stamped(expr):
                 if self._is_press(key):
@@ -1475,10 +1465,7 @@ class Context:
 
     def run(self) -> None:
         """Block until SIGTERM/SIGINT, then close the session."""
-        stop = threading.Event()
-        signal.signal(signal.SIGTERM, lambda *_: stop.set())
-        signal.signal(signal.SIGINT, lambda *_: stop.set())
-        stop.wait()
+        wait_for_shutdown()
         self.close()
 
     def close(self) -> None:

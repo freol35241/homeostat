@@ -61,7 +61,6 @@ import contextlib
 import json
 import math
 import os
-import signal
 import time
 from pathlib import Path
 from typing import ClassVar
@@ -502,10 +501,7 @@ class Adapter:
 
 
 async def serve(session, routers, config) -> None:
-    loop = asyncio.get_running_loop()
-    stop = asyncio.Event()
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(sig, stop.set)
+    stop = homeostat.async_shutdown_event()
 
     adapter = Adapter(session, routers, *classify(config.entities, routers, session))
     if adapter.places:
