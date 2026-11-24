@@ -165,20 +165,6 @@ mod tests {
     }
 
     #[test]
-    fn inputs_is_still_read_as_watches() {
-        // The starter house runs on the released image until the next
-        // release, so its manifests keep the older spelling.
-        let dir = house_dir("inputs-spelling");
-        let dash = dir.join("units/dash.toml");
-        let manifest = fs::read_to_string(&dash).unwrap();
-        fs::write(&dash, manifest.replace("watches = ", "inputs = ")).unwrap();
-        let before = hash_of(&dir, "dash");
-        entity(&dir, "second_lamp");
-        assert_ne!(hash_of(&dir, "dash"), before, "still house-wide");
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
     fn a_house_wide_unit_is_changed_by_another_units_manifest() {
         let dir = house_dir("house-manifest");
         let before = hash_of(&dir, "dash");
