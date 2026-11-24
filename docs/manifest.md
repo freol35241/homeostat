@@ -417,7 +417,7 @@ house's text, the grant table and the bus; no widget carries markup.
 
 ## Capability vocabulary
 
-What an entity of each capability publishes under which names (docs/adapters.md, State). The base aspect is what commands target and the dashboard widget renders; the other named aspects are what `features` may declare or the vocabulary reserves; commands are the aspects that take a command and the type of value each carries, a feature only on an entity that declares it; notable is the reading that counts as a deviation on `Now`; rest is the value the device is safe at, which wins between two holds at one band. Anything else an adapter publishes passes through under its native name.
+What an entity of each capability publishes under which names (docs/adapters.md#3-state). The base aspect is what commands target and the dashboard widget renders; the other named aspects are what `features` may declare or the vocabulary reserves; commands are the aspects that take a command and the type of value each carries, a feature only on an entity that declares it; notable is the reading that counts as a deviation on `Now`; rest is the value the device is safe at, which wins between two holds at one band. Anything else an adapter publishes passes through under its native name.
 
 | Capability | Base aspect | Other named aspects | Commands | Notable | Rest | Notes |
 |---|---|---|---|---|---|---|

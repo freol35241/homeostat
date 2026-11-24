@@ -154,7 +154,7 @@ class Phones:
         self.session.put_json(keys.state_key(entity.room, entity.name, aspect), value)
 
     def set_available(self, entity, value: bool) -> None:
-        # On transition only (docs/adapters.md §7).
+        # On transition only (docs/adapters.md#7-availability).
         if self.available.get(entity.name) == value:
             return
         self.available[entity.name] = value

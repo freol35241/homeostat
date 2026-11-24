@@ -101,7 +101,7 @@ fn render_vocabulary(out: &mut String) {
     out.push_str("## Capability vocabulary\n\n");
     out.push_str(
         "What an entity of each capability publishes under which names \
-         (docs/adapters.md, State). The base aspect is what commands target \
+         (docs/adapters.md#3-state). The base aspect is what commands target \
          and the dashboard widget renders; the other named aspects are what \
          `features` may declare or the vocabulary reserves; commands are the \
          aspects that take a command and the type of value each carries, a \

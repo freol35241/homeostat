@@ -16,8 +16,8 @@ at home/state/{room}/{entity}/motion. Video goes through go2rtc
 (adapters/go2rtc.py). There is no PTZ, imaging service or capability
 negotiation. On Tapo cameras, person detection is app-only and not
 exposed over ONVIF, and pan/tilt and privacy mode need the vendor API;
-an adapter for those would take the cameras over (docs/adapters.md,
-Files).
+an adapter for those would take the cameras over
+(docs/adapters.md#1-files).
 
 Binding: an entity file's `id` is the camera's key in the
 HOMEOSTAT_CAMERAS file.

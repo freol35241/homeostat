@@ -995,10 +995,11 @@ pub async fn config_write(
     }
 }
 
-/// The unit contract every supervised unit owes (docs/adapters.md, §2 and
-/// §10; docs/design.md#the-unit-contract): once ready it is `running`
-/// with a pid, and when the supervisor gets SIGTERM it exits cleanly
-/// inside `shutdown_grace_s` and leaves no orphan. Each adapter suite
+/// The unit contract every supervised unit owes
+/// (docs/adapters.md#2-lifecycle, docs/adapters.md#10-testing and
+/// docs/design.md#the-unit-contract): once ready it is `running` with a
+/// pid, and when the supervisor gets SIGTERM it exits cleanly inside
+/// `shutdown_grace_s` and leaves no orphan. Each adapter suite
 /// calls it once, so a new adapter's suite gets the check with one line.
 pub async fn assert_unit_contract(sup: &mut Supervisor, observer: &zenoh::Session, unit: &str) {
     let mut watch = health_watch(observer, unit).await;

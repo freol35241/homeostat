@@ -162,7 +162,7 @@ FEEDABLE = {
 # boiler-sensor emulation's mode (see OPERATING_MODES).
 #
 # The retain flag follows a distinction the firmware makes, visible in
-# what it publishes back (docs/adapters.md, Retaining a command):
+# what it publishes back (docs/adapters.md#retaining-a-command):
 #
 #   feed_temperature_target      {"value": 0,     "valid": false}
 #   indoor_temperature_feedback  {"value": 18.84, "valid": true}

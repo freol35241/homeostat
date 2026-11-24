@@ -176,7 +176,7 @@ COMMANDABLE = {c: set(commands) - DESCRIPTOR_ONLY for c, commands in vocabulary.
 # The vocabulary's value types, in the descriptor-command shape so one
 # check serves both. A vocabulary number is a descriptor "float", which
 # admits an integer too, as aduro's power levels 10/50/100 are. The
-# adapter checks bounds (docs/adapters.md, Commands). The type is checked
+# adapter checks bounds (docs/adapters.md#4-commands). The type is checked
 # here so a JSON object cannot reach the bus in a manual-band envelope.
 # An unknown vocabulary type fails here, at import, rather than as a
 # command the page cannot send.
