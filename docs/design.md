@@ -204,9 +204,8 @@ use, each in one sense. Where a word has two senses, both are listed.
   `global` and `person` hold entities with no place.
 - **Zone.** A named set of rooms, written in a key's room slot and
   expanded at plan time. Zones never appear in a published key.
-- **Key class.** The second segment of every bus key: `state`, `cmd`,
-  `arbiter`, `forecast`, `config`, `meta`, `health`, `clock`,
-  `history`, `discovery`, `hold`. See [Key space](#key-space).
+- **Key class.** The second segment of every bus key. The classes are
+  listed in [Key space](#key-space).
 - **Grant.** A unit's publish resolved against the entities it reaches.
   The **grant table** is the set of all grants. It is the permission
   record `plan` shows and the dependency graph that orders an apply.
@@ -217,8 +216,9 @@ use, each in one sense. Where a word has two senses, both are listed.
   `exclusive` or `arbitrated`. See
   [Capabilities, grants and write policy](#capabilities-grants-and-write-policy).
 - **Envelope.** A command's payload: `{value, priority, actor, id}`,
-  and optionally `options`. The SDK stamps the priority from the
-  manifest and the actor with the unit.
+  and optionally `options` and `hold`. The SDK stamps the priority from
+  the manifest and the actor with the unit. See
+  [Cmd envelopes](#cmd-envelopes).
 - **Arbiter.** The service that decides what an arbitrated aspect is
   sent. Units' holds and the family's hold stand on the aspect, and it
   forwards the one that wins. See [Arbitrated mode](#arbitrated-mode).
@@ -683,6 +683,9 @@ gives:
   The adapter still checks bounds.
 - The **notable** reading, which is a deviation on the dashboard's
   `Now` (a light on, a lock unlocked, a router's `wan = false`).
+- The **rest** value, the one the device is safe at (a burner's
+  `on = false`). Between two holds at one band, the hold for the rest
+  value wins ([Which hold wins](#which-hold-wins)).
 - The [command options](#command-options) its commands may carry
   (`transition` on a light).
 
@@ -1544,11 +1547,11 @@ A unit is unchanged when two hashes match the world's:
   the script imports is an input only if the command names it.
 
 This is why each unit in `adapters/` is a single script, the recorder's
-2,000 lines included. Splitting one into modules would let an edit to a
-module go unnoticed by `plan`, and the unit would keep running the old
-code after `apply`. Allowing it would take a manifest field that names
-a unit's other files, and the size of one script has not been reason
-enough to add one.
+more than two thousand lines included. Splitting one into modules would
+let an edit to a module go unnoticed by `plan`, and the unit would keep
+running the old code after `apply`. Allowing it would take a manifest
+field that names a unit's other files, and the size of one script has
+not been reason enough to add one.
 
 `[unit] watches = "house"` makes every manifest, entity file,
 `zones.toml` and `dashboard.toml` an input of the unit. The dashboard

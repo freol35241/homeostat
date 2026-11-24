@@ -1,9 +1,10 @@
 # Starter house
 
-A runnable house-repo template: clock, recorder, a Zigbee2MQTT adapter,
-and the evening-lights automation, with a compose file for the whole
-stack. Units pin the Python SDK from a released tag, so this directory
-is self-contained. Copy it out and make it your own repo:
+A runnable house-repo template: clock, recorder, arbiter, dashboard, the
+MCP server, adapters for Zigbee2MQTT, ESPHome, OwnTracks and an IVT490
+heat pump, and the persons and evening-lights automations, with a
+compose file for the whole stack. Units pin the Python SDK from a
+released tag, so this directory is self-contained. Copy it out and make it your own repo:
 
 ```
 cp -r examples/starter-house ~/house && cd ~/house
@@ -53,7 +54,7 @@ You need a Zigbee coordinator stick (e.g. SLZB-06 or Sonoff ZBDongle-E).
    not on the LAN.
 3. For each device, write an entity file under `entities/zigbee/`.
    `id` is the friendly name, and the file stem is the entity name on the
-   bus. Add its room to `zones.toml` if it is new. The two entity files
+   bus. Add its room to `zones.toml` if it is new. The three entity files
    here are examples. Replace them with your devices.
 4. Commit, then `docker compose restart homeostat` (structural changes
    need a fresh `up`; parameter and behavioral edits flow through

@@ -1,7 +1,8 @@
 //! Links into `docs/design.md` resolve. Code, tests and docs cite the
 //! design by anchor (`docs/design.md#arbitrated-mode`); this test fails
 //! when a heading is renamed out from under a citation, and when a
-//! citation names a section in prose instead of by anchor.
+//! citation names a section in prose instead of by anchor. The Key space
+//! table in the design lists the classes `src/keyspace.rs` defines.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -132,4 +133,26 @@ fn slugs_follow_github() {
         slug("Capabilities, grants and write policy"),
         "capabilities-grants-and-write-policy"
     );
+}
+
+/// The Key space table has a row for each class in `keyspace::CLASSES`,
+/// and no row for a class the core does not have.
+#[test]
+fn key_space_table_lists_the_classes() {
+    let design = fs::read_to_string(repo().join("docs/design.md")).expect("docs/design.md");
+    let section = design
+        .split("\n## Key space\n")
+        .nth(1)
+        .and_then(|rest| rest.split("\n### ").next())
+        .expect("a Key space section");
+    let documented: BTreeSet<&str> = section
+        .lines()
+        .filter_map(|line| line.strip_prefix("| `home/"))
+        .filter_map(|rest| rest.split(['/', '`']).next())
+        .collect();
+    let defined: BTreeSet<&str> = homeostat::keyspace::CLASSES
+        .iter()
+        .map(|c| c.name)
+        .collect();
+    assert_eq!(documented, defined);
 }
