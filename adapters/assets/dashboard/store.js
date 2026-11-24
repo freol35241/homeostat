@@ -83,7 +83,7 @@ export function stateValue(room, entity, aspect) {
 
 // aspects present in state for an entity (the history title's "· aspect" suffix)
 export function aspectsFor(entity) {
-  var prefix = 'home/state/' + entity.room + '/' + entity.name + '/';
+  var prefix = logic.stateKey(entity.room, entity.name, '');
   return Object.keys(store.state).filter(function (k) { return k.indexOf(prefix) === 0; })
     .map(function (k) { return k.slice(prefix.length); });
 }

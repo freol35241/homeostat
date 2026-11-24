@@ -92,11 +92,9 @@ function stampEarlySeen() {
 }
 
 function appendSparklinePoint(key, value) {
-  var parts = key.split('/');
-  if (parts[0] !== 'home' || parts[1] !== 'state' || parts.length < 5) return;
-  if (typeof value !== 'number') return;
-  var entity = parts[3], aspect = parts[4];
-  var sk = entity + '|' + aspect;
+  var k = logic.parseStateKey(key);
+  if (!k || typeof value !== 'number') return;
+  var sk = k.entity + '|' + k.aspect;
   var s = localState.sparklines[sk];
   if (!s || !s.loaded) return; // only append once history has been fetched
   s.points.push({ ts: new Date().toISOString(), value: value });

@@ -368,6 +368,24 @@ test('unrecognized messages apply nothing', () => {
   assert.deepEqual(store, freshStore());
 });
 
+// ---- bus keys ----
+
+test('state, config and health keys are built from their parts', () => {
+  assert.equal(logic.stateKey('hall', 'lamp', 'on'), 'home/state/hall/lamp/on');
+  assert.equal(logic.stateKey('hall', 'lamp', ''), 'home/state/hall/lamp/', 'the prefix of every aspect');
+  assert.equal(logic.configKey('heating', 'comfort'), 'home/config/heating/comfort');
+  assert.equal(logic.healthKey('heating'), 'home/health/heating');
+});
+
+test('a state key parses to its parts, and any other key to null', () => {
+  assert.deepEqual(logic.parseStateKey('home/state/hall/lamp/on'), { room: 'hall', entity: 'lamp', aspect: 'on' });
+  assert.deepEqual(logic.parseStateKey('home/state/hall/lamp/on/extra'), { room: 'hall', entity: 'lamp', aspect: 'on' },
+    'segments past the aspect are ignored');
+  assert.equal(logic.parseStateKey('home/state/hall/lamp'), null);
+  assert.equal(logic.parseStateKey('home/cmd/hall/lamp/on'), null);
+  assert.equal(logic.parseStateKey('home/config/heating/comfort'), null);
+});
+
 // ---- occupancy and people helpers ----
 
 test('occupancy keys parse for both aspects, off-schema keys do not', () => {
@@ -1043,6 +1061,25 @@ test('brightness converts to the percent its controls show and back', () => {
   assert.deepEqual([0, 50, 100].map((p) => logic.brightnessOfPercent(p, VOCABULARY)), [0, 127, 254]);
   assert.equal(logic.cmdTolerance('brightness', VOCABULARY), 1.27, 'half a percent');
   assert.equal(logic.cmdTolerance('on', VOCABULARY), 0);
+});
+
+test('a climate step lands on a tenth', () => {
+  assert.equal(logic.nextStep('climate', 21.1, 0.2), 21.3);
+  assert.equal(logic.nextStep('climate', 20, -0.5), 19.5);
+  assert.equal(logic.nextStep('climate', 0.7, 0.1), 0.8, 'not 0.7999999999999999');
+});
+
+test('a brightness step moves in percent and stays on the scale', () => {
+  assert.equal(logic.nextStep('brightness', 127, 10, null, VOCABULARY), 152, '60 % of 254');
+  assert.equal(logic.nextStep('brightness', 250, 10, null, VOCABULARY), 254, 'not past 100 %');
+  assert.equal(logic.nextStep('brightness', 5, -10, null, VOCABULARY), 0, 'not below 0 %');
+});
+
+test('an aspect step lands on a hundredth within its constraint', () => {
+  assert.equal(logic.nextStep('aspect', 0.1, 0.2, {}), 0.3);
+  assert.equal(logic.nextStep('aspect', 9.5, 1, { min: 0, max: 10 }), 10);
+  assert.equal(logic.nextStep('aspect', 0.5, -1, { min: 0, max: 10 }), 0);
+  assert.equal(logic.nextStep('aspect', 99, 5, { min: 0 }), 104, 'an open end is not a bound');
 });
 
 test('the hold words the page names are the vocabulary\'s', () => {
