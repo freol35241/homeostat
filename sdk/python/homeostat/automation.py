@@ -28,18 +28,18 @@ import datetime
 import inspect
 import json
 import os
-import secrets
 import threading
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import zenoh
 
-from . import history, house, intervals, keys, vocabulary
+from . import bindings, history, house, intervals, keys
 from .forecast import Forecast, Point
 from .forecast import decode as decode_forecast
 from .history import HistoryUnavailable
+from .holds import HoldBook
 from .house import Entity, HouseModel
 from .session import QueryError, UnitSession, wait_for_shutdown
 from .stamps import Newest
@@ -66,63 +66,6 @@ def context(root: str | Path = ".") -> "Context":
         If HOMEOSTAT_UNIT or HOMEOSTAT_BUS is unset.
     """
     return Context(os.environ[keys.ENV_UNIT], root)
-
-
-# The classes addressed per entity, as home/{class}/{room}/{entity}/{aspect}.
-# These are the classes with slots to fill and the ones that expand.
-# `arbiter` is left out because only adapters use it, and adapters use
-# UnitSession directly instead of a Context.
-_ENTITY_ADDRESSED = tuple(c for c in vocabulary.ENTITY_ADDRESSED if c != "arbiter")
-
-
-def _as_json(value: Any) -> Any:
-    """Return `value` as JSON reads it back: a tuple as a list, and so on."""
-    return json.loads(json.dumps(value))
-
-
-def _dedup(exprs: Iterable[str]) -> list[str]:
-    """Return `exprs` without duplicates, in their original order.
-
-    Two entities in one room expand a `{room}`-only expression identically,
-    and a duplicate subscription delivers twice.
-    """
-    return list(dict.fromkeys(exprs))
-
-
-def _expand(
-    expr: str, zones: dict[str, list[str]], entities: list[house.Entity]
-) -> list[str]:
-    """Expand an expression as the core does at plan time (src/expand.rs).
-
-    `{room}`/`{entity}` templates are substituted per bound entity.
-    Otherwise a zone in the room slot expands to one expression per member
-    room. The two cannot both apply, since a template is not a zone name.
-    Only the entity-addressed classes expand, because only they have a room
-    slot to fill (src/keyspace.rs, ENTITY_ADDRESSED).
-    """
-    segments = expr.split("/")
-    if len(segments) < 3 or segments[1] not in _ENTITY_ADDRESSED:
-        return [expr]
-    if "{room}" in segments or "{entity}" in segments:
-
-        def substitute(entity: house.Entity) -> str:
-            filled = {"{room}": entity.room, "{entity}": entity.name}
-            return "/".join(filled.get(seg, seg) for seg in segments)
-
-        # A cmd path to an arbitrated entity belongs to the arbiter, not to
-        # the entity's owner, so a templated cmd skips arbitrated entities.
-        # Automation-owned entities cannot be arbitrated
-        # (`virtual-entity-arbitrated`), so this currently excludes
-        # nothing. It keeps this expansion in step with the core's.
-        return _dedup(
-            substitute(entity)
-            for entity in entities
-            if segments[1] != "cmd" or entity.write_mode != "arbitrated"
-        )
-    rooms = zones.get(segments[2])
-    if rooms is None:
-        return [expr]
-    return ["/".join([*segments[:2], room, *segments[3:]]) for room in rooms]
 
 
 def _house_has_recorder(model: house.HouseModel) -> bool:
@@ -221,12 +164,6 @@ class Context:
         self.unit = unit
         self.params = _Params(self)
         self._lock = threading.Lock()
-        # hold key -> the record this unit holds there, and whether it has
-        # been asserted since start (`hold`, `ready`). Read from the mirror on
-        # first use, so a restart keeps a hold's id when its wish is unchanged.
-        self._holds: dict[str, dict] | None = None
-        self._asserted: set[str] = set()
-        self._holds_lock = threading.Lock()
         self._param_values: dict[str, Any] = {}
         self._subs: list = []
         # One per subscribe: delivers the binding's current values again.
@@ -234,11 +171,11 @@ class Context:
         if session is None:
             session = UnitSession(unit, os.environ[keys.ENV_BUS])
         self._session = session
+        self._holds = HoldBook(session, unit, lambda: self.paused)
         if self._holds_anything():
             # Read now, so a pause, which runs on a zenoh callback, never has
             # to wait on a get.
-            with self._holds_lock:
-                self._own_holds()
+            self._holds.load()
         # (entity, aspect, source) -> last reported participation, so
         # `source_used` can emit on transition rather than on every call.
         self._sources_used: dict[tuple[str, str, str], bool] = {}
@@ -277,7 +214,7 @@ class Context:
         if paused and self._holds_anything():
             # A paused automation stops driving the house, so it stops
             # holding too. Its rules hold again from the redelivery on resume.
-            self._release_all()
+            self._holds.release_all()
         if not paused:
             # Outside the zenoh callback, which must not block on a get.
             threading.Thread(target=self._redeliver, daemon=True).start()
@@ -359,7 +296,7 @@ class Context:
     def _variants(self, expr: str) -> list[str]:
         # Only templates need the entities. A unit with templates read the
         # house at startup.
-        return _expand(expr, self._zones, self.entities if "{" in expr else [])
+        return bindings.expand(expr, self._zones, self.entities if "{" in expr else [])
 
     def subscribe(self, binding: str, handler: Callable[..., None]) -> None:
         """Subscribe a `[bus.subscribes]` binding and deliver its current values.
@@ -488,56 +425,24 @@ class Context:
         """Return the concrete key a binding addresses.
 
         `use` is "publish" for a `[bus.publishes]` binding and "history" for
-        a `[bus.subscribes]` one. Literal expression segments are defaults,
-        and wildcard and template segments must be named. A key the declared
-        expression does not cover is refused, so the manifest decides what
-        the unit may publish and whose past it may read.
-
-        A forecast key has one more slot than the others: its source, which
-        says who publishes this forecast (docs/design.md#forecasts).
+        a `[bus.subscribes]` one. The slots are filled as `bindings.fill_slots`
+        does. A key the declared expression does not cover is refused, so
+        the manifest decides what the unit may publish and whose past it may
+        read.
         """
         if use == "publish":
             expr = self._publishes[binding]["key"]
         else:
             expr = self._subscribes[binding]
-        segments = expr.split("/")
-        if segments[1] == "hold":
-            # home/hold/{unit}/{room}/{entity}/{aspect}, under this unit's name.
-            names = ("room", "entity", "aspect")
-            defaults = dict(zip(names, segments[3:6], strict=False))
-            parts = []
-            for slot, given in (("room", room), ("entity", entity), ("aspect", aspect)):
-                part = given if given is not None else defaults.get(slot)
-                if part is None or "*" in part or "{" in part:
-                    raise ValueError(f"{use} {binding!r} needs a concrete {slot}")
-                parts.append(part)
-            key = "/".join(["home", "hold", self.unit, *parts])
-        elif segments[1] in _ENTITY_ADDRESSED:
-            if segments[1] == "forecast":
-                names = ("room", "entity", "aspect", "source")
-                slots = {
-                    "room": room,
-                    "entity": entity,
-                    "aspect": aspect,
-                    "source": source,
-                }
-            else:
-                if source is not None:
-                    raise ValueError(f"{use} {binding!r} takes no source slot")
-                names = ("room", "entity", "aspect")
-                slots = {"room": room, "entity": entity, "aspect": aspect}
-            defaults: dict[str, str] = dict(zip(names, segments[2 : 2 + len(names)], strict=False))
-            parts = []
-            for slot, given in slots.items():
-                part = given if given is not None else defaults.get(slot)
-                if part is None or "*" in part or "{" in part:
-                    raise ValueError(f"{use} {binding!r} needs a concrete {slot}")
-                parts.append(part)
-            key = "/".join(["home", segments[1], *parts])
-        else:
-            if room or entity or aspect:
-                raise ValueError(f"{use} {binding!r} takes no key slots")
-            key = expr
+        key = bindings.fill_slots(
+            expr,
+            self.unit,
+            f"{use} {binding!r}",
+            room=room,
+            entity=entity,
+            aspect=aspect,
+            source=source,
+        )
         covered = any(
             zenoh.KeyExpr(variant).includes(zenoh.KeyExpr(key))
             for variant in self._variants(expr)
@@ -634,7 +539,7 @@ class Context:
             # the command arrives, so the key is deleted after it, for the
             # mirror.
             if self._holds_anything():
-                self._release_key("/".join(["home", "hold", self.unit, *key.split("/")[2:5]]))
+                self._holds.release("/".join(["home", "hold", self.unit, *key.split("/")[2:5]]))
             return
         if segments[1] == "hold":
             raise ValueError(f"publish {binding!r} is a hold publish; use ctx.hold")
@@ -710,22 +615,7 @@ class Context:
             wish["until"] = until.astimezone(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
         if reason is not None:
             wish["reason"] = str(reason)
-        # Under the lock, which `release` and a pause also take, so a hold
-        # and a release racing on two subscription threads cannot leave a
-        # key on the bus that the SDK no longer counts.
-        with self._holds_lock:
-            if self.paused:
-                return
-            holds = self._own_holds()
-            self._asserted.add(key)
-            current = holds.get(key)
-            # Compared as JSON, so a tuple held again equals the list the
-            # mirror returned and keeps its id.
-            if current is not None and _as_json({k: v for k, v in current.items() if k != "id"}) == _as_json(wish):
-                return
-            record = dict(wish, id=secrets.token_hex(4))
-            holds[key] = record
-            self._session.put_json(key, record)
+        self._holds.hold(key, wish)
 
     def hold_while(
         self,
@@ -791,9 +681,7 @@ class Context:
             self.release(binding, room=room, entity=entity, aspect=aspect)
             return False
         key = self._concrete_key(binding, room=room, entity=entity, aspect=aspect)
-        with self._holds_lock:
-            current = self._own_holds().get(key)
-        holding = current is not None and _as_json(current.get("value")) == _as_json(value)
+        holding = self._holds.holding(key, value)
         if hold or holding:
             self.hold(binding, value, room=room, entity=entity, aspect=aspect, until=until, reason=reason)
             return not self.paused
@@ -832,41 +720,11 @@ class Context:
         """
         if self._publishes[binding]["key"].split("/")[1] != "hold":
             raise ValueError(f"publish {binding!r} is not a hold publish")
-        self._release_key(self._concrete_key(binding, room=room, entity=entity, aspect=aspect))
+        self._holds.release(self._concrete_key(binding, room=room, entity=entity, aspect=aspect))
 
     def _holds_anything(self) -> bool:
         """Whether the manifest declares a hold publish."""
         return any(spec["key"].split("/")[1] == "hold" for spec in self._publishes.values())
-
-    def _own_holds(self) -> dict[str, dict]:
-        """Return the holds this unit has published, read from the mirror once.
-
-        Called with `self._holds_lock` held.
-        """
-        if self._holds is None:
-            self._holds = {
-                key: record
-                for key, record in self._session.get_json(keys.hold_keyexpr(self.unit))
-                if isinstance(record, dict)
-            }
-        return self._holds
-
-    def _release_key(self, key: str) -> None:
-        with self._holds_lock:
-            self._asserted.discard(key)
-            holds = self._own_holds()
-            if key not in holds:
-                return
-            del holds[key]
-            self._session.delete(key)
-
-    def _release_all(self) -> None:
-        with self._holds_lock:
-            holds = self._own_holds()
-            for key in holds:
-                self._session.delete(key)
-            holds.clear()
-            self._asserted.clear()
 
     def publish_forecast(
         self,
@@ -1456,11 +1314,7 @@ class Context:
         is ready, so nothing waits on a clock (docs/design.md#holds).
         """
         if self._holds_anything():
-            with self._holds_lock:
-                holds = self._own_holds()
-                for key in [key for key in holds if key not in self._asserted]:
-                    del holds[key]
-                    self._session.delete(key)
+            self._holds.prune_unasserted()
         self._session.ready()
 
     def run(self) -> None:
