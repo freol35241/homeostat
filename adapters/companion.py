@@ -10,68 +10,54 @@
 # ///
 """Companion adapter: the house's own Android app, over the MQTT broker.
 
-The wire contract is docs/companion-protocol.md. It specifies every topic
-and payload, and what the app owes about sessions, retention and wills.
-It is normative, and homeostat-app implements against it.
+This adapter makes a family phone a described part of the house. The
+phone never touches the bus. Like any device, it speaks a dialect to an
+adapter (docs/design.md#bus). The dialect is ours, so the app already
+speaks homeostat vocabulary and there is nothing to rename.
 docs/design.md#the-companion-app holds the reasoning.
 
-This adapter makes a family phone a described part of the house. The
-phone never touches the bus. It is a device, and devices speak a dialect
-to an adapter (docs/design.md#bus). This dialect is ours, so the app
-already speaks homeostat vocabulary and there is nothing to rename. The
-adapter adds the ownership, the grants and the plan visibility that a
-phone publishing for itself would not have.
+The wire contract is docs/companion-protocol.md. Its Topics table lists
+each topic with its direction, QoS and retain flag, and the sections
+after it give the payloads. It is normative, and homeostat-app
+implements against it.
 
-Each phone owns a topic subtree under the endpoint's base topic
-(`companion` unless the endpoint path names another) and two entities:
+Binding: each phone owns the subtree `{base}/{phone}/` and two entities.
+The entity file's `id` is the two topic segments that name the subtree
+and the face. "alice/person" binds the phone's `tracker` entity, in the
+pseudo-room `person`. "alice/notifier" binds its `notifier` entity. The
+two files share the first segment, and that is how `available` reaches
+both. The human is a `person` entity the persons automation computes
+from the tracker (docs/design.md#map-and-people).
 
-    {base}/{phone}/available          <- retained birth `true`, LWT `false`
-    {base}/{phone}/person/presence    <- retained bare JSON bool
-    {base}/{phone}/person/position    <- {"lat","lon","accuracy","battery","fixed_at"}
-    {base}/{phone}/notifier/ack       <- the acknowledged alert's `sent_at`
-    {base}/{phone}/notifier/message   -> {"text","actor","sent_at"}, QoS 1
-    {base}/{phone}/notifier/alert     -> the same, the urgent channel
+Configuration: [discovery].endpoint is the MQTT broker, with credentials
+inline or in HOMEOSTAT_MQTT_CREDENTIALS. The endpoint's path names the
+base topic, `companion` by default.
 
-The entity file's `id` is the two topic segments that name the subtree and
-the face: "alice/person" binds the phone's `tracker` entity (room
-`person`, the reserved pseudo-room), "alice/notifier" the `notifier`
-entity for the same phone. One phone is therefore two files, which is
-what the two capabilities are; they share the first segment and that is
-how `available` reaches both. The wire keeps the face name `person`; the
-human is a `person` entity the persons automation computes from this
-tracker (docs/design.md#map-and-people).
+State:
 
-Published state:
-
-- `home` (bool) on the tracker, from the platform's geofence transitions,
-  which the wire calls `presence`. The app registers a single geofence,
-  `home`. Continuous position is opt-in per phone and off by default, so a
-  phone that never publishes `position` is the normal case.
-- `lat`, `lon`, `fixed_at` and, when the fix carries them, `accuracy` and
-  `battery`: scalar aspects, never one composite fix, so the recorder
-  gives trails for free. `fixed_at` is published last, because it
-  completes a fix for the persons automation. A fix without one is
-  stamped with its arrival time.
+- `home` (bool) on the tracker, from the app's geofence transitions
+  (`presence` on the wire).
+- `lat`, `lon`, `fixed_at` and, when the fix carries them, `accuracy`
+  and `battery`. They are scalar aspects, so the recorder keeps trails.
+  `fixed_at` is published last, because it completes a fix for the
+  persons automation. A fix without one is stamped with its arrival
+  time. Position is opt-in per phone and off by default.
 - `delivered` (epoch seconds) on the notifier when the broker acks the
-  publish (QoS 1 PUBACK). ntfy's `delivered` means the same: the delivery
-  path took the message, and nobody has necessarily seen it.
+  publish. As with ntfy, it means the delivery path took the message.
 - `acknowledged` (epoch seconds): the `sent_at` of the newest alert the
-  person has dismissed or opened in the app, echoed back by the app. It
-  is this adapter's clock, so an automation that sent an alert at `t`
-  reads `acknowledged >= t` as seen. This is the far-end receipt only an
-  app can give; whether an unacknowledged `alert` escalates is the
-  automation's policy over this aspect, never this adapter's.
+  person dismissed or opened, echoed back by the app. `sent_at` is this
+  adapter's clock, so an automation that sent an alert at `t` reads
+  `acknowledged >= t` as seen. Whether an unacknowledged alert escalates
+  is the automation's policy.
 - `available` (bool) on both of a phone's entities, from the app's
-  retained birth message and its last will. A phone out of coverage is
-  unreachable, and an automation that escalates should be able to see it.
-  Stale, not false: every other aspect keeps its last value.
+  retained birth message and its last will. The other aspects keep their
+  last value while a phone is unreachable.
 
-Commands: the notifier's two commandable aspects, `message` and `alert`.
-Each takes a non-empty string. The QoS, retain flag and queueing are in
-docs/companion-protocol.md. The envelope's `actor` travels as `actor`, so
-the phone can say who spoke. There is no rate floor, because there is no
-third-party server to protect as there is with ntfy. A cooldown is house
-policy and lives in the automation.
+Commands: `message` and `alert` on the notifier, each a non-empty
+string. The envelope's `actor` travels with the text, so the phone can
+say who spoke. There is no rate floor, because there is no third-party
+server to protect as there is with ntfy. A cooldown is house policy and
+lives in the automation.
 
 Health events: drop/malformed-payload (undecodable or wrongly typed
 input from the phone), drop/invalid-command (bad envelope, unknown

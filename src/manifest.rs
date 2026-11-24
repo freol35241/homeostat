@@ -286,7 +286,9 @@ pub const SUPPORTED_SCHEMA: u32 = 1;
 pub struct UnitManifest {
     /// Contract version. Must be 1 (`unsupported-schema` otherwise).
     pub schema: u32,
+    /// The unit's name, kind and description.
     pub unit: UnitSection,
+    /// How the supervisor starts, restarts and stops the unit.
     pub runtime: RuntimeSection,
     /// How an adapter reaches its backend. Required for adapters, allowed
     /// for services, refused for automations.
