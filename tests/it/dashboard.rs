@@ -273,6 +273,7 @@ async fn dashboard_serves_the_family_surface() {
     params_persist_within_constraints(&ctx).await;
     local_only_gate_holds(&ctx);
     history_checks_its_selector(&ctx);
+    windows_refuse_bad_hours(&ctx);
 
     sup.shutdown();
 }
@@ -1123,6 +1124,8 @@ fn history_checks_its_selector(ctx: &Ctx) {
         "entity=lamp&aspect=brightness&bucket=-5",
         "entity=lamp&aspect=brightness&hours=744&bucket=1",
         "entity=lamp&aspect=brightness&bucket=60&changes=1",
+        // A bucket too large for a float.
+        &format!("entity=lamp&aspect=brightness&bucket=1{}", "0".repeat(400)),
     ] {
         let (status, reply) = http_request(
             &ctx.addr,
@@ -1132,6 +1135,32 @@ fn history_checks_its_selector(ctx: &Ctx) {
             None,
         );
         assert_eq!(status, 400, "{query}: {reply}");
+    }
+}
+
+/// 10. The recorder routes read `hours` as a window length. One that is
+///     not a finite positive number is a 400 on each of them.
+fn windows_refuse_bad_hours(ctx: &Ctx) {
+    for path in [
+        "/api/history?entity=lamp&aspect=brightness",
+        "/api/forecasts?entity=lamp&aspect=brightness",
+        "/api/source-events?entity=lamp&aspect=brightness",
+        "/api/unit-events?unit=evening_lights",
+        "/api/unit-timeline?unit=evening_lights",
+    ] {
+        let (status, reply) =
+            http_request(&ctx.addr, "GET", &format!("{path}&hours=24"), &[], None);
+        assert_eq!(status, 200, "{path}: {reply}");
+        for hours in ["soon", "nan", "inf", "-inf", "0", "-1", "-1e300"] {
+            let (status, reply) = http_request(
+                &ctx.addr,
+                "GET",
+                &format!("{path}&hours={hours}"),
+                &[],
+                None,
+            );
+            assert_eq!(status, 400, "{path} hours={hours}: {reply}");
+        }
     }
 }
 
