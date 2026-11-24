@@ -5,8 +5,10 @@ sets. It opens a client session against the supervisor's router and
 returns a UnitSession. Scouting is off, because the topology is explicit.
 Call `ready()` once the unit can do its job. The supervisor treats a unit
 as up when its liveliness token is declared, not when its process
-starts. `wait_for_shutdown()`, or `shutdown_event()` for a unit with worker
-threads, waits for the supervisor's SIGTERM.
+starts. `wait_for_shutdown()` blocks until the supervisor's SIGTERM.
+`shutdown_event()` returns the event the signal sets, for a unit whose
+worker threads stop on it, and `async_shutdown_event()` is its asyncio
+form.
 """
 
 import asyncio
@@ -74,12 +76,25 @@ def connect() -> "UnitSession":
     return UnitSession(unit, endpoint)
 
 
+# The process's one shutdown event. Its handlers are installed on the first
+# call to `shutdown_event`, because a second install would replace them and
+# strand the event an earlier caller holds.
+_shutdown = threading.Event()
+_shutdown_installed = False
+
+# The asyncio shutdown event of each running loop, for the same reason.
+_async_shutdown: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Event]" = (
+    weakref.WeakKeyDictionary()
+)
+
+
 def shutdown_event() -> threading.Event:
-    """Return an event that SIGTERM or SIGINT sets.
+    """Return the event that SIGTERM or SIGINT sets.
 
     SIGTERM is the supervisor's stop signal. A unit that only waits for it
     calls `wait_for_shutdown`. One that runs worker threads passes them the
-    event, so they see the stop too.
+    event, so they see the stop too. Every call returns the same event, so
+    a unit can hand it to a worker and still call `Context.run`.
 
     Returns
     -------
@@ -89,13 +104,15 @@ def shutdown_event() -> threading.Event:
     Raises
     ------
     ValueError
-        If called from a thread other than the main thread, the only one
-        Python lets install signal handlers.
+        If the first call is made from a thread other than the main thread,
+        the only one Python lets install signal handlers.
     """
-    stop = threading.Event()
-    signal.signal(signal.SIGTERM, lambda *_: stop.set())
-    signal.signal(signal.SIGINT, lambda *_: stop.set())
-    return stop
+    global _shutdown_installed
+    if not _shutdown_installed:
+        signal.signal(signal.SIGTERM, lambda *_: _shutdown.set())
+        signal.signal(signal.SIGINT, lambda *_: _shutdown.set())
+        _shutdown_installed = True
+    return _shutdown
 
 
 def wait_for_shutdown() -> None:
@@ -104,16 +121,18 @@ def wait_for_shutdown() -> None:
     Raises
     ------
     ValueError
-        If called from a thread other than the main thread.
+        If the first call to `shutdown_event` is made from a thread other
+        than the main thread.
     """
     shutdown_event().wait()
 
 
 def async_shutdown_event() -> asyncio.Event:
-    """Return an asyncio event that SIGTERM or SIGINT sets.
+    """Return the asyncio event that SIGTERM or SIGINT sets.
 
     The asyncio form of `shutdown_event`. The handlers are the running
-    loop's, so the signal wakes the loop wherever it is waiting.
+    loop's, so the signal wakes the loop wherever it is waiting. Every call
+    on one loop returns the same event.
 
     Returns
     -------
@@ -123,12 +142,16 @@ def async_shutdown_event() -> asyncio.Event:
     Raises
     ------
     RuntimeError
-        If no event loop is running in this thread.
+        If no event loop is running in this thread, or if the loop's first
+        call is made from a thread other than the main thread.
     """
     loop = asyncio.get_running_loop()
-    stop = asyncio.Event()
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(sig, stop.set)
+    stop = _async_shutdown.get(loop)
+    if stop is None:
+        stop = asyncio.Event()
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(sig, stop.set)
+        _async_shutdown[loop] = stop
     return stop
 
 
@@ -637,7 +660,7 @@ class UnitSession:
         The age is read from the reply's attachment, which the core's
         last-value mirrors write. A reply without one has age zero. The
         stamp is the reply's timestamp: the mirrored value's own, or None.
-        Non-JSON payloads are ignored, as a subscriber ignores them.
+        A reply whose payload is not JSON is left out, with no event.
         `timeout_s` bounds the wait for replies, with zenoh's default of
         10 s when None. Running out raises QueryTimeout.
 

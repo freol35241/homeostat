@@ -161,9 +161,11 @@ class Causes:
             self.held(key, None)
             return
         try:
-            self.held(key, json.loads(sample.payload.to_bytes()))
+            record = json.loads(sample.payload.to_bytes())
         except ValueError:
             self.session.health_event("drop", reason="malformed-payload", key=key)
+            return
+        self.held(key, record)
 
     def changed(self, entity, value: bool) -> None:
         """Attribute a change of `entity`'s `on` to `value`, and act on it."""

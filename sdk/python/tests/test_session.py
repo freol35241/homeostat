@@ -4,13 +4,17 @@ put_json refuses to publish, and the shared command prologue.
 Run: uv run --no-project --with-editable sdk/python python -m unittest discover sdk/python/tests
 """
 
+import asyncio
 import datetime
 import json
+import os
+import signal
 import threading
 import unittest
 
 import zenoh
-from homeostat import keys
+from homeostat import async_shutdown_event, keys, shutdown_event
+from homeostat import session as session_mod
 from homeostat.session import ConfigWriteError, QueryError, QueryTimeout
 from homeostat.stamps import stamp_us
 from homeostat.testing import FakeSample, FakeSession
@@ -185,6 +189,32 @@ class SubscribeJsonTest(unittest.TestCase):
             session.events,
             [{"kind": "drop", "reason": "malformed-payload", "key": "home/state/hall/lamp/on"}],
         )
+
+
+class ShutdownTest(unittest.TestCase):
+    """The stop signal sets one event per process, and one per asyncio loop."""
+
+    def setUp(self):
+        for sig, handler in ((signal.SIGTERM, signal.SIG_DFL), (signal.SIGINT, signal.default_int_handler)):
+            self.addCleanup(signal.signal, sig, handler)
+
+    def test_sigterm_sets_the_one_shutdown_event(self):
+        self.addCleanup(setattr, session_mod, "_shutdown_installed", False)
+        self.addCleanup(setattr, session_mod, "_shutdown", session_mod._shutdown)
+        session_mod._shutdown = threading.Event()
+        stop = shutdown_event()
+        self.assertIs(shutdown_event(), stop)
+        os.kill(os.getpid(), signal.SIGTERM)
+        self.assertTrue(stop.wait(timeout=1))
+
+    def test_sigterm_sets_the_loops_one_shutdown_event(self):
+        async def main():
+            stop = async_shutdown_event()
+            self.assertIs(async_shutdown_event(), stop)
+            os.kill(os.getpid(), signal.SIGTERM)
+            await asyncio.wait_for(stop.wait(), timeout=1)
+
+        asyncio.run(main())
 
 
 class GetReplyTest(unittest.TestCase):

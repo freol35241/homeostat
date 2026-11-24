@@ -20,9 +20,6 @@ import paho.mqtt.client as mqtt
 import tomllib
 from paho.mqtt.enums import CallbackAPIVersion
 
-# MQTT adapters outside this repo import the shutdown wait from here.
-from .session import wait_for_shutdown  # noqa: F401
-
 ENV_CREDENTIALS = "HOMEOSTAT_MQTT_CREDENTIALS"
 
 

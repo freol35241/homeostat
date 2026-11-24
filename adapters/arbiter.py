@@ -63,7 +63,8 @@ back.
 
 Health events at home/health/{unit}/event: `drop` (off-schema-key,
 invalid-command, unbound, malformed-hold, and malformed-payload for a
-grant table that does not read), `refuse` when a command loses to a
+grant table that does not read or a health status, health event,
+`available` or clock minute that is not JSON), `refuse` when a command loses to a
 hold, `preempt` when a higher hold takes over, `resume` when a
 lower one takes over after it, `replay-late` when the core's replay
 after a restart did not come in time and the arbiter starts without it,
