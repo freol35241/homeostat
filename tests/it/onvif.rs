@@ -293,8 +293,9 @@ async fn a_camera_without_a_subscription_manager_keeps_streaming() {
 
 /// (e) ...and the subscription is rotated before it expires, which keeps
 /// such a camera working past `InitialTerminationTime`. Without a working
-/// Renew the stream would stop after PT60S. The test is slow because the
-/// rotation is a real wall-clock interval.
+/// Renew the stream would stop after PT60S. The rotation is a real
+/// wall-clock interval, which the fixture shortens through
+/// `resubscribe_after_s`.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_camera_without_a_subscription_manager_rotates_its_subscription() {
     let (camera, _cameras, mut sup, observer) = setup().await;
@@ -311,17 +312,18 @@ async fn a_camera_without_a_subscription_manager_rotates_its_subscription() {
     camera.control("/control/reject-renew");
     let before = camera.created();
 
-    // RESUBSCRIBE_BEFORE_S is 40s against a PT60S termination.
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(90);
+    // The fixture sets resubscribe_after_s to 3, so the rotation comes
+    // within one pull of that.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
         if camera.created() > before {
             break;
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "the subscription was never rotated: still {before} after 90s"
+            "the subscription was never rotated: still {before} after 30s"
         );
-        tokio::time::sleep(Duration::from_secs(2)).await;
+        tokio::time::sleep(Duration::from_millis(500)).await;
     }
 
     // The rotation is invisible from the bus: motion keeps flowing and
