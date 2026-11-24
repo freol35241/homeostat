@@ -849,21 +849,20 @@ class Hub:
             self.holds[key] = value
         self._emit({"type": "hold", "key": key, "value": value})
 
-    def _on_arbitration(self, sample) -> None:
+    def _mirror(self, sample, cache: dict, kind: str) -> None:
+        """Store a sample's value in `cache` and send it to the page as `kind`."""
         if (decoded := self._decode(sample)) is None:
             return
         key, value = decoded
         with self.lock:
-            self.arbitration[key] = value
-        self._emit({"type": "arbitration", "key": key, "value": value})
+            cache[key] = value
+        self._emit({"type": kind, "key": key, "value": value})
+
+    def _on_arbitration(self, sample) -> None:
+        self._mirror(sample, self.arbitration, "arbitration")
 
     def _on_forecast(self, sample) -> None:
-        if (decoded := self._decode(sample)) is None:
-            return
-        key, value = decoded
-        with self.lock:
-            self.forecasts[key] = value
-        self._emit({"type": "forecast", "key": key, "value": value})
+        self._mirror(sample, self.forecasts, "forecast")
 
     def _apply_discovery(self, unit: str, value) -> None:
         """Diff a unit's discovery record against what it described before.
@@ -892,12 +891,7 @@ class Hub:
         self._apply_discovery(key.split("/")[2], value)
 
     def _on_config(self, sample) -> None:
-        if (decoded := self._decode(sample)) is None:
-            return
-        key, value = decoded
-        with self.lock:
-            self.config[key] = value
-        self._emit({"type": "config", "key": key, "value": value})
+        self._mirror(sample, self.config, "config")
 
     def _on_health(self, sample) -> None:
         if (decoded := self._decode(sample)) is None:
@@ -935,6 +929,22 @@ class Hub:
 
 def json_error(message: str, status: int = 400) -> web.Response:
     return web.json_response({"error": message}, status=status)
+
+
+def window_hours(request: web.Request, cap: float) -> float | web.Response:
+    """Return the request's window length in hours, at most `cap`, or a 400.
+
+    `hours` defaults to 24. It must be a finite, positive number.
+    """
+    try:
+        hours = float(request.query.get("hours", "24"))
+    except ValueError:
+        return json_error("hours must be a number")
+    if not math.isfinite(hours):
+        return json_error("hours must be a finite number")
+    if hours <= 0:
+        return json_error("hours must be positive")
+    return min(hours, cap)
 
 
 @web.middleware
@@ -1023,6 +1033,32 @@ class Model:
 
 
 def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Application:
+
+    def known_series(request: web.Request) -> tuple[str, str] | web.Response:
+        """Return the request's entity and aspect, or a 400.
+
+        They go into a recorder selector as they are. A wildcard entity
+        would spread the per-series limit over the whole store, and `/`,
+        `#` or `$` would raise inside the executor.
+        """
+        entity = request.query.get("entity", "")
+        aspect = request.query.get("aspect", "")
+        if not entity or not aspect:
+            return json_error("entity and aspect are required")
+        if entity not in model.entities:
+            return json_error(f"unknown entity {entity}")
+        if not keys.valid_segment(aspect):
+            return json_error("aspect must be a single key segment")
+        return entity, aspect
+
+    async def recorder_get(selector: str) -> list | web.Response:
+        """Run a recorder query off the event loop, or return a 502 if it fails."""
+        try:
+            return await asyncio.get_running_loop().run_in_executor(
+                None, hub.session.get_json, selector
+            )
+        except QueryError as error:
+            return json_error(f"recorder: {error}", status=502)
 
     async def index(request: web.Request) -> web.StreamResponse:
         return web.FileResponse(page, headers=REVALIDATE)
@@ -1236,33 +1272,30 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         default) is what the house did, class=cmd what was asked of it; a
         command strip under a chart shows intent against outcome.
         """
-        entity = request.query.get("entity", "")
-        aspect = request.query.get("aspect", "")
-        if not entity or not aspect:
-            return json_error("entity and aspect are required")
+        if isinstance(series := known_series(request), web.Response):
+            return series
+        entity, aspect = series
         # The two series classes the recorder keeps per (entity, aspect).
         # The page asks for no other.
         series_class = request.query.get("class", "state")
         if series_class not in ("state", "cmd"):
             return json_error("class must be state or cmd")
-        # These go into a selector as they are. A wildcard entity would
-        # spread the per-series limit over the whole store, and `/`, `#` or
-        # `$` would raise inside the executor.
-        if entity not in model.entities:
-            return json_error(f"unknown entity {entity}")
-        if not keys.valid_segment(aspect):
-            return json_error("aspect must be a single key segment")
+        if isinstance(hours := window_hours(request, HISTORY_HOURS_MAX), web.Response):
+            return hours
         now = datetime.datetime.now(datetime.timezone.utc)
+        start = now - datetime.timedelta(hours=hours)
         try:
-            hours = min(float(request.query.get("hours", "24")), HISTORY_HOURS_MAX)
             limit = max(1, min(int(request.query.get("limit", "500")), HISTORY_LIMIT_MAX))
             bucket = int(request.query.get("bucket", "0"))
-            start = now - datetime.timedelta(hours=hours)
-        except (ValueError, OverflowError):
-            # timedelta raises OverflowError on NaN or infinite hours.
-            return json_error("hours, limit and bucket must be numbers")
+        except ValueError:
+            return json_error("limit and bucket must be numbers")
         changes = request.query.get("changes") == "1"
-        if bucket < 0 or (bucket and hours * 3600 / bucket > HISTORY_LIMIT_MAX):
+        try:
+            per_window = hours * 3600 / bucket if bucket else 0
+        except OverflowError:
+            # The division turns bucket into a float first.
+            return json_error("bucket is too large")
+        if bucket < 0 or per_window > HISTORY_LIMIT_MAX:
             # The recorder refuses a fold finer than a reply can carry. The
             # page does not ask for one, so this is a plain 400.
             return json_error(f"bucket must be positive and no finer than {HISTORY_LIMIT_MAX} per window")
@@ -1280,12 +1313,8 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         elif changes:
             params["changes"] = 1
         selector = history.selector(keys.history_key(series_class, entity, aspect), params)
-        try:
-            replies = await asyncio.get_running_loop().run_in_executor(
-                None, hub.session.get_json, selector
-            )
-        except QueryError as error:
-            return json_error(f"recorder: {error}", status=502)
+        if isinstance(replies := await recorder_get(selector), web.Response):
+            return replies
         return web.json_response(
             {"series": [{"key": key, "points": points} for key, points in replies]}
         )
@@ -1299,21 +1328,17 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         issues. `limit` counts issues, as the recorder does, so a reply
         never holds part of an issue.
         """
-        entity = request.query.get("entity", "")
-        aspect = request.query.get("aspect", "")
-        if not entity or not aspect:
-            return json_error("entity and aspect are required")
-        if entity not in model.entities:
-            return json_error(f"unknown entity {entity}")
-        if not keys.valid_segment(aspect):
-            return json_error("aspect must be a single key segment")
+        if isinstance(series := known_series(request), web.Response):
+            return series
+        entity, aspect = series
+        if isinstance(hours := window_hours(request, HISTORY_HOURS_MAX), web.Response):
+            return hours
         now = datetime.datetime.now(datetime.timezone.utc)
+        start = now - datetime.timedelta(hours=hours)
         try:
-            hours = min(float(request.query.get("hours", "24")), HISTORY_HOURS_MAX)
             limit = max(1, min(int(request.query.get("limit", "60")), FORECAST_ISSUE_MAX))
-            start = now - datetime.timedelta(hours=hours)
-        except (ValueError, OverflowError):
-            return json_error("hours and limit must be numbers")
+        except ValueError:
+            return json_error("limit must be a number")
         # The window is the drawn one. An issue is kept when it said
         # anything about the window, so a forecast made before the window
         # that reaches into it is included. The wildcard in the source slot
@@ -1327,12 +1352,8 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
                 "limit": limit,
             },
         )
-        try:
-            replies = await asyncio.get_running_loop().run_in_executor(
-                None, hub.session.get_json, selector
-            )
-        except QueryError as error:
-            return json_error(f"recorder: {error}", status=502)
+        if isinstance(replies := await recorder_get(selector), web.Response):
+            return replies
         # The reply key's last segment is the source. Tagging each issue
         # with it gives the page one flat list, since the chart draws
         # issues, and still says which provider each line came from.
@@ -1351,19 +1372,14 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         window read is wider than the window drawn by
         SOURCE_EVENT_LOOKBACK_H (see there).
         """
-        entity = request.query.get("entity", "")
-        aspect = request.query.get("aspect", "")
-        if entity not in model.entities:
-            return json_error(f"unknown entity {entity}")
-        if not keys.valid_segment(aspect):
-            return json_error("aspect must be a single key segment")
+        if isinstance(series := known_series(request), web.Response):
+            return series
+        entity, aspect = series
+        if isinstance(hours := window_hours(request, HISTORY_HOURS_MAX), web.Response):
+            return hours
         owner = model.entities[entity].get("owner")
         if not owner:
             return web.json_response({"events": []})
-        try:
-            hours = min(float(request.query.get("hours", "24")), HISTORY_HOURS_MAX)
-        except (ValueError, OverflowError):
-            return json_error("hours must be a number")
         now = datetime.datetime.now(datetime.timezone.utc)
         # The recorder's events path takes integer microseconds; its
         # samples path takes RFC3339.
@@ -1378,12 +1394,8 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
                 "limit": SOURCE_EVENT_MAX,
             },
         )
-        try:
-            replies = await asyncio.get_running_loop().run_in_executor(
-                None, hub.session.get_json, selector
-            )
-        except QueryError as error:
-            return json_error(f"recorder: {error}", status=502)
+        if isinstance(replies := await recorder_get(selector), web.Response):
+            return replies
         out = []
         for _key, payload in replies:
             for row in payload or []:
@@ -1417,12 +1429,8 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         unit = request.query.get("unit", "")
         if unit not in model.units:
             return json_error(f"unknown unit {unit}", status=404)
-        try:
-            hours = min(float(request.query.get("hours", "24")), HISTORY_HOURS_MAX)
-        except (ValueError, OverflowError):
-            return json_error("hours must be a number")
-        if not hours > 0:
-            return json_error("hours must be positive")
+        if isinstance(hours := window_hours(request, HISTORY_HOURS_MAX), web.Response):
+            return hours
         now = datetime.datetime.now(datetime.timezone.utc)
         to_us = int(now.timestamp() * 1_000_000)
         from_us = to_us - int(hours * 3600 * 1_000_000)
@@ -1435,12 +1443,8 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
                 "limit": UNIT_EVENT_MAX,
             },
         )
-        try:
-            replies = await asyncio.get_running_loop().run_in_executor(
-                None, hub.session.get_json, selector
-            )
-        except QueryError as error:
-            return json_error(f"recorder: {error}", status=502)
+        if isinstance(replies := await recorder_get(selector), web.Response):
+            return replies
         events = [
             {"ts": row.get("ts", 0) / 1_000_000, "key": row.get("key"), "value": row["payload"]}
             for _key, payload in replies
@@ -1540,12 +1544,8 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         unit = request.query.get("unit", "")
         if unit not in model.units:
             return json_error(f"unknown unit {unit}", status=404)
-        try:
-            hours = min(float(request.query.get("hours", "24")), 24 * 7)
-        except (ValueError, OverflowError):
-            return json_error("hours must be a number")
-        if not hours > 0:
-            return json_error("hours must be positive")
+        if isinstance(hours := window_hours(request, 24 * 7), web.Response):
+            return hours
         to_us = int(datetime.datetime.now(datetime.timezone.utc).timestamp() * 1_000_000)
         from_us = to_us - int(hours * 3600 * 1_000_000)
         try:
