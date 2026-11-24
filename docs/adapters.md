@@ -468,7 +468,8 @@ trace: one JSON object at `home/health/{unit}/event` via
 | `drop` | `reason = "device-unavailable"`, `key`, `cmd_id` | a command dropped because the device is down |
 | `drop` | `reason = "invalid-feed"`, `input`, `key`, `value` | a fed value outside its bounds |
 | `drop` | `reason = "feed-source-unavailable"`, `input`, `key` | a fed value arriving while its source is unavailable (once per outage) |
-| `device-silent` / `bridge-silent` | `topic` or `base_topic`, `timeout_s` | a loss transition (once per transition) |
+| `device-silent` | `topic` | a loss transition (once per transition) |
+| `bridge-silent` | `base_topic`, and `timeout_s` or `state` | a loss transition (once per transition) |
 | `feed-source-lost` | `input`, `key` | a fed input's source went unavailable |
 | `device-rule` | `entity`, `rule`, `aspect`, `value` | a change the device reports as its own rule ([Changes made at the device](#changes-made-at-the-device)) |
 | `unattributed` | `entity`, `aspect`, `value` | a change of an entity with `[causes]` that the device gave no cause for |

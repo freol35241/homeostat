@@ -10,19 +10,17 @@
 # ///
 """Companion adapter: the house's own Android app, over the MQTT broker.
 
-The wire contract this implements — every topic, every payload, and what
-the app owes about sessions, retention and wills — is
-docs/companion-protocol.md, which is normative and is what homeostat-app
-implements against; docs/design.md#the-companion-app holds the
-reasoning.
+The wire contract is docs/companion-protocol.md. It specifies every topic
+and payload, and what the app owes about sessions, retention and wills.
+It is normative, and homeostat-app implements against it.
+docs/design.md#the-companion-app holds the reasoning.
 
-The membrane that makes a family phone a described part of the house. The
-phone never touches the bus — it is a device, and devices speak a dialect
-to an adapter (docs/design.md#bus). Unlike every other dialect this one
-is ours, so the app already speaks homeostat vocabulary and there is
-nothing to rename; what this adapter provides is the ownership, the
-grants and the plan visibility that a phone publishing for itself would
-not have.
+This adapter makes a family phone a described part of the house. The
+phone never touches the bus. It is a device, and devices speak a dialect
+to an adapter (docs/design.md#bus). This dialect is ours, so the app
+already speaks homeostat vocabulary and there is nothing to rename. The
+adapter adds the ownership, the grants and the plan visibility that a
+phone publishing for itself would not have.
 
 Each phone owns a topic subtree under the endpoint's base topic
 (`companion` unless the endpoint path names another) and two entities:
@@ -46,17 +44,17 @@ tracker (docs/design.md#map-and-people).
 Published state:
 
 - `home` (bool) on the tracker, from the platform's geofence transitions,
-  which the wire calls `presence`. The app registers ONE geofence, `home`;
-  continuous position is opt-in per phone and off by default, so a phone
-  that never publishes `position` is the normal case, not a degraded one.
+  which the wire calls `presence`. The app registers a single geofence,
+  `home`. Continuous position is opt-in per phone and off by default, so a
+  phone that never publishes `position` is the normal case.
 - `lat`, `lon`, `fixed_at` and, when the fix carries them, `accuracy` and
   `battery`: scalar aspects, never one composite fix, so the recorder
   gives trails for free. `fixed_at` is published last, because it
   completes a fix for the persons automation. A fix without one is
   stamped with its arrival time.
-- `delivered` (epoch seconds) on the notifier when the BROKER acks the
-  publish (QoS 1 PUBACK), which is what ntfy's `delivered` also means: the
-  delivery path took it, not that anyone saw it.
+- `delivered` (epoch seconds) on the notifier when the broker acks the
+  publish (QoS 1 PUBACK). ntfy's `delivered` means the same: the delivery
+  path took the message, and nobody has necessarily seen it.
 - `acknowledged` (epoch seconds): the `sent_at` of the newest alert the
   person has dismissed or opened in the app, echoed back by the app. It
   is this adapter's clock, so an automation that sent an alert at `t`
@@ -68,13 +66,12 @@ Published state:
   unreachable, and an automation that escalates should be able to see it.
   Stale, not false: every other aspect keeps its last value.
 
-Commands — the notifier's two commandable aspects, each a non-empty
-string, published at QoS 1 and NOT retained (a retained alert would fire
-again on every reconnect; the queueing is the app's persistent session,
-which is the whole reason the broker carries this instead of ntfy). The
-envelope's `actor` travels as `actor` so the phone can say who spoke.
-There is no rate floor: unlike ntfy there is no third-party server to
-protect, and the cooldown that is house policy lives in the automation.
+Commands: the notifier's two commandable aspects, `message` and `alert`.
+Each takes a non-empty string. The QoS, retain flag and queueing are in
+docs/companion-protocol.md. The envelope's `actor` travels as `actor`, so
+the phone can say who spoke. There is no rate floor, because there is no
+third-party server to protect as there is with ntfy. A cooldown is house
+policy and lives in the automation.
 
 Health events: drop/malformed-payload (undecodable or wrongly typed
 input from the phone), drop/invalid-command (bad envelope, unknown

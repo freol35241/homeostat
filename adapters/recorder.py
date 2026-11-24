@@ -39,8 +39,8 @@ Live parameters (home/config/{unit}/*):
 
 Health events at home/health/{unit}/event: `drop` (reasons off-schema-key,
 malformed-payload, invalid-command, non-scalar, non-finite,
-integrity-error), backend-outage, backend-restored, purge, purge-failed,
-archive, archive-failed, archive-dropped, archive-drop-failed,
+integrity-error, older-than-held), backend-outage, backend-restored, purge,
+purge-failed, archive, archive-failed, archive-dropped, archive-drop-failed,
 archive-misconfigured, integrity-ok, integrity-failed and query-failed.
 """
 
@@ -203,12 +203,12 @@ CREATE VIEW IF NOT EXISTS history AS
 # is answering. If a large store pushed that scan past the query timeout,
 # every restoring latch would fall back to its code default.
 #
-# A trigger instead of an UPDATE in the writer, because four paths insert
-# samples: _flush, _flush_each, seed and the v0 migration. Two are hard to
-# count in Python. _flush_each skips rows a constraint refuses, and seed
-# inserts rows dated in the past, so a batch's oldest row is not its
-# contribution to oldest_ts. The trigger fires only on rows that landed,
-# at the cost of one UPDATE on a small cached table per sample.
+# A trigger instead of an UPDATE in the writer, because three paths insert
+# samples: _flush, _flush_each and the v0 migration. Two are hard to count
+# in Python. _flush_each skips rows a constraint refuses. _flush also lands
+# the rows seed enqueues, which are dated in the past, so a batch's oldest
+# row is not its contribution to oldest_ts. The trigger fires only on rows
+# that landed, at the cost of one UPDATE on a small cached table per sample.
 #
 # Deletes have no trigger. Only _purge and _prune delete samples or
 # forecasts. They walk the series one at a time with a rowcount in hand,
@@ -1822,8 +1822,8 @@ def store_stats(conn: sqlite3.Connection) -> dict:
 
     Sizes from the pager, one aggregate per series and one for the events
     table. The per-series aggregates are read off `series`, where the
-    insert trigger and _purge maintain them; a series with no rows right
-    now (`row_count` 0) has no entry.
+    insert trigger, _purge and _prune maintain them; a series with no rows
+    right now (`row_count` 0) has no entry.
     """
     page_size = conn.execute("PRAGMA page_size").fetchone()[0]
     page_count = conn.execute("PRAGMA page_count").fetchone()[0]
