@@ -176,7 +176,7 @@ function renderEvents(live) {
 
 export function renderUnitDetailBody() {
   var unit = unitByName(overlay.unit) || { name: overlay.unit, label: overlay.unit, kind: '', description: '', params: {} };
-  var hkey = 'home/health/' + unit.name;
+  var hkey = logic.healthKey(unit.name);
   var h = store.health[hkey] || {};
   var status = h.status || 'stopped';
   var vocabulary = store.model.vocabulary;

@@ -37,20 +37,10 @@ export function sendCmd(room, entity, aspect, value) {
   clearTimeout(drafts[key]);
   delete drafts[key];
   delete recent[key];
-  var spec = findEntity(room, entity);
   var seq = ++cmdSeq;
-  logic.trackCommand(pending, {
-    room: room, entity: entity, aspect: aspect, value: value, seq: seq, tolerance: logic.cmdTolerance(aspect, store.model.vocabulary),
-    capability: spec ? spec.capability : null, descriptor: store.aspects[entity],
-    before: stateValue(room, entity, aspect)
-  }, Date.now(), 'sending');
+  logic.trackCommand(pending, trackedCommand(room, entity, aspect, value, seq), Date.now(), 'sending');
   scheduleRender();
-  return fetch('/api/cmd', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Homeostat': 'family' },
-    body: JSON.stringify({ room: room, entity: entity, aspect: aspect, value: value })
-  }).then(function (r) {
-    if (!r.ok) return r.text().then(function (t) { throw new Error(t || ('HTTP ' + r.status)); });
+  return postFamily('/api/cmd', { room: room, entity: entity, aspect: aspect, value: value }).then(function (r) {
     return r.json();
   }).then(function (body) {
     var outcome = logic.commandSent(pending, key, seq, body);
@@ -80,18 +70,23 @@ export function forgetOutcome(room, entity, aspect) {
 export function stepCmd(room, entity, aspect, value) {
   var key = logic.pendingKey(room, entity, aspect);
   delete recent[key];
-  var spec = findEntity(room, entity);
-  logic.trackCommand(pending, {
-    room: room, entity: entity, aspect: aspect, value: value, tolerance: logic.cmdTolerance(aspect, store.model.vocabulary),
-    capability: spec ? spec.capability : null, descriptor: store.aspects[entity],
-    before: stateValue(room, entity, aspect)
-  }, Date.now(), 'draft');
+  logic.trackCommand(pending, trackedCommand(room, entity, aspect, value), Date.now(), 'draft');
   clearTimeout(drafts[key]);
   drafts[key] = setTimeout(function () {
     delete drafts[key];
     sendCmd(room, entity, aspect, value);
   }, STEP_SETTLE_MS);
   scheduleRender();
+}
+
+// What logic.trackCommand records a command from. `seq` is the POST's, once there is one.
+function trackedCommand(room, entity, aspect, value, seq) {
+  var spec = findEntity(room, entity);
+  return {
+    room: room, entity: entity, aspect: aspect, value: value, seq: seq, tolerance: logic.cmdTolerance(aspect, store.model.vocabulary),
+    capability: spec ? spec.capability : null, descriptor: store.aspects[entity],
+    before: stateValue(room, entity, aspect)
+  };
 }
 
 // Where a stepper's next step starts: the request in flight, if any.
@@ -121,7 +116,7 @@ function formatCmdValue(room, entity, aspect, value) {
 function commandWarning(room, entity) {
   var spec = findEntity(room, entity);
   if (!spec) return '';
-  var health = store.health['home/health/' + spec.owner];
+  var health = store.health[logic.healthKey(spec.owner)];
   if (health && health.status && health.status !== 'running') {
     return unitLabel(spec.owner) + ' is ' + health.status;
   }
@@ -160,7 +155,7 @@ function outcomeStatus(done, fmt, room, entity, aspect) {
   }
   if (done.outcome === 'held') {
     var hold = logic.holdOn(store.holds, room, entity, aspect, Date.now(), store.arbitration);
-    var until = hold && hold.nextChange ? ' until the next change'
+    var until = hold && hold.nextChange ? ' until ' + logic.NEXT_CHANGE
       : hold && isFinite(hold.until) ? ' until ' + new Date(hold.until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
     return { tone: 'warn', text: 'Held by ' + done.by + (done.actor ? ' (' + done.actor + ')' : '') + until + ' · ' + fmt(done.value) + ' not sent' };
   }
@@ -197,6 +192,20 @@ function cssEscape(text) {
   return window.CSS && CSS.escape ? CSS.escape(text) : String(text).replace(/["\\]/g, '\\$&');
 }
 
+/* POST `body` as JSON with the family's header. Resolves to the response.
+ * An error status rejects with the reply's text, or 'HTTP <status>'
+ * when the reply is empty. */
+function postFamily(url, body) {
+  return fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Homeostat': 'family' },
+    body: JSON.stringify(body)
+  }).then(function (r) {
+    if (!r.ok) return r.text().then(function (t) { throw new Error(t || ('HTTP ' + r.status)); });
+    return r;
+  });
+}
+
 /* Change a family hold (docs/design.md#hold-intents): "release" hands
  * the aspect back, and an instant holds `value` until then. Neither is
  * tracked as a command. A release reaches no device, and a new end sends
@@ -207,12 +216,7 @@ export function sendHold(room, entity, aspect, value, hold) {
   var body = hold === logic.HOLD_RELEASE
     ? { room: room, entity: entity, aspect: aspect, hold: hold }
     : { room: room, entity: entity, aspect: aspect, value: value, hold: hold };
-  return fetch('/api/cmd', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Homeostat': 'family' },
-    body: JSON.stringify(body)
-  }).then(function (r) {
-    if (!r.ok) return r.text().then(function (t) { throw new Error(t || ('HTTP ' + r.status)); });
+  return postFamily('/api/cmd', body).then(function () {
     return true;
   }).catch(function (e) {
     toast(errText(e));
@@ -221,24 +225,13 @@ export function sendHold(room, entity, aspect, value, hold) {
 }
 
 export function sendLightsOff() {
-  fetch('/api/lights/off', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Homeostat': 'family' }
-  }).then(function (r) {
-    if (!r.ok) return r.text().then(function (t) { throw new Error(t || ('HTTP ' + r.status)); });
-  }).catch(function (e) {
+  postFamily('/api/lights/off').catch(function (e) {
     toast(errText(e));
   });
 }
 
 export function sendParam(unit, param, value, onError) {
-  fetch('/api/param', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Homeostat': 'family' },
-    body: JSON.stringify({ unit: unit, param: param, value: value })
-  }).then(function (r) {
-    if (!r.ok) return r.text().then(function (t) { throw new Error(t || ('HTTP ' + r.status)); });
-  }).catch(function (e) {
+  postFamily('/api/param', { unit: unit, param: param, value: value }).catch(function (e) {
     toast(errText(e));
     if (onError) onError();
   });

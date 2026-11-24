@@ -88,7 +88,7 @@ function renderHolds(entity) {
       <button data-action="hold-until"${attrs}>Hold until</button>`;
     return html`<div class="aspect-row hold-row">
       <span class="aspect-label">${titleCase(h.aspect)}</span>
-      <span class="muted">by ${unitLabel(h.actor)} until ${h.nextChange ? 'the next change' : ends}</span>
+      <span class="muted">by ${unitLabel(h.actor)} until ${h.nextChange ? logic.NEXT_CHANGE : ends}</span>
       <div class="seg">${extend}<button data-action="hold-release"${attrs}>Resume automatic</button></div></div>`;
   });
   units.forEach(function (h) {

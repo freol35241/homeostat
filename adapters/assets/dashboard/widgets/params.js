@@ -25,7 +25,7 @@ function paramConstraintCaption(p) {
 }
 
 function currentParamValue(unitName, pname, p) {
-  var key = 'home/config/' + unitName + '/' + pname;
+  var key = logic.configKey(unitName, pname);
   if (key in store.config) return store.config[key];
   return p.default;
 }

@@ -14,7 +14,7 @@ export function widgetUnit(unitName) {
   var plan = logic.unitCardPlan(store.model, unitName);
   if (!plan) return '';
   var u = plan.unit;
-  var h = store.health['home/health/' + u.name] || {};
+  var h = store.health[logic.healthKey(u.name)] || {};
   var status = h.status || 'stopped';
   var parts = [html`<div class="unit-head row-clickable" data-action="unit-detail" data-unit="${u.name}">
     <div><div class="unit-name" title="${u.label}">${u.label}</div>

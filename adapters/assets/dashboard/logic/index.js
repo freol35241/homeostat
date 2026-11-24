@@ -8,8 +8,26 @@
  * test runner loads it with require().
  */
 
-function entityKey(room, entity, aspect) {
+/* The bus keys the page reads (docs/design.md#key-space). An empty
+ * `aspect` gives the prefix every aspect of the entity shares. */
+export function stateKey(room, entity, aspect) {
   return 'home/state/' + room + '/' + entity + '/' + aspect;
+}
+
+export function configKey(unit, name) {
+  return 'home/config/' + unit + '/' + name;
+}
+
+export function healthKey(unit) {
+  return 'home/health/' + unit;
+}
+
+// { room, entity, aspect } of a state key, or null for any other key.
+// Segments past the aspect are ignored.
+export function parseStateKey(key) {
+  var parts = String(key).split('/');
+  if (parts[0] !== 'home' || parts[1] !== 'state' || parts.length < 5) return null;
+  return { room: parts[2], entity: parts[3], aspect: parts[4] };
 }
 
 export function titleCase(s) {
@@ -20,7 +38,7 @@ export function titleCase(s) {
 }
 
 export function stateValue(state, room, entity, aspect) {
-  return state[entityKey(room, entity, aspect)];
+  return state[stateKey(room, entity, aspect)];
 }
 
 /* A room sensor's reading: { aspect, value }, from whichever occupancy
@@ -197,11 +215,8 @@ export function hexColor(value) {
 
 // "room/entity" when the key is an occupancy-aspect state key, else null.
 export function occupancyEntityFromKey(key, vocabulary) {
-  var parts = key.split('/');
-  if (parts[0] === 'home' && parts[1] === 'state' && parts.length >= 5 &&
-      vocabulary.occupancy_aspects.indexOf(parts[4]) !== -1) {
-    return parts[2] + '/' + parts[3];
-  }
+  var k = parseStateKey(key);
+  if (k && vocabulary.occupancy_aspects.indexOf(k.aspect) !== -1) return k.room + '/' + k.entity;
   return null;
 }
 
@@ -425,6 +440,9 @@ export function chartGeometry(points, width, height, pad, win, forecast, issues,
  * tap places one, so most holds are the family using the house. A hold is
  * only worth reporting when it displaced somebody.
  */
+// How the page words the end of a hold placed "until next change".
+export var NEXT_CHANGE = 'the next change';
+
 // Deviation rows are built here, so the time formatting they need is
 // here too. Local time with no date, because a hold lasts at most an
 // hour or two.
@@ -634,9 +652,9 @@ export function computeDeviations(model, state, health, config, aspects, holds, 
   units.forEach(function (u) {
     var params = u.params || {};
     Object.keys(params).forEach(function (pname) {
-      var configKey = 'home/config/' + u.name + '/' + pname;
-      if (!(configKey in config)) return;
-      var live = config[configKey];
+      var key = configKey(u.name, pname);
+      if (!(key in config)) return;
+      var live = config[key];
       var def = params[pname].default;
       if (pname === model.vocabulary.pause_param && pauseParam(u, model.vocabulary)) {
         // A pause reads as what it is, and taps to the unit, whose card
@@ -679,7 +697,7 @@ export function computeDeviations(model, state, health, config, aspects, holds, 
     if (!displaces(hold, model.driven, model.vocabulary)) return;
     var e = entityByName[hold.entity];
     var label = e ? e.label || titleCase(hold.entity) : titleCase(hold.entity);
-    var detail = 'held by ' + hold.actor + (hold.nextChange ? ' until the next change' : ' until ' + clockOf(hold.until));
+    var detail = 'held by ' + hold.actor + ' until ' + (hold.nextChange ? NEXT_CHANGE : clockOf(hold.until));
     if (hold.refused) {
       detail += ' \u00b7 ' + hold.refused + (hold.refused === 1 ? ' wish' : ' wishes') + ' refused';
     }
@@ -833,7 +851,7 @@ export function coarseStep(min, max, atLeast) {
  * declared `valid` pointer.
  * Rows: { aspect, label, value, display, stale, numeric, control }. */
 export function aspectPlan(entity, state, descriptor, commandable, controls) {
-  var prefix = 'home/state/' + entity.room + '/' + entity.name + '/';
+  var prefix = stateKey(entity.room, entity.name, '');
   var present = {};
   Object.keys(state).forEach(function (k) {
     if (k.indexOf(prefix) === 0) present[k.slice(prefix.length)] = state[k];
@@ -1188,6 +1206,23 @@ export function brightnessOfPercent(pct, vocabulary) {
   return Math.round(range.min + pct / 100 * (range.max - range.min));
 }
 
+/* Where a stepper's tap lands, from `current` (commandBase) and the
+ * button's `delta`. A climate setpoint rounds to a tenth. Brightness steps
+ * in percent of the vocabulary's scale, kept within 0 to 100. Any other
+ * aspect rounds to hundredths and stays within `bounds`, its command
+ * constraint's min and max. */
+export function nextStep(kind, current, delta, bounds, vocabulary) {
+  if (kind === 'climate') return Math.round((current + delta) * 10) / 10;
+  if (kind === 'brightness') {
+    var pct = Math.max(0, Math.min(100, percentOfBrightness(current, vocabulary) + delta));
+    return brightnessOfPercent(pct, vocabulary);
+  }
+  var next = Math.round((current + delta) * 100) / 100;
+  if (typeof bounds.min === 'number') next = Math.max(bounds.min, next);
+  if (typeof bounds.max === 'number') next = Math.min(bounds.max, next);
+  return next;
+}
+
 /* How far a readback may be from a command and still match it. The
  * brightness scale is finer than the percent its control shows, so
  * half a percent of it still matches. */
@@ -1239,11 +1274,11 @@ export function commandSent(pending, key, seq, reply) {
  *     page says so.
  * A draft has not been sent, so nothing can answer it yet. */
 export function resolveFromState(pending, key, value) {
-  var parts = String(key).split('/');
-  if (parts[0] !== 'home' || parts[1] !== 'state' || parts.length < 5) return null;
-  var answered = resolveFromReceipt(pending, parts[2], parts[3], parts[4]);
+  var k = parseStateKey(key);
+  if (!k) return null;
+  var answered = resolveFromReceipt(pending, k.room, k.entity, k.aspect);
   if (answered) return answered;
-  var pk = pendingKey(parts[2], parts[3], parts[4]);
+  var pk = pendingKey(k.room, k.entity, k.aspect);
   var entry = pending[pk];
   if (!entry || (entry.outcome !== 'pending' && entry.outcome !== 'sending')) return null;
   var tol = entry.tolerance;
@@ -2019,7 +2054,7 @@ export function pauseParam(unit, vocabulary) {
 export function isPaused(unit, config, vocabulary) {
   var spec = pauseParam(unit, vocabulary);
   if (!spec) return false;
-  var key = 'home/config/' + unit.name + '/' + vocabulary.pause_param;
+  var key = configKey(unit.name, vocabulary.pause_param);
   var live = config && key in config ? config[key] : spec.default;
   return live === false;
 }

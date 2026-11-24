@@ -67,7 +67,7 @@ function widgetForOccupancy(entity) {
 // its own overlay the row opens nothing.
 export function widgetForButton(entity, inOverlay) {
   var action = stateValue(entity.room, entity.name, 'action');
-  var at = store.actionAt['home/state/' + entity.room + '/' + entity.name + '/action'];
+  var at = store.actionAt[logic.stateKey(entity.room, entity.name, 'action')];
   var age = at ? html`<span class="faint" title="${new Date(at).toLocaleString()}"> &middot; ${relTime(at)}</span>` : '';
   var row = html`<span class="entity-name" title="${entity.label}">${entity.label}</span>
     <span>${action === undefined ? html`<span class="faint">no press yet</span>` : String(action)}${age}</span>`;
@@ -160,7 +160,7 @@ export function widgetForSensor(entity, withHead) {
 }
 
 function widgetGeneric(entity) {
-  var prefix = 'home/state/' + entity.room + '/' + entity.name + '/';
+  var prefix = logic.stateKey(entity.room, entity.name, '');
   var rows = [];
   Object.keys(store.state).forEach(function (k) {
     if (k.indexOf(prefix) === 0) {
