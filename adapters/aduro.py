@@ -29,7 +29,9 @@ operating field as `operating_{field}`, and only when its value changes
 `boiler_temperature` are the burner vocabulary (`status_aspects`). `on`
 and `fault` are derived from the run state (`state`), which the
 descriptor labels from STATE_LABELS. `available` goes false after
-availability_timeout_s without a message (`Stoves.sweep`).
+availability_timeout_s without a message (`homeostat.availability`).
+The bridge skips a topic's publish when the burner does not answer, so
+an unreachable burner and a dead bridge both go silent.
 
 Commands: `on` (a bool) and `power_level` (10, 50 or 100); see
 `command_body`.
@@ -58,11 +60,11 @@ before this adapter goes live, so it is the device's only writer.
 
 import json
 import os
-import threading
 import time
 
 import homeostat
 from homeostat import house, keys, mqtt
+from homeostat.availability import SilenceWatch
 from homeostat.params import LiveParams
 
 PARAM_DEFAULTS = {"availability_timeout_s": 300.0}
@@ -267,36 +269,22 @@ def route(topic: str, entities):
 class Stoves:
     """The stove-to-bus direction: status and operating documents in, aspects out.
 
-    It publishes on change, tracks each stove's availability from when it
-    last spoke, and keeps discovery's `bound` flag: whether a stove has
-    been heard at all. `session` is anything with `put_json` and
-    `health_event`; the clock is injectable. paho delivers messages on one
-    thread and the watchdog sweeps on another, so availability is locked.
+    It publishes on change. `watch` tracks each stove's availability from
+    when it last spoke, and whether it has been heard at all, which is
+    discovery's `bound` flag. `session` is anything with `put_json` and
+    `health_event`; the clock is injectable.
     """
 
     def __init__(self, session, unit: str, entities, clock=time.monotonic):
         self.session = session
         self.unit = unit
         self.entities = list(entities)
-        self.clock = clock
-        self.seen: set[str] = set()
+        self.watch = SilenceWatch(session, self.entities, clock)
         # Publish-on-change: the last value put on the bus per (entity, aspect).
         self.last: dict[tuple[str, str], object] = {}
-        self.lock = threading.Lock()
-        self.last_rx = {e.id: clock() for e in self.entities}
-        self.available: dict[str, bool] = {}
         # (entity, code) for each run-state code reported as unknown, so
         # a stove that stays in one reports it once.
         self.unknown_states: set[tuple[str, int | float]] = set()
-
-    def set_available(self, entity, value: bool) -> bool:
-        """Publish an availability change; True when it was one."""
-        with self.lock:
-            if self.available.get(entity.name) == value:
-                return False
-            self.available[entity.name] = value
-            self.session.put_json(keys.state_key(entity.room, entity.name, "available"), value)
-        return True
 
     def inventory(self) -> list[dict]:
         """Return the discovery document: every configured stove."""
@@ -305,7 +293,7 @@ class Stoves:
                 "id": e.id,
                 "configured": True,
                 "entity": e.name,
-                "bound": e.id in self.seen,
+                "bound": self.watch.heard(e),
                 "suggested": {"capability": "burner", "features": ["power_level"]},
                 "aspects": ASPECT_DESCRIPTOR,
             }
@@ -341,10 +329,7 @@ class Stoves:
         if entity is None or len(rest) != 1 or rest[0] not in ("status", "operating"):
             return
 
-        self.last_rx[entity.id] = self.clock()
-        self.set_available(entity, True)
-        if entity.id not in self.seen:
-            self.seen.add(entity.id)
+        if self.watch.contact(entity):
             session.put_json(keys.discovery_key(self.unit), self.inventory())
 
         try:
@@ -379,20 +364,6 @@ class Stoves:
                 continue  # unchanged since the last poll
             self.last[(entity.name, aspect)] = value
             session.put_json(key, value)
-
-    def sweep(self, timeout_s: float) -> None:
-        """Mark a stove silent for `timeout_s` unavailable, one event per transition.
-
-        The bridge publishes on a cadence, so silence is the loss signal.
-        The bridge skips a topic's publish when the burner does not answer,
-        so an unreachable burner and a dead bridge both go silent. The next
-        message marks the stove available again, and the other aspects
-        keep their last values.
-        """
-        now = self.clock()
-        for entity in self.entities:
-            if now - self.last_rx[entity.id] > timeout_s and self.set_available(entity, False):
-                self.session.health_event("device-silent", topic=entity.id)
 
 
 def main():
@@ -445,24 +416,13 @@ def main():
 
     session.put_json(keys.discovery_key(unit), stoves.inventory())
 
-    stop = threading.Event()
-
-    def watchdog():
-        while True:
-            timeout = params.availability_timeout_s
-            if stop.wait(min(1.0, timeout / 4)):
-                return
-            stoves.sweep(timeout)
-
-    watchdog_thread = threading.Thread(target=watchdog, daemon=True)
-    watchdog_thread.start()
+    stoves.watch.start(lambda: params.availability_timeout_s)
 
     session.ready()
 
     homeostat.wait_for_shutdown()
 
-    stop.set()
-    watchdog_thread.join(timeout=5)
+    stoves.watch.stop()
     # Stop the MQTT loop first, or an in-flight on_message could put on
     # a closed zenoh session.
     client.loop_stop()
