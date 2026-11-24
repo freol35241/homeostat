@@ -226,6 +226,27 @@ export function unitNameFromHealthKey(key) {
   return parts[2] || key;
 }
 
+/* The worst unit status in `health` (keyed by health key), and how many
+ * units are running. A unit with no status counts as running. */
+export function healthWorstAndCount(health) {
+  var order = { open: 0, backoff: 1, starting: 2, stopped: 2, running: 3 };
+  var worst = null;
+  var okCount = 0;
+  var total = 0;
+  Object.keys(health).forEach(function (k) {
+    var h = health[k] || {};
+    total++;
+    var status = h.status || 'running';
+    if (status === 'running') okCount++;
+    var rank = order[status];
+    if (rank === undefined) rank = 3;
+    if (worst === null || rank < worst.rank) {
+      worst = { rank: rank, status: status, key: k };
+    }
+  });
+  return { worst: worst, ok: okCount, total: total };
+}
+
 /* Applies one WebSocket message to the store (the state, health and
  * config maps, and the capped events feed). Returns the message type when
  * applied, and null for anything unrecognized. The caller renders, and
@@ -432,6 +453,91 @@ export function chartGeometry(points, width, height, pad, win, forecast, issues,
     if (nowAt > 0 && nowAt < 1) geo.nowX = pad + nowAt * (width - 2 * pad);
   }
   return geo;
+}
+
+/* Geometry for bars over intervals (intervalBars), or null when there
+ * are none. A bar spans its interval, and the scale includes zero.
+ * `rects` are in drawing order: a bar's recorded amount, then its
+ * forecast stacked on top. `coords` is one point per bar, at its centre
+ * and total, for the scrub. `now` places the now-rule, which is drawn
+ * only when the bars reach past the window's end. */
+export function barGeometry(bars, width, height, pad, win, now) {
+  if (!bars.length) return null;
+  // A first bar that starts before the window, a whole day or the
+  // interval straddling its start, is drawn whole.
+  var from = Math.min(win.from, bars[0].from);
+  var to = Math.max(win.to, bars[bars.length - 1].to);
+  var max = 0, min = 0;
+  bars.forEach(function (b) {
+    [b.observed, b.observed + b.forecast].forEach(function (v) {
+      max = Math.max(max, v);
+      min = Math.min(min, v);
+    });
+  });
+  if (max === min) max = min + 1;
+  var x = function (t) { return pad + (Math.min(Math.max(t, from), to) - from) / (to - from) * (width - 2 * pad); };
+  var y = function (v) { return height - pad - ((v - min) / (max - min)) * (height - 2 * pad); };
+  // A rectangle between two amounts, whichever is higher.
+  var rect = function (forecast, x0, w, a, b) {
+    return { forecast: forecast, x: x0, y: Math.min(y(a), y(b)), width: w, height: Math.abs(y(a) - y(b)) };
+  };
+  var rects = [], coords = [];
+  bars.forEach(function (b) {
+    var x0 = x(b.from), x1 = x(b.to);
+    // A sliver between bars, so neighbours of equal height stay apart.
+    var w = Math.max(x1 - x0 - Math.min(1, (x1 - x0) * 0.15), 0.5);
+    var total = b.observed + b.forecast;
+    if (b.observed !== 0) rects.push(rect(false, x0, w, 0, b.observed));
+    if (b.forecast !== 0) rects.push(rect(true, x0, w, b.observed, total));
+    coords.push({ x: x0 + w / 2, y: y(total), value: total, ts: b.from });
+  });
+  var nowX = now > from && now < to && to > win.to ? x(now) : undefined;
+  return { from: from, to: to, min: min, max: max, rects: rects, coords: coords, nowX: nowX };
+}
+
+/* ---- times and durations as text ---- */
+
+// A reading's time, at the precision the window needs. On an hour of
+// history the recorder's buckets are seconds wide, so minutes alone would
+// hide the detail the reader opened the chart for. `spanMs` is the charted
+// window. Without it the time is shown as day and minute, unless `seconds`
+// asks for them.
+export function formatChartTime(ts, spanMs, seconds) {
+  var d = new Date(ts);
+  if (isNaN(d.getTime())) return '';
+  var fmt = { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' };
+  if (seconds || (spanMs && spanMs <= 3 * 3600e3)) fmt.second = '2-digit';
+  return d.toLocaleString([], fmt);
+}
+
+// The same instant without the date, for the far end of a run whose near
+// end already shows it.
+export function formatChartClock(ts, spanMs) {
+  var d = new Date(ts);
+  if (isNaN(d.getTime())) return '';
+  var fmt = { hour: '2-digit', minute: '2-digit' };
+  if (spanMs && spanMs <= 3 * 3600e3) fmt.second = '2-digit';
+  return d.toLocaleTimeString([], fmt);
+}
+
+export function fmtDuration(ms) {
+  var mins = Math.round(ms / 60000);
+  if (mins < 60) return mins + ' min';
+  var h = Math.floor(mins / 60), m = mins % 60;
+  if (h < 48) return m ? h + ' h ' + m + ' min' : h + ' h';
+  return Math.round(h / 24) + ' d';
+}
+
+// How long before `now` the instant `ms` was, in minutes or hours.
+export function relTime(ms, now) {
+  var diff = Math.max(0, now - ms);
+  var mins = Math.round(diff / 60000);
+  if (mins < 1) return 'just now';
+  if (mins === 1) return '1 min ago';
+  if (mins < 60) return mins + ' min ago';
+  var hrs = Math.round(mins / 60);
+  if (hrs === 1) return '1 hr ago';
+  return hrs + ' hr ago';
 }
 
 /* ---- the family's holds (docs/design.md#arbitrated-mode) ----
@@ -1397,6 +1503,73 @@ export function recentFor(recent, key, nowMs) {
   return entry;
 }
 
+/* A commanded value in the words its control uses. `field` is the
+ * aspect's descriptor field, or null. */
+export function formatCmdValue(aspect, value, field, vocabulary) {
+  if ((aspect === 'message' || aspect === 'alert') && typeof value === 'string') {
+    var text = value.length > 40 ? value.slice(0, 39) + '…' : value;
+    return (aspect === 'alert' ? 'alert “' : '“') + text + '”';
+  }
+  if (aspect === 'brightness' && typeof value === 'number') return percentOfBrightness(value, vocabulary) + '%';
+  if (typeof value === 'boolean' && aspect === 'locked') return value ? 'locked' : 'unlocked';
+  if (typeof value === 'boolean' && aspect === 'on') return value ? 'on' : 'off';
+  if (!field && aspect === 'setpoint' && typeof value === 'number') return value.toFixed(1) + '°';
+  return formatAspect(aspect, field, value);
+}
+
+/* Warnings that can be given before anything answers a command: the unit
+ * that owns the device is not running, or the device reports itself
+ * unavailable. Either makes a long wait likely, so the page says so now
+ * rather than after twenty seconds. `health` is the owner's health
+ * record, `ownerLabel` its label, and `available` the device's
+ * `available` aspect. */
+export function commandWarning(health, ownerLabel, available) {
+  if (health && health.status && health.status !== 'running') {
+    return ownerLabel + ' is ' + health.status;
+  }
+  if (available === false) return 'the device reports itself unavailable';
+  return '';
+}
+
+/* How an ended command is shown, as `{ tone, text }`, or null for an
+ * outcome the page does not show. `fmt` words a value as its control
+ * does. `hold` is the hold on the aspect now (holdOn), read for a held
+ * command. `ownerLabel` is the label of the unit that owns the device, or
+ * null when the entity is not in the model, read for an unheard one. */
+export function outcomeStatus(done, fmt, hold, ownerLabel) {
+  if (done.outcome === 'confirmed') return { tone: 'ok', text: '✓ ' + fmt(done.value) };
+  if (done.outcome === 'adjusted') {
+    return { tone: 'warn', text: 'The device settled on ' + fmt(done.seen) + ' (asked ' + fmt(done.value) + ')' };
+  }
+  if (done.outcome === 'held') {
+    var until = hold && hold.nextChange ? ' until ' + NEXT_CHANGE
+      : hold && isFinite(hold.until) ? ' until ' + new Date(hold.until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+    return { tone: 'warn', text: 'Held by ' + done.by + (done.actor ? ' (' + done.actor + ')' : '') + until + ' · ' + fmt(done.value) + ' not sent' };
+  }
+  if (done.outcome === 'rejected') {
+    return { tone: 'bad', text: (done.reason === 'device-unavailable' ? 'The device is unavailable' : 'Not taken: ' + done.reason) + ' · ' + fmt(done.value) };
+  }
+  if (done.outcome === 'unheard') {
+    return { tone: 'bad', text: 'Nothing is listening' + (ownerLabel !== null ? ': ' + ownerLabel + ' is not running' : '') + ' · ' + fmt(done.value) + ' went nowhere' };
+  }
+  if (done.outcome === 'unconfirmed') {
+    return { tone: 'bad', text: 'No answer for ' + fmt(done.value) + (done.seen !== undefined ? ' · still ' + fmt(done.seen) : '') };
+  }
+  if (done.outcome === 'failed') return { tone: 'bad', text: done.reason };
+  return null;
+}
+
+// The text of a refused request: the reply's `error` when its body is
+// JSON with one, and the error's message otherwise.
+export function errText(e) {
+  var msg = e && e.message ? e.message : String(e);
+  try {
+    var parsed = JSON.parse(msg);
+    if (parsed && parsed.error) return parsed.error;
+  } catch (ex) { /* not json */ }
+  return msg;
+}
+
 /* ---- forecasts (docs/design.md#forecasts) ----
  *
  * The house's current forecast for a series, carried live beside its
@@ -1904,6 +2077,21 @@ export function timelineStats(runs) {
     onMs: boolean ? onMs : null,
     changes: Math.max(0, runs.length - 1),
     latest: runs.length ? runs[runs.length - 1].value : null
+  };
+}
+
+// The last point's value, and the smallest, largest and mean of the
+// numeric ones. Each is null when the window has none.
+export function rangeStats(points) {
+  var vals = (points || []).map(function (p) { return p.value; }).filter(function (v) { return typeof v === 'number'; });
+  if (vals.length === 0) return { latest: null, min: null, max: null, avg: null };
+  var sum = 0;
+  vals.forEach(function (v) { sum += v; });
+  return {
+    latest: points[points.length - 1].value,
+    min: Math.min.apply(null, vals),
+    max: Math.max.apply(null, vals),
+    avg: sum / vals.length
   };
 }
 
