@@ -4,7 +4,7 @@
 import { errText } from './api.js';
 import { toast } from './chrome.js';
 import logic from './logic.js';
-import { baseAspect, descriptorField, entitySpec, scheduleRender, stateValue, store, unitLabel } from './store.js';
+import { baseAspect, descriptorField, findEntity, scheduleRender, stateValue, store, unitLabel } from './store.js';
 
 /* In-flight commands, keyed room/entity/aspect. They are kept outside
  * `store`, which holds the house's state as the bus reports it. A pending
@@ -37,7 +37,7 @@ export function sendCmd(room, entity, aspect, value) {
   clearTimeout(drafts[key]);
   delete drafts[key];
   delete recent[key];
-  var spec = entitySpec(room, entity);
+  var spec = findEntity(room, entity);
   var seq = ++cmdSeq;
   logic.trackCommand(pending, {
     room: room, entity: entity, aspect: aspect, value: value, seq: seq, tolerance: logic.cmdTolerance(aspect, store.model.vocabulary),
@@ -80,7 +80,7 @@ export function forgetOutcome(room, entity, aspect) {
 export function stepCmd(room, entity, aspect, value) {
   var key = logic.pendingKey(room, entity, aspect);
   delete recent[key];
-  var spec = entitySpec(room, entity);
+  var spec = findEntity(room, entity);
   logic.trackCommand(pending, {
     room: room, entity: entity, aspect: aspect, value: value, tolerance: logic.cmdTolerance(aspect, store.model.vocabulary),
     capability: spec ? spec.capability : null, descriptor: store.aspects[entity],
@@ -108,7 +108,7 @@ function formatCmdValue(room, entity, aspect, value) {
   if (aspect === 'brightness' && typeof value === 'number') return logic.percentOfBrightness(value, store.model.vocabulary) + '%';
   if (typeof value === 'boolean' && aspect === 'locked') return value ? 'locked' : 'unlocked';
   if (typeof value === 'boolean' && aspect === 'on') return value ? 'on' : 'off';
-  var spec = entitySpec(room, entity);
+  var spec = findEntity(room, entity);
   var field = spec ? descriptorField(spec, aspect) : null;
   if (!field && aspect === 'setpoint' && typeof value === 'number') return value.toFixed(1) + '°';
   return logic.formatAspect(aspect, field, value);
@@ -119,7 +119,7 @@ function formatCmdValue(room, entity, aspect, value) {
  * unavailable. Either makes a long wait likely, so the page says so now
  * rather than after twenty seconds. */
 function commandWarning(room, entity) {
-  var spec = entitySpec(room, entity);
+  var spec = findEntity(room, entity);
   if (!spec) return '';
   var health = store.health['home/health/' + spec.owner];
   if (health && health.status && health.status !== 'running') {
@@ -168,7 +168,7 @@ function outcomeStatus(done, fmt, room, entity, aspect) {
     return { tone: 'bad', text: (done.reason === 'device-unavailable' ? 'The device is unavailable' : 'Not taken: ' + done.reason) + ' · ' + fmt(done.value) };
   }
   if (done.outcome === 'unheard') {
-    var spec = entitySpec(room, entity);
+    var spec = findEntity(room, entity);
     return { tone: 'bad', text: 'Nothing is listening' + (spec ? ': ' + unitLabel(spec.owner) + ' is not running' : '') + ' · ' + fmt(done.value) + ' went nowhere' };
   }
   if (done.outcome === 'unconfirmed') {
@@ -189,7 +189,7 @@ export function announceOutcome(outcome) {
   var parts = outcome.key.split('/');
   var status = outcomeStatus(outcome, function (v) { return formatCmdValue(parts[0], parts[1], parts[2], v); },
     parts[0], parts[1], parts[2]);
-  var spec = entitySpec(parts[0], parts[1]);
+  var spec = findEntity(parts[0], parts[1]);
   if (status) toast((spec ? spec.label + ': ' : '') + status.text);
 }
 

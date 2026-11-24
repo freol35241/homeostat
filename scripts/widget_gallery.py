@@ -19,6 +19,9 @@ parser. This script adds no description of its own. A test in
 src/schema.rs checks that every widget kind the parser accepts has a
 section here, so a new kind cannot ship without its picture.
 
+It needs `node` on PATH, which prints each example's TOML with the page's
+own printer.
+
 Usage: uv run --script scripts/widget_gallery.py [--chromium PATH]
 """
 
@@ -27,6 +30,7 @@ import asyncio
 import json
 import pathlib
 import re
+import subprocess
 import sys
 
 from playwright.async_api import async_playwright
@@ -39,6 +43,7 @@ from server import FakeHouse
 
 DOCS = ROOT / "docs"
 PICTURES = DOCS / "widgets"
+LOGIC = ROOT / "adapters" / "assets" / "dashboard" / "logic" / "index.js"
 
 # One placing line per kind, against the fixture house. A group is shown
 # around the two widgets it most often holds.
@@ -64,33 +69,27 @@ EXAMPLES = {
     "burner": {"kind": "burner", "entity": "stove"},
 }
 
-KEY_ORDER = ["kind", "entity", "aspect", "room", "unit", "label", "hours", "colors"]
 
+def toml_widgets() -> dict[str, str]:
+    """Return each example as dashboard.toml writes it.
 
-def toml_value(value) -> str:
-    """Return a value as TOML writes it; a table, such as `colors`, inline."""
-    if isinstance(value, dict):
-        return "{ " + ", ".join(f"{k} = {toml_value(v)}" for k, v in value.items()) + " }"
-    return json.dumps(value)
-
-
-def toml_widget(widget: dict, indent: str = "") -> str:
-    """Return the widget as dashboard.toml writes it.
-
-    This is the shape the page's "Text" overlay prints (dashboard/logic/index.js,
-    viewText).
+    The page's own printer writes them (dashboard/logic/index.js,
+    widgetToml), so they read as its "Text" overlay prints them.
     """
-    fields = [
-        f"{k} = {toml_value(widget[k])}"
-        for k in sorted(
-            (k for k in widget if k != "widgets"),
-            key=lambda k: KEY_ORDER.index(k) if k in KEY_ORDER else len(KEY_ORDER),
-        )
-    ]
-    if "widgets" not in widget:
-        return f"{indent}{{ {', '.join(fields)} }}"
-    members = "".join(toml_widget(m, indent + "  ") + ",\n" for m in widget["widgets"])
-    return f"{indent}{{ {', '.join(fields + ['widgets = ['])}\n{members}{indent}] }}"
+    script = (
+        "const logic = require(process.argv[1]);"
+        "const examples = JSON.parse(require('fs').readFileSync(0, 'utf8'));"
+        "for (const k in examples) examples[k] = logic.widgetToml(examples[k], '');"
+        "console.log(JSON.stringify(examples));"
+    )
+    out = subprocess.run(
+        ["node", "-e", script, str(LOGIC)],
+        input=json.dumps(EXAMPLES),
+        stdout=subprocess.PIPE,
+        text=True,
+        check=True,
+    )
+    return json.loads(out.stdout)
 
 
 def kinds_from_manifest() -> list[tuple[str, str]]:
@@ -132,7 +131,7 @@ async def pictures(chromium: str | None) -> None:
         await house.stop()
 
 
-def markdown(kinds: list[tuple[str, str]]) -> str:
+def markdown(kinds: list[tuple[str, str]], tomls: dict[str, str]) -> str:
     out = [
         "# Dashboard widgets",
         "",
@@ -151,14 +150,13 @@ def markdown(kinds: list[tuple[str, str]]) -> str:
         "",
     ]
     for kind, description in kinds:
-        example = EXAMPLES[kind]
         out += [
             f"## `{kind}`",
             "",
             description,
             "",
             "```toml",
-            toml_widget(example),
+            tomls[kind],
             "```",
             "",
             f"![The {kind} widget]({PICTURES.name}/{kind}.png)",
@@ -175,8 +173,11 @@ def main() -> None:
     missing = [k for k, _ in kinds if k not in EXAMPLES]
     if missing:
         sys.exit(f"widget_gallery: no example for {', '.join(missing)}; add one to EXAMPLES")
+    # The TOML comes from the page's printer through node, before the slow
+    # screenshot pass, so a node failure shows at once.
+    snippets = toml_widgets()
     asyncio.run(pictures(args.chromium))
-    (DOCS / "widgets.md").write_text(markdown(kinds))
+    (DOCS / "widgets.md").write_text(markdown(kinds, snippets))
     print(f"wrote docs/widgets.md and {len(kinds)} pictures")
 
 

@@ -82,11 +82,11 @@ function intervalTile(entity, r, named, intervalS) {
     : '';
   var recent = loaded ? logic.recentTotal(s.points, intervalS, now) : null;
   var big = recent ? logic.formatAspect(r.aspect, field, recent.total) : r.display;
-  var day = recent && recent.spanMs === 864e5;
+  var wholeDay = recent && recent.spanMs === 864e5;
   var caption = recent
-    ? ['last ' + (day ? '24 h' : fmtDuration(recent.spanMs)) + ' to ' +
-        (day ? formatChartClock(recent.end) : formatChartTime(recent.end)),
-      day ? 'latest ' + (intervalName(intervalS) ? intervalName(intervalS) + ' ' : '') + logic.formatAspect(r.aspect, field, recent.latest) : '',
+    ? ['last ' + (wholeDay ? '24 h' : fmtDuration(recent.spanMs)) + ' to ' +
+        (wholeDay ? formatChartClock(recent.end) : formatChartTime(recent.end)),
+      wholeDay ? 'latest ' + (intervalName(intervalS) ? intervalName(intervalS) + ' ' : '') + logic.formatAspect(r.aspect, field, recent.latest) : '',
       // Rounded to the hour: a second short of the span is not missing.
       Math.round(recent.coveredMs / 36e5) < Math.round(recent.spanMs / 36e5)
         ? Math.round(recent.coveredMs / 36e5) + ' of ' + Math.round(recent.spanMs / 36e5) + ' h recorded'

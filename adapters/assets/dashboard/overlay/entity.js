@@ -4,7 +4,7 @@ import logic, { titleCase } from '../logic.js';
 import { showOverlay } from './panel.js';
 import { controlDisabled, descriptorField, findEntity, houseControls, localState, overlay, store, unitLabel } from '../store.js';
 import { aspectValueSpan, renderAspectControl } from '../widgets/controls.js';
-import { BESPOKE_WIDGET, relTime, widgetForButton, widgetForClimate, widgetForEntity, widgetForSensor } from '../widgets/entity.js';
+import { BESPOKE_WIDGET, arbitratedBadge, relTime, widgetForButton, widgetForClimate, widgetForEntity, widgetForSensor } from '../widgets/entity.js';
 
 export function openEntityDetail(room, entityName) {
   var entity = findEntity(room, entityName);
@@ -121,7 +121,7 @@ export function renderEntityDetailBody() {
   var entity = overlay.entity;
   var meta = titleCase(entity.room) + ' · ' + titleCase(entity.capability) +
     ((entity.features && entity.features.length) ? ' · ' + entity.features.map(titleCase).join(', ') : '');
-  var badge = entity.write_mode === 'arbitrated' ? html`<span class="badge-arbitrated">ARBITRATED</span>` : '';
+  var badge = arbitratedBadge(entity);
   var ownerLine = html`Owned by ${unitLabel(entity.owner)} · ${entity.write_mode}${badge}`;
 
   // Sections come from the adapter's aspect descriptor, if it published

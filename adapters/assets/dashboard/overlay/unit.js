@@ -4,7 +4,7 @@ import { fmtOrDash, statusChipHtml } from '../chrome.js';
 import { html } from '../html.js';
 import logic, { titleCase, unitNameFromHealthKey } from '../logic.js';
 import { renderOverlayContent, showOverlay } from './panel.js';
-import { findEntityByName, overlay, store, unitsByName } from '../store.js';
+import { findEntityByName, overlay, store, unitByName } from '../store.js';
 import { renderEventRow } from '../views/health.js';
 import { renderParamRow, renderPauseSwitch } from '../widgets/params.js';
 
@@ -13,7 +13,11 @@ function fetchUnitLog(unitName) {
   getJson('/api/logs?unit=' + encodeURIComponent(unitName) + '&lines=100')
     .then(function (data) {
       if (overlay.unit !== unitName) return; // the overlay moved on to another unit
-      overlay.log = { lines: Array.isArray(data) ? data : [], loaded: true, loading: false, error: null };
+      // A line's time is epoch µs from the core, and the page's are ms.
+      var lines = (Array.isArray(data) ? data : []).map(function (l) {
+        return { ts: (l.ts_us || 0) / 1000, stream: l.stream, line: l.line };
+      });
+      overlay.log = { lines: lines, loaded: true, loading: false, error: null };
       if (overlay.open && overlay.type === 'unit') renderOverlayContent();
     })
     .catch(function (e) {
@@ -24,7 +28,7 @@ function fetchUnitLog(unitName) {
 }
 
 function renderLogLine(entry) {
-  var t = new Date((entry.ts_us || 0) / 1000);
+  var t = new Date(entry.ts);
   var tStr = isNaN(t.getTime()) ? '' : t.toLocaleTimeString();
   var tFull = isNaN(t.getTime()) ? '' : t.toLocaleString();
   var cls = entry.stream === 'stderr' ? 'log-line stderr' : 'log-line';
@@ -42,8 +46,25 @@ function fetchUnitEvents(unitName) {
     if (overlay.open && overlay.type === 'unit') renderOverlayContent();
   };
   getJson('/api/unit-events?unit=' + encodeURIComponent(unitName))
-    .then(function (data) { done((data && data.events) || [], false); })
+    .then(function (data) { done(((data && data.events) || []).map(inMs), false); })
     .catch(function () { done([], true); });
+}
+
+// The unit routes' times are epoch seconds, and the page's are ms.
+function inMs(row) { return Object.assign({}, row, { ts: row.ts * 1000 }); }
+
+function timelineInMs(raw) {
+  var ms = function (s) { return s === null || s === undefined ? s : s * 1000; };
+  return Object.assign({}, raw, {
+    events: (raw.events || []).map(inMs),
+    params: (raw.params || []).map(inMs),
+    commands: (raw.commands || []).map(inMs),
+    answers: (raw.answers || []).map(inMs),
+    answers_from: ms(raw.answers_from),
+    readbacks: (raw.readbacks || []).map(function (s) {
+      return Object.assign({}, s, { from: ms(s.from), points: (s.points || []).map(inMs) });
+    })
+  });
 }
 
 // An automation's timeline rows (docs/design.md#unit-timeline). Its
@@ -56,7 +77,7 @@ function fetchUnitTimeline(unitName) {
     if (overlay.open && overlay.type === 'unit') renderOverlayContent();
   };
   getJson('/api/unit-timeline?unit=' + encodeURIComponent(unitName))
-    .then(function (raw) { done(raw, false); })
+    .then(function (raw) { done(timelineInMs(raw || {}), false); })
     .catch(function () { done(null, true); });
 }
 
@@ -64,7 +85,7 @@ export function openUnitDetail(unitName) {
   overlay.type = 'unit';
   overlay.unit = unitName;
   fetchUnitLog(unitName);
-  var unit = unitsByName()[unitName];
+  var unit = unitByName(unitName);
   if (unit && unit.kind === 'automation') fetchUnitTimeline(unitName);
   else fetchUnitEvents(unitName);
   showOverlay();
@@ -87,7 +108,7 @@ var TIMELINE_SHOWN = 300;
 
 // One timeline entry: when, what kind, and what happened.
 function renderTimelineRow(entry) {
-  var t = new Date((entry.ts || 0) * 1000);
+  var t = new Date(entry.ts || 0);
   var tStr = isNaN(t.getTime()) ? '' : t.toLocaleTimeString();
   var tFull = isNaN(t.getTime()) ? '' : t.toLocaleString();
   var tag, text;
@@ -154,7 +175,7 @@ function renderEvents(live) {
 }
 
 export function renderUnitDetailBody() {
-  var unit = unitsByName()[overlay.unit] || { name: overlay.unit, label: overlay.unit, kind: '', description: '', params: {} };
+  var unit = unitByName(overlay.unit) || { name: overlay.unit, label: overlay.unit, kind: '', description: '', params: {} };
   var hkey = 'home/health/' + unit.name;
   var h = store.health[hkey] || {};
   var status = h.status || 'stopped';

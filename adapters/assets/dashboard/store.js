@@ -13,7 +13,7 @@ export var store = {
   aspects: {},      // entity -> its adapter's aspect descriptor (from discovery)
   events: [],
   lastSeen: {},
-  actionAt: {},     // state key ending in /action -> epoch second of its last value
+  actionAt: {},     // state key ending in /action -> epoch ms of its last value
   arbitration: {},  // home/arbitration/{arbiter} -> per aspect, the applied hold and the holds in force
   connected: false,
   view: 'now',
@@ -37,6 +37,7 @@ export var overlay = {
   aspect: null,        // for history: aspect name
   shape: 'chart',      // for history: 'chart' (a number) | 'timeline' (a bool or string)
   shapeSettled: true,  // false while the shape was guessed without a live value
+  intervalS: null,     // for history: the seconds each sample totals over, or null
   unit: null,           // for unit: unit name
   viewName: null,        // for text: the view whose dashboard.toml block it shows
   range: 24,             // hours, for history
@@ -67,12 +68,6 @@ export var overlay = {
   expanded: {}              // for entity: group -> true when a collapsed section is opened
 };
 
-export function unitsByName() {
-  var m = {};
-  (store.model.units || []).forEach(function (u) { m[u.name] = u; });
-  return m;
-}
-
 export function findEntity(room, name) {
   var list = store.model.entities || [];
   for (var i = 0; i < list.length; i++) {
@@ -99,7 +94,7 @@ export function descriptorField(entity, aspect) {
 }
 
 export function unitLabel(unitName) {
-  var u = unitsByName()[unitName];
+  var u = unitByName(unitName);
   return u ? u.label : unitName;
 }
 
@@ -111,14 +106,6 @@ export function occupancyReading(entity) {
 // model's vocabulary.
 export function baseAspect(capability) {
   return store.model.vocabulary.base_aspects[capability];
-}
-
-export function entitySpec(room, entity) {
-  var entities = (store.model && store.model.entities) || [];
-  for (var i = 0; i < entities.length; i++) {
-    if (entities[i].room === room && entities[i].name === entity) return entities[i];
-  }
-  return null;
 }
 
 /* One render per frame, however many modules ask for it. The render

@@ -8,6 +8,11 @@ import logic, { titleCase } from '../logic.js';
 import { controlDisabled, houseControls, localState, occupancyReading, stateValue, store } from '../store.js';
 import { renderAspectControl, renderDial } from './controls.js';
 
+// The mark beside the name of an entity in arbitrated write mode.
+export function arbitratedBadge(entity) {
+  return entity.write_mode === 'arbitrated' ? html`<span class="badge-arbitrated">ARBITRATED</span>` : '';
+}
+
 function widgetForLight(entity) {
   var on = !!stateValue(entity.room, entity.name, 'on');
   var inert = controlDisabled(entity);
@@ -63,7 +68,7 @@ function widgetForOccupancy(entity) {
 export function widgetForButton(entity, inOverlay) {
   var action = stateValue(entity.room, entity.name, 'action');
   var at = store.actionAt['home/state/' + entity.room + '/' + entity.name + '/action'];
-  var age = at ? html`<span class="faint" title="${new Date(at * 1000).toLocaleString()}"> &middot; ${relTime(at * 1000)}</span>` : '';
+  var age = at ? html`<span class="faint" title="${new Date(at).toLocaleString()}"> &middot; ${relTime(at)}</span>` : '';
   var row = html`<span class="entity-name" title="${entity.label}">${entity.label}</span>
     <span>${action === undefined ? html`<span class="faint">no press yet</span>` : String(action)}${age}</span>`;
   return inOverlay
@@ -73,7 +78,7 @@ export function widgetForButton(entity, inOverlay) {
 
 function widgetForLock(entity) {
   var locked = !!stateValue(entity.room, entity.name, 'locked');
-  var badge = entity.write_mode === 'arbitrated' ? html`<span class="badge-arbitrated">ARBITRATED</span>` : '';
+  var badge = arbitratedBadge(entity);
   return html`<div class="entity-row row-clickable" data-action="entity-detail" data-room="${entity.room}" data-entity="${entity.name}">
     <span class="entity-name" title="${entity.label}">${entity.label}${badge}</span>
     <span class="toggle ${locked ? 'on' : ''}${controlDisabled(entity) ? ' disabled' : ''}"${controlDisabled(entity) ? '' : html` data-action="toggle-lock"`} data-room="${entity.room}" data-entity="${entity.name}" data-value="${!locked}"><span class="knob"></span></span>
@@ -89,7 +94,7 @@ export function widgetForClimate(entity, big) {
   var nowParts = [];
   if (typeof indoor === 'number') nowParts.push(indoor.toFixed(1) + '° now');
   if (typeof feed === 'number') nowParts.push(feed.toFixed(1) + '° feed');
-  var badge = entity.write_mode === 'arbitrated' ? html`<span class="badge-arbitrated">ARBITRATED</span>` : '';
+  var badge = arbitratedBadge(entity);
   var disabled = !(hasSetpoint && !controlDisabled(entity));
   if (big) {
     // The overlay and the dial widget: the vocabulary's setpoint on a
@@ -193,7 +198,7 @@ function widgetForCamera(entity) {
 // column. logic.js's cardPlan picks the headline readings.
 function widgetForDescribed(entity) {
   var plan = logic.cardPlan(entity, store.state, store.aspects[entity.name], !controlDisabled(entity), houseControls());
-  var badge = entity.write_mode === 'arbitrated' ? html`<span class="badge-arbitrated">ARBITRATED</span>` : '';
+  var badge = arbitratedBadge(entity);
   var control = plan.controls.length ? renderAspectControl(entity, plan.controls[0]) : '';
   var readings = plan.readings.map(function (r, i) {
     return html`${i ? html`<span class="sep">&middot;</span>` : ''}<span class="card-reading${r.stale ? ' stale' : ''}" title="${r.aspect}">

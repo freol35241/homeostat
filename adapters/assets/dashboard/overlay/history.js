@@ -7,7 +7,7 @@ import { buildBars, buildChart, buildTimeline, fmtDuration, formatChartClock, fo
 import { html } from '../html.js';
 import logic, { titleCase } from '../logic.js';
 import { overlayWide, renderOverlayContent, showOverlay } from './panel.js';
-import { aspectsFor, descriptorField, findEntity, forecastsOf, liveForecastsOf, overlay, stateValue, store } from '../store.js';
+import { aspectsFor, descriptorField, findEntity, findEntityByName, forecastsOf, liveForecastsOf, overlay, stateValue, store } from '../store.js';
 
 var RANGE_PRESETS = [{ label: '1h', hours: 1 }, { label: '6h', hours: 6 }, { label: '24h', hours: 24 }, { label: '7d', hours: 168 }];
 
@@ -70,11 +70,8 @@ function layerLines(entity, aspect, layer) {
 
 // A contributor's room, for reading its own `available` aspect.
 function contributorRoom(c) {
-  var entities = (store.model && store.model.entities) || [];
-  for (var i = 0; i < entities.length; i++) {
-    if (entities[i].name === c.entity) return entities[i].room;
-  }
-  return null;
+  var e = findEntityByName(c.entity);
+  return e ? e.room : null;
 }
 
 function sourceCacheKey(hours, c) {
@@ -93,9 +90,11 @@ export function fetchSourceEvents(entity, aspect, hours) {
   getJson('/api/source-events?entity=' + encodeURIComponent(entity.name) +
           '&aspect=' + encodeURIComponent(aspect) + '&hours=' + hours)
     .then(function (data) {
-      overlay.sourceEvents[ck] = {
-        events: (data && data.events) || [], loaded: true, loading: false
-      };
+      // The recorder's times are epoch µs, and the page's are ms.
+      var events = ((data && data.events) || []).map(function (e) {
+        return Object.assign({}, e, { ts: e.ts / 1000 });
+      });
+      overlay.sourceEvents[ck] = { events: events, loaded: true, loading: false };
       if (overlay.open && overlay.type === 'history') renderOverlayContent();
     })
     .catch(function () {
@@ -343,7 +342,7 @@ export function renderHistoryDetailBody() {
     chartHtml = !loaded ? html`<div class="aspect-row faint">reading…</div>` : presses.length
       ? html`<div class="press-list">${presses.slice(0, PRESSES_SHOWN).map(function (p) {
         // To the second, because two presses are often in one minute.
-        return html`<div class="aspect-row"><span class="aspect-label">${formatChartTime(Date.parse(p.ts), 1)}</span><span>${String(p.value)}</span></div>`;
+        return html`<div class="aspect-row"><span class="aspect-label">${formatChartTime(Date.parse(p.ts), null, true)}</span><span>${String(p.value)}</span></div>`;
       })}</div>`
       : html`<div class="aspect-row faint">no press in this window</div>`;
     statsHtml = html`<div class="stat-row">${statText('Presses', !loaded ? '—' : String(points.length) + (points.length >= PRESSES_READ ? '+' : ''))}</div>`;
@@ -462,7 +461,7 @@ export function renderHistoryDetailBody() {
         var use = usage[c.name];
         var excluded = use && use.used === false;
         var since = excluded && use.since
-          ? ' since ' + formatChartClock(use.since / 1000)
+          ? ' since ' + formatChartClock(use.since)
           : '';
         return html`<span data-source="${c.name}"${c.note ? html` title="${c.note}"` : ''}>
           ${c.label}
