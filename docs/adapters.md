@@ -494,6 +494,8 @@ device liveness signal, published on transition by the owning adapter.
   its last value.
 - A silence timeout is a live parameter (`availability_timeout_s`,
   owner-editable) with an adapter-side default, so a house can tune it.
+- `homeostat.availability.SilenceWatch` keeps these rules for a device
+  timed by its publish cadence.
 
 ### One-way senders
 

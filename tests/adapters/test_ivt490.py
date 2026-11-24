@@ -90,6 +90,12 @@ class PumpsTest(unittest.TestCase):
         self.assertEqual(self.session.puts[0], (KEY + "available", True))
         self.assertIn((KEY + "feed_temperature", 42.5), self.session.puts)
 
+    def test_first_contact_is_available_and_bound(self):
+        self.message("ivt490/state/GT1", b"42.5")
+        self.assertEqual(self.session.puts[0], (KEY + "available", True))
+        discovery = [v for k, v in self.session.puts if k == "home/discovery/ivt490"]
+        self.assertTrue(discovery[0][0]["bound"])
+
     def test_validity_goes_out_ahead_of_its_value(self):
         self.message("controller/state/indoor_temperature_feedback", b'{"value": 20, "valid": 1}')
         tail = self.session.puts[-2:]
@@ -120,8 +126,8 @@ class PumpsTest(unittest.TestCase):
     def test_silence_is_one_unavailable_and_one_event(self):
         self.message("ivt490/state/GT1", b"1")
         self.now = 400.0
-        self.pumps.sweep(300.0)
-        self.pumps.sweep(300.0)
+        self.pumps.watch.sweep(300.0)
+        self.pumps.watch.sweep(300.0)
         self.assertEqual(self.session.puts[-1], (KEY + "available", False))
         self.assertEqual(len([e for e in self.session.events if e["kind"] == "device-silent"]), 1)
 
