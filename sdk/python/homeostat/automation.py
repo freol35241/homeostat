@@ -31,18 +31,18 @@ import os
 import secrets
 import signal
 import threading
-import time
 from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
 
 import zenoh
 
-from . import house, intervals, keys, vocabulary
+from . import history, house, intervals, keys, vocabulary
 from .forecast import Forecast, Point
 from .forecast import decode as decode_forecast
+from .history import HistoryUnavailable
 from .house import Entity, HouseModel
-from .session import QueryError, QueryTimeout, UnitSession
+from .session import QueryError, UnitSession
 from .stamps import Newest
 
 
@@ -79,29 +79,6 @@ _ENTITY_ADDRESSED = tuple(c for c in vocabulary.ENTITY_ADDRESSED if c != "arbite
 def _as_json(value: Any) -> Any:
     """Return `value` as JSON reads it back: a tuple as a list, and so on."""
     return json.loads(json.dumps(value))
-
-# The recorder's store description. It is the only history selector that
-# answers whenever the recorder is up, whatever the store holds.
-_HISTORY_STATS = "home/history/stats"
-
-
-# The most rows the recorder returns for one read (MAX_QUERY_LIMIT in
-# adapters/recorder.py).
-_HISTORY_LIMIT = 10_000
-
-
-class HistoryUnavailable(Exception):
-    """`Context.history` or `Context.forecast_history` could not read.
-
-    The house runs no recorder, the recorder did not answer or answered
-    with an error, or the read holds more rows or issues than one read
-    returns.
-    """
-
-
-def _rfc3339(when: datetime.datetime) -> str:
-    """Format an aware datetime for a history selector, in UTC."""
-    return when.astimezone(datetime.timezone.utc).isoformat()
 
 
 def _dedup(exprs: Iterable[str]) -> list[str]:
@@ -962,38 +939,6 @@ class Context:
     def _has_recorder(self) -> bool:
         return _house_has_recorder(self._load_house())
 
-    def _await_recorder(self, timeout_s: float) -> str | None:
-        """Wait for the recorder to answer. Returns why it did not, or None.
-
-        Wait for the recorder, not for rows. The recorder replies once per
-        series it holds, so a series it does not hold gets no reply at all.
-        Waiting on the series itself would delay every first start by the
-        whole timeout. `stats` describes the store and always answers while
-        the recorder is up.
-
-        Send one query at a time, and let it wait for the rest of the
-        deadline. The recorder answers queries one at a time (zenoh runs a
-        queryable's callback serially). A get that gives up and asks again
-        leaves its query in the recorder's queue. Once an answer takes
-        longer than the get's timeout, every later answer arrives after its
-        get has given up, and the loop never receives one. A get that no
-        queryable serves returns at once with no replies, which means the
-        recorder is not up yet. Only that case is retried.
-        """
-        deadline = time.monotonic() + timeout_s
-        while True:
-            remaining = max(deadline - time.monotonic(), 0.1)
-            try:
-                if self._session.get_json(_HISTORY_STATS, timeout_s=remaining):
-                    return None
-            except QueryTimeout:
-                return f"recorder took the query but did not answer within {timeout_s}s"
-            except QueryError as err:
-                return str(err)
-            if time.monotonic() >= deadline:
-                return f"no recorder answered within {timeout_s}s"
-            time.sleep(0.2)
-
     def restore(
         self,
         binding: str,
@@ -1072,11 +1017,13 @@ class Context:
         def failed(reason: str) -> None:
             self.health_event("restore-failed", key=key, reason=reason)
 
-        reason = self._await_recorder(timeout_s)
+        reason = history.wait(self._session, timeout_s)
         if reason is not None:
             failed(reason)
             return None
-        selector = f"{keys.history_key('state', segments[3], segments[4])}?limit=1"
+        selector = history.selector(
+            keys.history_key("state", segments[3], segments[4]), {"limit": 1}
+        )
         try:
             replies = self._session.get_json(selector)
         except QueryError as err:
@@ -1191,34 +1138,17 @@ class Context:
             raise ValueError(f"history bucket_s {bucket_s!r} is not a positive integer")
         if not self._has_recorder():
             raise HistoryUnavailable("the house runs no recorder")
-        reason = self._await_recorder(timeout_s)
-        if reason is not None:
-            raise HistoryUnavailable(reason)
-        params = [
-            f"from={_rfc3339(start)}",
-            f"to={_rfc3339(end)}",
-            f"limit={_HISTORY_LIMIT}",
-        ]
+        params = {"from": start, "to": end, "limit": history.MAX_ROWS}
         if bucket_s is not None:
-            params.append(f"bucket={bucket_s}")
-        selector = keys.history_key("state", segments[3], segments[4]) + "?" + ";".join(params)
-        try:
-            replies = self._session.get_json(selector, timeout_s=timeout_s)
-            # The recorder sends nothing for a series it has never recorded,
-            # and a get nobody serves returns nothing too. Asking `stats`
-            # again tells the two apart, so a recorder that went down since
-            # the wait does not read as an empty window.
-            if not replies and not self._session.get_json(_HISTORY_STATS, timeout_s=timeout_s):
-                raise HistoryUnavailable("the recorder stopped answering")
-        except QueryError as err:
-            raise HistoryUnavailable(str(err)) from err
-        rows = next((rows for _, rows in replies), [])
+            params["bucket"] = bucket_s
+        selector = history.selector(keys.history_key("state", segments[3], segments[4]), params)
+        rows = history.read(self._session, selector, timeout_s)
         # The recorder keeps the newest rows when a window holds more than
         # the limit. Returning them would cut the window's start off
         # without saying so.
-        if bucket_s is None and len(rows) >= _HISTORY_LIMIT:
+        if bucket_s is None and len(rows) >= history.MAX_ROWS:
             raise HistoryUnavailable(
-                f"the window holds {_HISTORY_LIMIT} rows or more; pass bucket_s"
+                f"the window holds {history.MAX_ROWS} rows or more; pass bucket_s"
             )
         return [{**row, "ts": datetime.datetime.fromisoformat(row["ts"])} for row in rows]
 
@@ -1327,34 +1257,25 @@ class Context:
         # The recorder clamps a larger limit and keeps the newest, which
         # would drop the oldest without saying so.
         if limit is not None and (
-            isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= _HISTORY_LIMIT
+            isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= history.MAX_ROWS
         ):
-            raise ValueError(f"forecast_history limit {limit!r} is not from 1 to {_HISTORY_LIMIT}")
+            raise ValueError(f"forecast_history limit {limit!r} is not from 1 to {history.MAX_ROWS}")
         if not self._has_recorder():
             raise HistoryUnavailable("the house runs no recorder")
-        reason = self._await_recorder(timeout_s)
-        if reason is not None:
-            raise HistoryUnavailable(reason)
-        params = [f"limit={limit if limit is not None else _HISTORY_LIMIT}"]
+        params: dict[str, int | datetime.datetime] = {
+            "limit": limit if limit is not None else history.MAX_ROWS
+        }
         if at is not None:
-            params.append(f"at={_rfc3339(at)}")
+            params["at"] = at
         if valid_from is not None and valid_to is not None:
-            params += [f"valid_from={_rfc3339(valid_from)}", f"valid_to={_rfc3339(valid_to)}"]
+            params |= {"valid_from": valid_from, "valid_to": valid_to}
         series = keys.history_key("forecast", segments[3], segments[4]) + "/" + segments[5]
-        try:
-            replies = self._session.get_json(series + "?" + ";".join(params), timeout_s=timeout_s)
-            # Nothing comes back for a series never recorded, and nothing
-            # from a recorder that has gone; `stats` tells the two apart.
-            if not replies and not self._session.get_json(_HISTORY_STATS, timeout_s=timeout_s):
-                raise HistoryUnavailable("the recorder stopped answering")
-        except QueryError as err:
-            raise HistoryUnavailable(str(err)) from err
-        issues = next((issues for _, issues in replies), [])
+        issues = history.read(self._session, history.selector(series, params), timeout_s)
         # The recorder keeps the newest issues past the limit, which would
         # cut the oldest off without saying so.
-        if limit is None and len(issues) >= _HISTORY_LIMIT:
+        if limit is None and len(issues) >= history.MAX_ROWS:
             raise HistoryUnavailable(
-                f"the read holds {_HISTORY_LIMIT} issues or more; pass limit or a shorter window"
+                f"the read holds {history.MAX_ROWS} issues or more; pass limit or a shorter window"
             )
         try:
             return [decode_forecast(json.dumps(issue).encode()) for issue in issues]
