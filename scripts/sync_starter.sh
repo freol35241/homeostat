@@ -56,7 +56,6 @@ recorder.py:recorder.py
 arbiter.py:arbiter.py
 dashboard.py:dashboard.py
 dashboard.html:dashboard.html
-assets/dashboard-logic.js:assets/dashboard-logic.js
 assets/dashboard.css:assets/dashboard.css
 assets/video-rtc.js:assets/video-rtc.js
 assets/homeostat-mark.svg:assets/homeostat-mark.svg

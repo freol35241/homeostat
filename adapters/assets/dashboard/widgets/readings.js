@@ -7,7 +7,7 @@ import { descriptorField, liveForecastsOf, localState, scheduleRender, stateValu
 
 // Signal tiles: one per reading of the entity, or only the named reading.
 // The descriptor decides which readings appear and in what order. They are
-// the same rows as the entity's sensor card (dashboard-logic.js,
+// the same rows as the entity's sensor card (logic.js,
 // sensorCardPlan).
 export function widgetTiles(entity, aspect) {
   var all = logic.sensorCardPlan(entity, store.state, store.aspects[entity.name]);

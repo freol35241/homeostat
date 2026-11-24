@@ -1,9 +1,5 @@
-/* The page's pure decision logic, ../dashboard-logic.js, under one name.
- * That file is a classic script, because `node --test tests/js` loads it
- * with require(). dashboard.html loads it before these modules, and it
- * defines window.HomeostatLogic. */
-var logic = window.HomeostatLogic;
+/* The page's pure decision logic, ./logic/index.js. Modules import it
+ * from here, either whole (`import logic from './logic.js'`) or by name. */
+import * as logic from './logic/index.js';
 export default logic;
-
-export var titleCase = logic.titleCase;
-export var unitNameFromHealthKey = logic.unitNameFromHealthKey;
+export * from './logic/index.js';

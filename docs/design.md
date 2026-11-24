@@ -2823,12 +2823,11 @@ The dashboard is an adapter for humans. It speaks HTTP and a WebSocket
 to browsers on one side, and the bus through the SDK on the other.
 Browsers never speak Zenoh. `adapters/dashboard.py` is a `service` unit
 (aiohttp). It serves one hand-editable page, `dashboard.html`, along
-with its stylesheet `assets/dashboard.css`, its decision logic
-`assets/dashboard-logic.js`, its ES modules under `assets/dashboard/`
-(entry `main.js`) and a few vendored libraries. It serves from an
-allowlist of filenames plus that one directory, and there is no build
-step. The page is rendered in the client because pushing live state is
-the dashboard's main job.
+with its stylesheet `assets/dashboard.css`, its ES modules under
+`assets/dashboard/` (entry `main.js`, decision logic in `logic/`) and a
+few vendored libraries. It serves from an allowlist of filenames plus
+that one directory, and there is no build step. The page is rendered
+in the client because pushing live state is the dashboard's main job.
 
 - The browser goes through the dashboard unit rather than onto the raw
   bus. Running Zenoh's remote-api plugin in the browser would bypass
@@ -3061,7 +3060,7 @@ because the version would have to be rewritten into a hand-edited
 file.
 
 Pure decisions (arithmetic and selection, never markup) live in
-`dashboard-logic.js`, and `node --test tests/js` pins them. Markup is
+`assets/dashboard/logic/`, and `node --test tests/js` pins them. Markup is
 written with the `html` tag (`assets/dashboard/html.js`). The tag
 escapes every interpolated value unless the value is itself markup, so
 a forgotten escape cannot turn a label from the house into markup.
@@ -3167,7 +3166,7 @@ command and decision together, because a fixed chart cannot know which
 of them the question is about.
 
 `/api/unit-timeline` gathers the rows from the recorder and
-`unitTimeline` in `dashboard-logic.js` puts them in order. The commands
+`unitTimeline` in the page's logic puts them in order. The commands
 and events of the whole house are read newest first up to a cap, and so
 are the changes of each aspect it commanded. A busy day can push the
 oldest rows out, and the overlay says when it did. An answer to an older

@@ -1,5 +1,5 @@
 // Tests for the dashboard's extracted decision logic
-// (adapters/assets/dashboard-logic.js), run by `node --test tests/js`,
+// (adapters/assets/dashboard/logic/index.js), run by `node --test tests/js`,
 // Node's built-in runner, with no packages. The DOM wiring
 // (adapters/assets/dashboard/) is covered by the browser suite
 // (tests/browser), the server-side one (tests/it/dashboard.rs) and manual
@@ -9,7 +9,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 
-const logic = require(path.join(__dirname, '../../adapters/assets/dashboard-logic.js'));
+const logic = require(path.join(__dirname, '../../adapters/assets/dashboard/logic/index.js'));
 // The model's `vocabulary` block. tests/it/dashboard.rs checks that the
 // browser fixture's is the one /api/model serves, so it is read from there.
 const VOCABULARY = require(path.join(__dirname, '../browser/fixtures/model.json')).vocabulary;

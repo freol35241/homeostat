@@ -72,7 +72,7 @@ function handleWsMessage(msg) {
 }
 
 // For a key like home/state/{room}/{entity}/motion, track lastSeen per
-// entity (both occupancy aspect names; see dashboard-logic.js). The
+// entity (both occupancy aspect names; see logic.js). The
 // model's vocabulary names them, so a delta that arrives before the model
 // is kept and stamped when it loads.
 var earlySeen = {};

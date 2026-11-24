@@ -64,8 +64,8 @@ this copy.
 The rest of this directory is the repo's own code, not vendored, and is
 edited like any source file:
 
-- `dashboard-logic.js` is the page's pure decision logic. It is kept apart
-  from the page so `node --test tests/js` can test it.
 - `dashboard.css` is the page's stylesheet.
 - `dashboard/` holds the page's ES modules. `dashboard/main.js` is the
-  entry point.
+  entry point. `dashboard/logic/` is the page's pure decision logic. It
+  is kept apart from the DOM so `node --test tests/js` can test it, and
+  the page imports it through `dashboard/logic.js`.

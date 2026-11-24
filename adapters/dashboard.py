@@ -121,8 +121,8 @@ except importlib.metadata.PackageNotFoundError:
 # modules under assets/dashboard/ (MODULES). Nothing else is served, so the
 # route cannot be used for path traversal.
 #
-# dashboard.html, dashboard.css, dashboard-logic.js and the modules are
-# written against each other and change together at an upgrade. aiohttp's
+# dashboard.html, dashboard.css and the modules are written against each
+# other and change together at an upgrade. aiohttp's
 # FileResponse sets ETag and Last-Modified but no Cache-Control, so a
 # browser falls back to heuristic freshness, commonly a tenth of the
 # file's age. A file unchanged for two weeks is then not revalidated for
@@ -142,7 +142,6 @@ REVALIDATE = {"Cache-Control": "no-cache"}
 
 ASSETS = {
     "video-rtc.js": "text/javascript",
-    "dashboard-logic.js": "text/javascript",
     "dashboard.css": "text/css",
     "homeostat-mark.svg": "image/svg+xml",
 }
@@ -1539,7 +1538,7 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         Its parameter writes, the commands it sent, the events that
         answered them, how the commanded aspects changed after, and its own
         health events (docs/design.md#unit-timeline).
-        The page puts them in order (dashboard-logic.js, unitTimeline).
+        The page puts them in order (dashboard/logic/index.js, unitTimeline).
         """
         unit = request.query.get("unit", "")
         if unit not in model.units:

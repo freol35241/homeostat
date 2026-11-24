@@ -77,7 +77,7 @@ def toml_value(value) -> str:
 def toml_widget(widget: dict, indent: str = "") -> str:
     """Return the widget as dashboard.toml writes it.
 
-    This is the shape the page's "Text" overlay prints (dashboard-logic.js,
+    This is the shape the page's "Text" overlay prints (dashboard/logic/index.js,
     viewText).
     """
     fields = [

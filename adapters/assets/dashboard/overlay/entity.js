@@ -125,7 +125,7 @@ export function renderEntityDetailBody() {
   var ownerLine = html`Owned by ${unitLabel(entity.owner)} · ${entity.write_mode}${badge}`;
 
   // Sections come from the adapter's aspect descriptor, if it published
-  // one (dashboard-logic.js, aspectPlan). An undescribed entity gets one
+  // one (logic.js, aspectPlan). An undescribed entity gets one
   // flat State list. A described climate's declared commands render in
   // their own group, so its Controls row is not repeated.
   var descriptor = store.aspects[entity.name];

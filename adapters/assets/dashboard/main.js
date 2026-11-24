@@ -153,7 +153,7 @@ document.addEventListener('click', function (e) {
     return;
   }
   // A deviation tap opens whichever view shows the item
-  // (dashboard-logic.js, viewFor). If no view does, the unit overlay has
+  // (logic.js, viewFor). If no view does, the unit overlay has
   // every param, and Not shown has every unplaced light.
   if (action === 'goto-rooms') {
     store.view = logic.viewFor({ type: 'rooms' }, logic.viewsOf(store.model)) || 'notshown';

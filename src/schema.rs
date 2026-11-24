@@ -577,8 +577,8 @@ mod tests {
     }
 
     /// The dashboard reads every name in `OCCUPANCY_ASPECTS` as a presence
-    /// reading (`occupancyReading` in dashboard-logic.js), so a name added
-    /// to the occupancy row is a change to the page too.
+    /// reading (`occupancyReading` in dashboard/logic/index.js), so a name
+    /// added to the occupancy row is a change to the page too.
     #[test]
     fn occupancy_aspects_are_the_presence_readings() {
         let occupancy =

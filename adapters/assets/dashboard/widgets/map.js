@@ -287,7 +287,7 @@ function updateMapMarkers(persons, opts) {
 
 /* One entity's track: its fixes over the window, read from the recorder
  * and extended by each live fix, drawn as one line that fades with age
- * (dashboard-logic.js, trackGradient). The fixes are kept per entity
+ * (logic.js, trackGradient). The fixes are kept per entity
  * across renders, and the line is redrawn only when they change. */
 function updateTrack(key, entity, hours, color) {
   var track = mapState.tracks[key];

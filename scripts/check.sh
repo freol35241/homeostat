@@ -42,7 +42,7 @@ check_adapters() {
 
 check_ruff() { uvx ruff@0.16.7 check adapters sdk scripts tests/adapters tests/browser; }
 
-# The dashboard's decision logic (adapters/assets/dashboard-logic.js) and
+# The dashboard's decision logic (adapters/assets/dashboard/logic/) and
 # its html tag, with Node's built-in runner and no packages. The shell
 # expands the glob, because newer Node treats a bare directory argument as
 # a module path and fails with MODULE_NOT_FOUND.

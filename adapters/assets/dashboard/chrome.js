@@ -72,7 +72,7 @@ export function fmtOrDash(v) {
   return (v === undefined || v === null) ? '—' : String(v);
 }
 
-// The nav lists the file's views (dashboard-logic.js, viewsOf). Health
+// The nav lists the file's views (logic.js, viewsOf). Health
 // and Not shown are fixed entries below it, and the file cannot name
 // them as views.
 export function currentView() {
