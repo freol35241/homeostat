@@ -9,7 +9,7 @@ export function renderEventRow(ev) {
   var unit = unitNameFromHealthKey(ev.key);
   var extra = Object.keys(ev.value || {}).filter(function (k) { return k !== 'kind'; })
     .map(function (k) { return k + '=' + JSON.stringify(ev.value[k]); }).join(' ');
-  var t = new Date((ev.ts || 0) * 1000);
+  var t = new Date(ev.ts || 0);
   var tStr = isNaN(t.getTime()) ? '' : t.toLocaleTimeString();
   var tFull = isNaN(t.getTime()) ? '' : t.toLocaleString();
   return html`<div class="event-row"><span class="ts" title="${tFull}">${tStr}</span>

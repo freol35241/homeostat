@@ -8,7 +8,7 @@
  * test runner loads it with require().
  */
 
-export function entityKey(room, entity, aspect) {
+function entityKey(room, entity, aspect) {
   return 'home/state/' + room + '/' + entity + '/' + aspect;
 }
 
@@ -215,10 +215,12 @@ export function unitNameFromHealthKey(key) {
  * config maps, and the capped events feed). Returns the message type when
  * applied, and null for anything unrecognized. The caller renders, and
  * tracks per-key side effects, only when a message was applied.
- * `nowSeconds` stamps events whose message has no ts. */
+ * The message's `action_at`, `at` and `ts` are epoch seconds, and the
+ * store keeps them in epoch ms like the rest of the page. `nowMs` stamps a press or an event whose
+ * message has no time. */
 var EVENTS_CAP = 200;
 
-export function applyMessage(store, msg, nowSeconds) {
+export function applyMessage(store, msg, nowMs) {
   if (!msg || !msg.type) return null;
   if (msg.type === 'snapshot') {
     store.state = msg.state || {};
@@ -227,7 +229,8 @@ export function applyMessage(store, msg, nowSeconds) {
     store.health = msg.health || {};
     store.config = msg.config || {};
     store.aspects = msg.aspects || {};
-    store.actionAt = msg.action_at || {};
+    store.actionAt = {};
+    Object.keys(msg.action_at || {}).forEach(function (k) { store.actionAt[k] = msg.action_at[k] * 1000; });
     store.arbitration = msg.arbitration || {};
     return 'snapshot';
   }
@@ -243,7 +246,7 @@ export function applyMessage(store, msg, nowSeconds) {
     // dashboard's clock as the snapshot's times are.
     if (/\/action$/.test(msg.key)) {
       if (!store.actionAt) store.actionAt = {};
-      store.actionAt[msg.key] = typeof msg.at === 'number' ? msg.at : nowSeconds;
+      store.actionAt[msg.key] = typeof msg.at === 'number' ? msg.at * 1000 : nowMs;
     }
     return 'state';
   }
@@ -272,7 +275,7 @@ export function applyMessage(store, msg, nowSeconds) {
     return 'health';
   }
   if (msg.type === 'event') {
-    store.events.unshift({ key: msg.key, value: msg.value, ts: msg.ts || nowSeconds });
+    store.events.unshift({ key: msg.key, value: msg.value, ts: msg.ts ? msg.ts * 1000 : nowMs });
     if (store.events.length > EVENTS_CAP) store.events.length = EVENTS_CAP;
     return 'event';
   }
@@ -294,8 +297,9 @@ export function applyMessage(store, msg, nowSeconds) {
 // Points sit where their timestamps fall in the window, so a gap in the
 // record stays a gap. Points are spaced evenly only when timestamps are
 // missing. A live point past the window's end (a delta after the fetch)
-// extends the window.
-export function chartGeometry(points, width, height, pad, win, forecast, issues, contributors) {
+// extends the window. `now` is the current time in epoch ms, which places
+// the now-rule and decides whether a forecast is stale.
+export function chartGeometry(points, width, height, pad, win, forecast, issues, contributors, now) {
   var vals = points.map(function (p) { return p.value; }).filter(function (v) { return typeof v === 'number'; });
   // A forecast key names its source, so an aspect may have several live
   // forecasts at once. Each gets its own line, with no envelope over
@@ -312,7 +316,7 @@ export function chartGeometry(points, width, height, pad, win, forecast, issues,
       // Older than the span it has left to cover. It is still drawn,
       // because it is the house's current forecast, but it is marked as
       // stale (docs/design.md#charts-forecasts-and-sources).
-      stale: forecastFreshness(b.forecast, Date.now()).stale
+      stale: forecastFreshness(b.forecast, now).stale
     };
   });
   var allVals = vals.slice();
@@ -409,7 +413,7 @@ export function chartGeometry(points, width, height, pad, win, forecast, issues,
     // The line between the record and the forecast. It is placed at the
     // current time rather than at the last point, because a gap in
     // recording does not mean the present has moved.
-    var nowAt = (Date.now() - from) / (to - from);
+    var nowAt = (now - from) / (to - from);
     if (nowAt > 0 && nowAt < 1) geo.nowX = pad + nowAt * (width - 2 * pad);
   }
   return geo;
@@ -524,7 +528,7 @@ export function holdUntil(hhmm, now) {
  * lowest first. A hold can arrive before the model does, and then
  * nothing is driven.
  */
-export function displaces(hold, driven, vocabulary) {
+function displaces(hold, driven, vocabulary) {
   var band = (driven || {})[hold.room + '/' + hold.entity + '/' + hold.aspect];
   if (band === undefined) return false;
   var below = vocabulary.priorities.indexOf(band);
@@ -897,12 +901,12 @@ export function aspectPlan(entity, state, descriptor, commandable, controls) {
  * overlay keeps: "feed line (GT1)" becomes "feed line". */
 export function cardPlan(entity, state, descriptor, commandable, controls) {
   var sections = aspectPlan(entity, state, descriptor, commandable, controls);
-  var controls = [];
+  var controlRows = [];
   var readings = [];
   sections.forEach(function (s) {
     if (s.group === DIAGNOSTICS) return;
     s.rows.forEach(function (r) {
-      if (r.control && r.control.kind !== 'readonly') controls.push(r);
+      if (r.control && r.control.kind !== 'readonly') controlRows.push(r);
     });
     if (readings.length === 0) {
       readings = s.rows.filter(function (r) { return !r.control; }).slice(0, 2);
@@ -914,7 +918,7 @@ export function cardPlan(entity, state, descriptor, commandable, controls) {
     short.label = r.label.replace(/\s*\([^)]*\)$/, '');
     return short;
   });
-  return { readings: readings, controls: controls };
+  return { readings: readings, controls: controlRows };
 }
 
 /* The sparkline rows of a sensor's room card: every numeric row without
@@ -966,7 +970,8 @@ function orderedKeys(obj, first) {
   });
 }
 
-function widgetToml(w, indent) {
+// scripts/widget_gallery.py prints docs/widgets.md's examples with this.
+export function widgetToml(w, indent) {
   var fields = orderedKeys(w, WIDGET_KEY_ORDER).map(function (k) { return k + ' = ' + tomlValue(w[k]); });
   if (!w.widgets) return indent + '{ ' + fields.join(', ') + ' }';
   return indent + '{ ' + fields.concat(['widgets = [']).join(', ') + '\n' +
@@ -1209,12 +1214,6 @@ function sameValue(a, b, tolerance) {
 export function commandSent(pending, key, seq, reply) {
   var entry = pending[key];
   if (!entry || entry.outcome !== 'sending' || entry.seq !== seq) return null;
-  if (!reply || !reply.id) {
-    // An older dashboard unit that returns no id cannot be tracked. A
-    // pending state that can never resolve is worse than none.
-    delete pending[key];
-    return null;
-  }
   if (reply.heard === false) {
     delete pending[key];
     return { key: key, outcome: 'unheard', value: entry.value };
@@ -1897,14 +1896,14 @@ export function viewsOf(model) {
  * those this page saw live. A live event the recorder also holds is
  * listed once. The two clocks differ by the bus's latency, so a pair
  * counts as one when key and value match within a few seconds. */
-var SAME_EVENT_S = 5;
+var SAME_EVENT_MS = 5000;
 export function mergeUnitEvents(recorded, live) {
   var out = (recorded || []).slice();
   (live || []).forEach(function (ev) {
     var value = JSON.stringify(ev.value);
     var seen = out.some(function (r) {
       return r.key === ev.key && JSON.stringify(r.value) === value &&
-        Math.abs((r.ts || 0) - (ev.ts || 0)) <= SAME_EVENT_S;
+        Math.abs((r.ts || 0) - (ev.ts || 0)) <= SAME_EVENT_MS;
     });
     if (!seen) out.push(ev);
   });
@@ -1920,7 +1919,8 @@ export var HOLD_RELEASE = 'release';
 export var HOLD_REPORT = 'report';
 
 /* An automation's timeline (docs/design.md#unit-timeline), newest first,
- * built from what /api/unit-timeline gathers from the recorder:
+ * built from what /api/unit-timeline gathers from the recorder, with its
+ * times in epoch ms:
  * - `param`: a write to one of its parameters.
  * - `command`: a command it sent, with what came of it. An event naming
  *   its cmd_id says refused (the arbiter) or dropped (the adapter). Else
@@ -1968,12 +1968,12 @@ export function unitTimeline(raw, model, aspects, unitName) {
       entry.outcome = 'unknown';
     } else {
       var e = byName[entity] || {};
-      var waitS = commandTimeoutMs(e.capability, aspects && aspects[entity], aspect) / 1000;
+      var waitMs = commandTimeoutMs(e.capability, aspects && aspects[entity], aspect);
       var tol = cmdTolerance(aspect, model.vocabulary);
       var before = null;
       var reached = (series.points || []).some(function (p) {
         if (p.ts <= c.ts) before = p;
-        return p.ts > c.ts && p.ts <= c.ts + waitS && sameValue(p.value, envelope.value, tol);
+        return p.ts > c.ts && p.ts <= c.ts + waitMs && sameValue(p.value, envelope.value, tol);
       });
       if (reached) entry.outcome = 'applied';
       else if (before && sameValue(before.value, envelope.value, tol)) entry.outcome = 'already';

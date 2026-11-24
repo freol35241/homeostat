@@ -1456,11 +1456,10 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         """Gather an automation's timeline rows from the recorder. Blocking.
 
         Events and commands come from home/history/events, state changes
-        from the samples path with changes=1. Times are seconds, as the
-        page's are. When a query fills its cap, the reply carries the
-        oldest time it kept (`answers_from`, a series' `from`): an answer
-        to an older command may have been cut, so the page does not judge
-        those commands.
+        from the samples path with changes=1. Times are epoch seconds. When
+        a query fills its cap, the reply carries the oldest time it kept
+        (`answers_from`, a series' `from`): an answer to an older command
+        may have been cut, so the page does not judge those commands.
         """
         start = datetime.datetime.fromtimestamp(from_us / 1e6, datetime.timezone.utc)
         end = datetime.datetime.fromtimestamp(to_us / 1e6, datetime.timezone.utc)

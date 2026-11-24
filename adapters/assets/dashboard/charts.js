@@ -61,12 +61,13 @@ export function horizonCaption(aspect, field, forecast, fromTs) {
 // A reading's time, at the precision the window needs. On an hour of
 // history the recorder's buckets are seconds wide, so minutes alone would
 // hide the detail the reader opened the chart for. `spanMs` is the charted
-// window. Without it the time is shown as day and minute.
-export function formatChartTime(ts, spanMs) {
+// window. Without it the time is shown as day and minute, unless `seconds`
+// asks for them.
+export function formatChartTime(ts, spanMs, seconds) {
   var d = new Date(ts);
   if (isNaN(d.getTime())) return '';
   var fmt = { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' };
-  if (spanMs && spanMs <= 3 * 3600e3) fmt.second = '2-digit';
+  if (seconds || (spanMs && spanMs <= 3 * 3600e3)) fmt.second = '2-digit';
   return d.toLocaleString([], fmt);
 }
 
@@ -88,7 +89,7 @@ export function buildChart(chartId, points, opts) {
   var height = opts.height || 36;
   var pad = opts.pad !== undefined ? opts.pad : 3;
   var sizeClass = opts.sizeClass || 'chart-tile';
-  var geo = logic.chartGeometry(points || [], CHART_VBW, height, pad, opts.window, opts.forecast, opts.issues, opts.contributors);
+  var geo = logic.chartGeometry(points || [], CHART_VBW, height, pad, opts.window, opts.forecast, opts.issues, opts.contributors, Date.now());
   var inner;
   if (!geo) {
     chartRegistry[chartId] = null;

@@ -55,7 +55,7 @@ function scheduleReconnect() {
 }
 
 function handleWsMessage(msg) {
-  var applied = logic.applyMessage(store, msg, Date.now() / 1000);
+  var applied = logic.applyMessage(store, msg, Date.now());
   if (!applied) return;
   if (applied === 'state') {
     trackLastSeen(msg.key);
