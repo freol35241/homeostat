@@ -55,7 +55,7 @@ function widgetForOccupancy(entity) {
   var seenKey = entity.room + '/' + entity.name;
   var lastSeen = store.lastSeen[seenKey];
   var label = !occ ? 'Clear' : reading.aspect === 'occupied' ? 'Occupied' : 'Motion';
-  var extra = lastSeen ? html`<span class="faint" title="${new Date(lastSeen).toLocaleString()}"> &middot; ${relTime(lastSeen)}</span>` : '';
+  var extra = lastSeen ? html`<span class="faint" title="${new Date(lastSeen).toLocaleString()}"> &middot; ${logic.relTime(lastSeen, Date.now())}</span>` : '';
   return html`<div class="entity-row row-clickable" data-action="entity-detail" data-room="${entity.room}" data-entity="${entity.name}">
     <span class="entity-name" title="${entity.label}">${entity.label}</span>
     <span><span class="status-dot ${occ ? 'dot-on' : 'dot-off'}"></span>${label}${extra}</span>
@@ -68,7 +68,7 @@ function widgetForOccupancy(entity) {
 export function widgetForButton(entity, inOverlay) {
   var action = stateValue(entity.room, entity.name, 'action');
   var at = store.actionAt[logic.stateKey(entity.room, entity.name, 'action')];
-  var age = at ? html`<span class="faint" title="${new Date(at).toLocaleString()}"> &middot; ${relTime(at)}</span>` : '';
+  var age = at ? html`<span class="faint" title="${new Date(at).toLocaleString()}"> &middot; ${logic.relTime(at, Date.now())}</span>` : '';
   var row = html`<span class="entity-name" title="${entity.label}">${entity.label}</span>
     <span>${action === undefined ? html`<span class="faint">no press yet</span>` : String(action)}${age}</span>`;
   return inOverlay
@@ -235,17 +235,6 @@ export var BESPOKE_WIDGET = { light: true, switch: true, occupancy: true, lock: 
 function capRank(entity) {
   var r = CAP_ORDER[entity.capability];
   return r === undefined ? 7 : r;
-}
-
-export function relTime(ms) {
-  var diff = Math.max(0, Date.now() - ms);
-  var mins = Math.round(diff / 60000);
-  if (mins < 1) return 'just now';
-  if (mins === 1) return '1 min ago';
-  if (mins < 60) return mins + ' min ago';
-  var hrs = Math.round(mins / 60);
-  if (hrs === 1) return '1 hr ago';
-  return hrs + ' hr ago';
 }
 
 // An entity's own row (its control or its readings) as a card.

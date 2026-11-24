@@ -1,6 +1,6 @@
 /* The tile and chart widgets: an entity's readings, now and over time. */
 import { ensureHistory, fetchHistory } from '../api.js';
-import { buildBars, buildChart, buildTimeline, fmtDuration, formatChartClock, formatChartTime, horizonCaption, issuedCaption, minMaxCaption } from '../charts.js';
+import { buildBars, buildChart, buildTimeline, horizonCaption, issuedCaption, minMaxCaption } from '../charts.js';
 import { html } from '../html.js';
 import logic from '../logic.js';
 import { descriptorField, liveForecastsOf, localState, scheduleRender, stateValue, store } from '../store.js';
@@ -84,8 +84,8 @@ function intervalTile(entity, r, named, intervalS) {
   var big = recent ? logic.formatAspect(r.aspect, field, recent.total) : r.display;
   var wholeDay = recent && recent.spanMs === 864e5;
   var caption = recent
-    ? ['last ' + (wholeDay ? '24 h' : fmtDuration(recent.spanMs)) + ' to ' +
-        (wholeDay ? formatChartClock(recent.end) : formatChartTime(recent.end)),
+    ? ['last ' + (wholeDay ? '24 h' : logic.fmtDuration(recent.spanMs)) + ' to ' +
+        (wholeDay ? logic.formatChartClock(recent.end) : logic.formatChartTime(recent.end)),
       wholeDay ? 'latest ' + (intervalName(intervalS) ? intervalName(intervalS) + ' ' : '') + logic.formatAspect(r.aspect, field, recent.latest) : '',
       // Rounded to the hour: a second short of the span is not missing.
       Math.round(recent.coveredMs / 36e5) < Math.round(recent.spanMs / 36e5)

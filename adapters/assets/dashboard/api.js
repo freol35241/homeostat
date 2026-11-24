@@ -113,15 +113,6 @@ export function getJson(url) {
   });
 }
 
-export function errText(e) {
-  var msg = e && e.message ? e.message : String(e);
-  try {
-    var parsed = JSON.parse(msg);
-    if (parsed && parsed.error) return parsed.error;
-  } catch (ex) { /* not json */ }
-  return msg;
-}
-
 // The recorder summarises the window (docs/design.md#read-path). A line
 // chart asks for one bucket per drawn column, and a timeline for the runs
 // of the state. The window is returned with the points so the chart can

@@ -4,7 +4,7 @@ import logic, { titleCase } from '../logic.js';
 import { showOverlay } from './panel.js';
 import { controlDisabled, descriptorField, findEntity, houseControls, localState, overlay, store, unitLabel } from '../store.js';
 import { aspectValueSpan, renderAspectControl } from '../widgets/controls.js';
-import { BESPOKE_WIDGET, arbitratedBadge, relTime, widgetForButton, widgetForClimate, widgetForEntity, widgetForSensor } from '../widgets/entity.js';
+import { BESPOKE_WIDGET, arbitratedBadge, widgetForButton, widgetForClimate, widgetForEntity, widgetForSensor } from '../widgets/entity.js';
 
 export function openEntityDetail(room, entityName) {
   var entity = findEntity(room, entityName);
@@ -52,7 +52,7 @@ function renderTrackers(person) {
   var rows = logic.trackersOf(store.model.entities, store.state, person).map(function (t) {
     var parts = [];
     if (t.unavailable) parts.push('unavailable');
-    if (t.fixedAt !== undefined) parts.push('fix ' + relTime(t.fixedAt));
+    if (t.fixedAt !== undefined) parts.push('fix ' + logic.relTime(t.fixedAt, Date.now()));
     if (t.accuracy !== undefined) parts.push('\u00b1' + Math.round(t.accuracy) + ' m');
     if (t.battery !== undefined) parts.push('battery ' + Math.round(t.battery) + '%');
     return html`<div class="aspect-row described row-clickable" data-action="entity-detail" data-room="${t.room}" data-entity="${t.entity}">

@@ -1,7 +1,6 @@
 /* What the page asks of the house: commands through /api/cmd, parameter
  * writes through /api/param, the whole-house lights-off, and the stage a
  * command is in, as its control shows it. */
-import { errText } from './api.js';
 import { toast } from './chrome.js';
 import logic from './logic.js';
 import { baseAspect, descriptorField, findEntity, scheduleRender, stateValue, store, unitLabel } from './store.js';
@@ -51,7 +50,7 @@ export function sendCmd(room, entity, aspect, value) {
     // Refused before it reached the bus, so there is nothing to wait for.
     var entry = pending[key];
     if (entry && entry.outcome === 'sending' && entry.seq === seq) delete pending[key];
-    announceOutcome({ key: key, outcome: 'failed', value: value, reason: errText(e) });
+    announceOutcome({ key: key, outcome: 'failed', value: value, reason: logic.errText(e) });
     scheduleRender();
     return false;
   });
@@ -94,34 +93,11 @@ export function stepBase(room, entity, aspect) {
   return logic.commandBase(pending, room, entity, aspect, stateValue(room, entity, aspect));
 }
 
-// A commanded value in the words its control uses.
-function formatCmdValue(room, entity, aspect, value) {
-  if ((aspect === 'message' || aspect === 'alert') && typeof value === 'string') {
-    var text = value.length > 40 ? value.slice(0, 39) + '\u2026' : value;
-    return (aspect === 'alert' ? 'alert \u201c' : '\u201c') + text + '\u201d';
-  }
-  if (aspect === 'brightness' && typeof value === 'number') return logic.percentOfBrightness(value, store.model.vocabulary) + '%';
-  if (typeof value === 'boolean' && aspect === 'locked') return value ? 'locked' : 'unlocked';
-  if (typeof value === 'boolean' && aspect === 'on') return value ? 'on' : 'off';
+// A function that words a value as the control for this aspect does.
+function cmdFormatter(room, entity, aspect) {
   var spec = findEntity(room, entity);
   var field = spec ? descriptorField(spec, aspect) : null;
-  if (!field && aspect === 'setpoint' && typeof value === 'number') return value.toFixed(1) + '°';
-  return logic.formatAspect(aspect, field, value);
-}
-
-/* Warnings that can be given before anything answers a command: the unit
- * that owns the device is not running, or the device reports itself
- * unavailable. Either makes a long wait likely, so the page says so now
- * rather than after twenty seconds. */
-function commandWarning(room, entity) {
-  var spec = findEntity(room, entity);
-  if (!spec) return '';
-  var health = store.health[logic.healthKey(spec.owner)];
-  if (health && health.status && health.status !== 'running') {
-    return unitLabel(spec.owner) + ' is ' + health.status;
-  }
-  if (stateValue(room, entity, 'available') === false) return 'the device reports itself unavailable';
-  return '';
+  return function (v) { return logic.formatCmdValue(aspect, v, field, store.model.vocabulary); };
 }
 
 /* The line under a control: the stage its command is in, or how it
@@ -133,14 +109,17 @@ function commandWarning(room, entity) {
 function commandStatus(key) {
   var parts = key.split('/');
   var room = parts[0], entity = parts[1], aspect = parts[2];
-  var fmt = function (v) { return formatCmdValue(room, entity, aspect, v); };
+  var fmt = cmdFormatter(room, entity, aspect);
   var entry = pending[key];
   if (entry) {
     var text = 'Asked ' + fmt(entry.value);
     if (entry.outcome === 'draft') return { tone: 'busy', text: text };
     if (entry.seen !== undefined) text += ' · still ' + fmt(entry.seen);
     else text += entry.readback === aspect ? ' · waiting for the device' : ' · waiting for delivery';
-    var warning = commandWarning(room, entity);
+    var spec = findEntity(room, entity);
+    var warning = spec
+      ? logic.commandWarning(store.health[logic.healthKey(spec.owner)], unitLabel(spec.owner), stateValue(room, entity, 'available'))
+      : '';
     return warning ? { tone: 'warn', text: text + ' · ' + warning } : { tone: 'busy', text: text };
   }
   var done = logic.recentFor(recent, key, Date.now());
@@ -148,29 +127,11 @@ function commandStatus(key) {
   return outcomeStatus(done, fmt, room, entity, aspect);
 }
 
+// logic.outcomeStatus, given what it reads from the store.
 function outcomeStatus(done, fmt, room, entity, aspect) {
-  if (done.outcome === 'confirmed') return { tone: 'ok', text: '✓ ' + fmt(done.value) };
-  if (done.outcome === 'adjusted') {
-    return { tone: 'warn', text: 'The device settled on ' + fmt(done.seen) + ' (asked ' + fmt(done.value) + ')' };
-  }
-  if (done.outcome === 'held') {
-    var hold = logic.holdOn(store.holds, room, entity, aspect, Date.now(), store.arbitration);
-    var until = hold && hold.nextChange ? ' until ' + logic.NEXT_CHANGE
-      : hold && isFinite(hold.until) ? ' until ' + new Date(hold.until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
-    return { tone: 'warn', text: 'Held by ' + done.by + (done.actor ? ' (' + done.actor + ')' : '') + until + ' · ' + fmt(done.value) + ' not sent' };
-  }
-  if (done.outcome === 'rejected') {
-    return { tone: 'bad', text: (done.reason === 'device-unavailable' ? 'The device is unavailable' : 'Not taken: ' + done.reason) + ' · ' + fmt(done.value) };
-  }
-  if (done.outcome === 'unheard') {
-    var spec = findEntity(room, entity);
-    return { tone: 'bad', text: 'Nothing is listening' + (spec ? ': ' + unitLabel(spec.owner) + ' is not running' : '') + ' · ' + fmt(done.value) + ' went nowhere' };
-  }
-  if (done.outcome === 'unconfirmed') {
-    return { tone: 'bad', text: 'No answer for ' + fmt(done.value) + (done.seen !== undefined ? ' · still ' + fmt(done.seen) : '') };
-  }
-  if (done.outcome === 'failed') return { tone: 'bad', text: done.reason };
-  return null;
+  var hold = done.outcome === 'held' ? logic.holdOn(store.holds, room, entity, aspect, Date.now(), store.arbitration) : null;
+  var spec = findEntity(room, entity);
+  return logic.outcomeStatus(done, fmt, hold, spec ? unitLabel(spec.owner) : null);
 }
 
 /* An ended command is shown on its control. The toast is the fallback
@@ -182,8 +143,7 @@ export function announceOutcome(outcome) {
   var shown = document.querySelector('[data-cmd-status="' + cssEscape(outcome.key) + '"]');
   if (shown) return;
   var parts = outcome.key.split('/');
-  var status = outcomeStatus(outcome, function (v) { return formatCmdValue(parts[0], parts[1], parts[2], v); },
-    parts[0], parts[1], parts[2]);
+  var status = outcomeStatus(outcome, cmdFormatter(parts[0], parts[1], parts[2]), parts[0], parts[1], parts[2]);
   var spec = findEntity(parts[0], parts[1]);
   if (status) toast((spec ? spec.label + ': ' : '') + status.text);
 }
@@ -219,20 +179,20 @@ export function sendHold(room, entity, aspect, value, hold) {
   return postFamily('/api/cmd', body).then(function () {
     return true;
   }).catch(function (e) {
-    toast(errText(e));
+    toast(logic.errText(e));
     return false;
   });
 }
 
 export function sendLightsOff() {
   postFamily('/api/lights/off').catch(function (e) {
-    toast(errText(e));
+    toast(logic.errText(e));
   });
 }
 
 export function sendParam(unit, param, value, onError) {
   postFamily('/api/param', { unit: unit, param: param, value: value }).catch(function (e) {
-    toast(errText(e));
+    toast(logic.errText(e));
     if (onError) onError();
   });
 }
@@ -325,7 +285,7 @@ function showRequest(el, row, room, entity, aspect, value) {
   } else if (el.tagName !== 'INPUT') {
     var slot = row.querySelector('.stepper-value, .dial-target, .sval');
     if (slot) {
-      slot.textContent = formatCmdValue(room, entity, aspect, value);
+      slot.textContent = cmdFormatter(room, entity, aspect)(value);
       slot.classList.add('cmd-target');
     }
   }
