@@ -15,9 +15,9 @@ section, and the validator refuses a mismatch with `invalid-manifest`.
 | `entities` | [EntitiesSection](#entitiessection) | no | The entities this unit binds. Required for adapters, allowed for automations (virtual sensors), refused for services. |
 | `naming` | [UnitNaming](#unitnaming) | no | Human names for voice and the dashboard. The dashboard reads well only when these are set. |
 | `params` | table of name → [ParamSpec](#paramspec) | no | Live parameters, keyed by name (`home/config/{unit}/{param}`). Names become key segments (`invalid-name`). Every automation also has `enabled`, a `bool` that defaults to `true` and the family may edit. While it is `false` the SDK drops the automation's commands. Declaring `[params.enabled]` changes its default or who may edit it, and it must stay a `bool` (`invalid-manifest`). |
-| `runtime` | [RuntimeSection](#runtimesection) | yes |  |
+| `runtime` | [RuntimeSection](#runtimesection) | yes | How the supervisor starts, restarts and stops the unit. |
 | `schema` | integer | yes | Contract version. Must be 1 (`unsupported-schema` otherwise). |
-| `unit` | [UnitSection](#unitsection) | yes |  |
+| `unit` | [UnitSection](#unitsection) | yes | The unit's name, kind and description. |
 
 ### BusSection
 

@@ -460,7 +460,6 @@ trace: one JSON object at `home/health/{unit}/event` via
 | kind | reason / fields | when |
 |---|---|---|
 | `drop` | `reason = "malformed-payload"`, `topic` or `key` | undecodable input from either side |
-| `drop` | `reason = "malformed-topic"`, `topic` (the raw bytes, `repr`-ed) | an MQTT topic that is not valid UTF-8; emitted by the SDK's guard, not the adapter |
 | `drop` | `reason = "invalid-command"`, `key`, `cmd_id` | bad envelope, unknown aspect, wrong type, out of bounds |
 | `drop` | `reason = "unknown-device"`, `topic` | a device outside the adapter's own view, first sight only |
 | `drop` | `reason = "reserved-aspect"`, `topic` | a native field that would mint `available` |
@@ -479,6 +478,27 @@ exist). Keep them to transitions and drops, not one per message, and list
 them in the module docstring. A degraded condition (a silent bridge, an
 unreachable router) gets its own event kind, not `drop`, since nothing
 was dropped.
+
+### Events the SDK emits
+
+The SDK emits these on the unit's behalf. A module docstring lists only
+the events its own code emits. `tests/adapters/test_docstrings.py`
+checks this table against the SDK's source.
+
+| kind | reason / fields | emitted by | when |
+|---|---|---|---|
+| `drop` | `reason = "malformed-payload"`, `key` | `Session.parse_command`, `Session.decode_json` | a sample that is not JSON |
+| `drop` | `reason = "invalid-command"`, `key`, `cmd_id` | `Session.parse_command` | a command whose envelope does not parse |
+| `drop` | `reason = "non-finite"`, `key` | `Session.put_json` | a value JSON cannot carry, such as NaN |
+| `drop` | `reason = "invalid-forecast"`, `key`, `detail` | `Session.put_forecast` | points `homeostat.forecast.encode` refuses |
+| `drop` | `reason = "malformed-topic"`, `topic` (the raw bytes, `repr`-ed) | `mqtt.guard` | an MQTT topic that is not valid UTF-8 |
+| `device-silent` | `topic` (the entity's `id`) | `availability.SilenceWatch` | a device silent past the timeout (once per transition) |
+| `paused`, `resumed` | none | `Context` | the automation's `enabled` parameter changes ([Pausing an automation](design.md#pausing-an-automation)) |
+| `redeliver-failed` | `error` | `Context` | on resume, a query for a binding's current values fails |
+| `drop` | `reason = "house-unreadable"`, `key`, `error` | `Context` | the house cannot be read to tell a button's press from its state, so the `action` counts as a press |
+| `restore-failed` | `key`, `reason` | `ctx.restore` | the recorder did not answer, or its query failed |
+| `source-dropped`, `source-restored` | `entity`, `aspect`, `source` | `ctx.source_used` | a source stops or starts contributing ([design](design.md#which-sources-a-computation-actually-used)) |
+| `decision` | `rule`, `outcome` | `ctx.decision` | a rule's outcome changes ([Unit timeline](design.md#unit-timeline)) |
 
 ## 7. Availability
 
