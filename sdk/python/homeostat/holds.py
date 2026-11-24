@@ -1,10 +1,10 @@
 """Hold bookkeeping for an automation's Context (docs/design.md#holds).
 
-A HoldBook keeps the holds one unit has published under
+A `_HoldBook` keeps the holds one unit has published under
 home/hold/{unit}/ and which of them it has asserted since it started.
 It reads them from the state mirror on first use, so a restart keeps a
 hold's id when its wish is unchanged. The Context validates a hold's
-arguments and builds the wish; the HoldBook publishes and deletes.
+arguments and builds the wish; the book publishes and deletes.
 """
 
 import json
@@ -22,19 +22,12 @@ def _as_json(value: Any) -> Any:
     return json.loads(json.dumps(value))
 
 
-class HoldBook:
+class _HoldBook:
     """The holds one unit has published, and which it has asserted.
 
-    Parameters
-    ----------
-    session : UnitSession
-        The unit's bus session.
-    unit : str
-        The unit's name.
-    paused : Callable[[], bool]
-        Whether the automation is paused. `hold` asks it under this
-        book's lock, so a pause that releases every hold cannot race a
-        hold that publishes one.
+    `paused` says whether the automation is paused. `hold` asks it under
+    this book's lock, so a pause that releases every hold cannot race a
+    hold that publishes one.
     """
 
     def __init__(self, session: UnitSession, unit: str, paused: Callable[[], bool]):
@@ -56,14 +49,8 @@ class HoldBook:
         """Hold `wish` at `key`, unless paused or already held.
 
         Holding the same wish again publishes nothing and keeps the
-        hold's id.
-
-        Parameters
-        ----------
-        key : str
-            The concrete hold key.
-        wish : dict
-            The hold's value, priority and optional `until` and `reason`.
+        hold's id. `wish` is the hold's value, priority and optional
+        `until` and `reason`.
         """
         # Under the lock, which `release` and a pause also take, so a hold
         # and a release racing on two subscription threads cannot leave a
@@ -83,32 +70,13 @@ class HoldBook:
             self._session.put_json(key, record)
 
     def holding(self, key: str, value: Any) -> bool:
-        """Return whether the unit holds `value` at `key`.
-
-        Parameters
-        ----------
-        key : str
-            The concrete hold key.
-        value : Any
-            The value to compare, as JSON.
-
-        Returns
-        -------
-        bool
-            Whether a hold at `key` has this value.
-        """
+        """Return whether the unit holds `value` at `key`, compared as JSON."""
         with self._lock:
             current = self._own().get(key)
         return current is not None and _as_json(current.get("value")) == _as_json(value)
 
     def release(self, key: str) -> None:
-        """Release the hold at `key`. Releasing one not held does nothing.
-
-        Parameters
-        ----------
-        key : str
-            The concrete hold key.
-        """
+        """Release the hold at `key`. Releasing one not held does nothing."""
         with self._lock:
             self._asserted.discard(key)
             holds = self._own()

@@ -1,6 +1,6 @@
 """Key-expression expansion in the automation Context: pure, no bus.
 
-`bindings.expand` is what makes a unit's subscriptions agree with what `plan`
+`bindings._expand` is what makes a unit's subscriptions agree with what `plan`
 printed for it (src/expand.rs), so these pin the four rules that matter —
 templates per bound entity, zones per member room, the two never at once,
 and no duplicate expression.
@@ -21,7 +21,7 @@ from homeostat.automation import (
     HistoryUnavailable,
     _house_has_recorder,
 )
-from homeostat.bindings import expand
+from homeostat.bindings import _expand
 from homeostat.house import Entity
 from homeostat.intervals import IntervalsUncovered
 from homeostat.session import QueryError, QueryTimeout
@@ -51,7 +51,7 @@ LATCHES = [entity("night_mode", "global"), entity("motion_lighting", "hallway")]
 class TemplateTest(unittest.TestCase):
     def test_both_slots_expand_per_bound_entity(self):
         self.assertEqual(
-            expand("home/state/{room}/{entity}/on", ZONES, LATCHES),
+            _expand("home/state/{room}/{entity}/on", ZONES, LATCHES),
             ["home/state/global/night_mode/on", "home/state/hallway/motion_lighting/on"],
         )
 
@@ -59,14 +59,14 @@ class TemplateTest(unittest.TestCase):
         """Unexpanded, this fails silently: zenoh takes `{room}` as a
         literal chunk, so the expression matches no key that exists."""
         self.assertEqual(
-            expand("home/cmd/{room}/{entity}/**", ZONES, LATCHES),
+            _expand("home/cmd/{room}/{entity}/**", ZONES, LATCHES),
             ["home/cmd/global/night_mode/**", "home/cmd/hallway/motion_lighting/**"],
         )
 
     def test_a_room_only_template_does_not_repeat_a_shared_room(self):
         upstairs = [entity("a", "bedroom"), entity("b", "bedroom")]
         self.assertEqual(
-            expand("home/state/{room}/thermo/temperature", ZONES, upstairs),
+            _expand("home/state/{room}/thermo/temperature", ZONES, upstairs),
             ["home/state/bedroom/thermo/temperature"],
         )
 
@@ -74,22 +74,22 @@ class TemplateTest(unittest.TestCase):
         """Their cmd path belongs to the arbiter, as in the core."""
         mixed = [entity("latch", "global"), entity("pump", "boiler", "arbitrated")]
         self.assertEqual(
-            expand("home/cmd/{room}/{entity}/**", ZONES, mixed),
+            _expand("home/cmd/{room}/{entity}/**", ZONES, mixed),
             ["home/cmd/global/latch/**"],
         )
         self.assertEqual(
-            expand("home/state/{room}/{entity}/**", ZONES, mixed),
+            _expand("home/state/{room}/{entity}/**", ZONES, mixed),
             ["home/state/global/latch/**", "home/state/boiler/pump/**"],
         )
 
     def test_binding_nothing_expands_to_nothing(self):
-        self.assertEqual(expand("home/state/{room}/{entity}/on", ZONES, []), [])
+        self.assertEqual(_expand("home/state/{room}/{entity}/on", ZONES, []), [])
 
 
 class ZoneTest(unittest.TestCase):
     def test_a_zone_in_the_room_slot_expands_per_member_room(self):
         self.assertEqual(
-            expand("home/state/downstairs/*/temperature", ZONES, []),
+            _expand("home/state/downstairs/*/temperature", ZONES, []),
             [
                 "home/state/livingroom/*/temperature",
                 "home/state/hallway/*/temperature",
@@ -98,11 +98,11 @@ class ZoneTest(unittest.TestCase):
 
     def test_a_plain_room_is_left_alone(self):
         expr = "home/state/office/thermo/temperature"
-        self.assertEqual(expand(expr, ZONES, []), [expr])
+        self.assertEqual(_expand(expr, ZONES, []), [expr])
 
     def test_a_non_entity_class_never_expands(self):
         expr = "home/discovery/z2m"
-        self.assertEqual(expand(expr, ZONES, LATCHES), [expr])
+        self.assertEqual(_expand(expr, ZONES, LATCHES), [expr])
 
     def test_forecast_expands_like_state(self):
         # A forecast is the same series extended forward, so it is
@@ -110,7 +110,7 @@ class ZoneTest(unittest.TestCase):
         # templated forecast publish that `plan` accepts must be
         # addressable at runtime.
         self.assertEqual(
-            expand("home/forecast/{room}/{entity}/price", ZONES, LATCHES),
+            _expand("home/forecast/{room}/{entity}/price", ZONES, LATCHES),
             [
                 "home/forecast/global/night_mode/price",
                 "home/forecast/hallway/motion_lighting/price",
@@ -119,7 +119,7 @@ class ZoneTest(unittest.TestCase):
 
     def test_a_zone_expands_in_a_forecast_room_slot_too(self):
         self.assertEqual(
-            expand("home/forecast/downstairs/*/price", ZONES, []),
+            _expand("home/forecast/downstairs/*/price", ZONES, []),
             ["home/forecast/livingroom/*/price", "home/forecast/hallway/*/price"],
         )
 

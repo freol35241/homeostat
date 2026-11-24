@@ -39,7 +39,7 @@ from . import bindings, history, house, intervals, keys
 from .forecast import Forecast, Point
 from .forecast import decode as decode_forecast
 from .history import HistoryUnavailable
-from .holds import HoldBook
+from .holds import _HoldBook
 from .house import Entity, HouseModel
 from .session import QueryError, UnitSession, wait_for_shutdown
 from .stamps import Newest
@@ -171,7 +171,9 @@ class Context:
         if session is None:
             session = UnitSession(unit, os.environ[keys.ENV_BUS])
         self._session = session
-        self._holds = HoldBook(session, unit, lambda: self.paused)
+        # Never call into the hold book with `self._lock` held: the book
+        # calls `paused`, which takes `self._lock`.
+        self._holds = _HoldBook(session, unit, lambda: self.paused)
         if self._holds_anything():
             # Read now, so a pause, which runs on a zenoh callback, never has
             # to wait on a get.
@@ -296,7 +298,7 @@ class Context:
     def _variants(self, expr: str) -> list[str]:
         # Only templates need the entities. A unit with templates read the
         # house at startup.
-        return bindings.expand(expr, self._zones, self.entities if "{" in expr else [])
+        return bindings._expand(expr, self._zones, self.entities if "{" in expr else [])
 
     def subscribe(self, binding: str, handler: Callable[..., None]) -> None:
         """Subscribe a `[bus.subscribes]` binding and deliver its current values.
@@ -425,7 +427,7 @@ class Context:
         """Return the concrete key a binding addresses.
 
         `use` is "publish" for a `[bus.publishes]` binding and "history" for
-        a `[bus.subscribes]` one. The slots are filled as `bindings.fill_slots`
+        a `[bus.subscribes]` one. The slots are filled as `bindings._fill_slots`
         does. A key the declared expression does not cover is refused, so
         the manifest decides what the unit may publish and whose past it may
         read.
@@ -434,7 +436,7 @@ class Context:
             expr = self._publishes[binding]["key"]
         else:
             expr = self._subscribes[binding]
-        key = bindings.fill_slots(
+        key = bindings._fill_slots(
             expr,
             self.unit,
             f"{use} {binding!r}",

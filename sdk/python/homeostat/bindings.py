@@ -1,9 +1,11 @@
 """Key resolution for an automation's bindings: pure, no bus.
 
 A binding is a key expression from the unit's `[bus.subscribes]` or
-`[bus.publishes]`. `expand` turns one into the expressions the unit
-subscribes to, as `plan` printed them. `fill_slots` turns one into the
-concrete key a publish or a history read addresses.
+`[bus.publishes]`. `_expand` turns one into the expressions the unit
+subscribes to, as `plan` printed them. `_fill_slots` turns one into the
+concrete key a publish or a history read addresses. `Context._concrete_key`
+then checks, with `_expand` through `Context._variants`, that the declared
+expression covers that key.
 """
 
 from collections.abc import Iterable
@@ -15,7 +17,7 @@ from .house import Entity
 # These are the classes with slots to fill and the ones that expand.
 # `arbiter` is left out because only adapters use it, and adapters use
 # UnitSession directly instead of a Context.
-ENTITY_ADDRESSED = tuple(c for c in vocabulary.ENTITY_ADDRESSED if c != "arbiter")
+_ENTITY_ADDRESSED = tuple(c for c in vocabulary.ENTITY_ADDRESSED if c != "arbiter")
 
 
 def _dedup(exprs: Iterable[str]) -> list[str]:
@@ -27,7 +29,7 @@ def _dedup(exprs: Iterable[str]) -> list[str]:
     return list(dict.fromkeys(exprs))
 
 
-def expand(
+def _expand(
     expr: str, zones: dict[str, list[str]], entities: list[Entity]
 ) -> list[str]:
     """Expand an expression as the core does at plan time (src/expand.rs).
@@ -39,7 +41,7 @@ def expand(
     slot to fill (src/keyspace.rs, ENTITY_ADDRESSED).
     """
     segments = expr.split("/")
-    if len(segments) < 3 or segments[1] not in ENTITY_ADDRESSED:
+    if len(segments) < 3 or segments[1] not in _ENTITY_ADDRESSED:
         return [expr]
     if "{room}" in segments or "{entity}" in segments:
 
@@ -63,7 +65,7 @@ def expand(
     return ["/".join([*segments[:2], room, *segments[3:]]) for room in rooms]
 
 
-def fill_slots(
+def _fill_slots(
     expr: str,
     unit: str,
     what: str,
@@ -75,40 +77,16 @@ def fill_slots(
 ) -> str:
     """Return the concrete key `expr` addresses with its slots filled.
 
-    Literal expression segments are defaults, and wildcard and template
-    segments must be named. A hold key is addressed under `unit`'s name.
-    A forecast key has one more slot than the others: its source, which
-    says who publishes this forecast (docs/design.md#forecasts). Whether
-    the declared expression covers the key is the caller's check.
-
-    Parameters
-    ----------
-    expr : str
-        The declared key expression.
-    unit : str
-        The unit's name, for a hold key.
-    what : str
-        What resolves the key, such as ``"publish 'lamp'"``, for the
-        error messages.
-    room : str or None
-        The room slot; required where the expression's is a wildcard.
-    entity : str or None
-        The entity slot; required where the expression's is a wildcard.
-    aspect : str or None
-        The aspect slot; required where the expression's is a wildcard.
-    source : str or None, optional
-        The source slot of a forecast key.
-
-    Returns
-    -------
-    str
-        The concrete key.
-
-    Raises
-    ------
-    ValueError
-        If a slot the key needs is missing or not concrete, or a slot is
-        given that the key does not have.
+    Literal expression segments are defaults. For a hold or an
+    entity-addressed key, `room`, `entity` and `aspect` are required where
+    the expression's segment is a wildcard, a `{template}` or missing. A
+    hold key is addressed under `unit`'s name. A forecast key has one more
+    slot than the others: its source, which says who publishes this
+    forecast (docs/design.md#forecasts). Another entity-addressed key
+    refuses a source, and a hold key ignores it. Any other key is `expr`
+    itself: it refuses room, entity and aspect, and ignores a source.
+    `what` names the caller in error messages, such as ``"publish 'lamp'"``.
+    Whether the declared expression covers the key is the caller's check.
     """
     segments = expr.split("/")
     if segments[1] == "hold":
@@ -122,7 +100,7 @@ def fill_slots(
                 raise ValueError(f"{what} needs a concrete {slot}")
             parts.append(part)
         key = "/".join(["home", "hold", unit, *parts])
-    elif segments[1] in ENTITY_ADDRESSED:
+    elif segments[1] in _ENTITY_ADDRESSED:
         if segments[1] == "forecast":
             names = ("room", "entity", "aspect", "source")
             slots = {
