@@ -408,12 +408,14 @@ reached only on the LAN or over WireGuard (see
 ## Status
 
 Pre-1.0. What works today: the validator, `homeostat plan` and `apply`,
-the supervisor, the Python SDK, the recorder (history, forecasts and
-archives), the arbiter, the persons automation (one person from the
+the supervisor, the Python SDK, the clock, the recorder (history,
+forecasts and archives), the arbiter, the buttons service (a button's
+gestures as family commands), the persons automation (one person from the
 trackers each carries), the dashboard and the read-only MCP server.
 There are adapters for Zigbee2MQTT, ESPHome, OwnTracks, an IVT490 heat
 pump, Aduro pellet burners, ONVIF cameras through go2rtc, OpenWrt routers,
-433 MHz transmitters and ntfy notifications. Voice control is planned
+433 MHz transmitters, ntfy notifications and the companion Android app
+([protocol](docs/companion-protocol.md)). Voice control is planned
 ([design record](docs/design.md#voice)).
 
 ## Development
