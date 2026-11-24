@@ -6,7 +6,16 @@ from .forecast import Forecast, Point
 from .freshness import Freshness
 from .history import HistoryUnavailable
 from .intervals import IntervalsUncovered
-from .session import ConfigWriteError, QueryError, QueryTimeout, UnitSession, connect
+from .session import (
+    ConfigWriteError,
+    QueryError,
+    QueryTimeout,
+    UnitSession,
+    async_shutdown_event,
+    connect,
+    shutdown_event,
+    wait_for_shutdown,
+)
 from .stamps import Newest
 
 __all__ = [
@@ -21,6 +30,7 @@ __all__ = [
     "QueryError",
     "QueryTimeout",
     "UnitSession",
+    "async_shutdown_event",
     "automation",
     "connect",
     "forecast",
@@ -28,5 +38,7 @@ __all__ = [
     "house",
     "intervals",
     "keys",
+    "shutdown_event",
     "stamps",
+    "wait_for_shutdown",
 ]

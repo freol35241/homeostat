@@ -87,7 +87,6 @@ import contextlib
 import json
 import math
 import os
-import signal
 import threading
 from functools import partial
 from pathlib import Path
@@ -162,9 +161,11 @@ class Causes:
             self.held(key, None)
             return
         try:
-            self.held(key, json.loads(sample.payload.to_bytes()))
+            record = json.loads(sample.payload.to_bytes())
         except ValueError:
+            self.session.health_event("drop", reason="malformed-payload", key=key)
             return
+        self.held(key, record)
 
     def changed(self, entity, value: bool) -> None:
         """Attribute a change of `entity`'s `on` to `value`, and act on it."""
@@ -760,10 +761,7 @@ async def serve(unit, session, config, devices_conf) -> None:
     # effort and does not gate readiness.
     session.ready()
 
-    stop = asyncio.Event()
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(sig, stop.set)
-    await stop.wait()
+    await homeostat.async_shutdown_event().wait()
 
     mdns_task.cancel()
     with contextlib.suppress(asyncio.CancelledError):

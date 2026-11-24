@@ -49,7 +49,6 @@ import hashlib
 import json
 import math
 import os
-import signal
 import sqlite3
 import threading
 import time
@@ -2310,10 +2309,7 @@ def main():
     )
     sess.ready()
 
-    stop = threading.Event()
-    signal.signal(signal.SIGTERM, lambda *_: stop.set())
-    signal.signal(signal.SIGINT, lambda *_: stop.set())
-    stop.wait()
+    session.wait_for_shutdown()
 
     for sub in subs:
         sub.undeclare()

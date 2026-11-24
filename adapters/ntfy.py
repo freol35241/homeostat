@@ -49,7 +49,6 @@ static record per entity, with the aspect descriptor.
 import json
 import os
 import queue
-import signal
 import threading
 import time
 import urllib.error
@@ -315,10 +314,7 @@ def main():
 
     session.ready()
 
-    stop = threading.Event()
-    signal.signal(signal.SIGTERM, lambda *_: stop.set())
-    signal.signal(signal.SIGINT, lambda *_: stop.set())
-    stop.wait()
+    homeostat.wait_for_shutdown()
 
     outbox.put(None)
     sender_thread.join(timeout=HTTP_TIMEOUT_S + 1)

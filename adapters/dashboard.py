@@ -72,6 +72,7 @@ from aiohttp import WSMsgType, web
 from homeostat import (
     ConfigWriteError,
     Newest,
+    async_shutdown_event,
     connect,
     history,
     house,
@@ -1680,13 +1681,7 @@ async def serve(app: web.Application, hub: Hub, host: str, port: int) -> None:
     await site.start()
     hub.session.ready()  # ready once the server accepts connections
 
-    stop = asyncio.Event()
-    loop = asyncio.get_running_loop()
-    import signal
-
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(sig, stop.set)
-    await stop.wait()
+    await async_shutdown_event().wait()
     await runner.cleanup()
 
 

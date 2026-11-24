@@ -327,7 +327,7 @@ def main():
 
     session.ready()
 
-    mqtt.wait_for_shutdown()
+    homeostat.wait_for_shutdown()
 
     # The MQTT loop stops first: an in-flight callback during teardown
     # would otherwise put on a closed zenoh session.

@@ -5,12 +5,17 @@ sets. It opens a client session against the supervisor's router and
 returns a UnitSession. Scouting is off, because the topology is explicit.
 Call `ready()` once the unit can do its job. The supervisor treats a unit
 as up when its liveliness token is declared, not when its process
-starts.
+starts. `wait_for_shutdown()` blocks until the supervisor's SIGTERM.
+`shutdown_event()` returns the event the signal sets, for a unit whose
+worker threads stop on it, and `async_shutdown_event()` is its asyncio
+form.
 """
 
+import asyncio
 import datetime
 import json
 import os
+import signal
 import threading
 import time
 import weakref
@@ -69,6 +74,85 @@ def connect() -> "UnitSession":
     unit = os.environ[keys.ENV_UNIT]
     endpoint = os.environ[keys.ENV_BUS]
     return UnitSession(unit, endpoint)
+
+
+# The process's one shutdown event. Its handlers are installed on the first
+# call to `shutdown_event`, because a second install would replace them and
+# strand the event an earlier caller holds.
+_shutdown = threading.Event()
+_shutdown_installed = False
+
+# The asyncio shutdown event of each running loop, for the same reason.
+_async_shutdown: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Event]" = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def shutdown_event() -> threading.Event:
+    """Return the event that SIGTERM or SIGINT sets.
+
+    SIGTERM is the supervisor's stop signal. A unit that only waits for it
+    calls `wait_for_shutdown`. One that runs worker threads passes them the
+    event, so they see the stop too. Every call returns the same event, so
+    a unit can hand it to a worker and still call `Context.run`.
+
+    Returns
+    -------
+    threading.Event
+        Set when either signal arrives.
+
+    Raises
+    ------
+    ValueError
+        If the first call is made from a thread other than the main thread,
+        the only one Python lets install signal handlers.
+    """
+    global _shutdown_installed
+    if not _shutdown_installed:
+        signal.signal(signal.SIGTERM, lambda *_: _shutdown.set())
+        signal.signal(signal.SIGINT, lambda *_: _shutdown.set())
+        _shutdown_installed = True
+    return _shutdown
+
+
+def wait_for_shutdown() -> None:
+    """Block until SIGTERM or SIGINT.
+
+    Raises
+    ------
+    ValueError
+        If the first call to `shutdown_event` is made from a thread other
+        than the main thread.
+    """
+    shutdown_event().wait()
+
+
+def async_shutdown_event() -> asyncio.Event:
+    """Return the asyncio event that SIGTERM or SIGINT sets.
+
+    The asyncio form of `shutdown_event`. The handlers are the running
+    loop's, so the signal wakes the loop wherever it is waiting. Every call
+    on one loop returns the same event.
+
+    Returns
+    -------
+    asyncio.Event
+        Set when either signal arrives.
+
+    Raises
+    ------
+    RuntimeError
+        If no event loop is running in this thread, or if the loop's first
+        call is made from a thread other than the main thread.
+    """
+    loop = asyncio.get_running_loop()
+    stop = _async_shutdown.get(loop)
+    if stop is None:
+        stop = asyncio.Event()
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(sig, stop.set)
+        _async_shutdown[loop] = stop
+    return stop
 
 
 class ConfigWriteError(Exception):
@@ -230,30 +314,6 @@ class UnitSession:
             return
         self._session.put(key, encoded)
 
-    def parse_forecast(self, sample: zenoh.Sample):
-        """Decode a subscribed forecast sample, or drop it with a health event.
-
-        Returns None after a "malformed-payload" drop event, as
-        `parse_command` does. What to do when `issued` is old is the
-        consumer's own policy, not the SDK's (see homeostat.forecast).
-
-        Parameters
-        ----------
-        sample : zenoh.Sample
-            A sample received on a forecast key.
-
-        Returns
-        -------
-        Forecast or None
-            The decoded forecast, or None if the payload was malformed.
-        """
-        key = str(sample.key_expr)
-        try:
-            return forecast.decode(sample.payload.to_bytes())
-        except ValueError as error:
-            self.health_event("drop", reason="malformed-payload", key=key, detail=str(error))
-            return None
-
     def parse_command(self, sample: zenoh.Sample):
         """Run the command prologue every adapter shares (docs/adapters.md, §4).
 
@@ -411,6 +471,59 @@ class UnitSession:
         """
         return self._session.declare_subscriber(keyexpr, callback)
 
+    def subscribe_json(self, keyexpr: str, handler: Callable[[str, Any, zenoh.Sample], None]):
+        """Declare a subscriber that decodes each sample's JSON payload.
+
+        A put whose payload is not JSON is dropped with a "malformed-payload"
+        event naming its key, as `parse_command` drops one
+        (docs/adapters.md, §6). A delete has no payload and is skipped.
+
+        Parameters
+        ----------
+        keyexpr : str
+            The key expression to subscribe to.
+        handler : Callable[[str, Any, zenoh.Sample], None]
+            Called as `handler(key, value, sample)` for each put that
+            decodes, on zenoh's thread.
+
+        Returns
+        -------
+        zenoh.Subscriber
+            The subscriber; undeclare it to stop.
+        """
+
+        def callback(sample: zenoh.Sample) -> None:
+            decoded = self.decode_json(sample)
+            if decoded is not None:
+                handler(*decoded, sample)
+
+        return self.subscribe(keyexpr, callback)
+
+    def decode_json(self, sample: zenoh.Sample) -> tuple[str, Any] | None:
+        """Return a sample's key and decoded JSON payload, by `subscribe_json`'s rule.
+
+        A put whose payload is not JSON is dropped with a "malformed-payload"
+        event naming its key. A delete has no payload and is skipped.
+
+        Parameters
+        ----------
+        sample : zenoh.Sample
+            The sample a subscriber received.
+
+        Returns
+        -------
+        tuple[str, Any] | None
+            The key and the value, or None for a sample that is skipped.
+        """
+        if sample.kind == zenoh.SampleKind.DELETE:
+            return None
+        key = str(sample.key_expr)
+        try:
+            return key, json.loads(sample.payload.to_bytes())
+        except ValueError:
+            self.health_event("drop", reason="malformed-payload", key=key)
+            return None
+
     def is_live(self, sample: zenoh.Sample) -> bool:
         """Return whether a sample is a live publish rather than a stamped one.
 
@@ -454,8 +567,8 @@ class UnitSession:
             return True
         if not self._router_ids:
             self._router_ids = {str(zid) for zid in self._session.info.routers_zid()}
-        # With no router known, every sample is taken as live, as before
-        # the core stamped samples.
+        # With no router known, no stamp can be told from a router's, so
+        # every sample is taken as live.
         return not self._router_ids or str(stamp.get_id()) in self._router_ids
 
     def sample_age(self, sample: zenoh.Sample) -> float:
@@ -566,7 +679,7 @@ class UnitSession:
         The age is read from the reply's attachment, which the core's
         last-value mirrors write. A reply without one has age zero. The
         stamp is the reply's timestamp: the mirrored value's own, or None.
-        Non-JSON payloads are ignored, as a subscriber ignores them.
+        A reply whose payload is not JSON is left out, with no event.
         `timeout_s` bounds the wait for replies, with zenoh's default of
         10 s when None. Running out raises QueryTimeout.
 

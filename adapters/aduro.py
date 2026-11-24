@@ -459,7 +459,7 @@ def main():
 
     session.ready()
 
-    mqtt.wait_for_shutdown()
+    homeostat.wait_for_shutdown()
 
     stop.set()
     watchdog_thread.join(timeout=5)

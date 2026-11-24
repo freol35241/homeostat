@@ -63,7 +63,8 @@ back.
 
 Health events at home/health/{unit}/event: `drop` (off-schema-key,
 invalid-command, unbound, malformed-hold, and malformed-payload for a
-grant table that does not read), `refuse` when a command loses to a
+grant table that does not read or a health status, health event,
+`available` or clock minute that is not JSON), `refuse` when a command loses to a
 hold, `preempt` when a higher hold takes over, `resume` when a
 lower one takes over after it, `replay-late` when the core's replay
 after a restart did not come in time and the arbiter starts without it,
@@ -75,7 +76,6 @@ import datetime
 import json
 import os
 import secrets
-import signal
 import threading
 import time
 from functools import partial
@@ -985,25 +985,20 @@ def main():
     # move the device. A holder an apply removes loses its grant instead.
     gone_statuses = ("open",)
 
-    def on_health(sample) -> None:
-        holder = str(sample.key_expr).split("/")[2]
-        try:
-            status = json.loads(sample.payload.to_bytes()).get("status")
-        except (ValueError, AttributeError):
+    def on_health(key, value, sample) -> None:
+        if not isinstance(value, dict):
             return
+        holder = key.split("/")[2]
+        status = value.get("status")
         effects: list = []
         with changed:
             resolver.holder(holder, status in gone_statuses, effects)
             if routes_box:
                 carry_out_locked(effects)
 
-    def on_event(sample) -> None:
+    def on_event(key, event, sample) -> None:
         # An adapter's drop of a forward it could not deliver names the
         # forward's id (docs/design.md#when-a-holder-stops).
-        try:
-            event = json.loads(sample.payload.to_bytes())
-        except ValueError:
-            return
         if (
             isinstance(event, dict)
             and event.get("kind") == "drop"
@@ -1014,13 +1009,9 @@ def main():
                 if resolver.undelivered(event["cmd_id"]) and routes_box:
                     carry_out_locked([])
 
-    def on_available(sample) -> None:
-        parts = str(sample.key_expr).split("/")
-        try:
-            back = json.loads(sample.payload.to_bytes()) is True
-        except ValueError:
-            return
-        if not back or len(parts) != 5:
+    def on_available(key, value, sample) -> None:
+        parts = key.split("/")
+        if value is not True or len(parts) != 5:
             return
         effects: list = []
         with changed:
@@ -1029,9 +1020,9 @@ def main():
                 carry_out_locked(effects)
 
     health_subs = [
-        session.subscribe("home/health/*", on_health),
-        session.subscribe("home/health/*/event", on_event),
-        session.subscribe("home/state/*/*/available", on_available),
+        session.subscribe_json("home/health/*", on_health),
+        session.subscribe_json("home/health/*/event", on_event),
+        session.subscribe_json("home/state/*/*/available", on_available),
     ]
 
     # The family's holds, the units' holds and the applied holds outlive
@@ -1111,13 +1102,7 @@ def main():
             resolver.set_offset(offset, effects)
             carry_out_locked(effects)
 
-    def on_minute(sample) -> None:
-        try:
-            on_clock(json.loads(sample.payload.to_bytes()))
-        except ValueError:
-            return
-
-    clock_sub = session.subscribe(CLOCK_KEY, on_minute)
+    clock_sub = session.subscribe_json(CLOCK_KEY, lambda _key, minute, _sample: on_clock(minute))
     for _key, minute in session.get_json(CLOCK_KEY):
         on_clock(minute)
 
@@ -1198,9 +1183,7 @@ def main():
 
     session.ready()
 
-    stop = threading.Event()
-    signal.signal(signal.SIGTERM, lambda *_: stop.set())
-    signal.signal(signal.SIGINT, lambda *_: stop.set())
+    stop = homeostat.shutdown_event()
     expiry = threading.Thread(target=expiry_loop, args=(stop,), daemon=True)
     expiry.start()
     stop.wait()

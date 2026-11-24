@@ -48,7 +48,6 @@ import base64
 import contextlib
 import hashlib
 import os
-import signal
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
@@ -440,10 +439,7 @@ async def run_camera(entity, conf: dict, session, http: aiohttp.ClientSession, s
 
 
 async def serve(session, config, cameras_conf) -> None:
-    loop = asyncio.get_running_loop()
-    stop = asyncio.Event()
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(sig, stop.set)
+    stop = homeostat.async_shutdown_event()
 
     async with aiohttp.ClientSession() as http:
         tasks = []

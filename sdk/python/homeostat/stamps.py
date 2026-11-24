@@ -43,9 +43,9 @@ class Newest:
     older than what was already delivered and must not replace it. Stamps
     are compared as zenoh orders them: by time, then by publisher.
 
-    A value without a stamp comes from a core that does not stamp. It is
-    ordered by arrival, as before stamps existed: a live sample is always
-    delivered, and a catch-up for a key already delivered is not.
+    A value without a stamp has no time to compare. It is ordered by
+    arrival: a live sample is always delivered, and a catch-up for a key
+    already delivered is not.
     """
 
     def __init__(self):
