@@ -1,6 +1,6 @@
 """Key-expression expansion in the automation Context: pure, no bus.
 
-`_expand` is what makes a unit's subscriptions agree with what `plan`
+`bindings._expand` is what makes a unit's subscriptions agree with what `plan`
 printed for it (src/expand.rs), so these pin the four rules that matter —
 templates per bound entity, zones per member room, the two never at once,
 and no duplicate expression.
@@ -19,9 +19,9 @@ from homeostat import keys
 from homeostat.automation import (
     Context,
     HistoryUnavailable,
-    _expand,
     _house_has_recorder,
 )
+from homeostat.bindings import _expand
 from homeostat.house import Entity
 from homeostat.intervals import IntervalsUncovered
 from homeostat.session import QueryError, QueryTimeout
