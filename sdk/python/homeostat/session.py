@@ -493,17 +493,36 @@ class UnitSession:
         """
 
         def callback(sample: zenoh.Sample) -> None:
-            if sample.kind == zenoh.SampleKind.DELETE:
-                return
-            key = str(sample.key_expr)
-            try:
-                value = json.loads(sample.payload.to_bytes())
-            except ValueError:
-                self.health_event("drop", reason="malformed-payload", key=key)
-                return
-            handler(key, value, sample)
+            decoded = self.decode_json(sample)
+            if decoded is not None:
+                handler(*decoded, sample)
 
         return self.subscribe(keyexpr, callback)
+
+    def decode_json(self, sample: zenoh.Sample) -> tuple[str, Any] | None:
+        """Return a sample's key and decoded JSON payload, by `subscribe_json`'s rule.
+
+        A put whose payload is not JSON is dropped with a "malformed-payload"
+        event naming its key. A delete has no payload and is skipped.
+
+        Parameters
+        ----------
+        sample : zenoh.Sample
+            The sample a subscriber received.
+
+        Returns
+        -------
+        tuple[str, Any] | None
+            The key and the value, or None for a sample that is skipped.
+        """
+        if sample.kind == zenoh.SampleKind.DELETE:
+            return None
+        key = str(sample.key_expr)
+        try:
+            return key, json.loads(sample.payload.to_bytes())
+        except ValueError:
+            self.health_event("drop", reason="malformed-payload", key=key)
+            return None
 
     def is_live(self, sample: zenoh.Sample) -> bool:
         """Return whether a sample is a live publish rather than a stamped one.

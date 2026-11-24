@@ -30,13 +30,20 @@ class LiveParams:
     def __init__(self, session, defaults: dict):
         self._values = dict(defaults)
         self._live: set[str] = set()
-        self._sub = session.subscribe_json(keys.config_keyexpr(session.unit), self._on_config)
+        self._session = session
+        self._sub = session.subscribe(keys.config_keyexpr(session.unit), self._on_config)
         for key, value in session.get_json(keys.config_keyexpr(session.unit)):
             name = key.rsplit("/", 1)[-1]
             if name not in self._live:
                 self._store(name, value)
 
-    def _on_config(self, key: str, value, sample) -> None:
+    def _on_config(self, sample) -> None:
+        # Subclasses override this hook with the raw sample, the recorder's
+        # in the released starter house among them, so it decodes here.
+        decoded = self._session.decode_json(sample)
+        if decoded is None:
+            return
+        key, value = decoded
         name = key.rsplit("/", 1)[-1]
         # Only a value that is kept counts as live, so an invalid one does
         # not make the seed skip the value the core serves.

@@ -377,8 +377,8 @@ class Params(LiveParams):
         self._on_change = on_change
         super().__init__(sess, PARAM_DEFAULTS)
 
-    def _on_config(self, key, value, sample) -> None:
-        super()._on_config(key, value, sample)
+    def _on_config(self, sample) -> None:
+        super()._on_config(sample)
         self._on_change()
 
     @property

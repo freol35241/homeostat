@@ -20,6 +20,10 @@ import paho.mqtt.client as mqtt
 import tomllib
 from paho.mqtt.enums import CallbackAPIVersion
 
+# The released starter house's MQTT adapters import the shutdown wait from
+# here, and the image runs them against this SDK.
+from .session import wait_for_shutdown  # noqa: F401
+
 ENV_CREDENTIALS = "HOMEOSTAT_MQTT_CREDENTIALS"
 
 
