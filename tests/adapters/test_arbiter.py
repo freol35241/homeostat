@@ -651,6 +651,16 @@ class MalformedTableTest(unittest.TestCase):
         session.deliver(FakeSample(PENDING_KEY, [owner_row(entity("hall", "lamp", "arbitrated"))]))
         self.assertEqual(routes.route(("hall", "lamp")), "arbitrated")
 
+    def test_a_hold_key_zenoh_refuses_leaves_the_last_in_force(self):
+        # The core admits `**/**`, which zenoh's KeyExpr refuses.
+        session = FakeSession(served={GRANTS_KEY: [owner_row(entity("hall", "door", "arbitrated"))]})
+        routes = Bindings(session, lambda arbitrated: None)
+        stove = {"name": "stove", "room": "utility", "capability": "burner", "write": "arbitrated", "owner": "aduro"}
+        session.deliver(FakeSample(GRANTS_KEY, [hold_row("heating", "automation", ["home/hold/heating/**/**"], stove)]))
+        self.assertEqual([e["reason"] for e in session.events], ["malformed-payload"])
+        self.assertEqual(routes.route(("hall", "door")), "arbitrated")
+        self.assertEqual(routes.route(("utility", "stove")), "unbound")
+
     def test_a_seed_that_does_not_read_stops_the_unit(self):
         # With no table in force there is nothing to route on; the
         # supervisor starting the arbiter again is the retry.
