@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "homeostat==0.23.0",
+#     "homeostat==0.24.0",
 #     "aioesphomeapi>=45,<46",
 #     "zeroconf>=0.130,<1",
 # ]
@@ -82,8 +82,8 @@ runtime number.
 import asyncio
 import contextlib
 import json
+import math
 import os
-import signal
 import threading
 from functools import partial
 from pathlib import Path
@@ -109,7 +109,7 @@ from aioesphomeapi import (
     SwitchState,
 )
 from homeostat import causes as causes_mod
-from homeostat import house, keys
+from homeostat import house, keys, vocabulary
 from zeroconf import ServiceStateChange
 from zeroconf.asyncio import AsyncServiceBrowser, AsyncServiceInfo, AsyncZeroconf
 
@@ -118,10 +118,11 @@ MDNS_SERVICE = "_esphomelib._tcp.local."
 DEFAULT_PORT = 6053
 OCCUPANCY_DEVICE_CLASSES = {"motion", "occupancy", "presence"}
 # ESPHome's native brightness is a 0.0-1.0 float. z2m's `brightness` is
-# the raw Zigbee 0-254 integer (see zigbee2mqtt.py, and the dashboard's
-# `b / 254`), so brightness is rescaled both ways to match it. color_temp
-# is mireds on both sides and is only rounded to an int.
-BRIGHTNESS_SCALE = 254
+# the raw Zigbee 0-254 integer (see zigbee2mqtt.py), the scale the
+# vocabulary names (vocabulary.BRIGHTNESS_RANGE), so brightness is rescaled
+# both ways to match it. color_temp is mireds on both sides and is only
+# rounded to an int.
+BRIGHTNESS_SCALE = vocabulary.BRIGHTNESS_RANGE[1]
 RUNTIME_ASPECT = "runtime_s"
 
 
@@ -157,9 +158,11 @@ class Causes:
             self.held(key, None)
             return
         try:
-            self.held(key, json.loads(sample.payload.to_bytes()))
+            record = json.loads(sample.payload.to_bytes())
         except ValueError:
+            self.session.health_event("drop", reason="malformed-payload", key=key)
             return
+        self.held(key, record)
 
     def changed(self, entity, value: bool) -> None:
         """Attribute a change of `entity`'s `on` to `value`, and act on it."""
@@ -550,14 +553,17 @@ async def run_device(
         client.subscribe_states(on_state)
 
     async def on_disconnect(expected: bool) -> None:
+        # One entity can hold several device keys, a switch and its runtime
+        # number, so each is marked once.
+        entities = {entity.name: entity for entity, _info in key_map.values()}.values()
         # A requested disconnect (adapter shutdown) is not a device loss,
         # so only an unexpected one marks the entities unavailable. Other
         # aspects keep their last values.
         if not expected:
-            for entity, _info in key_map.values():
+            for entity in entities:
                 session.put_json(keys.state_key(entity.room, entity.name, "available"), False)
         with entity_lock:
-            for entity, _info in key_map.values():
+            for entity in entities:
                 if entity_runtime.get(entity.name, {}).get("client") is client:
                     del entity_runtime[entity.name]
         key_map.clear()
@@ -625,14 +631,29 @@ async def mdns_browse(unit, session, by_device, unbound_discovery, publish_disco
         await aiozc.async_close()
 
 
+def is_number(value) -> bool:
+    """Return whether a command value is a finite number, and not a bool.
+
+    JSON gives an integer of any length, and one too large for a float
+    makes `isfinite` raise, so it counts as no number.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
+
+
 def cmd_handler(entity, entity_runtime, entity_lock, loop, session, attribution):
     """Return the command handler for one entity.
 
     A switch takes `on` (a bool), and `runtime_s` (a number within its
     number entity's bounds) when it is a declared feature and the device
-    has that entity. A light takes `on` (a bool), and
-    `brightness` and `color_temp` (numbers) when they are declared
-    features. Sensors take no commands. A command for a device that is not
+    has that entity. A light takes `on` (a bool), and when they are
+    declared features `brightness` (a number from 0 to 254, dropped
+    outside that rather than clamped) and `color_temp` (a number). Sensors
+    take no commands. A command for a device that is not
     connected drops with `device-unavailable`; anything else that does not
     fit drops with `invalid-command`.
     """
@@ -655,8 +676,7 @@ def cmd_handler(entity, entity_runtime, entity_lock, loop, session, attribution)
             if (
                 number is None
                 or RUNTIME_ASPECT not in entity.features
-                or isinstance(value, bool)
-                or not isinstance(value, (int, float))
+                or not is_number(value)
                 or not number.min_value <= value <= number.max_value
             ):
                 session.health_event("drop", reason="invalid-command", key=key, cmd_id=cmd_id)
@@ -664,7 +684,7 @@ def cmd_handler(entity, entity_runtime, entity_lock, loop, session, attribution)
             loop.call_soon_threadsafe(client.number_command, number.key, float(value))
         elif entity.capability == "switch":
             if aspect != "on" or not isinstance(value, bool):
-                session.health_event("drop", reason="invalid-command", key=key)
+                session.health_event("drop", reason="invalid-command", key=key, cmd_id=cmd_id)
                 return
             attribution.commanded(entity.name, value)
             loop.call_soon_threadsafe(client.switch_command, esp_key, value)
@@ -675,25 +695,23 @@ def cmd_handler(entity, entity_runtime, entity_lock, loop, session, attribution)
             elif (
                 aspect == "brightness"
                 and "brightness" in entity.features
-                and isinstance(value, (int, float))
+                and is_number(value)
+                and 0 <= value <= BRIGHTNESS_SCALE
             ):
-                frac = max(0.0, min(1.0, value / BRIGHTNESS_SCALE))
+                frac = value / BRIGHTNESS_SCALE
                 # A brightness of 0 turns the light off and any other may
                 # turn it on, so either change of `on` is this command's.
                 attribution.commanded(entity.name, frac > 0)
                 loop.call_soon_threadsafe(partial(client.light_command, esp_key, brightness=frac))
-            elif (
-                aspect == "color_temp"
-                and "color_temp" in entity.features
-                and isinstance(value, (int, float))
-            ):
+            elif aspect == "color_temp" and "color_temp" in entity.features and is_number(value):
                 loop.call_soon_threadsafe(
                     partial(client.light_command, esp_key, color_temperature=float(value))
                 )
             else:
-                session.health_event("drop", reason="invalid-command", key=key)
+                session.health_event("drop", reason="invalid-command", key=key, cmd_id=cmd_id)
         else:
-            session.health_event("drop", reason="invalid-command", key=key)  # sensors take no commands
+            # Sensors take no commands.
+            session.health_event("drop", reason="invalid-command", key=key, cmd_id=cmd_id)
 
     return handler
 
@@ -740,10 +758,7 @@ async def serve(unit, session, config, devices_conf) -> None:
     # effort and does not gate readiness.
     session.ready()
 
-    stop = asyncio.Event()
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(sig, stop.set)
-    await stop.wait()
+    await homeostat.async_shutdown_event().wait()
 
     mdns_task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
