@@ -7,7 +7,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 
-const logic = require(path.join(__dirname, '../../adapters/assets/dashboard-logic.js'));
+const logic = require(path.join(__dirname, '../../adapters/assets/dashboard/logic/index.js'));
 
 const HOUR = 3600e3;
 const iso = (ms) => new Date(ms).toISOString();

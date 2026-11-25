@@ -1,7 +1,7 @@
 /* The Health view. */
 import { healthTooltip, statusGlyph } from '../chrome.js';
 import { byId, html } from '../html.js';
-import { unitNameFromHealthKey } from '../logic.js';
+import { healthKey, unitNameFromHealthKey } from '../logic.js';
 import { store, unitLabel } from '../store.js';
 import { renderPauseSwitch } from '../widgets/params.js';
 
@@ -9,7 +9,7 @@ export function renderEventRow(ev) {
   var unit = unitNameFromHealthKey(ev.key);
   var extra = Object.keys(ev.value || {}).filter(function (k) { return k !== 'kind'; })
     .map(function (k) { return k + '=' + JSON.stringify(ev.value[k]); }).join(' ');
-  var t = new Date((ev.ts || 0) * 1000);
+  var t = new Date(ev.ts || 0);
   var tStr = isNaN(t.getTime()) ? '' : t.toLocaleTimeString();
   var tFull = isNaN(t.getTime()) ? '' : t.toLocaleString();
   return html`<div class="event-row"><span class="ts" title="${tFull}">${tStr}</span>
@@ -19,7 +19,7 @@ export function renderEventRow(ev) {
 export function renderHealth() {
   var units = store.model.units || [];
   var cards = units.map(function (u) {
-    var key = 'home/health/' + u.name;
+    var key = healthKey(u.name);
     var h = store.health[key] || {};
     var status = h.status || 'stopped';
     var meta = [];

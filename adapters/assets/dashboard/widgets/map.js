@@ -14,7 +14,6 @@ import { getJson } from '../api.js';
 import { byId, html } from '../html.js';
 import logic from '../logic.js';
 import { stateValue, store } from '../store.js';
-import { relTime } from './entity.js';
 
 // The vendored map files (adapters/assets/map/), found from this module's
 // own address so the page works under any path prefix.
@@ -211,7 +210,7 @@ function personPopupHtml(entity) {
   var fixedAt = stateValue(entity.room, entity.name, 'fixed_at');
   var parts = [];
   if (typeof battery === 'number') parts.push('battery ' + Math.round(battery) + '%');
-  if (typeof fixedAt === 'number') parts.push(relTime(fixedAt * 1000));
+  if (typeof fixedAt === 'number') parts.push(logic.relTime(fixedAt * 1000, Date.now()));
   return String(html`<b>${entity.label}</b>${parts.length ? html`<br>${parts.join(' · ')}` : ''}`);
 }
 
@@ -287,7 +286,7 @@ function updateMapMarkers(persons, opts) {
 
 /* One entity's track: its fixes over the window, read from the recorder
  * and extended by each live fix, drawn as one line that fades with age
- * (dashboard-logic.js, trackGradient). The fixes are kept per entity
+ * (logic.js, trackGradient). The fixes are kept per entity
  * across renders, and the line is redrawn only when they change. */
 function updateTrack(key, entity, hours, color) {
   var track = mapState.tracks[key];

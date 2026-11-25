@@ -584,7 +584,7 @@ def main():
     watchdog = threading.Thread(target=bridge_watchdog, daemon=True)
     watchdog.start()
 
-    mqtt.wait_for_shutdown()
+    homeostat.wait_for_shutdown()
     stop.set()
 
     # Stop the MQTT loop first, or an in-flight on_message could put on

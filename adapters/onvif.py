@@ -16,8 +16,8 @@ at home/state/{room}/{entity}/motion. Video goes through go2rtc
 (adapters/go2rtc.py). There is no PTZ, imaging service or capability
 negotiation. On Tapo cameras, person detection is app-only and not
 exposed over ONVIF, and pan/tilt and privacy mode need the vendor API;
-an adapter for those would take the cameras over (docs/adapters.md,
-Files).
+an adapter for those would take the cameras over
+(docs/adapters.md#1-files).
 
 Binding: an entity file's `id` is the camera's key in the
 HOMEOSTAT_CAMERAS file.
@@ -34,6 +34,12 @@ are unaffected either way.
 State: `motion`, published when it changes, and `available`, true while
 a pull-point subscription works (`run_camera`).
 
+Live parameter: `resubscribe_after_s` (default 40), how long a camera
+with no working Renew keeps a subscription before the adapter replaces it.
+The adapter holds it between 1 and 50 s, so a replacement lands before
+the old subscription's PT60S termination even with a PT10S pull in
+flight.
+
 Health events: `drop` (camera-unconfigured, camera-misconfigured,
 malformed-payload), event-stream-lost and renew-unsupported.
 
@@ -48,7 +54,6 @@ import base64
 import contextlib
 import hashlib
 import os
-import signal
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
@@ -59,18 +64,20 @@ import aiohttp
 import homeostat
 import tomllib
 from homeostat import house, keys
+from homeostat.params import LiveParams
 
 ENV_CAMERAS = "HOMEOSTAT_CAMERAS"
 DEFAULT_PORT = 2020  # Tapo's ONVIF service port; override per camera with host:port
-PULL_TIMEOUT = "PT10S"
-TERMINATION_TIME = "PT60S"
+PULL_TIMEOUT_S = 10
+PULL_TIMEOUT = f"PT{PULL_TIMEOUT_S}S"
 TERMINATION_S = 60
-# Re-create a subscription this long after it was created, for cameras
-# with no working Renew. The old one lingers until it times out, so this
-# also bounds the overlap: at 40 s against a PT60S termination, at most
-# two per camera are live at once, well under the MaxPullPoints these
-# firmwares advertise.
-RESUBSCRIBE_BEFORE_S = 40
+TERMINATION_TIME = f"PT{TERMINATION_S}S"
+# A camera with no working Renew gets a new subscription this long after
+# the last was created. The old one lingers until it times out, so this
+# also bounds the overlap: against a PT60S termination, at most two per
+# camera are live at once, well under the MaxPullPoints these firmwares
+# advertise.
+PARAM_DEFAULTS = {"resubscribe_after_s": 40}
 RESUBSCRIBE_DELAY_S = 5
 # A camera that rejects a call will reject it again, so back off toward
 # RESUBSCRIBE_MAX_S instead of retrying a live camera at a fixed rate. A
@@ -262,7 +269,20 @@ def motion_values(root: ElementTree.Element):
             yield None, f"unusable motion value {raw!r}"
 
 
-async def run_camera(entity, conf: dict, session, http: aiohttp.ClientSession, stop: asyncio.Event) -> None:
+class Params(LiveParams):
+    """resubscribe_after_s from home/config/{unit}/*, live."""
+
+    @property
+    def resubscribe_after_s(self) -> float:
+        # The check runs after each pull, so a replacement can come up to
+        # one pull late. Capping at TERMINATION_S - PULL_TIMEOUT_S keeps it
+        # ahead of the old subscription's termination.
+        return min(max(1, self.get("resubscribe_after_s")), TERMINATION_S - PULL_TIMEOUT_S)
+
+
+async def run_camera(
+    entity, conf: dict, session, params: Params, http: aiohttp.ClientSession, stop: asyncio.Event
+) -> None:
     """Run one pull-point event stream for one camera: subscribe, long-poll, renew, forever.
 
     Any fault on the event stream (HTTP error, SOAP fault, timeout,
@@ -290,7 +310,7 @@ async def run_camera(entity, conf: dict, session, http: aiohttp.ClientSession, s
     GetServiceCapabilities reports no SubscriptionManager. After a Renew
     fault the next pull decides: if it succeeds, the camera has no
     SubscriptionManager, so it reports `renew-unsupported`, stops renewing,
-    and rotates the subscription every RESUBSCRIBE_BEFORE_S, unsubscribing
+    and rotates the subscription every `resubscribe_after_s`, unsubscribing
     the old one best effort. Availability does not change, since nothing
     was lost. If the pull fails, the ordinary loss path runs. This is
     learned from behaviour, since the adapter does no capability
@@ -404,7 +424,7 @@ async def run_camera(entity, conf: dict, session, http: aiohttp.ClientSession, s
                 # and never back off.
                 failures = 0
                 delay = RESUBSCRIBE_DELAY_S
-                if not renews and loop.time() - created_at >= RESUBSCRIBE_BEFORE_S:
+                if not renews and loop.time() - created_at >= params.resubscribe_after_s:
                     # Best effort. A camera with a working
                     # SubscriptionManager is left clean; the cameras that
                     # need rotation refuse this too.
@@ -440,10 +460,8 @@ async def run_camera(entity, conf: dict, session, http: aiohttp.ClientSession, s
 
 
 async def serve(session, config, cameras_conf) -> None:
-    loop = asyncio.get_running_loop()
-    stop = asyncio.Event()
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(sig, stop.set)
+    stop = homeostat.async_shutdown_event()
+    params = Params(session, PARAM_DEFAULTS)
 
     async with aiohttp.ClientSession() as http:
         tasks = []
@@ -452,7 +470,7 @@ async def serve(session, config, cameras_conf) -> None:
             if not conf:
                 session.health_event("drop", reason="camera-unconfigured", camera=entity.name)
                 continue
-            tasks.append(asyncio.create_task(run_camera(entity, conf, session, http, stop)))
+            tasks.append(asyncio.create_task(run_camera(entity, conf, session, params, http, stop)))
 
         # Every configured camera has a subscription attempt in flight, and
         # each camera's loop keeps retrying on its own.

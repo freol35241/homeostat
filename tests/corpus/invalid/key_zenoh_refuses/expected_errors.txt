@@ -1,0 +1,3 @@
+error[key-outside-schema] watcher.anything: "home/state/**/**" is not a key expression zenoh accepts: `**/**` must be replaced by `**` to reach canon-form (units/watcher.toml)
+error[key-outside-schema] watcher.locked: "home/hold/watcher/kitchen/lamp/$light" is not a key expression zenoh accepts: `$` is only allowed in `$*` (units/watcher.toml)
+error[key-outside-schema] watcher.numbered: "home/state/kitchen/lamp#1/**" is not a key expression zenoh accepts: `#` and `?` are forbidden characters (units/watcher.toml)

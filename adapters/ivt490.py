@@ -27,7 +27,9 @@ State: scalar leaves under {base}/ivt490/state and {base}/controller/state
 publish to home/state/{room}/{entity}/{aspect} (`Pumps.on_message`). A
 controller field that carries a validity flag also publishes
 `{aspect}_valid`. `available` goes false after availability_timeout_s
-without a message from the board (`Pumps.sweep`).
+without a message from the board (`homeostat.availability`). The
+firmware publishes on every serial telegram, so silence is the loss
+signal.
 
 Commands (COMMANDS): setpoint, feed_temperature_target,
 outdoor_temperature_offset and operating_mode. Only the setpoint is
@@ -55,11 +57,11 @@ stay.
 
 import json
 import os
-import threading
 import time
 
 import homeostat
 from homeostat import house, keys, mqtt
+from homeostat.availability import SilenceWatch
 from homeostat.params import LiveParams
 
 PARAM_DEFAULTS = {"availability_timeout_s": 300.0}
@@ -160,7 +162,7 @@ FEEDABLE = {
 # boiler-sensor emulation's mode (see OPERATING_MODES).
 #
 # The retain flag follows a distinction the firmware makes, visible in
-# what it publishes back (docs/adapters.md, Retaining a command):
+# what it publishes back (docs/adapters.md#retaining-a-command):
 #
 #   feed_temperature_target      {"value": 0,     "valid": false}
 #   indoor_temperature_feedback  {"value": 18.84, "valid": true}
@@ -441,36 +443,17 @@ def command_payload(entity, aspect: str, value):
 class Pumps:
     """The controller-to-bus direction: state subtopics in, aspects out.
 
-    It tracks each controller's availability from when it last spoke and
-    keeps discovery's `bound` flag. `session` is anything with `put_json`
-    and `health_event`; the clock is injectable. paho delivers on one
-    thread and the watchdog sweeps on another, so availability is locked.
+    `watch` tracks each controller's availability from when it last spoke,
+    and whether it has been heard at all, which is discovery's `bound`
+    flag. `session` is anything with `put_json` and `health_event`; the
+    clock is injectable.
     """
 
     def __init__(self, session, unit: str, entities, clock=time.monotonic):
         self.session = session
         self.unit = unit
         self.entities = list(entities)
-        self.clock = clock
-        self.seen: set[str] = set()
-        self.lock = threading.Lock()
-        # Seeded now, so a device that never speaks flips false after one
-        # timeout.
-        self.last_rx = {e.id: clock() for e in self.entities}
-        self.available: dict[str, bool] = {}
-
-    def set_available(self, entity, value: bool) -> bool:
-        """Publish `available` on transition only; return True when it was one.
-
-        The publish stays under the lock so the receive path and the
-        watchdog cannot interleave decision and publication.
-        """
-        with self.lock:
-            if self.available.get(entity.name) == value:
-                return False
-            self.available[entity.name] = value
-            self.session.put_json(keys.state_key(entity.room, entity.name, "available"), value)
-        return True
+        self.watch = SilenceWatch(session, self.entities, clock)
 
     def inventory(self) -> list[dict]:
         """Return the discovery document: every configured controller.
@@ -487,7 +470,7 @@ class Pumps:
                 "id": e.id,
                 "configured": True,
                 "entity": e.name,
-                "bound": e.id in self.seen,
+                "bound": self.watch.heard(e),
                 "suggested": {"capability": "climate", "features": []},
                 "aspects": aspect_descriptor(e),
             }
@@ -510,11 +493,7 @@ class Pumps:
         if entity is None:
             return
 
-        self.last_rx[entity.id] = self.clock()
-        self.set_available(entity, True)
-
-        if entity.id not in self.seen:
-            self.seen.add(entity.id)
+        if self.watch.contact(entity):
             session.put_json(keys.discovery_key(self.unit), self.inventory())
 
         if len(rest) in (3, 4) and rest[0] == "ivt490" and rest[1] == "state":
@@ -572,19 +551,6 @@ class Pumps:
             session.health_event("drop", reason="null-value", topic=topic)
             return
         session.put_json(key, value)
-
-    def sweep(self, timeout_s: float) -> None:
-        """Mark a controller silent for `timeout_s` unavailable, one event per transition.
-
-        The firmware publishes on every serial telegram, so silence is the
-        loss signal. Any routed message marks the board available again.
-        The other aspects keep their last values.
-        """
-        now = self.clock()
-        for entity in self.entities:
-            if now - self.last_rx[entity.id] > timeout_s and self.set_available(entity, False):
-                # A degraded condition, so its own event kind.
-                self.session.health_event("device-silent", topic=entity.id)
 
 
 class Feed:
@@ -736,24 +702,13 @@ def main():
 
     session.put_json(keys.discovery_key(unit), pumps.inventory())
 
-    stop = threading.Event()
-
-    def watchdog():
-        while True:
-            timeout = params.availability_timeout_s
-            if stop.wait(min(1.0, timeout / 4)):
-                return
-            pumps.sweep(timeout)
-
-    watchdog_thread = threading.Thread(target=watchdog, daemon=True)
-    watchdog_thread.start()
+    pumps.watch.start(lambda: params.availability_timeout_s)
 
     session.ready()
 
-    mqtt.wait_for_shutdown()
+    homeostat.wait_for_shutdown()
 
-    stop.set()
-    watchdog_thread.join(timeout=5)
+    pumps.watch.stop()
     # Stop the MQTT loop first, or an in-flight on_message could put on
     # a closed zenoh session.
     client.loop_stop()

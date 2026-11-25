@@ -10,10 +10,10 @@
  * every state-delta render. Its container is therefore a detached DOM node
  * kept in mapState and moved into a new slot on each render, instead of
  * being rebuilt from an HTML string like the rest of the view. */
+import { getJson } from '../api.js';
 import { byId, html } from '../html.js';
 import logic from '../logic.js';
 import { stateValue, store } from '../store.js';
-import { relTime } from './entity.js';
 
 // The vendored map files (adapters/assets/map/), found from this module's
 // own address so the page works under any path prefix.
@@ -29,14 +29,6 @@ var mapState = {
 var TRACK_REFRESH_MS = 5 * 60e3;
 // The number of steps the fade along a track is worked out at.
 var TRACK_STEPS = 32;
-// The most fixes a track reads per series: the history endpoint's cap.
-var TRACK_LIMIT = 5000;
-// The window `lat`, `lon` and `accuracy` are read over: the history
-// endpoint's longest. A changes read starts at the first change inside
-// its window, and these publish only on change, so a person who has not
-// moved since before the track's window has no row in it. Each fix needs
-// the value as it stood when the fix was taken.
-var TRACK_LOOKBACK_HOURS = 24 * 31;
 // The aspects a fix is paired from, beside `fixed_at`.
 var FIX_ASPECTS = ['lat', 'lon', 'accuracy'];
 // The zoom a single fix opens at, and the closest the map goes. Vector
@@ -218,7 +210,7 @@ function personPopupHtml(entity) {
   var fixedAt = stateValue(entity.room, entity.name, 'fixed_at');
   var parts = [];
   if (typeof battery === 'number') parts.push('battery ' + Math.round(battery) + '%');
-  if (typeof fixedAt === 'number') parts.push(relTime(fixedAt * 1000));
+  if (typeof fixedAt === 'number') parts.push(logic.relTime(fixedAt * 1000, Date.now()));
   return String(html`<b>${entity.label}</b>${parts.length ? html`<br>${parts.join(' · ')}` : ''}`);
 }
 
@@ -294,7 +286,7 @@ function updateMapMarkers(persons, opts) {
 
 /* One entity's track: its fixes over the window, read from the recorder
  * and extended by each live fix, drawn as one line that fades with age
- * (dashboard-logic.js, trackGradient). The fixes are kept per entity
+ * (logic.js, trackGradient). The fixes are kept per entity
  * across renders, and the line is redrawn only when they change. */
 function updateTrack(key, entity, hours, color) {
   var track = mapState.tracks[key];
@@ -320,11 +312,11 @@ function updateTrack(key, entity, hours, color) {
 }
 
 // One series over the last `hours`, as changes. Changes, not buckets:
-// averaging lat and lon apart would cut the corners off a route.
+// averaging lat and lon apart would cut the corners off a route. It asks
+// for as many rows as the history endpoint returns.
 function readChanges(entity, aspect, hours) {
-  return fetch('/api/history?entity=' + encodeURIComponent(entity.name) + '&aspect=' + aspect +
-               '&hours=' + hours + '&changes=1&limit=' + TRACK_LIMIT)
-    .then(function (r) { return r.json(); })
+  return getJson('/api/history?entity=' + encodeURIComponent(entity.name) + '&aspect=' + aspect +
+                 '&hours=' + hours + '&changes=1&limit=' + store.model.limits.history_limit_max)
     .then(function (data) {
       var points = [];
       (data.series || []).forEach(function (s) { points = points.concat(s.points || []); });
@@ -339,8 +331,13 @@ function readTrack(track, entity, hours) {
   // `fixed_at` lands after its `lat` and `lon`. Read after it, they hold
   // every fix the `fixed_at` reply has.
   readChanges(entity, 'fixed_at', hours).then(function (fixedAt) {
+    // `lat`, `lon` and `accuracy` are read over the history endpoint's
+    // longest window. A changes read starts at the first change inside
+    // its window, and these publish only on change, so a person who has
+    // not moved since before the track's window has no row in it. Each
+    // fix needs the value as it stood when the fix was taken.
     return Promise.all(FIX_ASPECTS.map(function (aspect) {
-      return readChanges(entity, aspect, TRACK_LOOKBACK_HOURS);
+      return readChanges(entity, aspect, store.model.limits.history_hours_max);
     })).then(function (results) {
       var series = { fixed_at: fixedAt };
       FIX_ASPECTS.forEach(function (aspect, i) { series[aspect] = results[i]; });

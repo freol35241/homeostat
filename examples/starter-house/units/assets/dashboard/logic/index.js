@@ -1,0 +1,2363 @@
+/* Dashboard decision logic: the pure functions behind the Now view and the
+ * WebSocket store. They are kept apart from the page so `node --test
+ * tests/js` can test them. The DOM wiring is in the page's modules
+ * (assets/dashboard/). Nothing here touches the DOM, fetches, or uses
+ * globals.
+ *
+ * An ES module. The page imports it through ../logic.js, and the node
+ * test runner loads it with require().
+ */
+
+/* The bus keys the page reads (docs/design.md#key-space). An empty
+ * `aspect` gives the prefix every aspect of the entity shares. */
+export function stateKey(room, entity, aspect) {
+  return 'home/state/' + room + '/' + entity + '/' + aspect;
+}
+
+export function configKey(unit, name) {
+  return 'home/config/' + unit + '/' + name;
+}
+
+export function healthKey(unit) {
+  return 'home/health/' + unit;
+}
+
+// { room, entity, aspect } of a state key, or null for any other key.
+// Segments past the aspect are ignored.
+export function parseStateKey(key) {
+  var parts = String(key).split('/');
+  if (parts[0] !== 'home' || parts[1] !== 'state' || parts.length < 5) return null;
+  return { room: parts[2], entity: parts[3], aspect: parts[4] };
+}
+
+export function titleCase(s) {
+  if (!s) return '';
+  return String(s).split(/[\s_-]+/).map(function (w) {
+    return w ? w[0].toUpperCase() + w.slice(1) : w;
+  }).join(' ');
+}
+
+export function stateValue(state, room, entity, aspect) {
+  return state[stateKey(room, entity, aspect)];
+}
+
+/* A room sensor's reading: { aspect, value }, from whichever occupancy
+ * aspect it publishes. A sensor publishes `motion` (a PIR) or
+ * `occupied` (a radar), whichever its device observes
+ * (docs/design.md#the-capability-vocabulary). `vocabulary` is the
+ * model's, which lists them. Both are undefined when it has published
+ * neither. */
+export function occupancyReading(state, entity, vocabulary) {
+  var names = vocabulary.occupancy_aspects;
+  for (var i = 0; i < names.length; i++) {
+    var v = stateValue(state, entity.room, entity.name, names[i]);
+    if (v !== undefined) return { aspect: names[i], value: v };
+  }
+  return { aspect: undefined, value: undefined };
+}
+
+/* A person or a tracker on People: { home, stale, notSeen, seenAt }.
+ * home is a person's `presence`, or for a tracker what the persons rule
+ * would read: home when `home` or `sighted` is true, away when `home`
+ * is false. It is undefined when nothing says. A tracker's
+ * `sighted = false` only says the network has not seen the device, so
+ * it is notSeen and not away. stale is a person's `presence_valid =
+ * false`: presence is held because no tracker can say. seenAt is the
+ * last location fix in epoch ms, when one is reported. The page writes
+ * the text; this only reads the values. */
+export function personStatus(state, entity) {
+  function read(aspect) { return stateValue(state, entity.room, entity.name, aspect); }
+  var home, sighted;
+  if (entity.capability === 'tracker') {
+    var geofence = read('home');
+    sighted = read('sighted');
+    home = geofence === true || sighted === true ? true : geofence === false ? false : undefined;
+  } else {
+    home = read('presence');
+    home = typeof home === 'boolean' ? home : undefined;
+  }
+  var fixedAt = read('fixed_at');
+  return {
+    home: home,
+    stale: entity.capability === 'person' && read('presence_valid') === false,
+    notSeen: home === undefined && sighted === false,
+    seenAt: typeof fixedAt === 'number' ? fixedAt * 1000 : undefined
+  };
+}
+
+/* Who the People and map widgets draw: every person, and every tracker
+ * no person lists as a source. A phone bound before its person file is
+ * written still shows up, and one a person lists is not drawn twice. */
+export function peopleEntities(entities) {
+  var listed = {};
+  entities.forEach(function (e) {
+    if (e.capability !== 'person') return;
+    Object.keys(e.sources || {}).forEach(function (name) { listed[e.sources[name].entity] = true; });
+  });
+  return entities.filter(function (e) {
+    return e.capability === 'person' || (e.capability === 'tracker' && !listed[e.name]);
+  });
+}
+
+/* ---- map tracks (docs/design.md#map-and-people) ---- */
+
+// The value a series held at `ts`: its last point at or before it.
+function valueAsOf(points, ts) {
+  var value;
+  for (var i = 0; i < points.length && Date.parse(points[i].ts) <= ts; i++) value = points[i].value;
+  return value;
+}
+
+/* An entity's fixes over a window, oldest first, from the recorder's
+ * `lat`, `lon`, `accuracy` and `fixed_at` series. Every fix ends with
+ * its `fixed_at`, which is published after the other three, so each
+ * `fixed_at` point marks one complete fix. A point taken where `lat`
+ * changed could pair the new `lat` with the old `lon`. A fix is placed
+ * at its `fixed_at` time, which is when it was taken, even if the phone
+ * sent it later. */
+export function trackFixes(series, from) {
+  var out = [];
+  (series.fixed_at || []).forEach(function (p) {
+    var at = Date.parse(p.ts);
+    var lat = valueAsOf(series.lat || [], at);
+    var lon = valueAsOf(series.lon || [], at);
+    if (typeof lat !== 'number' || typeof lon !== 'number' || typeof p.value !== 'number') return;
+    var t = p.value * 1000;
+    if (t < from) return;
+    var accuracy = valueAsOf(series.accuracy || [], at);
+    out.push({ lat: lat, lon: lon, accuracy: typeof accuracy === 'number' ? accuracy : 0, t: t });
+  });
+  return out.sort(function (a, b) { return a.t - b.t; });
+}
+
+function metresBetween(a, b) {
+  var rad = Math.PI / 180;
+  var dLat = (b.lat - a.lat) * rad, dLon = (b.lon - a.lon) * rad;
+  var h = Math.pow(Math.sin(dLat / 2), 2) +
+    Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.pow(Math.sin(dLon / 2), 2);
+  return 2 * 6371000 * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+/* The fixes worth drawing. A phone lying still reports a fix inside its
+ * accuracy circle every few minutes, and drawing them scribbles around
+ * the spot. A fix within its own accuracy of the last one kept is
+ * dropped. The newest fix is always kept, so the line reaches the
+ * marker. */
+export function thinTrack(fixes) {
+  var kept = [];
+  fixes.forEach(function (f, i) {
+    var last = kept[kept.length - 1];
+    if (!last || i === fixes.length - 1 || metresBetween(last, f) > f.accuracy) kept.push(f);
+  });
+  return kept;
+}
+
+/* The track as one line whose opacity follows the age of each fix,
+ * from faint at the window's start to solid at the newest fix. A line
+ * gradient in MapLibre runs over the distance along the line, not over
+ * time, so the age at each step of distance is worked out here. Fixes
+ * are not evenly spaced in time, and a stop where someone stood still
+ * would otherwise fade the whole stretch around it. Returns the line's
+ * [lon, lat] coordinates and `steps` + 1 [progress, opacity] stops, or
+ * null when there is no line to draw. */
+export function trackGradient(fixes, from, to, steps) {
+  if (fixes.length < 2) return null;
+  var along = [0];
+  for (var i = 1; i < fixes.length; i++) along.push(along[i - 1] + metresBetween(fixes[i - 1], fixes[i]));
+  var total = along[along.length - 1];
+  if (!(total > 0)) return null;
+  var opacity = function (t) {
+    var f = to > from ? (t - from) / (to - from) : 1;
+    return 0.15 + 0.85 * Math.min(1, Math.max(0, f));
+  };
+  var stops = [];
+  var j = 0;
+  for (var k = 0; k <= steps; k++) {
+    var d = total * k / steps;
+    // `<=` steps onto a last segment of no length, a phone lying where
+    // it stopped, so the line's end takes the newest fix's time.
+    while (j < fixes.length - 2 && along[j + 1] <= d) j++;
+    var seg = along[j + 1] - along[j];
+    var t = seg > 0 ? fixes[j].t + (fixes[j + 1].t - fixes[j].t) * (d - along[j]) / seg : fixes[j + 1].t;
+    stops.push([k / steps, opacity(t)]);
+  }
+  return { coordinates: fixes.map(function (f) { return [f.lon, f.lat]; }), stops: stops };
+}
+
+/* An accuracy circle as a polygon of `sides` corners, [lon, lat]
+ * closed. MapLibre has no circle in metres, and a circle layer is sized
+ * in pixels. */
+export function circlePolygon(lat, lon, radiusM, sides) {
+  var dLat = radiusM / 111320;
+  var dLon = dLat / Math.max(1e-6, Math.cos(lat * Math.PI / 180));
+  var ring = [];
+  for (var i = 0; i <= sides; i++) {
+    var a = 2 * Math.PI * (i % sides) / sides;
+    ring.push([lon + dLon * Math.cos(a), lat + dLat * Math.sin(a)]);
+  }
+  return ring;
+}
+
+// "rgba(r,g,b,a)" for a hex colour, which a line gradient needs to fade.
+export function hexRgba(hex, alpha) {
+  var h = hex.slice(1);
+  if (h.length === 3) h = h.replace(/./g, function (c) { return c + c; });
+  var n = parseInt(h, 16);
+  return 'rgba(' + (n >> 16 & 255) + ',' + (n >> 8 & 255) + ',' + (n & 255) + ',' + alpha + ')';
+}
+
+// A `colors` value as the house wrote it, or null unless it is a hex
+// colour. The plan refuses anything else; this keeps the page safe from
+// a value that reached it some other way.
+export function hexColor(value) {
+  return typeof value === 'string' && /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(value) ? value : null;
+}
+
+// "room/entity" when the key is an occupancy-aspect state key, else null.
+export function occupancyEntityFromKey(key, vocabulary) {
+  var k = parseStateKey(key);
+  if (k && vocabulary.occupancy_aspects.indexOf(k.aspect) !== -1) return k.room + '/' + k.entity;
+  return null;
+}
+
+export function unitNameFromHealthKey(key) {
+  // home/health/{unit}
+  var parts = key.split('/');
+  return parts[2] || key;
+}
+
+/* The worst unit status in `health` (keyed by health key), and how many
+ * units are running. A unit with no status counts as running. */
+export function healthWorstAndCount(health) {
+  var order = { open: 0, backoff: 1, starting: 2, stopped: 2, running: 3 };
+  var worst = null;
+  var okCount = 0;
+  var total = 0;
+  Object.keys(health).forEach(function (k) {
+    var h = health[k] || {};
+    total++;
+    var status = h.status || 'running';
+    if (status === 'running') okCount++;
+    var rank = order[status];
+    if (rank === undefined) rank = 3;
+    if (worst === null || rank < worst.rank) {
+      worst = { rank: rank, status: status, key: k };
+    }
+  });
+  return { worst: worst, ok: okCount, total: total };
+}
+
+/* Applies one WebSocket message to the store (the state, health and
+ * config maps, and the capped events feed). Returns the message type when
+ * applied, and null for anything unrecognized. The caller renders, and
+ * tracks per-key side effects, only when a message was applied.
+ * The message's `action_at`, `at` and `ts` are epoch seconds, and the
+ * store keeps them in epoch ms like the rest of the page. `nowMs` stamps a press or an event whose
+ * message has no time. */
+var EVENTS_CAP = 200;
+
+export function applyMessage(store, msg, nowMs) {
+  if (!msg || !msg.type) return null;
+  if (msg.type === 'snapshot') {
+    store.state = msg.state || {};
+    store.forecasts = msg.forecasts || {};
+    store.holds = msg.holds || {};
+    store.health = msg.health || {};
+    store.config = msg.config || {};
+    store.aspects = msg.aspects || {};
+    store.actionAt = {};
+    Object.keys(msg.action_at || {}).forEach(function (k) { store.actionAt[k] = msg.action_at[k] * 1000; });
+    store.arbitration = msg.arbitration || {};
+    return 'snapshot';
+  }
+  if (msg.type === 'aspects') {
+    // null retires a descriptor the adapter no longer publishes
+    if (msg.value === null || msg.value === undefined) delete store.aspects[msg.entity];
+    else store.aspects[msg.entity] = msg.value;
+    return 'aspects';
+  }
+  if (msg.type === 'state') {
+    store.state[msg.key] = msg.value;
+    // When a button was last pressed (docs/design.md#buttons), on the
+    // dashboard's clock as the snapshot's times are.
+    if (/\/action$/.test(msg.key)) {
+      if (!store.actionAt) store.actionAt = {};
+      store.actionAt[msg.key] = typeof msg.at === 'number' ? msg.at * 1000 : nowMs;
+    }
+    return 'state';
+  }
+  if (msg.type === 'arbitration') {
+    if (!store.arbitration) store.arbitration = {};
+    if (msg.value === null || msg.value === undefined) delete store.arbitration[msg.key];
+    else store.arbitration[msg.key] = msg.value;
+    return 'hold';
+  }
+  if (msg.type === 'hold') {
+    // null: the hold ended and the arbiter deleted its key
+    if (msg.value === null || msg.value === undefined) delete store.holds[msg.key];
+    else store.holds[msg.key] = msg.value;
+    return 'hold';
+  }
+  if (msg.type === 'forecast') {
+    store.forecasts[msg.key] = msg.value;
+    return 'forecast';
+  }
+  if (msg.type === 'config') {
+    store.config[msg.key] = msg.value;
+    return 'config';
+  }
+  if (msg.type === 'health') {
+    store.health[msg.key] = msg.value;
+    return 'health';
+  }
+  if (msg.type === 'event') {
+    store.events.unshift({ key: msg.key, value: msg.value, ts: msg.ts ? msg.ts * 1000 : nowMs });
+    if (store.events.length > EVENTS_CAP) store.events.length = EVENTS_CAP;
+    return 'event';
+  }
+  return null;
+}
+
+/* ---- chart geometry (docs/design.md#the-page) ----
+ *
+ * Where each drawn thing lands in the viewBox: the record, the current
+ * forecast, the braid of kept issues, and the contributing sources. This
+ * is arithmetic over timestamps and value ranges, so it lives here
+ * rather than in the page, where tests can check the numbers directly
+ * instead of through a DOM.
+ */
+// Geometry for a series and, when the house has one, its forecast on the
+// same axis. Both share one time domain and one value scale. A forecast
+// drawn to its own scale beside its history cannot show whether the
+// house is about to get colder (docs/design.md#forecasts).
+// Points sit where their timestamps fall in the window, so a gap in the
+// record stays a gap. Points are spaced evenly only when timestamps are
+// missing. A live point past the window's end (a delta after the fetch)
+// extends the window. `now` is the current time in epoch ms, which places
+// the now-rule and decides whether a forecast is stale.
+export function chartGeometry(points, width, height, pad, win, forecast, issues, contributors, now) {
+  var vals = points.map(function (p) { return p.value; }).filter(function (v) { return typeof v === 'number'; });
+  // A forecast key names its source, so an aspect may have several live
+  // forecasts at once. Each gets its own line, with no envelope over
+  // them, for the same reason as the braid
+  // (docs/design.md#charts-forecasts-and-sources).
+  //
+  // A forecast issued hours ago still holds what it said about the hours
+  // since, and that part is drawn. Laid over the record, it lets the
+  // reader compare a provider's forecast with what happened without
+  // opening the braid.
+  var beliefs = (forecast || []).map(function (b) {
+    return {
+      source: b.source, points: b.forecast.points, to: b.forecast.to,
+      // Older than the span it has left to cover. It is still drawn,
+      // because it is the house's current forecast, but it is marked as
+      // stale (docs/design.md#charts-forecasts-and-sources).
+      stale: forecastFreshness(b.forecast, now).stale
+    };
+  });
+  var allVals = vals.slice();
+  beliefs.forEach(function (b) {
+    b.points.forEach(function (p) { allVals.push(p.v); });
+  });
+  // Every drawn issue shares the scale. A braid on its own y range could
+  // not show whether the house was about to get colder.
+  (issues || []).forEach(function (f) {
+    f.points.forEach(function (pt) { allVals.push(pt.v); });
+  });
+  // Contributors share the scale for the same reason. A source drawn on
+  // its own y range could look like it agrees when it does not.
+  (contributors || []).forEach(function (c) {
+    (c.points || []).forEach(function (p) {
+      if (typeof p.value === 'number') allVals.push(p.value);
+    });
+  });
+  if (allVals.length < 2) return null;
+  var min = Math.min.apply(null, allVals);
+  var max = Math.max.apply(null, allVals);
+  var span = (max - min) || 1;
+  var n = points.length;
+  var times = points.map(function (p) { return Date.parse(p.ts); });
+  var from = win ? win.from : times[0];
+  var to = Math.max(win ? win.to : times[n - 1] || 0, times[n - 1] || 0);
+  // The horizon extends the axis to the right, and the past keeps the
+  // time span it had. Recorded history is only narrowed on screen with
+  // the forecast drawn beside it, so the reader can see why.
+  beliefs.forEach(function (b) { to = Math.max(to, b.to); });
+  (issues || []).forEach(function (f) { to = Math.max(to, f.to); });
+  var byTime = times.every(function (t) { return !isNaN(t); }) && to > from;
+  var place = function (t, value) {
+    var f = (t - from) / (to - from);
+    return {
+      x: pad + f * (width - 2 * pad),
+      y: pad + (1 - (value - min) / span) * (height - 2 * pad)
+    };
+  };
+  var coords = points.map(function (p, i) {
+    var f = byTime ? (times[i] - from) / (to - from) : i / (n - 1);
+    var x = pad + f * (width - 2 * pad);
+    var y = pad + (1 - (p.value - min) / span) * (height - 2 * pad);
+    return { x: x, y: y, value: p.value, ts: p.ts };
+  });
+  var geo = { coords: coords, min: min, max: max, from: from, to: to };
+  if (contributors && contributors.length && byTime) {
+    // One line per source, with no band across them. An envelope's edge
+    // follows whichever sensor is highest at each instant, so it traces
+    // a path no sensor took. The braid follows the same rule
+    // (docs/design.md#sources).
+    geo.contributors = contributors.map(function (c) {
+      return {
+        name: c.name,
+        label: c.label,
+        coords: (c.points || [])
+          .filter(function (p) { return typeof p.value === 'number'; })
+          .map(function (p) {
+            var at = place(Date.parse(p.ts), p.value);
+            return { x: at.x, y: at.y, value: p.value, ts: p.ts };
+          })
+          .filter(function (pt) { return !isNaN(pt.x); })
+      };
+    }).filter(function (c) { return c.coords.length > 1; });
+  }
+  if (issues && issues.length && byTime) {
+    // Each stored issue is drawn as its own line, with no envelope over
+    // them. An envelope's edge follows whichever issue is highest at
+    // each instant, which is a path no issue predicted
+    // (docs/wireframes/forecast-history.svg).
+    geo.issues = issues.map(function (f, n) {
+      return {
+        issued: f.issued,
+        source: f.source,
+        age: issues.length > 1 ? n / (issues.length - 1) : 1,
+        coords: f.points.map(function (pt) {
+          var at = place(pt.t, pt.v);
+          return { x: at.x, y: at.y, value: pt.v, ts: pt.t };
+        })
+      };
+    });
+  }
+  if (beliefs.length && byTime) {
+    geo.forecast = beliefs.map(function (b) {
+      return {
+        source: b.source,
+        stale: b.stale,
+        coords: b.points.map(function (p) {
+          var at = place(p.t, p.v);
+          return { x: at.x, y: at.y, value: p.v, ts: p.t };
+        })
+      };
+    });
+    // The line between the record and the forecast. It is placed at the
+    // current time rather than at the last point, because a gap in
+    // recording does not mean the present has moved.
+    var nowAt = (now - from) / (to - from);
+    if (nowAt > 0 && nowAt < 1) geo.nowX = pad + nowAt * (width - 2 * pad);
+  }
+  return geo;
+}
+
+/* Geometry for bars over intervals (intervalBars), or null when there
+ * are none. A bar spans its interval, and the scale includes zero.
+ * `rects` are in drawing order: a bar's recorded amount, then its
+ * forecast stacked on top. `coords` is one point per bar, at its centre
+ * and total, for the scrub. `now` places the now-rule, which is drawn
+ * only when the bars reach past the window's end. */
+export function barGeometry(bars, width, height, pad, win, now) {
+  if (!bars.length) return null;
+  // A first bar that starts before the window, a whole day or the
+  // interval straddling its start, is drawn whole.
+  var from = Math.min(win.from, bars[0].from);
+  var to = Math.max(win.to, bars[bars.length - 1].to);
+  var max = 0, min = 0;
+  bars.forEach(function (b) {
+    [b.observed, b.observed + b.forecast].forEach(function (v) {
+      max = Math.max(max, v);
+      min = Math.min(min, v);
+    });
+  });
+  if (max === min) max = min + 1;
+  var x = function (t) { return pad + (Math.min(Math.max(t, from), to) - from) / (to - from) * (width - 2 * pad); };
+  var y = function (v) { return height - pad - ((v - min) / (max - min)) * (height - 2 * pad); };
+  // A rectangle between two amounts, whichever is higher.
+  var rect = function (forecast, x0, w, a, b) {
+    return { forecast: forecast, x: x0, y: Math.min(y(a), y(b)), width: w, height: Math.abs(y(a) - y(b)) };
+  };
+  var rects = [], coords = [];
+  bars.forEach(function (b) {
+    var x0 = x(b.from), x1 = x(b.to);
+    // A sliver between bars, so neighbours of equal height stay apart.
+    var w = Math.max(x1 - x0 - Math.min(1, (x1 - x0) * 0.15), 0.5);
+    var total = b.observed + b.forecast;
+    if (b.observed !== 0) rects.push(rect(false, x0, w, 0, b.observed));
+    if (b.forecast !== 0) rects.push(rect(true, x0, w, b.observed, total));
+    coords.push({ x: x0 + w / 2, y: y(total), value: total, ts: b.from });
+  });
+  var nowX = now > from && now < to && to > win.to ? x(now) : undefined;
+  return { from: from, to: to, min: min, max: max, rects: rects, coords: coords, nowX: nowX };
+}
+
+/* ---- times and durations as text ---- */
+
+// A reading's time, at the precision the window needs. On an hour of
+// history the recorder's buckets are seconds wide, so minutes alone would
+// hide the detail the reader opened the chart for. `spanMs` is the charted
+// window. Without it the time is shown as day and minute, unless `seconds`
+// asks for them.
+export function formatChartTime(ts, spanMs, seconds) {
+  var d = new Date(ts);
+  if (isNaN(d.getTime())) return '';
+  var fmt = { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' };
+  if (seconds || (spanMs && spanMs <= 3 * 3600e3)) fmt.second = '2-digit';
+  return d.toLocaleString([], fmt);
+}
+
+// The same instant without the date, for the far end of a run whose near
+// end already shows it.
+export function formatChartClock(ts, spanMs) {
+  var d = new Date(ts);
+  if (isNaN(d.getTime())) return '';
+  var fmt = { hour: '2-digit', minute: '2-digit' };
+  if (spanMs && spanMs <= 3 * 3600e3) fmt.second = '2-digit';
+  return d.toLocaleTimeString([], fmt);
+}
+
+export function fmtDuration(ms) {
+  var mins = Math.round(ms / 60000);
+  if (mins < 60) return mins + ' min';
+  var h = Math.floor(mins / 60), m = mins % 60;
+  if (h < 48) return m ? h + ' h ' + m + ' min' : h + ' h';
+  return Math.round(h / 24) + ' d';
+}
+
+// How long before `now` the instant `ms` was, in minutes or hours.
+export function relTime(ms, now) {
+  var diff = Math.max(0, now - ms);
+  var mins = Math.round(diff / 60000);
+  if (mins < 1) return 'just now';
+  if (mins === 1) return '1 min ago';
+  if (mins < 60) return mins + ' min ago';
+  var hrs = Math.round(mins / 60);
+  if (hrs === 1) return '1 hr ago';
+  return hrs + ' hr ago';
+}
+
+/* ---- the family's holds (docs/design.md#arbitrated-mode) ----
+ *
+ * Each arbiter publishes one record per aspect the family holds. Every
+ * tap places one, so most holds are the family using the house. A hold is
+ * only worth reporting when it displaced somebody.
+ */
+// How the page words the end of a hold placed "until next change".
+export var NEXT_CHANGE = 'the next change';
+
+// Deviation rows are built here, so the time formatting they need is
+// here too. Local time with no date, because a hold lasts at most an
+// hour or two.
+function clockOf(ts) {
+  var d = new Date(ts);
+  return isNaN(d.getTime()) ? '' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+// The family's holds across every arbiter, with expired ones dropped.
+// Each is one record, keyed home/hold/{arbiter}/{room}/{entity}/{aspect}.
+// The record states `until` and the reader applies it, as with a
+// forecast's `issued`. The arbiter also deletes the key at the deadline,
+// so this check is a second guard.
+export function liveHolds(holds, now) {
+  var out = [];
+  Object.keys(holds || {}).forEach(function (key) {
+    var h = holds[key];
+    if (!h || typeof h.entity !== 'string' || typeof h.aspect !== 'string') return;
+    var until = Date.parse(h.until);
+    if (isNaN(until) || until <= now) return;
+    out.push({
+      key: key,
+      room: h.room, entity: h.entity, aspect: h.aspect,
+      priority: h.priority, actor: h.actor, value: h.value,
+      refused: typeof h.refused === 'number' ? h.refused : 0,
+      until: until,
+      // Placed by the family policy "until next change": it ends when
+      // the unit hold beneath changes, and `until` is only its cap
+      // (docs/design.md#family-policy).
+      nextChange: h.next_change === true
+    });
+  });
+  return out.sort(function (a, b) { return a.until - b.until; });
+}
+
+// The units' holds that count, from each arbiter's arbitration document
+// (home/arbitration/{arbiter}), which lists the holds in force on an
+// aspect with the winner first (docs/design.md#which-hold-wins). A hold
+// its unit published but the arbiter does not count, because the unit is
+// gone or lost its grant, is not there. Without an `until` a hold stands
+// until it is released.
+export function unitHolds(arbitration, now) {
+  var out = [];
+  Object.keys(arbitration || {}).forEach(function (docKey) {
+    var doc = arbitration[docKey];
+    ((doc && doc.aspects) || []).forEach(function (entry) {
+      if (!entry || typeof entry.entity !== 'string' || typeof entry.aspect !== 'string') return;
+      (entry.holds || []).forEach(function (h, i) {
+        if (!h || h.family) return;
+        var until = h.until === undefined || h.until === null ? Infinity : Date.parse(h.until);
+        if (isNaN(until) || until <= now) return;
+        out.push({
+          key: docKey + '/' + entry.room + '/' + entry.entity + '/' + entry.aspect + '/' + h.unit,
+          room: entry.room, entity: entry.entity, aspect: entry.aspect,
+          priority: h.priority, actor: h.unit, value: h.value,
+          reason: typeof h.reason === 'string' ? h.reason : null,
+          winner: i === 0, until: until
+        });
+      });
+    });
+  });
+  return out;
+}
+
+// The hold in force over one aspect, or null: the family's, else the
+// unit hold that wins it. A control shows it as "held" whether or not it
+// displaced anyone.
+export function holdOn(holds, room, entity, aspect, now, arbitration) {
+  var on = function (h) { return h.room === room && h.entity === entity && h.aspect === aspect; };
+  return liveHolds(holds, now).filter(on)[0] ||
+    unitHolds(arbitration, now).filter(function (h) { return h.winner && on(h); })[0] || null;
+}
+
+// The instant "hold until HH:MM" means: the next time the local clock
+// shows it, later today or else tomorrow. It goes to the arbiter as UTC,
+// so the arbiter needs no time zone. The browser's zone stands in for the
+// house's, so a phone in another zone picks a time in its own. null for
+// anything that is not a time of day.
+export function holdUntil(hhmm, now) {
+  var m = /^(\d{2}):(\d{2})$/.exec(hhmm || '');
+  if (!m || +m[1] > 23 || +m[2] > 59) return null;
+  var d = new Date(now);
+  d.setHours(+m[1], +m[2], 0, 0);
+  if (d.getTime() <= now) d.setDate(d.getDate() + 1);
+  return d.toISOString();
+}
+
+/* Whether a hold displaced somebody. That is the case when the hold's
+ * band is above a band at which some unit is granted to command this
+ * aspect. `driven` maps "room/entity/aspect" to that band, resolved from
+ * the grant table at plan time.
+ *
+ * This is decided from the grants, not by observing refusals. Waiting
+ * until the displaced automation is refused would make the deviation
+ * depend on how often that automation publishes, which says something
+ * about its author and not about the house. An override of a boost
+ * schedule is a takeover from the moment it starts, even if the schedule
+ * would not have written again until morning.
+ *
+ * `vocabulary` is the model's, whose `priorities` lists the bands
+ * lowest first. A hold can arrive before the model does, and then
+ * nothing is driven.
+ */
+function displaces(hold, driven, vocabulary) {
+  var band = (driven || {})[hold.room + '/' + hold.entity + '/' + hold.aspect];
+  if (band === undefined) return false;
+  var below = vocabulary.priorities.indexOf(band);
+  var holder = vocabulary.priorities.indexOf(hold.priority);
+  return below !== -1 && holder !== -1 && holder > below;
+}
+
+/* The Now view's "out of the ordinary" list, in render order. Each
+ * record is { tag, title, detail, target, button? }. target names what a
+ * tap opens: {type:'unit', unit}, {type:'rooms'},
+ * {type:'entity', room, entity}, {type:'setpoint', unit, param} for a
+ * family-editable param, or {type:'unit', unit} for an owner param.
+ * button is the optional corrective action. */
+export function computeDeviations(model, state, health, config, aspects, holds, now) {
+  aspects = aspects || {};
+  now = now === undefined ? Date.now() : now;
+  var entities = model.entities || [];
+  var units = model.units || [];
+  var labels = {};
+  units.forEach(function (u) { labels[u.name] = u.label || u.name; });
+  var deviations = [];
+
+  // 1. supervision: any unit not running
+  Object.keys(health).forEach(function (k) {
+    var h = health[k] || {};
+    var status = h.status || 'running';
+    if (status === 'running') return;
+    var unit = unitNameFromHealthKey(k);
+    var detail = [];
+    if (h.restarts) detail.push('restarts: ' + h.restarts);
+    if (h.backoff_ms) detail.push('backoff ' + h.backoff_ms + 'ms');
+    deviations.push({
+      tag: 'supervision',
+      title: labels[unit] || unit,
+      detail: status + (detail.length ? ' — ' + detail.join(', ') : ''),
+      target: { type: 'unit', unit: unit }
+    });
+  });
+
+  // 2. state: lights on. One row for all of them, with the corrective
+  // action. The server fans it out at the manual band, so the family
+  // always wins.
+  var litRooms = {};
+  var litCount = 0;
+  entities.filter(function (e) { return e.capability === 'light'; }).forEach(function (e) {
+    if (stateValue(state, e.room, e.name, 'on') === true) {
+      litCount++;
+      litRooms[e.room] = true;
+    }
+  });
+  if (litCount > 0) {
+    deviations.push({
+      tag: 'state',
+      title: litCount + ' light' + (litCount === 1 ? '' : 's') + ' on',
+      detail: Object.keys(litRooms).map(titleCase).join(', '),
+      target: { type: 'rooms' },
+      button: { action: 'lights-off', label: 'All off' }
+    });
+  }
+
+  var entityRow = function (e, title) {
+    return {
+      tag: 'state', title: title, detail: '',
+      target: { type: 'entity', room: e.room, entity: e.name }
+    };
+  };
+
+  // state: unlocked locks
+  entities.filter(function (e) { return e.capability === 'lock'; }).forEach(function (e) {
+    if (stateValue(state, e.room, e.name, 'locked') === false) {
+      deviations.push(entityRow(e, e.label + ' unlocked'));
+    }
+  });
+
+  // state: connectivity, WAN down
+  entities.filter(function (e) { return e.capability === 'router'; }).forEach(function (e) {
+    if (stateValue(state, e.room, e.name, 'wan') === false) {
+      deviations.push(entityRow(e, e.label + ' — WAN down'));
+    }
+  });
+
+  // state: a device gone quiet. The owning adapter published
+  // available = false. This applies to any capability.
+  entities.forEach(function (e) {
+    if (stateValue(state, e.room, e.name, 'available') === false) {
+      deviations.push(entityRow(e, e.label + ' unresponsive'));
+    }
+  });
+
+  // state: an aspect the adapter's descriptor marks notable, when it is
+  // true (an alarm flag, say). The adapter declares this, not the house
+  // configuration.
+  entities.forEach(function (e) {
+    var fields = (aspects[e.name] && aspects[e.name].fields) || {};
+    Object.keys(fields).forEach(function (aspect) {
+      if (fields[aspect].notable && stateValue(state, e.room, e.name, aspect) === true) {
+        deviations.push(entityRow(e, e.label + ' — ' + (fields[aspect].label || aspect)));
+      }
+    });
+  });
+
+  // 3. setpoint: live config differing from the manifest default
+  units.forEach(function (u) {
+    var params = u.params || {};
+    Object.keys(params).forEach(function (pname) {
+      var key = configKey(u.name, pname);
+      if (!(key in config)) return;
+      var live = config[key];
+      var def = params[pname].default;
+      if (pname === model.vocabulary.pause_param && pauseParam(u, model.vocabulary)) {
+        // A pause reads as what it is, and taps to the unit, whose card
+        // carries the switch.
+        if (live === false) {
+          deviations.push({
+            tag: 'setpoint',
+            title: (labels[u.name] || u.name) + ' is paused',
+            detail: 'its commands are not sent',
+            target: { type: 'unit', unit: u.name }
+          });
+        }
+        return;
+      }
+      if (JSON.stringify(live) !== JSON.stringify(def)) {
+        // A family param taps through to its editor on Setpoints; an
+        // owner param is read-only here, so it taps to the unit overlay
+        // where it is shown against its default.
+        var family = params[pname].editable_by === 'family';
+        deviations.push({
+          tag: 'setpoint',
+          title: (labels[u.name] || u.name) + ' · ' + pname,
+          detail: String(live) + ' (default ' + String(def) + ')',
+          target: family
+            ? { type: 'setpoint', unit: u.name, param: pname }
+            : { type: 'unit', unit: u.name }
+        });
+      }
+    });
+  });
+
+  // 4. arbitration: an aspect held above the band a unit normally drives
+  // it at. The house's own control is suspended here, and it resumes by
+  // itself when the hold expires. This feed exists to show such cases. A
+  // hold that displaced nobody is the family using the house and is not
+  // listed. It still shows as `held` on the control.
+  var entityByName = {};
+  entities.forEach(function (e) { entityByName[e.name] = e; });
+  liveHolds(holds, now).forEach(function (hold) {
+    if (!displaces(hold, model.driven, model.vocabulary)) return;
+    var e = entityByName[hold.entity];
+    var label = e ? e.label || titleCase(hold.entity) : titleCase(hold.entity);
+    var detail = 'held by ' + hold.actor + ' until ' + (hold.nextChange ? NEXT_CHANGE : clockOf(hold.until));
+    if (hold.refused) {
+      detail += ' \u00b7 ' + hold.refused + (hold.refused === 1 ? ' wish' : ' wishes') + ' refused';
+    }
+    deviations.push({
+      tag: 'hold',
+      title: label + ' \u2014 ' + hold.aspect,
+      detail: detail,
+      until: hold.until,
+      target: e
+        ? { type: 'entity', room: hold.room, entity: hold.entity }
+        : { type: 'rooms' }
+    });
+  });
+
+  return deviations;
+}
+
+
+/* ---- aspect descriptors (docs/design.md#aspect-descriptors) ----
+ * An adapter may describe an entity's aspects in its discovery record:
+ * { schema, groups: [name...], fields: { aspect: { label, kind, group,
+ * unit?, values?, valid?, notable?, command? } } }. The page renders the
+ * description with the widgets it already has. This section maps
+ * descriptor and state to a render plan. */
+var DIAGNOSTICS = 'diagnostics';
+
+// Display text for one value. The field's kind decides. Without a kind,
+// the value gets one decimal, and a degree sign when the aspect name
+// contains "temperature".
+export function formatAspect(aspect, field, value) {
+  if (value === undefined || value === null) return '—';
+  var kind = field && field.kind;
+  if (field && field.values) {
+    // an enum's labels; a boolean may have them too ("locked"/"unlocked")
+    for (var i = 0; i < field.values.length; i++) {
+      if (field.values[i].value === value) return field.values[i].label;
+    }
+    if (kind === 'enum') return String(value);
+  }
+  if (typeof value === 'number') {
+    if (kind === 'temperature') return value.toFixed(1) + '°';
+    if (kind === 'temperature_delta') return (value > 0 ? '+' : '') + value.toFixed(1) + '°';
+    if (kind === 'percent') return Math.round(value) + '%';
+    if (kind === 'number') return String(Math.round(value * 100) / 100) + (field.unit ? ' ' + field.unit : '');
+    if (aspect.indexOf('temperature') !== -1) return value.toFixed(1) + '°';
+    return value.toFixed(1);
+  }
+  if (typeof value === 'boolean') {
+    if (kind === 'boolean') return value ? 'on' : 'off';
+    return value ? 'true' : 'false';
+  }
+  return String(value);
+}
+
+// An enum with more choices than fit on one segmented row.
+export var SELECT_ABOVE = 4;
+
+/* ---- declared control grain (docs/design.md#controls-and-the-overlay) ----
+ *
+ * `dashboard.toml`'s `[[control]]` entries say how coarse a control is.
+ * They are keyed by what the control changes (an entity's aspect, or a
+ * unit's parameter), so one grain applies wherever that control is
+ * drawn: room card, view or overlay. The derived step (a twentieth of
+ * the range) is a guess, and the house may know better. Returns null
+ * when nothing is declared, and the derived step is used.
+ */
+export function declaredStep(controls, target) {
+  var match = (controls || []).filter(function (c) {
+    if (!c || typeof c.step !== 'number' || !(c.step > 0)) return false;
+    return target.entity !== undefined
+      ? c.entity === target.entity && c.aspect === target.aspect
+      : c.unit === target.unit && c.param === target.param;
+  })[0];
+  return match ? match.step : null;
+}
+
+// The control a described command renders as. These are the same
+// shapes as the param controls:
+//   - an enum is a segmented control, or a select above SELECT_ABOVE
+//     values;
+//   - a temperature with a step is a dial. Where a card has no room, the
+//     page draws its compact form, a stepper;
+//   - any other float with a step is a stepper;
+//   - any other number is a slider, with a coarse step for its ± buttons.
+// A command the family may not edit shows its value with a tier badge
+// instead. `commandable` is the dashboard's own grant on the capability.
+// Without it the control is disabled, as for every other widget.
+export function controlFor(field, commandable, step) {
+  var cmd = field && field.command;
+  if (!cmd) return null;
+  var tier = cmd.editable_by || 'owner';
+  if (tier !== 'family') return { kind: 'readonly', tier: tier };
+  // A constraint or enum values of the wrong shape, or a step/min/max
+  // that is not a number, mean the descriptor is malformed, so no control
+  // is drawn. The server finds no command in it either.
+  var shaped = function (v, array) {
+    return v === undefined || v === null || (typeof v === 'object' && Array.isArray(v) === array);
+  };
+  if (!shaped(cmd.constraint, false) || !shaped(field.values, true)) return null;
+  var c = cmd.constraint || {};
+  var bounds = [cmd.step, c.min, c.max];
+  for (var i = 0; i < bounds.length; i++) {
+    if (bounds[i] !== undefined && (typeof bounds[i] !== 'number' || !isFinite(bounds[i]))) return null;
+  }
+  if (cmd.type === 'enum') {
+    var values = field.values || [];
+    return { kind: values.length > SELECT_ABOVE ? 'select' : 'segment', values: values, disabled: !commandable };
+  }
+  if (cmd.type === 'float' || cmd.type === 'int') {
+    if (cmd.step) {
+      // A dial is an arc from min to max. Without both bounds there is
+      // no arc to draw, so a stepper is used.
+      var bounded = typeof c.min === 'number' && typeof c.max === 'number' && c.max > c.min;
+      var kind = field.kind === 'temperature' && bounded ? 'dial' : 'stepper';
+      return { kind: kind, step: cmd.step, min: c.min, max: c.max, disabled: !commandable };
+    }
+    var min = c.min !== undefined ? c.min : 0, max = c.max !== undefined ? c.max : 100;
+    // A declared step applies to both the drag and the ± buttons. A
+    // slider quantised to 5 beside buttons that move by 5.7 looks like a
+    // bug. A quantised drag also means a slip of the finger lands one
+    // notch off rather than at an arbitrary value.
+    return {
+      kind: 'slider', min: min, max: max,
+      step: step || (cmd.type === 'int' ? 1 : 'any'),
+      coarse: step || coarseStep(min, max, cmd.type === 'int' ? 1 : 0),
+      disabled: !commandable
+    };
+  }
+  return null;
+}
+
+/* A slider's ± step: a twentieth of the range, no finer than the value's
+ * own step, rounded to a round number (5 on a percent, 1 on a small
+ * integer range). */
+export function coarseStep(min, max, atLeast) {
+  var raw = (max - min) / 20;
+  var nice = raw >= 5 ? 5 * Math.round(raw / 5) : raw >= 1 ? Math.round(raw) : Math.round(raw * 10) / 10;
+  return Math.max(nice, atLeast, 0.1);
+}
+
+/* Sections of rows for an entity's detail, in render order. First come
+ * the descriptor's groups as listed, then a diagnostics section for
+ * every present aspect it does not describe. An undescribed entity gets
+ * one 'state' section with a flat list. A described field's `valid`
+ * pointer names the boolean aspect that marks the value stale. That
+ * aspect sets the row's `stale` flag and is not listed itself.
+ * Two aspects are part of the schema and need no descriptor.
+ * `available` (device liveness, docs/design.md#availability) renders as
+ * a boolean in the descriptor's `status` group, if it has one. Any
+ * `{aspect}_valid` beside an undescribed `{aspect}` is handled like a
+ * declared `valid` pointer.
+ * Rows: { aspect, label, value, display, stale, numeric, control }. */
+export function aspectPlan(entity, state, descriptor, commandable, controls) {
+  var prefix = stateKey(entity.room, entity.name, '');
+  var present = {};
+  Object.keys(state).forEach(function (k) {
+    if (k.indexOf(prefix) === 0) present[k.slice(prefix.length)] = state[k];
+  });
+  var fields = {};
+  Object.keys((descriptor && descriptor.fields) || {}).forEach(function (a) { fields[a] = descriptor.fields[a]; });
+  var described = Object.keys(fields).length > 0;
+  var groups = (descriptor && descriptor.groups) || [];
+  if (!fields.available && 'available' in present) {
+    fields.available = { label: 'available', kind: 'boolean', group: groups.indexOf('status') !== -1 ? 'status' : null };
+  }
+  Object.keys(present).forEach(function (a) {
+    var base = a.replace(/_valid$/, '');
+    if (base !== a && base in present && !fields[a] && !fields[base]) {
+      fields[base] = { label: base, valid: a };
+    }
+  });
+  var validOf = {};
+  Object.keys(fields).forEach(function (a) {
+    if (fields[a].valid) validOf[fields[a].valid] = a;
+  });
+  var order = groups.slice();
+  var rest = described ? DIAGNOSTICS : 'state';
+  if (order.indexOf(rest) === -1) order.push(rest);
+  var byGroup = {};
+  order.forEach(function (g) { byGroup[g] = []; });
+
+  var row = function (aspect, field) {
+    var value = present[aspect];
+    var stale = !!(field && field.valid && present[field.valid] === false);
+    return {
+      aspect: aspect,
+      label: (field && field.label) || aspect,
+      value: value,
+      display: formatAspect(aspect, field, value),
+      stale: stale,
+      numeric: typeof value === 'number',
+      control: controlFor(
+        field, commandable, declaredStep(controls, { entity: entity.name, aspect: aspect })
+      )
+    };
+  };
+
+  Object.keys(fields).forEach(function (aspect) {
+    if (!(aspect in present)) return;
+    var group = fields[aspect].group;
+    if (!group || !byGroup[group]) group = rest;
+    byGroup[group].push(row(aspect, fields[aspect]));
+  });
+  Object.keys(present).sort().forEach(function (aspect) {
+    if (fields[aspect] || validOf[aspect]) return;
+    byGroup[rest].push(row(aspect, null));
+  });
+
+  return order.filter(function (g) { return byGroup[g].length > 0; }).map(function (g) {
+    return { group: g, label: titleCase(g), rows: byGroup[g], collapsed: g === DIAGNOSTICS };
+  });
+}
+
+/* The room-card row for a described entity: at most two headline
+ * readings and the family-editable controls. The headline readings are
+ * a convention, not part of the vocabulary. They are the first two rows
+ * without a control in the first group that has any, so the adapter's
+ * ordering decides. Card labels drop a trailing "(CODE)" that the
+ * overlay keeps: "feed line (GT1)" becomes "feed line". */
+export function cardPlan(entity, state, descriptor, commandable, controls) {
+  var sections = aspectPlan(entity, state, descriptor, commandable, controls);
+  var controlRows = [];
+  var readings = [];
+  sections.forEach(function (s) {
+    if (s.group === DIAGNOSTICS) return;
+    s.rows.forEach(function (r) {
+      if (r.control && r.control.kind !== 'readonly') controlRows.push(r);
+    });
+    if (readings.length === 0) {
+      readings = s.rows.filter(function (r) { return !r.control; }).slice(0, 2);
+    }
+  });
+  readings = readings.map(function (r) {
+    var short = {};
+    Object.keys(r).forEach(function (k) { short[k] = r[k]; });
+    short.label = r.label.replace(/\s*\([^)]*\)$/, '');
+    return short;
+  });
+  return { readings: readings, controls: controlRows };
+}
+
+/* The sparkline rows of a sensor's room card: every numeric row without
+ * a control outside diagnostics, in the descriptor's order. A
+ * thermometer's card therefore lists temperature and humidity but not
+ * its link quality. The sensor widget keeps its sparklines instead of
+ * using the described card. An undescribed sensor gets its flat state
+ * list, sorted. These are the overlay's rows without the collapsed
+ * group. */
+export function sensorCardPlan(entity, state, descriptor) {
+  var rows = [];
+  aspectPlan(entity, state, descriptor, false).forEach(function (s) {
+    if (s.group === DIAGNOSTICS) return;
+    s.rows.forEach(function (r) {
+      if (r.numeric && !r.control) rows.push(r);
+    });
+  });
+  return rows;
+}
+
+/* ---- the text behind a view ----
+ *
+ * A view is text in the house repo (dashboard.toml), and the page can
+ * show it. Someone pointing at the screen can then name what they see,
+ * to a person or to an agent editing the repo, in the file's own words.
+ * The text is rendered from the parsed view that /api/model carries, in
+ * the file's style: one inline table per widget, with a group's members
+ * indented under it. Comments and spacing are not reproduced, but the
+ * content is. It is read-only, and the dashboard does not write to the
+ * house. */
+var WIDGET_KEY_ORDER = ['kind', 'entity', 'aspect', 'room', 'unit', 'label', 'hours', 'colors'];
+
+function tomlValue(v) {
+  // A JSON string literal is a valid TOML basic string.
+  if (typeof v === 'string') return JSON.stringify(v);
+  // A table, such as a map's `colors`, is written inline. Its keys are
+  // entity names, which are bare TOML keys.
+  if (v && typeof v === 'object') {
+    return '{ ' + Object.keys(v).map(function (k) { return k + ' = ' + tomlValue(v[k]); }).join(', ') + ' }';
+  }
+  return String(v);
+}
+
+function orderedKeys(obj, first) {
+  var keys = Object.keys(obj).filter(function (k) { return k !== 'widgets' && obj[k] !== null && obj[k] !== undefined; });
+  return keys.sort(function (a, b) {
+    var ia = first.indexOf(a), ib = first.indexOf(b);
+    return (ia < 0 ? first.length : ia) - (ib < 0 ? first.length : ib) || (a < b ? -1 : a > b ? 1 : 0);
+  });
+}
+
+// scripts/widget_gallery.py prints docs/widgets.md's examples with this.
+export function widgetToml(w, indent) {
+  var fields = orderedKeys(w, WIDGET_KEY_ORDER).map(function (k) { return k + ' = ' + tomlValue(w[k]); });
+  if (!w.widgets) return indent + '{ ' + fields.join(', ') + ' }';
+  return indent + '{ ' + fields.concat(['widgets = [']).join(', ') + '\n' +
+    w.widgets.map(function (m) { return widgetToml(m, indent + '  ') + ',\n'; }).join('') +
+    indent + '] }';
+}
+
+/* The `[[view]]` block for `name`. For a house without the file, it is
+ * the block that would keep a generated view as it is. Null for a name
+ * no view has. Health and Not shown are part of the page frame, not
+ * views. */
+export function viewText(model, name) {
+  var views = model && model.views;
+  if (!views) {
+    if (DEFAULT_VIEWS.indexOf(name) === -1) return null;
+    return '# This house has no dashboard.toml: the dashboard draws its\n' +
+      '# generated views. To arrange them, create dashboard.toml at the\n' +
+      '# house root; this keeps this one as it is:\n\nschema = 1\n\n' +
+      '[[view]]\nname = ' + tomlValue(name) + '\nkind = ' + tomlValue(name) + '\n';
+  }
+  var view = views.filter(function (v) { return v.name === name; })[0];
+  if (!view) return null;
+  var lines = ['[[view]]'];
+  orderedKeys(view, ['name', 'label', 'kind']).forEach(function (k) {
+    lines.push(k + ' = ' + tomlValue(view[k]));
+  });
+  if (view.widgets) {
+    lines.push('widgets = [');
+    view.widgets.forEach(function (w) { lines.push(widgetToml(w, '  ') + ','); });
+    lines.push(']');
+  }
+  return lines.join('\n') + '\n';
+}
+
+/* ---- where the page is served from ----
+ *
+ * The dashboard unit's /api/model carries `about`. It has the core's
+ * version and the commit it was built from (when the build was given
+ * one), the house commit last applied, and the dashboard's own SDK
+ * version, which is the release this copy of the page came from. The
+ * page shows the core and house lines, with links. It shows the
+ * dashboard's version only when it differs from the core's. */
+var REPO_URL = 'https://github.com/freol35241/homeostat';
+export var ABOUT_LINKS = [
+  { label: 'Source', href: REPO_URL },
+  { label: 'Releases', href: REPO_URL + '/releases' },
+  { label: 'Docs', href: REPO_URL + '#readme' },
+  { label: 'Report an issue', href: REPO_URL + '/issues' }
+];
+
+// Python writes a prerelease without the hyphen that semver puts before
+// it (0.14.0rc1, 0.14.0-rc1). Both name the same release.
+function sameRelease(a, b) {
+  var norm = function (v) { return String(v).replace(/-(a|b|rc|alpha|beta)/, '$1'); };
+  return norm(a) === norm(b);
+}
+
+export function aboutLines(about) {
+  about = about || {};
+  var core = about.homeostat || {};
+  var lines = [];
+  if (core.version) {
+    var line = { label: 'homeostat', text: core.version, href: REPO_URL + '/releases/tag/v' + core.version };
+    if (core.commit) {
+      line.commit = String(core.commit).slice(0, 7);
+      line.commitHref = REPO_URL + '/commit/' + core.commit;
+    }
+    lines.push(line);
+  }
+  var page = (about.dashboard || {}).version;
+  if (page && !(core.version && sameRelease(page, core.version))) {
+    lines.push({
+      label: 'dashboard', text: page, href: REPO_URL + '/releases/tag/v' + page,
+      note: core.version ? 'not the core\'s release' : null
+    });
+  }
+  var house = (about.house || {}).commit;
+  if (house) {
+    var dirty = /-dirty$/.test(house);
+    lines.push({ label: 'house', text: house.replace(/-dirty$/, '').slice(0, 7) + (dirty ? ' + uncommitted changes' : '') });
+  }
+  return lines;
+}
+
+/* ---- pending commands ----
+ *
+ * A command is a request, not a write. It passes through arbitration,
+ * the adapter's validation and finally the device's own readback, and
+ * any of these can end it. If the page shows nothing between the tap
+ * and stage 4, a slow device looks like a broken button, and the user
+ * taps again.
+ *
+ * Showing the new value straight away would be wrong. Posting an
+ * out-of-range value returns ok and is then dropped at stage 3, so the
+ * control would show a value the house never took. The page shows the
+ * stages instead, and the envelope's correlation id ties an event back
+ * to the command it ended. The page shows the request as a request,
+ * "asked 22.5", beside what the device still reports.
+ *
+ * An entry moves draft → sending → pending → (resolved). A draft is a
+ * stepper the user is still tapping. The page holds it for a moment and
+ * then sends one command for where the taps ended. Three taps of + are
+ * one command for +1.5, rather than three commands each computed from a
+ * readback that has not moved yet. */
+
+/* How long to wait for a readback before calling it unconfirmed. The
+ * wire has no readback cadence, and the capability is the only thing the
+ * browser knows about a device's class, so the wait is scaled by
+ * capability. A z2m lamp answers in about a second, a lock waits on a
+ * motor, and a burner behind a polling bridge can take half a minute.
+ * The values are generous, because a timeout that fires early reports a
+ * failure that did not happen. */
+export var COMMAND_TIMEOUT_MS = {
+  light: 8000,
+  switch: 8000,
+  lock: 15000,
+  climate: 15000,
+  burner: 60000
+};
+export var DEFAULT_COMMAND_TIMEOUT_MS = 20000;
+
+/* The adapter knows more than the capability does
+ * (docs/design.md#aspect-descriptors). A descriptor may declare
+ * `readback_s`, the longest the device takes to report a command back,
+ * for one command or for the whole entity. The per-command value takes
+ * precedence, then the entity's, then the guess above. A value that is
+ * not a positive number up to ten minutes is ignored, because a command
+ * pending for an hour is worse than one judged on the guess. */
+var MAX_DECLARED_READBACK_S = 600;
+
+function declaredReadbackS(descriptor, aspect) {
+  var field = descriptor && descriptor.fields && descriptor.fields[aspect];
+  var candidates = [field && field.command && field.command.readback_s, descriptor && descriptor.readback_s];
+  for (var i = 0; i < candidates.length; i++) {
+    var s = candidates[i];
+    if (typeof s === 'number' && isFinite(s) && s > 0 && s <= MAX_DECLARED_READBACK_S) return s;
+  }
+  return null;
+}
+
+export function commandTimeoutMs(capability, descriptor, aspect) {
+  var declared = declaredReadbackS(descriptor, aspect);
+  if (declared !== null) return declared * 1000;
+  return COMMAND_TIMEOUT_MS[capability] || DEFAULT_COMMAND_TIMEOUT_MS;
+}
+
+export function pendingKey(room, entity, aspect) {
+  return room + '/' + entity + '/' + aspect;
+}
+
+/* The aspect whose report answers a command. Most devices report the
+ * commanded aspect back. A notifier does not report the text it was
+ * sent: the channel answers with a new `delivered`, the time the
+ * delivery service took the message (docs/design.md#notifications). */
+export function readbackAspect(capability, aspect) {
+  if (capability === 'notifier' && (aspect === 'message' || aspect === 'alert')) return 'delivered';
+  return aspect;
+}
+
+/* One command per (room, entity, aspect). A second tap on the same
+ * control replaces the first, which is what the user means. The
+ * replaced request is still remembered. Its value is added to `asked`,
+ * so a readback of that value on the way is treated as progress rather
+ * than as the device settling somewhere else. `before` keeps what the
+ * device reported before the first tap of the sequence.
+ * `stage` is 'pending' (the id is known) unless given: 'draft' while the
+ * taps continue, and 'sending' while the POST is in flight. `seq`
+ * identifies the POST, so its reply matches only the request it answers
+ * (commandSent). `tolerance` is how far a readback may be from the
+ * request and still count as a match. The brightness scale is finer
+ * than the percent the control shows, and a bulb that rounds by one
+ * step has done what it was asked. */
+export function trackCommand(pending, cmd, nowMs, stage) {
+  var key = pendingKey(cmd.room, cmd.entity, cmd.aspect);
+  var prev = pending[key];
+  pending[key] = {
+    id: cmd.id || null,
+    seq: cmd.seq || null,
+    value: cmd.value,
+    before: prev ? prev.before : cmd.before,
+    asked: prev ? prev.asked.concat([prev.value]) : [],
+    moved: prev ? prev.moved : false,
+    tolerance: cmd.tolerance || 0,
+    at: nowMs,
+    timeoutMs: commandTimeoutMs(cmd.capability, cmd.descriptor, cmd.aspect),
+    outcome: stage || 'pending',
+    readback: readbackAspect(cmd.capability, cmd.aspect)
+  };
+  return pending;
+}
+
+export function pendingFor(pending, room, entity, aspect) {
+  return pending[pendingKey(room, entity, aspect)] || null;
+}
+
+/* Where the next step of a stepper starts: the request in flight if
+ * there is one, and otherwise the device's report. Stepping from a
+ * report that has not moved yet would make a second tap repeat the
+ * first. */
+export function commandBase(pending, room, entity, aspect, current) {
+  var entry = pendingFor(pending, room, entity, aspect);
+  return entry ? entry.value : current;
+}
+
+/* A light's brightness as the percent its controls show, and back.
+ * `vocabulary` is the model's, which has the brightness scale. */
+export function percentOfBrightness(value, vocabulary) {
+  var range = vocabulary.brightness;
+  return Math.round((value - range.min) / (range.max - range.min) * 100);
+}
+
+export function brightnessOfPercent(pct, vocabulary) {
+  var range = vocabulary.brightness;
+  return Math.round(range.min + pct / 100 * (range.max - range.min));
+}
+
+/* Where a stepper's tap lands, from `current` (commandBase) and the
+ * button's `delta`. A climate setpoint rounds to a tenth. Brightness steps
+ * in percent of the vocabulary's scale, kept within 0 to 100. Any other
+ * aspect rounds to hundredths and stays within `bounds`, its command
+ * constraint's min and max. */
+export function nextStep(kind, current, delta, bounds, vocabulary) {
+  if (kind === 'climate') return Math.round((current + delta) * 10) / 10;
+  if (kind === 'brightness') {
+    var pct = Math.max(0, Math.min(100, percentOfBrightness(current, vocabulary) + delta));
+    return brightnessOfPercent(pct, vocabulary);
+  }
+  var next = Math.round((current + delta) * 100) / 100;
+  if (typeof bounds.min === 'number') next = Math.max(bounds.min, next);
+  if (typeof bounds.max === 'number') next = Math.min(bounds.max, next);
+  return next;
+}
+
+/* How far a readback may be from a command and still match it. The
+ * brightness scale is finer than the percent its control shows, so
+ * half a percent of it still matches. */
+export function cmdTolerance(aspect, vocabulary) {
+  if (aspect !== 'brightness') return 0;
+  var range = vocabulary.brightness;
+  return (range.max - range.min) / 200;
+}
+
+function sameValue(a, b, tolerance) {
+  if (typeof a === 'number' && typeof b === 'number') {
+    return Math.abs(a - b) <= Math.max(tolerance || 0, 1e-6 * Math.max(1, Math.abs(a)));
+  }
+  return a === b;
+}
+
+/* The POST came back, and the request now waits on the bus. If the
+ * dashboard unit found nothing subscribed to the key, the command went
+ * nowhere, and the page reports that at once instead of waiting. A reply
+ * for a request the user has since replaced is ignored, because the
+ * newer request has its own POST. Replies are matched by `seq`, not by
+ * value. On, off, on are three POSTs, and the first reply must not
+ * match the third request. */
+export function commandSent(pending, key, seq, reply) {
+  var entry = pending[key];
+  if (!entry || entry.outcome !== 'sending' || entry.seq !== seq) return null;
+  if (reply.heard === false) {
+    delete pending[key];
+    return { key: key, outcome: 'unheard', value: entry.value };
+  }
+  entry.id = reply.id;
+  entry.outcome = 'pending';
+  return null;
+}
+
+/* Stage 4: the device reported the commanded aspect. The reported value
+ * decides the outcome:
+ *   - The value asked for: confirmed. The exception is when it is also
+ *     the value the device held before the sequence and nothing has
+ *     moved since. After tapping on, then off, a bridge republishing the
+ *     old "off" is not an answer to "off", because the "on" may still
+ *     land. The timeout decides that case (expirePending).
+ *   - The value it held before, or one the user asked for on the way:
+ *     not an answer. A bridge that republishes on every poll sends the
+ *     old value until the device moves. Counting that as confirmation
+ *     would clear the control before anything happened.
+ *   - Anything else: the device chose its own value (it clamped, or
+ *     rounded to its resolution). The outcome is "adjusted", and the
+ *     page says so.
+ * A draft has not been sent, so nothing can answer it yet. */
+export function resolveFromState(pending, key, value) {
+  var k = parseStateKey(key);
+  if (!k) return null;
+  var answered = resolveFromReceipt(pending, k.room, k.entity, k.aspect);
+  if (answered) return answered;
+  var pk = pendingKey(k.room, k.entity, k.aspect);
+  var entry = pending[pk];
+  if (!entry || (entry.outcome !== 'pending' && entry.outcome !== 'sending')) return null;
+  var tol = entry.tolerance;
+  var stale = !entry.moved && entry.asked.length > 0 && sameValue(entry.before, value, tol);
+  if (sameValue(entry.value, value, tol) && !stale) {
+    delete pending[pk];
+    return { key: pk, outcome: 'confirmed', value: entry.value };
+  }
+  if (!sameValue(entry.before, value, tol)) entry.moved = true;
+  var known = entry.asked.concat([entry.before]).some(function (v) { return sameValue(v, value, tol); });
+  if (known) {
+    entry.seen = value;
+    return null;
+  }
+  delete pending[pk];
+  return { key: pk, outcome: 'adjusted', value: entry.value, seen: value };
+}
+
+/* A command answered by another aspect (readbackAspect). Any report of
+ * it confirms the command, even one equal to the last: ntfy stamps
+ * `delivered` in whole seconds. The receipt carries no id, so a
+ * delivery of someone else's message during the wait answers too, and
+ * a drop that comes after it finds nothing left to end. */
+function resolveFromReceipt(pending, room, entity, aspect) {
+  var keys = Object.keys(pending);
+  for (var i = 0; i < keys.length; i++) {
+    var entry = pending[keys[i]];
+    var parts = keys[i].split('/');
+    if (parts[0] !== room || parts[1] !== entity || parts[2] === aspect) continue;
+    if (entry.readback !== aspect) continue;
+    if (entry.outcome !== 'pending' && entry.outcome !== 'sending') continue;
+    delete pending[keys[i]];
+    return { key: keys[i], outcome: 'confirmed', value: entry.value };
+  }
+  return null;
+}
+
+/* Stages 2 and 3. Both arrive as health events addressed by cmd_id.
+ * `refuse` is not a failure. The command was well-formed and lost to a
+ * higher band, and the user should do something other than retry. An
+ * event without a cmd_id belongs to no command being tracked. */
+export function resolveFromEvent(pending, event) {
+  if (!event || !event.cmd_id) return null;
+  var keys = Object.keys(pending);
+  for (var i = 0; i < keys.length; i++) {
+    var entry = pending[keys[i]];
+    if (!entry || entry.id !== event.cmd_id) continue;
+    delete pending[keys[i]];
+    if (event.kind === 'refuse') {
+      return {
+        key: keys[i],
+        outcome: 'held',
+        value: entry.value,
+        by: event.holder_priority || 'another band',
+        actor: event.holder_actor || null
+      };
+    }
+    return { key: keys[i], outcome: 'rejected', value: entry.value, reason: event.reason || 'dropped' };
+  }
+  return null;
+}
+
+/* Nothing answered, which is not success. The outcome carries the last
+ * value the device reported, if any, so the page can say "still reports
+ * 21.0" rather than only "no answer". The exception is a device that
+ * reported the asked value all along (on, then off, and the "on" never
+ * landed). After the wait it is where it was asked to be, so the
+ * command counts as confirmed. */
+export function expirePending(pending, nowMs) {
+  var out = [];
+  Object.keys(pending).forEach(function (k) {
+    var entry = pending[k];
+    if (entry && (entry.outcome === 'pending' || entry.outcome === 'sending') &&
+        nowMs - entry.at > entry.timeoutMs) {
+      delete pending[k];
+      if (entry.seen !== undefined && sameValue(entry.value, entry.seen, entry.tolerance)) {
+        out.push({ key: k, outcome: 'confirmed', value: entry.value });
+      } else {
+        out.push({ key: k, outcome: 'unconfirmed', value: entry.value, seen: entry.seen });
+      }
+    }
+  });
+  return out;
+}
+
+/* How long an ended command's outcome stays on its control. A
+ * confirmation needs only a glance. Any other outcome stays long enough
+ * to be read, or until the next tap on that control replaces it. */
+var OUTCOME_SHOWN_MS = { confirmed: 4000 };
+var DEFAULT_OUTCOME_SHOWN_MS = 15000;
+
+export function noteOutcome(recent, outcome, nowMs) {
+  recent[outcome.key] = Object.assign({ at: nowMs }, outcome);
+  return recent;
+}
+
+/* Drops every outcome whose time is up, whether or not its control is
+ * on screen (recentFor only prunes what it is asked about). Returns
+ * whether anything was dropped, so the caller redraws only then. */
+export function pruneRecent(recent, nowMs) {
+  var gone = false;
+  Object.keys(recent).forEach(function (k) {
+    if (!recentFor(recent, k, nowMs)) gone = true;
+  });
+  return gone;
+}
+
+export function recentFor(recent, key, nowMs) {
+  var entry = recent[key];
+  if (!entry) return null;
+  var shown = OUTCOME_SHOWN_MS[entry.outcome] || DEFAULT_OUTCOME_SHOWN_MS;
+  if (nowMs - entry.at > shown) {
+    delete recent[key];
+    return null;
+  }
+  return entry;
+}
+
+/* A commanded value in the words its control uses. `field` is the
+ * aspect's descriptor field, or null. */
+export function formatCmdValue(aspect, value, field, vocabulary) {
+  if ((aspect === 'message' || aspect === 'alert') && typeof value === 'string') {
+    var text = value.length > 40 ? value.slice(0, 39) + '…' : value;
+    return (aspect === 'alert' ? 'alert “' : '“') + text + '”';
+  }
+  if (aspect === 'brightness' && typeof value === 'number') return percentOfBrightness(value, vocabulary) + '%';
+  if (typeof value === 'boolean' && aspect === 'locked') return value ? 'locked' : 'unlocked';
+  if (typeof value === 'boolean' && aspect === 'on') return value ? 'on' : 'off';
+  if (!field && aspect === 'setpoint' && typeof value === 'number') return value.toFixed(1) + '°';
+  return formatAspect(aspect, field, value);
+}
+
+/* Warnings that can be given before anything answers a command: the unit
+ * that owns the device is not running, or the device reports itself
+ * unavailable. Either makes a long wait likely, so the page says so now
+ * rather than after twenty seconds. `health` is the owner's health
+ * record, `ownerLabel` its label, and `available` the device's
+ * `available` aspect. */
+export function commandWarning(health, ownerLabel, available) {
+  if (health && health.status && health.status !== 'running') {
+    return ownerLabel + ' is ' + health.status;
+  }
+  if (available === false) return 'the device reports itself unavailable';
+  return '';
+}
+
+/* How an ended command is shown, as `{ tone, text }`, or null for an
+ * outcome the page does not show. `fmt` words a value as its control
+ * does. `hold` is the hold on the aspect now (holdOn), read for a held
+ * command. `ownerLabel` is the label of the unit that owns the device, or
+ * null when the entity is not in the model, read for an unheard one. */
+export function outcomeStatus(done, fmt, hold, ownerLabel) {
+  if (done.outcome === 'confirmed') return { tone: 'ok', text: '✓ ' + fmt(done.value) };
+  if (done.outcome === 'adjusted') {
+    return { tone: 'warn', text: 'The device settled on ' + fmt(done.seen) + ' (asked ' + fmt(done.value) + ')' };
+  }
+  if (done.outcome === 'held') {
+    var until = hold && hold.nextChange ? ' until ' + NEXT_CHANGE
+      : hold && isFinite(hold.until) ? ' until ' + new Date(hold.until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+    return { tone: 'warn', text: 'Held by ' + done.by + (done.actor ? ' (' + done.actor + ')' : '') + until + ' · ' + fmt(done.value) + ' not sent' };
+  }
+  if (done.outcome === 'rejected') {
+    return { tone: 'bad', text: (done.reason === 'device-unavailable' ? 'The device is unavailable' : 'Not taken: ' + done.reason) + ' · ' + fmt(done.value) };
+  }
+  if (done.outcome === 'unheard') {
+    return { tone: 'bad', text: 'Nothing is listening' + (ownerLabel !== null ? ': ' + ownerLabel + ' is not running' : '') + ' · ' + fmt(done.value) + ' went nowhere' };
+  }
+  if (done.outcome === 'unconfirmed') {
+    return { tone: 'bad', text: 'No answer for ' + fmt(done.value) + (done.seen !== undefined ? ' · still ' + fmt(done.seen) : '') };
+  }
+  if (done.outcome === 'failed') return { tone: 'bad', text: done.reason };
+  return null;
+}
+
+// The text of a refused request: the reply's `error` when its body is
+// JSON with one, and the error's message otherwise.
+export function errText(e) {
+  var msg = e && e.message ? e.message : String(e);
+  try {
+    var parsed = JSON.parse(msg);
+    if (parsed && parsed.error) return parsed.error;
+  } catch (ex) { /* not json */ }
+  return msg;
+}
+
+/* ---- forecasts (docs/design.md#forecasts) ----
+ *
+ * The house's current forecast for a series, carried live beside its
+ * present value. The wire shape is {schema, issued, points:[{t, v, d?}]}.
+ * `d` is a point's extent in seconds, and is absent for an instant. */
+
+// The key prefix every source's forecast for one aspect sits under.
+function forecastPrefix(room, entity, aspect) {
+  return 'home/forecast/' + room + '/' + entity + '/' + aspect + '/';
+}
+
+// Every source with a live forecast for one aspect, sorted so a chart
+// and its legend keep the same order between renders. A forecast key
+// names its source (docs/design.md#forecasts), so several providers
+// appear side by side and do not overwrite each other.
+export function forecastSourcesFor(forecasts, room, entity, aspect) {
+  var prefix = forecastPrefix(room, entity, aspect);
+  return Object.keys(forecasts || {})
+    .filter(function (k) {
+      // The source is the last segment. A deeper key is not this
+      // aspect's forecast.
+      return k.indexOf(prefix) === 0 &&
+        k.length > prefix.length &&
+        k.indexOf('/', prefix.length) === -1;
+    })
+    .map(function (k) { return k.slice(prefix.length); })
+    .sort();
+}
+
+// One source's current forecast, decoded, or null.
+export function forecastFor(forecasts, room, entity, aspect, source) {
+  return decodeForecast(
+    forecasts && forecasts[forecastPrefix(room, entity, aspect) + source]
+  );
+}
+
+// Every live forecast for one aspect, decoded, in source order. Each is
+// drawn as its own line with no envelope over them, as in the braid. An
+// envelope's edge follows whichever source is highest at each instant,
+// which is a path no source predicted.
+export function forecastsFor(forecasts, room, entity, aspect) {
+  var out = [];
+  forecastSourcesFor(forecasts, room, entity, aspect).forEach(function (source) {
+    var decoded = forecastFor(forecasts, room, entity, aspect, source);
+    if (decoded) out.push({ source: source, forecast: decoded });
+  });
+  return out;
+}
+
+// One forecast document, live from the bus or stored by the recorder.
+// Both have the same shape, because the store replies in the wire
+// format. Points become millisecond timestamps here, so the chart can
+// place them on the same axis as recorded history and callers do not
+// have to parse them again.
+export function decodeForecast(doc) {
+  if (!doc || !doc.points || !doc.points.length) return null;
+  var issued = Date.parse(doc.issued);
+  var points = [];
+  for (var i = 0; i < doc.points.length; i++) {
+    var p = doc.points[i];
+    var t = Date.parse(p.t);
+    if (isNaN(t) || typeof p.v !== 'number') return null;  // malformed: show nothing
+    points.push({ t: t, v: p.v, d: typeof p.d === 'number' ? p.d : null });
+  }
+  // The horizon runs to the end of a final interval, not its start.
+  // Otherwise a coarse trailing window would be drawn as a dot.
+  var last = points[points.length - 1];
+  return {
+    issued: isNaN(issued) ? null : issued,
+    // Passed through from the recorder, which tags each stored issue
+    // with the source of its key. Without it, a braid over several
+    // providers would not show which issue came from which, and "these
+    // issues disagree" would look the same as "these providers
+    // disagree".
+    source: typeof doc.source === 'string' ? doc.source : null,
+    points: points,
+    from: points[0].t,
+    to: last.d ? last.t + last.d * 1000 : last.t
+  };
+}
+
+// What a tile says about a horizon: where the series is going, not just
+// where it is. An extreme is only worth showing if the series moves, so
+// a flat horizon reports nothing rather than "min = max".
+export function horizonSummary(forecast, fromTs) {
+  if (!forecast) return null;
+  // Only points ahead of `fromTs` count. An issue made hours ago still
+  // holds what it said about the hours since. An extreme in that part
+  // is already in the past, so it is not shown as where the series is
+  // going.
+  var pts = forecast.points.filter(function (p) {
+    return fromTs === undefined || fromTs === null || p.t > fromTs;
+  });
+  if (pts.length < 2) return null;
+  var lo = pts[0], hi = pts[0];
+  for (var i = 1; i < pts.length; i++) {
+    if (pts[i].v < lo.v) lo = pts[i];
+    if (pts[i].v > hi.v) hi = pts[i];
+  }
+  if (lo.v === hi.v) return null;
+  return { min: lo, max: hi };
+}
+
+// How old a forecast is, and whether any of it is still in the future.
+// Staleness is judged from `issued` alone (docs/design.md#forecasts),
+// and the maximum age is the consumer's choice, not a TTL in the core.
+// This is the dashboard's policy:
+//   expired: the horizon has run out, so nothing is left ahead to draw.
+//   stale:   older than the span it still has left to cover. This
+//            scales with the forecast instead of being a constant per
+//            aspect. A day-ahead curve issued at 13:00 is fresh all
+//            evening and stale by the next afternoon, when its successor
+//            is long overdue. A ten-minute-old two-day forecast is not
+//            stale.
+// A document whose `issued` did not parse has no age. It can expire but
+// is never called stale, because the page does not guess a fact the
+// producer did not state.
+export function forecastFreshness(forecast, now) {
+  if (!forecast) return null;
+  var remaining = forecast.to - now;
+  var age = forecast.issued === null ? null : now - forecast.issued;
+  return {
+    issued: forecast.issued,
+    age: age,
+    remaining: remaining,
+    expired: remaining <= 0,
+    stale: remaining > 0 && age !== null && age > remaining
+  };
+}
+
+/* ---- declared sources (docs/design.md#sources) ----
+ *
+ * What a computed value is derived from, in the form the overlay needs.
+ * The entity file declares contributors for the whole entity, not per
+ * aspect, so each contributor is shown under the aspect it contributes
+ * to. A fused temperature derived from `temperature` readings shows them
+ * under `temperature`, and an unrelated `humidity` chart is unchanged.
+ * A person is the exception (docs/design.md#map-and-people). Its
+ * `presence` is derived from its trackers' `home` and `sighted`. Its
+ * position aspects come from the trackers its `lat` sources name, each
+ * drawn as that tracker's own aspect of the same name.
+ */
+var PERSON_PRESENCE_SOURCES = ['home', 'sighted'];
+var PERSON_POSITION = ['lat', 'lon', 'accuracy', 'fixed_at'];
+
+// The contributor's aspect to draw under `aspect`, or null when this
+// source does not contribute to it.
+function contributedAspect(owner, src, aspect) {
+  if (owner.capability === 'person') {
+    if (aspect === 'presence') return PERSON_PRESENCE_SOURCES.indexOf(src.aspect) !== -1 ? src.aspect : null;
+    if (PERSON_POSITION.indexOf(aspect) !== -1) return src.aspect === 'lat' ? aspect : null;
+  }
+  return src.aspect === aspect ? aspect : null;
+}
+
+export function contributorsFor(entities, entityName, aspect) {
+  var owner = (entities || []).filter(function (e) { return e.name === entityName; })[0];
+  if (!owner || !owner.sources) return [];
+  var byName = {};
+  (entities || []).forEach(function (e) { byName[e.name] = e; });
+  var out = [];
+  Object.keys(owner.sources).sort().forEach(function (name) {
+    var src = owner.sources[name];
+    var drawn = src ? contributedAspect(owner, src, aspect) : null;
+    if (!drawn) return;
+    var e = byName[src.entity];
+    // A contributor missing from the model cannot be drawn. The plan
+    // refuses an unknown one (`source-unknown-entity`), so this means the
+    // page is newer than the model, not that the house is wrong.
+    if (!e) return;
+    out.push({
+      name: name,
+      entity: src.entity,
+      aspect: drawn,
+      label: e.label || titleCase(src.entity),
+      // The contributor's own caveat. The aspect descriptor cannot say
+      // it because it does not apply to every source. Examples are one
+      // sensor in the sun, or a reading with an offset the house itself
+      // writes, which must not be fused back in.
+      note: typeof src.note === 'string' ? src.note : null
+    });
+  });
+  return out;
+}
+
+/* The entity's other readings that belong on one chart with `aspect`,
+ * from the descriptor's `related` sets: stages of one sensor, or a
+ * target and its actual value. A reading in several sets gets the
+ * members of each, once. A member the entity has not reported is left
+ * out. So is one that is undescribed or of another kind or unit,
+ * because the chart has one y scale and its readout formats every line
+ * as `aspect`. */
+export function relatedFor(descriptor, aspect, present) {
+  var fields = (descriptor && descriptor.fields) || {};
+  var own = fields[aspect];
+  var out = [], seen = {};
+  if (!own) return out;
+  seen[aspect] = true;
+  ((descriptor && descriptor.related) || []).forEach(function (set) {
+    if (!Array.isArray(set) || set.indexOf(aspect) === -1) return;
+    set.forEach(function (a) {
+      var f = fields[a];
+      if (seen[a] || present.indexOf(a) === -1 || !f || f.kind !== own.kind || f.unit !== own.unit) return;
+      seen[a] = true;
+      out.push({ name: a, aspect: a, label: f.label || a });
+    });
+  });
+  return out;
+}
+
+/* A person's trackers, for its overlay: one row per tracker its sources
+ * name, with the device's own battery, the accuracy and time of its last
+ * fix, and whether it is reported unavailable. */
+export function trackersOf(entities, state, person) {
+  var byName = {};
+  (entities || []).forEach(function (e) { byName[e.name] = e; });
+  var seen = {}, out = [];
+  Object.keys(person.sources || {}).sort().forEach(function (name) {
+    var e = byName[person.sources[name].entity];
+    if (!e || seen[e.name]) return;
+    seen[e.name] = true;
+    function read(aspect) { return stateValue(state, e.room, e.name, aspect); }
+    var fixedAt = read('fixed_at');
+    out.push({
+      entity: e.name,
+      room: e.room,
+      label: e.label || titleCase(e.name),
+      battery: typeof read('battery') === 'number' ? read('battery') : undefined,
+      accuracy: typeof read('accuracy') === 'number' ? read('accuracy') : undefined,
+      fixedAt: typeof fixedAt === 'number' ? fixedAt * 1000 : undefined,
+      unavailable: read('available') === false
+    });
+  });
+  return out;
+}
+
+/* Which declared sources were actually folded in, and when that last
+ * changed (docs/design.md#which-sources-a-computation-actually-used).
+ *
+ * Events arrive oldest first and only on a change, so the last one
+ * before the window closes is the current state. A source with no
+ * events is treated as contributing, as its declaration says. No events
+ * means nothing has reported otherwise, not that the state is unknown.
+ */
+export function sourceUsage(events, contributors) {
+  var state = {};
+  (contributors || []).forEach(function (c) {
+    state[c.name] = { used: true, since: null };
+  });
+  (events || []).forEach(function (e) {
+    if (!e || typeof e.source !== 'string') return;
+    // An event for a source this entity no longer declares has no line
+    // to annotate.
+    if (!Object.prototype.hasOwnProperty.call(state, e.source)) return;
+    state[e.source] = { used: !!e.used, since: e.ts || null };
+  });
+  return state;
+}
+
+// Stored issues in the form the chart needs: each decoded like a live
+// forecast, newest last, and only those with something to draw. The
+// wire already sends them oldest first, but sorting here means callers
+// do not depend on that.
+export function decodeIssues(issues) {
+  var out = [];
+  (issues || []).forEach(function (doc) {
+    var decoded = decodeForecast(doc);
+    if (decoded) out.push(decoded);
+  });
+  out.sort(function (a, b) { return (a.issued || a.from) - (b.issued || b.from); });
+  return out;
+}
+
+// A stored issue from before forecast keys had a source segment carries
+// the recorder's reserved name for an unrecorded source
+// (adapters/recorder.py, LEGACY_SOURCE). Showing it as-is would put a
+// provider called `_unknown` beside the real ones, which is the made-up
+// provenance the recorder avoids writing.
+export function sourceLabel(source) {
+  return source === '_unknown' ? 'source not recorded' : source;
+}
+
+// What every stored issue said about one instant, as one column of the
+// chart (docs/wireframes/forecast-history.svg). The spread is the value
+// of interest. The count says how much the spread can be trusted.
+export function columnAt(issues, when) {
+  var lo = null, hi = null, n = 0;
+  for (var i = 0; i < issues.length; i++) {
+    var v = valueAt(issues[i], when);
+    if (v === null) continue;
+    n += 1;
+    if (lo === null || v < lo) lo = v;
+    if (hi === null || v > hi) hi = v;
+  }
+  return n ? { count: n, min: lo, max: hi } : null;
+}
+
+// One issue's value at an instant, using the SDK's extent rule. A point
+// with `d` covers [t, t+d), and an instant covers only itself. Between
+// two instants the value is interpolated. Outside every point's range
+// the result is null rather than a guess.
+export function valueAt(forecast, when) {
+  var pts = forecast.points;
+  if (!pts.length || when < pts[0].t || when > forecast.to) return null;
+  var lo = 0;
+  for (var i = 0; i < pts.length; i++) {
+    if (pts[i].t <= when) lo = i; else break;
+  }
+  var left = pts[lo];
+  if (left.d) return when < left.t + left.d * 1000 ? left.v : null;
+  if (left.t === when) return left.v;
+  var right = pts[lo + 1];
+  if (!right) return null;
+  return left.v + (right.v - left.v) * ((when - left.t) / (right.t - left.t));
+}
+
+/* ---- history shapes ----
+ *
+ * The recorder summarises a window in two ways
+ * (docs/design.md#read-path). `bucket` is for a line chart, with one
+ * point per bucket, so a frequently updated series fills a week instead
+ * of showing only its last hour. `changes` is for a timeline of the
+ * runs of a state. When there is a descriptor, it decides. An enum or a
+ * boolean is drawn as runs, not a curve, whatever the JS type of its
+ * values. An enum coded as integers (ivt490's operating_mode) would
+ * otherwise be drawn as a line between its codes and averaged. Without
+ * a descriptor, the value's type decides. */
+
+export function historyShape(value, field, intervalS) {
+  // An amount per interval is drawn as bars over its intervals. A line
+  // through hourly amounts reads as a rate, and makes a 6 h forecast
+  // interval look like one spike.
+  if (intervalS) return 'bars';
+  var kind = field && field.kind;
+  if (kind === 'enum' || kind === 'boolean') return 'timeline';
+  return typeof value === 'number' ? 'chart' : 'timeline';
+}
+
+/* The interval in seconds that each sample of an aspect totals over,
+ * from the entity file's `[aspects.<name>] interval_s`
+ * (docs/design.md#totals-over-intervals), or null. */
+export function intervalOf(entity, aspect) {
+  var s = entity && entity.intervals && entity.intervals[aspect];
+  return typeof s === 'number' && s > 0 ? s : null;
+}
+
+var DAY_MS = 86400e3;
+
+// The most bars of one interval each that a window draws. Beyond this a
+// bar is a local calendar day: a week of hourly bars is too thin to
+// read, and "how much rain on Tuesday" asks for days.
+var MAX_INTERVAL_BARS = 48;
+
+// A day's interval is drawn as local days too, since a daily total is
+// stamped at local midnight, not at UTC's.
+export function barsByDay(spanMs, intervalS) {
+  var ms = intervalS * 1000;
+  return ms === DAY_MS || (ms < DAY_MS && spanMs / ms > MAX_INTERVAL_BARS);
+}
+
+// A bar's start and end. Interval bars line up with the recorded stamps,
+// offset `phase` from the epoch, so a unit stamping hours in a zone a
+// half hour off UTC still gets one bar per hour. Day bars start at
+// local midnight, and a day is not always 24 h long.
+function barStart(t, byDay, ms, phase) {
+  if (!byDay) return t - ((((t - phase) % ms) + ms) % ms);
+  var d = new Date(t);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+function barEnd(start, byDay, ms) {
+  if (!byDay) return start + ms;
+  var d = new Date(start);
+  d.setDate(d.getDate() + 1);
+  return d.getTime();
+}
+
+// Adds an amount, spread evenly over [a, b), to every bar it overlaps.
+function spreadOver(add, a, b, amount, byDay, ms, phase) {
+  for (var start = barStart(a, byDay, ms, phase); start < b; start = barEnd(start, byDay, ms)) {
+    var end = barEnd(start, byDay, ms);
+    var inside = Math.min(end, b) - Math.max(start, a);
+    if (inside > 0) add(start, end, amount * inside / (b - a));
+  }
+}
+
+// The recorded rows as { t, amount }, oldest first.
+function intervalRows(points) {
+  var rows = [];
+  (points || []).forEach(function (p) {
+    var t = Date.parse(p.ts);
+    if (!isNaN(t) && typeof p.value === 'number') rows.push({ t: t, amount: p.value });
+  });
+  return rows;
+}
+
+/* Bars for an interval aspect over a window: what was recorded, then
+ * what one forecast expects. `points` are the recorded rows, each at
+ * its interval's start. Each bar is { from, to, observed, forecast } in
+ * epoch ms and the aspect's unit. A bar holds its share of every value
+ * whose interval overlaps it, with the amount spread evenly over the
+ * interval, as `homeostat.intervals.total` counts it. The forecast is
+ * drawn only after the last recorded interval ends, so no stretch
+ * counts twice, and at most as far ahead as the window looks back, so a
+ * ten-day forecast does not squeeze a day's record into a corner. A
+ * forecast point without `d` says nothing about an interval and is left
+ * out. A stretch with nothing recorded has no bar, so a gap shows. */
+export function intervalBars(points, intervalS, win, forecast) {
+  var ms = intervalS * 1000;
+  var horizon = win.to + (win.to - win.from);
+  var to = forecast && forecast.to > win.to ? Math.min(forecast.to, horizon) : win.to;
+  var byDay = barsByDay(win.to - win.from, intervalS);
+  var rows = intervalRows(points);
+  var phase = rows.length ? rows[0].t : 0;
+  // Day bars are whole days, so the first one is not a fraction of a
+  // day that reads as a dry one.
+  var from = byDay ? barStart(win.from, true, ms, phase) : win.from;
+  var bars = {};
+  var adder = function (kind) {
+    return function (start, end, amount) {
+      if (end <= from || start >= to) return;
+      var bar = bars[start] || (bars[start] = { from: start, to: end, observed: 0, forecast: 0 });
+      bar[kind] += amount;
+    };
+  };
+  var observedEnd = win.from;
+  rows.forEach(function (r) {
+    spreadOver(adder('observed'), r.t, r.t + ms, r.amount, byDay, ms, phase);
+    observedEnd = Math.max(observedEnd, r.t + ms);
+  });
+  ((forecast && forecast.points) || []).forEach(function (p) {
+    if (!p.d) return;
+    var end = p.t + p.d * 1000;
+    var from = Math.max(p.t, observedEnd);
+    if (end <= from) return;
+    spreadOver(adder('forecast'), from, end, p.v * (end - from) / (end - p.t), byDay, ms, phase);
+  });
+  return Object.keys(bars)
+    .map(function (k) { return bars[k]; })
+    .sort(function (a, b) { return a.from - b.from; });
+}
+
+/* The total over the span that ends where the newest recorded interval
+ * ends, for a tile: 24 h, or one interval when that is longer. An
+ * interval is published after it ends, so the newest one ends before
+ * now and a total up to now would always be short. An interval that
+ * straddles the span's start counts by its share inside, as in
+ * `homeostat.intervals.total`. `coveredMs` is how much of the span the
+ * recorded intervals cover, so a tile can say when some are missing.
+ * `stale` is when the newest interval ended more than two intervals
+ * ago, as when its publisher has stopped. Null when nothing is
+ * recorded. */
+export function recentTotal(points, intervalS, nowMs) {
+  var ms = intervalS * 1000;
+  var rows = intervalRows(points);
+  if (!rows.length) return null;
+  var newest = rows.reduce(function (a, r) { return r.t > a.t ? r : a; });
+  var end = newest.t + ms;
+  var spanMs = Math.max(DAY_MS, ms);
+  var start = end - spanMs;
+  var total = 0, coveredMs = 0;
+  rows.forEach(function (r) {
+    var inside = Math.min(r.t + ms, end) - Math.max(r.t, start);
+    if (inside > 0) { total += r.amount * inside / ms; coveredMs += inside; }
+  });
+  return {
+    total: total, latest: newest.amount, end: end, spanMs: spanMs,
+    coveredMs: coveredMs, stale: nowMs - end > 2 * ms
+  };
+}
+
+/* One bucket per drawn column. The chart's viewBox width is the most
+ * points it can show separately. */
+export function bucketSeconds(hours, width) {
+  return Math.max(1, Math.round(hours * 3600 / width));
+}
+
+/* The runs of a state from change rows. Each row starts a run that ends
+ * where the next begins, or at the window's end. Nothing is known before
+ * the first row, so no run starts before it, and the timeline shows a
+ * gap there. Times are epoch ms. */
+export function timelineRuns(points, fromMs, toMs) {
+  var runs = [];
+  (points || []).forEach(function (p, i) {
+    var start = Math.max(Date.parse(p.ts), fromMs);
+    var next = points[i + 1];
+    var end = next ? Math.max(Date.parse(next.ts), fromMs) : toMs;
+    if (!(end > start)) return;
+    runs.push({ value: p.value, start: start, end: end });
+  });
+  return runs;
+}
+
+/* The stat row under a timeline: how long the state was `true` (only
+ * for a boolean), how many changes the window holds, and the current
+ * value. */
+export function timelineStats(runs) {
+  var onMs = 0, boolean = runs.length > 0;
+  runs.forEach(function (r) {
+    if (typeof r.value !== 'boolean') boolean = false;
+    else if (r.value) onMs += r.end - r.start;
+  });
+  return {
+    onMs: boolean ? onMs : null,
+    changes: Math.max(0, runs.length - 1),
+    latest: runs.length ? runs[runs.length - 1].value : null
+  };
+}
+
+// The last point's value, and the smallest, largest and mean of the
+// numeric ones. Each is null when the window has none.
+export function rangeStats(points) {
+  var vals = (points || []).map(function (p) { return p.value; }).filter(function (v) { return typeof v === 'number'; });
+  if (vals.length === 0) return { latest: null, min: null, max: null, avg: null };
+  var sum = 0;
+  vals.forEach(function (v) { sum += v; });
+  return {
+    latest: points[points.length - 1].value,
+    min: Math.min.apply(null, vals),
+    max: Math.max.apply(null, vals),
+    avg: sum / vals.length
+  };
+}
+
+/* ---- views (docs/design.md#views-are-text) ----
+ *
+ * dashboard.toml's [[view]] list is the nav. Without the file, the
+ * generated views are used. Health and "Not shown" are part of the page
+ * frame and are always drawn. They are not views here. Everything below
+ * is a pure function of the model that /api/model serves. */
+
+var GENERATED_LABELS = { now: 'Now', setpoints: 'Setpoints', rooms: 'Rooms' };
+var DEFAULT_VIEWS = ['now', 'setpoints', 'rooms'];
+
+export function viewsOf(model) {
+  var views = model && model.views;
+  if (!views) {
+    return DEFAULT_VIEWS.map(function (k) { return { name: k, label: GENERATED_LABELS[k], kind: k, widgets: [] }; });
+  }
+  return views.map(function (v) {
+    return { name: v.name, label: v.label || titleCase(v.name), kind: v.kind || null, widgets: v.widgets || [] };
+  });
+}
+
+/* A unit's events for its overlay, newest first: the recorded ones and
+ * those this page saw live. A live event the recorder also holds is
+ * listed once. The two clocks differ by the bus's latency, so a pair
+ * counts as one when key and value match within a few seconds. */
+var SAME_EVENT_MS = 5000;
+export function mergeUnitEvents(recorded, live) {
+  var out = (recorded || []).slice();
+  (live || []).forEach(function (ev) {
+    var value = JSON.stringify(ev.value);
+    var seen = out.some(function (r) {
+      return r.key === ev.key && JSON.stringify(r.value) === value &&
+        Math.abs((r.ts || 0) - (ev.ts || 0)) <= SAME_EVENT_MS;
+    });
+    if (!seen) out.push(ev);
+  });
+  return out.sort(function (a, b) { return (b.ts || 0) - (a.ts || 0); });
+}
+
+/* The hold words the page acts on (docs/design.md#hold-intents). A
+ * release hands an aspect back, and a report says the device already
+ * did it. The page has to name a word to send or recognise it, so these
+ * are the one place it does. The model's `vocabulary.hold_words` lists
+ * every word, and tests/js checks that these are among them. */
+export var HOLD_RELEASE = 'release';
+export var HOLD_REPORT = 'report';
+
+/* An automation's timeline (docs/design.md#unit-timeline), newest first,
+ * built from what /api/unit-timeline gathers from the recorder, with its
+ * times in epoch ms:
+ * - `param`: a write to one of its parameters.
+ * - `command`: a command it sent, with what came of it. An event naming
+ *   its cmd_id says refused (the arbiter) or dropped (the adapter). Else
+ *   a recorded state matching it within the readback wait says applied,
+ *   and a matching state from before it says the aspect already had the
+ *   value. Else nothing answered. A command older than what a capped
+ *   query kept is not judged: its answer may have been cut.
+   A release or a report reaches no device, so nothing judges it.
+ * - `taken-over`: another actor's command displaced its hold.
+ * - `decision`: why one of its rules acted or did not (ctx.decision).
+ * - `event`: one of its other health events. */
+export function unitTimeline(raw, model, aspects, unitName) {
+  raw = raw || {};
+  var byName = {};
+  ((model && model.entities) || []).forEach(function (e) { byName[e.name] = e; });
+  var out = [];
+  (raw.params || []).forEach(function (p) {
+    out.push({ ts: p.ts, type: 'param', param: String(p.key).split('/').pop(), value: p.value });
+  });
+  var readbacks = {};
+  (raw.readbacks || []).forEach(function (s) { readbacks[s.entity + '/' + s.aspect] = s; });
+  var answers = raw.answers || [];
+  var cut = function (ts, from) { return from !== null && from !== undefined && ts < from; };
+  (raw.commands || []).forEach(function (c) {
+    var parts = String(c.key).split('/');
+    var entity = parts[3];
+    var aspect = parts.slice(4).join('/');
+    var envelope = c.value || {};
+    var entry = { ts: c.ts, type: 'command', entity: entity, aspect: aspect, value: envelope.value, outcome: 'no answer' };
+    var answer = envelope.id ? answers.filter(function (a) { return a.value && a.value.cmd_id === envelope.id; })[0] : null;
+    var series = readbacks[entity + '/' + aspect] || { points: [] };
+    if (answer) {
+      if (answer.value.kind === 'refuse') {
+        entry.outcome = 'refused';
+        entry.by = answer.value.holder_actor || null;
+        entry.priority = answer.value.holder_priority || null;
+      } else {
+        entry.outcome = 'dropped';
+        entry.by = unitNameFromHealthKey(answer.key);
+        entry.reason = answer.value.reason || null;
+      }
+    } else if (envelope.hold === HOLD_RELEASE || envelope.hold === HOLD_REPORT) {
+      entry.outcome = envelope.hold === HOLD_RELEASE ? 'released' : 'reported';
+    } else if (cut(c.ts, raw.answers_from) || cut(c.ts, series.from)) {
+      entry.outcome = 'unknown';
+    } else {
+      var e = byName[entity] || {};
+      var waitMs = commandTimeoutMs(e.capability, aspects && aspects[entity], aspect);
+      var tol = cmdTolerance(aspect, model.vocabulary);
+      var before = null;
+      var reached = (series.points || []).some(function (p) {
+        if (p.ts <= c.ts) before = p;
+        return p.ts > c.ts && p.ts <= c.ts + waitMs && sameValue(p.value, envelope.value, tol);
+      });
+      if (reached) entry.outcome = 'applied';
+      else if (before && sameValue(before.value, envelope.value, tol)) entry.outcome = 'already';
+    }
+    out.push(entry);
+  });
+  answers.forEach(function (a) {
+    var v = a.value || {};
+    if (v.kind !== 'preempt' || v.from_actor !== unitName) return;
+    out.push({ ts: a.ts, type: 'taken-over', entity: v.entity, aspect: v.aspect, by: v.to_actor, priority: v.to_priority });
+  });
+  (raw.events || []).forEach(function (ev) {
+    var v = ev.value || {};
+    if (v.kind === 'decision') {
+      out.push({ ts: ev.ts, type: 'decision', rule: v.rule, outcome: v.outcome });
+      return;
+    }
+    out.push({ ts: ev.ts, type: 'event', kind: v.kind || 'event', fields: ev.value });
+  });
+  return out.sort(function (a, b) { return (b.ts || 0) - (a.ts || 0); });
+}
+
+/* The family's parameters of a unit, without an automation's pause
+ * switch, which its card shows in its head instead. */
+export function familyParams(unit, vocabulary) {
+  var params = (unit && unit.params) || {};
+  return Object.keys(params).filter(function (p) {
+    return params[p].editable_by === 'family' && !(p === vocabulary.pause_param && pauseParam(unit, vocabulary));
+  });
+}
+
+/* An automation's pause switch: the `enabled` parameter the core gives
+ * every automation (docs/design.md#pausing-an-automation), which the
+ * model's vocabulary names as `pause_param`. Its spec, or null for a
+ * unit that has none. */
+export function pauseParam(unit, vocabulary) {
+  if (!unit || unit.kind !== 'automation') return null;
+  return (unit.params || {})[vocabulary.pause_param] || null;
+}
+
+/* Whether an automation is paused: its `enabled` reads false, or its
+ * default is false while no value is served yet. */
+export function isPaused(unit, config, vocabulary) {
+  var spec = pauseParam(unit, vocabulary);
+  if (!spec) return false;
+  var key = configKey(unit.name, vocabulary.pause_param);
+  var live = config && key in config ? config[key] : spec.default;
+  return live === false;
+}
+
+/* A view's widgets with every group expanded. A group is only a card
+ * around its members, not a placement or a destination of its own. */
+function flatWidgets(view) {
+  var out = [];
+  (view.widgets || []).forEach(function (w) {
+    if (w.kind === 'group') (w.widgets || []).forEach(function (m) { out.push(m); });
+    else out.push(w);
+  });
+  return out;
+}
+
+/* What no view places: entities and family params the family cannot
+ * reach from the nav.
+ * An entity is placed by any of: a widget naming it, its room, a unit
+ * that publishes or drives it, a `people` widget when it is a person or
+ * a tracker no person lists, or a generated `rooms` view (every entity)
+ * or `now` view (people).
+ * A param is placed by a `params` or `unit` widget for its unit, or by a
+ * generated `setpoints` view.
+ * Deviations and the map place nothing, because they show signals, not
+ * an inventory. */
+export function placement(model) {
+  var views = viewsOf(model);
+  var entities = (model.entities || []).slice();
+  var units = model.units || [];
+  var byName = {};
+  units.forEach(function (u) { byName[u.name] = u; });
+  var placedEntity = {}, placedParam = {};
+  var allEntities = false, allParams = false, persons = false;
+  function placeUnit(name) {
+    var u = byName[name];
+    if (!u) return;
+    familyParams(u, model.vocabulary).forEach(function (p) { placedParam[name + '.' + p] = true; });
+    (u.drives || []).forEach(function (f) { placedEntity[f.entity] = true; });
+    entities.forEach(function (e) { if (e.owner === name) placedEntity[e.name] = true; });
+  }
+  views.forEach(function (v) {
+    if (v.kind === 'rooms') allEntities = true;
+    if (v.kind === 'setpoints') allParams = true;
+    if (v.kind === 'now') persons = true;
+    flatWidgets(v).forEach(function (w) {
+      if (w.entity) placedEntity[w.entity] = true;
+      if (w.kind === 'room') entities.forEach(function (e) { if (e.room === w.room) placedEntity[e.name] = true; });
+      if (w.kind === 'unit') placeUnit(w.unit);
+      if (w.kind === 'params') familyParams(byName[w.unit], model.vocabulary).forEach(function (p) { placedParam[w.unit + '.' + p] = true; });
+      if (w.kind === 'people') persons = true;
+    });
+  });
+  var people = {};
+  if (persons) peopleEntities(entities).forEach(function (e) { people[e.name] = true; });
+  var unplacedEntities = allEntities ? [] : entities.filter(function (e) {
+    return !placedEntity[e.name] && !people[e.name];
+  });
+  var unplacedParams = [];
+  if (!allParams) {
+    units.forEach(function (u) {
+      familyParams(u, model.vocabulary).forEach(function (p) {
+        if (!placedParam[u.name + '.' + p]) unplacedParams.push({ unit: u.name, param: p, spec: u.params[p] });
+      });
+    });
+  }
+  return { entities: unplacedEntities, params: unplacedParams };
+}
+
+/* The unit card's four relations. Each is read from the manifest and
+ * the grant table rather than declared for the card: family params, the
+ * entities it owns, the fields its cmd grants reach, and the fields its
+ * state subscriptions read.
+ * Drives and From are fields. The model carries them as
+ * { entity, aspect } (dashboard.py, unit_relations), and they are
+ * resolved here to { entity: <the entity>, aspect }. They are fields
+ * because an automation that commands a lamp and subscribes to it names
+ * the same entity in both sections, and only the aspect tells them
+ * apart. The labels belong to the page and are not vocabulary. */
+export function unitCardPlan(model, unitName) {
+  var unit = (model.units || []).filter(function (u) { return u.name === unitName; })[0];
+  if (!unit) return null;
+  var byName = {};
+  (model.entities || []).forEach(function (e) { byName[e.name] = e; });
+  var fields = function (rels) {
+    return (rels || []).map(function (f) {
+      return byName[f.entity] ? { entity: byName[f.entity], aspect: f.aspect || null } : null;
+    }).filter(Boolean);
+  };
+  return {
+    unit: unit,
+    params: familyParams(unit, model.vocabulary),
+    pause: pauseParam(unit, model.vocabulary),
+    publishes: (model.entities || []).filter(function (e) { return e.owner === unitName; }),
+    drives: fields(unit.drives),
+    sources: fields(unit.sources)
+  };
+}
+
+/* Which of the nav's views a deviation's tap should open. A setpoint
+ * opens the first view with its unit's params (or a generated
+ * Setpoints). The lights-on deviation opens a generated Rooms. null
+ * means no view shows it, and the page falls back to an overlay or to
+ * Not shown. */
+export function viewFor(target, views) {
+  var found = null;
+  views.forEach(function (v) {
+    if (found) return;
+    if (target.type === 'setpoint') {
+      var hit = v.kind === 'setpoints' || flatWidgets(v).some(function (w) {
+        return (w.kind === 'params' || w.kind === 'unit') && w.unit === target.unit;
+      });
+      if (hit) found = v.name;
+    } else if (target.type === 'rooms' && v.kind === 'rooms') {
+      found = v.name;
+    }
+  });
+  return found;
+}

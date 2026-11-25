@@ -72,8 +72,7 @@ document.addEventListener('click', function (e) {
     var stepAspect = baseAspect('climate');
     var current = stepBase(stepRoom, stepEntity, stepAspect);
     if (typeof current !== 'number') return; // no fabricated default to step from
-    var delta = parseFloat(el.getAttribute('data-delta'));
-    var next = Math.round((current + delta) * 10) / 10;
+    var next = logic.nextStep('climate', current, parseFloat(el.getAttribute('data-delta')));
     stepCmd(stepRoom, stepEntity, stepAspect, next);
     return;
   }
@@ -82,8 +81,8 @@ document.addEventListener('click', function (e) {
     var bEntity = el.getAttribute('data-entity');
     var bCurrent = stepBase(bRoom, bEntity, 'brightness');
     if (typeof bCurrent !== 'number') return;
-    var bPct = Math.max(0, Math.min(100, logic.percentOfBrightness(bCurrent, store.model.vocabulary) + parseInt(el.getAttribute('data-delta'), 10)));
-    stepCmd(bRoom, bEntity, 'brightness', logic.brightnessOfPercent(bPct, store.model.vocabulary));
+    var bNext = logic.nextStep('brightness', bCurrent, parseInt(el.getAttribute('data-delta'), 10), null, store.model.vocabulary);
+    stepCmd(bRoom, bEntity, 'brightness', bNext);
     return;
   }
   if (action === 'aspect-step') {
@@ -92,12 +91,9 @@ document.addEventListener('click', function (e) {
     var aAspect = el.getAttribute('data-aspect');
     var aCurrent = stepBase(aRoom, aEntity, aAspect);
     if (typeof aCurrent !== 'number') return; // no fabricated default to step from
-    var aNext = Math.round((aCurrent + parseFloat(el.getAttribute('data-delta'))) * 100) / 100;
     var aField = descriptorField(findEntity(aRoom, aEntity) || {}, aAspect);
     var aBounds = (aField && aField.command && aField.command.constraint) || {};
-    if (typeof aBounds.min === 'number') aNext = Math.max(aBounds.min, aNext);
-    if (typeof aBounds.max === 'number') aNext = Math.min(aBounds.max, aNext);
-    stepCmd(aRoom, aEntity, aAspect, aNext);
+    stepCmd(aRoom, aEntity, aAspect, logic.nextStep('aspect', aCurrent, parseFloat(el.getAttribute('data-delta')), aBounds));
     return;
   }
   if (action === 'aspect-enum') {
@@ -153,7 +149,7 @@ document.addEventListener('click', function (e) {
     return;
   }
   // A deviation tap opens whichever view shows the item
-  // (dashboard-logic.js, viewFor). If no view does, the unit overlay has
+  // (logic.js, viewFor). If no view does, the unit overlay has
   // every param, and Not shown has every unplaced light.
   if (action === 'goto-rooms') {
     store.view = logic.viewFor({ type: 'rooms' }, logic.viewsOf(store.model)) || 'notshown';
@@ -275,7 +271,7 @@ document.addEventListener('change', function (e) {
   if (el.matches('[data-action="param-time"]')) {
     var unit2 = el.getAttribute('data-unit');
     var param2 = el.getAttribute('data-param');
-    var prevKey = 'home/config/' + unit2 + '/' + param2;
+    var prevKey = logic.configKey(unit2, param2);
     var prevValue = store.config[prevKey];
     sendParam(unit2, param2, el.value, function () {
       el.value = prevValue !== undefined ? prevValue : el.value;
@@ -285,7 +281,7 @@ document.addEventListener('change', function (e) {
   if (el.matches('[data-action="param-text"]')) {
     var unit3 = el.getAttribute('data-unit');
     var param3 = el.getAttribute('data-param');
-    var prevKey3 = 'home/config/' + unit3 + '/' + param3;
+    var prevKey3 = logic.configKey(unit3, param3);
     var prevValue3 = store.config[prevKey3];
     sendParam(unit3, param3, el.value, function () {
       el.value = prevValue3 !== undefined ? prevValue3 : el.value;

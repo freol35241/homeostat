@@ -101,7 +101,7 @@ fn render_vocabulary(out: &mut String) {
     out.push_str("## Capability vocabulary\n\n");
     out.push_str(
         "What an entity of each capability publishes under which names \
-         (docs/adapters.md, State). The base aspect is what commands target \
+         (docs/adapters.md#3-state). The base aspect is what commands target \
          and the dashboard widget renders; the other named aspects are what \
          `features` may declare or the vocabulary reserves; commands are the \
          aspects that take a command and the type of value each carries, a \
@@ -577,8 +577,8 @@ mod tests {
     }
 
     /// The dashboard reads every name in `OCCUPANCY_ASPECTS` as a presence
-    /// reading (`occupancyReading` in dashboard-logic.js), so a name added
-    /// to the occupancy row is a change to the page too.
+    /// reading (`occupancyReading` in dashboard/logic/index.js), so a name
+    /// added to the occupancy row is a change to the page too.
     #[test]
     fn occupancy_aspects_are_the_presence_readings() {
         let occupancy =

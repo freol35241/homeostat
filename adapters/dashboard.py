@@ -69,7 +69,16 @@ from pathlib import Path
 import aiohttp
 import zenoh
 from aiohttp import WSMsgType, web
-from homeostat import ConfigWriteError, Newest, connect, house, keys, vocabulary
+from homeostat import (
+    ConfigWriteError,
+    Newest,
+    async_shutdown_event,
+    connect,
+    history,
+    house,
+    keys,
+    vocabulary,
+)
 from homeostat.session import QueryError
 
 ENV_HOSTS = "HOMEOSTAT_DASHBOARD_HOSTS"
@@ -112,8 +121,8 @@ except importlib.metadata.PackageNotFoundError:
 # modules under assets/dashboard/ (MODULES). Nothing else is served, so the
 # route cannot be used for path traversal.
 #
-# dashboard.html, dashboard.css, dashboard-logic.js and the modules are
-# written against each other and change together at an upgrade. aiohttp's
+# dashboard.html, dashboard.css and the modules are written against each
+# other and change together at an upgrade. aiohttp's
 # FileResponse sets ETag and Last-Modified but no Cache-Control, so a
 # browser falls back to heuristic freshness, commonly a tenth of the
 # file's age. A file unchanged for two weeks is then not revalidated for
@@ -133,7 +142,6 @@ REVALIDATE = {"Cache-Control": "no-cache"}
 
 ASSETS = {
     "video-rtc.js": "text/javascript",
-    "dashboard-logic.js": "text/javascript",
     "dashboard.css": "text/css",
     "homeostat-mark.svg": "image/svg+xml",
 }
@@ -168,7 +176,7 @@ COMMANDABLE = {c: set(commands) - DESCRIPTOR_ONLY for c, commands in vocabulary.
 # The vocabulary's value types, in the descriptor-command shape so one
 # check serves both. A vocabulary number is a descriptor "float", which
 # admits an integer too, as aduro's power levels 10/50/100 are. The
-# adapter checks bounds (docs/adapters.md, Commands). The type is checked
+# adapter checks bounds (docs/adapters.md#4-commands). The type is checked
 # here so a JSON object cannot reach the bus in a manual-band envelope.
 # An unknown vocabulary type fails here, at import, rather than as a
 # command the page cannot send.
@@ -337,9 +345,10 @@ def commandable_aspects(entity: dict, descriptor: dict | None) -> set[str]:
 def key_expr(key: str):
     """Return a zenoh key expression, or None when the string is not one.
 
-    The core's manifest parser admits some shapes zenoh refuses (`**/**`,
-    a `$`), and the model is re-read while files are being edited. A bad
-    expression is skipped so it does not turn into a 500 for every browser.
+    The core's plan refuses keys zenoh refuses, but the model is re-read
+    while files are being edited, so it can hold a key no plan has checked.
+    A bad expression is skipped so it does not turn into a 500 for every
+    browser.
     """
     try:
         return zenoh.KeyExpr(key)
@@ -703,8 +712,10 @@ class Hub:
 
     def start(self, loop: asyncio.AbstractEventLoop) -> None:
         self.loop = loop
-        # Subscribe first, then seed from the mirror. The seed uses
-        # setdefault, so a value the subscription already delivered wins.
+        # Subscribe first, then seed from the mirror. State seeds through
+        # `state_stamps`, so the newer of the seed and a delivered value
+        # wins. The other seeds use setdefault, so a value the subscription
+        # already delivered wins.
         self._subs = [
             self.session.subscribe("home/state/**", self._on_state),
             self.session.subscribe("home/forecast/**", self._on_forecast),
@@ -838,21 +849,20 @@ class Hub:
             self.holds[key] = value
         self._emit({"type": "hold", "key": key, "value": value})
 
-    def _on_arbitration(self, sample) -> None:
+    def _mirror(self, sample, cache: dict, kind: str) -> None:
+        """Store a sample's value in `cache` and send it to the page as `kind`."""
         if (decoded := self._decode(sample)) is None:
             return
         key, value = decoded
         with self.lock:
-            self.arbitration[key] = value
-        self._emit({"type": "arbitration", "key": key, "value": value})
+            cache[key] = value
+        self._emit({"type": kind, "key": key, "value": value})
+
+    def _on_arbitration(self, sample) -> None:
+        self._mirror(sample, self.arbitration, "arbitration")
 
     def _on_forecast(self, sample) -> None:
-        if (decoded := self._decode(sample)) is None:
-            return
-        key, value = decoded
-        with self.lock:
-            self.forecasts[key] = value
-        self._emit({"type": "forecast", "key": key, "value": value})
+        self._mirror(sample, self.forecasts, "forecast")
 
     def _apply_discovery(self, unit: str, value) -> None:
         """Diff a unit's discovery record against what it described before.
@@ -881,12 +891,7 @@ class Hub:
         self._apply_discovery(key.split("/")[2], value)
 
     def _on_config(self, sample) -> None:
-        if (decoded := self._decode(sample)) is None:
-            return
-        key, value = decoded
-        with self.lock:
-            self.config[key] = value
-        self._emit({"type": "config", "key": key, "value": value})
+        self._mirror(sample, self.config, "config")
 
     def _on_health(self, sample) -> None:
         if (decoded := self._decode(sample)) is None:
@@ -924,6 +929,22 @@ class Hub:
 
 def json_error(message: str, status: int = 400) -> web.Response:
     return web.json_response({"error": message}, status=status)
+
+
+def window_hours(request: web.Request, cap: float) -> float | web.Response:
+    """Return the request's window length in hours, at most `cap`, or a 400.
+
+    `hours` defaults to 24. It must be a finite, positive number.
+    """
+    try:
+        hours = float(request.query.get("hours", "24"))
+    except ValueError:
+        return json_error("hours must be a number")
+    if not math.isfinite(hours):
+        return json_error("hours must be a finite number")
+    if hours <= 0:
+        return json_error("hours must be positive")
+    return min(hours, cap)
 
 
 @web.middleware
@@ -1012,6 +1033,32 @@ class Model:
 
 
 def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Application:
+
+    def known_series(request: web.Request) -> tuple[str, str] | web.Response:
+        """Return the request's entity and aspect, or a 400.
+
+        They go into a recorder selector as they are. A wildcard entity
+        would spread the per-series limit over the whole store, and `/`,
+        `#` or `$` would raise inside the executor.
+        """
+        entity = request.query.get("entity", "")
+        aspect = request.query.get("aspect", "")
+        if not entity or not aspect:
+            return json_error("entity and aspect are required")
+        if entity not in model.entities:
+            return json_error(f"unknown entity {entity}")
+        if not keys.valid_segment(aspect):
+            return json_error("aspect must be a single key segment")
+        return entity, aspect
+
+    async def recorder_get(selector: str) -> list | web.Response:
+        """Run a recorder query off the event loop, or return a 502 if it fails."""
+        try:
+            return await asyncio.get_running_loop().run_in_executor(
+                None, hub.session.get_json, selector
+            )
+        except QueryError as error:
+            return json_error(f"recorder: {error}", status=502)
 
     async def index(request: web.Request) -> web.StreamResponse:
         return web.FileResponse(page, headers=REVALIDATE)
@@ -1225,55 +1272,49 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         default) is what the house did, class=cmd what was asked of it; a
         command strip under a chart shows intent against outcome.
         """
-        entity = request.query.get("entity", "")
-        aspect = request.query.get("aspect", "")
-        if not entity or not aspect:
-            return json_error("entity and aspect are required")
+        if isinstance(series := known_series(request), web.Response):
+            return series
+        entity, aspect = series
         # The two series classes the recorder keeps per (entity, aspect).
         # The page asks for no other.
         series_class = request.query.get("class", "state")
         if series_class not in ("state", "cmd"):
             return json_error("class must be state or cmd")
-        # These go into a selector as they are. A wildcard entity would
-        # spread the per-series limit over the whole store, and `/`, `#` or
-        # `$` would raise inside the executor.
-        if entity not in model.entities:
-            return json_error(f"unknown entity {entity}")
-        if not keys.valid_segment(aspect):
-            return json_error("aspect must be a single key segment")
+        if isinstance(hours := window_hours(request, HISTORY_HOURS_MAX), web.Response):
+            return hours
         now = datetime.datetime.now(datetime.timezone.utc)
+        start = now - datetime.timedelta(hours=hours)
         try:
-            hours = min(float(request.query.get("hours", "24")), HISTORY_HOURS_MAX)
             limit = max(1, min(int(request.query.get("limit", "500")), HISTORY_LIMIT_MAX))
             bucket = int(request.query.get("bucket", "0"))
-            start = now - datetime.timedelta(hours=hours)
-        except (ValueError, OverflowError):
-            # timedelta raises OverflowError on NaN or infinite hours.
-            return json_error("hours, limit and bucket must be numbers")
+        except ValueError:
+            return json_error("limit and bucket must be numbers")
         changes = request.query.get("changes") == "1"
-        if bucket < 0 or (bucket and hours * 3600 / bucket > HISTORY_LIMIT_MAX):
+        try:
+            per_window = hours * 3600 / bucket if bucket else 0
+        except OverflowError:
+            # The division turns bucket into a float first.
+            return json_error("bucket is too large")
+        if bucket < 0 or per_window > HISTORY_LIMIT_MAX:
             # The recorder refuses a fold finer than a reply can carry. The
             # page does not ask for one, so this is a plain 400.
             return json_error(f"bucket must be positive and no finer than {HISTORY_LIMIT_MAX} per window")
         if bucket and changes:
             return json_error("bucket and changes are exclusive")
-        selector = (
-            f"{keys.history_key(series_class, entity, aspect)}"
-            f"?from={start.isoformat(timespec='seconds')}"
-            f";to={now.isoformat(timespec='seconds')};limit={limit}"
-        )
+        params = {
+            "from": start.isoformat(timespec="seconds"),
+            "to": now.isoformat(timespec="seconds"),
+            "limit": limit,
+        }
         # The recorder's chart shapes (docs/design.md#read-path): one point
         # per bucket for a line, or the runs of a state for a timeline.
         if bucket:
-            selector += f";bucket={bucket}"
+            params["bucket"] = bucket
         elif changes:
-            selector += ";changes=1"
-        try:
-            replies = await asyncio.get_running_loop().run_in_executor(
-                None, hub.session.get_json, selector
-            )
-        except QueryError as error:
-            return json_error(f"recorder: {error}", status=502)
+            params["changes"] = 1
+        selector = history.selector(keys.history_key(series_class, entity, aspect), params)
+        if isinstance(replies := await recorder_get(selector), web.Response):
+            return replies
         return web.json_response(
             {"series": [{"key": key, "points": points} for key, points in replies]}
         )
@@ -1287,37 +1328,32 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         issues. `limit` counts issues, as the recorder does, so a reply
         never holds part of an issue.
         """
-        entity = request.query.get("entity", "")
-        aspect = request.query.get("aspect", "")
-        if not entity or not aspect:
-            return json_error("entity and aspect are required")
-        if entity not in model.entities:
-            return json_error(f"unknown entity {entity}")
-        if not keys.valid_segment(aspect):
-            return json_error("aspect must be a single key segment")
+        if isinstance(series := known_series(request), web.Response):
+            return series
+        entity, aspect = series
+        if isinstance(hours := window_hours(request, HISTORY_HOURS_MAX), web.Response):
+            return hours
         now = datetime.datetime.now(datetime.timezone.utc)
+        start = now - datetime.timedelta(hours=hours)
         try:
-            hours = min(float(request.query.get("hours", "24")), HISTORY_HOURS_MAX)
             limit = max(1, min(int(request.query.get("limit", "60")), FORECAST_ISSUE_MAX))
-            start = now - datetime.timedelta(hours=hours)
-        except (ValueError, OverflowError):
-            return json_error("hours and limit must be numbers")
+        except ValueError:
+            return json_error("limit must be a number")
         # The window is the drawn one. An issue is kept when it said
         # anything about the window, so a forecast made before the window
         # that reaches into it is included. The wildcard in the source slot
         # returns every provider for this aspect, each as its own series
         # (docs/design.md#forecasts).
-        selector = (
-            f"{keys.history_key('forecast', entity, aspect)}/*"
-            f"?valid_from={start.isoformat(timespec='seconds')}"
-            f";valid_to={now.isoformat(timespec='seconds')};limit={limit}"
+        selector = history.selector(
+            keys.history_key("forecast", entity, aspect) + "/*",
+            {
+                "valid_from": start.isoformat(timespec="seconds"),
+                "valid_to": now.isoformat(timespec="seconds"),
+                "limit": limit,
+            },
         )
-        try:
-            replies = await asyncio.get_running_loop().run_in_executor(
-                None, hub.session.get_json, selector
-            )
-        except QueryError as error:
-            return json_error(f"recorder: {error}", status=502)
+        if isinstance(replies := await recorder_get(selector), web.Response):
+            return replies
         # The reply key's last segment is the source. Tagging each issue
         # with it gives the page one flat list, since the chart draws
         # issues, and still says which provider each line came from.
@@ -1336,34 +1372,30 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         window read is wider than the window drawn by
         SOURCE_EVENT_LOOKBACK_H (see there).
         """
-        entity = request.query.get("entity", "")
-        aspect = request.query.get("aspect", "")
-        if entity not in model.entities:
-            return json_error(f"unknown entity {entity}")
-        if not keys.valid_segment(aspect):
-            return json_error("aspect must be a single key segment")
+        if isinstance(series := known_series(request), web.Response):
+            return series
+        entity, aspect = series
+        if isinstance(hours := window_hours(request, HISTORY_HOURS_MAX), web.Response):
+            return hours
         owner = model.entities[entity].get("owner")
         if not owner:
             return web.json_response({"events": []})
-        try:
-            hours = min(float(request.query.get("hours", "24")), HISTORY_HOURS_MAX)
-        except (ValueError, OverflowError):
-            return json_error("hours must be a number")
         now = datetime.datetime.now(datetime.timezone.utc)
         # The recorder's events path takes integer microseconds; its
         # samples path takes RFC3339.
         to_us = int(now.timestamp() * 1_000_000)
         from_us = to_us - int((hours + SOURCE_EVENT_LOOKBACK_H) * 3600 * 1_000_000)
-        selector = (
-            f"home/history/events?key=home/health/{owner}/event"
-            f";from={from_us};to={to_us};limit={SOURCE_EVENT_MAX}"
+        selector = history.selector(
+            "home/history/events",
+            {
+                "key": f"home/health/{owner}/event",
+                "from": from_us,
+                "to": to_us,
+                "limit": SOURCE_EVENT_MAX,
+            },
         )
-        try:
-            replies = await asyncio.get_running_loop().run_in_executor(
-                None, hub.session.get_json, selector
-            )
-        except QueryError as error:
-            return json_error(f"recorder: {error}", status=502)
+        if isinstance(replies := await recorder_get(selector), web.Response):
+            return replies
         out = []
         for _key, payload in replies:
             for row in payload or []:
@@ -1397,25 +1429,22 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         unit = request.query.get("unit", "")
         if unit not in model.units:
             return json_error(f"unknown unit {unit}", status=404)
-        try:
-            hours = min(float(request.query.get("hours", "24")), HISTORY_HOURS_MAX)
-        except (ValueError, OverflowError):
-            return json_error("hours must be a number")
-        if not hours > 0:
-            return json_error("hours must be positive")
+        if isinstance(hours := window_hours(request, HISTORY_HOURS_MAX), web.Response):
+            return hours
         now = datetime.datetime.now(datetime.timezone.utc)
         to_us = int(now.timestamp() * 1_000_000)
         from_us = to_us - int(hours * 3600 * 1_000_000)
-        selector = (
-            f"home/history/events?key=home/health/{unit}/event"
-            f";from={from_us};to={to_us};limit={UNIT_EVENT_MAX}"
+        selector = history.selector(
+            "home/history/events",
+            {
+                "key": f"home/health/{unit}/event",
+                "from": from_us,
+                "to": to_us,
+                "limit": UNIT_EVENT_MAX,
+            },
         )
-        try:
-            replies = await asyncio.get_running_loop().run_in_executor(
-                None, hub.session.get_json, selector
-            )
-        except QueryError as error:
-            return json_error(f"recorder: {error}", status=502)
+        if isinstance(replies := await recorder_get(selector), web.Response):
+            return replies
         events = [
             {"ts": row.get("ts", 0) / 1_000_000, "key": row.get("key"), "value": row["payload"]}
             for _key, payload in replies
@@ -1428,11 +1457,10 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         """Gather an automation's timeline rows from the recorder. Blocking.
 
         Events and commands come from home/history/events, state changes
-        from the samples path with changes=1. Times are seconds, as the
-        page's are. When a query fills its cap, the reply carries the
-        oldest time it kept (`answers_from`, a series' `from`): an answer
-        to an older command may have been cut, so the page does not judge
-        those commands.
+        from the samples path with changes=1. Times are epoch seconds. When
+        a query fills its cap, the reply carries the oldest time it kept
+        (`answers_from`, a series' `from`): an answer to an older command
+        may have been cut, so the page does not judge those commands.
         """
         start = datetime.datetime.fromtimestamp(from_us / 1e6, datetime.timezone.utc)
         end = datetime.datetime.fromtimestamp(to_us / 1e6, datetime.timezone.utc)
@@ -1440,9 +1468,9 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
 
         def events(key: str) -> list[dict]:
             nonlocal truncated
-            selector = (
-                f"home/history/events?key={key}"
-                f";from={from_us};to={to_us};limit={TIMELINE_ROW_MAX}"
+            selector = history.selector(
+                "home/history/events",
+                {"key": key, "from": from_us, "to": to_us, "limit": TIMELINE_ROW_MAX},
             )
             rows = [
                 {"ts": row["ts"] / 1_000_000, "key": row["key"], "value": row["payload"]}
@@ -1454,10 +1482,14 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
 
         def changes(entity: str, aspect: str, limit: int) -> dict:
             nonlocal truncated
-            selector = (
-                f"{keys.history_key('state', entity, aspect)}"
-                f"?from={start.isoformat(timespec='seconds')}"
-                f";to={end.isoformat(timespec='seconds')};limit={limit};changes=1"
+            selector = history.selector(
+                keys.history_key("state", entity, aspect),
+                {
+                    "from": start.isoformat(timespec="seconds"),
+                    "to": end.isoformat(timespec="seconds"),
+                    "limit": limit,
+                    "changes": 1,
+                },
             )
             points = [
                 {"ts": datetime.datetime.fromisoformat(p["ts"]).timestamp(), "value": p["value"]}
@@ -1506,17 +1538,13 @@ def make_app(hub: Hub, model: Model, page: Path, assets_dir: Path) -> web.Applic
         Its parameter writes, the commands it sent, the events that
         answered them, how the commanded aspects changed after, and its own
         health events (docs/design.md#unit-timeline).
-        The page puts them in order (dashboard-logic.js, unitTimeline).
+        The page puts them in order (dashboard/logic/index.js, unitTimeline).
         """
         unit = request.query.get("unit", "")
         if unit not in model.units:
             return json_error(f"unknown unit {unit}", status=404)
-        try:
-            hours = min(float(request.query.get("hours", "24")), 24 * 7)
-        except (ValueError, OverflowError):
-            return json_error("hours must be a number")
-        if not hours > 0:
-            return json_error("hours must be positive")
+        if isinstance(hours := window_hours(request, 24 * 7), web.Response):
+            return hours
         to_us = int(datetime.datetime.now(datetime.timezone.utc).timestamp() * 1_000_000)
         from_us = to_us - int(hours * 3600 * 1_000_000)
         try:
@@ -1654,13 +1682,7 @@ async def serve(app: web.Application, hub: Hub, host: str, port: int) -> None:
     await site.start()
     hub.session.ready()  # ready once the server accepts connections
 
-    stop = asyncio.Event()
-    loop = asyncio.get_running_loop()
-    import signal
-
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(sig, stop.set)
-    await stop.wait()
+    await async_shutdown_event().wait()
     await runner.cleanup()
 
 

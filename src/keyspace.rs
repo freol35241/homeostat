@@ -1,37 +1,69 @@
-//! The bus key space: the classes under `home/`, the shape each class
-//! takes, and key expressions as parsed segments.
+//! The bus key space: the classes under `home/` and who may publish under
+//! each, the shape each class takes, and key expressions as parsed
+//! segments.
 
 use std::fmt;
 
-/// `home/{class}/...`: the classes the core owns.
-pub const CLASSES: &[&str] = &[
-    "state",
-    "cmd",
-    "arbiter",
+/// Who may publish under a class (docs/design.md#reserved-classes).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Publisher {
+    /// Any unit, as its grants allow.
+    Any,
+    /// Only the core.
+    Core,
+    /// Each unit, under its own name: `home/{class}/{unit}/...`.
+    OwnName,
+    /// One service, and no more than one in the house.
+    OneService,
+}
+
+/// A class under `home/` and who may publish under it.
+#[derive(Debug)]
+pub struct Class {
+    pub name: &'static str,
+    pub publisher: Publisher,
+}
+
+impl Class {
+    const fn new(name: &'static str, publisher: Publisher) -> Class {
+        Class { name, publisher }
+    }
+}
+
+/// The classes under `home/`, each with who may publish under it.
+pub const CLASSES: &[Class] = &[
+    Class::new("state", Publisher::Any),
+    Class::new("cmd", Publisher::Any),
+    Class::new("arbiter", Publisher::OneService),
     // A series' future, keyed like its present: the same room/entity/aspect,
     // so a forecast extends the same series forward
     // (docs/design.md#forecasts). The core does not interpret it, just as it
     // does not interpret `motion`.
-    "forecast",
-    "config",
-    "meta",
-    "health",
-    "clock",
-    "history",
-    "discovery",
+    Class::new("forecast", Publisher::Any),
+    Class::new("config", Publisher::Core),
+    Class::new("meta", Publisher::Core),
+    Class::new("health", Publisher::OwnName),
+    Class::new("clock", Publisher::OneService),
+    Class::new("history", Publisher::OneService),
+    Class::new("discovery", Publisher::OwnName),
     // Standing wishes for arbitrated aspects: one record per held aspect,
     // under the holder's name (`home/hold/{unit}/{room}/{entity}/{aspect}`),
     // the family's under the arbiter's. They are mirrored so a late joiner
     // can ask what is held right now, which an event stream cannot answer
     // (docs/design.md#holds). The audit trail of preempt and refuse events
     // stays where it is.
-    "hold",
+    Class::new("hold", Publisher::OwnName),
     // What the arbiter resolved: per arbitrated aspect, the hold it applied
     // and the holds beneath it, one document per arbiter unit
     // (`home/arbitration/{unit}`). It is mirrored, and a restarted arbiter
     // reads it back so it does not send an applied hold again.
-    "arbitration",
+    Class::new("arbitration", Publisher::OwnName),
 ];
+
+/// The class named `name`, if the core has one.
+pub fn class(name: &str) -> Option<&'static Class> {
+    CLASSES.iter().find(|c| c.name == name)
+}
 
 /// The classes addressed per entity, as
 /// `home/{class}/{room}/{entity}/{aspect}`. `forecast` is one of them and
@@ -44,7 +76,7 @@ pub const PSEUDO_ROOMS: &[&str] = &["global", "person"];
 /// Words that may not be used as room or zone names (pseudo-rooms are the
 /// exception for entity rooms).
 pub fn is_reserved_word(word: &str) -> bool {
-    word == "home" || CLASSES.contains(&word) || PSEUDO_ROOMS.contains(&word)
+    word == "home" || class(word).is_some() || PSEUDO_ROOMS.contains(&word)
 }
 
 /// One segment of a key expression.
@@ -78,7 +110,8 @@ impl fmt::Display for Segment {
 pub struct KeyExpr(pub Vec<Segment>);
 
 impl KeyExpr {
-    /// Splits `raw` on `/`. An empty key or an empty segment is an error.
+    /// Splits `raw` on `/`. An empty key, an empty segment or a key zenoh
+    /// refuses is an error.
     pub fn parse(raw: &str) -> Result<KeyExpr, String> {
         if raw.is_empty() {
             return Err("key is empty".to_string());
@@ -94,6 +127,7 @@ impl KeyExpr {
                 other => Segment::Literal(other.to_string()),
             });
         }
+        check_zenoh(raw)?;
         Ok(KeyExpr(segments))
     }
 
@@ -124,7 +158,7 @@ impl KeyExpr {
             _ => return Err(format!("\"{raw}\" does not start with \"home/\"")),
         }
         let class = match self.0.get(1) {
-            Some(Segment::Literal(c)) if CLASSES.contains(&c.as_str()) => c.as_str(),
+            Some(Segment::Literal(c)) if self::class(c).is_some() => c.as_str(),
             Some(Segment::Literal(c)) => {
                 return Err(format!("\"{raw}\" has unknown class \"{c}\""));
             }
@@ -225,6 +259,27 @@ impl KeyExpr {
     }
 }
 
+/// Asks zenoh's own parser whether it accepts `raw`, so a key that passes
+/// plan does not fail when a unit declares it. zenoh takes `{room}` and
+/// `{entity}` as literal text, and the names that replace them are plain
+/// segments, so the templates need no special case.
+fn check_zenoh(raw: &str) -> Result<(), String> {
+    let Err(err) = zenoh::key_expr::keyexpr::new(raw) else {
+        return Ok(());
+    };
+    // zenoh's message reads "Invalid Key Expr `{key}`: {reason} at
+    // {file}:{line}.". Only the reason is kept, because the location is in
+    // zenoh's source. Any other shape is shown whole.
+    let message = err.to_string();
+    let reason = message
+        .strip_prefix(&format!("Invalid Key Expr `{raw}`: "))
+        .and_then(|rest| rest.rsplit_once(" at "))
+        .map_or(message.as_str(), |(reason, _)| reason);
+    Err(format!(
+        "\"{raw}\" is not a key expression zenoh accepts: {reason}"
+    ))
+}
+
 impl fmt::Display for KeyExpr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for (i, seg) in self.0.iter().enumerate() {
@@ -273,6 +328,46 @@ mod tests {
             "home/arbiter/{room}/{entity}/**",
         ] {
             assert_eq!(expr(s).to_string(), s);
+        }
+    }
+
+    #[test]
+    fn parse_refuses_what_zenoh_refuses() {
+        for s in [
+            "home/state/*/lamp/**",
+            "home/state/**/motion",
+            "home/state/kitchen/*/**",
+            "home/cmd/{room}/{entity}/**",
+            "home/state/kitchen/lamp$*/on",
+        ] {
+            KeyExpr::parse(s).unwrap();
+        }
+        for (s, reason) in [
+            ("home/state/**/**", "`**/**` must be replaced by `**`"),
+            ("home/state/**/*/on", "`**/*` must be replaced by `*/**`"),
+            (
+                "home/hold/setback/hallway/door/$locked",
+                "`$` is only allowed in `$*`",
+            ),
+            ("home/state/kitchen/lamp/$*", "empty chunks are forbidden"),
+            ("home/state/kitchen/lamp#1/on", "`#` and `?` are forbidden"),
+            ("home/state/kitchen/lamp/on?", "`#` and `?` are forbidden"),
+            (
+                "home/state/kitchen/lamp*/on",
+                "`*` may only be preceded by `/` or `$`",
+            ),
+            (
+                "home/cmd/{room}/{entity}/**/**",
+                "`**/**` must be replaced by `**`",
+            ),
+        ] {
+            let err = KeyExpr::parse(s).unwrap_err();
+            assert!(
+                err.starts_with(&format!("\"{s}\" is not a key expression zenoh accepts: ")),
+                "{err}"
+            );
+            assert!(err.contains(reason), "{err}");
+            assert!(!err.contains(" at "), "{err}");
         }
     }
 

@@ -3,11 +3,11 @@
  * the value is derived from, the entity's related readings, or every
  * forecast the recorder kept), and the commands sent to the aspect. */
 import { PRESSES_READ, fetchHistory, getJson } from '../api.js';
-import { buildBars, buildChart, buildTimeline, fmtDuration, formatChartClock, formatChartTime, formatChartValue, horizonCaption, issuedCaption } from '../charts.js';
+import { buildBars, buildChart, buildTimeline, formatChartValue, horizonCaption, issuedCaption } from '../charts.js';
 import { html } from '../html.js';
 import logic, { titleCase } from '../logic.js';
 import { overlayWide, renderOverlayContent, showOverlay } from './panel.js';
-import { aspectsFor, descriptorField, findEntity, forecastsOf, liveForecastsOf, overlay, stateValue, store } from '../store.js';
+import { aspectsFor, descriptorField, findEntity, findEntityByName, forecastsOf, liveForecastsOf, overlay, stateValue, store } from '../store.js';
 
 var RANGE_PRESETS = [{ label: '1h', hours: 1 }, { label: '6h', hours: 6 }, { label: '24h', hours: 24 }, { label: '7d', hours: 168 }];
 
@@ -70,11 +70,8 @@ function layerLines(entity, aspect, layer) {
 
 // A contributor's room, for reading its own `available` aspect.
 function contributorRoom(c) {
-  var entities = (store.model && store.model.entities) || [];
-  for (var i = 0; i < entities.length; i++) {
-    if (entities[i].name === c.entity) return entities[i].room;
-  }
-  return null;
+  var e = findEntityByName(c.entity);
+  return e ? e.room : null;
 }
 
 function sourceCacheKey(hours, c) {
@@ -93,9 +90,11 @@ export function fetchSourceEvents(entity, aspect, hours) {
   getJson('/api/source-events?entity=' + encodeURIComponent(entity.name) +
           '&aspect=' + encodeURIComponent(aspect) + '&hours=' + hours)
     .then(function (data) {
-      overlay.sourceEvents[ck] = {
-        events: (data && data.events) || [], loaded: true, loading: false
-      };
+      // The recorder's times are epoch µs, and the page's are ms.
+      var events = ((data && data.events) || []).map(function (e) {
+        return Object.assign({}, e, { ts: e.ts / 1000 });
+      });
+      overlay.sourceEvents[ck] = { events: events, loaded: true, loading: false };
       if (overlay.open && overlay.type === 'history') renderOverlayContent();
     })
     .catch(function () {
@@ -283,19 +282,6 @@ function statText(label, text) {
   return html`<div class="stat-item"><div class="stat-value">${text}</div><div class="stat-label">${label}</div></div>`;
 }
 
-function rangeStats(points) {
-  var vals = (points || []).map(function (p) { return p.value; }).filter(function (v) { return typeof v === 'number'; });
-  if (vals.length === 0) return { latest: null, min: null, max: null, avg: null };
-  var sum = 0;
-  vals.forEach(function (v) { sum += v; });
-  return {
-    latest: points[points.length - 1].value,
-    min: Math.min.apply(null, vals),
-    max: Math.max.apply(null, vals),
-    avg: sum / vals.length
-  };
-}
-
 export function renderHistoryDetailBody() {
   var entity = overlay.entity, aspect = overlay.aspect;
   var multi = aspectsFor(entity).length > 1;
@@ -343,7 +329,7 @@ export function renderHistoryDetailBody() {
     chartHtml = !loaded ? html`<div class="aspect-row faint">reading…</div>` : presses.length
       ? html`<div class="press-list">${presses.slice(0, PRESSES_SHOWN).map(function (p) {
         // To the second, because two presses are often in one minute.
-        return html`<div class="aspect-row"><span class="aspect-label">${formatChartTime(Date.parse(p.ts), 1)}</span><span>${String(p.value)}</span></div>`;
+        return html`<div class="aspect-row"><span class="aspect-label">${logic.formatChartTime(Date.parse(p.ts), null, true)}</span><span>${String(p.value)}</span></div>`;
       })}</div>`
       : html`<div class="aspect-row faint">no press in this window</div>`;
     statsHtml = html`<div class="stat-row">${statText('Presses', !loaded ? '—' : String(points.length) + (points.length >= PRESSES_READ ? '+' : ''))}</div>`;
@@ -352,7 +338,7 @@ export function renderHistoryDetailBody() {
     var tl = logic.timelineStats(logic.timelineRuns(points, win.from, win.to));
     statsHtml = html`<div class="stat-row">
       ${statText('Now', tl.latest === null ? '—' : logic.formatAspect(aspect, field, tl.latest))}
-      ${tl.onMs === null ? '' : statText('On', fmtDuration(tl.onMs) + ' of ' + fmtDuration(win.to - win.from))}
+      ${tl.onMs === null ? '' : statText('On', logic.fmtDuration(tl.onMs) + ' of ' + logic.fmtDuration(win.to - win.from))}
       ${statText('Changes', String(tl.changes))}</div>`;
   } else if (overlay.shape === 'bars' && overlay.layer !== 'forecasts') {
     // One forecast is drawn after the record, as on a tile. Bars from two
@@ -387,7 +373,7 @@ export function renderHistoryDetailBody() {
       // one set.
       contributors: drawnLines(entity, aspect, overlay.range)
     });
-    var stats = rangeStats(points);
+    var stats = logic.rangeStats(points);
     statsHtml = html`<div class="stat-row">
       ${statItem('Latest', stats.latest, aspect)}${statItem('Min', stats.min, aspect)}
       ${statItem('Max', stats.max, aspect)}${statItem('Avg', stats.avg, aspect)}</div>`;
@@ -410,7 +396,7 @@ export function renderHistoryDetailBody() {
       // "this aspect has no forecast". The expired forecast itself can
       // still be read in the braid.
       if (fresh.expired) {
-        return html`<div class="chart-note">spent · ${who}ran out ${formatChartTime(b.forecast.to)}${issued ? ' · ' + issued : ''}</div>`;
+        return html`<div class="chart-note">spent · ${who}ran out ${logic.formatChartTime(b.forecast.to)}${issued ? ' · ' + issued : ''}</div>`;
       }
       var ahead = horizonCaption(aspect, field, b.forecast, Date.now());
       if (!ahead && !issued) return '';
@@ -462,7 +448,7 @@ export function renderHistoryDetailBody() {
         var use = usage[c.name];
         var excluded = use && use.used === false;
         var since = excluded && use.since
-          ? ' since ' + formatChartClock(use.since / 1000)
+          ? ' since ' + logic.formatChartClock(use.since)
           : '';
         return html`<span data-source="${c.name}"${c.note ? html` title="${c.note}"` : ''}>
           ${c.label}
@@ -490,5 +476,5 @@ function commandStrip(aspect, field, win) {
   return html`<div class="card-label" style="margin-top:20px;">Commanded</div>
     ${buildTimeline('detail-cmd', cd.points, { height: 28, sizeClass: 'chart-commands', aspect: aspect, field: field, window: win })}
     <div class="chart-note">${runs.length + (runs.length === 1 ? ' command' : ' commands') +
-      ' · last ' + logic.formatAspect(aspect, field, latest.value) + ' at ' + formatChartTime(latest.ts)}</div>`;
+      ' · last ' + logic.formatAspect(aspect, field, latest.value) + ' at ' + logic.formatChartTime(latest.ts)}</div>`;
 }

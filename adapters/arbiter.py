@@ -63,7 +63,8 @@ back.
 
 Health events at home/health/{unit}/event: `drop` (off-schema-key,
 invalid-command, unbound, malformed-hold, and malformed-payload for a
-grant table that does not read), `refuse` when a command loses to a
+grant table that does not read or a health status, health event,
+`available` or clock minute that is not JSON), `refuse` when a command loses to a
 hold, `preempt` when a higher hold takes over, `resume` when a
 lower one takes over after it, `replay-late` when the core's replay
 after a restart did not come in time and the arbiter starts without it,
@@ -75,10 +76,12 @@ import datetime
 import json
 import os
 import secrets
-import signal
 import threading
 import time
+from contextlib import contextmanager
+from dataclasses import dataclass
 from functools import partial
+from typing import Any, NamedTuple
 
 import homeostat
 import zenoh
@@ -195,6 +198,17 @@ def policy_entry(values: dict, value):
     return values.get("any")
 
 
+class GrantSets(NamedTuple):
+    """What one pair of grant tables gives, as `Bindings` routes on it."""
+
+    arbitrated: frozenset
+    bound: frozenset
+    # (room, entity) -> (capability, hold rows), as `holders` returns.
+    holders: dict
+    # (room, entity) -> family policy, as `policies` returns.
+    policies: dict
+
+
 class Bindings:
     """The arbitrated and bound entities and the hold grants, live from the grant tables.
 
@@ -235,7 +249,7 @@ class Bindings:
         # Everything read from one pair of tables, in one attribute,
         # replaced in one assignment, so a reader never pairs sets from
         # different tables.
-        self._sets: tuple = (frozenset(), frozenset(), {}, {})
+        self._sets = GrantSets(frozenset(), frozenset(), {}, {})
         self._on_change = on_change
         self._lock = threading.Lock()
         self._subs = [
@@ -255,19 +269,22 @@ class Bindings:
                         seeded = True
         if seeded:
             with self._lock:
-                self._on_change(self._sets[0])
+                self._on_change(self._sets.arbitrated)
 
     @staticmethod
-    def _read(tables: dict) -> tuple:
+    def _read(tables: dict) -> GrantSets:
         """Return the sets one pair of tables gives.
 
         Raises
         ------
         ValueError, KeyError, TypeError or AttributeError
             If a table does not have the shape the core serves.
+        zenoh.ZError
+            If a hold row's key is not one zenoh accepts. The core's
+            manifest parser admits some shapes zenoh refuses (`**/**`, a `$`).
         """
         rows = tables[GRANTS_KEY] + tables[PENDING_KEY]
-        return (*bindings(rows), holders(rows), policies(rows))
+        return GrantSets(*bindings(rows), holders(rows), policies(rows))
 
     def _on_table(self, key: str, sample) -> None:
         # A table that does not read leaves the last one in force: routing
@@ -277,25 +294,27 @@ class Bindings:
             try:
                 tables = {**self._tables, key: json.loads(sample.payload.to_bytes())}
                 sets = self._read(tables)
-            except (ValueError, KeyError, TypeError, AttributeError):
+            except (ValueError, KeyError, TypeError, AttributeError, zenoh.ZError):
                 self._session.health_event("drop", reason="malformed-payload", key=key)
                 return
             self._live.add(key)
             self._tables = tables
             self._sets = sets
-            self._on_change(self._sets[0])
+            self._on_change(self._sets.arbitrated)
 
     def route(self, target: tuple[str, str]) -> str:
         """Return "arbitrated", "bound" or "unbound" for a (room, entity)."""
-        arbitrated, bound, _, _ = self._sets
-        if target in arbitrated:
+        # Read once, because this runs without the lock and a table can
+        # replace the sets between two reads.
+        sets = self._sets
+        if target in sets.arbitrated:
             return "arbitrated"
-        return "bound" if target in bound else "unbound"
+        return "bound" if target in sets.bound else "unbound"
 
     def grant_of(self, unit: str, target: tuple[str, str, str]) -> tuple[str, str | None] | None:
         """Return the band and `on_loss` `unit` may hold `target` with, or None without a grant."""
         room, entity, aspect = target
-        _, rows = self._sets[2].get((room, entity), (None, []))
+        _, rows = self._sets.holders.get((room, entity), (None, []))
         key = zenoh.KeyExpr(keys.hold_key(unit, room, entity, aspect))
         for holder, band, exprs, on_loss in rows:
             if holder == unit and any(expr.includes(key) for expr in exprs):
@@ -305,13 +324,13 @@ class Bindings:
     def policy_of(self, target: tuple[str, str, str], value):
         """Return the family policy's entry for `value` on `target`, or None."""
         room, entity, aspect = target
-        values = self._sets[3].get((room, entity), {}).get(aspect)
+        values = self._sets.policies.get((room, entity), {}).get(aspect)
         return policy_entry(values, value) if isinstance(values, dict) else None
 
     def rest_of(self, target: tuple[str, str, str]):
         """Return the value `target` is safe at, or None (keys.REST_VALUES)."""
         room, entity, aspect = target
-        capability, _ = self._sets[2].get((room, entity), (None, []))
+        capability, _ = self._sets.holders.get((room, entity), (None, []))
         rest = keys.REST_VALUES.get(capability)
         return rest[1] if rest is not None and rest[0] == aspect else None
 
@@ -326,6 +345,48 @@ def iso(epoch: float) -> str:
         .isoformat(timespec="seconds")
         .replace("+00:00", "Z")
     )
+
+
+@dataclass
+class FamilyHold:
+    """The family's hold on one aspect.
+
+    `deadline` is on time.monotonic() and enforces the end. `since` and
+    `until` are the wall-clock spellings published in its record.
+    """
+
+    id: str
+    actor: str
+    value: Any
+    deadline: float
+    # Wall-clock time it was placed, which orders it among holds at one rank.
+    seen: float
+    since: str
+    until: str
+    # How many commands it has refused. A new family hold starts its count
+    # again, because the count belongs to the hold in force.
+    refused: int
+    # The local time of day it ends at, as the policy said, so the end
+    # follows the house clock across a DST change.
+    at: datetime.datetime | None
+    # Placed "until next change", and the id of the hold beneath it then.
+    # A restored record's `beneath` is taken as it was, unchecked.
+    next_change: bool
+    beneath: Any
+
+
+@dataclass
+class UnitHold:
+    """One unit's hold on one aspect, as its record said."""
+
+    value: Any
+    id: str
+    until: str | None
+    # Whatever JSON the record carried, unchecked.
+    reason: Any
+    # On time.monotonic(), or None for a hold without an end.
+    deadline: float | None
+    seen: float
 
 
 class Resolver:
@@ -377,8 +438,8 @@ class Resolver:
         # host's stands in until the first one arrives.
         self._offset_known = offset is not None
         self._offset = offset if offset is not None else datetime.datetime.now().astimezone().utcoffset()
-        self._family: dict[tuple, dict] = {}
-        self._holds: dict[tuple, dict[str, dict]] = {}
+        self._family: dict[tuple, FamilyHold] = {}
+        self._holds: dict[tuple, dict[str, UnitHold]] = {}
         self._applied: dict[tuple, dict] = {}
         self._winner: dict[tuple, dict] = {}
         self._refused: dict[tuple, int] = {}
@@ -402,28 +463,29 @@ class Resolver:
 
         out = []
         family = self._family.get(target)
-        if family is not None and now < family["deadline"]:
+        if family is not None and now < family.deadline:
             out.append({
-                "id": family["id"], "unit": family["actor"], "priority": "manual",
-                "value": family["value"], "seen": family["seen"], "family": True,
-                "until": family["until"],
+                "id": family.id, "unit": family.actor, "priority": "manual",
+                "value": family.value, "seen": family.seen, "family": True,
+                "until": family.until,
             })
         for unit, hold in self._holds.get(target, {}).items():
             if unit == without:
                 continue
             grant = self._grant_of(unit, target)
-            if grant is None or (hold["deadline"] is not None and hold["deadline"] <= now):
+            if grant is None or (hold.deadline is not None and hold.deadline <= now):
                 continue
             band, on_loss = grant
-            if unit in self._gone and not (on_loss == "keep" or (on_loss is None and is_rest(hold["value"]))):
+            if unit in self._gone and not (on_loss == "keep" or (on_loss is None and is_rest(hold.value))):
                 continue
             candidate = {
-                "id": hold["id"], "unit": unit, "priority": band, "value": hold["value"],
-                "seen": hold["seen"], "family": False,
+                "id": hold.id, "unit": unit, "priority": band, "value": hold.value,
+                "seen": hold.seen, "family": False,
             }
-            for field in ("until", "reason"):
-                if hold.get(field) is not None:
-                    candidate[field] = hold[field]
+            if hold.until is not None:
+                candidate["until"] = hold.until
+            if hold.reason is not None:
+                candidate["reason"] = hold.reason
             out.append(candidate)
         out.sort(key=lambda c: (RANKS.index(c["priority"]), is_rest(c["value"]), c["seen"]), reverse=True)
         return out
@@ -470,9 +532,9 @@ class Resolver:
         family = self._family.get(target)
         if (
             family is None
-            or not family["next_change"]
+            or not family.next_change
             or not self._grants_read()
-            or self._beneath(target) == family["beneath"]
+            or self._beneath(target) == family.beneath
         ):
             return False
         del self._family[target]
@@ -543,7 +605,7 @@ class Resolver:
                 self.resolve(target, effects)
             self._refused[target] = self._refused.get(target, 0) + 1
             if won["family"]:
-                self._family[target]["refused"] += 1
+                self._family[target].refused += 1
             room, entity, aspect = target
             effects.append((
                 "event", "refuse",
@@ -612,26 +674,21 @@ class Resolver:
                 self._winner[target] = won
             return not report
         wall = self._wall()
-        family = {
-            "id": cmd_id or secrets.token_hex(4),
-            "actor": actor,
-            "value": value,
-            "deadline": self._clock() + seconds,
-            "seen": wall,
-            "since": iso(wall),
-            "until": iso(wall + seconds),
-            # A new family hold starts its count again, because the count
-            # belongs to the hold in force.
-            "refused": 0,
-            # The local time of day it ends at, as the policy said, so the
-            # end follows the house clock across a DST change.
-            "at": at,
-            # Placed "until next change": the hold beneath it then.
-            "next_change": next_change,
-            "beneath": self._beneath(target) if next_change else None,
-        }
+        family = FamilyHold(
+            id=cmd_id or secrets.token_hex(4),
+            actor=actor,
+            value=value,
+            deadline=self._clock() + seconds,
+            seen=wall,
+            since=iso(wall),
+            until=iso(wall + seconds),
+            refused=0,
+            at=at,
+            next_change=next_change,
+            beneath=self._beneath(target) if next_change else None,
+        )
         self._family[target] = family
-        self._applied[target] = {"id": family["id"], "unit": actor, "priority": "manual", "value": value}
+        self._applied[target] = {"id": family.id, "unit": actor, "priority": "manual", "value": value}
         self._note_winner(target, self.winner(target), effects)
         return not report
 
@@ -659,11 +716,11 @@ class Resolver:
         self._offset_known = True
         wall, now = self._wall(), self._clock()
         for family in self._family.values():
-            if family["at"] is None:
+            if family.at is None:
                 continue
-            until = self._local_epoch(family["at"])
-            family["deadline"] = now + (until - wall)
-            family["until"] = iso(until)
+            until = self._local_epoch(family.at)
+            family.deadline = now + (until - wall)
+            family.until = iso(until)
         self.expire(effects)
 
     # ---- units' holds
@@ -692,10 +749,10 @@ class Resolver:
         deadline = None
         if until is not None:
             deadline = self._clock() + (until.timestamp() - self._wall())
-        self._holds.setdefault(target, {})[unit] = {
-            "value": record["value"], "id": record["id"], "until": record.get("until"),
-            "reason": record.get("reason"), "deadline": deadline, "seen": seen,
-        }
+        self._holds.setdefault(target, {})[unit] = UnitHold(
+            value=record["value"], id=record["id"], until=record.get("until"),
+            reason=record.get("reason"), deadline=deadline, seen=seen,
+        )
         self.resolve(target, effects)
         return True
 
@@ -754,11 +811,11 @@ class Resolver:
     def expire(self, effects: list) -> None:
         """Drop the holds whose end has passed, and resolve what they stood on."""
         now = self._clock()
-        changed = {t for t, f in self._family.items() if f["deadline"] <= now}
+        changed = {t for t, f in self._family.items() if f.deadline <= now}
         for target in changed:
             del self._family[target]
         for target, held in list(self._holds.items()):
-            for unit in [u for u, h in held.items() if h["deadline"] is not None and h["deadline"] <= now]:
+            for unit in [u for u, h in held.items() if h.deadline is not None and h.deadline <= now]:
                 del held[unit]
                 changed.add(target)
             if not held:
@@ -768,8 +825,8 @@ class Resolver:
 
     def next_deadline(self) -> float | None:
         """Return the earliest end of a hold in force, or None."""
-        ends = [f["deadline"] for f in self._family.values()]
-        ends += [h["deadline"] for held in self._holds.values() for h in held.values() if h["deadline"] is not None]
+        ends = [f.deadline for f in self._family.values()]
+        ends += [h.deadline for held in self._holds.values() for h in held.values() if h.deadline is not None]
         return min(ends, default=None)
 
     def retain(self, arbitrated: frozenset) -> bool:
@@ -797,7 +854,7 @@ class Resolver:
         now = self._clock()
         out = {}
         for (room, entity, aspect), family in self._family.items():
-            if family["deadline"] <= now:
+            if family.deadline <= now:
                 continue
             record = out[(room, entity, aspect)] = {
                 "schema": 1,
@@ -805,25 +862,25 @@ class Resolver:
                 "entity": entity,
                 "aspect": aspect,
                 "priority": "manual",
-                "actor": family["actor"],
+                "actor": family.actor,
                 # What the family asked for, or what the device reported.
-                "value": family["value"],
-                "id": family["id"],
-                "since": family["since"],
+                "value": family.value,
+                "id": family.id,
+                "since": family.since,
                 # Enforcement uses the monotonic deadline; a countdown is
                 # drawn from this.
-                "until": family["until"],
+                "until": family.until,
                 # How many commands this hold has refused.
-                "refused": family["refused"],
+                "refused": family.refused,
             }
             # How the family policy placed it (docs/design.md#family-policy):
             # until a local time of day, or until the hold beneath changes,
             # with `until` as the cap.
-            if family["at"] is not None:
-                record["at"] = family["at"].isoformat(timespec="minutes")
-            if family["next_change"]:
+            if family.at is not None:
+                record["at"] = family.at.isoformat(timespec="minutes")
+            if family.next_change:
                 record["next_change"] = True
-                record["beneath"] = family["beneath"]
+                record["beneath"] = family.beneath
         return out
 
     def document(self) -> dict:
@@ -860,20 +917,20 @@ class Resolver:
             try:
                 target = (record["room"], record["entity"], record["aspect"])
                 until = datetime.datetime.fromisoformat(record["until"]).timestamp()
-                family = {
-                    "id": str(record["id"]),
-                    "actor": str(record["actor"]),
-                    "value": record.get("value"),
-                    "deadline": now + (until - wall),
-                    "seen": datetime.datetime.fromisoformat(record["since"]).timestamp(),
-                    "since": str(record["since"]),
-                    "until": record["until"],
-                    "refused": int(record.get("refused", 0)),
-                    "at": datetime.datetime.fromisoformat(record["at"]) if record.get("at") else None,
-                    "next_change": record.get("next_change") is True,
-                    "beneath": record.get("beneath"),
-                }
-                if family["at"] is not None and family["at"].tzinfo is not None:
+                family = FamilyHold(
+                    id=str(record["id"]),
+                    actor=str(record["actor"]),
+                    value=record.get("value"),
+                    deadline=now + (until - wall),
+                    seen=datetime.datetime.fromisoformat(record["since"]).timestamp(),
+                    since=str(record["since"]),
+                    until=record["until"],
+                    refused=int(record.get("refused", 0)),
+                    at=datetime.datetime.fromisoformat(record["at"]) if record.get("at") else None,
+                    next_change=record.get("next_change") is True,
+                    beneath=record.get("beneath"),
+                )
+                if family.at is not None and family.at.tzinfo is not None:
                     raise ValueError("at is a local time")
             except (TypeError, KeyError, ValueError):
                 continue
@@ -898,7 +955,7 @@ class Resolver:
 
 def main():
     unit = os.environ[keys.ENV_UNIT]
-    own = next(u for u in house.load_house(".").units if u.name == unit)
+    own = house.load_unit(unit)
 
     session = homeostat.connect()
     params = Params(session, {PARAM: float(own.params[PARAM]["default"])})
@@ -948,6 +1005,19 @@ def main():
             published_doc[0] = document
         changed.notify_all()
 
+    @contextmanager
+    def step():
+        """Hold the lock, collect the effects the block appends, then carry them out.
+
+        Nothing is carried out until the grant table is read, so before
+        then a step publishes nothing and does not wake the expiry thread.
+        """
+        with changed:
+            effects: list = []
+            yield effects
+            if routes_box:
+                carry_out_locked(effects)
+
     def hold_target(key: str):
         parts = key.split("/")
         if len(parts) != 6 or parts[1] != "hold":
@@ -962,8 +1032,7 @@ def main():
         if parsed is None:
             return
         holder, target = parsed
-        effects: list = []
-        with changed:
+        with step() as effects:
             if sample.kind == zenoh.SampleKind.DELETE:
                 resolver.drop_hold(target, holder, effects)
             else:
@@ -974,8 +1043,6 @@ def main():
                 seen = time.time() - session.sample_age(sample)
                 if not resolver.put_hold(target, holder, record, seen, effects):
                     session.health_event("drop", reason="malformed-hold", key=key)
-            if routes_box:
-                carry_out_locked(effects)
 
     hold_sub = session.subscribe("home/hold/**", on_hold)
 
@@ -985,25 +1052,17 @@ def main():
     # move the device. A holder an apply removes loses its grant instead.
     gone_statuses = ("open",)
 
-    def on_health(sample) -> None:
-        holder = str(sample.key_expr).split("/")[2]
-        try:
-            status = json.loads(sample.payload.to_bytes()).get("status")
-        except (ValueError, AttributeError):
+    def on_health(key, value, sample) -> None:
+        if not isinstance(value, dict):
             return
-        effects: list = []
-        with changed:
+        holder = key.split("/")[2]
+        status = value.get("status")
+        with step() as effects:
             resolver.holder(holder, status in gone_statuses, effects)
-            if routes_box:
-                carry_out_locked(effects)
 
-    def on_event(sample) -> None:
+    def on_event(key, event, sample) -> None:
         # An adapter's drop of a forward it could not deliver names the
         # forward's id (docs/design.md#when-a-holder-stops).
-        try:
-            event = json.loads(sample.payload.to_bytes())
-        except ValueError:
-            return
         if (
             isinstance(event, dict)
             and event.get("kind") == "drop"
@@ -1014,24 +1073,17 @@ def main():
                 if resolver.undelivered(event["cmd_id"]) and routes_box:
                     carry_out_locked([])
 
-    def on_available(sample) -> None:
-        parts = str(sample.key_expr).split("/")
-        try:
-            back = json.loads(sample.payload.to_bytes()) is True
-        except ValueError:
+    def on_available(key, value, sample) -> None:
+        parts = key.split("/")
+        if value is not True or len(parts) != 5:
             return
-        if not back or len(parts) != 5:
-            return
-        effects: list = []
-        with changed:
+        with step() as effects:
             resolver.available(parts[2], parts[3], effects)
-            if routes_box:
-                carry_out_locked(effects)
 
     health_subs = [
-        session.subscribe("home/health/*", on_health),
-        session.subscribe("home/health/*/event", on_event),
-        session.subscribe("home/state/*/*/available", on_available),
+        session.subscribe_json("home/health/*", on_health),
+        session.subscribe_json("home/health/*/event", on_event),
+        session.subscribe_json("home/state/*/*/available", on_available),
     ]
 
     # The family's holds, the units' holds and the applied holds outlive
@@ -1082,20 +1134,16 @@ def main():
                 resolver.holder(key.split("/")[2], health.get("status") in gone_statuses, [])
 
     def on_arbitrated(arbitrated: frozenset) -> None:
-        effects: list = []
-        with changed:
+        with step() as effects:
             resolver.retain(arbitrated)
             if routes_box:
                 # A changed grant can change which holds count.
                 resolver.resolve_all(effects)
-                carry_out_locked(effects)
 
     routes = Bindings(session, on_arbitrated)
-    with changed:
+    with step() as effects:
         routes_box.append(routes)
-        effects: list = []
         resolver.resolve_all(effects)
-        carry_out_locked(effects)
 
     # The house's UTC offset, for a family policy's time of day. The clock
     # service owns the zone and its DST, and its minute carries the offset.
@@ -1106,18 +1154,10 @@ def main():
             return
         if offset is None:
             return
-        with changed:
-            effects: list = []
+        with step() as effects:
             resolver.set_offset(offset, effects)
-            carry_out_locked(effects)
 
-    def on_minute(sample) -> None:
-        try:
-            on_clock(json.loads(sample.payload.to_bytes()))
-        except ValueError:
-            return
-
-    clock_sub = session.subscribe(CLOCK_KEY, on_minute)
+    clock_sub = session.subscribe_json(CLOCK_KEY, lambda _key, minute, _sample: on_clock(minute))
     for _key, minute in session.get_json(CLOCK_KEY):
         on_clock(minute)
 
@@ -1177,8 +1217,7 @@ def main():
             return
         cmd_id = keys.cmd_envelope_id(envelope)
 
-        with changed:
-            effects: list = []
+        with step() as effects:
             forward = resolver.command(
                 (room, entity, aspect),
                 priority,
@@ -1192,15 +1231,12 @@ def main():
             )
             if forward:
                 effects.insert(0, ("forward", (room, entity, aspect), envelope))
-            carry_out_locked(effects)
 
     cmd_sub = session.subscribe("home/cmd/**", cmd_handler)
 
     session.ready()
 
-    stop = threading.Event()
-    signal.signal(signal.SIGTERM, lambda *_: stop.set())
-    signal.signal(signal.SIGINT, lambda *_: stop.set())
+    stop = homeostat.shutdown_event()
     expiry = threading.Thread(target=expiry_loop, args=(stop,), daemon=True)
     expiry.start()
     stop.wait()

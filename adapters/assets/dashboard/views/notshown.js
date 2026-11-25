@@ -5,7 +5,7 @@ import { store } from '../store.js';
 import { renderRoomCard } from '../widgets/entity.js';
 import { renderParamRow } from '../widgets/params.js';
 
-// Everything dashboard.toml does not place (dashboard-logic.js,
+// Everything dashboard.toml does not place (logic.js,
 // placement), which the family cannot reach from the nav. It is grouped
 // by room, and each row uses its normal widget so it can be used here,
 // not only listed.

@@ -3,6 +3,9 @@
 //! houses run it as a stand-in for devices that obey at once, so a test can
 //! see a command land as state. Envelope-less commands are dropped, like
 //! any real adapter drops invalid commands.
+//!
+//! Cargo has no test-only binaries, so release builds name `--bin homeostat`
+//! to leave it out.
 
 use std::env;
 

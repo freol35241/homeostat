@@ -166,7 +166,7 @@ def main():
     # Persons are read-only, so there is no command subscription.
     session.ready()
 
-    mqtt.wait_for_shutdown()
+    homeostat.wait_for_shutdown()
 
     # Stop the MQTT loop first, or an in-flight on_message could put on
     # a closed zenoh session.

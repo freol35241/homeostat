@@ -28,21 +28,20 @@ import datetime
 import inspect
 import json
 import os
-import secrets
-import signal
 import threading
-import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-import tomllib
 import zenoh
 
-from . import house, intervals, keys, vocabulary
+from . import bindings, history, house, intervals, keys
 from .forecast import Forecast, Point
 from .forecast import decode as decode_forecast
-from .session import QueryError, QueryTimeout, UnitSession
+from .history import HistoryUnavailable
+from .holds import _HoldBook
+from .house import Entity, HouseModel
+from .session import QueryError, UnitSession, wait_for_shutdown
 from .stamps import Newest
 
 
@@ -69,97 +68,17 @@ def context(root: str | Path = ".") -> "Context":
     return Context(os.environ[keys.ENV_UNIT], root)
 
 
-# The classes addressed per entity, as home/{class}/{room}/{entity}/{aspect}.
-# These are the classes with slots to fill and the ones that expand.
-# `arbiter` is left out because only adapters use it, and adapters use
-# UnitSession directly instead of a Context.
-_ENTITY_ADDRESSED = tuple(c for c in vocabulary.ENTITY_ADDRESSED if c != "arbiter")
-
-
-def _as_json(value: Any) -> Any:
-    """Return `value` as JSON reads it back: a tuple as a list, and so on."""
-    return json.loads(json.dumps(value))
-
-# The recorder's store description. It is the only history selector that
-# answers whenever the recorder is up, whatever the store holds.
-_HISTORY_STATS = "home/history/stats"
-
-
-# The most rows the recorder returns for one read (MAX_QUERY_LIMIT in
-# adapters/recorder.py).
-_HISTORY_LIMIT = 10_000
-
-
-class HistoryUnavailable(Exception):
-    """`Context.history` or `Context.forecast_history` could not read.
-
-    The house runs no recorder, the recorder did not answer or answered
-    with an error, or the read holds more rows or issues than one read
-    returns.
-    """
-
-
-def _rfc3339(when: datetime.datetime) -> str:
-    """Format an aware datetime for a history selector, in UTC."""
-    return when.astimezone(datetime.timezone.utc).isoformat()
-
-
-def _dedup(exprs: Iterable[str]) -> list[str]:
-    """Return `exprs` without duplicates, in their original order.
-
-    Two entities in one room expand a `{room}`-only expression identically,
-    and a duplicate subscription delivers twice.
-    """
-    return list(dict.fromkeys(exprs))
-
-
-def _expand(
-    expr: str, zones: dict[str, list[str]], entities: list[house.Entity]
-) -> list[str]:
-    """Expand an expression as the core does at plan time (src/expand.rs).
-
-    `{room}`/`{entity}` templates are substituted per bound entity.
-    Otherwise a zone in the room slot expands to one expression per member
-    room. The two cannot both apply, since a template is not a zone name.
-    Only the entity-addressed classes expand, because only they have a room
-    slot to fill (src/keyspace.rs, ENTITY_ADDRESSED).
-    """
-    segments = expr.split("/")
-    if len(segments) < 3 or segments[1] not in _ENTITY_ADDRESSED:
-        return [expr]
-    if "{room}" in segments or "{entity}" in segments:
-
-        def substitute(entity: house.Entity) -> str:
-            filled = {"{room}": entity.room, "{entity}": entity.name}
-            return "/".join(filled.get(seg, seg) for seg in segments)
-
-        # A cmd path to an arbitrated entity belongs to the arbiter, not to
-        # the entity's owner, so a templated cmd skips arbitrated entities.
-        # Automation-owned entities cannot be arbitrated
-        # (`virtual-entity-arbitrated`), so this currently excludes
-        # nothing. It keeps this expansion in step with the core's.
-        return _dedup(
-            substitute(entity)
-            for entity in entities
-            if segments[1] != "cmd" or entity.write_mode != "arbitrated"
-        )
-    rooms = zones.get(segments[2])
-    if rooms is None:
-        return [expr]
-    return ["/".join([*segments[:2], room, *segments[3:]]) for room in rooms]
-
-
-def _house_has_recorder(root: str | Path) -> bool:
+def _house_has_recorder(model: house.HouseModel) -> bool:
     """Return whether the house runs a recorder, read from the manifests.
 
     The recorder is the unit that declares a publish under home/history/.
-    src/grants.rs allows only one service to publish there. Without a
+    src/publish_rules.rs allows only one service to publish there. Without a
     recorder, `restore` and `history` have nothing to wait for, and
     waiting out the timeout would delay every start in a house without one.
     """
     return any(
         spec.get("key", "").startswith("home/history/")
-        for unit in house.load_house(root).units
+        for unit in model.units
         for spec in unit.publishes.values()
     )
 
@@ -206,6 +125,8 @@ class Context:
     ----------
     unit : str
         The unit's name.
+    manifest : house.UnitInfo
+        The unit's own manifest, read when the Context is built.
     params : object
         The current typed parameter values, one attribute per `[params.*]`
         entry; a `time` parameter reads as a `datetime.time`.
@@ -219,62 +140,44 @@ class Context:
     def __init__(
         self, unit: str, root: str | Path = ".", session: UnitSession | None = None
     ):
-        root = Path(root)
-        self._root = root
-        manifest = tomllib.loads((root / "units" / f"{unit}.toml").read_text())
-        bus = manifest.get("bus", {})
-        self._subscribes: dict[str, str] = bus.get("subscribes", {})
+        self._root = Path(root)
+        self.manifest = house.load_unit(unit, root)
+        self._subscribes: dict[str, str] = self.manifest.subscribes
         self._publishes: dict[str, dict] = {
             name: {"key": spec["key"], "priority": spec.get("priority")}
-            for name, spec in bus.get("publishes", {}).items()
+            for name, spec in self.manifest.publishes.items()
         }
-        self._param_specs: dict[str, dict] = house.params_of(manifest)
-        self._zones: dict[str, list[str]] = {}
-        zones_path = root / "zones.toml"
-        if zones_path.exists():
-            self._zones = tomllib.loads(zones_path.read_text()).get("zones", {})
-        # Entities are only needed to expand templates, and reading them
-        # means parsing the whole house. Units without templates skip it.
-        # Units with templates fail at startup if it goes wrong, not while
+        self._param_specs: dict[str, dict] = self.manifest.params
+        self._zones = house.load_zones(root)
+        # The whole house, parsed on first use (`_load_house`). Units
+        # without templates may never need it. Units with templates read
+        # it now, so they fail at startup if it goes wrong, not while
         # running.
-        self._entities: list[house.Entity] = []
+        self._house: house.HouseModel | None = None
         declared = [
             *self._subscribes.values(),
             *(p["key"] for p in self._publishes.values()),
         ]
         if any("{" in expr for expr in declared):
-            self._entities = [
-                e for e in house.load_house(root).entities if e.owner == unit
-            ]
+            self._load_house()
 
         self.unit = unit
         self.params = _Params(self)
         self._lock = threading.Lock()
-        # hold key -> the record this unit holds there, and whether it has
-        # been asserted since start (`hold`, `ready`). Read from the mirror on
-        # first use, so a restart keeps a hold's id when its wish is unchanged.
-        self._holds: dict[str, dict] | None = None
-        self._asserted: set[str] = set()
-        self._holds_lock = threading.Lock()
         self._param_values: dict[str, Any] = {}
         self._subs: list = []
         # One per subscribe: delivers the binding's current values again.
         self._redeliveries: list[Callable[[], None]] = []
-        self._recorder: bool | None = None
-        # (entity, aspect) -> interval_s from the house's entity files, read
-        # on the first `history_total`.
-        self._intervals: dict[tuple[str, str], int] | None = None
-        # The house's button entities, read on the first catch-up that
-        # meets an `action` key (`_is_press`).
-        self._buttons: set[str] | None = None
         if session is None:
             session = UnitSession(unit, os.environ[keys.ENV_BUS])
         self._session = session
+        # Never call into the hold book with `self._lock` held: the book
+        # calls `paused`, which takes `self._lock`.
+        self._holds = _HoldBook(session, unit, lambda: self.paused)
         if self._holds_anything():
             # Read now, so a pause, which runs on a zenoh callback, never has
             # to wait on a get.
-            with self._holds_lock:
-                self._own_holds()
+            self._holds.load()
         # (entity, aspect, source) -> last reported participation, so
         # `source_used` can emit on transition rather than on every call.
         self._sources_used: dict[tuple[str, str, str], bool] = {}
@@ -288,7 +191,7 @@ class Context:
             # Subscribe, then get, then merge. The get covers everything
             # before the subscription, and the subscriber everything after.
             self._subs.append(
-                self._session.subscribe(keys.config_keyexpr(unit), self._on_config)
+                self._session.subscribe_json(keys.config_keyexpr(unit), self._on_config)
             )
             served = dict(self._session.get_json(keys.config_keyexpr(unit)))
             with self._lock:
@@ -299,13 +202,9 @@ class Context:
                         keys.config_key(unit, name), spec["default"]
                     )
 
-    def _on_config(self, sample: zenoh.Sample) -> None:
-        param = str(sample.key_expr).rsplit("/", 1)[1]
+    def _on_config(self, key: str, value: Any, sample: zenoh.Sample) -> None:
+        param = key.rsplit("/", 1)[1]
         if param not in self._param_specs:
-            return
-        try:
-            value = json.loads(sample.payload.to_bytes())
-        except ValueError:
             return
         with self._lock:
             was_paused = self._is_paused()
@@ -317,7 +216,7 @@ class Context:
         if paused and self._holds_anything():
             # A paused automation stops driving the house, so it stops
             # holding too. Its rules hold again from the redelivery on resume.
-            self._release_all()
+            self._holds.release_all()
         if not paused:
             # Outside the zenoh callback, which must not block on a get.
             threading.Thread(target=self._redeliver, daemon=True).start()
@@ -351,14 +250,61 @@ class Context:
             except QueryError as err:
                 self._session.health_event("redeliver-failed", error=str(err))
 
+    def _load_house(self) -> HouseModel:
+        """Return the whole house, parsed once per Context.
+
+        A house that cannot be read is not kept, so the next call reads it
+        again.
+        """
+        if self._house is None:
+            self._house = house.load_house(self._root)
+        return self._house
+
+    # Below this property, `house` in the class body names it and not the
+    # module, so signatures here name `Entity` and `HouseModel` directly.
+    @property
+    def house(self) -> HouseModel:
+        """The whole house, as `house.load_house` reads it.
+
+        It is parsed on first use and kept. A parse that fails is not kept,
+        so the next use reads the house again.
+
+        Raises
+        ------
+        OSError
+            If a house file cannot be read.
+        ValueError
+            If one is not valid TOML.
+        KeyError
+            If one lacks a table the core requires.
+        """
+        return self._load_house()
+
+    @property
+    def entities(self) -> list[Entity]:
+        """The entities this unit owns, from `house`.
+
+        Raises
+        ------
+        OSError
+            If a house file cannot be read.
+        ValueError
+            If one is not valid TOML.
+        KeyError
+            If one lacks a table the core requires.
+        """
+        return [e for e in self.house.entities if e.owner == self.unit]
+
     def _variants(self, expr: str) -> list[str]:
-        return _expand(expr, self._zones, self._entities)
+        # Only templates need the entities. A unit with templates read the
+        # house at startup.
+        return bindings._expand(expr, self._zones, self.entities if "{" in expr else [])
 
     def subscribe(self, binding: str, handler: Callable[..., None]) -> None:
         """Subscribe a `[bus.subscribes]` binding and deliver its current values.
 
-        The handler receives (key, decoded JSON value). Non-JSON payloads
-        are ignored.
+        The handler receives (key, decoded JSON value). A live payload that
+        is not JSON is dropped with a "malformed-payload" event.
 
         This subscribes, then gets, then merges, as for config. The current
         value of every matching key is read from the core's state mirror and
@@ -415,12 +361,7 @@ class Context:
             else:
                 handler(key, value)
 
-        def callback(sample: zenoh.Sample) -> None:
-            try:
-                value = json.loads(sample.payload.to_bytes())
-            except ValueError:
-                return
-            key = str(sample.key_expr)
+        def callback(key: str, value: Any, sample: zenoh.Sample) -> None:
             if self._is_press(key) and not self._session.is_live(sample):
                 # The core replaying the last recorded press after a
                 # restart. It is a past event, not a press.
@@ -432,7 +373,7 @@ class Context:
 
         exprs = self._variants(self._subscribes[binding])
         for expr in exprs:
-            self._subs.append(self._session.subscribe(expr, callback))
+            self._subs.append(self._session.subscribe_json(expr, callback))
         for expr in exprs:
             for key, value, age_s, stamp in self._session.get_json_stamped(expr):
                 if self._is_press(key):
@@ -459,22 +400,19 @@ class Context:
     def _is_press(self, key: str) -> bool:
         """Return whether `key` is a button's `action`, a press and not a state.
 
-        The house's buttons are read once per process. A house that cannot
-        be read counts every `action` as a press, because a press missed
-        does less harm than a stale one acted on, and is read again next
-        time.
+        A house that cannot be read counts every `action` as a press,
+        because a press missed does less harm than a stale one acted on,
+        and is read again next time.
         """
         parts = key.split("/")
         if len(parts) != 5 or parts[1] != "state" or parts[4] != "action":
             return False
-        if self._buttons is None:
-            try:
-                entities = house.load_house(self._root).entities
-            except (OSError, ValueError, KeyError) as err:
-                self._session.health_event("drop", reason="house-unreadable", key=key, error=str(err))
-                return True
-            self._buttons = {e.name for e in entities if e.capability == "button"}
-        return parts[3] in self._buttons
+        try:
+            entities = self._load_house().entities
+        except (OSError, ValueError, KeyError) as err:
+            self._session.health_event("drop", reason="house-unreadable", key=key, error=str(err))
+            return True
+        return any(e.name == parts[3] and e.capability == "button" for e in entities)
 
     def _concrete_key(
         self,
@@ -489,56 +427,24 @@ class Context:
         """Return the concrete key a binding addresses.
 
         `use` is "publish" for a `[bus.publishes]` binding and "history" for
-        a `[bus.subscribes]` one. Literal expression segments are defaults,
-        and wildcard and template segments must be named. A key the declared
-        expression does not cover is refused, so the manifest decides what
-        the unit may publish and whose past it may read.
-
-        A forecast key has one more slot than the others: its source, which
-        says who publishes this forecast (docs/design.md#forecasts).
+        a `[bus.subscribes]` one. The slots are filled as `bindings._fill_slots`
+        does. A key the declared expression does not cover is refused, so
+        the manifest decides what the unit may publish and whose past it may
+        read.
         """
         if use == "publish":
             expr = self._publishes[binding]["key"]
         else:
             expr = self._subscribes[binding]
-        segments = expr.split("/")
-        if segments[1] == "hold":
-            # home/hold/{unit}/{room}/{entity}/{aspect}, under this unit's name.
-            names = ("room", "entity", "aspect")
-            defaults = dict(zip(names, segments[3:6], strict=False))
-            parts = []
-            for slot, given in (("room", room), ("entity", entity), ("aspect", aspect)):
-                part = given if given is not None else defaults.get(slot)
-                if part is None or "*" in part or "{" in part:
-                    raise ValueError(f"{use} {binding!r} needs a concrete {slot}")
-                parts.append(part)
-            key = "/".join(["home", "hold", self.unit, *parts])
-        elif segments[1] in _ENTITY_ADDRESSED:
-            if segments[1] == "forecast":
-                names = ("room", "entity", "aspect", "source")
-                slots = {
-                    "room": room,
-                    "entity": entity,
-                    "aspect": aspect,
-                    "source": source,
-                }
-            else:
-                if source is not None:
-                    raise ValueError(f"{use} {binding!r} takes no source slot")
-                names = ("room", "entity", "aspect")
-                slots = {"room": room, "entity": entity, "aspect": aspect}
-            defaults: dict[str, str] = dict(zip(names, segments[2 : 2 + len(names)], strict=False))
-            parts = []
-            for slot, given in slots.items():
-                part = given if given is not None else defaults.get(slot)
-                if part is None or "*" in part or "{" in part:
-                    raise ValueError(f"{use} {binding!r} needs a concrete {slot}")
-                parts.append(part)
-            key = "/".join(["home", segments[1], *parts])
-        else:
-            if room or entity or aspect:
-                raise ValueError(f"{use} {binding!r} takes no key slots")
-            key = expr
+        key = bindings._fill_slots(
+            expr,
+            self.unit,
+            f"{use} {binding!r}",
+            room=room,
+            entity=entity,
+            aspect=aspect,
+            source=source,
+        )
         covered = any(
             zenoh.KeyExpr(variant).includes(zenoh.KeyExpr(key))
             for variant in self._variants(expr)
@@ -635,7 +541,7 @@ class Context:
             # the command arrives, so the key is deleted after it, for the
             # mirror.
             if self._holds_anything():
-                self._release_key("/".join(["home", "hold", self.unit, *key.split("/")[2:5]]))
+                self._holds.release("/".join(["home", "hold", self.unit, *key.split("/")[2:5]]))
             return
         if segments[1] == "hold":
             raise ValueError(f"publish {binding!r} is a hold publish; use ctx.hold")
@@ -711,22 +617,7 @@ class Context:
             wish["until"] = until.astimezone(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
         if reason is not None:
             wish["reason"] = str(reason)
-        # Under the lock, which `release` and a pause also take, so a hold
-        # and a release racing on two subscription threads cannot leave a
-        # key on the bus that the SDK no longer counts.
-        with self._holds_lock:
-            if self.paused:
-                return
-            holds = self._own_holds()
-            self._asserted.add(key)
-            current = holds.get(key)
-            # Compared as JSON, so a tuple held again equals the list the
-            # mirror returned and keeps its id.
-            if current is not None and _as_json({k: v for k, v in current.items() if k != "id"}) == _as_json(wish):
-                return
-            record = dict(wish, id=secrets.token_hex(4))
-            holds[key] = record
-            self._session.put_json(key, record)
+        self._holds.hold(key, wish)
 
     def hold_while(
         self,
@@ -792,9 +683,7 @@ class Context:
             self.release(binding, room=room, entity=entity, aspect=aspect)
             return False
         key = self._concrete_key(binding, room=room, entity=entity, aspect=aspect)
-        with self._holds_lock:
-            current = self._own_holds().get(key)
-        holding = current is not None and _as_json(current.get("value")) == _as_json(value)
+        holding = self._holds.holding(key, value)
         if hold or holding:
             self.hold(binding, value, room=room, entity=entity, aspect=aspect, until=until, reason=reason)
             return not self.paused
@@ -833,41 +722,11 @@ class Context:
         """
         if self._publishes[binding]["key"].split("/")[1] != "hold":
             raise ValueError(f"publish {binding!r} is not a hold publish")
-        self._release_key(self._concrete_key(binding, room=room, entity=entity, aspect=aspect))
+        self._holds.release(self._concrete_key(binding, room=room, entity=entity, aspect=aspect))
 
     def _holds_anything(self) -> bool:
         """Whether the manifest declares a hold publish."""
         return any(spec["key"].split("/")[1] == "hold" for spec in self._publishes.values())
-
-    def _own_holds(self) -> dict[str, dict]:
-        """Return the holds this unit has published, read from the mirror once.
-
-        Called with `self._holds_lock` held.
-        """
-        if self._holds is None:
-            self._holds = {
-                key: record
-                for key, record in self._session.get_json(keys.hold_keyexpr(self.unit))
-                if isinstance(record, dict)
-            }
-        return self._holds
-
-    def _release_key(self, key: str) -> None:
-        with self._holds_lock:
-            self._asserted.discard(key)
-            holds = self._own_holds()
-            if key not in holds:
-                return
-            del holds[key]
-            self._session.delete(key)
-
-    def _release_all(self) -> None:
-        with self._holds_lock:
-            holds = self._own_holds()
-            for key in holds:
-                self._session.delete(key)
-            holds.clear()
-            self._asserted.clear()
 
     def publish_forecast(
         self,
@@ -928,41 +787,7 @@ class Context:
         )
 
     def _has_recorder(self) -> bool:
-        if self._recorder is None:
-            self._recorder = _house_has_recorder(self._root)
-        return self._recorder
-
-    def _await_recorder(self, timeout_s: float) -> str | None:
-        """Wait for the recorder to answer. Returns why it did not, or None.
-
-        Wait for the recorder, not for rows. The recorder replies once per
-        series it holds, so a series it does not hold gets no reply at all.
-        Waiting on the series itself would delay every first start by the
-        whole timeout. `stats` describes the store and always answers while
-        the recorder is up.
-
-        Send one query at a time, and let it wait for the rest of the
-        deadline. The recorder answers queries one at a time (zenoh runs a
-        queryable's callback serially). A get that gives up and asks again
-        leaves its query in the recorder's queue. Once an answer takes
-        longer than the get's timeout, every later answer arrives after its
-        get has given up, and the loop never receives one. A get that no
-        queryable serves returns at once with no replies, which means the
-        recorder is not up yet. Only that case is retried.
-        """
-        deadline = time.monotonic() + timeout_s
-        while True:
-            remaining = max(deadline - time.monotonic(), 0.1)
-            try:
-                if self._session.get_json(_HISTORY_STATS, timeout_s=remaining):
-                    return None
-            except QueryTimeout:
-                return f"recorder took the query but did not answer within {timeout_s}s"
-            except QueryError as err:
-                return str(err)
-            if time.monotonic() >= deadline:
-                return f"no recorder answered within {timeout_s}s"
-            time.sleep(0.2)
+        return _house_has_recorder(self._load_house())
 
     def restore(
         self,
@@ -1042,11 +867,13 @@ class Context:
         def failed(reason: str) -> None:
             self.health_event("restore-failed", key=key, reason=reason)
 
-        reason = self._await_recorder(timeout_s)
+        reason = history.wait(self._session, timeout_s)
         if reason is not None:
             failed(reason)
             return None
-        selector = f"{keys.history_key('state', segments[3], segments[4])}?limit=1"
+        selector = history.selector(
+            keys.history_key("state", segments[3], segments[4]), {"limit": 1}
+        )
         try:
             replies = self._session.get_json(selector)
         except QueryError as err:
@@ -1161,34 +988,17 @@ class Context:
             raise ValueError(f"history bucket_s {bucket_s!r} is not a positive integer")
         if not self._has_recorder():
             raise HistoryUnavailable("the house runs no recorder")
-        reason = self._await_recorder(timeout_s)
-        if reason is not None:
-            raise HistoryUnavailable(reason)
-        params = [
-            f"from={_rfc3339(start)}",
-            f"to={_rfc3339(end)}",
-            f"limit={_HISTORY_LIMIT}",
-        ]
+        params = {"from": start, "to": end, "limit": history.MAX_ROWS}
         if bucket_s is not None:
-            params.append(f"bucket={bucket_s}")
-        selector = keys.history_key("state", segments[3], segments[4]) + "?" + ";".join(params)
-        try:
-            replies = self._session.get_json(selector, timeout_s=timeout_s)
-            # The recorder sends nothing for a series it has never recorded,
-            # and a get nobody serves returns nothing too. Asking `stats`
-            # again tells the two apart, so a recorder that went down since
-            # the wait does not read as an empty window.
-            if not replies and not self._session.get_json(_HISTORY_STATS, timeout_s=timeout_s):
-                raise HistoryUnavailable("the recorder stopped answering")
-        except QueryError as err:
-            raise HistoryUnavailable(str(err)) from err
-        rows = next((rows for _, rows in replies), [])
+            params["bucket"] = bucket_s
+        selector = history.selector(keys.history_key("state", segments[3], segments[4]), params)
+        rows = history.read(self._session, selector, timeout_s)
         # The recorder keeps the newest rows when a window holds more than
         # the limit. Returning them would cut the window's start off
         # without saying so.
-        if bucket_s is None and len(rows) >= _HISTORY_LIMIT:
+        if bucket_s is None and len(rows) >= history.MAX_ROWS:
             raise HistoryUnavailable(
-                f"the window holds {_HISTORY_LIMIT} rows or more; pass bucket_s"
+                f"the window holds {history.MAX_ROWS} rows or more; pass bucket_s"
             )
         return [{**row, "ts": datetime.datetime.fromisoformat(row["ts"])} for row in rows]
 
@@ -1297,34 +1107,25 @@ class Context:
         # The recorder clamps a larger limit and keeps the newest, which
         # would drop the oldest without saying so.
         if limit is not None and (
-            isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= _HISTORY_LIMIT
+            isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= history.MAX_ROWS
         ):
-            raise ValueError(f"forecast_history limit {limit!r} is not from 1 to {_HISTORY_LIMIT}")
+            raise ValueError(f"forecast_history limit {limit!r} is not from 1 to {history.MAX_ROWS}")
         if not self._has_recorder():
             raise HistoryUnavailable("the house runs no recorder")
-        reason = self._await_recorder(timeout_s)
-        if reason is not None:
-            raise HistoryUnavailable(reason)
-        params = [f"limit={limit if limit is not None else _HISTORY_LIMIT}"]
+        params: dict[str, int | datetime.datetime] = {
+            "limit": limit if limit is not None else history.MAX_ROWS
+        }
         if at is not None:
-            params.append(f"at={_rfc3339(at)}")
+            params["at"] = at
         if valid_from is not None and valid_to is not None:
-            params += [f"valid_from={_rfc3339(valid_from)}", f"valid_to={_rfc3339(valid_to)}"]
+            params |= {"valid_from": valid_from, "valid_to": valid_to}
         series = keys.history_key("forecast", segments[3], segments[4]) + "/" + segments[5]
-        try:
-            replies = self._session.get_json(series + "?" + ";".join(params), timeout_s=timeout_s)
-            # Nothing comes back for a series never recorded, and nothing
-            # from a recorder that has gone; `stats` tells the two apart.
-            if not replies and not self._session.get_json(_HISTORY_STATS, timeout_s=timeout_s):
-                raise HistoryUnavailable("the recorder stopped answering")
-        except QueryError as err:
-            raise HistoryUnavailable(str(err)) from err
-        issues = next((issues for _, issues in replies), [])
+        issues = history.read(self._session, history.selector(series, params), timeout_s)
         # The recorder keeps the newest issues past the limit, which would
         # cut the oldest off without saying so.
-        if limit is None and len(issues) >= _HISTORY_LIMIT:
+        if limit is None and len(issues) >= history.MAX_ROWS:
             raise HistoryUnavailable(
-                f"the read holds {_HISTORY_LIMIT} issues or more; pass limit or a shorter window"
+                f"the read holds {history.MAX_ROWS} issues or more; pass limit or a shorter window"
             )
         try:
             return [decode_forecast(json.dumps(issue).encode()) for issue in issues]
@@ -1421,18 +1222,10 @@ class Context:
 
     def _interval_of(self, entity: str, aspect: str) -> int:
         """Return the `interval_s` an entity file declares for an aspect."""
-        if self._intervals is None:
-            self._intervals = {
-                (e.name, name): seconds
-                for e in house.load_house(self._root).entities
-                for name, seconds in e.intervals.items()
-            }
-        try:
-            return self._intervals[(entity, aspect)]
-        except KeyError:
-            raise ValueError(
-                f"{entity}.{aspect} declares no interval_s in its entity file"
-            ) from None
+        for e in self._load_house().entities:
+            if e.name == entity and aspect in e.intervals:
+                return e.intervals[aspect]
+        raise ValueError(f"{entity}.{aspect} declares no interval_s in its entity file")
 
     def health_event(self, kind: str, **fields: Any) -> None:
         """Publish a JSON event at home/health/{unit}/event.
@@ -1523,19 +1316,12 @@ class Context:
         is ready, so nothing waits on a clock (docs/design.md#holds).
         """
         if self._holds_anything():
-            with self._holds_lock:
-                holds = self._own_holds()
-                for key in [key for key in holds if key not in self._asserted]:
-                    del holds[key]
-                    self._session.delete(key)
+            self._holds.prune_unasserted()
         self._session.ready()
 
     def run(self) -> None:
         """Block until SIGTERM/SIGINT, then close the session."""
-        stop = threading.Event()
-        signal.signal(signal.SIGTERM, lambda *_: stop.set())
-        signal.signal(signal.SIGINT, lambda *_: stop.set())
-        stop.wait()
+        wait_for_shutdown()
         self.close()
 
     def close(self) -> None:

@@ -7,10 +7,16 @@ grant table.
 
 import datetime
 import json
+import os
+import re
+import threading
+import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import _adapters_path  # noqa: F401
+import arbiter
 from arbiter import (
     GRANTS_KEY,
     PENDING_KEY,
@@ -20,6 +26,7 @@ from arbiter import (
     holders,
     policy_entry,
 )
+from homeostat import keys
 from homeostat.testing import FakeSample, FakeSession
 
 STOVE = ("utility", "stove", "on")
@@ -547,6 +554,41 @@ class DeliveryTest(Base):
         self.assertEqual(effects, [])
 
 
+class WireShapeTest(Base):
+    """The family's hold records and the arbitration document keep their JSON text."""
+
+    def test_the_records_and_the_document_keep_their_keys_and_order(self):
+        self.hold("heating", True, "h1", until="2023-11-15T05:00:00+00:00", reason="cold")
+        self.hold("planner", True, "p1", target=LAMP)
+        self.command("manual", "dashboard", False, cmd_id="c1", policy=STOP)
+        self.command("manual", "dashboard", True, cmd_id="c2", target=LAMP, policy={"until": "next change"})
+        since = '"since": "2023-11-14T22:13:20Z"'
+        lamp = (
+            '{"schema": 1, "room": "hall", "entity": "lamp", "aspect": "on", "priority": "manual",'
+            f' "actor": "dashboard", "value": true, "id": "c2", {since}, "until": "2023-11-15T22:13:20Z",'
+            ' "refused": 0, "next_change": true, "beneath": "p1"}'
+        )
+        stove = (
+            '{"schema": 1, "room": "utility", "entity": "stove", "aspect": "on", "priority": "manual",'
+            f' "actor": "dashboard", "value": false, "id": "c1", {since}, "until": "2023-11-15T05:00:00Z",'
+            ' "refused": 0, "at": "2023-11-15T06:00"}'
+        )
+        records = [json.dumps(r) for _, r in sorted(self.resolver.family_records().items())]
+        self.assertEqual(records, [lamp, stove])
+        self.assertEqual(json.dumps(self.resolver.document()), (
+            '{"schema": 1, "aspects": [{"room": "hall", "entity": "lamp", "aspect": "on",'
+            ' "applied": {"id": "c2", "unit": "dashboard", "priority": "manual", "value": true},'
+            ' "holds": [{"id": "c2", "unit": "dashboard", "priority": "manual", "value": true, "family": true,'
+            ' "until": "2023-11-15T22:13:20Z"}, {"id": "p1", "unit": "planner", "priority": "agent",'
+            ' "value": true, "family": false}], "refused": 0}, {"room": "utility", "entity": "stove",'
+            ' "aspect": "on", "applied": {"id": "c1", "unit": "dashboard", "priority": "manual",'
+            ' "value": false}, "holds": [{"id": "c1", "unit": "dashboard", "priority": "manual",'
+            ' "value": false, "family": true, "until": "2023-11-15T05:00:00Z"}, {"id": "h1",'
+            ' "unit": "heating", "priority": "automation", "value": true, "family": false,'
+            ' "until": "2023-11-15T05:00:00+00:00", "reason": "cold"}], "refused": 0}]}'
+        ))
+
+
 def hold_row(unit, band, keys, *entities):
     return {"unit": unit, "publish": "hold", "capability": "burner", "priority": band,
             "keys": keys, "entities": list(entities), "hold": True}
@@ -608,6 +650,16 @@ class MalformedTableTest(unittest.TestCase):
         # A good table still lands after the bad ones.
         session.deliver(FakeSample(PENDING_KEY, [owner_row(entity("hall", "lamp", "arbitrated"))]))
         self.assertEqual(routes.route(("hall", "lamp")), "arbitrated")
+
+    def test_a_hold_key_zenoh_refuses_leaves_the_last_in_force(self):
+        # The core admits `**/**`, which zenoh's KeyExpr refuses.
+        session = FakeSession(served={GRANTS_KEY: [owner_row(entity("hall", "door", "arbitrated"))]})
+        routes = Bindings(session, lambda arbitrated: None)
+        stove = {"name": "stove", "room": "utility", "capability": "burner", "write": "arbitrated", "owner": "aduro"}
+        session.deliver(FakeSample(GRANTS_KEY, [hold_row("heating", "automation", ["home/hold/heating/**/**"], stove)]))
+        self.assertEqual([e["reason"] for e in session.events], ["malformed-payload"])
+        self.assertEqual(routes.route(("hall", "door")), "arbitrated")
+        self.assertEqual(routes.route(("utility", "stove")), "unbound")
 
     def test_a_seed_that_does_not_read_stops_the_unit(self):
         # With no table in force there is nothing to route on; the
@@ -692,6 +744,132 @@ class PolicyBindingTest(unittest.TestCase):
         # An apply that drops the policy decides from its start.
         session.deliver(FakeSample(PENDING_KEY, [owner_row(entity("hall", "door", "arbitrated"))]))
         self.assertIsNone(routes.policy_of(("hall", "door", "locked"), False))
+
+
+class ServiceTest(unittest.TestCase):
+    """main()'s wiring, over a fake session: what reaches the bus, in order."""
+
+    def test_a_restart_a_hold_an_undelivered_forward_and_a_family_command(self):
+        stove = {"name": "stove", "room": "utility", "capability": "burner", "write": "arbitrated", "owner": "aduro"}
+        session = FakeSession("arbiter", served={GRANTS_KEY: [
+            hold_row("heating", "automation", ["home/hold/heating/utility/stove/on"], stove),
+            {"unit": "aduro", "publish": "state", "entities": [stove]},
+        ]})
+        # What the mirror kept from the last run: heating's hold on the
+        # stove, and a document with the lamp, which is no longer
+        # arbitrated. The core replays it while the arbiter waits.
+        mirror = {
+            "home/hold/heating/utility/stove/on": {"value": True, "id": "h1"},
+            "home/arbitration/arbiter": {"schema": 1, "aspects": [{
+                "room": "hall", "entity": "lamp", "aspect": "on",
+                "applied": {"id": "x1", "unit": "heating", "priority": "automation", "value": True},
+                "holds": [], "refused": 0,
+            }]},
+        }
+        get_json = session.get_json
+
+        def replay(key, *args, **kw):
+            if key != arbiter.REPLAY_KEY:
+                return get_json(key, *args, **kw)
+            for mirrored, value in mirror.items():
+                session.serve(mirrored, value)
+            session.deliver(FakeSample(key, "done"))
+            return [(key, "pending")]
+
+        session.get_json = replay
+        # Every put and delete as its key and JSON text. A family hold's
+        # since and until follow the wall clock, so they are blanked.
+        log, at_ready = [], []
+        put, delete = session.put_json, session.delete
+
+        def put_json(key, value, **kw):
+            log.append((key, re.sub(r'"(since|until)": "[^"]*"', r'"\1": "T"', json.dumps(value))))
+            put(key, value, **kw)
+
+        session.put_json = put_json
+        session.delete = lambda key: (log.append((key, None)), delete(key))
+        ready, stop, errors = threading.Event(), threading.Event(), []
+        session.ready = lambda: (at_ready.append(list(log)), ready.set())
+
+        def run():
+            try:
+                arbiter.main()
+            except BaseException as error:
+                errors.append(error)
+                ready.set()
+
+        own = types.SimpleNamespace(params={"hold_minutes": {"default": 30}})
+        with (
+            mock.patch.dict(os.environ, {keys.ENV_UNIT: "arbiter"}),
+            mock.patch.object(arbiter.house, "load_unit", lambda unit: own),
+            mock.patch.object(arbiter.homeostat, "connect", lambda: session),
+            mock.patch.object(arbiter.homeostat, "shutdown_event", lambda: stop),
+        ):
+            service = threading.Thread(target=run)
+            service.start()
+            try:
+                self.assertTrue(ready.wait(5), "the service came up")
+                session.deliver(FakeSample("home/hold/heating/utility/stove/on", {"value": True, "id": "h2"}))
+                session.deliver(FakeSample("home/health/aduro/event", {
+                    "kind": "drop", "reason": "device-unavailable", "cmd_id": "h2",
+                }))
+                session.deliver(FakeSample("home/state/utility/stove/available", True))
+                session.deliver(FakeSample("home/cmd/utility/stove/on", {
+                    "value": False, "priority": "manual", "actor": "dashboard", "id": "c1",
+                }))
+            finally:
+                stop.set()
+                service.join(5)
+        self.assertFalse(service.is_alive(), "the service stopped")
+        self.assertEqual(errors, [])
+
+        doc, forward = "home/arbitration/arbiter", "home/arbiter/utility/stove/on"
+        aspect = '"room": "utility", "entity": "stove", "aspect": "on"'
+
+        def heating(hold_id):
+            return f'{{"value": true, "priority": "automation", "actor": "heating", "id": "{hold_id}"}}'
+
+        def held(hold_id):
+            return f'{{"id": "{hold_id}", "unit": "heating", "priority": "automation", "value": true, "family": false}}'
+
+        def doc_held(hold_id, undelivered=""):
+            applied = f'{{"id": "{hold_id}", "unit": "heating", "priority": "automation", "value": true{undelivered}}}'
+            return f'{{"schema": 1, "aspects": [{{{aspect}, "applied": {applied}, "holds": [{held(hold_id)}], "refused": 0}}]}}'
+
+        family_cmd = '{"value": false, "priority": "manual", "actor": "dashboard", "id": "c1"}'
+        preempt = (
+            f'{{"kind": "preempt", {aspect}, "from_priority": "automation", "from_actor": "heating",'
+            ' "to_priority": "manual", "to_actor": "dashboard"}'
+        )
+        record = (
+            f'{{"schema": 1, {aspect}, "priority": "manual", "actor": "dashboard", "value": false,'
+            ' "id": "c1", "since": "T", "until": "T", "refused": 0}'
+        )
+        family = '{"id": "c1", "unit": "dashboard", "priority": "manual", "value": false, "family": true, "until": "T"}'
+        doc_family = (
+            f'{{"schema": 1, "aspects": [{{{aspect},'
+            ' "applied": {"id": "c1", "unit": "dashboard", "priority": "manual", "value": false},'
+            f' "holds": [{family}, {held("h2")}], "refused": 0}}]}}'
+        )
+        # At start-up the replayed hold is sent once the grant table is
+        # read, and the lamp is gone from the document.
+        startup = [(forward, heating("h1")), (doc, doc_held("h1"))]
+        self.assertEqual(at_ready, [startup], "ready comes after the start-up publishes")
+        self.assertEqual(log, [
+            *startup,
+            (forward, heating("h2")),
+            (doc, doc_held("h2")),
+            # The adapter could not deliver h2, and the document says so.
+            (doc, doc_held("h2", ', "undelivered": true')),
+            # The device is back, so h2 is sent again.
+            (forward, heating("h2")),
+            (doc, doc_held("h2")),
+            # The family's command goes out before the event it causes.
+            (forward, family_cmd),
+            ("home/health/arbiter/event", preempt),
+            ("home/hold/arbiter/utility/stove/on", record),
+            (doc, doc_family),
+        ])
 
 
 if __name__ == "__main__":

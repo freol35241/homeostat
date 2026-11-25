@@ -68,9 +68,9 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 |---|---|
 | `src/` | The Rust core: manifest parsing and validation, plan/apply, the supervisor, the MCP server. |
 | `sdk/python/` | The Python SDK every unit is built on. |
-| `adapters/` | The generic units (adapters, services and the `persons` automation), one script each, with a lockfile beside it. |
-| `adapters/assets/` | What the dashboard serves beside `dashboard.html`: its stylesheet, its pure logic (`dashboard-logic.js`, tested by `tests/js`), its ES modules (`dashboard/`, entry `main.js`) and vendored libraries (see its README). |
-| `examples/starter-house/` | A house to copy. The adapters in its `units/` are **generated** copies of `adapters/` at the release tag: never edit them by hand. `evening_lights.py` is the house's own. |
+| `adapters/` | The generic units (adapters, services and the `persons` automation), one script each, with a lockfile and a reference manifest (`<unit>.toml`) beside it. A house's copy of a manifest must agree with the reference (`tests/corpus.rs`). |
+| `adapters/assets/` | What the dashboard serves beside `dashboard.html`: its stylesheet, its ES modules (`dashboard/`, entry `main.js`, with the pure logic in `dashboard/logic/`, tested by `tests/js`) and vendored libraries (see its README). |
+| `examples/starter-house/` | A house to copy. The unit scripts and lockfiles in its `units/` are **generated** copies of `adapters/` at the release tag: never edit them by hand. Its manifests and `evening_lights.py` are the house's own; the manifests are checked against the reference manifests (`tests/corpus.rs`). |
 | `tests/` | Rust integration tests against real processes, a real broker and a real SQLite store. `tests/fixtures/` holds the houses they run; `tests/corpus/` pairs broken houses with their exact error lists; `tests/adapters/` unit-tests adapter logic in Python, without a bus. |
 | `docs/` | `design.md` (how the system works and why), `adapters.md` (the adapter contract), and two generated files. |
 
@@ -96,7 +96,7 @@ Edit the source, then regenerate. Tests refuse a stale copy.
 | `docs/manifest.md` | `cargo run -- schema --markdown > docs/manifest.md` |
 | `sdk/python/homeostat/vocabulary.py` | `HOMEOSTAT_BLESS=1 cargo test --lib sdk_vocabulary` |
 | `docs/widgets.md` and `docs/widgets/*.png` | `uv run --script scripts/widget_gallery.py` |
-| `examples/starter-house/units/` | `scripts/release.sh X.Y.Z`, which runs `scripts/sync_starter.sh` |
+| `examples/starter-house/units/` scripts, lockfiles and assets (not its manifests) | `scripts/release.sh X.Y.Z`, which runs `scripts/sync_starter.sh` |
 | `*.py.lock` beside a unit script | `uv lock --script <script>` |
 | `tests/corpus/expected_plan.txt` and `tests/corpus/invalid/*/expected_errors.txt` | `HOMEOSTAT_BLESS=1 cargo test --test corpus` |
 

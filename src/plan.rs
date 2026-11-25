@@ -12,10 +12,11 @@ use serde_json::Value;
 
 use crate::content;
 use crate::expand::ExpandedKey;
-use crate::grants::{free_nodes, grant_edges, Contributor, Grant};
+use crate::grants::{free_nodes, grant_edges, Grant};
 use crate::manifest::{implicit_enabled, ParamSpec, UnitKind, ENABLED_PARAM};
 use crate::params::{default_value, display_value, keeps_live};
 use crate::repo::LoadedUnit;
+use crate::wiring::Contributor;
 use crate::CheckResult;
 
 /// Plan tiers per docs/design.md#tiers. They are derived from the diff, and
@@ -46,6 +47,16 @@ pub struct WorldUnit {
     pub files_hash: String,
 }
 
+impl WorldUnit {
+    /// The kind the unit's manifest declares. `None` when the manifest does
+    /// not parse or its `[unit].kind` is missing or not a known kind.
+    fn kind(&self) -> Option<UnitKind> {
+        let text = std::str::from_utf8(&self.manifest).ok()?;
+        let manifest: toml::Value = toml::from_str(text).ok()?;
+        manifest.get("unit")?.get("kind")?.clone().try_into().ok()
+    }
+}
+
 /// The actual world, read from the bus (manifest hashes, current parameters,
 /// resolved grants), or empty when planning offline.
 #[derive(Debug, Default)]
@@ -72,7 +83,8 @@ impl World {
 }
 
 /// The unit's world entry as the repo currently describes it. The supervisor
-/// records this at startup and after a successful apply step.
+/// records this at startup and after a successful apply step, and [`diff`]
+/// compares it with the world's entry.
 pub fn world_unit_from_repo(
     root: &Path,
     unit: &LoadedUnit,
@@ -182,16 +194,13 @@ pub fn diff(check: &CheckResult, root: &Path, world: &World, reset_params: bool)
             continue;
         };
 
-        let manifest_bytes = fs::read(root.join(&unit.path)).unwrap_or_default();
-        let files = content::files_hash(
-            root,
-            unit,
-            &check.house,
-            content::uses_zone(name, &check.expanded),
-        );
-        let files_changed = files != world_unit.files_hash;
-        let hash_changed = content::manifest_hash(&manifest_bytes) != world_unit.manifest_hash;
-        let param_level = hash_changed && param_level_only(&manifest_bytes, &world_unit.manifest);
+        let repo_unit = world_unit_from_repo(root, unit, &check.house, &check.expanded);
+        let files_changed = repo_unit.files_hash != world_unit.files_hash;
+        let hash_changed = repo_unit.manifest_hash != world_unit.manifest_hash;
+        let repo_manifest = parse_manifest(&repo_unit.manifest);
+        let world_manifest = parse_manifest(&world_unit.manifest);
+        let param_level =
+            hash_changed && param_level_only(repo_manifest.as_ref(), world_manifest.as_ref());
         let manifest_changed = hash_changed && !param_level;
         if manifest_changed || files_changed {
             let reason = match (manifest_changed, files_changed) {
@@ -207,7 +216,7 @@ pub fn diff(check: &CheckResult, root: &Path, world: &World, reset_params: bool)
         } else if param_level {
             diff.refreshes.push(Refresh {
                 name: name.clone(),
-                changes: refresh_changes(&manifest_bytes, &world_unit.manifest),
+                changes: refresh_changes(repo_manifest.as_ref(), world_manifest.as_ref()),
             });
         }
 
@@ -222,7 +231,7 @@ pub fn diff(check: &CheckResult, root: &Path, world: &World, reset_params: bool)
                 if live == &repo {
                     continue;
                 }
-                let old_default = world_default(world_unit, param);
+                let old_default = world_default(world_manifest.as_ref(), param);
                 let edited = old_default.as_ref() != Some(live);
                 let keep = edited
                     && !reset_params
@@ -277,11 +286,16 @@ pub fn diff(check: &CheckResult, root: &Path, world: &World, reset_params: bool)
     diff
 }
 
+/// A manifest's bytes as TOML. `None` when they do not parse.
+fn parse_manifest(bytes: &[u8]) -> Option<toml::Value> {
+    toml::from_str(std::str::from_utf8(bytes).ok()?).ok()
+}
+
 /// A parameter's default in the manifest the world is running, the implicit
 /// `enabled` of an automation included. `None` when the manifest does not
 /// parse or does not have the parameter.
-fn world_default(unit: &WorldUnit, param: &str) -> Option<Value> {
-    let manifest: toml::Value = toml::from_str(std::str::from_utf8(&unit.manifest).ok()?).ok()?;
+fn world_default(manifest: Option<&toml::Value>, param: &str) -> Option<Value> {
+    let manifest = manifest?;
     let declared = manifest.get("params").and_then(|p| p.get(param));
     let spec: ParamSpec = match declared {
         Some(spec) => spec.clone().try_into().ok()?,
@@ -300,11 +314,8 @@ fn world_default(unit: &WorldUnit, param: &str) -> Option<Value> {
 /// equal. Adding or removing a param, or changing its type, is not
 /// parameter-level, because the running unit read its manifest at startup. An
 /// unparseable side counts as a change.
-fn param_level_only(repo: &[u8], world: &[u8]) -> bool {
-    let parse = |bytes: &[u8]| -> Option<toml::Value> {
-        toml::from_str(std::str::from_utf8(bytes).ok()?).ok()
-    };
-    let (Some(mut a), Some(mut b)) = (parse(repo), parse(world)) else {
+fn param_level_only(repo: Option<&toml::Value>, world: Option<&toml::Value>) -> bool {
+    let (Some(mut a), Some(mut b)) = (repo.cloned(), world.cloned()) else {
         return false;
     };
     strip_param_values(&mut a);
@@ -328,11 +339,9 @@ fn strip_param_values(manifest: &mut toml::Value) {
 /// The per-param deltas behind a parameter-level manifest change: the
 /// stripped fields compared between the world's manifest and the repo's.
 /// Empty when the manifests differ only in formatting or comments.
-fn refresh_changes(repo: &[u8], world: &[u8]) -> Vec<String> {
-    let params = |bytes: &[u8]| -> toml::value::Table {
-        std::str::from_utf8(bytes)
-            .ok()
-            .and_then(|text| toml::from_str::<toml::Value>(text).ok())
+fn refresh_changes(repo: Option<&toml::Value>, world: Option<&toml::Value>) -> Vec<String> {
+    let params = |manifest: Option<&toml::Value>| -> toml::value::Table {
+        manifest
             .and_then(|m| m.get("params").and_then(|p| p.as_table()).cloned())
             .unwrap_or_default()
     };
@@ -405,22 +414,13 @@ pub fn walk_steps(diff: &Diff, check: &CheckResult, world: &World) -> Vec<Step> 
 
     let stop_set: BTreeSet<String> = diff.destroys.iter().cloned().collect();
     let old_edges = grant_edges(&world.grants);
-    // Look up each unit's kind once. kind_of runs per comparison inside
-    // ordered, and the world's kind lives in unparsed manifest TOML.
-    let stop_kinds: BTreeMap<String, u8> = stop_set
-        .iter()
-        .map(|name| {
-            (
-                name.clone(),
-                world
-                    .units
-                    .get(name)
-                    .and_then(world_kind_order)
-                    .unwrap_or(3),
-            )
-        })
-        .collect();
-    let mut stops = ordered(&stop_set, &old_edges, |name| stop_kinds[name]);
+    let mut stops = ordered(&stop_set, &old_edges, |name| {
+        world
+            .units
+            .get(name)
+            .and_then(WorldUnit::kind)
+            .map_or(3, kind_order)
+    });
     stops.reverse();
     steps.extend(stops.into_iter().map(|unit| Step {
         unit,
@@ -448,9 +448,10 @@ pub fn walk_steps(diff: &Diff, check: &CheckResult, world: &World) -> Vec<Step> 
 }
 
 /// Topological order over `set` under `edges` (owner before dependent), each
-/// layer sorted by (kind, name). Check time refuses a cyclic grant table
-/// (`grant-cycle`), so one cannot reach a plan. A malformed table still falls
-/// back to sorted order instead of looping.
+/// layer sorted by (kind, name). `kind_of` runs once per unit, because a
+/// world unit's kind comes from parsing its manifest. Check time refuses a
+/// cyclic grant table (`grant-cycle`), so one cannot reach a plan. A
+/// malformed table still falls back to sorted order instead of looping.
 fn ordered<F>(set: &BTreeSet<String>, edges: &[(String, String)], kind_of: F) -> Vec<String>
 where
     F: Fn(&str) -> u8,
@@ -462,7 +463,7 @@ where
         if layer.is_empty() {
             layer = remaining.iter().cloned().collect();
         }
-        layer.sort_by_key(|name| (kind_of(name), name.clone()));
+        layer.sort_by_cached_key(|name| (kind_of(name), name.clone()));
         for unit in layer {
             remaining.remove(&unit);
             out.push(unit);
@@ -477,21 +478,6 @@ fn kind_order(kind: UnitKind) -> u8 {
         UnitKind::Automation => 1,
         UnitKind::Service => 2,
     }
-}
-
-fn world_kind(unit: &WorldUnit) -> Option<String> {
-    let text = std::str::from_utf8(&unit.manifest).ok()?;
-    let value: toml::Value = toml::from_str(text).ok()?;
-    Some(value.get("unit")?.get("kind")?.as_str()?.to_string())
-}
-
-fn world_kind_order(unit: &WorldUnit) -> Option<u8> {
-    Some(match world_kind(unit)?.as_str() {
-        "adapter" => 0,
-        "automation" => 1,
-        "service" => 2,
-        _ => 3,
-    })
 }
 
 /// Renders the full plan text for `diff`, the result of [`diff`] over the
@@ -544,8 +530,8 @@ pub fn render(check: &CheckResult, diff: &Diff, repo_label: &str, world: &World)
             let kind = world
                 .units
                 .get(name)
-                .and_then(world_kind)
-                .unwrap_or_else(|| "unit".to_string());
+                .and_then(WorldUnit::kind)
+                .map_or("unit".to_string(), |kind| kind.to_string());
             out.push_str(&format!("- {kind} {name}\n"));
         }
     }
@@ -753,11 +739,9 @@ fn render_grant(grant: &Grant, mark: char, out: &mut String) {
             "{prefix}{}.{}  holds  capability={capability}  priority={priority}{}\n",
             grant.unit,
             grant.publish,
-            match grant.on_loss {
-                Some(crate::manifest::OnLoss::Keep) => "  on_loss=keep",
-                Some(crate::manifest::OnLoss::Release) => "  on_loss=release",
-                None => "",
-            }
+            grant
+                .on_loss
+                .map_or_else(String::new, |on_loss| format!("  on_loss={on_loss}"))
         )),
         (Some(capability), Some(priority)) => out.push_str(&format!(
             "{prefix}{}.{}  capability={capability}  priority={priority}\n",
@@ -933,16 +917,26 @@ mod tests {
         (a.to_string(), d.to_string())
     }
 
-    fn world_unit(kind: &str, params: &str) -> WorldUnit {
+    fn level_only(repo: &[u8], world: &[u8]) -> bool {
+        param_level_only(
+            parse_manifest(repo).as_ref(),
+            parse_manifest(world).as_ref(),
+        )
+    }
+
+    fn changes(repo: &[u8], world: &[u8]) -> Vec<String> {
+        refresh_changes(
+            parse_manifest(repo).as_ref(),
+            parse_manifest(world).as_ref(),
+        )
+    }
+
+    fn world_manifest(kind: &str, params: &str) -> Option<toml::Value> {
         let manifest = format!(
             "schema = 1\n[unit]\nname = \"porch\"\nkind = \"{kind}\"\n\
              [runtime]\ncommand = \"true\"\n{params}"
         );
-        WorldUnit {
-            manifest: manifest.into_bytes(),
-            manifest_hash: String::new(),
-            files_hash: String::new(),
-        }
+        parse_manifest(manifest.as_bytes())
     }
 
     #[test]
@@ -950,16 +944,19 @@ mod tests {
         // A pause must read as a live edit under an unchanged default, or
         // the next apply would undo it.
         assert_eq!(
-            world_default(&world_unit("automation", ""), ENABLED_PARAM),
+            world_default(world_manifest("automation", "").as_ref(), ENABLED_PARAM),
             Some(Value::Bool(true))
         );
         assert_eq!(
-            world_default(&world_unit("adapter", ""), ENABLED_PARAM),
+            world_default(world_manifest("adapter", "").as_ref(), ENABLED_PARAM),
             None
         );
         let declared = "[params.enabled]\ntype = \"bool\"\ndefault = false\n";
         assert_eq!(
-            world_default(&world_unit("automation", declared), ENABLED_PARAM),
+            world_default(
+                world_manifest("automation", declared).as_ref(),
+                ENABLED_PARAM
+            ),
             Some(Value::Bool(false))
         );
     }
@@ -1017,19 +1014,19 @@ default = 1
 constraint = { min = 0, max = 10 }
 "#;
         let new_default = String::from_utf8_lossy(old).replace("default = 1", "default = 5");
-        assert!(param_level_only(new_default.as_bytes(), old));
+        assert!(level_only(new_default.as_bytes(), old));
 
         let new_command = String::from_utf8_lossy(old).replace("units/probe.py", "units/other.py");
-        assert!(!param_level_only(new_command.as_bytes(), old));
+        assert!(!level_only(new_command.as_bytes(), old));
 
         let new_type = String::from_utf8_lossy(old).replace("type = \"int\"", "type = \"float\"");
-        assert!(!param_level_only(new_type.as_bytes(), old));
+        assert!(!level_only(new_type.as_bytes(), old));
 
         let added_param = format!(
             "{}\n[params.extra]\ntype = \"bool\"\ndefault = false\n",
             String::from_utf8_lossy(old)
         );
-        assert!(!param_level_only(added_param.as_bytes(), old));
+        assert!(!level_only(added_param.as_bytes(), old));
     }
 
     #[test]
@@ -1049,30 +1046,27 @@ constraint = { min = 0, max = 10 }
 editable_by = "family"
 "#;
         let tightened = String::from_utf8_lossy(old).replace("max = 10", "max = 5");
-        assert!(param_level_only(tightened.as_bytes(), old));
+        assert!(level_only(tightened.as_bytes(), old));
         assert_eq!(
-            refresh_changes(tightened.as_bytes(), old),
+            changes(tightened.as_bytes(), old),
             vec!["level: constraint {max=10, min=0} -> {max=5, min=0}"]
         );
 
         let owner_only = String::from_utf8_lossy(old)
             .replace("editable_by = \"family\"", "editable_by = \"owner\"");
         assert_eq!(
-            refresh_changes(owner_only.as_bytes(), old),
+            changes(owner_only.as_bytes(), old),
             vec!["level: editable_by family -> owner"]
         );
 
         let dropped = String::from_utf8_lossy(old).replace("editable_by = \"family\"\n", "");
         assert_eq!(
-            refresh_changes(dropped.as_bytes(), old),
+            changes(dropped.as_bytes(), old),
             vec!["level: editable_by family -> (none)"]
         );
 
         let comment_only = format!("{}\n# a comment\n", String::from_utf8_lossy(old));
-        assert!(param_level_only(comment_only.as_bytes(), old));
-        assert_eq!(
-            refresh_changes(comment_only.as_bytes(), old),
-            Vec::<String>::new()
-        );
+        assert!(level_only(comment_only.as_bytes(), old));
+        assert_eq!(changes(comment_only.as_bytes(), old), Vec::<String>::new());
     }
 }

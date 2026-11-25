@@ -8,6 +8,11 @@ import logic, { titleCase } from '../logic.js';
 import { controlDisabled, houseControls, localState, occupancyReading, stateValue, store } from '../store.js';
 import { renderAspectControl, renderDial } from './controls.js';
 
+// The mark beside the name of an entity in arbitrated write mode.
+export function arbitratedBadge(entity) {
+  return entity.write_mode === 'arbitrated' ? html`<span class="badge-arbitrated">ARBITRATED</span>` : '';
+}
+
 function widgetForLight(entity) {
   var on = !!stateValue(entity.room, entity.name, 'on');
   var inert = controlDisabled(entity);
@@ -50,7 +55,7 @@ function widgetForOccupancy(entity) {
   var seenKey = entity.room + '/' + entity.name;
   var lastSeen = store.lastSeen[seenKey];
   var label = !occ ? 'Clear' : reading.aspect === 'occupied' ? 'Occupied' : 'Motion';
-  var extra = lastSeen ? html`<span class="faint" title="${new Date(lastSeen).toLocaleString()}"> &middot; ${relTime(lastSeen)}</span>` : '';
+  var extra = lastSeen ? html`<span class="faint" title="${new Date(lastSeen).toLocaleString()}"> &middot; ${logic.relTime(lastSeen, Date.now())}</span>` : '';
   return html`<div class="entity-row row-clickable" data-action="entity-detail" data-room="${entity.room}" data-entity="${entity.name}">
     <span class="entity-name" title="${entity.label}">${entity.label}</span>
     <span><span class="status-dot ${occ ? 'dot-on' : 'dot-off'}"></span>${label}${extra}</span>
@@ -62,8 +67,8 @@ function widgetForOccupancy(entity) {
 // its own overlay the row opens nothing.
 export function widgetForButton(entity, inOverlay) {
   var action = stateValue(entity.room, entity.name, 'action');
-  var at = store.actionAt['home/state/' + entity.room + '/' + entity.name + '/action'];
-  var age = at ? html`<span class="faint" title="${new Date(at * 1000).toLocaleString()}"> &middot; ${relTime(at * 1000)}</span>` : '';
+  var at = store.actionAt[logic.stateKey(entity.room, entity.name, 'action')];
+  var age = at ? html`<span class="faint" title="${new Date(at).toLocaleString()}"> &middot; ${logic.relTime(at, Date.now())}</span>` : '';
   var row = html`<span class="entity-name" title="${entity.label}">${entity.label}</span>
     <span>${action === undefined ? html`<span class="faint">no press yet</span>` : String(action)}${age}</span>`;
   return inOverlay
@@ -73,7 +78,7 @@ export function widgetForButton(entity, inOverlay) {
 
 function widgetForLock(entity) {
   var locked = !!stateValue(entity.room, entity.name, 'locked');
-  var badge = entity.write_mode === 'arbitrated' ? html`<span class="badge-arbitrated">ARBITRATED</span>` : '';
+  var badge = arbitratedBadge(entity);
   return html`<div class="entity-row row-clickable" data-action="entity-detail" data-room="${entity.room}" data-entity="${entity.name}">
     <span class="entity-name" title="${entity.label}">${entity.label}${badge}</span>
     <span class="toggle ${locked ? 'on' : ''}${controlDisabled(entity) ? ' disabled' : ''}"${controlDisabled(entity) ? '' : html` data-action="toggle-lock"`} data-room="${entity.room}" data-entity="${entity.name}" data-value="${!locked}"><span class="knob"></span></span>
@@ -89,7 +94,7 @@ export function widgetForClimate(entity, big) {
   var nowParts = [];
   if (typeof indoor === 'number') nowParts.push(indoor.toFixed(1) + '° now');
   if (typeof feed === 'number') nowParts.push(feed.toFixed(1) + '° feed');
-  var badge = entity.write_mode === 'arbitrated' ? html`<span class="badge-arbitrated">ARBITRATED</span>` : '';
+  var badge = arbitratedBadge(entity);
   var disabled = !(hasSetpoint && !controlDisabled(entity));
   if (big) {
     // The overlay and the dial widget: the vocabulary's setpoint on a
@@ -114,7 +119,7 @@ export function widgetForClimate(entity, big) {
 
 // A sensor's card: one sparkline row per reading, and tapping a row opens
 // that aspect's history. The descriptor decides which readings appear and
-// in what order (dashboard-logic.js, sensorCardPlan). A thermometer lists
+// in what order (logic.js, sensorCardPlan). A thermometer lists
 // temperature and humidity, not its link quality. A sensor with several
 // aspects gets a head row with the entity name, which opens the entity
 // detail. Without it, every tap on the card would lead to a chart. The
@@ -155,7 +160,7 @@ export function widgetForSensor(entity, withHead) {
 }
 
 function widgetGeneric(entity) {
-  var prefix = 'home/state/' + entity.room + '/' + entity.name + '/';
+  var prefix = logic.stateKey(entity.room, entity.name, '');
   var rows = [];
   Object.keys(store.state).forEach(function (k) {
     if (k.indexOf(prefix) === 0) {
@@ -190,10 +195,10 @@ function widgetForCamera(entity) {
 // descriptor. The name and the first family control share one line, with
 // the headline readings below. This avoids the undescribed climate
 // widget's layout, which wraps the readout around a stepper in a narrow
-// column. dashboard-logic.js's cardPlan picks the headline readings.
+// column. logic.js's cardPlan picks the headline readings.
 function widgetForDescribed(entity) {
   var plan = logic.cardPlan(entity, store.state, store.aspects[entity.name], !controlDisabled(entity), houseControls());
-  var badge = entity.write_mode === 'arbitrated' ? html`<span class="badge-arbitrated">ARBITRATED</span>` : '';
+  var badge = arbitratedBadge(entity);
   var control = plan.controls.length ? renderAspectControl(entity, plan.controls[0]) : '';
   var readings = plan.readings.map(function (r, i) {
     return html`${i ? html`<span class="sep">&middot;</span>` : ''}<span class="card-reading${r.stale ? ' stale' : ''}" title="${r.aspect}">
@@ -230,17 +235,6 @@ export var BESPOKE_WIDGET = { light: true, switch: true, occupancy: true, lock: 
 function capRank(entity) {
   var r = CAP_ORDER[entity.capability];
   return r === undefined ? 7 : r;
-}
-
-export function relTime(ms) {
-  var diff = Math.max(0, Date.now() - ms);
-  var mins = Math.round(diff / 60000);
-  if (mins < 1) return 'just now';
-  if (mins === 1) return '1 min ago';
-  if (mins < 60) return mins + ' min ago';
-  var hrs = Math.round(mins / 60);
-  if (hrs === 1) return '1 hr ago';
-  return hrs + ' hr ago';
 }
 
 // An entity's own row (its control or its readings) as a card.

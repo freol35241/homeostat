@@ -1,0 +1,43 @@
+schema = 1
+
+[unit]
+name = "dashboard"
+kind = "service"
+# The model is a view over the whole house, so any entity or manifest
+# change is a change to this unit (docs/design.md#change-detection).
+watches = "house"
+description = "Family web dashboard: generated views over state, setpoints and health"
+
+[runtime]
+command = "uv run units/dashboard.py"
+restart = "always"
+shutdown_grace_s = 5
+env = ["HOMEOSTAT_DASHBOARD_PORT", "HOMEOSTAT_DASHBOARD_TILES", "HOMEOSTAT_DASHBOARD_HOSTS", "HOMEOSTAT_GO2RTC"]
+
+[bus.subscribes]
+state = "home/state/**"
+# A series' future, drawn on the same axis as its past.
+forecast = "home/forecast/**"
+# The holds and what the arbiter resolved from them.
+holds = "home/hold/**"
+arbitration = "home/arbitration/*"
+health = "home/health/**"
+config = "home/config/*/*"
+discovery = "home/discovery/*"
+grants = "home/meta/system/grants"
+# The core's version and build, for the page's footer.
+about = "home/meta/system/about"
+# Queried, not subscribed: the recorder's store for charts and the unit
+# pages, and each unit's captured output from the supervisor.
+history = "home/history/**"
+logs = "home/meta/*/log"
+
+# What the family may command from the page, one publish per capability.
+# A house keeps the ones it grants.
+[bus.publishes]
+lights = { key = "home/cmd/**", capability = "light", priority = "manual" }
+locks = { key = "home/cmd/**", capability = "lock", priority = "manual" }
+switches = { key = "home/cmd/**", capability = "switch", priority = "manual" }
+climate = { key = "home/cmd/**", capability = "climate", priority = "manual" }
+burners = { key = "home/cmd/**", capability = "burner", priority = "manual" }
+notifiers = { key = "home/cmd/**", capability = "notifier", priority = "manual" }

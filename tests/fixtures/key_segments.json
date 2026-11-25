@@ -1,5 +1,5 @@
 {
-  "comment": "The names usable as one bus key segment, as src/validate.rs and homeostat.keys check them (tests/fixtures/README.md).",
+  "comment": "The names usable as one bus key segment, as src/validate/mod.rs and homeostat.keys check them (tests/fixtures/README.md).",
   "accepted": [
     "a",
     "Z",

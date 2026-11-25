@@ -5,7 +5,7 @@
 //! what `plan` printed for it.
 
 use crate::error::{Code, Diagnostics};
-use crate::keyspace::{KeyExpr, Segment, CLASSES};
+use crate::keyspace::{self, KeyExpr, Segment};
 use crate::manifest::{UnitKind, WriteMode};
 use crate::repo::House;
 
@@ -108,18 +108,15 @@ pub fn expand(house: &House, diags: &mut Diagnostics) -> Vec<ExpandedKey> {
                 }
             };
 
-            let class = CLASSES
-                .iter()
-                .copied()
-                .find(|c| expr.class() == Some(*c))
-                .expect("check_schema accepts only known classes");
+            let class = expr
+                .class()
+                .and_then(keyspace::class)
+                .expect("check_schema accepts only known classes")
+                .name;
             let templated = expr.has_template();
             let mut zone = None;
             let exprs = if templated {
-                if !matches!(
-                    unit.manifest.unit.kind,
-                    UnitKind::Adapter | UnitKind::Automation
-                ) {
+                if !unit.manifest.unit.kind.binds_entities() {
                     diags.error(
                         Code::TemplateOutsideBindingUnit,
                         subject,

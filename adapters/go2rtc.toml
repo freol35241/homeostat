@@ -1,0 +1,12 @@
+schema = 1
+
+[unit]
+name = "go2rtc"
+kind = "service"
+description = "Restreams the cameras for the dashboard"
+
+[runtime]
+command = "uv run units/go2rtc.py"
+restart = "always"
+shutdown_grace_s = 5
+env = ["HOMEOSTAT_CAMERAS", "HOMEOSTAT_GO2RTC_LISTEN"]

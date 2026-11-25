@@ -1,0 +1,30 @@
+schema = 1
+
+[unit]
+name = "buttons"
+kind = "service"
+# The actions are read from the entity files, so any house change is a
+# change to this unit (docs/design.md#change-detection).
+watches = "house"
+description = "Sends a button's gestures as family commands"
+
+[runtime]
+command = "uv run units/buttons.py"
+restart = "always"
+shutdown_grace_s = 5
+
+[bus.subscribes]
+# The targets' states, which a toggle flips.
+state = "home/state/**"
+# Every button's presses.
+presses = "home/state/*/*/action"
+
+# The targets a button may command, one publish per capability. A house
+# keeps the ones its buttons' actions need.
+[bus.publishes]
+lights = { key = "home/cmd/**", capability = "light", priority = "manual" }
+locks = { key = "home/cmd/**", capability = "lock", priority = "manual" }
+switches = { key = "home/cmd/**", capability = "switch", priority = "manual" }
+climate = { key = "home/cmd/**", capability = "climate", priority = "manual" }
+burners = { key = "home/cmd/**", capability = "burner", priority = "manual" }
+notifiers = { key = "home/cmd/**", capability = "notifier", priority = "manual" }

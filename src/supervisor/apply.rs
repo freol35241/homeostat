@@ -64,13 +64,8 @@ async fn handle(core: Arc<Core>, query: zenoh::query::Query) {
 
 fn failure(error: String) -> ApplyResult {
     ApplyResult {
-        ok: false,
-        params: Vec::new(),
-        refreshes: Vec::new(),
-        steps: Vec::new(),
-        halted_at: None,
-        not_reached: Vec::new(),
         error: Some(error),
+        ..Default::default()
     }
 }
 
@@ -88,12 +83,7 @@ async fn execute(core: &Arc<Core>, request: ApplyRequest) -> ApplyResult {
     if diff.is_empty() {
         return ApplyResult {
             ok: true,
-            params: Vec::new(),
-            refreshes: Vec::new(),
-            steps: Vec::new(),
-            halted_at: None,
-            not_reached: Vec::new(),
-            error: None,
+            ..Default::default()
         };
     }
     let tier = plan::derive_tier(&diff);
