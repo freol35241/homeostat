@@ -80,6 +80,50 @@ class SilenceWatchTest(unittest.TestCase):
         self.watch.sweep(300.0)
         self.assertEqual(self.silent_events().count(STOVE_SILENT), 2)
 
+    def test_a_message_during_a_sweep_leaves_the_entity_available(self):
+        # A message arrives on another thread just as the sweep reads the
+        # stove's last contact. Its contact waits for the sweep's lock, so
+        # it lands after the put and marks the stove available again.
+        self.watch.contact(STOVE)
+        self.now = 301.0
+        # Set when the message's contact has finished or is waiting for
+        # the lock, so the sweep goes on without a timed wait.
+        progressed = threading.Event()
+
+        class SignallingLock:
+            def __init__(self):
+                self._lock = threading.Lock()
+
+            def __enter__(self):
+                if not self._lock.acquire(blocking=False):
+                    progressed.set()
+                    self._lock.acquire()
+
+            def __exit__(self, *exc):
+                self._lock.release()
+
+        def message():
+            self.watch.contact(STOVE)
+            progressed.set()
+
+        receiver = threading.Thread(target=message, daemon=True)
+
+        class LastContact(dict):
+            def __getitem__(self, key):
+                value = super().__getitem__(key)
+                if key == STOVE.id and not progressed.is_set():
+                    receiver.start()
+                    progressed.wait(5)
+                return value
+
+        self.watch._lock = SignallingLock()  # type: ignore[assignment]
+        self.watch._last_rx = LastContact(self.watch._last_rx)
+        self.watch.sweep(300.0)
+        receiver.join(5)
+        self.assertFalse(receiver.is_alive())
+        stove = [value for key, value in self.session.puts if key == STOVE_AVAILABLE]
+        self.assertEqual(stove, [True, False, True])
+
     def test_the_watchdog_reads_the_timeout_each_round_and_waits_a_quarter_of_it(self):
         # Silent for 1 s throughout. Only the third timeout is short enough
         # to sweep the stove unavailable.

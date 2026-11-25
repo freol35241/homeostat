@@ -279,6 +279,9 @@ class Bindings:
         ------
         ValueError, KeyError, TypeError or AttributeError
             If a table does not have the shape the core serves.
+        zenoh.ZError
+            If a hold row's key is not one zenoh accepts. The core's
+            manifest parser admits some shapes zenoh refuses (`**/**`, a `$`).
         """
         rows = tables[GRANTS_KEY] + tables[PENDING_KEY]
         return GrantSets(*bindings(rows), holders(rows), policies(rows))
@@ -291,7 +294,7 @@ class Bindings:
             try:
                 tables = {**self._tables, key: json.loads(sample.payload.to_bytes())}
                 sets = self._read(tables)
-            except (ValueError, KeyError, TypeError, AttributeError):
+            except (ValueError, KeyError, TypeError, AttributeError, zenoh.ZError):
                 self._session.health_event("drop", reason="malformed-payload", key=key)
                 return
             self._live.add(key)

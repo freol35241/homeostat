@@ -24,9 +24,10 @@ class SilenceWatch:
 
     Every entity counts from construction, so one that never speaks goes
     unavailable after one timeout. Messages and sweeps arrive on
-    different threads, so availability is locked. The put stays under
-    the lock, so a message and a sweep cannot interleave the decision
-    and the put.
+    different threads, so the last contact and availability are locked.
+    A sweep decides and puts under the lock, so a message lands either
+    before the decision or after the put. In the second case it marks
+    the entity available again.
 
     Parameters
     ----------
@@ -66,8 +67,9 @@ class SilenceWatch:
             True the first time `entity` is heard, so the caller can
             republish discovery with the entity bound.
         """
-        self._last_rx[entity.id] = self._clock()
-        self._set_available(entity, True)
+        with self._lock:
+            self._last_rx[entity.id] = self._clock()
+            self._set_available(entity, True)
         if entity.id in self._heard:
             return False
         self._heard.add(entity.id)
@@ -92,9 +94,7 @@ class SilenceWatch:
         """Mark each entity silent for over `timeout_s` unavailable.
 
         Only a transition to unavailable emits `device-silent`, so a
-        device that stays silent is reported once. The last contact is
-        read outside the lock, so at the timeout boundary a device heard
-        during a sweep can stay unavailable until its next message.
+        device that stays silent is reported once.
 
         Parameters
         ----------
@@ -103,8 +103,9 @@ class SilenceWatch:
         """
         now = self._clock()
         for entity in self._entities:
-            if now - self._last_rx[entity.id] > timeout_s and self._set_available(entity, False):
-                self._session.health_event("device-silent", topic=entity.id)
+            with self._lock:
+                if now - self._last_rx[entity.id] > timeout_s and self._set_available(entity, False):
+                    self._session.health_event("device-silent", topic=entity.id)
 
     def start(self, timeout: Callable[[], float]) -> None:
         """Start the watchdog thread, which sweeps until `stop`.
@@ -138,10 +139,12 @@ class SilenceWatch:
             self._thread.join(timeout=5)
 
     def _set_available(self, entity: Entity, value: bool) -> bool:
-        """Put an availability change; return True when it was one."""
-        with self._lock:
-            if self._available.get(entity.name) == value:
-                return False
-            self._available[entity.name] = value
-            self._session.put_json(keys.state_key(entity.room, entity.name, "available"), value)
+        """Put an availability change; return True when it was one.
+
+        The caller holds the lock.
+        """
+        if self._available.get(entity.name) == value:
+            return False
+        self._available[entity.name] = value
+        self._session.put_json(keys.state_key(entity.room, entity.name, "available"), value)
         return True
