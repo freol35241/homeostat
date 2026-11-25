@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "homeostat==0.23.0",
+#     "homeostat==0.24.0",
 #     "paho-mqtt>=2,<3",
 # ]
 # ///
@@ -157,12 +157,13 @@ def main():
         endpoint,
         lambda _client, _userdata, msg: tracker.on_message(msg.topic, msg.payload),
         f"{BASE_TOPIC}/+/+",
+        health=session.health_event,
     )
 
     # Persons are read-only, so there is no command subscription.
     session.ready()
 
-    mqtt.wait_for_shutdown()
+    homeostat.wait_for_shutdown()
 
     # Stop the MQTT loop first, or an in-flight on_message could put on
     # a closed zenoh session.

@@ -228,9 +228,10 @@
       return Promise.resolve(respond({ events: [], params: [], commands: [], answers: [], answers_from: null, readbacks: [], truncated: false }));
     }
     if (route === '/api/logs') {
-      return Promise.resolve(respond({ lines: [
-        { stream: 'stdout', line: 'running (a demo house: these lines are made up)' }
-      ] }));
+      // The unit answers with a bare list of the core's log entries.
+      return Promise.resolve(respond([
+        { ts_us: Date.now() * 1000, stream: 'stdout', line: 'running (a demo house: these lines are made up)' }
+      ]));
     }
     if (route === '/api/cmd') return Promise.resolve(respond(command(body)));
     if (route === '/api/lights/off') return Promise.resolve(respond(lightsOff()));

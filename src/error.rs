@@ -311,8 +311,12 @@ codes! {
     KeyOutsideSchema => "key-outside-schema":
         "A `[bus]` key expression must be `home/{class}/...`: it starts with \
         `home/`, names a known class literally (state, cmd, arbiter, forecast, \
-        config, meta, health, clock, history, discovery, hold), and has at \
-        least one segment after the class.",
+        config, meta, health, clock, history, discovery, hold, arbitration), \
+        and has at least one segment after the class. It must also be a key \
+        expression zenoh accepts, and the error quotes zenoh's reason when it \
+        is not. Common causes are `**/**` (write `**`), `**/*` (write `*/**`), \
+        `#` or `?` in a segment, and a `$` or a `*` inside a segment other \
+        than as `$*` after some text, as in `lamp$*`.",
     TemplateOutsideBindingUnit => "template-outside-binding-unit":
         "A `[bus]` key uses `{room}` or `{entity}` templates, which expand per \
         bound entity and so are valid only in units that bind entities: \
@@ -602,9 +606,13 @@ mod tests {
     fn every_code_is_emitted_and_renders_distinctly() {
         let sources = [
             include_str!("repo.rs"),
-            include_str!("validate.rs"),
+            include_str!("validate/mod.rs"),
+            include_str!("validate/entity.rs"),
+            include_str!("validate/dashboard.rs"),
             include_str!("expand.rs"),
             include_str!("grants.rs"),
+            include_str!("publish_rules.rs"),
+            include_str!("wiring.rs"),
             include_str!("params.rs"),
         ];
         let dead: Vec<Code> = Code::ALL

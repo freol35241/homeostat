@@ -13,7 +13,7 @@ import { aspectValueSpan, renderAspectControl } from './controls.js';
 
 // A descriptor label keeps the firmware's field name in parentheses, as
 // in "flue (smoke_temp)". The overlay shows it, but a card has no room,
-// so it is trimmed here as on the room card (dashboard-logic.js,
+// so it is trimmed here as on the room card (logic.js,
 // cardPlan).
 function shortLabel(label) { return label.replace(/\s*\([^)]*\)$/, ''); }
 

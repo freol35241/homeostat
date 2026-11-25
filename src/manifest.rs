@@ -9,6 +9,22 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
 
+/// Implements `Display` for unit-only enums as the variant name in
+/// lowercase. That is the name `#[serde(rename_all = "lowercase")]` reads
+/// and writes, so plan text and error messages spell a value as the file
+/// does.
+macro_rules! lowercase_display {
+    ($($t:ty),*) => {$(
+        impl fmt::Display for $t {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str(&format!("{self:?}").to_ascii_lowercase())
+            }
+        }
+    )*};
+}
+
+lowercase_display!(UnitKind, OnLoss, Priority, ParamType, EditableBy, WriteMode);
+
 /// One capability's aspect vocabulary: the names an adapter binding it
 /// publishes under, and the aspects the family surfaces act on. See
 /// docs/design.md#the-capability-vocabulary. The base aspect is what
@@ -27,7 +43,7 @@ pub struct Capability {
     pub aspects: &'static [&'static str],
     /// The aspects that take a command, with the type of value each
     /// carries: the base aspect and the features a unit or a person sets.
-    /// A feature takes commands only on an entity that declares it. The adapter checks bounds (docs/adapters.md, Commands).
+    /// A feature takes commands only on an entity that declares it. The adapter checks bounds (docs/adapters.md#4-commands).
     pub commands: &'static [(&'static str, ValueType)],
     /// The reading and value that is out of the ordinary, if any.
     pub notable: Option<&'static str>,
@@ -270,7 +286,9 @@ pub const SUPPORTED_SCHEMA: u32 = 1;
 pub struct UnitManifest {
     /// Contract version. Must be 1 (`unsupported-schema` otherwise).
     pub schema: u32,
+    /// The unit's name, kind and description.
     pub unit: UnitSection,
+    /// How the supervisor starts, restarts and stops the unit.
     pub runtime: RuntimeSection,
     /// How an adapter reaches its backend. Required for adapters, allowed
     /// for services, refused for automations.
@@ -332,8 +350,7 @@ pub struct UnitSection {
     pub description: Option<String>,
     /// Which repo files restart this unit when they change. Absent means
     /// `own`: the unit's command, its own entity files, its zone if it
-    /// uses one. `inputs` is accepted as an older spelling.
-    #[serde(alias = "inputs")]
+    /// uses one.
     pub watches: Option<UnitWatches>,
 }
 
@@ -367,13 +384,10 @@ pub enum UnitKind {
     Service,
 }
 
-impl fmt::Display for UnitKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            UnitKind::Adapter => "adapter",
-            UnitKind::Automation => "automation",
-            UnitKind::Service => "service",
-        })
+impl UnitKind {
+    /// Whether units of this kind may bind entities with `[entities]`.
+    pub fn binds_entities(self) -> bool {
+        matches!(self, UnitKind::Adapter | UnitKind::Automation)
     }
 }
 
@@ -435,8 +449,8 @@ pub enum DiscoveryMode {
 }
 
 /// `[bus]`: the unit's declared key surface. Keys are `home/{class}/...`
-/// (`key-outside-schema` otherwise). A zone name in the room slot expands
-/// to its rooms at plan time. `{room}`/`{entity}` templates expand per
+/// expressions that zenoh accepts (`key-outside-schema` otherwise). A
+/// zone name in the room slot expands to its rooms at plan time. `{room}`/`{entity}` templates expand per
 /// bound entity. They are valid only in adapters and automations
 /// (`template-outside-binding-unit`), and only in a unit that binds
 /// entities (`template-without-entities`).
@@ -524,17 +538,6 @@ impl Priority {
     ];
 }
 
-impl fmt::Display for Priority {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Priority::Automation => "automation",
-            Priority::Agent => "agent",
-            Priority::Family => "family",
-            Priority::Manual => "manual",
-        })
-    }
-}
-
 /// `[params.<name>]`: one live parameter. The manifest default is the
 /// value until something writes `home/config/{unit}/{param}`; a write
 /// outside the constraint is refused with the old value still in force.
@@ -573,33 +576,12 @@ pub enum ParamType {
     Time,
 }
 
-impl fmt::Display for ParamType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            ParamType::Bool => "bool",
-            ParamType::Int => "int",
-            ParamType::Float => "float",
-            ParamType::String => "string",
-            ParamType::Time => "time",
-        })
-    }
-}
-
 /// Actor tiers that may write a parameter live.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum EditableBy {
     Owner,
     Family,
-}
-
-impl fmt::Display for EditableBy {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            EditableBy::Owner => "owner",
-            EditableBy::Family => "family",
-        })
-    }
 }
 
 /// `[entities]`: where this unit's entity files live.
@@ -945,16 +927,6 @@ pub enum WriteMode {
     Arbitrated,
 }
 
-impl fmt::Display for WriteMode {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            WriteMode::Shared => "shared",
-            WriteMode::Exclusive => "exclusive",
-            WriteMode::Arbitrated => "arbitrated",
-        })
-    }
-}
-
 /// `zones.toml` at the house root: named sets of rooms that expand in the
 /// room slot of key expressions.
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -1124,4 +1096,44 @@ pub enum WidgetKind {
     /// interlock reads. It uses only the `burner` vocabulary, with nothing
     /// adapter-specific.
     Burner,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Reads `value`'s `Display` text back through serde.
+    fn round_trips<T>(value: T) -> bool
+    where
+        T: fmt::Display + PartialEq + serde::de::DeserializeOwned,
+    {
+        serde_json::from_value::<T>(serde_json::Value::String(value.to_string())).ok()
+            == Some(value)
+    }
+
+    #[test]
+    fn lowercase_display_is_the_serde_name() {
+        use EditableBy as E;
+        use ParamType as P;
+        use UnitKind as U;
+        use WriteMode as W;
+        for kind in [U::Adapter, U::Automation, U::Service] {
+            assert!(round_trips(kind), "{kind}");
+        }
+        for on_loss in [OnLoss::Keep, OnLoss::Release] {
+            assert!(round_trips(on_loss), "{on_loss}");
+        }
+        for priority in Priority::ALL {
+            assert!(round_trips(priority), "{priority}");
+        }
+        for param_type in [P::Bool, P::Int, P::Float, P::String, P::Time] {
+            assert!(round_trips(param_type), "{param_type}");
+        }
+        for editable_by in [E::Owner, E::Family] {
+            assert!(round_trips(editable_by), "{editable_by}");
+        }
+        for mode in [W::Shared, W::Exclusive, W::Arbitrated] {
+            assert!(round_trips(mode), "{mode}");
+        }
+    }
 }

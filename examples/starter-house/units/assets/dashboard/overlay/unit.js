@@ -1,30 +1,34 @@
 /* The unit overlay: a unit's health, parameters, events or timeline, and log. */
+import { getJson } from '../api.js';
 import { fmtOrDash, statusChipHtml } from '../chrome.js';
 import { html } from '../html.js';
 import logic, { titleCase, unitNameFromHealthKey } from '../logic.js';
 import { renderOverlayContent, showOverlay } from './panel.js';
-import { findEntityByName, overlay, store, unitsByName } from '../store.js';
+import { findEntityByName, overlay, store, unitByName } from '../store.js';
 import { renderEventRow } from '../views/health.js';
 import { renderParamRow, renderPauseSwitch } from '../widgets/params.js';
 
 function fetchUnitLog(unitName) {
-  overlay.log = { lines: [], loaded: false, loading: true };
-  fetch('/api/logs?unit=' + encodeURIComponent(unitName) + '&lines=100')
-    .then(function (r) { return r.json(); })
+  overlay.log = { lines: [], loaded: false, loading: true, error: null };
+  getJson('/api/logs?unit=' + encodeURIComponent(unitName) + '&lines=100')
     .then(function (data) {
       if (overlay.unit !== unitName) return; // the overlay moved on to another unit
-      overlay.log = { lines: data || [], loaded: true, loading: false };
+      // A line's time is epoch µs from the core, and the page's are ms.
+      var lines = (Array.isArray(data) ? data : []).map(function (l) {
+        return { ts: (l.ts_us || 0) / 1000, stream: l.stream, line: l.line };
+      });
+      overlay.log = { lines: lines, loaded: true, loading: false, error: null };
       if (overlay.open && overlay.type === 'unit') renderOverlayContent();
     })
-    .catch(function () {
+    .catch(function (e) {
       if (overlay.unit !== unitName) return;
-      overlay.log = { lines: [], loaded: true, loading: false };
+      overlay.log = { lines: [], loaded: true, loading: false, error: e.message };
       if (overlay.open && overlay.type === 'unit') renderOverlayContent();
     });
 }
 
 function renderLogLine(entry) {
-  var t = new Date((entry.ts_us || 0) / 1000);
+  var t = new Date(entry.ts);
   var tStr = isNaN(t.getTime()) ? '' : t.toLocaleTimeString();
   var tFull = isNaN(t.getTime()) ? '' : t.toLocaleString();
   var cls = entry.stream === 'stderr' ? 'log-line stderr' : 'log-line';
@@ -41,13 +45,26 @@ function fetchUnitEvents(unitName) {
     overlay.unitEvents = { rows: rows, loaded: true, loading: false, failed: failed };
     if (overlay.open && overlay.type === 'unit') renderOverlayContent();
   };
-  fetch('/api/unit-events?unit=' + encodeURIComponent(unitName))
-    .then(function (r) {
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      return r.json();
-    })
-    .then(function (data) { done((data && data.events) || [], false); })
+  getJson('/api/unit-events?unit=' + encodeURIComponent(unitName))
+    .then(function (data) { done(((data && data.events) || []).map(inMs), false); })
     .catch(function () { done([], true); });
+}
+
+// The unit routes' times are epoch seconds, and the page's are ms.
+function inMs(row) { return Object.assign({}, row, { ts: row.ts * 1000 }); }
+
+function timelineInMs(raw) {
+  var ms = function (s) { return s === null || s === undefined ? s : s * 1000; };
+  return Object.assign({}, raw, {
+    events: (raw.events || []).map(inMs),
+    params: (raw.params || []).map(inMs),
+    commands: (raw.commands || []).map(inMs),
+    answers: (raw.answers || []).map(inMs),
+    answers_from: ms(raw.answers_from),
+    readbacks: (raw.readbacks || []).map(function (s) {
+      return Object.assign({}, s, { from: ms(s.from), points: (s.points || []).map(inMs) });
+    })
+  });
 }
 
 // An automation's timeline rows (docs/design.md#unit-timeline). Its
@@ -59,12 +76,8 @@ function fetchUnitTimeline(unitName) {
     overlay.timeline = { raw: raw, loaded: true, loading: false, failed: failed };
     if (overlay.open && overlay.type === 'unit') renderOverlayContent();
   };
-  fetch('/api/unit-timeline?unit=' + encodeURIComponent(unitName))
-    .then(function (r) {
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      return r.json();
-    })
-    .then(function (raw) { done(raw, false); })
+  getJson('/api/unit-timeline?unit=' + encodeURIComponent(unitName))
+    .then(function (raw) { done(timelineInMs(raw || {}), false); })
     .catch(function () { done(null, true); });
 }
 
@@ -72,7 +85,7 @@ export function openUnitDetail(unitName) {
   overlay.type = 'unit';
   overlay.unit = unitName;
   fetchUnitLog(unitName);
-  var unit = unitsByName()[unitName];
+  var unit = unitByName(unitName);
   if (unit && unit.kind === 'automation') fetchUnitTimeline(unitName);
   else fetchUnitEvents(unitName);
   showOverlay();
@@ -95,7 +108,7 @@ var TIMELINE_SHOWN = 300;
 
 // One timeline entry: when, what kind, and what happened.
 function renderTimelineRow(entry) {
-  var t = new Date((entry.ts || 0) * 1000);
+  var t = new Date(entry.ts || 0);
   var tStr = isNaN(t.getTime()) ? '' : t.toLocaleTimeString();
   var tFull = isNaN(t.getTime()) ? '' : t.toLocaleString();
   var tag, text;
@@ -162,22 +175,24 @@ function renderEvents(live) {
 }
 
 export function renderUnitDetailBody() {
-  var unit = unitsByName()[overlay.unit] || { name: overlay.unit, label: overlay.unit, kind: '', description: '', params: {} };
-  var hkey = 'home/health/' + unit.name;
+  var unit = unitByName(overlay.unit) || { name: overlay.unit, label: overlay.unit, kind: '', description: '', params: {} };
+  var hkey = logic.healthKey(unit.name);
   var h = store.health[hkey] || {};
   var status = h.status || 'stopped';
+  var vocabulary = store.model.vocabulary;
+  var pause = logic.pauseParam(unit, vocabulary);
 
   var fieldRows = html`<div class="aspect-row"><span class="muted">status:</span> ${statusChipHtml(status)}</div>
     <div class="aspect-row"><span class="muted">pid:</span> ${fmtOrDash(h.pid)}</div>
     <div class="aspect-row"><span class="muted">restarts:</span> ${fmtOrDash(h.restarts)}</div>
     <div class="aspect-row"><span class="muted">backoff_ms:</span> ${fmtOrDash(h.backoff_ms)}</div>
     <div class="aspect-row"><span class="muted">last_exit_code:</span> ${fmtOrDash(h.last_exit_code)}</div>
-    ${logic.pauseParam(unit) ? html`<div class="aspect-row"><span class="muted">enabled:</span> ${renderPauseSwitch(unit)}</div>` : ''}`;
+    ${pause ? html`<div class="aspect-row"><span class="muted">${vocabulary.pause_param}:</span> ${renderPauseSwitch(unit)}</div>` : ''}`;
 
   var params = unit.params || {};
   // An automation's `enabled` is its pause switch, shown under Health.
   var paramRows = Object.keys(params).filter(function (pname) {
-    return !(pname === 'enabled' && logic.pauseParam(unit));
+    return !(pname === vocabulary.pause_param && pause);
   }).map(function (pname) {
     return renderParamRow(unit.name, pname, params[pname]);
   });
@@ -189,6 +204,7 @@ export function renderUnitDetailBody() {
   var log = overlay.log || { lines: [], loaded: false, loading: false };
   var logRows = log.lines.map(renderLogLine);
   var logHtml = log.loading ? html`<div class="empty-hint">Loading&hellip;</div>` :
+    log.error ? html`<div class="empty-hint">The log could not be read: ${log.error}</div>` :
     (logRows.length ? logRows : html`<div class="empty-hint">No output captured.</div>`);
 
   var body = html`<div class="muted">${titleCase(unit.kind || '')}</div>

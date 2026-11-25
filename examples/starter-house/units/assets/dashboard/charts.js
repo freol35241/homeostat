@@ -1,4 +1,4 @@
-/* Charts: line, bar and timeline markup over dashboard-logic.js's geometry,
+/* Charts: line, bar and timeline markup over logic.js's geometry,
  * and the scrub, with its crosshair, tooltip and the readouts under a
  * chart. */
 import { byId, html } from './html.js';
@@ -43,7 +43,7 @@ export function issuedCaption(forecast) {
   // a forecast made yesterday reads as this afternoon. For anything older
   // than today the date is included.
   var sameDay = new Date(f.issued).toDateString() === new Date(Date.now()).toDateString();
-  return 'issued ' + (sameDay ? formatChartClock(f.issued) : formatChartTime(f.issued));
+  return 'issued ' + (sameDay ? logic.formatChartClock(f.issued) : logic.formatChartTime(f.issued));
 }
 
 // "min 0.38 at 03:00": where the horizon goes, and at what time. A flat
@@ -55,29 +55,7 @@ export function horizonCaption(aspect, field, forecast, fromTs) {
   var falling = summary.min.t > summary.max.t;
   var point = falling ? summary.min : summary.max;
   return (falling ? 'min ' : 'max ') +
-    logic.formatAspect(aspect, field, point.v) + ' at ' + formatChartClock(point.t);
-}
-
-// A reading's time, at the precision the window needs. On an hour of
-// history the recorder's buckets are seconds wide, so minutes alone would
-// hide the detail the reader opened the chart for. `spanMs` is the charted
-// window. Without it the time is shown as day and minute.
-export function formatChartTime(ts, spanMs) {
-  var d = new Date(ts);
-  if (isNaN(d.getTime())) return '';
-  var fmt = { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' };
-  if (spanMs && spanMs <= 3 * 3600e3) fmt.second = '2-digit';
-  return d.toLocaleString([], fmt);
-}
-
-// The same instant without the date, for the far end of a run whose near
-// end already shows it.
-export function formatChartClock(ts, spanMs) {
-  var d = new Date(ts);
-  if (isNaN(d.getTime())) return '';
-  var fmt = { hour: '2-digit', minute: '2-digit' };
-  if (spanMs && spanMs <= 3 * 3600e3) fmt.second = '2-digit';
-  return d.toLocaleTimeString([], fmt);
+    logic.formatAspect(aspect, field, point.v) + ' at ' + logic.formatChartClock(point.t);
 }
 
 // Builds a chart's markup (line + optional area/gridlines/y-labels) and
@@ -88,7 +66,7 @@ export function buildChart(chartId, points, opts) {
   var height = opts.height || 36;
   var pad = opts.pad !== undefined ? opts.pad : 3;
   var sizeClass = opts.sizeClass || 'chart-tile';
-  var geo = logic.chartGeometry(points || [], CHART_VBW, height, pad, opts.window, opts.forecast, opts.issues, opts.contributors);
+  var geo = logic.chartGeometry(points || [], CHART_VBW, height, pad, opts.window, opts.forecast, opts.issues, opts.contributors, Date.now());
   var inner;
   if (!geo) {
     chartRegistry[chartId] = null;
@@ -198,13 +176,13 @@ function timeAxis(from, to, nowX) {
     ? html`<span class="chart-xnow" style="left:${nowPct.toFixed(1)}%">now</span>`
     : '';
   return html`<div class="chart-xaxis">
-    <span>${formatChartTime(from, span)}</span>${nowLabel}
-    <span>${sameDay ? formatChartClock(to, span) : formatChartTime(to, span)}</span>
+    <span>${logic.formatChartTime(from, span)}</span>${nowLabel}
+    <span>${sameDay ? logic.formatChartClock(to, span) : logic.formatChartTime(to, span)}</span>
     </div>`;
 }
 
 /* Bars over intervals, for an aspect whose samples are amounts per
- * interval (dashboard-logic.js, intervalBars). A bar spans its interval,
+ * interval (logic.js, intervalBars). A bar spans its interval,
  * so an amount reads as an amount: a 6 h forecast interval is six hours
  * wide and not a spike. Recorded amounts are solid and the forecast's
  * are faded, stacked on top where one bar holds both, as today's bar
@@ -216,63 +194,35 @@ export function buildBars(chartId, bars, opts) {
   var height = opts.height || 36;
   var pad = opts.pad !== undefined ? opts.pad : 3;
   var sizeClass = opts.sizeClass || 'chart-tile';
-  var win = opts.window;
-  if (!bars.length) {
+  var geo = logic.barGeometry(bars, CHART_VBW, height, pad, opts.window, Date.now());
+  if (!geo) {
     chartRegistry[chartId] = null;
     return html`<div class="chart-wrap ${sizeClass}" data-chart-id="${chartId}"><div class="chart-empty">no history yet</div></div>`;
   }
-  // A first bar that starts before the window, a whole day or the
-  // interval straddling its start, is drawn whole.
-  var from = Math.min(win.from, bars[0].from);
-  var to = Math.max(win.to, bars[bars.length - 1].to);
-  var max = 0, min = 0;
-  bars.forEach(function (b) {
-    [b.observed, b.observed + b.forecast].forEach(function (v) {
-      max = Math.max(max, v);
-      min = Math.min(min, v);
-    });
-  });
-  if (max === min) max = min + 1;
-  var x = function (t) { return pad + (Math.min(Math.max(t, from), to) - from) / (to - from) * (CHART_VBW - 2 * pad); };
-  var y = function (v) { return height - pad - ((v - min) / (max - min)) * (height - 2 * pad); };
-  // A rectangle between two amounts, whichever is higher.
-  var rect = function (cls, x0, w, a, b) {
-    var top = Math.min(y(a), y(b));
-    return html`<rect class="${cls}" x="${x0.toFixed(1)}" y="${top.toFixed(1)}" width="${w.toFixed(1)}" height="${Math.abs(y(a) - y(b)).toFixed(1)}"/>`;
-  };
   var marks = [];
   if (opts.gridlines) {
     [pad, height / 2, height - pad].forEach(function (gy) {
       marks.push(html`<line class="chart-grid" x1="0" y1="${gy.toFixed(1)}" x2="${CHART_VBW}" y2="${gy.toFixed(1)}"/>`);
     });
   }
-  var coords = [];
-  bars.forEach(function (b) {
-    var x0 = x(b.from), x1 = x(b.to);
-    // A sliver between bars, so neighbours of equal height stay apart.
-    var w = Math.max(x1 - x0 - Math.min(1, (x1 - x0) * 0.15), 0.5);
-    var total = b.observed + b.forecast;
-    if (b.observed !== 0) marks.push(rect('chart-bar', x0, w, 0, b.observed));
-    if (b.forecast !== 0) marks.push(rect('chart-bar forecast', x0, w, b.observed, total));
-    coords.push({ x: x0 + w / 2, y: y(total), value: total, ts: b.from });
+  geo.rects.forEach(function (r) {
+    marks.push(html`<rect class="${r.forecast ? 'chart-bar forecast' : 'chart-bar'}" x="${r.x.toFixed(1)}" y="${r.y.toFixed(1)}" width="${r.width.toFixed(1)}" height="${r.height.toFixed(1)}"/>`);
   });
-  var now = Date.now();
-  var nowX = now > from && now < to && to > win.to ? x(now) : undefined;
-  if (nowX !== undefined) {
-    marks.push(html`<line class="chart-now" x1="${nowX.toFixed(1)}" y1="0" x2="${nowX.toFixed(1)}" y2="${height}"/>`);
+  if (geo.nowX !== undefined) {
+    marks.push(html`<line class="chart-now" x1="${geo.nowX.toFixed(1)}" y1="0" x2="${geo.nowX.toFixed(1)}" y2="${height}"/>`);
   }
-  chartRegistry[chartId] = { coords: coords, width: CHART_VBW, height: height, aspect: opts.aspect, window: { from: from, to: to } };
+  chartRegistry[chartId] = { coords: geo.coords, width: CHART_VBW, height: height, aspect: opts.aspect, window: { from: geo.from, to: geo.to } };
   var inner = html`<svg viewBox="0 0 ${CHART_VBW} ${height}" preserveAspectRatio="none">${marks}
     <line class="chart-crosshair" x1="0" y1="0" x2="0" y2="${height}" style="display:none;"/></svg>
     <div class="chart-crosshair-dot" style="display:none;"></div>
-    ${opts.yLabels ? html`<div class="chart-ylabel chart-ylabel-top">${formatChartValue(opts.aspect, max)}</div>
-      <div class="chart-ylabel chart-ylabel-bottom">${formatChartValue(opts.aspect, min)}</div>` : ''}`;
-  var axis = opts.yLabels ? timeAxis(from, to, nowX) : '';
+    ${opts.yLabels ? html`<div class="chart-ylabel chart-ylabel-top">${formatChartValue(opts.aspect, geo.max)}</div>
+      <div class="chart-ylabel chart-ylabel-bottom">${formatChartValue(opts.aspect, geo.min)}</div>` : ''}`;
+  var axis = opts.yLabels ? timeAxis(geo.from, geo.to, geo.nowX) : '';
   return html`<div class="chart-wrap ${sizeClass}" data-chart-id="${chartId}">${inner}</div>${axis}`;
 }
 
 // A timeline: one band per run of a bool or string state over the window
-// (dashboard-logic.js, timelineRuns). A boolean is a filled band while
+// (logic.js, timelineRuns). A boolean is a filled band while
 // true and a faint one while false. A string's runs alternate two tints so
 // each change shows as an edge, and the tooltip names the value.
 export function buildTimeline(chartId, points, opts) {
@@ -419,7 +369,7 @@ function onChartPointerMove(wrap, reg, ev) {
   var px = rect.left + (c.x / reg.width) * rect.width;
   var py = rect.top + (c.y / reg.height) * rect.height;
   var span = reg.window ? reg.window.to - reg.window.from : 0;
-  showChartTooltip(px, py, formatChartValue(reg.aspect, c.value), formatChartTime(c.ts, span));
+  showChartTooltip(px, py, formatChartValue(reg.aspect, c.value), logic.formatChartTime(c.ts, span));
   sourcesColumn(reg, tx);
 }
 
@@ -469,8 +419,8 @@ function onBraidPointerMove(wrap, reg, ev, rect, tx) {
     rect.top + (near.point.y / reg.height) * rect.height,
     formatChartValue(reg.aspect, near.point.value),
     (near.issue.source ? logic.sourceLabel(near.issue.source) + ' \u00b7 ' : '') +
-      'issued ' + formatChartTime(near.issue.issued, span) + ' \u2014 for ' +
-      formatChartClock(near.point.ts, span)
+      'issued ' + logic.formatChartTime(near.issue.issued, span) + ' \u2014 for ' +
+      logic.formatChartClock(near.point.ts, span)
   );
   braidColumn(reg, when);
 }
@@ -484,7 +434,7 @@ function braidColumn(reg, when) {
   var col = when === null ? null : logic.columnAt(overlay.issues || [], when);
   if (!col) { el.textContent = ''; return; }
   var field = descriptorField(overlay.entity, overlay.aspect);
-  el.textContent = formatChartClock(when) + ' \u00b7 ' + col.count + ' forecast' +
+  el.textContent = logic.formatChartClock(when) + ' \u00b7 ' + col.count + ' forecast' +
     (col.count === 1 ? '' : 's') + ' \u00b7 ' +
     logic.formatAspect(overlay.aspect, field, col.min) + ' to ' +
     logic.formatAspect(overlay.aspect, field, col.max);
@@ -509,10 +459,10 @@ function onTimelinePointerMove(wrap, reg, ev) {
   var span = reg.window.to - reg.window.from;
   var ongoing = run.end >= reg.window.to;
   var when = ongoing
-    ? 'since ' + formatChartTime(run.start, span)
-    : formatChartTime(run.start, span) + ' → ' + formatChartClock(run.end, span);
+    ? 'since ' + logic.formatChartTime(run.start, span)
+    : logic.formatChartTime(run.start, span) + ' → ' + logic.formatChartClock(run.end, span);
   showChartTooltip(ev.clientX, rect.top, logic.formatAspect(reg.aspect || '', reg.field, run.value),
-    when + ' · ' + fmtDuration(run.end - run.start));
+    when + ' · ' + logic.fmtDuration(run.end - run.start));
 }
 
 function onChartPointerLeave(wrap) {
@@ -542,12 +492,4 @@ function showChartTooltip(x, y, valueText, timeText) {
 
 function hideChartTooltip() {
   byId('chart-tooltip').classList.remove('show');
-}
-
-export function fmtDuration(ms) {
-  var mins = Math.round(ms / 60000);
-  if (mins < 60) return mins + ' min';
-  var h = Math.floor(mins / 60), m = mins % 60;
-  if (h < 48) return m ? h + ' h ' + m + ' min' : h + ' h';
-  return Math.round(h / 24) + ' d';
 }

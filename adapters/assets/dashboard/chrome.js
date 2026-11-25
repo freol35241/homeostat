@@ -31,25 +31,6 @@ export function toast(msg) {
   toastTimer = setTimeout(function () { el.classList.remove('show'); }, 3200);
 }
 
-function healthWorstAndCount() {
-  var order = { open: 0, backoff: 1, starting: 2, stopped: 2, running: 3 };
-  var worst = null;
-  var okCount = 0;
-  var total = 0;
-  Object.keys(store.health).forEach(function (k) {
-    var h = store.health[k] || {};
-    total++;
-    var status = h.status || 'running';
-    if (status === 'running') okCount++;
-    var rank = order[status];
-    if (rank === undefined) rank = 3;
-    if (worst === null || rank < worst.rank) {
-      worst = { rank: rank, status: status, key: k };
-    }
-  });
-  return { worst: worst, ok: okCount, total: total };
-}
-
 export function statusGlyph(status) {
   if (status === 'running') return '●'; // ●
   if (status === 'backoff') return '▲'; // ▲
@@ -72,7 +53,7 @@ export function fmtOrDash(v) {
   return (v === undefined || v === null) ? '—' : String(v);
 }
 
-// The nav lists the file's views (dashboard-logic.js, viewsOf). Health
+// The nav lists the file's views (logic.js, viewsOf). Health
 // and Not shown are fixed entries below it, and the file cannot name
 // them as views.
 export function currentView() {
@@ -115,7 +96,7 @@ export function renderShell() {
   var activeTab = tabs.querySelector('.tabs-views button.active');
   if (activeTab && activeTab.scrollIntoView) activeTab.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 
-  var hw = healthWorstAndCount();
+  var hw = logic.healthWorstAndCount(store.health);
   var pin = byId('health-pin');
   var healthRows;
   if (hw.total === 0) {

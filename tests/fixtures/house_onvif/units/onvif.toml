@@ -18,5 +18,12 @@ service = "_onvif._tcp"
 [bus.publishes]
 state = { key = "home/state/{room}/{entity}/**" }
 
+# Short, so the rotation test waits seconds, not the default 40.
+[params.resubscribe_after_s]
+type = "int"
+default = 3
+constraint = { min = 1, max = 50 }
+editable_by = "owner"
+
 [entities]
 dir = "entities/onvif/"

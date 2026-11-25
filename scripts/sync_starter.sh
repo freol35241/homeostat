@@ -4,6 +4,10 @@
 # ~/house`). Copies kept by hand drift from the release they claim to be,
 # so this script generates them.
 #
+# It copies scripts, lockfiles and assets, not manifests. A unit's
+# manifest is the house's own file, and adapters/<unit>.toml is the
+# template it was copied from (docs/design.md#the-starter-house).
+#
 #   scripts/sync_starter.sh          rewrite the copies
 #   scripts/sync_starter.sh --check  fail if any copy is stale (CI)
 #
@@ -26,7 +30,7 @@
 set -euo pipefail
 
 # Bumped with the starter's compose image at each release.
-SDK_TAG="v0.23.0"
+SDK_TAG="v0.24.0"
 
 # The tag's version, and the same version as Python spells it (py_version
 # in lib/sdk_pin.sh says why they differ).
@@ -52,7 +56,6 @@ recorder.py:recorder.py
 arbiter.py:arbiter.py
 dashboard.py:dashboard.py
 dashboard.html:dashboard.html
-assets/dashboard-logic.js:assets/dashboard-logic.js
 assets/dashboard.css:assets/dashboard.css
 assets/video-rtc.js:assets/video-rtc.js
 assets/homeostat-mark.svg:assets/homeostat-mark.svg

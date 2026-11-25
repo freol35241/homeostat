@@ -1,6 +1,6 @@
 """Key-expression expansion in the automation Context: pure, no bus.
 
-`_expand` is what makes a unit's subscriptions agree with what `plan`
+`bindings._expand` is what makes a unit's subscriptions agree with what `plan`
 printed for it (src/expand.rs), so these pin the four rules that matter —
 templates per bound entity, zones per member room, the two never at once,
 and no duplicate expression.
@@ -12,15 +12,16 @@ import datetime
 import unittest
 import zoneinfo
 from pathlib import Path
+from unittest import mock
 
 from homeostat import house as house_mod
 from homeostat import keys
 from homeostat.automation import (
     Context,
     HistoryUnavailable,
-    _expand,
     _house_has_recorder,
 )
+from homeostat.bindings import _expand
 from homeostat.house import Entity
 from homeostat.intervals import IntervalsUncovered
 from homeostat.session import QueryError, QueryTimeout
@@ -307,10 +308,45 @@ class RecorderPresenceTest(unittest.TestCase):
     house must start on its defaults at once, not after the timeout."""
 
     def test_a_house_running_a_recorder_is_recognised(self):
-        self.assertTrue(_house_has_recorder(FIXTURES / "house_restore"))
+        self.assertTrue(_house_has_recorder(house_mod.load_house(FIXTURES / "house_restore")))
 
     def test_a_house_without_one_is_too(self):
-        self.assertFalse(_house_has_recorder(FIXTURES / "house_templates"))
+        self.assertFalse(_house_has_recorder(house_mod.load_house(FIXTURES / "house_templates")))
+
+
+class HouseTest(unittest.TestCase):
+    """Every Context feature that needs the house shares one parse of it,
+    made on first use, and a parse that fails is tried again."""
+
+    def test_the_house_is_parsed_once_on_first_use(self):
+        files = {
+            f"entities/{UNIT}/gauge.toml": house_entity(
+                "garden", "sensor", "[aspects]\nprecipitation = { interval_s = 3600 }\n"
+            ),
+            "units/recorder.toml": RECORDER,
+        }
+        body = (
+            f'[entities]\ndir = "entities/{UNIT}/"\n'
+            '[bus.publishes]\nrain = { key = "home/state/garden/gauge/precipitation" }\n'
+        )
+        with mock.patch.object(house_mod, "load_house", wraps=house_mod.load_house) as load_house:
+            ctx = context(self, body, files)
+            self.assertEqual(load_house.call_count, 0)
+            self.assertTrue(ctx._has_recorder())
+            self.assertFalse(ctx._is_press("home/state/garden/gauge/action"))
+            self.assertEqual(ctx._interval_of("gauge", "precipitation"), 3600)
+            self.assertEqual([e.name for e in ctx.entities], ["gauge"])
+            self.assertIs(ctx.house, ctx.house)
+        self.assertEqual(load_house.call_count, 1)
+
+    def test_a_failed_parse_is_not_kept(self):
+        ctx = context(self, "", {"units/half.toml": "[unit\nname ="})
+        with mock.patch.object(house_mod, "load_house", wraps=house_mod.load_house) as load_house:
+            with self.assertRaises(ValueError):
+                ctx.house  # noqa: B018
+            (ctx._root / "units" / "half.toml").write_text(RECORDER)
+            self.assertEqual(sorted(u.name for u in ctx.house.units), [UNIT, "recorder"])
+        self.assertEqual(load_house.call_count, 2)
 
 
 class RestoreWaitTest(unittest.TestCase):

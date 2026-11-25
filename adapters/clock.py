@@ -22,11 +22,9 @@ startup is a startup error, visible through the supervisor's backoff.
 """
 
 import datetime
-import signal
-import threading
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from homeostat import automation
+from homeostat import automation, shutdown_event
 
 
 def next_boundary(now_utc: datetime.datetime) -> datetime.datetime:
@@ -47,9 +45,7 @@ def main():
     ctx = automation.context()
     zone = ZoneInfo(ctx.params.timezone)
 
-    stop = threading.Event()
-    signal.signal(signal.SIGTERM, lambda *_: stop.set())
-    signal.signal(signal.SIGINT, lambda *_: stop.set())
+    stop = shutdown_event()
 
     last_date = None
 

@@ -22,8 +22,6 @@ person decided, and the only record of it.
 """
 
 import json
-import signal
-import threading
 import time
 
 from homeostat import session
@@ -48,10 +46,7 @@ def main():
     queryable = sess.declare_queryable("home/history/**", answer)
     sess.ready()
 
-    stop = threading.Event()
-    signal.signal(signal.SIGTERM, lambda *_: stop.set())
-    signal.signal(signal.SIGINT, lambda *_: stop.set())
-    stop.wait()
+    session.wait_for_shutdown()
     queryable.undeclare()
     sess.close()
 

@@ -408,32 +408,32 @@ reached only on the LAN or over WireGuard (see
 ## Status
 
 Pre-1.0. What works today: the validator, `homeostat plan` and `apply`,
-the supervisor, the Python SDK, the recorder (history, forecasts and
-archives), the arbiter, the persons automation (one person from the
+the supervisor, the Python SDK, the clock, the recorder (history,
+forecasts and archives), the arbiter, the buttons service (a button's
+gestures as family commands), the persons automation (one person from the
 trackers each carries), the dashboard and the read-only MCP server.
 There are adapters for Zigbee2MQTT, ESPHome, OwnTracks, an IVT490 heat
 pump, Aduro pellet burners, ONVIF cameras through go2rtc, OpenWrt routers,
-433 MHz transmitters and ntfy notifications. Voice control is planned
+433 MHz transmitters, ntfy notifications and the companion Android app
+([protocol](docs/companion-protocol.md)). Voice control is planned
 ([design record](docs/design.md#voice)).
 
 ## Development
 
-CI runs these, in this order. The devcontainer has everything they need:
-`mosquitto`, `uv`, `node`, and a browser from
-`scripts/install_browser.sh`.
+`scripts/check.sh` runs the checks CI runs, in CI's order, with the tool
+versions CI pins. CI calls it once per check. Run with no arguments, it
+first resolves the units' Python environments with `scripts/prewarm.sh`,
+then runs every check. Name checks to run only those:
 
 ```
-cargo fmt --check
-cargo clippy --all-targets -- -D warnings
-cargo test
-uv run --no-project --with-editable sdk/python --with 'paho-mqtt>=2,<3' python -m unittest discover sdk/python/tests
-uv run --no-project --with-editable sdk/python --with 'paho-mqtt>=2,<3' --with pyright==1.1.414 pyright sdk/python/homeostat
-uv run --no-project --with-editable sdk/python --with 'paho-mqtt>=2,<3' python -m unittest discover tests/adapters
-uvx ruff@0.16.7 check adapters sdk scripts tests/adapters tests/browser
-node --test tests/js/*.test.js
-scripts/sync_starter.sh --check
-uv run --script tests/browser/run.py
+scripts/check.sh
+scripts/check.sh adapters ruff
 ```
+
+The checks are `fmt`, `clippy`, `cargo-test`, `sdk`, `pyright`, `adapters`,
+`ruff`, `js`, `starter`, `smoke-bare` and `browser`. The devcontainer has
+everything they need: `mosquitto`, `uv`, `node`, and a browser from
+`scripts/install_browser.sh`.
 
 If you are writing a unit, [docs/manifest.md](docs/manifest.md) describes
 every manifest field, `homeostat explain` gives the validator's rules, and
@@ -442,7 +442,7 @@ every manifest field, `homeostat explain` gives the validator's rules, and
 The integration tests run the real binary against a live supervisor, a
 real mosquitto broker on a free port, a real SQLite store, and fake device
 servers that speak each device's protocol. Each adapter has its own suite
-in `tests/<adapter>.rs`. `tests/corpus/invalid/` pairs broken houses with
+in `tests/it/<adapter>.rs`. `tests/corpus/invalid/` pairs broken houses with
 the exact list of errors each should produce, and `tests/browser/` runs
 the dashboard in a real browser against canned data. CI also builds the
 container image and runs `scripts/smoke_image.sh`, `smoke_starter.sh` and

@@ -1,5 +1,5 @@
 // Tests for the dashboard's extracted decision logic
-// (adapters/assets/dashboard-logic.js), run by `node --test tests/js`,
+// (adapters/assets/dashboard/logic/index.js), run by `node --test tests/js`,
 // Node's built-in runner, with no packages. The DOM wiring
 // (adapters/assets/dashboard/) is covered by the browser suite
 // (tests/browser), the server-side one (tests/it/dashboard.rs) and manual
@@ -9,7 +9,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 
-const logic = require(path.join(__dirname, '../../adapters/assets/dashboard-logic.js'));
+const logic = require(path.join(__dirname, '../../adapters/assets/dashboard/logic/index.js'));
 // The model's `vocabulary` block. tests/it/dashboard.rs checks that the
 // browser fixture's is the one /api/model serves, so it is read from there.
 const VOCABULARY = require(path.join(__dirname, '../browser/fixtures/model.json')).vocabulary;
@@ -349,13 +349,13 @@ test('deltas set single keys and report their type', () => {
 
 test('events prepend, stamp a missing ts, and cap at 200', () => {
   const store = freshStore();
-  logic.applyMessage(store, { type: 'event', key: 'e1', value: {}, ts: 111 }, 999);
-  logic.applyMessage(store, { type: 'event', key: 'e2', value: {} }, 999);
+  logic.applyMessage(store, { type: 'event', key: 'e1', value: {}, ts: 111 }, 999000);
+  logic.applyMessage(store, { type: 'event', key: 'e2', value: {} }, 999000);
   assert.equal(store.events[0].key, 'e2', 'newest first');
-  assert.equal(store.events[0].ts, 999, 'stamped from the clock argument');
-  assert.equal(store.events[1].ts, 111, 'a carried ts wins');
+  assert.equal(store.events[0].ts, 999000, 'stamped from the clock argument');
+  assert.equal(store.events[1].ts, 111000, 'a carried ts wins, in ms');
   for (let i = 0; i < 250; i++) {
-    logic.applyMessage(store, { type: 'event', key: 'e' + i, value: {} }, 999);
+    logic.applyMessage(store, { type: 'event', key: 'e' + i, value: {} }, 999000);
   }
   assert.equal(store.events.length, 200);
 });
@@ -366,6 +366,24 @@ test('unrecognized messages apply nothing', () => {
   assert.equal(logic.applyMessage(store, {}), null);
   assert.equal(logic.applyMessage(store, { type: 'mystery', key: 'k' }), null);
   assert.deepEqual(store, freshStore());
+});
+
+// ---- bus keys ----
+
+test('state, config and health keys are built from their parts', () => {
+  assert.equal(logic.stateKey('hall', 'lamp', 'on'), 'home/state/hall/lamp/on');
+  assert.equal(logic.stateKey('hall', 'lamp', ''), 'home/state/hall/lamp/', 'the prefix of every aspect');
+  assert.equal(logic.configKey('heating', 'comfort'), 'home/config/heating/comfort');
+  assert.equal(logic.healthKey('heating'), 'home/health/heating');
+});
+
+test('a state key parses to its parts, and any other key to null', () => {
+  assert.deepEqual(logic.parseStateKey('home/state/hall/lamp/on'), { room: 'hall', entity: 'lamp', aspect: 'on' });
+  assert.deepEqual(logic.parseStateKey('home/state/hall/lamp/on/extra'), { room: 'hall', entity: 'lamp', aspect: 'on' },
+    'segments past the aspect are ignored');
+  assert.equal(logic.parseStateKey('home/state/hall/lamp'), null);
+  assert.equal(logic.parseStateKey('home/cmd/hall/lamp/on'), null);
+  assert.equal(logic.parseStateKey('home/config/heating/comfort'), null);
 });
 
 // ---- occupancy and people helpers ----
@@ -1045,6 +1063,25 @@ test('brightness converts to the percent its controls show and back', () => {
   assert.equal(logic.cmdTolerance('on', VOCABULARY), 0);
 });
 
+test('a climate step lands on a tenth', () => {
+  assert.equal(logic.nextStep('climate', 21.1, 0.2), 21.3);
+  assert.equal(logic.nextStep('climate', 20, -0.5), 19.5);
+  assert.equal(logic.nextStep('climate', 0.7, 0.1), 0.8, 'not 0.7999999999999999');
+});
+
+test('a brightness step moves in percent and stays on the scale', () => {
+  assert.equal(logic.nextStep('brightness', 127, 10, null, VOCABULARY), 152, '60 % of 254');
+  assert.equal(logic.nextStep('brightness', 250, 10, null, VOCABULARY), 254, 'not past 100 %');
+  assert.equal(logic.nextStep('brightness', 5, -10, null, VOCABULARY), 0, 'not below 0 %');
+});
+
+test('an aspect step lands on a hundredth within its constraint', () => {
+  assert.equal(logic.nextStep('aspect', 0.1, 0.2, {}), 0.3);
+  assert.equal(logic.nextStep('aspect', 9.5, 1, { min: 0, max: 10 }), 10);
+  assert.equal(logic.nextStep('aspect', 0.5, -1, { min: 0, max: 10 }), 0);
+  assert.equal(logic.nextStep('aspect', 99, 5, { min: 0 }), 104, 'an open end is not a bound');
+});
+
 test('the hold words the page names are the vocabulary\'s', () => {
   assert.ok(VOCABULARY.hold_words.includes(logic.HOLD_RELEASE));
   assert.ok(VOCABULARY.hold_words.includes(logic.HOLD_REPORT));
@@ -1597,14 +1634,15 @@ test('a forecast extends the axis rightward and the past keeps its width', () =>
       to: Date.parse('2026-09-25T18:00:00Z'),
     },
   }];
-  const geo = logic.chartGeometry(record, W, H, PAD, WIN, forecast);
+  const now = Date.parse('2026-09-25T12:00:00Z');
+  const geo = logic.chartGeometry(record, W, H, PAD, WIN, forecast, null, null, now);
   assert.equal(geo.to, Date.parse('2026-09-25T18:00:00Z'), 'the horizon extends the domain');
   assert.equal(geo.from, WIN.from, 'the window still starts where it did');
   assert.equal(geo.max, 25, 'one value scale over record and belief together');
   assert.equal(geo.forecast.length, 1);
   assert.equal(geo.forecast[0].source, 'nordpool');
   // now sits two thirds along an 18-hour domain that began at midnight
-  assert.ok(geo.nowX === undefined || (geo.nowX > PAD && geo.nowX < W - PAD));
+  assert.equal(geo.nowX, PAD + (2 / 3) * (W - 2 * PAD));
 });
 
 test('a belief older than the span it has left is marked on the line', () => {
@@ -1619,9 +1657,9 @@ test('a belief older than the span it has left is marked on the line', () => {
   }];
   const now = Date.now();
   const soon = new Date(now + 3600e3).toISOString();
-  const fresh = logic.chartGeometry(record, W, H, PAD, WIN, stale(new Date(now - 60e3).toISOString(), soon));
+  const fresh = logic.chartGeometry(record, W, H, PAD, WIN, stale(new Date(now - 60e3).toISOString(), soon), null, null, now);
   assert.equal(fresh.forecast[0].stale, false);
-  const old = logic.chartGeometry(record, W, H, PAD, WIN, stale(new Date(now - 30 * 3600e3).toISOString(), soon));
+  const old = logic.chartGeometry(record, W, H, PAD, WIN, stale(new Date(now - 30 * 3600e3).toISOString(), soon), null, null, now);
   assert.equal(old.forecast[0].stale, true);
 });
 
@@ -2017,23 +2055,23 @@ test('without the file, a generated view says how to keep it', () => {
 test('recorded and live events merge newest first, each listed once', () => {
   const key = 'home/health/porch/event';
   const recorded = [
-    { key, value: { kind: 'paused' }, ts: 1000.2 },
-    { key, value: { kind: 'resumed' }, ts: 1100.5 },
+    { key, value: { kind: 'paused' }, ts: 1000200 },
+    { key, value: { kind: 'resumed' }, ts: 1100500 },
   ];
   const live = [
-    { key, value: { kind: 'resumed' }, ts: 1101 }, // the same event, seen live
-    { key, value: { kind: 'paused' }, ts: 1200 },
+    { key, value: { kind: 'resumed' }, ts: 1101000 }, // the same event, seen live
+    { key, value: { kind: 'paused' }, ts: 1200000 },
   ];
   const merged = logic.mergeUnitEvents(recorded, live);
-  assert.deepEqual(merged.map((e) => [e.value.kind, Math.round(e.ts)]),
-    [['paused', 1200], ['resumed', 1101], ['paused', 1000]]);
+  assert.deepEqual(merged.map((e) => [e.value.kind, e.ts]),
+    [['paused', 1200000], ['resumed', 1100500], ['paused', 1000200]]);
 });
 
 test('an event that repeats later is not mistaken for the recorded one', () => {
   const key = 'home/health/porch/event';
   const merged = logic.mergeUnitEvents(
-    [{ key, value: { kind: 'paused' }, ts: 1000 }],
-    [{ key, value: { kind: 'paused' }, ts: 1060 }]
+    [{ key, value: { kind: 'paused' }, ts: 1000000 }],
+    [{ key, value: { kind: 'paused' }, ts: 1060000 }]
   );
   assert.equal(merged.length, 2);
   assert.deepEqual(logic.mergeUnitEvents(null, null), []);
@@ -2046,11 +2084,11 @@ function timelineRaw(overrides) {
     value: { value, priority: 'automation', actor: 'evening_lights', id },
   });
   return Object.assign({
-    params: [{ ts: 150, key: 'home/config/evening_lights/off_time', value: '22:30' }],
-    commands: [cmd(300, false, 'c1')],
+    params: [{ ts: 150000, key: 'home/config/evening_lights/off_time', value: '22:30' }],
+    commands: [cmd(300000, false, 'c1')],
     answers: [],
-    readbacks: [{ entity: 'lamp', aspect: 'on', points: [{ ts: 50, value: true }, { ts: 302, value: false }] }],
-    events: [{ ts: 400, key: 'home/health/evening_lights/event', value: { kind: 'paused' } }],
+    readbacks: [{ entity: 'lamp', aspect: 'on', points: [{ ts: 50000, value: true }, { ts: 302000, value: false }] }],
+    events: [{ ts: 400000, key: 'home/health/evening_lights/event', value: { kind: 'paused' } }],
   }, overrides || {});
 }
 const timelineModel = { entities: [{ name: 'lamp', room: 'livingroom', capability: 'light' }], vocabulary: VOCABULARY };
@@ -2058,7 +2096,7 @@ const timelineModel = { entities: [{ name: 'lamp', room: 'livingroom', capabilit
 test('the timeline lists writes, commands and events newest first', () => {
   const t = logic.unitTimeline(timelineRaw(), timelineModel, {}, 'evening_lights');
   assert.deepEqual(t.map((e) => [e.type, e.ts]),
-    [['event', 400], ['command', 300], ['param', 150]]);
+    [['event', 400000], ['command', 300000], ['param', 150000]]);
   assert.equal(t.find((e) => e.type === 'param').param, 'off_time');
 });
 
@@ -2066,14 +2104,14 @@ test('a command the state reached within its wait is applied, one it did not is 
   const applied = logic.unitTimeline(timelineRaw(), timelineModel, {}, 'evening_lights');
   assert.equal(applied.find((e) => e.type === 'command').outcome, 'applied');
   const late = logic.unitTimeline(timelineRaw({
-    readbacks: [{ entity: 'lamp', aspect: 'on', points: [{ ts: 50, value: true }, { ts: 900, value: false }] }],
+    readbacks: [{ entity: 'lamp', aspect: 'on', points: [{ ts: 50000, value: true }, { ts: 900000, value: false }] }],
   }), timelineModel, {}, 'evening_lights');
   assert.equal(late.find((e) => e.type === 'command').outcome, 'no answer', 'after the light wait of 8 s');
 });
 
 test('a command to a value the aspect already had says so, and is not called applied', () => {
   const t = logic.unitTimeline(timelineRaw({
-    readbacks: [{ entity: 'lamp', aspect: 'on', points: [{ ts: 50, value: false }] }],
+    readbacks: [{ entity: 'lamp', aspect: 'on', points: [{ ts: 50000, value: false }] }],
   }), timelineModel, {}, 'evening_lights');
   assert.equal(t.find((e) => e.type === 'command').outcome, 'already');
 });
@@ -2084,51 +2122,51 @@ test('a change after the command lands does not undo its outcome', () => {
     value: { value, priority: 'automation', actor: 'evening_lights', id },
   });
   const quick = logic.unitTimeline(timelineRaw({
-    commands: [cmd(300, false, 'c1'), cmd(302, true, 'c2')],
-    readbacks: [{ entity: 'lamp', aspect: 'on', points: [{ ts: 50, value: true }, { ts: 301, value: false }, { ts: 303, value: true }] }],
+    commands: [cmd(300000, false, 'c1'), cmd(302000, true, 'c2')],
+    readbacks: [{ entity: 'lamp', aspect: 'on', points: [{ ts: 50000, value: true }, { ts: 301000, value: false }, { ts: 303000, value: true }] }],
   }), timelineModel, {}, 'evening_lights');
   assert.deepEqual(quick.filter((e) => e.type === 'command').map((e) => e.outcome), ['applied', 'applied']);
   const taken = logic.unitTimeline(timelineRaw({
-    answers: [{ ts: 305, key: 'home/health/arbiter/event', value: { kind: 'preempt', entity: 'lamp', aspect: 'on',
+    answers: [{ ts: 305000, key: 'home/health/arbiter/event', value: { kind: 'preempt', entity: 'lamp', aspect: 'on',
       from_actor: 'evening_lights', to_actor: 'dashboard', to_priority: 'manual' } }],
-    readbacks: [{ entity: 'lamp', aspect: 'on', points: [{ ts: 50, value: true }, { ts: 301, value: false }, { ts: 306, value: true }] }],
+    readbacks: [{ entity: 'lamp', aspect: 'on', points: [{ ts: 50000, value: true }, { ts: 301000, value: false }, { ts: 306000, value: true }] }],
   }), timelineModel, {}, 'evening_lights');
   assert.equal(taken.find((e) => e.type === 'command').outcome, 'applied', 'it held until taken over');
 });
 
 test('a brightness one step off matches, as it does for the page', () => {
   const t = logic.unitTimeline(timelineRaw({
-    commands: [{ ts: 300, key: 'home/cmd/livingroom/lamp/brightness',
+    commands: [{ ts: 300000, key: 'home/cmd/livingroom/lamp/brightness',
       value: { value: 128, priority: 'automation', actor: 'evening_lights', id: 'c1' } }],
-    readbacks: [{ entity: 'lamp', aspect: 'brightness', points: [{ ts: 50, value: 10 }, { ts: 301, value: 127 }] }],
+    readbacks: [{ entity: 'lamp', aspect: 'brightness', points: [{ ts: 50000, value: 10 }, { ts: 301000, value: 127 }] }],
   }), timelineModel, {}, 'evening_lights');
   assert.equal(t.find((e) => e.type === 'command').outcome, 'applied');
 });
 
 test('a command older than what a capped query kept is not judged', () => {
-  const answersCut = logic.unitTimeline(timelineRaw({ answers_from: 310 }), timelineModel, {}, 'evening_lights');
+  const answersCut = logic.unitTimeline(timelineRaw({ answers_from: 310000 }), timelineModel, {}, 'evening_lights');
   assert.equal(answersCut.find((e) => e.type === 'command').outcome, 'unknown');
   const stateCut = logic.unitTimeline(timelineRaw({
-    readbacks: [{ entity: 'lamp', aspect: 'on', from: 310, points: [{ ts: 310, value: false }] }],
+    readbacks: [{ entity: 'lamp', aspect: 'on', from: 310000, points: [{ ts: 310000, value: false }] }],
   }), timelineModel, {}, 'evening_lights');
   assert.equal(stateCut.find((e) => e.type === 'command').outcome, 'unknown');
   const answered = logic.unitTimeline(timelineRaw({
-    answers_from: 310,
-    answers: [{ ts: 301, key: 'home/health/arbiter/event', value: { kind: 'refuse', cmd_id: 'c1' } }],
+    answers_from: 310000,
+    answers: [{ ts: 301000, key: 'home/health/arbiter/event', value: { kind: 'refuse', cmd_id: 'c1' } }],
   }), timelineModel, {}, 'evening_lights');
   assert.equal(answered.find((e) => e.type === 'command').outcome, 'refused', 'a kept answer still counts');
 });
 
 test('events naming the command say refused or dropped, and by whom', () => {
   const refused = logic.unitTimeline(timelineRaw({
-    answers: [{ ts: 301, key: 'home/health/arbiter/event',
+    answers: [{ ts: 301000, key: 'home/health/arbiter/event',
       value: { kind: 'refuse', cmd_id: 'c1', holder_actor: 'dashboard', holder_priority: 'manual' } }],
   }), timelineModel, {}, 'evening_lights');
   const r = refused.find((e) => e.type === 'command');
   assert.equal(r.outcome, 'refused');
   assert.deepEqual([r.by, r.priority], ['dashboard', 'manual']);
   const dropped = logic.unitTimeline(timelineRaw({
-    answers: [{ ts: 301, key: 'home/health/zigbee/event',
+    answers: [{ ts: 301000, key: 'home/health/zigbee/event',
       value: { kind: 'drop', cmd_id: 'c1', reason: 'invalid-command' } }],
   }), timelineModel, {}, 'evening_lights');
   const d = dropped.find((e) => e.type === 'command');
@@ -2138,9 +2176,9 @@ test('events naming the command say refused or dropped, and by whom', () => {
 test('a later command that displaced its hold is listed as taken over', () => {
   const t = logic.unitTimeline(timelineRaw({
     answers: [
-      { ts: 500, key: 'home/health/arbiter/event', value: { kind: 'preempt', entity: 'lamp', aspect: 'on',
+      { ts: 500000, key: 'home/health/arbiter/event', value: { kind: 'preempt', entity: 'lamp', aspect: 'on',
         from_actor: 'evening_lights', to_actor: 'dashboard', to_priority: 'manual' } },
-      { ts: 600, key: 'home/health/arbiter/event', value: { kind: 'preempt', entity: 'lamp', aspect: 'on',
+      { ts: 600000, key: 'home/health/arbiter/event', value: { kind: 'preempt', entity: 'lamp', aspect: 'on',
         from_actor: 'someone_else', to_actor: 'dashboard', to_priority: 'manual' } },
     ],
   }), timelineModel, {}, 'evening_lights');
@@ -2151,7 +2189,7 @@ test('a later command that displaced its hold is listed as taken over', () => {
 
 test('a decision event is listed as why its rule acted', () => {
   const t = logic.unitTimeline(timelineRaw({
-    events: [{ ts: 450, key: 'home/health/evening_lights/event',
+    events: [{ ts: 450000, key: 'home/health/evening_lights/event',
       value: { kind: 'decision', rule: 'night_off', outcome: 'waiting: someone is home' } }],
   }), timelineModel, {}, 'evening_lights');
   const d = t.find((e) => e.type === 'decision');
@@ -2163,7 +2201,7 @@ test('a release or a report reaches no device, so nothing judges it', () => {
   const sent = (ts, envelope) => ({ ts, key: 'home/cmd/livingroom/lamp/on',
     value: Object.assign({ priority: 'manual', actor: 'remote' }, envelope) });
   const t = logic.unitTimeline(timelineRaw({
-    commands: [sent(300, { hold: 'release' }), sent(310, { value: true, hold: 'report' })],
+    commands: [sent(300000, { hold: 'release' }), sent(310000, { value: true, hold: 'report' })],
   }), timelineModel, {}, 'remote');
   const outcomes = t.filter((e) => e.type === 'command').map((e) => e.outcome);
   assert.deepEqual(outcomes, ['reported', 'released']);
@@ -2172,13 +2210,13 @@ test('a release or a report reaches no device, so nothing judges it', () => {
 test('a press is timed when it arrives, and a snapshot carries the times the dashboard knows', () => {
   const key = 'home/state/hall/remote/action';
   const store = { state: {}, actionAt: {} };
-  logic.applyMessage(store, { type: 'snapshot', state: { [key]: 'single' }, action_at: { [key]: 100 } }, 500);
-  assert.equal(store.actionAt[key], 100, 'the snapshot says when, not the page');
-  logic.applyMessage(store, { type: 'state', key, value: 'single', at: 590 }, 600);
-  assert.equal(store.actionAt[key], 590, 'a repeat is a new press, timed by the dashboard');
-  logic.applyMessage(store, { type: 'state', key, value: 'single' }, 650);
-  assert.equal(store.actionAt[key], 650, 'without a time, on arrival');
-  logic.applyMessage(store, { type: 'state', key: 'home/state/hall/lamp/on', value: true, at: 700 }, 700);
+  logic.applyMessage(store, { type: 'snapshot', state: { [key]: 'single' }, action_at: { [key]: 100 } }, 500000);
+  assert.equal(store.actionAt[key], 100000, 'the snapshot says when, not the page');
+  logic.applyMessage(store, { type: 'state', key, value: 'single', at: 590 }, 600000);
+  assert.equal(store.actionAt[key], 590000, 'a repeat is a new press, timed by the dashboard');
+  logic.applyMessage(store, { type: 'state', key, value: 'single' }, 650000);
+  assert.equal(store.actionAt[key], 650000, 'without a time, on arrival');
+  logic.applyMessage(store, { type: 'state', key: 'home/state/hall/lamp/on', value: true, at: 700 }, 700000);
   assert.deepEqual(Object.keys(store.actionAt), [key]);
 });
 
@@ -2206,4 +2244,168 @@ test("the units' holds are the arbitration document's, and the family's hold is 
   const store = { arbitration: {} };
   logic.applyMessage(store, { type: 'arbitration', key: 'home/arbitration/arbiter', value: arbitration['home/arbitration/arbiter'] }, 0);
   assert.equal(logic.unitHolds(store.arbitration, NOW).length, 1);
+});
+
+// ---- the line under a control once its command has ended ----
+
+const fmtCmd = (v) => '<' + v + '>';
+
+test('each ended command is worded with its tone', () => {
+  const ended = (o) => logic.outcomeStatus(Object.assign({ value: 21 }, o), fmtCmd, null, 'Heating');
+  assert.deepEqual(ended({ outcome: 'confirmed' }), { tone: 'ok', text: '✓ <21>' });
+  assert.deepEqual(ended({ outcome: 'adjusted', seen: 20 }),
+    { tone: 'warn', text: 'The device settled on <20> (asked <21>)' });
+  assert.deepEqual(ended({ outcome: 'rejected', reason: 'device-unavailable' }),
+    { tone: 'bad', text: 'The device is unavailable · <21>' });
+  assert.deepEqual(ended({ outcome: 'rejected', reason: 'out of range' }),
+    { tone: 'bad', text: 'Not taken: out of range · <21>' });
+  assert.deepEqual(ended({ outcome: 'unheard' }),
+    { tone: 'bad', text: 'Nothing is listening: Heating is not running · <21> went nowhere' });
+  assert.deepEqual(logic.outcomeStatus({ outcome: 'unheard', value: 21 }, fmtCmd, null, null),
+    { tone: 'bad', text: 'Nothing is listening · <21> went nowhere' }, 'an entity the model does not have');
+  assert.deepEqual(ended({ outcome: 'unconfirmed' }), { tone: 'bad', text: 'No answer for <21>' });
+  assert.deepEqual(ended({ outcome: 'unconfirmed', seen: 19 }), { tone: 'bad', text: 'No answer for <21> · still <19>' });
+  assert.deepEqual(ended({ outcome: 'failed', reason: 'HTTP 500' }), { tone: 'bad', text: 'HTTP 500' });
+  assert.equal(ended({ outcome: 'sending' }), null);
+});
+
+test('a held command names who holds it and until when', () => {
+  const held = (hold, actor) => logic.outcomeStatus({ outcome: 'held', value: true, by: 'arbiter', actor: actor }, fmtCmd, hold, null).text;
+  assert.equal(held(null), 'Held by arbiter · <true> not sent');
+  assert.equal(held(null, 'planner'), 'Held by arbiter (planner) · <true> not sent');
+  assert.equal(held({ nextChange: true, until: NOW }), 'Held by arbiter until the next change · <true> not sent');
+  assert.equal(held({ until: Infinity }), 'Held by arbiter · <true> not sent', 'an open-ended hold has no end to name');
+  const clock = new Date(NOW).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  assert.equal(held({ until: NOW }), 'Held by arbiter until ' + clock + ' · <true> not sent');
+  assert.equal(logic.outcomeStatus({ outcome: 'held', value: 1, by: 'a' }, fmtCmd, null, null).tone, 'warn');
+});
+
+test('a commanded value is worded as its control words it', () => {
+  assert.equal(logic.formatCmdValue('message', 'dinner', null, VOCABULARY), '“dinner”');
+  assert.equal(logic.formatCmdValue('alert', 'x'.repeat(41), null, VOCABULARY),
+    'alert “' + 'x'.repeat(39) + '…”', 'a long text is cut to 40 characters');
+  assert.equal(logic.formatCmdValue('brightness', 127, null, VOCABULARY), '50%');
+  assert.equal(logic.formatCmdValue('locked', false, null, VOCABULARY), 'unlocked');
+  assert.equal(logic.formatCmdValue('on', true, null, VOCABULARY), 'on');
+  assert.equal(logic.formatCmdValue('setpoint', 21, null, VOCABULARY), '21.0°', 'a setpoint with no descriptor');
+  const field = { type: 'number', unit: '°C' };
+  assert.equal(logic.formatCmdValue('setpoint', 21, field, VOCABULARY), logic.formatAspect('setpoint', field, 21));
+  assert.equal(logic.formatCmdValue('level', 3, null, VOCABULARY), '3.0');
+});
+
+test('a command warns early when its owner is down or its device unavailable', () => {
+  assert.equal(logic.commandWarning({ status: 'backoff' }, 'Zigbee', false), 'Zigbee is backoff', 'the owner comes first');
+  assert.equal(logic.commandWarning({ status: 'running' }, 'Zigbee', false), 'the device reports itself unavailable');
+  assert.equal(logic.commandWarning(undefined, 'Zigbee', undefined), '');
+  assert.equal(logic.commandWarning({}, 'Zigbee', true), '');
+});
+
+test("a refused request's text is the reply's error when it is JSON", () => {
+  assert.equal(logic.errText(new Error('{"error":"not editable"}')), 'not editable');
+  assert.equal(logic.errText(new Error('HTTP 502')), 'HTTP 502');
+  assert.equal(logic.errText(new Error('{"ok":false}')), '{"ok":false}');
+  assert.equal(logic.errText('offline'), 'offline');
+});
+
+// ---- bars over intervals ----
+
+const round3 = (o) => JSON.parse(JSON.stringify(o, (k, v) => (typeof v === 'number' ? Math.round(v * 1000) / 1000 : v)));
+
+test('bars span their intervals on a scale from zero, with the forecast stacked on top', () => {
+  const bars = [
+    { from: 0, to: HOUR, observed: 2, forecast: 0 },
+    { from: HOUR, to: 2 * HOUR, observed: 1, forecast: 3 },
+    { from: 2 * HOUR, to: 3 * HOUR, observed: 0, forecast: 2 },
+  ];
+  const geo = logic.barGeometry(bars, 400, 36, 3, { from: 0, to: 2 * HOUR }, 1.5 * HOUR);
+  assert.deepEqual(round3(geo), {
+    from: 0, to: 3 * HOUR, min: 0, max: 4,
+    rects: [
+      { forecast: false, x: 3, y: 18, width: 130.333, height: 15 },
+      { forecast: false, x: 134.333, y: 25.5, width: 130.333, height: 7.5 },
+      { forecast: true, x: 134.333, y: 3, width: 130.333, height: 22.5 },
+      { forecast: true, x: 265.667, y: 18, width: 130.333, height: 15 },
+    ],
+    coords: [
+      { x: 68.167, y: 18, value: 2, ts: 0 },
+      { x: 199.5, y: 3, value: 4, ts: HOUR },
+      { x: 330.833, y: 18, value: 2, ts: 2 * HOUR },
+    ],
+    nowX: 200,
+  });
+});
+
+test('the now-rule is drawn only inside bars that reach past the window', () => {
+  const bars = [{ from: 0, to: HOUR, observed: 1, forecast: 0 }, { from: HOUR, to: 2 * HOUR, observed: 0, forecast: 1 }];
+  const at = (win, now) => logic.barGeometry(bars, 400, 36, 3, win, now).nowX;
+  assert.equal(at({ from: 0, to: HOUR }, 1.5 * HOUR), 3 + 0.75 * 394);
+  assert.equal(at({ from: 0, to: 2 * HOUR }, 1.5 * HOUR), undefined, 'no forecast past the window');
+  assert.equal(at({ from: 0, to: HOUR }, 3 * HOUR), undefined, 'now is past the bars');
+});
+
+test('a negative amount is drawn down from zero, and a first bar before the window is drawn whole', () => {
+  const geo = logic.barGeometry([{ from: -HOUR, to: HOUR, observed: -1, forecast: 0 }, { from: HOUR, to: 2 * HOUR, observed: 3, forecast: 0 }],
+    400, 36, 3, { from: 0, to: 2 * HOUR }, 0);
+  assert.equal(geo.from, -HOUR);
+  assert.deepEqual([geo.min, geo.max], [-1, 3]);
+  assert.deepEqual(round3(geo.rects[0]), { forecast: false, x: 3, y: 25.5, width: 261.667, height: 7.5 });
+});
+
+test('no bars is no geometry, and bars of nothing still get a scale and scrub points', () => {
+  assert.equal(logic.barGeometry([], 400, 36, 3, { from: 0, to: HOUR }, 0), null);
+  const geo = logic.barGeometry([{ from: 0, to: HOUR, observed: 0, forecast: 0 }], 400, 36, 3, { from: 0, to: HOUR }, 0);
+  assert.deepEqual([geo.min, geo.max, geo.rects.length], [0, 1, 0]);
+  assert.deepEqual(round3(geo.coords), [{ x: 199.5, y: 33, value: 0, ts: 0 }]);
+});
+
+// ---- times, durations and a window's statistics as text ----
+
+test('durations read in minutes, then hours, then days', () => {
+  assert.equal(logic.fmtDuration(29e3), '0 min');
+  assert.equal(logic.fmtDuration(59 * 60e3), '59 min');
+  assert.equal(logic.fmtDuration(60 * 60e3), '1 h');
+  assert.equal(logic.fmtDuration(90 * 60e3), '1 h 30 min');
+  assert.equal(logic.fmtDuration(47 * HOUR), '47 h');
+  assert.equal(logic.fmtDuration(60 * HOUR), '3 d');
+});
+
+test('how long ago reads in minutes, then hours, and never in the future', () => {
+  assert.equal(logic.relTime(NOW + 60e3, NOW), 'just now');
+  assert.equal(logic.relTime(NOW - 20e3, NOW), 'just now');
+  assert.equal(logic.relTime(NOW - 60e3, NOW), '1 min ago');
+  assert.equal(logic.relTime(NOW - 59 * 60e3, NOW), '59 min ago');
+  assert.equal(logic.relTime(NOW - 80 * 60e3, NOW), '1 hr ago');
+  assert.equal(logic.relTime(NOW - 5 * HOUR, NOW), '5 hr ago');
+});
+
+test('a chart time carries seconds only on a short window or when asked', () => {
+  const ts = Date.parse('2026-09-25T20:17:42Z');
+  assert.ok(logic.formatChartTime(ts, 3 * HOUR).includes('42'));
+  assert.ok(!logic.formatChartTime(ts, 24 * HOUR).includes('42'));
+  assert.ok(!logic.formatChartTime(ts).includes('42'));
+  assert.ok(logic.formatChartTime(ts, null, true).includes('42'));
+  assert.ok(logic.formatChartClock(ts, HOUR).includes('42'));
+  assert.ok(!logic.formatChartClock(ts).includes('42'));
+  assert.equal(logic.formatChartTime(NaN), '');
+  assert.equal(logic.formatChartClock('nonsense'), '');
+});
+
+test("a window's statistics are over its numbers, and the latest is its last point", () => {
+  assert.deepEqual(logic.rangeStats([{ value: 2 }, { value: 'x' }, { value: 6 }, { value: 'off' }]),
+    { latest: 'off', min: 2, max: 6, avg: 4 });
+  assert.deepEqual(logic.rangeStats(null), { latest: null, min: null, max: null, avg: null });
+  assert.deepEqual(logic.rangeStats([{ value: true }]), { latest: null, min: null, max: null, avg: null });
+});
+
+test("the top bar's health pin names the worst unit and counts the running ones", () => {
+  const hw = logic.healthWorstAndCount({
+    'home/health/a': { status: 'running' },
+    'home/health/b': { status: 'stopped' },
+    'home/health/c': {},
+    'home/health/d': { status: 'backoff' },
+    'home/health/e': { status: 'odd' },
+  });
+  assert.deepEqual(hw, { worst: { rank: 1, status: 'backoff', key: 'home/health/d' }, ok: 2, total: 5 });
+  assert.deepEqual(logic.healthWorstAndCount({}), { worst: null, ok: 0, total: 0 });
+  assert.equal(logic.healthWorstAndCount({ 'home/health/a': null }).worst.status, 'running', 'no status reads as running');
 });

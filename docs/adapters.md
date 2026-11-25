@@ -34,7 +34,10 @@ entities/
     kitchen_lamp.toml  # one file per bound device; the stem is the entity name
 ```
 
-The manifest ([manifest.md](manifest.md) is the field reference):
+The manifest ([manifest.md](manifest.md) is the field reference). The
+manifest that runs is the house's own `units/<name>.toml`. For a generic
+adapter, `adapters/<adapter>.toml` beside its script is the reference a
+house copies it from (§11):
 
 ```toml
 schema = 1
@@ -155,8 +158,10 @@ What the supervisor does, and what it expects back:
   comes with the image, not the repo.
 - **Stop.** The supervisor sends SIGTERM and waits `shutdown_grace_s`
   before SIGKILL. Undeclare subscribers, close the session, close the
-  protocol connection, exit. `homeostat.mqtt.wait_for_shutdown()` is the
-  blocking wait the MQTT adapters use.
+  protocol connection, exit. `homeostat.wait_for_shutdown()` blocks until
+  SIGTERM. `homeostat.shutdown_event()` returns the event instead, for a
+  unit whose worker threads stop on it, and
+  `homeostat.async_shutdown_event()` is its asyncio form.
 - **Restart** follows `runtime.restart` with backoff and a circuit
   breaker. A misconfiguration that cannot be recovered (an unset `${VAR}`
   in the endpoint, an unknown input name in an entity file) should exit
@@ -455,7 +460,6 @@ trace: one JSON object at `home/health/{unit}/event` via
 | kind | reason / fields | when |
 |---|---|---|
 | `drop` | `reason = "malformed-payload"`, `topic` or `key` | undecodable input from either side |
-| `drop` | `reason = "malformed-topic"`, `topic` (the raw bytes, `repr`-ed) | an MQTT topic that is not valid UTF-8; emitted by the SDK's guard, not the adapter |
 | `drop` | `reason = "invalid-command"`, `key`, `cmd_id` | bad envelope, unknown aspect, wrong type, out of bounds |
 | `drop` | `reason = "unknown-device"`, `topic` | a device outside the adapter's own view, first sight only |
 | `drop` | `reason = "reserved-aspect"`, `topic` | a native field that would mint `available` |
@@ -463,7 +467,8 @@ trace: one JSON object at `home/health/{unit}/event` via
 | `drop` | `reason = "device-unavailable"`, `key`, `cmd_id` | a command dropped because the device is down |
 | `drop` | `reason = "invalid-feed"`, `input`, `key`, `value` | a fed value outside its bounds |
 | `drop` | `reason = "feed-source-unavailable"`, `input`, `key` | a fed value arriving while its source is unavailable (once per outage) |
-| `device-silent` / `bridge-silent` | `topic` or `base_topic`, `timeout_s` | a loss transition (once per transition) |
+| `device-silent` | `topic` | a loss transition (once per transition) |
+| `bridge-silent` | `base_topic`, and `timeout_s` or `state` | a loss transition (once per transition) |
 | `feed-source-lost` | `input`, `key` | a fed input's source went unavailable |
 | `device-rule` | `entity`, `rule`, `aspect`, `value` | a change the device reports as its own rule ([Changes made at the device](#changes-made-at-the-device)) |
 | `unattributed` | `entity`, `aspect`, `value` | a change of an entity with `[causes]` that the device gave no cause for |
@@ -473,6 +478,27 @@ exist). Keep them to transitions and drops, not one per message, and list
 them in the module docstring. A degraded condition (a silent bridge, an
 unreachable router) gets its own event kind, not `drop`, since nothing
 was dropped.
+
+### Events the SDK emits
+
+The SDK emits these on the unit's behalf. A module docstring lists only
+the events its own code emits. `tests/adapters/test_docstrings.py`
+checks this table against the SDK's source.
+
+| kind | reason / fields | emitted by | when |
+|---|---|---|---|
+| `drop` | `reason = "malformed-payload"`, `key` | `Session.parse_command`, `Session.decode_json` | a sample that is not JSON |
+| `drop` | `reason = "invalid-command"`, `key`, `cmd_id` | `Session.parse_command` | a command whose envelope does not parse |
+| `drop` | `reason = "non-finite"`, `key` | `Session.put_json` | a value JSON cannot carry, such as NaN |
+| `drop` | `reason = "invalid-forecast"`, `key`, `detail` | `Session.put_forecast` | points `homeostat.forecast.encode` refuses |
+| `drop` | `reason = "malformed-topic"`, `topic` (the raw bytes, `repr`-ed) | `mqtt.guard` | an MQTT topic that is not valid UTF-8 |
+| `device-silent` | `topic` (the entity's `id`) | `availability.SilenceWatch` | a device silent past the timeout (once per transition) |
+| `paused`, `resumed` | none | `Context` | the automation's `enabled` parameter changes ([Pausing an automation](design.md#pausing-an-automation)) |
+| `redeliver-failed` | `error` | `Context` | on resume, a query for a binding's current values fails |
+| `drop` | `reason = "house-unreadable"`, `key`, `error` | `Context` | the house cannot be read to tell a button's press from its state, so the `action` counts as a press |
+| `restore-failed` | `key`, `reason` | `ctx.restore` | the recorder did not answer, or its query failed |
+| `source-dropped`, `source-restored` | `entity`, `aspect`, `source` | `ctx.source_used` | a source stops or starts contributing ([design](design.md#which-sources-a-computation-actually-used)) |
+| `decision` | `rule`, `outcome` | `ctx.decision` | a rule's outcome changes ([Unit timeline](design.md#unit-timeline)) |
 
 ## 7. Availability
 
@@ -488,6 +514,8 @@ device liveness signal, published on transition by the owning adapter.
   its last value.
 - A silence timeout is a live parameter (`availability_timeout_s`,
   owner-editable) with an adapter-side default, so a house can tune it.
+- `homeostat.availability.SilenceWatch` keeps these rules for a device
+  timed by its publish cadence.
 
 ### One-way senders
 
@@ -589,7 +617,31 @@ protocol endpoint, without mocking the bus. The pattern, from
 
 Generic adapters live in `adapters/` in this repo. A house gets a copy
 in its `units/`, pinned to the release's SDK; `scripts/sync_starter.sh`
-regenerates the starter house's copies at each tag. A house-specific
+regenerates the starter house's copies of the scripts at each tag.
+
+Beside each script, `adapters/<adapter>.toml` is its reference manifest.
+It declares every key the code publishes and every parameter it reads,
+with the code's defaults. Its `[bus.subscribes]` lists every key
+expression the code reads from the bus, by subscription or by query (a
+get from the mirror, the recorder or a supervisor queryable). Two reads
+are not listed: the unit's own `home/config/{unit}/*`, which is
+implicit, and the reads the SDK makes on a binding's behalf, such as a
+state binding's recorded history.
+
+A house copies the reference and keeps the copy as its own. It may
+rename the unit, drop bindings and parameters it does not need, and set
+its own endpoint, entities directory and defaults. It keeps the binding
+names and keys it does declare as the reference has them. A house does
+not narrow a binding: the dashboard's and the buttons service's cmd
+grants and the recorder's subscriptions are dropped whole or kept as
+they are. `copies_of_a_generic_manifest_agree` in `tests/corpus.rs`
+checks every copy in this repo against its reference, so a change to the
+keys the code uses or the params it reads starts in the reference
+manifest. The test does not catch a copy that leaves out something the
+code needs, such as the arbiter's `hold_minutes`, which it reads without
+a fallback.
+
+A house-specific
 adapter simply lives in that house's `units/` and pins the SDK the same
 way. There is no registry and no loading step: a file in `units/` with
 a manifest beside it is installed, and `plan` shows it.

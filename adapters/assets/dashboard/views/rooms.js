@@ -5,12 +5,7 @@ import { store } from '../store.js';
 import { renderRoomCard } from '../widgets/entity.js';
 
 function allZoneNames() {
-  var zones = store.model.zones || {};
-  var out = [];
-  Object.keys(zones).forEach(function (zone) {
-    out.push(zone);
-  });
-  return out;
+  return Object.keys(store.model.zones || {});
 }
 
 function roomsInZone(zone) {

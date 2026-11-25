@@ -4,7 +4,7 @@ import logic, { titleCase } from '../logic.js';
 import { showOverlay } from './panel.js';
 import { controlDisabled, descriptorField, findEntity, houseControls, localState, overlay, store, unitLabel } from '../store.js';
 import { aspectValueSpan, renderAspectControl } from '../widgets/controls.js';
-import { BESPOKE_WIDGET, relTime, widgetForButton, widgetForClimate, widgetForEntity, widgetForSensor } from '../widgets/entity.js';
+import { BESPOKE_WIDGET, arbitratedBadge, widgetForButton, widgetForClimate, widgetForEntity, widgetForSensor } from '../widgets/entity.js';
 
 export function openEntityDetail(room, entityName) {
   var entity = findEntity(room, entityName);
@@ -52,7 +52,7 @@ function renderTrackers(person) {
   var rows = logic.trackersOf(store.model.entities, store.state, person).map(function (t) {
     var parts = [];
     if (t.unavailable) parts.push('unavailable');
-    if (t.fixedAt !== undefined) parts.push('fix ' + relTime(t.fixedAt));
+    if (t.fixedAt !== undefined) parts.push('fix ' + logic.relTime(t.fixedAt, Date.now()));
     if (t.accuracy !== undefined) parts.push('\u00b1' + Math.round(t.accuracy) + ' m');
     if (t.battery !== undefined) parts.push('battery ' + Math.round(t.battery) + '%');
     return html`<div class="aspect-row described row-clickable" data-action="entity-detail" data-room="${t.room}" data-entity="${t.entity}">
@@ -88,7 +88,7 @@ function renderHolds(entity) {
       <button data-action="hold-until"${attrs}>Hold until</button>`;
     return html`<div class="aspect-row hold-row">
       <span class="aspect-label">${titleCase(h.aspect)}</span>
-      <span class="muted">by ${unitLabel(h.actor)} until ${h.nextChange ? 'the next change' : ends}</span>
+      <span class="muted">by ${unitLabel(h.actor)} until ${h.nextChange ? logic.NEXT_CHANGE : ends}</span>
       <div class="seg">${extend}<button data-action="hold-release"${attrs}>Resume automatic</button></div></div>`;
   });
   units.forEach(function (h) {
@@ -121,11 +121,11 @@ export function renderEntityDetailBody() {
   var entity = overlay.entity;
   var meta = titleCase(entity.room) + ' · ' + titleCase(entity.capability) +
     ((entity.features && entity.features.length) ? ' · ' + entity.features.map(titleCase).join(', ') : '');
-  var badge = entity.write_mode === 'arbitrated' ? html`<span class="badge-arbitrated">ARBITRATED</span>` : '';
+  var badge = arbitratedBadge(entity);
   var ownerLine = html`Owned by ${unitLabel(entity.owner)} · ${entity.write_mode}${badge}`;
 
   // Sections come from the adapter's aspect descriptor, if it published
-  // one (dashboard-logic.js, aspectPlan). An undescribed entity gets one
+  // one (logic.js, aspectPlan). An undescribed entity gets one
   // flat State list. A described climate's declared commands render in
   // their own group, so its Controls row is not repeated.
   var descriptor = store.aspects[entity.name];

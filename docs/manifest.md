@@ -15,15 +15,15 @@ section, and the validator refuses a mismatch with `invalid-manifest`.
 | `entities` | [EntitiesSection](#entitiessection) | no | The entities this unit binds. Required for adapters, allowed for automations (virtual sensors), refused for services. |
 | `naming` | [UnitNaming](#unitnaming) | no | Human names for voice and the dashboard. The dashboard reads well only when these are set. |
 | `params` | table of name → [ParamSpec](#paramspec) | no | Live parameters, keyed by name (`home/config/{unit}/{param}`). Names become key segments (`invalid-name`). Every automation also has `enabled`, a `bool` that defaults to `true` and the family may edit. While it is `false` the SDK drops the automation's commands. Declaring `[params.enabled]` changes its default or who may edit it, and it must stay a `bool` (`invalid-manifest`). |
-| `runtime` | [RuntimeSection](#runtimesection) | yes |  |
+| `runtime` | [RuntimeSection](#runtimesection) | yes | How the supervisor starts, restarts and stops the unit. |
 | `schema` | integer | yes | Contract version. Must be 1 (`unsupported-schema` otherwise). |
-| `unit` | [UnitSection](#unitsection) | yes |  |
+| `unit` | [UnitSection](#unitsection) | yes | The unit's name, kind and description. |
 
 ### BusSection
 
 `[bus]`: the unit's declared key surface. Keys are `home/{class}/...`
-(`key-outside-schema` otherwise). A zone name in the room slot expands
-to its rooms at plan time. `{room}`/`{entity}` templates expand per
+expressions that zenoh accepts (`key-outside-schema` otherwise). A
+zone name in the room slot expands to its rooms at plan time. `{room}`/`{entity}` templates expand per
 bound entity. They are valid only in adapters and automations
 (`template-outside-binding-unit`), and only in a unit that binds
 entities (`template-without-entities`).
@@ -96,7 +96,7 @@ outside the constraint is refused with the old value still in force.
 | `description` | string | no |  |
 | `kind` | [UnitKind](#unitkind) | yes |  |
 | `name` | string | yes | Unique across the house; a bus key segment (`home/health/{unit}`, `home/config/{unit}/*`), so letters, digits, `_`, `-`, `.` only, and not `.` or `..`. `system` is reserved for the core. |
-| `watches` | [UnitWatches](#unitwatches) | no | Which repo files restart this unit when they change. Absent means `own`: the unit's command, its own entity files, its zone if it uses one. `inputs` is accepted as an older spelling. |
+| `watches` | [UnitWatches](#unitwatches) | no | Which repo files restart this unit when they change. Absent means `own`: the unit's command, its own entity files, its zone if it uses one. |
 
 ### PublishSpec
 
@@ -417,7 +417,7 @@ house's text, the grant table and the bus; no widget carries markup.
 
 ## Capability vocabulary
 
-What an entity of each capability publishes under which names (docs/adapters.md, State). The base aspect is what commands target and the dashboard widget renders; the other named aspects are what `features` may declare or the vocabulary reserves; commands are the aspects that take a command and the type of value each carries, a feature only on an entity that declares it; notable is the reading that counts as a deviation on `Now`; rest is the value the device is safe at, which wins between two holds at one band. Anything else an adapter publishes passes through under its native name.
+What an entity of each capability publishes under which names (docs/adapters.md#3-state). The base aspect is what commands target and the dashboard widget renders; the other named aspects are what `features` may declare or the vocabulary reserves; commands are the aspects that take a command and the type of value each carries, a feature only on an entity that declares it; notable is the reading that counts as a deviation on `Now`; rest is the value the device is safe at, which wins between two holds at one band. Anything else an adapter publishes passes through under its native name.
 
 | Capability | Base aspect | Other named aspects | Commands | Notable | Rest | Notes |
 |---|---|---|---|---|---|---|

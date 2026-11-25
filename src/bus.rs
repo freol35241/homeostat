@@ -281,7 +281,7 @@ pub async fn request_apply(
 
 /// The supervisor's reply to an apply request. `steps` holds every unit step
 /// attempted, in walk order. A halted walk names its position.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ApplyResult {
     pub ok: bool,
     pub params: Vec<ApplyParam>,

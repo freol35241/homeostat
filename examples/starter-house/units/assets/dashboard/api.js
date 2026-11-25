@@ -8,8 +8,9 @@ import logic from './logic.js';
 import { localState, scheduleRender, store } from './store.js';
 
 export function loadModel() {
-  fetch('/api/model').then(function (r) { return r.json(); }).then(function (m) {
+  getJson('/api/model').then(function (m) {
     store.model = m || store.model;
+    stampEarlySeen();
     scheduleRender();
   }).catch(function () { /* keep defaults; page still renders */ });
 }
@@ -54,7 +55,7 @@ function scheduleReconnect() {
 }
 
 function handleWsMessage(msg) {
-  var applied = logic.applyMessage(store, msg, Date.now() / 1000);
+  var applied = logic.applyMessage(store, msg, Date.now());
   if (!applied) return;
   if (applied === 'state') {
     trackLastSeen(msg.key);
@@ -71,41 +72,51 @@ function handleWsMessage(msg) {
 }
 
 // For a key like home/state/{room}/{entity}/motion, track lastSeen per
-// entity (both occupancy aspect names; see dashboard-logic.js).
+// entity (both occupancy aspect names; see logic.js). The
+// model's vocabulary names them, so a delta that arrives before the model
+// is kept and stamped when it loads.
+var earlySeen = {};
 function trackLastSeen(key) {
-  var pe = logic.occupancyEntityFromKey(key);
+  if (!store.model.vocabulary) { earlySeen[key] = Date.now(); return; }
+  var pe = logic.occupancyEntityFromKey(key, store.model.vocabulary);
   if (pe) store.lastSeen[pe] = Date.now();
 }
 
+function stampEarlySeen() {
+  if (!store.model.vocabulary) return;
+  Object.keys(earlySeen).forEach(function (key) {
+    var pe = logic.occupancyEntityFromKey(key, store.model.vocabulary);
+    if (pe) store.lastSeen[pe] = Math.max(store.lastSeen[pe] || 0, earlySeen[key]);
+  });
+  earlySeen = {};
+}
+
 function appendSparklinePoint(key, value) {
-  var parts = key.split('/');
-  if (parts[0] !== 'home' || parts[1] !== 'state' || parts.length < 5) return;
-  if (typeof value !== 'number') return;
-  var entity = parts[3], aspect = parts[4];
-  var sk = entity + '|' + aspect;
+  var k = logic.parseStateKey(key);
+  if (!k || typeof value !== 'number') return;
+  var sk = k.entity + '|' + k.aspect;
   var s = localState.sparklines[sk];
   if (!s || !s.loaded) return; // only append once history has been fetched
   s.points.push({ ts: new Date().toISOString(), value: value });
   if (s.points.length > 500) s.points.shift();
 }
 
-export function errText(e) {
-  var msg = e && e.message ? e.message : String(e);
-  try {
-    var parsed = JSON.parse(msg);
-    if (parsed && parsed.error) return parsed.error;
-  } catch (ex) { /* not json */ }
-  return msg;
+/* GET a JSON endpoint of this unit. An error status rejects, with the
+ * reply's `error` text when it has one, so no caller reads an error reply
+ * as data. */
+export function getJson(url) {
+  return fetch(url).then(function (r) {
+    if (r.ok) return r.json();
+    return r.json().catch(function () { return {}; }).then(function (body) {
+      throw new Error((body && body.error) || 'HTTP ' + r.status);
+    });
+  });
 }
 
 // The recorder summarises the window (docs/design.md#read-path). A line
 // chart asks for one bucket per drawn column, and a timeline for the runs
 // of the state. The window is returned with the points so the chart can
 // place them by time.
-
-// The most rows /api/history returns (HISTORY_LIMIT_MAX in
-// adapters/dashboard.py).
-var HISTORY_LIMIT = 5000;
 
 // The most presses of a button one history read asks for.
 export var PRESSES_READ = 500;
@@ -130,13 +141,12 @@ export function fetchHistory(entity, aspect, hours, shape, cls, intervalS) {
   var limit = 0;
   if (query === null) {
     var extra = intervalS / 3600 + (logic.barsByDay(hours * 3600e3, intervalS) ? 24 : 0);
-    limit = Math.min(Math.ceil((hours + extra) * 3600 / intervalS) + 1, HISTORY_LIMIT);
+    limit = Math.min(Math.ceil((hours + extra) * 3600 / intervalS) + 1, store.model.limits.history_limit_max);
     query = '&hours=' + (hours + extra) + '&limit=' + limit;
   }
   var url = '/api/history?entity=' + encodeURIComponent(entity) + '&aspect=' + encodeURIComponent(aspect) + query +
     (cls ? '&class=' + encodeURIComponent(cls) : '');
-  return fetch(url)
-    .then(function (r) { return r.json(); })
+  return getJson(url)
     .then(function (data) {
       var pts = [];
       (data.series || []).forEach(function (series) {

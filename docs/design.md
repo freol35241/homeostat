@@ -204,9 +204,8 @@ use, each in one sense. Where a word has two senses, both are listed.
   `global` and `person` hold entities with no place.
 - **Zone.** A named set of rooms, written in a key's room slot and
   expanded at plan time. Zones never appear in a published key.
-- **Key class.** The second segment of every bus key: `state`, `cmd`,
-  `arbiter`, `forecast`, `config`, `meta`, `health`, `clock`,
-  `history`, `discovery`, `hold`. See [Key space](#key-space).
+- **Key class.** The second segment of every bus key. The classes are
+  listed in [Key space](#key-space).
 - **Grant.** A unit's publish resolved against the entities it reaches.
   The **grant table** is the set of all grants. It is the permission
   record `plan` shows and the dependency graph that orders an apply.
@@ -217,8 +216,9 @@ use, each in one sense. Where a word has two senses, both are listed.
   `exclusive` or `arbitrated`. See
   [Capabilities, grants and write policy](#capabilities-grants-and-write-policy).
 - **Envelope.** A command's payload: `{value, priority, actor, id}`,
-  and optionally `options`. The SDK stamps the priority from the
-  manifest and the actor with the unit.
+  and optionally `options` and `hold`. The SDK stamps the priority from
+  the manifest and the actor with the unit. See
+  [Cmd envelopes](#cmd-envelopes).
 - **Arbiter.** The service that decides what an arbitrated aspect is
   sent. Units' holds and the family's hold stand on the aspect, and it
   forwards the one that wins. See [Arbitrated mode](#arbitrated-mode).
@@ -264,8 +264,10 @@ use, each in one sense. Where a word has two senses, both are listed.
 
 Every key starts `home/{class}/`. The class list is fixed in
 `src/keyspace.rs` (`CLASSES`). A manifest expression with any other
-class is a plan error. Four classes are entity-addressed and share one
-shape:
+class is a plan error. So is one that Zenoh's own key-expression parser
+refuses, such as `**/**` or a `$` outside `$*`. A unit would otherwise
+fail when it declares the key. Four classes are entity-addressed and
+share one shape:
 
 ```
 home/{class}/{room}/{entity}/{aspect}            state, cmd, arbiter
@@ -581,7 +583,7 @@ record carries:
 - on bound records, the entity's
   [aspect descriptor](#aspect-descriptors).
 
-The format is in [`docs/adapters.md`](adapters.md), section 5.
+The format is in [`docs/adapters.md`](adapters.md#5-discovery).
 
 - One key holds the whole inventory. Device ids may contain `/`, so a
   key segment per device would break. A complete document makes a
@@ -628,6 +630,9 @@ offers the surface the manifest declares and nothing more:
 - `ctx.decision` ([Unit timeline](#unit-timeline));
 - `ctx.paused` ([Pausing an automation](#pausing-an-automation));
 - `ctx.health_event`;
+- `ctx.manifest`, the unit's own manifest, read once at start;
+- `ctx.house` and `ctx.entities`, the whole house and the entities the
+  unit owns, read on first use and then kept;
 - `ctx.ready()`, which declares the liveliness token once the unit can
   do its job;
 - `ctx.run()`.
@@ -680,6 +685,9 @@ gives:
   The adapter still checks bounds.
 - The **notable** reading, which is a deviation on the dashboard's
   `Now` (a light on, a lock unlocked, a router's `wan = false`).
+- The **rest** value, the one the device is safe at (a burner's
+  `on = false`). Between two holds at one band, the hold for the rest
+  value wins ([Which hold wins](#which-hold-wins)).
 - The [command options](#command-options) its commands may carry
   (`transition` on a light).
 
@@ -1336,7 +1344,7 @@ formatting `kind`, a group, and optionally `valid` and `notable`. A
 commandable aspect also carries `command: {type, constraint, step?,
 editable_by}`, which copies the parameter fields. Firmware names get
 labels; they do not become schema. The contract is in
-[`docs/adapters.md`](adapters.md), section 5.
+[`docs/adapters.md`](adapters.md#5-discovery).
 
 - The descriptor travels in the discovery record, as the `aspects`
   member of a bound record. That record is already declared, mirrored
@@ -1541,11 +1549,11 @@ A unit is unchanged when two hashes match the world's:
   the script imports is an input only if the command names it.
 
 This is why each unit in `adapters/` is a single script, the recorder's
-2,000 lines included. Splitting one into modules would let an edit to a
-module go unnoticed by `plan`, and the unit would keep running the old
-code after `apply`. Allowing it would take a manifest field that names
-a unit's other files, and the size of one script has not been reason
-enough to add one.
+more than two thousand lines included. Splitting one into modules would
+let an edit to a module go unnoticed by `plan`, and the unit would keep
+running the old code after `apply`. Allowing it would take a manifest
+field that names a unit's other files, and the size of one script has
+not been reason enough to add one.
 
 `[unit] watches = "house"` makes every manifest, entity file,
 `zones.toml` and `dashboard.toml` an input of the unit. The dashboard
@@ -2499,7 +2507,7 @@ indoor_temperature_actual = { entity = "indoor_temperature", aspect = "temperatu
   unit. Entities are the identity layer that keys derive from, and a
   device consumes one signal. The plan resolves the reference to a
   state key and prints the edge under `Feeds:`.
-- The plan checks (`resolve_feeds` in `src/grants.rs`) that the source
+- The plan checks (`resolve_feeds` in `src/wiring.rs`) that the source
   entity exists (`input-unknown-entity`), that an automation-owned
   source publishes the aspect (`input-unpublished-aspect`), and that
   the fed entity is a device (`virtual-entity-fed`). An aspect of any
@@ -2820,12 +2828,11 @@ The dashboard is an adapter for humans. It speaks HTTP and a WebSocket
 to browsers on one side, and the bus through the SDK on the other.
 Browsers never speak Zenoh. `adapters/dashboard.py` is a `service` unit
 (aiohttp). It serves one hand-editable page, `dashboard.html`, along
-with its stylesheet `assets/dashboard.css`, its decision logic
-`assets/dashboard-logic.js`, its ES modules under `assets/dashboard/`
-(entry `main.js`) and a few vendored libraries. It serves from an
-allowlist of filenames plus that one directory, and there is no build
-step. The page is rendered in the client because pushing live state is
-the dashboard's main job.
+with its stylesheet `assets/dashboard.css`, its ES modules under
+`assets/dashboard/` (entry `main.js`, decision logic in `logic/`) and a
+few vendored libraries. It serves from an allowlist of filenames plus
+that one directory, and there is no build step. The page is rendered
+in the client because pushing live state is the dashboard's main job.
 
 - The browser goes through the dashboard unit rather than onto the raw
   bus. Running Zenoh's remote-api plugin in the browser would bypass
@@ -3058,7 +3065,7 @@ because the version would have to be rewritten into a hand-edited
 file.
 
 Pure decisions (arithmetic and selection, never markup) live in
-`dashboard-logic.js`, and `node --test tests/js` pins them. Markup is
+`assets/dashboard/logic/`, and `node --test tests/js` pins them. Markup is
 written with the `html` tag (`assets/dashboard/html.js`). The tag
 escapes every interpolated value unless the value is itself markup, so
 a forgotten escape cannot turn a label from the house into markup.
@@ -3164,7 +3171,7 @@ command and decision together, because a fixed chart cannot know which
 of them the question is about.
 
 `/api/unit-timeline` gathers the rows from the recorder and
-`unitTimeline` in `dashboard-logic.js` puts them in order. The commands
+`unitTimeline` in the page's logic puts them in order. The commands
 and events of the whole house are read newest first up to a cap, and so
 are the changes of each aspect it commanded. A busy day can push the
 oldest rows out, and the overlay says when it did. An answer to an older
@@ -3813,6 +3820,15 @@ along with the other version strings, relocks, and regenerates the
 starter. Until the tag exists, the check compares against the working
 tree, which is the release commit itself. CI checks out full history,
 because otherwise the tag is not found.
+
+The starter's manifests are not generated. Each is the house's own
+file, which the owner edits like any other. Beside each generic script,
+`adapters/<unit>.toml` is its reference manifest, the template a house
+copies. `tests/corpus.rs` checks every copy in this repo against it.
+A copy may declare a subset of the reference's bus entries and
+parameters and set its own defaults. The starter's copies are checked
+against the reference manifests at `SDK_TAG`, the release its scripts
+come from. A release without reference manifests leaves them unchecked.
 
 ## Open questions
 

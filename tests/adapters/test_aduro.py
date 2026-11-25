@@ -154,8 +154,8 @@ class StovesTest(unittest.TestCase):
     def test_silence_is_one_unavailable_and_one_event(self):
         self.message("status", {"state": 14})
         self.now = 301.0
-        self.stoves.sweep(300.0)
-        self.stoves.sweep(300.0)
+        self.stoves.watch.sweep(300.0)
+        self.stoves.watch.sweep(300.0)
         self.assertEqual(self.session.puts[-1], (KEY + "available", False))
         silent = [e for e in self.session.events if e["kind"] == "device-silent"]
         self.assertEqual(len(silent), 1)

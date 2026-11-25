@@ -141,12 +141,7 @@ pub async fn replay_when_running(
         if core.shutting_down() {
             return;
         }
-        let status = core
-            .health
-            .lock()
-            .expect("health map lock")
-            .get(&recorder)
-            .map(|h| h.status);
+        let status = core.unit_status(&recorder);
         if status == Some(HealthStatus::Running) {
             break;
         }

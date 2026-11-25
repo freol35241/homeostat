@@ -49,6 +49,11 @@ impl House {
         self.units.iter().find(|u| u.manifest.unit.name == name)
     }
 
+    /// The kind of the unit named `name`, if the house has one.
+    pub fn kind_of(&self, name: &str) -> Option<UnitKind> {
+        self.unit(name).map(|u| u.manifest.unit.kind)
+    }
+
     /// All rooms that house at least one entity.
     pub fn rooms(&self) -> Vec<&str> {
         let mut rooms: Vec<&str> = self
@@ -100,10 +105,7 @@ pub fn load(root: &Path, diags: &mut Diagnostics) -> House {
 
     let mut entity_dirs: Vec<(String, String)> = Vec::new(); // (owner, dir)
     for unit in &house.units {
-        if !matches!(
-            unit.manifest.unit.kind,
-            UnitKind::Adapter | UnitKind::Automation
-        ) {
+        if !unit.manifest.unit.kind.binds_entities() {
             continue;
         }
         if let Some(entities) = &unit.manifest.entities {

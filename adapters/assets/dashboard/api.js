@@ -55,7 +55,7 @@ function scheduleReconnect() {
 }
 
 function handleWsMessage(msg) {
-  var applied = logic.applyMessage(store, msg, Date.now() / 1000);
+  var applied = logic.applyMessage(store, msg, Date.now());
   if (!applied) return;
   if (applied === 'state') {
     trackLastSeen(msg.key);
@@ -72,7 +72,7 @@ function handleWsMessage(msg) {
 }
 
 // For a key like home/state/{room}/{entity}/motion, track lastSeen per
-// entity (both occupancy aspect names; see dashboard-logic.js). The
+// entity (both occupancy aspect names; see logic.js). The
 // model's vocabulary names them, so a delta that arrives before the model
 // is kept and stamped when it loads.
 var earlySeen = {};
@@ -92,11 +92,9 @@ function stampEarlySeen() {
 }
 
 function appendSparklinePoint(key, value) {
-  var parts = key.split('/');
-  if (parts[0] !== 'home' || parts[1] !== 'state' || parts.length < 5) return;
-  if (typeof value !== 'number') return;
-  var entity = parts[3], aspect = parts[4];
-  var sk = entity + '|' + aspect;
+  var k = logic.parseStateKey(key);
+  if (!k || typeof value !== 'number') return;
+  var sk = k.entity + '|' + k.aspect;
   var s = localState.sparklines[sk];
   if (!s || !s.loaded) return; // only append once history has been fetched
   s.points.push({ ts: new Date().toISOString(), value: value });
@@ -113,15 +111,6 @@ export function getJson(url) {
       throw new Error((body && body.error) || 'HTTP ' + r.status);
     });
   });
-}
-
-export function errText(e) {
-  var msg = e && e.message ? e.message : String(e);
-  try {
-    var parsed = JSON.parse(msg);
-    if (parsed && parsed.error) return parsed.error;
-  } catch (ex) { /* not json */ }
-  return msg;
 }
 
 // The recorder summarises the window (docs/design.md#read-path). A line

@@ -6,13 +6,11 @@ OwnTracks, ...).
 This module is a helper and not a transport layer (docs/design.md#bus).
 Adapters still own their connections, with their own `on_message` logic,
 topics and health-event vocabulary. This module covers only the code that
-is the same in all of them: endpoint parsing, client construction,
-connect-and-subscribe with a SUBACK wait, and the SIGTERM/SIGINT shutdown
-wait that runs alongside the zenoh session teardown.
+is the same in all of them: endpoint parsing, client construction and
+connect-and-subscribe with a SUBACK wait.
 """
 
 import os
-import signal
 import threading
 import traceback
 from pathlib import Path
@@ -21,6 +19,10 @@ from urllib.parse import ParseResult, unquote, urlparse
 import paho.mqtt.client as mqtt
 import tomllib
 from paho.mqtt.enums import CallbackAPIVersion
+
+# The released starter house's MQTT adapters import the shutdown wait from
+# here, and the image runs them against this SDK.
+from .session import wait_for_shutdown  # noqa: F401
 
 ENV_CREDENTIALS = "HOMEOSTAT_MQTT_CREDENTIALS"
 
@@ -258,15 +260,3 @@ def connect(
             raise ConnectionError(f"MQTT broker refused the connection: {refused[-1]}")
         raise TimeoutError(f"no MQTT SUBACK within {int(timeout)}s")
     return client
-
-
-def wait_for_shutdown() -> None:
-    """Block until SIGTERM or SIGINT, the supervisor's stop signal.
-
-    This is the shutdown wait every adapter observes alongside its zenoh
-    session teardown.
-    """
-    stop = threading.Event()
-    signal.signal(signal.SIGTERM, lambda *_: stop.set())
-    signal.signal(signal.SIGINT, lambda *_: stop.set())
-    stop.wait()
