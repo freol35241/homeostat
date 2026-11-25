@@ -110,7 +110,8 @@ impl fmt::Display for Segment {
 pub struct KeyExpr(pub Vec<Segment>);
 
 impl KeyExpr {
-    /// Splits `raw` on `/`. An empty key or an empty segment is an error.
+    /// Splits `raw` on `/`. An empty key, an empty segment or a key zenoh
+    /// refuses is an error.
     pub fn parse(raw: &str) -> Result<KeyExpr, String> {
         if raw.is_empty() {
             return Err("key is empty".to_string());
@@ -126,6 +127,7 @@ impl KeyExpr {
                 other => Segment::Literal(other.to_string()),
             });
         }
+        check_zenoh(raw)?;
         Ok(KeyExpr(segments))
     }
 
@@ -257,6 +259,27 @@ impl KeyExpr {
     }
 }
 
+/// Asks zenoh's own parser whether it accepts `raw`, so a key that passes
+/// plan does not fail when a unit declares it. zenoh takes `{room}` and
+/// `{entity}` as literal text, and the names that replace them are plain
+/// segments, so the templates need no special case.
+fn check_zenoh(raw: &str) -> Result<(), String> {
+    let Err(err) = zenoh::key_expr::keyexpr::new(raw) else {
+        return Ok(());
+    };
+    // zenoh's message reads "Invalid Key Expr `{key}`: {reason} at
+    // {file}:{line}.". Only the reason is kept, because the location is in
+    // zenoh's source. Any other shape is shown whole.
+    let message = err.to_string();
+    let reason = message
+        .strip_prefix(&format!("Invalid Key Expr `{raw}`: "))
+        .and_then(|rest| rest.rsplit_once(" at "))
+        .map_or(message.as_str(), |(reason, _)| reason);
+    Err(format!(
+        "\"{raw}\" is not a key expression zenoh accepts: {reason}"
+    ))
+}
+
 impl fmt::Display for KeyExpr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for (i, seg) in self.0.iter().enumerate() {
@@ -305,6 +328,46 @@ mod tests {
             "home/arbiter/{room}/{entity}/**",
         ] {
             assert_eq!(expr(s).to_string(), s);
+        }
+    }
+
+    #[test]
+    fn parse_refuses_what_zenoh_refuses() {
+        for s in [
+            "home/state/*/lamp/**",
+            "home/state/**/motion",
+            "home/state/kitchen/*/**",
+            "home/cmd/{room}/{entity}/**",
+            "home/state/kitchen/lamp$*/on",
+        ] {
+            KeyExpr::parse(s).unwrap();
+        }
+        for (s, reason) in [
+            ("home/state/**/**", "`**/**` must be replaced by `**`"),
+            ("home/state/**/*/on", "`**/*` must be replaced by `*/**`"),
+            (
+                "home/hold/setback/hallway/door/$locked",
+                "`$` is only allowed in `$*`",
+            ),
+            ("home/state/kitchen/lamp/$*", "empty chunks are forbidden"),
+            ("home/state/kitchen/lamp#1/on", "`#` and `?` are forbidden"),
+            ("home/state/kitchen/lamp/on?", "`#` and `?` are forbidden"),
+            (
+                "home/state/kitchen/lamp*/on",
+                "`*` may only be preceded by `/` or `$`",
+            ),
+            (
+                "home/cmd/{room}/{entity}/**/**",
+                "`**/**` must be replaced by `**`",
+            ),
+        ] {
+            let err = KeyExpr::parse(s).unwrap_err();
+            assert!(
+                err.starts_with(&format!("\"{s}\" is not a key expression zenoh accepts: ")),
+                "{err}"
+            );
+            assert!(err.contains(reason), "{err}");
+            assert!(!err.contains(" at "), "{err}");
         }
     }
 

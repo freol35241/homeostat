@@ -345,9 +345,10 @@ def commandable_aspects(entity: dict, descriptor: dict | None) -> set[str]:
 def key_expr(key: str):
     """Return a zenoh key expression, or None when the string is not one.
 
-    The core's manifest parser admits some shapes zenoh refuses (`**/**`,
-    a `$`), and the model is re-read while files are being edited. A bad
-    expression is skipped so it does not turn into a 500 for every browser.
+    The core's plan refuses keys zenoh refuses, but the model is re-read
+    while files are being edited, so it can hold a key no plan has checked.
+    A bad expression is skipped so it does not turn into a 500 for every
+    browser.
     """
     try:
         return zenoh.KeyExpr(key)

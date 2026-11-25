@@ -22,8 +22,8 @@ section, and the validator refuses a mismatch with `invalid-manifest`.
 ### BusSection
 
 `[bus]`: the unit's declared key surface. Keys are `home/{class}/...`
-(`key-outside-schema` otherwise). A zone name in the room slot expands
-to its rooms at plan time. `{room}`/`{entity}` templates expand per
+expressions that zenoh accepts (`key-outside-schema` otherwise). A
+zone name in the room slot expands to its rooms at plan time. `{room}`/`{entity}` templates expand per
 bound entity. They are valid only in adapters and automations
 (`template-outside-binding-unit`), and only in a unit that binds
 entities (`template-without-entities`).

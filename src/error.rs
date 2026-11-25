@@ -311,8 +311,12 @@ codes! {
     KeyOutsideSchema => "key-outside-schema":
         "A `[bus]` key expression must be `home/{class}/...`: it starts with \
         `home/`, names a known class literally (state, cmd, arbiter, forecast, \
-        config, meta, health, clock, history, discovery, hold), and has at \
-        least one segment after the class.",
+        config, meta, health, clock, history, discovery, hold, arbitration), \
+        and has at least one segment after the class. It must also be a key \
+        expression zenoh accepts, and the error quotes zenoh's reason when it \
+        is not. Common causes are `**/**` (write `**`), `**/*` (write `*/**`), \
+        `#` or `?` in a segment, and a `$` or a `*` inside a segment other \
+        than as `$*` after some text, as in `lamp$*`.",
     TemplateOutsideBindingUnit => "template-outside-binding-unit":
         "A `[bus]` key uses `{room}` or `{entity}` templates, which expand per \
         bound entity and so are valid only in units that bind entities: \

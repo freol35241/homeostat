@@ -264,8 +264,10 @@ use, each in one sense. Where a word has two senses, both are listed.
 
 Every key starts `home/{class}/`. The class list is fixed in
 `src/keyspace.rs` (`CLASSES`). A manifest expression with any other
-class is a plan error. Four classes are entity-addressed and share one
-shape:
+class is a plan error. So is one that Zenoh's own key-expression parser
+refuses, such as `**/**` or a `$` outside `$*`. A unit would otherwise
+fail when it declares the key. Four classes are entity-addressed and
+share one shape:
 
 ```
 home/{class}/{room}/{entity}/{aspect}            state, cmd, arbiter
