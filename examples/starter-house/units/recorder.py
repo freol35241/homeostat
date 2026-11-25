@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "homeostat==0.23.0",
+#     "homeostat==0.24.0",
 # ]
 # ///
 """Recorder service: writes the bus to a SQLite store and answers history reads.
@@ -36,26 +36,26 @@ Live parameters (home/config/{unit}/*):
 
 Health events at home/health/{unit}/event: `drop` (reasons off-schema-key,
 malformed-payload, invalid-command, non-scalar, non-finite,
-integrity-error), backend-outage, backend-restored, purge, purge-failed,
-archive, archive-failed, archive-dropped, archive-drop-failed,
+integrity-error, older-than-held), backend-outage, backend-restored, purge,
+purge-failed, archive, archive-failed, archive-dropped, archive-drop-failed,
 archive-misconfigured, integrity-ok, integrity-failed and query-failed.
 """
 
+import contextlib
 import datetime
 import hashlib
 import json
 import math
 import os
-import signal
 import sqlite3
 import threading
 import time
 from collections import deque
 from pathlib import Path
 
-import tomllib
 import zenoh
 from homeostat import forecast, house, keys, session
+from homeostat.history import MAX_ROWS, split_params
 from homeostat.params import LiveParams
 from homeostat.stamps import stamp_us
 
@@ -82,8 +82,6 @@ PARAM_DEFAULTS = {
 RETENTION_PARAMS = ("retain_samples_days", "retain_forecasts_days", "retain_events_days")
 DEFAULT_QUERY_LIMIT = 1000
 DEFAULT_EVENTS_LIMIT = 500
-# The most rows one reply carries. A larger limit is clamped to it.
-MAX_QUERY_LIMIT = 10_000
 # SQLite binds Python ints as signed 64-bit; anything else raises at bind
 # time, outside sqlite3.Error, so the parse helpers refuse it first.
 INT64_MIN, INT64_MAX = -(2**63), 2**63 - 1
@@ -173,7 +171,7 @@ CREATE TABLE IF NOT EXISTS standing (
   ts INTEGER NOT NULL,
   payload TEXT NOT NULL
 );
--- The closed months sealed into archive files (see Writer._archive). A
+-- The closed months sealed into archive files (see Archiver.archive). A
 -- row is written as 'sealing' before its file is, so a crash at any
 -- point leaves a row that says what to finish or undo; only a 'sealed'
 -- file is ever trusted to hold rows the hot file may then drop.
@@ -203,12 +201,12 @@ CREATE VIEW IF NOT EXISTS history AS
 # is answering. If a large store pushed that scan past the query timeout,
 # every restoring latch would fall back to its code default.
 #
-# A trigger instead of an UPDATE in the writer, because four paths insert
-# samples: _flush, _flush_each, seed and the v0 migration. Two are hard to
-# count in Python. _flush_each skips rows a constraint refuses, and seed
-# inserts rows dated in the past, so a batch's oldest row is not its
-# contribution to oldest_ts. The trigger fires only on rows that landed,
-# at the cost of one UPDATE on a small cached table per sample.
+# A trigger instead of an UPDATE in the writer, because three paths insert
+# samples: _flush, _flush_each and the v0 migration. Two are hard to count
+# in Python. _flush_each skips rows a constraint refuses. _flush also lands
+# the rows seed enqueues, which are dated in the past, so a batch's oldest
+# row is not its contribution to oldest_ts. The trigger fires only on rows
+# that landed, at the cost of one UPDATE on a small cached table per sample.
 #
 # Deletes have no trigger. Only _purge and _prune delete samples or
 # forecasts. They walk the series one at a time with a rowcount in hand,
@@ -237,6 +235,9 @@ END;
 # samples.kind codes, in the order the history view spells them out; the
 # wire and the docs keep the names.
 KINDS = ("bool", "number", "string")
+
+# The tables a purge or an archive file counts rows in.
+TABLES = ("samples", "forecasts", "events")
 
 
 def now_us() -> int:
@@ -358,6 +359,411 @@ def closed_months(conn: sqlite3.Connection, boundary: int):
     while month_start_us(year, month) < boundary:
         yield year, month
         year, month = (year + 1, 1) if month == 12 else (year, month + 1)
+
+
+def delete_series_rows(
+    conn: sqlite3.Connection,
+    table: str,
+    column: str,
+    series_id: int,
+    where: str,
+    args: tuple,
+    *,
+    newest: bool,
+) -> int:
+    """Delete one series' rows that match `where` and update its tally; return how many.
+
+    The delete and the update of the tally the insert trigger keeps share
+    one transaction. One transaction per series keeps the write lock short,
+    even on a first purge of years of data, and the series_id makes the
+    delete a range on the primary key instead of a table scan. `where` may
+    name the deleted row `r`. `column` is the stamp the bounds are taken
+    from. oldest_ts is always recomputed, and newest_ts only when `newest`
+    is set. Each bound is a seek to one end of the series' key range.
+    """
+    bounds = f"oldest_ts = (SELECT MIN({column}) FROM main.{table} WHERE series_id = ?)"
+    bound_args: tuple = (series_id,)
+    if newest:
+        bounds += f", newest_ts = (SELECT MAX({column}) FROM main.{table} WHERE series_id = ?)"
+        bound_args += (series_id,)
+    with conn:
+        gone = conn.execute(
+            f"DELETE FROM main.{table} AS r WHERE series_id = ? AND ({where})",
+            (series_id, *args),
+        ).rowcount
+        if gone:
+            conn.execute(
+                f"UPDATE series SET row_count = row_count - ?, {bounds} WHERE id = ?",
+                (gone, *bound_args, series_id),
+            )
+    return gone
+
+
+class Archiver:
+    """Seals closed months into archive files and deletes expired ones.
+
+    Runs on the writer thread, between flushes (see Writer).
+    """
+
+    def __init__(self, db_path: Path, sess: session.UnitSession, params: "Params"):
+        self.db_path = db_path
+        self.sess = sess
+        self.params = params
+        # The settings problems last reported, so each is reported once per
+        # change and not every hour.
+        self._misconfigured: list[str] = []
+
+    def archive(self) -> bool:
+        """Move one closed month out of the hot file into archive files.
+
+        Archiving moves rows and deletes nothing. A month that closed more
+        than archive_after_months ago is sealed into
+        archive/<store>-YYYY-MM.db beside the store, and the rows the
+        sealed file holds leave the hot file. The hot file stays one window
+        deep while every observation is kept. home/history/** answers from
+        the hot file only: archives are for people and tools (sqlite3,
+        DuckDB ATTACH), and home/history/stats lists them. See
+        docs/design.md#archives.
+
+        Handles one month per call. Returns True when it did something, so
+        the writer comes back for the next month once pending samples have
+        flushed. Does nothing while archive_after_months is 0.
+        """
+        months = self.params.archive_after_months
+        if months <= 0:
+            return False
+        archive_dir = self.db_path.parent / ARCHIVE_DIR
+        # A failure is reported and the pass goes on, so one unreadable file
+        # or one month that will not seal does not stop the other months.
+        # ValueError and OverflowError come from a date out of range (an
+        # absurd archive_after_months, a row stamped in year 1). They are
+        # caught too, because an uncaught one kills the writer thread.
+        failures = (sqlite3.Error, OSError, ArchiveError, ValueError, OverflowError)
+        try:
+            boundary = archive_boundary_us(now_us(), months)
+            conn = sqlite3.connect(self.db_path, timeout=2.0)
+        except failures as err:
+            self.sess.health_event("archive-failed", month=None, error=str(err))
+            return False
+        try:
+            self._finish_interrupted(conn, archive_dir, failures)
+            try:
+                months_due = list(closed_months(conn, boundary))
+            except failures as err:
+                self.sess.health_event("archive-failed", month=None, error=str(err))
+                return False
+            for month in months_due:
+                try:
+                    if self._archive_month(conn, archive_dir, month):
+                        return True
+                except failures as err:
+                    self.sess.health_event(
+                        "archive-failed", month=month_label(month), error=str(err)
+                    )
+            return False
+        finally:
+            conn.close()
+
+    def drop_archives(self) -> None:
+        """Delete sealed archive files older than retain_archives_months.
+
+        A file is deleted once its month closed more than
+        retain_archives_months ago. Only whole files are deleted, since a
+        sealed file is never rewritten. 0, the default, keeps them forever,
+        and the retain_*_days windows do not apply to archives. This runs
+        even when archive_after_months is 0, so archives made earlier still
+        age out. The file is deleted before its record, so a crash between
+        the two leaves a record of a missing file, which the next pass
+        removes.
+        """
+        months = self.params.retain_archives_months
+        if months <= 0:
+            return
+        archive_dir = self.db_path.parent / ARCHIVE_DIR
+        dropped = []
+        try:
+            boundary = archive_boundary_us(now_us(), months)
+            conn = sqlite3.connect(self.db_path, timeout=2.0)
+            try:
+                for name, month in conn.execute(
+                    "SELECT file, month FROM archives WHERE state = 'sealed' ORDER BY month"
+                ).fetchall():
+                    year, number = (int(part) for part in month.split("-"))
+                    if month_start_us(year, number) >= boundary:
+                        continue
+                    (archive_dir / name).unlink(missing_ok=True)
+                    with conn:
+                        conn.execute("DELETE FROM archives WHERE file = ?", (name,))
+                    dropped.append(name)
+            finally:
+                conn.close()
+        except (sqlite3.Error, OSError, ValueError, OverflowError) as err:
+            self.sess.health_event("archive-drop-failed", dropped=dropped, error=str(err))
+            return
+        if dropped:
+            self.sess.health_event("archive-dropped", files=dropped)
+
+    def check_settings(self) -> None:
+        """Report, once per change, when the archive settings undercut each other.
+
+        A month is archived once it closed more than archive_after_months
+        ago, so its first rows are by then up to archive_after_months + 1
+        months old. A retention window shorter than that deletes them before
+        they are archived. Archives kept no longer than archiving waits are
+        deleted as soon as they are sealed. Both settings are allowed; each
+        change that leaves such a conflict reports one
+        `archive-misconfigured` event.
+        """
+        archive = self.params.archive_after_months
+        problems = []
+        if archive > 0:
+            for param in RETENTION_PARAMS:
+                days = self.params.get(param)
+                if 0 < days < (archive + 1) * 31:
+                    problems.append(
+                        f"{param} ({days:g} days) deletes rows before"
+                        f" archive_after_months ({archive}) archives them"
+                    )
+            keep = self.params.retain_archives_months
+            if 0 < keep <= archive:
+                problems.append(
+                    f"retain_archives_months ({keep}) drops archives as soon as"
+                    f" archive_after_months ({archive}) seals them"
+                )
+        if problems and problems != self._misconfigured:
+            self.sess.health_event("archive-misconfigured", problems=problems)
+        self._misconfigured = problems
+
+    def _finish_interrupted(
+        self, conn: sqlite3.Connection, archive_dir: Path, failures: tuple
+    ) -> None:
+        """Finish or discard the seals a crash interrupted.
+
+        A 'sealing' row is a seal a crash interrupted. A file takes its
+        final name only after it has verified, so a file under that name is
+        complete and is recorded as sealed. Without one, nothing was pruned
+        against it yet, so the half-written attempt is discarded and the
+        month is sealed again from the hot rows.
+        """
+        for name, month in conn.execute(
+            "SELECT file, month FROM archives WHERE state = 'sealing'"
+        ).fetchall():
+            final = archive_dir / name
+            try:
+                if final.exists():
+                    self._record_sealed(conn, final)
+                else:
+                    Path(f"{final}.tmp").unlink(missing_ok=True)
+                    with conn:
+                        conn.execute("DELETE FROM archives WHERE file = ?", (name,))
+            except failures as err:
+                # Left as 'sealing', so nothing is pruned against it and
+                # its name is not reused.
+                self.sess.health_event("archive-failed", month=month, error=str(err))
+
+    def _archive_month(self, conn: sqlite3.Connection, archive_dir: Path, month) -> bool:
+        """Prune, seal and prune again one closed month; True when anything moved.
+
+        Prunes what the month's sealed files already hold, seals what none
+        of them does, and prunes that too.
+        """
+        label = month_label(month)
+        lo, hi = month_start_us(*month), month_start_us(month[0], month[1] + 1)
+        if not month_has_rows(conn, lo, hi):
+            return False
+        parts = [
+            archive_dir / name
+            for (name,) in conn.execute(
+                "SELECT file FROM archives WHERE month = ? AND state = 'sealed'"
+                " ORDER BY sealed_ts",
+                (label,),
+            )
+        ]
+        # A sealed file removed by hand holds nothing any more; what the
+        # hot file still has of that month is sealed again.
+        parts = [part for part in parts if part.exists()]
+        if len(parts) > MAX_PARTS:
+            raise ArchiveError(f"{label} has {len(parts)} archive files; at most {MAX_PARTS} are read")
+        aliases = []
+        sealed = None
+        try:
+            for i, part in enumerate(parts):
+                conn.execute(f"ATTACH DATABASE ? AS part{i}", (str(part),))
+                aliases.append(f"part{i}")
+            pruned = self._prune(conn, aliases, lo, hi)
+            if has_unsealed(conn, aliases, lo, hi):
+                sealed = self._seal(conn, archive_dir, label, aliases, lo, hi)
+                alias = f"part{len(aliases)}"
+                conn.execute(f"ATTACH DATABASE ? AS {alias}", (str(archive_dir / sealed["file"]),))
+                aliases.append(alias)
+                pruned += self._prune(conn, [alias], lo, hi)
+        finally:
+            for alias in aliases:
+                conn.execute(f"DETACH DATABASE {alias}")
+        if not sealed and not pruned:
+            return False
+        conn.execute("PRAGMA incremental_vacuum")
+        self.sess.health_event("archive", month=label, sealed=sealed, pruned=pruned)
+        return True
+
+    def _seal(self, conn, archive_dir: Path, label: str, aliases: list, lo: int, hi: int) -> dict:
+        """Write the month's rows that no sealed file holds into a new archive file.
+
+        The file is a plain SQLite file with the store's own schema, so
+        `sqlite3` or a DuckDB ATTACH reads it like the store. It carries
+        the store's series and room ids, so a row means the same thing in
+        both. It is written under a temporary name and verified
+        (integrity_check and row counts) before it takes its final name.
+        """
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        name = self._free_name(conn, archive_dir, label)
+        with conn:
+            conn.execute(
+                "INSERT INTO archives (file, month, state) VALUES (?, ?, 'sealing')",
+                (name, label),
+            )
+        final = archive_dir / name
+        tmp = Path(f"{final}.tmp")
+        tmp.unlink(missing_ok=True)
+        init = sqlite3.connect(tmp)
+        try:
+            init.executescript(SCHEMA)
+            init.executescript(TRIGGERS)
+            init.execute(f"PRAGMA user_version={STORE_VERSION}")
+            init.commit()
+        finally:
+            init.close()
+        conn.execute("ATTACH DATABASE ? AS arch", (str(tmp),))
+        try:
+            with conn:
+                conn.execute(
+                    "INSERT INTO arch.series (id, class, entity, aspect, source)"
+                    " SELECT id, class, entity, aspect, source FROM main.series"
+                )
+                conn.execute("INSERT INTO arch.rooms SELECT * FROM main.rooms")
+                counts = {
+                    table: conn.execute(
+                        f"INSERT INTO arch.{table} SELECT r.* {month_rows(table)}"
+                        f" AND {not_held(aliases, table)}",
+                        (lo, hi),
+                    ).rowcount
+                    for table in TABLES
+                }
+        finally:
+            conn.execute("DETACH DATABASE arch")
+        check = sqlite3.connect(tmp)
+        try:
+            verdict = check.execute("PRAGMA integrity_check").fetchone()[0]
+            found = {
+                table: check.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                for table in counts
+            }
+        finally:
+            check.close()
+        if verdict != "ok" or found != counts:
+            raise ArchiveError(f"{name} did not verify: {verdict}, {found} != {counts}")
+        with open(tmp, "rb") as handle:
+            os.fsync(handle.fileno())
+        os.replace(tmp, final)
+        directory = os.open(archive_dir, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+        return self._record_sealed(conn, final)
+
+    def _record_sealed(self, conn: sqlite3.Connection, final: Path) -> dict:
+        """Mark a verified, renamed file sealed and return its record.
+
+        The record is the file's row counts, size and SHA-256. An archive
+        is never written again, so a later check only needs the checksum.
+        The file is made read-only on disk.
+        """
+        check = sqlite3.connect(f"file:{final}?mode=ro", uri=True)
+        try:
+            counts = {
+                table: check.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                for table in TABLES
+            }
+        finally:
+            check.close()
+        digest = hashlib.sha256()
+        with open(final, "rb") as handle:
+            for block in iter(lambda: handle.read(1 << 20), b""):
+                digest.update(block)
+        final.chmod(0o444)
+        record = {
+            "file": final.name,
+            **counts,
+            "bytes": final.stat().st_size,
+            "sha256": digest.hexdigest(),
+        }
+        with conn:
+            conn.execute(
+                "UPDATE archives SET state = 'sealed', samples = ?, forecasts = ?,"
+                " events = ?, bytes = ?, sha256 = ?, sealed_ts = ? WHERE file = ?",
+                (
+                    counts["samples"],
+                    counts["forecasts"],
+                    counts["events"],
+                    record["bytes"],
+                    record["sha256"],
+                    now_us(),
+                    final.name,
+                ),
+            )
+        return record
+
+    def _free_name(self, conn: sqlite3.Connection, archive_dir: Path, label: str) -> str:
+        """Return the first free archive file name for a month.
+
+        `<store>-YYYY-MM.db`, then `.2`, `.3`... for rows that reached a
+        month after it was sealed, since a sealed file is never written
+        again. A name already on disk that the store has no record of
+        belongs to something else and is skipped.
+        """
+        taken = {name for (name,) in conn.execute("SELECT file FROM archives")}
+        part = 1
+        while True:
+            suffix = "" if part == 1 else f".{part}"
+            name = f"{self.db_path.stem}-{label}{suffix}.db"
+            if name not in taken and not (archive_dir / name).exists():
+                return name
+            part += 1
+
+    def _prune(self, conn: sqlite3.Connection, aliases: list, lo: int, hi: int) -> int:
+        """Delete the month's hot rows that a sealed file holds; return how many.
+
+        Rows are matched on the whole row. Each series' newest sample and
+        newest forecast issue stay in the hot file as well, because
+        restore, the seed and every latest-value read look for a series'
+        last value there. A latch set months ago must still be found after
+        a core restart. Works per series, like the purge, so each delete is
+        a range on the primary key and the tally is updated in the same
+        transaction.
+        """
+        if not aliases:
+            return 0
+        gone_total = 0
+        for table, column in (("samples", "ts"), ("forecasts", "issued_ts")):
+            for series_id, newest_ts in conn.execute(
+                f"SELECT DISTINCT r.series_id, s.newest_ts {month_rows(table)}",
+                (lo, hi),
+            ).fetchall():
+                # The newest row stays, so newest_ts stays as it is.
+                gone_total += delete_series_rows(
+                    conn, table, column, series_id,
+                    f"{column} >= ? AND {column} < ? AND {column} <> ?"
+                    f" AND NOT ({not_held(aliases, table)})",
+                    (lo, hi, newest_ts), newest=False,
+                )
+        with conn:
+            gone_total += conn.execute(
+                "DELETE FROM main.events AS r WHERE ts >= ? AND ts < ?"
+                f" AND NOT ({not_held(aliases, 'events')})",
+                (lo, hi),
+            ).rowcount
+        return gone_total
 
 
 def iso_utc(us: int) -> str:
@@ -491,15 +897,13 @@ class Writer:
         # archives one month, so on a first archive of years of data the
         # flushes run between months instead of waiting for all of it.
         self.archive_due = False
-        # The settings problems last reported, so each is reported once per
-        # change and not every hour.
-        self._misconfigured: list[str] = []
         # The checker is created before the params because a config sample
         # can arrive as soon as the params subscription exists, and the
         # change handler wakes the checker.
         self.checker = IntegrityChecker(db_path, sess)
         self.params = Params(sess, self._on_param_change)
         self.checker.params = self.params
+        self.archiver = Archiver(db_path, sess, self.params)
         self.thread = threading.Thread(target=self._run, name="writer")
 
     def _on_param_change(self) -> None:
@@ -553,9 +957,9 @@ class Writer:
                 # deleted instead of archived and then deleted.
                 if purge:
                     self._purge()
-                    self._check_archive_settings()
-                    self._drop_archives()
-                if archive and self._archive():
+                    self.archiver.check_settings()
+                    self.archiver.drop_archives()
+                if archive and self.archiver.archive():
                     with self.cond:
                         self.archive_due = True
                 continue
@@ -715,60 +1119,23 @@ class Writer:
             for table, days in windows.items()
             if days > 0
         }
-        deleted = {"samples": 0, "forecasts": 0, "events": 0}
+        deleted = dict.fromkeys(TABLES, 0)
         try:
             conn = sqlite3.connect(self.db_path, timeout=2.0)
             try:
-                if "samples" in cutoffs:
-                    # Per series, so the delete is a range on the primary
-                    # key (series_id, ts) instead of a table scan. One
-                    # transaction per series keeps the write lock short,
-                    # even on a first purge of years of data.
+                # Both bounds are recomputed for samples and forecasts
+                # alike, because a series purged empty has no newest
+                # either. A forecast's primary key is (series_id,
+                # issued_ts, valid_ts), so all points of one issue are
+                # deleted together.
+                for table, column in (("samples", "ts"), ("forecasts", "issued_ts")):
+                    if table not in cutoffs:
+                        continue
                     for (series_id,) in conn.execute("SELECT id FROM series").fetchall():
-                        with conn:
-                            gone = conn.execute(
-                                "DELETE FROM samples WHERE series_id = ? AND ts < ?",
-                                (series_id, cutoffs["samples"]),
-                            ).rowcount
-                            if gone:
-                                # Update the tally the insert trigger
-                                # keeps, in the same transaction as the
-                                # delete. Both bounds are recomputed
-                                # because a series purged empty has no
-                                # newest either. Each subquery is a seek
-                                # to one end of the series' key range.
-                                conn.execute(
-                                    "UPDATE series SET row_count = row_count - ?,"
-                                    " oldest_ts = (SELECT MIN(ts) FROM samples"
-                                    "   WHERE series_id = ?),"
-                                    " newest_ts = (SELECT MAX(ts) FROM samples"
-                                    "   WHERE series_id = ?)"
-                                    " WHERE id = ?",
-                                    (gone, series_id, series_id, series_id),
-                                )
-                            deleted["samples"] += gone
-                if "forecasts" in cutoffs:
-                    # The same walk on issue time. The primary key is
-                    # (series_id, issued_ts, valid_ts), so deleting by
-                    # issue age is a range on its leading columns, and all
-                    # points of one issue are deleted together.
-                    for (series_id,) in conn.execute("SELECT id FROM series").fetchall():
-                        with conn:
-                            gone = conn.execute(
-                                "DELETE FROM forecasts WHERE series_id = ? AND issued_ts < ?",
-                                (series_id, cutoffs["forecasts"]),
-                            ).rowcount
-                            if gone:
-                                conn.execute(
-                                    "UPDATE series SET row_count = row_count - ?,"
-                                    " oldest_ts = (SELECT MIN(issued_ts) FROM forecasts"
-                                    "   WHERE series_id = ?),"
-                                    " newest_ts = (SELECT MAX(issued_ts) FROM forecasts"
-                                    "   WHERE series_id = ?)"
-                                    " WHERE id = ?",
-                                    (gone, series_id, series_id, series_id),
-                                )
-                            deleted["forecasts"] += gone
+                        deleted[table] += delete_series_rows(
+                            conn, table, column, series_id, f"{column} < ?",
+                            (cutoffs[table],), newest=True,
+                        )
                 if "events" in cutoffs:
                     with conn:
                         deleted["events"] = conn.execute(
@@ -791,368 +1158,6 @@ class Writer:
             events=deleted["events"],
             pages_freed=before - after,
         )
-
-    def _archive(self) -> bool:
-        """Move one closed month out of the hot file into archive files.
-
-        Archiving moves rows and deletes nothing. A month that closed more
-        than archive_after_months ago is sealed into
-        archive/<store>-YYYY-MM.db beside the store, and the rows the
-        sealed file holds leave the hot file. The hot file stays one window
-        deep while every observation is kept. home/history/** answers from
-        the hot file only: archives are for people and tools (sqlite3,
-        DuckDB ATTACH), and home/history/stats lists them. See
-        docs/design.md#archives.
-
-        Handles one month per call. Returns True when it did something, so
-        the writer comes back for the next month once pending samples have
-        flushed. Does nothing while archive_after_months is 0.
-        """
-        months = self.params.archive_after_months
-        if months <= 0:
-            return False
-        archive_dir = self.db_path.parent / ARCHIVE_DIR
-        # A failure is reported and the pass goes on, so one unreadable file
-        # or one month that will not seal does not stop the other months.
-        # ValueError and OverflowError come from a date out of range (an
-        # absurd archive_after_months, a row stamped in year 1). They are
-        # caught too, because an uncaught one kills the writer thread.
-        failures = (sqlite3.Error, OSError, ArchiveError, ValueError, OverflowError)
-        try:
-            boundary = archive_boundary_us(now_us(), months)
-            conn = sqlite3.connect(self.db_path, timeout=2.0)
-        except failures as err:
-            self.sess.health_event("archive-failed", month=None, error=str(err))
-            return False
-        try:
-            self._finish_interrupted(conn, archive_dir, failures)
-            try:
-                months_due = list(closed_months(conn, boundary))
-            except failures as err:
-                self.sess.health_event("archive-failed", month=None, error=str(err))
-                return False
-            for month in months_due:
-                try:
-                    if self._archive_month(conn, archive_dir, month):
-                        return True
-                except failures as err:
-                    self.sess.health_event(
-                        "archive-failed", month=month_label(month), error=str(err)
-                    )
-            return False
-        finally:
-            conn.close()
-
-    def _drop_archives(self) -> None:
-        """Delete sealed archive files older than retain_archives_months.
-
-        A file is deleted once its month closed more than
-        retain_archives_months ago. Only whole files are deleted, since a
-        sealed file is never rewritten. 0, the default, keeps them forever,
-        and the retain_*_days windows do not apply to archives. This runs
-        even when archive_after_months is 0, so archives made earlier still
-        age out. The file is deleted before its record, so a crash between
-        the two leaves a record of a missing file, which the next pass
-        removes.
-        """
-        months = self.params.retain_archives_months
-        if months <= 0:
-            return
-        archive_dir = self.db_path.parent / ARCHIVE_DIR
-        dropped = []
-        try:
-            boundary = archive_boundary_us(now_us(), months)
-            conn = sqlite3.connect(self.db_path, timeout=2.0)
-            try:
-                for name, month in conn.execute(
-                    "SELECT file, month FROM archives WHERE state = 'sealed' ORDER BY month"
-                ).fetchall():
-                    year, number = (int(part) for part in month.split("-"))
-                    if month_start_us(year, number) >= boundary:
-                        continue
-                    (archive_dir / name).unlink(missing_ok=True)
-                    with conn:
-                        conn.execute("DELETE FROM archives WHERE file = ?", (name,))
-                    dropped.append(name)
-            finally:
-                conn.close()
-        except (sqlite3.Error, OSError, ValueError, OverflowError) as err:
-            self.sess.health_event("archive-drop-failed", dropped=dropped, error=str(err))
-            return
-        if dropped:
-            self.sess.health_event("archive-dropped", files=dropped)
-
-    def _check_archive_settings(self) -> None:
-        """Report, once per change, when the archive settings undercut each other.
-
-        A month is archived once it closed more than archive_after_months
-        ago, so its first rows are by then up to archive_after_months + 1
-        months old. A retention window shorter than that deletes them before
-        they are archived. Archives kept no longer than archiving waits are
-        deleted as soon as they are sealed. Both settings are allowed; each
-        change that leaves such a conflict reports one
-        `archive-misconfigured` event.
-        """
-        archive = self.params.archive_after_months
-        problems = []
-        if archive > 0:
-            for param in RETENTION_PARAMS:
-                days = self.params.get(param)
-                if 0 < days < (archive + 1) * 31:
-                    problems.append(
-                        f"{param} ({days:g} days) deletes rows before"
-                        f" archive_after_months ({archive}) archives them"
-                    )
-            keep = self.params.retain_archives_months
-            if 0 < keep <= archive:
-                problems.append(
-                    f"retain_archives_months ({keep}) drops archives as soon as"
-                    f" archive_after_months ({archive}) seals them"
-                )
-        if problems and problems != self._misconfigured:
-            self.sess.health_event("archive-misconfigured", problems=problems)
-        self._misconfigured = problems
-
-    def _finish_interrupted(
-        self, conn: sqlite3.Connection, archive_dir: Path, failures: tuple
-    ) -> None:
-        """Finish or discard the seals a crash interrupted.
-
-        A 'sealing' row is a seal a crash interrupted. A file takes its
-        final name only after it has verified, so a file under that name is
-        complete and is recorded as sealed. Without one, nothing was pruned
-        against it yet, so the half-written attempt is discarded and the
-        month is sealed again from the hot rows.
-        """
-        for name, month in conn.execute(
-            "SELECT file, month FROM archives WHERE state = 'sealing'"
-        ).fetchall():
-            final = archive_dir / name
-            try:
-                if final.exists():
-                    self._record_sealed(conn, final)
-                else:
-                    Path(f"{final}.tmp").unlink(missing_ok=True)
-                    with conn:
-                        conn.execute("DELETE FROM archives WHERE file = ?", (name,))
-            except failures as err:
-                # Left as 'sealing', so nothing is pruned against it and
-                # its name is not reused.
-                self.sess.health_event("archive-failed", month=month, error=str(err))
-
-    def _archive_month(self, conn: sqlite3.Connection, archive_dir: Path, month) -> bool:
-        """Prune, seal and prune again one closed month; True when anything moved.
-
-        Prunes what the month's sealed files already hold, seals what none
-        of them does, and prunes that too.
-        """
-        label = month_label(month)
-        lo, hi = month_start_us(*month), month_start_us(month[0], month[1] + 1)
-        if not month_has_rows(conn, lo, hi):
-            return False
-        parts = [
-            archive_dir / name
-            for (name,) in conn.execute(
-                "SELECT file FROM archives WHERE month = ? AND state = 'sealed'"
-                " ORDER BY sealed_ts",
-                (label,),
-            )
-        ]
-        # A sealed file removed by hand holds nothing any more; what the
-        # hot file still has of that month is sealed again.
-        parts = [part for part in parts if part.exists()]
-        if len(parts) > MAX_PARTS:
-            raise ArchiveError(f"{label} has {len(parts)} archive files; at most {MAX_PARTS} are read")
-        aliases = []
-        sealed = None
-        try:
-            for i, part in enumerate(parts):
-                conn.execute(f"ATTACH DATABASE ? AS part{i}", (str(part),))
-                aliases.append(f"part{i}")
-            pruned = self._prune(conn, aliases, lo, hi)
-            if has_unsealed(conn, aliases, lo, hi):
-                sealed = self._seal(conn, archive_dir, label, aliases, lo, hi)
-                alias = f"part{len(aliases)}"
-                conn.execute(f"ATTACH DATABASE ? AS {alias}", (str(archive_dir / sealed["file"]),))
-                aliases.append(alias)
-                pruned += self._prune(conn, [alias], lo, hi)
-        finally:
-            for alias in aliases:
-                conn.execute(f"DETACH DATABASE {alias}")
-        if not sealed and not pruned:
-            return False
-        conn.execute("PRAGMA incremental_vacuum")
-        self.sess.health_event("archive", month=label, sealed=sealed, pruned=pruned)
-        return True
-
-    def _seal(self, conn, archive_dir: Path, label: str, aliases: list, lo: int, hi: int) -> dict:
-        """Write the month's rows that no sealed file holds into a new archive file.
-
-        The file is a plain SQLite file with the store's own schema, so
-        `sqlite3` or a DuckDB ATTACH reads it like the store. It carries
-        the store's series and room ids, so a row means the same thing in
-        both. It is written under a temporary name and verified
-        (integrity_check and row counts) before it takes its final name.
-        """
-        archive_dir.mkdir(parents=True, exist_ok=True)
-        name = self._free_name(conn, archive_dir, label)
-        with conn:
-            conn.execute(
-                "INSERT INTO archives (file, month, state) VALUES (?, ?, 'sealing')",
-                (name, label),
-            )
-        final = archive_dir / name
-        tmp = Path(f"{final}.tmp")
-        tmp.unlink(missing_ok=True)
-        init = sqlite3.connect(tmp)
-        try:
-            init.executescript(SCHEMA)
-            init.executescript(TRIGGERS)
-            init.execute(f"PRAGMA user_version={STORE_VERSION}")
-            init.commit()
-        finally:
-            init.close()
-        conn.execute("ATTACH DATABASE ? AS arch", (str(tmp),))
-        try:
-            with conn:
-                conn.execute(
-                    "INSERT INTO arch.series (id, class, entity, aspect, source)"
-                    " SELECT id, class, entity, aspect, source FROM main.series"
-                )
-                conn.execute("INSERT INTO arch.rooms SELECT * FROM main.rooms")
-                counts = {
-                    table: conn.execute(
-                        f"INSERT INTO arch.{table} SELECT r.* {month_rows(table)}"
-                        f" AND {not_held(aliases, table)}",
-                        (lo, hi),
-                    ).rowcount
-                    for table in ("samples", "forecasts", "events")
-                }
-        finally:
-            conn.execute("DETACH DATABASE arch")
-        check = sqlite3.connect(tmp)
-        try:
-            verdict = check.execute("PRAGMA integrity_check").fetchone()[0]
-            found = {
-                table: check.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-                for table in counts
-            }
-        finally:
-            check.close()
-        if verdict != "ok" or found != counts:
-            raise ArchiveError(f"{name} did not verify: {verdict}, {found} != {counts}")
-        with open(tmp, "rb") as handle:
-            os.fsync(handle.fileno())
-        os.replace(tmp, final)
-        directory = os.open(archive_dir, os.O_RDONLY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
-        return self._record_sealed(conn, final)
-
-    def _record_sealed(self, conn: sqlite3.Connection, final: Path) -> dict:
-        """Mark a verified, renamed file sealed and return its record.
-
-        The record is the file's row counts, size and SHA-256. An archive
-        is never written again, so a later check only needs the checksum.
-        The file is made read-only on disk.
-        """
-        check = sqlite3.connect(f"file:{final}?mode=ro", uri=True)
-        try:
-            counts = {
-                table: check.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-                for table in ("samples", "forecasts", "events")
-            }
-        finally:
-            check.close()
-        digest = hashlib.sha256()
-        with open(final, "rb") as handle:
-            for block in iter(lambda: handle.read(1 << 20), b""):
-                digest.update(block)
-        final.chmod(0o444)
-        record = {
-            "file": final.name,
-            **counts,
-            "bytes": final.stat().st_size,
-            "sha256": digest.hexdigest(),
-        }
-        with conn:
-            conn.execute(
-                "UPDATE archives SET state = 'sealed', samples = ?, forecasts = ?,"
-                " events = ?, bytes = ?, sha256 = ?, sealed_ts = ? WHERE file = ?",
-                (
-                    counts["samples"],
-                    counts["forecasts"],
-                    counts["events"],
-                    record["bytes"],
-                    record["sha256"],
-                    now_us(),
-                    final.name,
-                ),
-            )
-        return record
-
-    def _free_name(self, conn: sqlite3.Connection, archive_dir: Path, label: str) -> str:
-        """Return the first free archive file name for a month.
-
-        `<store>-YYYY-MM.db`, then `.2`, `.3`... for rows that reached a
-        month after it was sealed, since a sealed file is never written
-        again. A name already on disk that the store has no record of
-        belongs to something else and is skipped.
-        """
-        taken = {name for (name,) in conn.execute("SELECT file FROM archives")}
-        part = 1
-        while True:
-            suffix = "" if part == 1 else f".{part}"
-            name = f"{self.db_path.stem}-{label}{suffix}.db"
-            if name not in taken and not (archive_dir / name).exists():
-                return name
-            part += 1
-
-    def _prune(self, conn: sqlite3.Connection, aliases: list, lo: int, hi: int) -> int:
-        """Delete the month's hot rows that a sealed file holds; return how many.
-
-        Rows are matched on the whole row. Each series' newest sample and
-        newest forecast issue stay in the hot file as well, because
-        restore, the seed and every latest-value read look for a series'
-        last value there. A latch set months ago must still be found after
-        a core restart. Works per series, like the purge, so each delete is
-        a range on the primary key and the tally is updated in the same
-        transaction.
-        """
-        if not aliases:
-            return 0
-        gone_total = 0
-        for table, column in (("samples", "ts"), ("forecasts", "issued_ts")):
-            for series_id, newest in conn.execute(
-                f"SELECT DISTINCT r.series_id, s.newest_ts {month_rows(table)}",
-                (lo, hi),
-            ).fetchall():
-                with conn:
-                    gone = conn.execute(
-                        f"DELETE FROM main.{table} AS r WHERE series_id = ?"
-                        f" AND {column} >= ? AND {column} < ? AND {column} <> ?"
-                        f" AND NOT ({not_held(aliases, table)})",
-                        (series_id, lo, hi, newest),
-                    ).rowcount
-                    if gone:
-                        conn.execute(
-                            "UPDATE series SET row_count = row_count - ?,"
-                            f" oldest_ts = (SELECT MIN({column}) FROM main.{table}"
-                            "   WHERE series_id = ?)"
-                            " WHERE id = ?",
-                            (gone, series_id, series_id),
-                        )
-                gone_total += gone
-        with conn:
-            gone_total += conn.execute(
-                "DELETE FROM main.events AS r WHERE ts >= ? AND ts < ?"
-                f" AND NOT ({not_held(aliases, 'events')})",
-                (lo, hi),
-            ).rowcount
-        return gone_total
-
     def _intern(self, conn: sqlite3.Connection, rows: list) -> None:
         """Ensure every series and room the batch names has an id.
 
@@ -1195,6 +1200,19 @@ def decode(kind: int, value):
 # recorder's receipt, the mirror's age counts from the core's, and the two
 # sit milliseconds apart on the same host.
 SEED_TOLERANCE_US = 500_000
+
+
+@contextlib.contextmanager
+def store_errors(query: zenoh.Query):
+    """Turn a sqlite3.Error in the block into a "store unavailable" error reply.
+
+    The error ends the block, so a handler that replies per series may
+    already have sent some replies before the error reply.
+    """
+    try:
+        yield
+    except sqlite3.Error as err:
+        query.reply_err(json.dumps(f"store unavailable: {err}"))
 
 
 class Recorder:
@@ -1448,7 +1466,7 @@ class Recorder:
 
         Every path keeps at most `limit` rows (issues, for forecasts),
         keeps the newest, and replies oldest first. A limit above
-        MAX_QUERY_LIMIT is clamped to it. Malformed parameters get an error
+        MAX_ROWS is clamped to it. Malformed parameters get an error
         reply.
         """
         # A query callback that raises sends no reply, and the caller cannot
@@ -1486,6 +1504,17 @@ class Recorder:
         else:
             self._answer_samples(query, asked)
 
+    def _read_only(self) -> contextlib.closing:
+        """Open the store read-only for one query, closed when the block ends."""
+        return contextlib.closing(
+            sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True, timeout=2.0)
+        )
+
+    def _reply_one(self, query: zenoh.Query, key: zenoh.KeyExpr, build) -> None:
+        """Reply one message at `key` with what `build` reads from the store, as JSON."""
+        with store_errors(query), self._read_only() as conn:
+            query.reply(str(key), json.dumps(build(conn)))
+
     def _answer_samples(self, query: zenoh.Query, asked: zenoh.KeyExpr) -> None:
         """Answer home/history/{state|cmd}/{entity}/{aspect}?from=..;to=..;limit=..
 
@@ -1502,12 +1531,7 @@ class Recorder:
         except ValueError as err:
             query.reply_err(json.dumps(str(err)))
             return
-        try:
-            conn = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True, timeout=2.0)
-        except sqlite3.Error as err:
-            query.reply_err(json.dumps(f"store unavailable: {err}"))
-            return
-        try:
+        with store_errors(query), self._read_only() as conn:
             series = conn.execute(
                 "SELECT id, class, entity, aspect FROM series WHERE class != 'forecast'"
             ).fetchall()
@@ -1548,10 +1572,6 @@ class Recorder:
                         for ts, room, kind, value in rows
                     ]
                 query.reply(series_key, json.dumps(payload))
-        except sqlite3.Error as err:
-            query.reply_err(json.dumps(f"store unavailable: {err}"))
-        finally:
-            conn.close()
 
     def _answer_forecasts(self, query: zenoh.Query, asked: zenoh.KeyExpr) -> None:
         """Answer home/history/forecast/{entity}/{aspect}/{source} in issues.
@@ -1572,12 +1592,7 @@ class Recorder:
         except ValueError as err:
             query.reply_err(json.dumps(str(err)))
             return
-        try:
-            conn = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True, timeout=2.0)
-        except sqlite3.Error as err:
-            query.reply_err(json.dumps(f"store unavailable: {err}"))
-            return
-        try:
+        with store_errors(query), self._read_only() as conn:
             series = conn.execute(
                 "SELECT id, entity, aspect, source FROM series WHERE class = 'forecast'"
             ).fetchall()
@@ -1617,10 +1632,6 @@ class Recorder:
                         (series_id, to_us, from_us, from_us),
                     ).fetchall()
                 query.reply(series_key, json.dumps(as_issues(rows, limit)))
-        except sqlite3.Error as err:
-            query.reply_err(json.dumps(f"store unavailable: {err}"))
-        finally:
-            conn.close()
 
     def _answer_events(self, query: zenoh.Query) -> None:
         """Answer home/history/events?key=..;from=..;to=..;limit=..
@@ -1637,12 +1648,7 @@ class Recorder:
         except ValueError as err:
             query.reply_err(json.dumps(str(err)))
             return
-        try:
-            conn = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True, timeout=2.0)
-        except sqlite3.Error as err:
-            query.reply_err(json.dumps(f"store unavailable: {err}"))
-            return
-        try:
+        with store_errors(query), self._read_only() as conn:
             if key_pattern is None:
                 rows = conn.execute(
                     "SELECT ts, key, payload FROM events WHERE ts >= ? AND ts <= ?"
@@ -1678,10 +1684,6 @@ class Recorder:
                 for ts, key, text in reversed(rows)
             ]
             query.reply("home/history/events", json.dumps(payload))
-        except sqlite3.Error as err:
-            query.reply_err(json.dumps(f"store unavailable: {err}"))
-        finally:
-            conn.close()
 
     def _answer_latest(self, query: zenoh.Query) -> None:
         """Answer home/history/latest with every state series' newest row.
@@ -1691,17 +1693,7 @@ class Recorder:
         The core reads it after a restart to replay what its mirror lost
         (docs/design.md#replay-after-a-core-restart).
         """
-        try:
-            conn = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True, timeout=2.0)
-        except sqlite3.Error as err:
-            query.reply_err(json.dumps(f"store unavailable: {err}"))
-            return
-        try:
-            query.reply(str(LATEST_KEY), json.dumps(latest_state(conn)))
-        except sqlite3.Error as err:
-            query.reply_err(json.dumps(f"store unavailable: {err}"))
-        finally:
-            conn.close()
+        self._reply_one(query, LATEST_KEY, latest_state)
 
     def _answer_holds(self, query: zenoh.Query) -> None:
         """Answer home/history/holds with the latest record at every hold and arbitration key.
@@ -1711,17 +1703,7 @@ class Recorder:
         arbiters back what its mirror lost
         (docs/design.md#replay-after-a-core-restart).
         """
-        try:
-            conn = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True, timeout=2.0)
-        except sqlite3.Error as err:
-            query.reply_err(json.dumps(f"store unavailable: {err}"))
-            return
-        try:
-            query.reply(str(HOLDS_KEY), json.dumps(standing(conn)))
-        except sqlite3.Error as err:
-            query.reply_err(json.dumps(f"store unavailable: {err}"))
-        finally:
-            conn.close()
+        self._reply_one(query, HOLDS_KEY, standing)
 
     def _answer_stats(self, query: zenoh.Query) -> None:
         """Answer home/history/stats with one message describing the store.
@@ -1734,17 +1716,7 @@ class Recorder:
         are kept up to date on insert, so the reply reads one row per series
         and does not slow down as the store grows.
         """
-        try:
-            conn = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True, timeout=2.0)
-        except sqlite3.Error as err:
-            query.reply_err(json.dumps(f"store unavailable: {err}"))
-            return
-        try:
-            query.reply(str(STATS_KEY), json.dumps(store_stats(conn)))
-        except sqlite3.Error as err:
-            query.reply_err(json.dumps(f"store unavailable: {err}"))
-        finally:
-            conn.close()
+        self._reply_one(query, STATS_KEY, store_stats)
 
 
 def newest_state_ts(conn: sqlite3.Connection, entity: str, aspect: str) -> int | None:
@@ -1786,7 +1758,7 @@ def latest_state(conn: sqlite3.Connection) -> list[dict]:
     """Return every state series' newest row, as the latest reply lists it.
 
     The newest row of each series stays in the hot file when its month is
-    archived (see Writer._prune), so this reads the hot file only.
+    archived (see Archiver._prune), so this reads the hot file only.
     """
     rows = conn.execute(
         "SELECT rooms.name, s.entity, s.aspect, x.kind, x.value, x.ts"
@@ -1822,8 +1794,8 @@ def store_stats(conn: sqlite3.Connection) -> dict:
 
     Sizes from the pager, one aggregate per series and one for the events
     table. The per-series aggregates are read off `series`, where the
-    insert trigger and _purge maintain them; a series with no rows right
-    now (`row_count` 0) has no entry.
+    insert trigger, _purge and _prune maintain them; a series with no rows
+    right now (`row_count` 0) has no entry.
     """
     page_size = conn.execute("PRAGMA page_size").fetchone()[0]
     page_count = conn.execute("PRAGMA page_count").fetchone()[0]
@@ -1885,43 +1857,19 @@ def event_payload(text: str):
         return text
 
 
-def split_selector(raw: str) -> dict[str, str]:
-    """Split a selector's parameters (zenoh's `a=1;b=2` grammar) into a dict.
-
-    No URL decoding: RFC3339 offsets contain '+', which must stay literal.
-    """
-    params = {}
-    for part in raw.split(";"):
-        if not part:
-            continue
-        name, _, value = part.partition("=")
-        params[name] = value
-    return params
-
-
 def parse_params(raw: str) -> tuple[int, int, int, int, bool]:
     """Parse a samples query's parameters from a selector.
 
     Returns from/to (RFC3339 with offset), limit, bucket (µs, 0 = raw rows)
     and changes.
     """
-    params = split_selector(raw)
+    params = split_params(raw)
     from_us, to_us, limit = 0, now_us(), DEFAULT_QUERY_LIMIT
     bucket_us, changes = 0, False
-    for bound in ("from", "to"):
-        if bound not in params:
-            continue
-        try:
-            dt = datetime.datetime.fromisoformat(params[bound])
-        except ValueError:
-            raise ValueError(f"{bound}: {params[bound]!r} is not RFC3339") from None
-        if dt.tzinfo is None:
-            raise ValueError(f"{bound}: {params[bound]!r} needs a UTC offset")
-        us = int(dt.timestamp() * 1e6)
-        if bound == "from":
-            from_us = us
-        else:
-            to_us = us
+    if "from" in params:
+        from_us = rfc3339_us("from", params["from"])
+    if "to" in params:
+        to_us = rfc3339_us("to", params["to"])
     if "limit" in params:
         limit = parse_limit(params["limit"])
     if "bucket" in params:
@@ -1932,13 +1880,13 @@ def parse_params(raw: str) -> tuple[int, int, int, int, bool]:
         changes = True
     if bucket_us and changes:
         raise ValueError("bucket and changes are exclusive")
-    if bucket_us and to_us // bucket_us - from_us // bucket_us + 1 > MAX_QUERY_LIMIT:
+    if bucket_us and to_us // bucket_us - from_us // bucket_us + 1 > MAX_ROWS:
         # The fold walks the whole window, so a bucket that yields more
         # points than a reply can carry would scan for nothing, and the
         # reply would leave the oldest buckets out. Buckets are aligned to
         # the epoch, so the count is of the buckets the window touches.
         raise ValueError(
-            f"bucket: {bucket_us // 1_000_000} s makes more than {MAX_QUERY_LIMIT}"
+            f"bucket: {bucket_us // 1_000_000} s makes more than {MAX_ROWS}"
             " buckets over the window; widen it or narrow from/to"
         )
     return from_us, to_us, limit, bucket_us, changes
@@ -1975,7 +1923,7 @@ def parse_forecast_params(raw: str) -> tuple[int | None, int, int, int]:
     default for one end would be a guess. With neither given, `at` is
     now, so a bare read of the key returns the current forecast.
     """
-    params = split_selector(raw)
+    params = split_params(raw)
     limit = parse_limit(params["limit"]) if "limit" in params else DEFAULT_QUERY_LIMIT
     ranged = "valid_from" in params or "valid_to" in params
     if "at" in params and ranged:
@@ -2074,14 +2022,14 @@ def changes_only(rows, limit: int) -> list[tuple]:
 
 
 def parse_limit(raw: str) -> int:
-    """Parse a positive row count, clamped to MAX_QUERY_LIMIT."""
+    """Parse a positive row count, clamped to MAX_ROWS."""
     try:
         limit = int(raw)
     except ValueError:
         raise ValueError(f"limit: {raw!r} is not an integer") from None
     if limit < 1:
         raise ValueError(f"limit: {limit} is not positive")
-    return min(limit, MAX_QUERY_LIMIT)
+    return min(limit, MAX_ROWS)
 
 
 def parse_event_params(raw: str) -> tuple[str | None, int, int, int]:
@@ -2092,7 +2040,7 @@ def parse_event_params(raw: str) -> tuple[str | None, int, int, int]:
     the recorder's own timestamps, unlike the RFC3339 samples path) and
     limit.
     """
-    params = split_selector(raw)
+    params = split_params(raw)
     key = params.get("key")
     if key is not None:
         try:
@@ -2308,7 +2256,7 @@ def migrate_v4(conn: sqlite3.Connection) -> None:
 
 def main():
     sess = session.connect()
-    manifest = tomllib.loads(Path(f"units/{sess.unit}.toml").read_text())
+    own = house.load_unit(sess.unit)
 
     endpoint = house.load_endpoint(sess.unit)
     if not endpoint.startswith("sqlite:"):
@@ -2319,24 +2267,21 @@ def main():
     recorder = Recorder(db_path, sess)
     subs = [
         sess.subscribe(expr, recorder.record)
-        for expr in manifest["bus"]["subscribes"].values()
+        for expr in own.subscribes.values()
     ]
     queryable = sess.declare_queryable(
-        manifest["bus"]["publishes"]["history"]["key"], recorder.answer
+        own.publishes["history"]["key"], recorder.answer
     )
-    if any(e.startswith(("home/hold/", "home/arbitration/")) for e in manifest["bus"]["subscribes"].values()):
+    if any(e.startswith(("home/hold/", "home/arbitration/")) for e in own.subscribes.values()):
         recorder.reconcile_standing()
     recorder.writer.thread.start()
     recorder.writer.checker.thread.start()
     recorder.seed(
-        [e for e in manifest["bus"]["subscribes"].values() if e.startswith("home/state/")]
+        [e for e in own.subscribes.values() if e.startswith("home/state/")]
     )
     sess.ready()
 
-    stop = threading.Event()
-    signal.signal(signal.SIGTERM, lambda *_: stop.set())
-    signal.signal(signal.SIGINT, lambda *_: stop.set())
-    stop.wait()
+    session.wait_for_shutdown()
 
     for sub in subs:
         sub.undeclare()

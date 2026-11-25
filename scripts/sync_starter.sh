@@ -30,7 +30,7 @@
 set -euo pipefail
 
 # Bumped with the starter's compose image at each release.
-SDK_TAG="v0.23.0"
+SDK_TAG="v0.24.0"
 
 # The tag's version, and the same version as Python spells it (py_version
 # in lib/sdk_pin.sh says why they differ).

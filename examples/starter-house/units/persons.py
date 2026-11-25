@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "homeostat==0.23.0",
+#     "homeostat==0.24.0",
 # ]
 # ///
 """Persons: each person computed from the trackers that person carries.
@@ -272,10 +272,7 @@ class Unit:
 
 def main():
     ctx = automation.context()
-    persons = [
-        e for e in house.load_house().entities
-        if e.owner == ctx.unit and e.capability == "person"
-    ]
+    persons = [e for e in ctx.entities if e.capability == "person"]
     unit = Unit(ctx, persons)
     ctx.subscribe("trackers", unit.on_state)
     unit.start()

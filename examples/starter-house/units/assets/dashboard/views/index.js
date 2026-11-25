@@ -3,6 +3,7 @@
  * frame. */
 import { wireChartInteractions } from '../charts.js';
 import { currentView } from '../chrome.js';
+import { markPendingControls } from '../commands.js';
 import { byId, html } from '../html.js';
 import logic from '../logic.js';
 import { store } from '../store.js';
@@ -30,4 +31,7 @@ export function renderView() {
     title.insertAdjacentHTML('beforeend', html`<button class="view-text-btn" data-action="view-text" data-view-name="${view.name}" title="The text in dashboard.toml that makes this view">Text</button>`);
   }
   wireChartInteractions(byId('view'));
+  // Every redraw of the view replaces its controls, so the marks of the
+  // commands still in flight are put back here, whichever path redrew it.
+  markPendingControls();
 }

@@ -1,13 +1,13 @@
 /* The tile and chart widgets: an entity's readings, now and over time. */
 import { ensureHistory, fetchHistory } from '../api.js';
-import { buildBars, buildChart, buildTimeline, fmtDuration, formatChartClock, formatChartTime, horizonCaption, issuedCaption, minMaxCaption } from '../charts.js';
+import { buildBars, buildChart, buildTimeline, horizonCaption, issuedCaption, minMaxCaption } from '../charts.js';
 import { html } from '../html.js';
 import logic from '../logic.js';
 import { descriptorField, liveForecastsOf, localState, scheduleRender, stateValue, store } from '../store.js';
 
 // Signal tiles: one per reading of the entity, or only the named reading.
 // The descriptor decides which readings appear and in what order. They are
-// the same rows as the entity's sensor card (dashboard-logic.js,
+// the same rows as the entity's sensor card (logic.js,
 // sensorCardPlan).
 export function widgetTiles(entity, aspect) {
   var all = logic.sensorCardPlan(entity, store.state, store.aspects[entity.name]);
@@ -82,11 +82,11 @@ function intervalTile(entity, r, named, intervalS) {
     : '';
   var recent = loaded ? logic.recentTotal(s.points, intervalS, now) : null;
   var big = recent ? logic.formatAspect(r.aspect, field, recent.total) : r.display;
-  var day = recent && recent.spanMs === 864e5;
+  var wholeDay = recent && recent.spanMs === 864e5;
   var caption = recent
-    ? ['last ' + (day ? '24 h' : fmtDuration(recent.spanMs)) + ' to ' +
-        (day ? formatChartClock(recent.end) : formatChartTime(recent.end)),
-      day ? 'latest ' + (intervalName(intervalS) ? intervalName(intervalS) + ' ' : '') + logic.formatAspect(r.aspect, field, recent.latest) : '',
+    ? ['last ' + (wholeDay ? '24 h' : logic.fmtDuration(recent.spanMs)) + ' to ' +
+        (wholeDay ? logic.formatChartClock(recent.end) : logic.formatChartTime(recent.end)),
+      wholeDay ? 'latest ' + (intervalName(intervalS) ? intervalName(intervalS) + ' ' : '') + logic.formatAspect(r.aspect, field, recent.latest) : '',
       // Rounded to the hour: a second short of the span is not missing.
       Math.round(recent.coveredMs / 36e5) < Math.round(recent.spanMs / 36e5)
         ? Math.round(recent.coveredMs / 36e5) + ' of ' + Math.round(recent.spanMs / 36e5) + ' h recorded'
